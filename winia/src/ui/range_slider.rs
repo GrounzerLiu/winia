@@ -17,18 +17,22 @@
 //!   matching Compose's strict comparison.
 //! - The thumbs cannot cross: the start thumb stops at the end thumb's value and the end thumb at
 //!   the start thumb's (Compose 1.3's `coerceAtMost` / `coerceAtLeast` rule).
-//! - The component takes focus as a whole (ONE focusable node) and the ring wraps the thumb the last
-//!   gesture resolved to — the same thumb the arrow keys move. Compose focuses the two thumbs
-//!   separately (Tab between them); this is the one intentional difference here.
+//! - The track and the two thumbs are three nodes: the root carries the pointer gestures, and each
+//!   thumb is its own focusable node with its own key handling. So Tab moves between the thumbs and
+//!   the arrow keys move the FOCUSED one — Compose's model (`rangeSliderPressDragModifier` on the
+//!   container, one `focusable` per thumb). A press moves focus to the thumb it resolved, which
+//!   Compose leaves to the platform.
 
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::layout::BoxLayout;
-use crate::modifier::{KbEvent, Modifier};
+use crate::layout::constraints::Constraints;
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
+use crate::modifier::{FocusRequester, KbEvent, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::slider::{
-    SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, TrackThumb, draw_track,
-    fraction_from_value, handle_key, snap_value, value_at_x,
+    SLIDER_ACTIVE_THUMB_WIDTH, SLIDER_THUMB_GAP, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
+    SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, draw_thumb,
+    draw_track_body, fraction_from_value, handle_key, snap_value, value_at_x,
 };
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
@@ -232,9 +236,12 @@ impl RangeSlider {
         let start_active = st_start.pressed || st_start.focused || st_start.dragged;
         let end_active = st_end.pressed || st_end.focused || st_end.dragged;
 
-        // The thumb the current (or last) gesture resolved to: set on press, then read by the drag,
-        // the focus ring and the keyboard. Kept across gestures, so the ring stays put between them.
+        // The thumb the current (or last) gesture resolved to: set on press, then read by the drag
+        // (the keyboard follows FOCUS instead — see the module note).
         let active = ctx.remember(|| RangeThumb::Start);
+        // One focus requester per thumb, so a press can hand focus to the thumb it resolved.
+        let start_fr = ctx.remember(|| FocusRequester::new()).get();
+        let end_fr = ctx.remember(|| FocusRequester::new()).get();
         // Width write-back from the draw node (Backchannel — no recomposition); the gesture
         // callbacks read it for pixel↔value conversion.
         let track_width = ctx.remember_backchannel(|| 0.0f32);
@@ -246,40 +253,32 @@ impl RangeSlider {
         let set_value = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
 
-        let mut m = Modifier::new()
-            .fill_max_width()
-            .min_height(SLIDER_TOUCH_HEIGHT)
-            // The focus ring is self-drawn around a thumb capsule (as in `Slider`), not by the
-            // framework around the component rect.
-            .no_focus_ring()
-            .draw_node(RangeSliderTrackNode {
-                track_width: track_width.clone(),
-                start_interaction: start_source.clone(),
-                colors,
-                enabled,
-                value,
-                min,
-                max,
-                steps,
-                start_active,
-                end_active,
-                active_thumb: active.get(),
-            });
+        // The root carries the pointer gestures only; the track and the two thumbs are the children
+        // the policy places.
+        let mut m = Modifier::new().fill_max_width();
 
         if enabled {
-            // Press: resolve the nearer thumb, remember it for the gesture, jump it to the pressed
-            // position (the same immediate jump the single slider does) and emit the press on the
-            // source of the thumb that got it.
+            // Press: resolve the nearer thumb, remember it for the gesture, hand it focus (so the
+            // arrow keys that follow move THIS thumb), jump it to the pressed position (the same
+            // immediate jump the single slider does) and emit the press on the thumb's source.
             let src_s = start_source.clone();
             let src_e = end_source.clone();
+            let fr_s = start_fr.clone();
+            let fr_e = end_fr.clone();
             let v_press = set_value.clone();
             let a_press = active.clone();
             m = m.on_press(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_press.get(), value, min, max);
                 a_press.set(thumb);
                 match thumb {
-                    RangeThumb::Start => src_s.emit_press_at(pos),
-                    RangeThumb::End => src_e.emit_press_at(pos),
+                    RangeThumb::Start => {
+                        src_s.emit_press_at(pos);
+                        fr_s.request_focus();
+                    }
+                    RangeThumb::End => {
+                        src_e.emit_press_at(pos);
+                        fr_e.request_focus();
+                    }
                 }
                 if let Some(cb) = &v_press {
                     let nv = value_at_x(pos.0, tw_press.get(), min, max, steps);
@@ -311,14 +310,22 @@ impl RangeSlider {
             // `draggable` + `offsetToValue`), clamped by the other thumb.
             let src_s = start_source.clone();
             let src_e = end_source.clone();
+            let fr_s = start_fr.clone();
+            let fr_e = end_fr.clone();
             let v_ds = set_value.clone();
             let a_ds = active.clone();
             m = m.on_drag_start(move |pos| {
                 let thumb = nearest_thumb(pos.0, tw_drag_start.get(), value, min, max);
                 a_ds.set(thumb);
                 match thumb {
-                    RangeThumb::Start => src_s.emit_drag_start(),
-                    RangeThumb::End => src_e.emit_drag_start(),
+                    RangeThumb::Start => {
+                        src_s.emit_drag_start();
+                        fr_s.request_focus();
+                    }
+                    RangeThumb::End => {
+                        src_e.emit_drag_start();
+                        fr_e.request_focus();
+                    }
                 }
                 if let Some(cb) = &v_ds {
                     let nv = value_at_x(pos.0, tw_drag_start.get(), min, max, steps);
@@ -358,102 +365,117 @@ impl RangeSlider {
                 src_e.emit_release();
             });
         }
-
-        if enabled {
-            // One focusable node (the start source is the focus source; the ring follows `active`),
-            // and the arrow keys move the active thumb — see the module note on this difference
-            // from Compose's per-thumb focus.
-            let v_key = set_value.clone();
-            let f_key = finished.clone();
-            let a_key = active.clone();
-            m = m
-                .focusable_with_source(&start_source)
-                .on_key_event(move |ke: &KbEvent| {
-                    let thumb = a_key.get();
-                    let current = match thumb {
-                        RangeThumb::Start => value.start,
-                        RangeThumb::End => value.end,
-                    };
-                    let cb = v_key.as_ref().map(|cb| {
-                        let cb = cb.clone();
-                        Arc::new(move |nv: f32| {
-                            cb(range_with_moved_thumb(value, thumb, nv, min, max))
-                        }) as Arc<dyn Fn(f32) + Send + Sync>
-                    });
-                    handle_key(ke, current, min, max, steps, &cb, &f_key)
-                });
-        }
         m = m.then(self.modifier);
 
-        match ctx.start_restartable_group(
-            key,
-            m,
-            BoxLayout::new().alignment(crate::layout::Alignment::Center),
-        ) {
+        match ctx.start_restartable_group(key, m, RangeSliderLayoutPolicy { value, min, max }) {
             GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
+            GroupStatus::Enter => {
+                // Child 0 — the track: the segments, ticks and stop indicators, plus the width
+                // write-back the gesture callbacks convert pixels through. It draws no thumb.
+                let track_key = ctx.next_key();
+                ctx.start_leaf(track_key, Modifier::new()
+                    .fill_max_width()
+                    .height(SLIDER_TOUCH_HEIGHT)
+                    .draw_node(RangeSliderTrackNode {
+                        track_width: track_width.clone(),
+                        colors,
+                        enabled,
+                        value,
+                        min,
+                        max,
+                        steps,
+                    }));
+                ctx.end_node();
+
+                // Children 1 and 2 — the thumbs. Each is its own focusable node with its own key
+                // handling, so Tab moves between them and the arrow keys move the FOCUSED thumb;
+                // each draws its own capsule and focus ring.
+                for thumb in [RangeThumb::Start, RangeThumb::End] {
+                    let is_start = thumb == RangeThumb::Start;
+                    let source = if is_start { start_source.clone() } else { end_source.clone() };
+                    let requester = if is_start { start_fr.clone() } else { end_fr.clone() };
+                    let thumb_active = if is_start { start_active } else { end_active };
+                    let mut tm = Modifier::new()
+                        .size(SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT)
+                        // The ring is self-drawn around the capsule: the framework's ring follows the
+                        // node's own background/border shape, which a bare capsule node has none of.
+                        .no_focus_ring()
+                        .draw_node(RangeThumbNode {
+                            interaction: source.clone(),
+                            colors,
+                            enabled,
+                            active: thumb_active,
+                        });
+                    if enabled {
+                        let v_key = set_value.clone();
+                        let f_key = finished.clone();
+                        tm = tm
+                            .focusable_with_source(&source)
+                            .focus_requester(&requester)
+                            .on_key_event(move |ke: &KbEvent| {
+                                let current = if is_start { value.start } else { value.end };
+                                let cb = v_key.as_ref().map(|cb| {
+                                    let cb = cb.clone();
+                                    Arc::new(move |nv: f32| {
+                                        cb(range_with_moved_thumb(value, thumb, nv, min, max))
+                                    }) as Arc<dyn Fn(f32) + Send + Sync>
+                                });
+                                handle_key(ke, current, min, max, steps, &cb, &f_key)
+                            });
+                    }
+                    let thumb_key = ctx.next_key();
+                    ctx.start_leaf(thumb_key, tm);
+                    ctx.end_node();
+                }
+            }
         }
-        ctx.set_current_node_focus_color(theme.primary);
         ctx.end_restartable_group();
     }
 }
 
-/// The range track's drawing node — the two-thumb counterpart of
-/// [`crate::ui::slider::SliderTrackNode`], and the same shape: a named type (visible in the debug
-/// tree, precise `Skip` through `node_key`) that owns the width write-back channel, so pixel↔value
-/// conversion needs no recomposition.
+/// The range track's drawing node: the segments, ticks and stop indicators — no thumb, because the
+/// two thumbs are nodes of their own (`RangeThumbNode`), each focusable.
 ///
-/// `start_interaction` is the component's focus source (see the module note); the ring wraps
-/// `active_thumb` when that source reports focus.
+/// A named type (visible in the debug tree, precise `Skip` through `node_key`) that owns the width
+/// write-back channel, so the gesture callbacks' pixel↔value conversion needs no recomposition.
 #[derive(Debug)]
 pub(crate) struct RangeSliderTrackNode {
     /// Track width write-back (read by the tap/drag pixel↔value conversion).
     pub(crate) track_width: crate::core::state::Backchannel<f32>,
-    pub(crate) start_interaction: MutableInteractionSource,
     pub(crate) colors: SliderColors,
     pub(crate) enabled: bool,
     pub(crate) value: RangeValue,
     pub(crate) min: f32,
     pub(crate) max: f32,
     pub(crate) steps: i32,
-    pub(crate) start_active: bool,
-    pub(crate) end_active: bool,
-    pub(crate) active_thumb: RangeThumb,
 }
 
 impl crate::modifier::DrawNode for RangeSliderTrackNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         self.track_width.set(rect.width());
-        // Render-time peek, as in `SliderTrackNode`: the focus state reaches the ring through the
-        // redraw channel (a focused thumb also rebuilds through `interaction.state`), so reading a
-        // dependency here would be too late to register anyway.
-        let focused = self.start_interaction.is_focused_value();
-        let focus_alpha = self.start_interaction.focus_indicator_alpha_value();
-        let thumbs = [
-            TrackThumb {
-                value: self.value.start,
-                active: self.start_active,
-                focused: focused && self.active_thumb == RangeThumb::Start,
-            },
-            TrackThumb {
-                value: self.value.end,
-                active: self.end_active,
-                focused: focused && self.active_thumb == RangeThumb::End,
-            },
-        ];
-        draw_track(
-            canvas, rect, &self.colors, self.enabled, &thumbs, self.min, self.max, self.steps, false,
-            focus_alpha,
+        // `single_sided = false`: both outer segments are inactive track, and `thumb_values` keeps
+        // the body from drawing a tick or stop a thumb will cover (the thumbs are drawn above this
+        // node, in their own nodes).
+        draw_track_body(
+            canvas,
+            rect,
+            &self.colors,
+            self.enabled,
+            self.value.start,
+            self.value.end,
+            self.min,
+            self.max,
+            self.steps,
+            false,
+            &[self.value.start, self.value.end],
         );
     }
 
     fn node_key(&self) -> String {
-        // Static visual params only: both values, the range, the step count, per-thumb active
-        // state, which thumb the ring would wrap, the colors, the enable flag and the focus source
-        // identity. `track_width` (write-back) and `focus_alpha` (per-frame animation) stay out,
-        // exactly as in `SliderTrackNode`.
+        // Static visual params only: both values, the range, the step count and the colors.
+        // `track_width` is a write-back channel and stays out, exactly as in `SliderTrackNode`.
         format!(
-            "rangeslidertrack:{:?}:{}:{}:{}:{}:{}:{}:{}:{}:{:?}:{}",
+            "rangeslidertrack:{:?}:{}:{}:{}:{}:{}:{}",
             self.colors,
             self.enabled,
             self.value.start.to_bits(),
@@ -461,11 +483,113 @@ impl crate::modifier::DrawNode for RangeSliderTrackNode {
             self.min.to_bits(),
             self.max.to_bits(),
             self.steps,
-            self.start_active,
-            self.end_active,
-            self.active_thumb,
-            self.start_interaction.source_id(),
         )
+    }
+}
+
+/// One thumb: its capsule and, while this thumb holds focus, its ring.
+///
+/// The node's rect is the RESTING capsule box (4 × 44) whatever the gesture state, so the ring's
+/// geometry stays put while a drag narrows the capsule inside it — the same rule the single slider's
+/// thumb follows.
+#[derive(Debug)]
+pub(crate) struct RangeThumbNode {
+    /// This thumb's own interaction source: its focused/dragged state drives the ring and the
+    /// halved capsule width.
+    pub(crate) interaction: MutableInteractionSource,
+    pub(crate) colors: SliderColors,
+    pub(crate) enabled: bool,
+    /// The thumb's own gesture is running (press / drag / focus), which halves its width.
+    pub(crate) active: bool,
+}
+
+impl crate::modifier::DrawNode for RangeThumbNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        // Render-time peek, as in `SliderTrackNode`: focus reaches the ring through the redraw
+        // channel (a focus change also rebuilds through `interaction.state`), so reading a dependency
+        // here would be too late to register anyway.
+        let focused = self.interaction.is_focused_value();
+        let focus_alpha = self.interaction.focus_indicator_alpha_value();
+        draw_thumb(
+            canvas,
+            rect.left + rect.width() / 2.0,
+            rect.top + rect.height() / 2.0,
+            &self.colors,
+            self.enabled,
+            self.active,
+            focused,
+            focus_alpha,
+        );
+    }
+
+    fn node_key(&self) -> String {
+        // Static visual params only; the focus state arrives through the source (and the redraw
+        // channel), so it is not part of the key — as in `SliderTrackNode`.
+        format!(
+            "rangethumb:{:?}:{}:{}:{}",
+            self.colors,
+            self.enabled,
+            self.active,
+            self.interaction.source_id(),
+        )
+    }
+}
+
+/// Places the track across the row and the two thumbs on their value positions.
+///
+/// The thumb x comes from [`thumb_center_x`] — the same axis the track draws and `nearest_thumb`
+/// hit-tests on — so drawing, placement and pointer resolution cannot drift apart.
+#[derive(Debug)]
+struct RangeSliderLayoutPolicy {
+    value: RangeValue,
+    min: f32,
+    max: f32,
+}
+
+impl MeasurePolicy for RangeSliderLayoutPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let row_w = constraints.max_width;
+        // Children are composed in a fixed order: [track, start thumb, end thumb].
+        let (track_size, _) = measure_node(
+            nodes,
+            policies,
+            children[0],
+            Constraints::new(row_w, row_w, 0.0, f32::MAX),
+        );
+        let cy = track_size.height / 2.0;
+        let mut placements = vec![Placement {
+            size: track_size,
+            position: Point::new(0.0, 0.0),
+        }];
+        for (i, v) in [self.value.start, self.value.end].iter().enumerate() {
+            let (thumb_size, _) = measure_node(
+                nodes,
+                policies,
+                children[1 + i],
+                Constraints::new(SLIDER_THUMB_WIDTH, SLIDER_THUMB_WIDTH, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_HEIGHT),
+            );
+            let x = thumb_center_x(*v, row_w, self.min, self.max) - SLIDER_THUMB_WIDTH / 2.0;
+            placements.push(Placement {
+                size: thumb_size,
+                position: Point::new(x, cy - SLIDER_THUMB_HEIGHT / 2.0),
+            });
+        }
+        (Size::new(row_w, track_size.height), placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            if let Some(p) = placements.get(index) {
+                nodes[child].position = p.position;
+                nodes[child].measured_size = p.size;
+            }
+        }
     }
 }
 
@@ -788,35 +912,125 @@ mod tests {
     #[test]
     fn range_slider_track_node_key_covers_all_visual_params() {
         let colors = SliderDefaults::slider_colors(&ThemeColors::light_from_seed(0x6750A4));
-        let src = MutableInteractionSource::new();
-        let node = |v: RangeValue, min: f32, max: f32, steps: i32, sa: bool, ea: bool, t: RangeThumb| {
-            RangeSliderTrackNode {
-                track_width: crate::core::state::Backchannel::new(0.0),
-                start_interaction: src.clone(),
-                colors,
-                enabled: true,
-                value: v,
-                min,
-                max,
-                steps,
-                start_active: sa,
-                end_active: ea,
-                active_thumb: t,
-            }
+        let node = |v: RangeValue, min: f32, max: f32, steps: i32| RangeSliderTrackNode {
+            track_width: crate::core::state::Backchannel::new(0.0),
+            colors,
+            enabled: true,
+            value: v,
+            min,
+            max,
+            steps,
         };
-        let base = node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, false, false, RangeThumb::Start);
+        let base = node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0);
         let base_key = base.node_key();
-        assert_eq!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, false, false, RangeThumb::Start).node_key(), "same params → same key (Skip holds)");
-        assert_ne!(base_key, node(RangeValue::new(0.2, 0.75), 0.0, 1.0, 0, false, false, RangeThumb::Start).node_key(), "start value");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.7), 0.0, 1.0, 0, false, false, RangeThumb::Start).node_key(), "end value");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 2.0, 0, false, false, RangeThumb::Start).node_key(), "max");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), -1.0, 1.0, 0, false, false, RangeThumb::Start).node_key(), "min");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 4, false, false, RangeThumb::Start).node_key(), "steps");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, true, false, RangeThumb::Start).node_key(), "start thumb active");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, false, true, RangeThumb::Start).node_key(), "end thumb active");
-        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, false, false, RangeThumb::End).node_key(), "which thumb the ring wraps");
-        let mut other = node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0, false, false, RangeThumb::Start);
+        assert_eq!(
+            base_key,
+            node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0).node_key(),
+            "same params → same key (Skip holds)"
+        );
+        assert_ne!(base_key, node(RangeValue::new(0.2, 0.75), 0.0, 1.0, 0).node_key(), "start value");
+        assert_ne!(base_key, node(RangeValue::new(0.25, 0.7), 0.0, 1.0, 0).node_key(), "end value");
+        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 2.0, 0).node_key(), "max");
+        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), -1.0, 1.0, 0).node_key(), "min");
+        assert_ne!(base_key, node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 4).node_key(), "steps");
+        let mut other = node(RangeValue::new(0.25, 0.75), 0.0, 1.0, 0);
         other.enabled = false;
         assert_ne!(base_key, other.node_key(), "enabled");
+    }
+
+    /// A thumb's key must cover what it draws (its colors, the halved width) and its own source —
+    /// the ring comes from that source, so two thumbs with different sources must not collide.
+    #[test]
+    fn range_thumb_node_key_covers_all_visual_params() {
+        let colors = SliderDefaults::slider_colors(&ThemeColors::light_from_seed(0x6750A4));
+        let src = MutableInteractionSource::new();
+        let node = |active: bool, enabled: bool, src: MutableInteractionSource| RangeThumbNode {
+            interaction: src,
+            colors,
+            enabled,
+            active,
+        };
+        let base_key = node(false, true, src.clone()).node_key();
+        assert_eq!(base_key, node(false, true, src.clone()).node_key(), "same params → same key");
+        assert_ne!(base_key, node(true, true, src.clone()).node_key(), "halved width while active");
+        assert_ne!(base_key, node(false, false, src.clone()).node_key(), "enabled");
+        assert_ne!(
+            base_key,
+            node(false, true, MutableInteractionSource::new()).node_key(),
+            "the source drives the ring, so it must be part of the key"
+        );
+        let mut recolored = node(false, true, src.clone());
+        recolored.colors.thumb_color = crate::modifier::Color::from_argb(255, 1, 2, 3);
+        assert_ne!(base_key, recolored.node_key(), "colors");
+    }
+
+    /// The three children are laid out as documented: the track across the row, each thumb centred
+    /// on [`thumb_center_x`] — the axis the drawing and the hit test both use.
+    #[test]
+    fn both_thumbs_are_placed_on_the_value_axis() {
+        let v = RangeValue::new(0.25, 0.75);
+        let mut composer = Composer::new();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                RangeSlider::new(v).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        assert_eq!(children.len(), 3, "the row holds [track, start thumb, end thumb]");
+
+        let track = &nodes[children[0]];
+        assert_eq!(track.measured_size.width, 300.0, "the track fills the row");
+        assert_eq!(track.measured_size.height, SLIDER_TOUCH_HEIGHT);
+
+        for (i, value) in [v.start, v.end].iter().enumerate() {
+            let t = &nodes[children[1 + i]];
+            assert_eq!(t.measured_size.width, SLIDER_THUMB_WIDTH, "thumb {} keeps its resting width", i);
+            assert_eq!(t.measured_size.height, SLIDER_THUMB_HEIGHT);
+            let expected = thumb_center_x(*value, 300.0, 0.0, 1.0) - SLIDER_THUMB_WIDTH / 2.0;
+            assert!(
+                (t.position.x - expected).abs() < 0.01,
+                "thumb {i} at x={} but the axis says {expected}",
+                t.position.x
+            );
+            assert!((t.position.y - (SLIDER_TOUCH_HEIGHT - SLIDER_THUMB_HEIGHT) / 2.0).abs() < 0.01);
+        }
+    }
+
+    /// Each thumb carries its own focusable node and its own key handling: two focus stops, and a
+    /// pointer press hands focus to the thumb it resolved (Compose's model, one `focusable` per
+    /// thumb). Without this the keyboard would have a single target and Tab could not switch.
+    #[test]
+    fn each_thumb_is_its_own_focus_target_with_its_own_keys() {
+        let mut composer = Composer::new();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                RangeSlider::new((0.25, 0.75)).value_range(0.0, 1.0).on_value_change(|_| {}).build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        let focusable_thumbs = children[1..]
+            .iter()
+            .filter(|&&c| {
+                let els = nodes[c].modifier.elements();
+                els.iter().any(|el| matches!(el, ModifierElement::Focusable { .. }))
+                    && els.iter().any(|el| matches!(el, ModifierElement::KbEvent { on_key: Some(_), .. }))
+                    && els.iter().any(|el| matches!(el, ModifierElement::FocusRequesterId { .. }))
+            })
+            .count();
+        assert_eq!(focusable_thumbs, 2, "both thumbs are focusable, carry keys and a focus requester");
+        let root_focusable = nodes[root]
+            .modifier
+            .elements()
+            .iter()
+            .any(|el| matches!(el, ModifierElement::Focusable { .. }));
+        assert!(!root_focusable, "the root holds the gestures, not a third focus stop");
     }
 }

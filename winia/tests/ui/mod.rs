@@ -484,6 +484,32 @@ impl UiTest {
         }
     }
 
+    /// Send a named key and wait for `expect` to show up, retrying the key itself.
+    ///
+    /// A loaded machine drops key events the way it drops clicks (see `click_until`), and a focus
+    /// hand-off lands on a LATER frame than the value change that triggered it — so a test that sends
+    /// an arrow right after a press can be talking to a window that has nothing focused yet.
+    pub fn key_until(&mut self, key: &str, expect: &str, timeout: Duration) {
+        for attempt in 0..3 {
+            self.send(&format!("k {key}"));
+            let deadline = Instant::now() + timeout;
+            loop {
+                self.refresh();
+                if self.all_texts().iter().any(|t| t.contains(expect)) {
+                    return;
+                }
+                if Instant::now() > deadline {
+                    break; // this attempt did not take — send the key again
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if attempt == 2 {
+                panic!("`k {key}` did not produce `{expect}` in 3 attempts (rendering stalled)");
+            }
+            eprintln!("[ui-test] `k {key}` did not take (attempt {}) — retrying", attempt + 1);
+        }
+    }
+
     /// 断言树中不出现 `text`
     pub fn expect_no_text(&mut self, text: &str) {
         self.refresh();

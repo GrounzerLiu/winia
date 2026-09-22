@@ -102,8 +102,8 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
             .color(label_color())
             .build(ctx);
 
-            section_title(ctx, "Keyboard (focus a thumb, then the arrow keys)");
-            Text::new("The component focuses as a whole and the arrow keys move the thumb the last gesture picked: ←/→ one step, PageUp/PageDown ten, Home/End the ends.")
+            section_title(ctx, "Keyboard (one focus stop per thumb)");
+            Text::new("Press a thumb — it takes focus and the ring follows it — or Tab between the two thumbs. The arrow keys move the focused one: ←/→ one step, PageUp/PageDown ten, Home/End the ends.")
                 .font_size(12.0)
                 .color(label_color())
                 .build(ctx);

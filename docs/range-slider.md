@@ -71,15 +71,24 @@ value's thumb lands exactly on its stop; a tick a thumb would cover is skipped.
 Gestures:
 
 - A press resolves the **nearer** thumb (`nearest_thumb`), which then owns the whole gesture: the
-  same `RangeThumb` answers the press, the drag, the focus ring and the keyboard, so a drag never
-  swaps thumbs halfway. A tie goes to the start thumb only when it sits right of the press — the
-  port of `RangeSliderLogic.compareOffsets` plus the press gesture's tie-break.
+  same `RangeThumb` answers the press, the drag and the release, so a drag never swaps thumbs
+  halfway. A tie goes to the start thumb only when it sits right of the press — the port of
+  `RangeSliderLogic.compareOffsets` plus the press gesture's tie-break.
 - The thumbs cannot cross: `range_with_moved_thumb` clamps the start thumb at the end thumb's value
   and vice versa, then into the range.
 - Press and drag both jump the resolved thumb to the pointer (`value_at_x`), like `Slider` does.
 - Each thumb has its own interaction source and halves in width while ITS gesture runs.
-- The component takes focus as a whole and the arrow keys move the resolved thumb (1 step, or 1% of
-  the range without `steps`; PageUp/PageDown ten steps, Home/End the ends).
+
+Keyboard and focus — Compose's model, one focus stop per thumb:
+
+- The component is three nodes: the root carries the pointer gestures, and each thumb is its own
+  `focusable` node with its own `on_key_event`. Tab / Shift+Tab move between the two thumbs
+  (`focus_next` / `focus_prev` in tree order), and the arrow keys move the FOCUSED one — 1% of the
+  range without `steps`, one tick with them, PageUp/PageDown ten steps, Home/End the ends.
+- A press (or drag start) hands focus to the thumb it resolved (`FocusRequester::request_focus`), so
+  the keyboard follows the mouse. Compose leaves that to the platform; a superset, not a gap.
+- Each thumb draws its own focus ring around its own capsule; the track node draws segments, ticks
+  and stop indicators only.
 
 ## 4. Tests
 
@@ -92,12 +101,22 @@ Gestures:
   `a_press_on_the_far_side_moves_the_other_thumb`,
   `a_drag_keeps_the_thumb_it_resolved_at_press` (the drag stays on its thumb and clamps at the
   other one).
-- Skip correctness: `range_slider_track_node_key_covers_all_visual_params` — every visual field must
-  change the draw node's key, `track_width` and `focus_alpha` must not.
-- Real window: `range_slider_drags_the_thumb_the_press_resolved` (`tests/ui_test.rs`, fixture
-  `fixture_range_slider`) drags each thumb by ~0.2 of the track and asserts the value the inset axis
-  predicts, plus that the other thumb did not move. Falsified by making `nearest_thumb` always
-  answer `Start`: the end-thumb drag then moves the start thumb and the test fails.
+- Skip correctness: `range_slider_track_node_key_covers_all_visual_params` (every visual field must
+  change the draw node's key, `track_width` and `focus_alpha` must not) and
+  `range_thumb_node_key_covers_all_visual_params` (a thumb's key covers its colors, the halved width
+  and its own interaction source, which is what its ring comes from).
+- Layout: `both_thumbs_are_placed_on_the_value_axis` — the row is [track, start thumb, end thumb],
+  the track fills it and each thumb is centred on `thumb_center_x`, the axis both the drawing and the
+  hit test use.
+- Focus plumbing: `each_thumb_is_its_own_focus_target_with_its_own_keys` — both thumbs carry a
+  `focusable`, an `on_key_event` and a `FocusRequester`, and the root carries none (no third stop).
+- Real window: `range_slider_drags_the_thumb_the_press_resolved` and
+  `range_slider_keyboard_moves_the_focused_thumb` (`tests/ui_test.rs`, fixture
+  `fixture_range_slider`). The drag test was falsified by making `nearest_thumb` always answer
+  `Start`; the keyboard test by removing the focus hand-off (then no thumb has focus and the first
+  arrow only moves focus, so the value assertion fails). The keyboard test waits for the focus to
+  land (`tag_is_focused`) before sending a key — the hand-off arrives on a later frame than the value
+  change, which made it flaky once — and retries the key itself via the harness's `key_until`.
 
 ## 5. Differences from Compose
 
@@ -131,9 +150,13 @@ Gestures:
    value next to a snapped thumb, exactly as it can in Compose (`state.startValue = value.start`
    snaps the state, not the app's variable); the first gesture writes the snapped value back. The
    single `Slider` follows the same rule.
-6. **Focus as a whole.** Compose puts a `focusable` on each thumb, so Tab moves between them and
-   each thumb draws its own ring. winia has one focusable node and the ring wraps the resolved
-   thumb.
+6. **A press focuses the thumb it resolves; Compose leaves focus to the platform.** Two focus stops
+   and per-thumb keys are now Compose's model (see §3). What Compose does not do is move focus on a
+   pointer press — a desktop click picks up whichever focusable node it landed on, which for a 4 px
+   thumb is not the point you pressed. winia takes focus for the resolved thumb, so the keyboard
+   always follows the mouse. The remaining focus gap is semantics: each Compose thumb is a semantics
+   node with its own `progressBarRangeInfo` and `setProgress` / `stepBy` actions, and winia has no
+   semantics layer.
 7. **Horizontal-only drag is not enforced.** Compose cancels the press when the gesture moves more
    vertically than horizontally (so an ancestor can scroll instead); winia's gesture tracker decides
    by distance alone. Shared with `Slider`.
