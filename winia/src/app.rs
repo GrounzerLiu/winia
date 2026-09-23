@@ -233,6 +233,10 @@ struct OverlayWindow {
     /// Whether this overlay owns the keyboard while it is open (see
     /// [`crate::ui::overlay::OverlayDesc::focus_scope`]).
     focus_scope: bool,
+    /// Has this overlay already suspended the page's focus? Claiming is a ONE-TIME transition, and
+    /// this is what keeps it one: re-running it every frame walked the whole main tree and called
+    /// into the IME on every frame of a modal's life.
+    claimed_keyboard: bool,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -2835,6 +2839,7 @@ impl OverlayWindow {
             focused_id: None,
             focused_slot_key: None,
             focus_scope: desc.focus_scope,
+            claimed_keyboard: false,
         }
     }
 
@@ -2848,6 +2853,9 @@ impl OverlayWindow {
     fn resume_after_close(&mut self) {
         self.closing = false;
         self.closing_since = None;
+        // It is the keyboard's owner again, so the page's suspended focus has to be suspended afresh
+        // (the release already handed it back).
+        self.claimed_keyboard = false;
         let Some(progress) = self.progress.clone() else { return };
         match &self.enter_anim {
             Some(spec) => {
@@ -3124,9 +3132,12 @@ fn focus_scope_is_open(pw: &PerWindow) -> bool {
 /// (see `release_keyboard_to_lower_layer`).
 fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
     let scope = (0..pw.overlays.len()).rev().find(|&i| {
-        pw.overlays[i].focused_id.is_none() && overlay_owns_keyboard(&pw.overlays[i])
+        !pw.overlays[i].claimed_keyboard
+            && pw.overlays[i].focused_id.is_none()
+            && overlay_owns_keyboard(&pw.overlays[i])
     });
     let Some(i) = scope else { return };
+    pw.overlays[i].claimed_keyboard = true;
 
     // Suspend the page's focus instead of dropping it. Read from the ARENA, not from
     // `pw.focused_slot_key`: a click focuses a node through `focus_by_id` and leaves the cached slot
