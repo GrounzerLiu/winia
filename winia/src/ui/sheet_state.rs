@@ -218,6 +218,12 @@ impl SheetState {
         self.has_partially_expanded.get()
     }
 
+    /// [`Self::has_partially_expanded_state`] without registering a dependency — the render-time read (a
+    /// value that is PAINTED must not mark a slot dirty; see `AnchoredDraggableState::peek_progress`).
+    pub fn peek_has_partially_expanded_state(&self) -> bool {
+        self.has_partially_expanded.peek()
+    }
+
     pub fn has_expanded_state(&self) -> bool {
         self.has_expanded.get()
     }

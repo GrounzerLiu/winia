@@ -216,12 +216,15 @@ impl ModalBottomSheet {
                 // 仅全屏（sheetH≈fullH）时 28→0 过渡，非全屏保持 28（M3 满屏变直角）
                 // progress 基准用 Partial→Expanded 才能半展开保持 28（Hidden→Expanded 会在 Partial 已掉角）
                 let full_h = crate::ui::window_size().1;
-                // The clip and the shadow keep a build-time shape — a clip cannot be animated per frame
-                // here — so they follow the sheet's VALUE (a tracked read, one recompose per anchor
-                // crossing) while the panel's painted surface follows the drag every frame in
-                // `SheetPanelNode`. Reading the offset instead (what this used to do) tied the shape to
-                // whatever the last compose saw: the sheet expands by animating `offset`, which
-                // recomposes nothing, so the corners arrived square only after some unrelated compose.
+                // winia's own rule (kept from the original implementation): an expanded sheet whose panel
+                // reaches the window height drops its top corners. It is NOT from Material 3 — current M3
+                // passes `shape` through untouched and never switches on the sheet's state (checked against
+                // `SheetDefaults.kt` / `ModalBottomSheet.kt`), so this is a local choice, not an alignment.
+                //
+                // The radius is derived from the sheet's VALUE through tracked reads, so it is recomputed
+                // when the sheet crosses an anchor — the offset alone would never recompose anything here
+                // (the sheet expands by ANIMATING the offset), which is how the corners used to arrive
+                // square only after some unrelated compose re-ran this closure.
                 let clipped_full = sheet_h.get() >= full_h - 1.0 && st.current_value() == SheetValue::Expanded;
                 let cur_shape = Shape::TopRoundedRect {
                     radius: if clipped_full { 0.0 } else { radius },
@@ -301,12 +304,16 @@ impl ModalBottomSheet {
                                 false,
                                 Color::from_argb(40, 0, 0, 0),
                             )
-                            // The panel's own surface is PAINTED per frame by a draw node, not composed
-                            // into the modifier chain: M3's expanded sheet is square-cornered and the
-                            // radius follows the drag, and a build-time shape cannot do either — the sheet
-                            // expands by animating `offset`, which recomposes nothing (measured: the
-                            // corners stayed rounded until an unrelated compose — a list scroll — re-ran
-                            // the closure, and stayed square after collapsing for the same reason).
+                            // The panel's own surface is PAINTED by a draw node rather than composed into the
+                            // modifier chain, because the radius cannot be composed here at all: this
+                            // closure's reads of the sheet's state register NOTHING (they happen outside any
+                            // composition group), so a "value-driven" shape never updates — measured twice,
+                            // first as the original build-time shape and again as one derived from an
+                            // explicit tracked read. Either way the corners went square only after an
+                            // unrelated compose (a list scroll) re-ran this closure, and stayed square after
+                            // collapsing. The CLIP behind it stays value-driven and can therefore lag the
+                            // surface by one anchor crossing: do not paint content into the panel's top
+                            // corners (docs/bottom-sheet.md, Known limits).
                             .draw_node(SheetPanelNode {
                                 state: st.clone(),
                                 color: bg,
@@ -452,15 +459,17 @@ impl Default for ModalBottomSheet {
     fn default() -> Self { Self::new(false) }
 }
 
-/// The sheet panel's own surface, painted every frame.
+/// The sheet panel's own surface, painted on every frame.
 ///
-/// M3's sheet is square-cornered once it is expanded (`BottomSheetDefaults.ExpandedShape` is a
-/// rectangle) and its radius follows the drag on the way there. Neither can be done at build time:
-/// the sheet expands by animating its `offset`, which recomposes nothing, so a composed shape kept
-/// the radius it was built with until some unrelated compose re-ran the closure (measured on the
-/// demo: the corners went square only after a list scroll, and stayed square after collapsing).
-/// So the radius is read from the state at PAINT time — the same "painted, not composed" rule the
-/// slider's track node follows.
+/// winia's rule (kept from the original implementation; NOT Material 3 — current M3 passes `shape`
+/// through untouched and never switches on the sheet's state): a panel that reaches the window height
+/// drops its top corners.
+///
+/// It has to be painted here rather than composed, because the content closure CANNOT observe the sheet's
+/// state: its reads happen outside any composition group and register nothing, so a shape derived from
+/// them never updates (measured both as the original build-time shape and as one driven by an explicit
+/// tracked read — the corners went square only after an unrelated compose re-ran the closure, and stayed
+/// square after collapsing). Paint-time reads use `peek`, so nothing here marks a slot dirty.
 #[derive(Clone)]
 pub(crate) struct SheetPanelNode {
     pub(crate) state: SheetState,
@@ -474,17 +483,17 @@ pub(crate) struct SheetPanelNode {
 }
 
 impl SheetPanelNode {
-    /// The radius this panel is painted with right now: `radius` until the expanded sheet fills the
-    /// window, then `radius * (1 - progress)` so it reaches square exactly when the sheet settles
-    /// expanded (and comes back on the way out).
+    /// The radius this panel is painted with right now: `radius` until the panel fills the window, then
+    /// `radius * (1 - progress)` so the corners reach square exactly when the sheet settles expanded (and
+    /// come back on the way out).
     fn current_radius(&self, panel_height: f32) -> f32 {
         if panel_height < self.window_height - 1.0 {
             return self.radius;
         }
         // Progress is measured from the state the sheet came from: a sheet WITH a partially expanded
         // anchor keeps its radius while it sits there (the corners must not go square on the way
-        // through), one without it (skip_partially_expanded) starts from Hidden.
-        let from = if self.state.has_partially_expanded_state() {
+        // through), one without it (`skip_partially_expanded`) starts from Hidden.
+        let from = if self.state.peek_has_partially_expanded_state() {
             SheetValue::PartiallyExpanded
         } else {
             SheetValue::Hidden
@@ -503,15 +512,6 @@ impl std::fmt::Debug for SheetPanelNode {
 impl crate::modifier::DrawNode for SheetPanelNode {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
         let r = self.current_radius(rect.height()).clamp(0.0, rect.height() / 2.0);
-        #[cfg(debug_assertions)]
-        if std::env::var("WINIA_BS_TRACE").is_ok() {
-            eprintln!(
-                "[sheet-panel] rect_h={:.1} win_h={:.1} radius={:.1}",
-                rect.height(),
-                self.window_height,
-                r
-            );
-        }
         let rrect = skia_safe::RRect::new_rect_radii(
             rect,
             &[
@@ -532,9 +532,9 @@ impl crate::modifier::DrawNode for SheetPanelNode {
         canvas.draw_rrect(&rrect, &paint);
     }
 
-    /// Static visual parameters only: the colour and the token radius. The radius it is PAINTED with
-    /// is transient (read per frame) and must not enter the key, or every drag frame would re-run the
-    /// group.
+    /// Static visual parameters only: the colour, the token radius and the window height. The radius it is
+    /// PAINTED with is transient (read per frame) and must not enter the key, or every drag frame would
+    /// re-run the group.
     fn node_key(&self) -> String {
         let argb = ((self.color.a as u32) << 24)
             | ((self.color.r as u32) << 16)
@@ -543,6 +543,7 @@ impl crate::modifier::DrawNode for SheetPanelNode {
         format!("SheetPanelNode|{argb:08x}|{}|{}", self.radius, self.window_height)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

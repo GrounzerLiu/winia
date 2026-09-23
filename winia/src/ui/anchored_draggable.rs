@@ -280,12 +280,6 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         self.anchors.peek().position_of(value)
     }
 
-    /// Current offset without registering a dependency — the render-time companion of
-    /// [`Self::offset`], for a value that is *painted* rather than composed.
-    pub fn peek_offset(&self) -> f32 {
-        self.offset.peek()
-    }
-
     /// 拖拽增量（on_drag 回调——当前位置增量 delta 的轴向分量）。
     /// 更新 offset（clamp 到 min/max 锚点），跨过半程更新 current_value。
     pub fn drag_delta(&self, delta: f32) {

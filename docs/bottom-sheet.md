@@ -43,18 +43,39 @@ inside the list dismisses the sheet") turned out to be the documented M3 behavio
 
 ## Shape: square when it fills the window
 
-M3 squares the sheet's top corners once it is expanded. The radius therefore depends on state that changes
-while the sheet slides, and the panel's surface is PAINTED per frame by `SheetPanelNode` rather than
-composed into the modifier chain — the sheet expands by animating its offset, which recomposes nothing, so
-a build-time shape kept the radius it was built with until an unrelated compose re-ran the closure
-(measured on the demo: the corners arrived square only after a list scroll, and stayed square after
-collapsing). The clip and the shadow keep a build-time shape, driven by the sheet's VALUE (a tracked read,
-one recompose per anchor crossing).
+**winia's own rule, not Material 3's.** An expanded sheet whose panel reaches the window height drops its
+top corners. Current M3 passes `shape` through untouched — `BottomSheetDefaults.ExpandedShape` is
+`DockedContainerShape` (`CornerExtraLargeTop`, the same 28 dp) and nothing in `ModalBottomSheet.kt` switches
+on the sheet's state, so the square-corner rule came from the original winia implementation and is kept
+deliberately. Do not "align" it away; the test below locks it.
+
+The surface is PAINTED per frame by `SheetPanelNode` (a `DrawNode`), because the radius cannot be composed
+in that closure at all: its reads of the sheet's state happen outside any composition group and register
+nothing, so a shape derived from them never updates. Measured twice — once as the original build-time shape,
+once as one driven by an explicit tracked read — both times the corners went square only after an unrelated
+compose (a list scroll) re-ran the closure, and stayed square after collapsing. Paint-time reads use `peek`,
+so nothing in the draw path marks a slot dirty.
+
+The CLIP behind the surface stays a build-time shape (the framework's `clip` takes a plain `Shape`, not a
+closure), so it can lag the painted radius by one anchor crossing. Nothing in this component's own content
+is affected — the corners are padding — but a caller who paints content into the panel's top corners will
+see the clip and the surface disagree mid-drag.
 
 `the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not` reads the pixels just inside and
 clear of the corner: a rounded corner shows what is behind the panel, a square one shows the panel. The
 panel only squares up when its height reaches the window's, so a fixture for it needs content taller than
 the window.
+
+## Differences from M3 (beyond the shape rule above)
+
+- **Settle threshold.** M3 settles with a positional threshold of 56 dp
+  (`SheetDefaults.PositionalThreshold`); winia passes no explicit threshold and
+  `AnchoredDraggableState::settle_with_velocity` falls back to HALF the travel distance. A drag of 100 px
+  toward a nearer anchor therefore springs back here and settles in M3 — the sheet feels heavier. The
+  velocity gate matches (125 dp/s).
+- **Fling deltas.** M3's connection only consumes `NestedScrollSource.UserInput` deltas; winia's
+  `on_pre_scroll` / `on_post_scroll` ignore the source, so a FLING that the list could not absorb also moves
+  the sheet.
 
 ## Dismissal paths
 
