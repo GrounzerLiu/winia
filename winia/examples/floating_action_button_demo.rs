@@ -3,6 +3,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const STAR_PATH: &str = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
 const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
@@ -17,40 +21,21 @@ fn section_title(ctx: &mut ComposeCtx, title: &str) {
 #[composable]
 fn floating_action_button_demo(ctx: &mut ComposeCtx) {
     let clicks = ctx.remember(|| 0i32);
-    let rtl = ctx.remember(|| false);
     let ext_expanded = ctx.remember(|| true);
     let scroll = ctx.remember(|| ScrollState::new()).get();
-    let direction = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
     let click_count = clicks.get();
     let theme = WiniaTheme::colors();
 
-    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
+    {
         Column::new()
             .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll))
             .spacing(18.0)
             .build(ctx, |ctx| {
-                // ── 顶栏：标题 + 方向切换 ──
-                Row::new()
-                    .modifier(Modifier::new().fill_max_width())
-                    .build(ctx, |ctx| {
-                        Column::new().build(ctx, |ctx| {
-                            Text::new("Floating Action Button")
-                                .font_size(24.0)
-                                .build(ctx);
-                            Text::new(format!(
-                                "Clicks: {} | direction: {:?}",
-                                click_count, direction
-                            ))
-                            .font_size(14.0)
-                            .build(ctx);
-                        });
-                        Spacer::horizontal(12.0).build(ctx);
-                        Button::text()
-                            .on_click({ clone!(rtl); move || rtl.update(|v| *v = !*v) })
-                            .build(ctx, |ctx| {
-                                Text::new(if rtl.get() { "LTR" } else { "RTL" }).build(ctx)
-                            });
-                    });
+                // The demo's own top bar (title + direction switch) is gone: the chrome's bar
+                // carries the title and the settings sheet the direction. The click counter stays.
+                Text::new(format!("Clicks: {click_count}"))
+                    .font_size(14.0)
+                    .build(ctx);
 
                 // ── 尺寸变体 ──
                 section_title(ctx, "Sizes (small / regular / medium / large)");
@@ -139,7 +124,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 }
             });
-    });
+    }
 }
 
 fn main() {
@@ -148,7 +133,9 @@ fn main() {
             Window::new()
                 .size(720.0, 520.0)
                 .title("Floating Action Button Demo")
-                .build(ctx, |ctx| floating_action_button_demo(ctx));
+                .build(ctx, |ctx| {
+                settings::shell("Floating Action Button Demo", ctx, |ctx| floating_action_button_demo(ctx));
+            });
         });
     });
 }
