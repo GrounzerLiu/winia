@@ -1,6 +1,10 @@
 //! RichText 组件演示 — 全部属性展示
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn main() {
     winia::run_app!(|ctx| {
@@ -8,7 +12,9 @@ fn main() {
             Window::new()
                 .size(680.0, 1200.0)
                 .title("RichText — All Features")
-                .build(ctx, |ctx| rich_text_demo_ui(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("RichText — All Features", ctx, |ctx| rich_text_demo_ui(ctx));
+                });
         });
     });
 }
