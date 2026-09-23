@@ -226,6 +226,13 @@ struct OverlayWindow {
     /// Slot key of the focused node (stable across recompositions — focus is
     /// restored by slot_key after layout, mirroring the main tree).
     focused_slot_key: Option<u64>,
+    /// Whether this overlay owns the keyboard while it is open (see
+    /// [`crate::ui::overlay::OverlayDesc::focus_scope`]).
+    focus_scope: bool,
+    /// The main tree's focused slot when this overlay TOOK focus from it. Closing the overlay hands
+    /// focus back to that node — a keyboard user who opened a dialog and dismissed it must land where
+    /// they were, not at the top of the page.
+    restore_main_focus: Option<u64>,
 }
 
 /// Compose 风格的 click 检测中间状态
@@ -409,13 +416,97 @@ impl PerWindow {
         // （由后续触发的 set_focus_by_id 或 pointer 事件补上树的焦点标记）
     }
 
+    /// Escape: close the topmost overlay, or — with no overlay open — drop the page's focus.
+    ///
+    /// The one implementation, called by the real `KeyboardInput` path and by the debug server's
+    /// `k Escape`: this branch used to exist twice, and the copy kept the old "always clear focus"
+    /// rule, so a keyboard round trip driven over the debug server measured behaviour the framework
+    /// no longer had.
+    ///
+    /// Closing an overlay does NOT touch the page's focus: the page keeps it while the overlay owns
+    /// the keyboard (see `claim_keyboard_for_overlay`), so a keyboard user who opened a panel and
+    /// dismissed it is still where they were instead of having to tab back. Clearing the focus is
+    /// what Escape does when there is nothing to close (the collapsed field loses its ring).
+    fn escape_key(&mut self) {
+        if let Some(top) = self.overlays.iter().rposition(|o| !o.closing).map(|i| self.overlays[i].id) {
+            begin_overlay_close(self, top);
+            return;
+        }
+        if self.focused_id.is_some() {
+            if let Some(r) = self.composer.layout_root_idx() {
+                crate::layout::node::clear_focus(self.composer.arena_nodes_mut(), r);
+            }
+            self.focused_id = None;
+            self.focused_slot_key = None;
+            // Escape 清焦后关闭输入法（避免 IME 残留开启）
+            self.apply_ime_for_focus(None);
+        }
+    }
+
+    /// Tab / Shift+Tab: move focus one step inside whichever arena owns the keyboard.
+    ///
+    /// The arena is chosen by [`keyboard_scope`] — an overlay that already holds focus keeps it, else
+    /// the topmost overlay that declares itself a focus scope takes the key, else the main tree. This
+    /// is the ONE implementation: the real `KeyboardInput` path and the debug server's `k Tab` both
+    /// call it, because a second copy of the rule silently goes stale (it did: the debug copy kept
+    /// walking the main tree after this rule changed, so a UI test driving Tab over the debug server
+    /// measured the copy, not the framework).
+    fn tab_move_focus(&mut self, shift: bool) {
+        if let Some(i) = keyboard_scope(self) {
+            let (new_id, new_slot, want_ime) = {
+                let ov = &mut self.overlays[i];
+                match ov.composer.layout_root_idx() {
+                    Some(r) => {
+                        let nodes = ov.composer.arena_nodes_mut();
+                        if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
+                        let fid = crate::layout::node::get_focus_id(nodes, r);
+                        let (slot, want) = fid
+                            .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
+                            .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
+                            .unwrap_or((0, false));
+                        (fid, fid.map(|_| slot), want)
+                    }
+                    None => (None, None, false),
+                }
+            };
+            self.overlays[i].focused_id = new_id;
+            self.overlays[i].focused_slot_key = new_slot;
+            if let Some(ref sw) = self.skia_window {
+                sw.set_ime_allowed(want_ime);
+            }
+        } else {
+            let (new_id, new_slot) = self.composer.layout_root_idx().map(|r| {
+                let nodes = self.composer.arena_nodes_mut();
+                if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
+                let id = crate::layout::node::get_focus_id(nodes, r);
+                let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
+                (id, slot)
+            }).unwrap_or((None, None));
+            self.focused_id = new_id;
+            self.focused_slot_key = new_slot;
+            self.apply_ime_for_focus(new_id);
+        }
+    }
+
     /// 方向键移动焦点（对标 Compose Desktop 方向导航）——
     /// 候选 = 目标方向半平面内的可聚焦节点，得分 = 方向距离 + 垂直偏离×2
+    ///
+    /// The arena is the same one Tab uses ([`keyboard_scope`]): while an overlay owns the keyboard —
+    /// a modal one, or any overlay something inside was clicked into — the arrows move inside it too.
+    /// Letting them walk the page behind a dialog would be the same focus leak Tab had.
     fn focus_move_directional(&mut self, dir: FocusDir) -> bool {
-        let Some(fid) = self.focused_id else { return false; };
-        let Some(r) = self.composer.layout_root_idx() else { return false; };
-        let best = {
-            let nodes = self.composer.arena_nodes();
+        let overlay = keyboard_scope(self);
+        let (current, root) = match overlay {
+            Some(i) => (self.overlays[i].focused_id, self.overlays[i].composer.layout_root_idx()),
+            None => (self.focused_id, self.composer.layout_root_idx()),
+        };
+        let (Some(fid), Some(r)) = (current, root) else { return false };
+
+        let target = {
+            let nodes = match overlay {
+                Some(i) => self.overlays[i].composer.arena_nodes(),
+                None => self.composer.arena_nodes(),
+            };
             let candidates = crate::layout::node::collect_focus_candidates(nodes, r);
             let Some((_, cur_cx, cur_cy)) = candidates.iter().find(|(id, _, _)| *id == fid) else {
                 return false;
@@ -440,20 +531,31 @@ impl PerWindow {
                     best = Some((score, id));
                 }
             }
-            best
+            best.map(|(_, id)| id)
         };
-        if let Some((_, target)) = best {
-            let nodes = self.composer.arena_nodes_mut();
-            crate::layout::node::clear_focus(nodes, r);
-            if crate::layout::node::set_focus_by_id(nodes, r, target) {
-                self.focused_id = Some(target);
-                self.focused_slot_key =
-                    crate::layout::node::find_node_by_id(nodes, r, target)
-                        .map(|idx| nodes[idx].slot_key);
-                // IME 按组件声明（方向键聚焦文本组件时开启输入法）
-                self.apply_ime_for_focus(Some(target));
-                return true;
+        let Some(target) = target else { return false };
+
+        let (nodes, root) = match overlay {
+            Some(i) => (self.overlays[i].composer.arena_nodes_mut(), r),
+            None => (self.composer.arena_nodes_mut(), r),
+        };
+        crate::layout::node::clear_focus(nodes, root);
+        if crate::layout::node::set_focus_by_id(nodes, root, target) {
+            let slot = crate::layout::node::find_node_by_id(nodes, root, target)
+                .map(|idx| nodes[idx].slot_key);
+            match overlay {
+                Some(i) => {
+                    self.overlays[i].focused_id = Some(target);
+                    self.overlays[i].focused_slot_key = slot;
+                }
+                None => {
+                    self.focused_id = Some(target);
+                    self.focused_slot_key = slot;
+                }
             }
+            // IME 按组件声明（方向键聚焦文本组件时开启输入法）
+            self.apply_ime_for_focus(Some(target));
+            return true;
         }
         false
     }
@@ -550,6 +652,9 @@ impl PerWindow {
         // 导致 overlay 消失但状态残留 → 下次点击 toggle 错乱（"点两次才开"）
         sync_overlays(self, any_composed);
         layout_overlays(self);
+        // A modal overlay owns the keyboard from the frame it appears on and until it closes. The
+        // arenas have to exist first, which is why this runs after `layout_overlays`.
+        claim_keyboard_for_overlay(self);
         // Overlay focus interaction sync (needs overlay layout for slot resolve).
         self.sync_overlay_focus_interaction();
         // Cross-composer Tier1 flights (Phase 4): match stashed sources with
@@ -1082,85 +1187,23 @@ impl ApplicationHandler for AppState {
                 };
                 let mut consumed = false;
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Escape)) {
-                    // Topmost overlay first (Compose back/dismiss semantics): Esc closes
-                    // Dialog/Popup via exit anim + on_dismiss (e.g. SearchBar active=false).
-                    // Overlay key dispatch only walks the main-tree focus path, so overlays
-                    // can never see Esc themselves — this is their only close path.
-                    // User request: Esc must also clear focus (lose focus) even when closing
-                    // an overlay, so focus does not remain on the collapsed field.
-                    if let Some(top) = pw.overlays.iter().rposition(|o| !o.closing).map(|i| pw.overlays[i].id) {
-                        begin_overlay_close(pw, top);
-                        if pw.focused_id.is_some() {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-                            }
-                            pw.focused_id = None;
-                            pw.focused_slot_key = None;
-                            pw.apply_ime_for_focus(None);
-                        }
-                        consumed = true;
-                    } else if pw.focused_id.is_some() {
-                        if let Some(r) = pw.composer.layout_root_idx() {
-                            crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-                        }
-                        pw.focused_id = None;
-                        pw.focused_slot_key = None;
-                        // Escape 清焦后关闭输入法（避免 IME 残留开启）
-                        pw.apply_ime_for_focus(None);
-                        consumed = true;
-                    }
+                    pw.escape_key();
+                    consumed = true;
                 }
                 if event.state.is_pressed() && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
-                    let shift = pw.modifiers.shift_key();
-                    let has_overlay_focus = pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some());
-                    if has_overlay_focus {
-                        // Focus lives in an overlay — cycle within the topmost
-                        // focused overlay instead of the main tree (P1-2).
-                        for i in (0..pw.overlays.len()).rev() {
-                            if pw.overlays[i].closing || pw.overlays[i].focused_id.is_none() {
-                                continue;
-                            }
-                            let (new_id, new_slot, want_ime) = {
-                                let ov = &mut pw.overlays[i];
-                                let r = match ov.composer.layout_root_idx() {
-                                    Some(r) => r,
-                                    None => continue,
-                                };
-                                let nodes = ov.composer.arena_nodes_mut();
-                                if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
-                                let fid = crate::layout::node::get_focus_id(nodes, r);
-                                let (slot, want) = fid
-                                    .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
-                                    .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
-                                    .unwrap_or((0, false));
-                                (fid, fid.map(|_| slot), want)
-                            };
-                            pw.overlays[i].focused_id = new_id;
-                            pw.overlays[i].focused_slot_key = new_slot;
-                            if let Some(ref sw) = pw.skia_window {
-                                sw.set_ime_allowed(want_ime);
-                            }
-                            break;
-                        }
-                    } else {
-                        let (new_id, new_slot) = pw.composer.layout_root_idx().map(|r| {
-                            let nodes = pw.composer.arena_nodes_mut();
-                            if shift { focus_prev(nodes, r); } else { focus_next(nodes, r); }
-                            let id = crate::layout::node::get_focus_id(nodes, r);
-                            let slot = id.and_then(|fid| crate::layout::node::find_node_by_id(nodes, r, fid).map(|idx| nodes[idx].slot_key));
-                            (id, slot)
-                        }).unwrap_or((None, None));
-                        pw.focused_id = new_id;
-                        pw.focused_slot_key = new_slot;
-                        pw.apply_ime_for_focus(new_id);
-                    }
+                    pw.tab_move_focus(pw.modifiers.shift_key());
                     consumed = true;
                 }
                 if !consumed {
                     consumed = dispatch_key_to_overlay(pw, &ke);
                 }
                 if !consumed {
-                    consumed = dispatch_key_to_focus(pw, &ke);
+                    // The page is out of reach while a focus-scope overlay is up: it keeps its focused
+                    // node (and its ring comes back when the overlay closes), but keys it would have
+                    // handled — typing into a field behind the scrim — stop here instead.
+                    if keyboard_scope(pw).is_none() {
+                        consumed = dispatch_key_to_focus(pw, &ke);
+                    }
                 }
                 // 方向键焦点导航（对标 Compose Desktop arrow-key navigation）——
                 // 在目标方向半平面内选"方向距离 + 垂直偏离×2"最小的可聚焦节点
@@ -1690,64 +1733,17 @@ impl AppState {
                 }
                 debug::DebugEvent::Key { key } => {
                     if key == "Escape" {
-                        if let Some(top) = pw.overlays.iter().rposition(|o| !o.closing).map(|i| pw.overlays[i].id) {
-                            begin_overlay_close(pw, top);
-                            if pw.focused_id.is_some() {
-                                if let Some(r) = pw.composer.layout_root_idx() {
-                                    crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-                                }
-                                pw.focused_id = None;
-                                pw.focused_slot_key = None;
-                                pw.apply_ime_for_focus(None);
-                            }
-                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                            handled = true;
-                        } else if pw.focused_id.is_some() {
-                            if let Some(r) = pw.composer.layout_root_idx() {
-                                crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-                            }
-                            pw.focused_id = None;
-                            pw.focused_slot_key = None;
-                            pw.apply_ime_for_focus(None);
-                            if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                            handled = true;
-                        }
+                        // The same helper the real key path calls — see `PerWindow::escape_key`.
+                        pw.escape_key();
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                        handled = true;
                     } else if key == "Tab" {
-                        let has_overlay_focus = pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some());
-                        if has_overlay_focus {
-                            for i in (0..pw.overlays.len()).rev() {
-                                if pw.overlays[i].closing || pw.overlays[i].focused_id.is_none() {
-                                    continue;
-                                }
-                                let (new_id, new_slot, want_ime) = {
-                                    let ov = &mut pw.overlays[i];
-                                    let r = match ov.composer.layout_root_idx() {
-                                        Some(r) => r,
-                                        None => continue,
-                                    };
-                                    let nodes = ov.composer.arena_nodes_mut();
-                                    focus_next(nodes, r);
-                                    let fid = crate::layout::node::get_focus_id(nodes, r);
-                                    let (slot, want) = fid
-                                        .and_then(|f| crate::layout::node::find_node_by_id(nodes, r, f))
-                                        .map(|idx| (nodes[idx].slot_key, node_or_descendant_wants_ime(nodes, idx)))
-                                        .unwrap_or((0, false));
-                                    (fid, fid.map(|_| slot), want)
-                                };
-                                pw.overlays[i].focused_id = new_id;
-                                pw.overlays[i].focused_slot_key = new_slot;
-                                if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(want_ime);
-                                }
-                                break;
-                            }
-                        } else if let Some(r) = pw.composer.layout_root_idx() {
-                            let nodes = pw.composer.arena_nodes_mut();
-                            focus_next(nodes, r);
-                            pw.focused_id = crate::layout::node::get_focus_id(nodes, r);
-                            pw.focused_slot_key = pw.focused_id.and_then(|id| crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key));
-                            pw.apply_ime_for_focus(pw.focused_id);
-                        }
+                        // The SAME helper the real key path calls: this branch used to keep its own
+                        // copy of the traversal rule, which silently went stale the moment the rule
+                        // changed (it still walked the main tree while an overlay owned the keyboard,
+                        // and a UI test driving Tab over the debug server would have measured that
+                        // copy instead of the framework). Shift is not expressible in `k <key>`.
+                        pw.tab_move_focus(false);
                     } else if let Some(k) = parse_debug_key(&key) {
                         // 任意按键：复用真实键盘派发路径（Preview/Bubble/激活）——
                         // WS 可模拟字符输入/删除/方向键。修饰键默认无（Ctrl 等
@@ -1761,7 +1757,9 @@ impl AppState {
                             is_meta_pressed: pw.modifiers.meta_key(),
                             repeat: false,
                         };
-                        if !dispatch_key_to_overlay(pw, &ke) {
+                        if !dispatch_key_to_overlay(pw, &ke) && keyboard_scope(pw).is_none() {
+                            // Same gate as the real key path: a focus-scope overlay owns the keyboard,
+                            // so a key it does not consume does not reach the page behind it either.
                             dispatch_key_to_focus(pw, &ke);
                         }
                     }
@@ -2812,6 +2810,8 @@ impl OverlayWindow {
             closing_since: None,
             focused_id: None,
             focused_slot_key: None,
+            focus_scope: desc.focus_scope,
+            restore_main_focus: None,
         }
     }
 
@@ -2828,6 +2828,7 @@ impl OverlayWindow {
         self.anchor_slide = desc.anchor_slide;
         self.offset = desc.offset;
         self.modal = desc.modal;
+        self.focus_scope = desc.focus_scope;
         self.dismiss_on_outside = desc.dismiss_on_outside;
         self.click_passthrough = desc.click_passthrough;
         self.on_dismiss = desc.on_dismiss;
@@ -2956,6 +2957,23 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     // IME follows: off when nothing else holds focus.
     pw.overlays[idx].focused_id = None;
     pw.overlays[idx].focused_slot_key = None;
+    // A focus-scope overlay took the keyboard from the page when it opened; giving it back is what
+    // returns a keyboard user to where they were instead of to the top of the page. Resolved at once
+    // (the main arena is laid out by now) and ALSO armed for the frame's own restore-by-slot step, so
+    // it survives a recomposition that replaced the node.
+    if let Some(slot) = pw.overlays[idx].focus_scope.then(|| pw.overlays[idx].restore_main_focus).flatten() {
+        pw.focused_slot_key = Some(slot);
+        if let Some(r) = pw.composer.layout_root_idx() {
+            let nodes = pw.composer.arena_nodes_mut();
+            if let Some(id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
+                crate::layout::node::clear_focus(nodes, r);
+                if crate::layout::node::set_focus_by_id(nodes, r, id) {
+                    pw.focused_id = Some(id);
+                }
+            }
+        }
+        pw.apply_ime_for_focus(pw.focused_id);
+    }
     if pw.focused_id.is_none() && !pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some()) {
         if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(false); }
     }
@@ -2972,7 +2990,15 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
             );
         }
     }
-    if !has_exit {
+    // An overlay the caller STILL declares is not removed here, even with no exit animation of its
+    // own: `ModalBottomSheet` slides out through its own `SheetState`, and its dismissal is reported
+    // back to the caller only after that slide settles (`shown && settled == Hidden`). Removing the
+    // overlay now killed the composition the observer runs in, so the caller's `visible` stayed TRUE
+    // forever — which left a sheet that could never be reopened, and re-created it (off-screen, with
+    // its scrim) on the next recomposition. `finish_closing_overlays` removes it once the caller stops
+    // declaring it.
+    let still_declared = pw.composer.overlay_active.get(&id).copied().unwrap_or(false);
+    if !has_exit && !still_declared {
         pw.overlays.remove(idx);
     }
 }
@@ -2983,14 +3009,134 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
 /// rest of the process, which is a stuck dim layer over the window that the user cannot get rid of.
 const CLOSING_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
 
-/// 退出动画完成检测：closing 且 progress≈0（动画已播完）→ 移除
+/// Which arena owns the keyboard right now: `Some(i)` = that overlay's own composition,
+/// `None` = the window's main tree.
+///
+/// Two steps, in this order:
+///
+/// 1. An overlay that ALREADY holds focus keeps it. That is the case the framework has always had —
+///    the user clicked into a popup's field, so Tab cycles there instead of jumping back out.
+/// 2. Otherwise the topmost open overlay that declares itself a focus scope takes it, provided the
+///    focusable nodes it composed this frame are not empty. This is what makes a modal overlay
+///    reachable by keyboard at all, and what keeps Tab out of the page behind its scrim.
+///
+/// A focus scope with nothing focusable is SKIPPED rather than swallowing the key: Tab has to keep
+/// doing something, and a layer with nowhere to put focus would silently do nothing. The same walk
+/// therefore falls through to the next overlay below, and finally to the main tree.
+fn keyboard_scope(pw: &PerWindow) -> Option<usize> {
+    // The topmost overlay that owns the keyboard wins outright. Asking "who already holds focus"
+    // FIRST would hand the keys to an overlay BELOW a modal that still remembers a focused node —
+    // measured: with a dialog over the settings sheet, Tab cycled the sheet underneath.
+    if let Some(i) = (0..pw.overlays.len()).rev().find(|&i| overlay_owns_keyboard(&pw.overlays[i])) {
+        return Some(i);
+    }
+    // No focus scope is up: an overlay something was clicked into keeps the keys (a popup, a tooltip
+    // the user is interacting with), else they belong to the main tree.
+    (0..pw.overlays.len())
+        .rev()
+        .find(|&i| !pw.overlays[i].closing && pw.overlays[i].focused_id.is_some())
+}
+
+/// Whether this overlay may own the keyboard: it declares itself a focus scope, has not started
+/// closing, still has a size, and composed at least one focusable node.
+///
+/// An overlay with nothing focusable is skipped rather than swallowing the key — Tab has to keep
+/// doing something — and the same walk then falls through to the overlay below it, or to the main
+/// tree.
+fn overlay_owns_keyboard(ov: &OverlayWindow) -> bool {
+    if ov.closing || !ov.focus_scope {
+        return false;
+    }
+    let Some(root) = ov.composer.layout_root_idx() else { return false };
+    let size = ov.composer.layout_root()
+        .map(|r| (r.measured_size.width, r.measured_size.height))
+        .unwrap_or((0.0, 0.0));
+    if size.0 <= 0.0 || size.1 <= 0.0 {
+        return false;
+    }
+    let mut ids = Vec::new();
+    crate::layout::node::collect_focusable_ids(ov.composer.arena_nodes(), root, &mut ids);
+    !ids.is_empty()
+}
+
+/// Take the keyboard away from the page while a focus-scope overlay is up: the page keeps no focused
+/// node (no focus ring under the scrim, and its keys have nowhere to go), and the overlay is where
+/// Tab will land.
+///
+/// It deliberately does NOT focus anything inside the overlay. A focus ring appearing on its own the
+/// moment a panel opens reads as a bug — nothing the user did put it there — so the first Tab is what
+/// moves focus in, and until then the panel simply has no focus. (Compose focuses a dialog's first
+/// focusable on open; this framework shows the keyboard user the same thing with one keypress, without
+/// the ring that a mouse user would see for no reason.)
+///
+/// Runs right after the overlays have been laid out, because the choice needs their arenas: on the
+/// frame an overlay is created, the arena only exists once `layout_overlays` has run.
+///
+/// The overlay remembers where the page's focus was, so closing can hand it back (see
+/// `begin_overlay_close`).
+fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
+    let scope = (0..pw.overlays.len()).rev().find(|&i| {
+        pw.overlays[i].focused_id.is_none() && overlay_owns_keyboard(&pw.overlays[i])
+    });
+    let Some(i) = scope else { return };
+
+    // Where the page behind was, so closing can hand it back. Read from the ARENA, not from
+    // `pw.focused_slot_key`: a click focuses a node through `focus_by_id` and leaves the cached slot
+    // key alone, so the cache read as `None` while the page did have focus (measured: after dismissing
+    // the sheet, nothing was focused at all — the restore had nothing to put back). Only the FIRST
+    // takeover records it; a second one would overwrite it with the cleared value below.
+    if pw.overlays[i].restore_main_focus.is_none() {
+        let main_focus = pw.composer.layout_root_idx().and_then(|r| {
+            let nodes = pw.composer.arena_nodes();
+            let id = crate::layout::node::get_focus_id(nodes, r)?;
+            crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key)
+        });
+        pw.overlays[i].restore_main_focus = main_focus.or(pw.focused_slot_key);
+    }
+    // The page KEEPS its focused node. It is not the keyboard target any more — `keyboard_scope`
+    // gives the keys to this overlay, and the key fall-through in the event loop stops at the overlay
+    // — but it is not forgotten either: a keyboard user who opened a panel and dismissed it is still
+    // where they were, without tabbing back. (Clearing it here was the previous rule; it made every
+    // overlay visit cost a fresh Tab round.)
+    if let Some(ref sw) = pw.skia_window {
+        // Nothing in the panel is focused until the user tabs into it, so the IME has no target yet.
+        sw.set_ime_allowed(false);
+    }
+}
+
+/// Close bookkeeping: drop a closing overlay whose fade is over AND whose caller has stopped
+/// declaring it, and hand a still-declared one back its interactivity if the close never concludes.
+///
+/// The declaration is what decides. A component can keep its overlay alive through a close — the
+/// modal sheet slides out with its own `SheetState` and reports the dismissal to the caller only
+/// after the slide settles — so removing it on the strength of "no exit animation" cut the
+/// composition that observer lives in, froze the caller's `visible` at true for good, and let the
+/// next recomposition rebuild the panel off-screen with its scrim (measured: sheet unreachable
+/// afterwards, dim layer permanent).
 fn finish_closing_overlays(pw: &mut PerWindow) {
     let now = std::time::Instant::now();
-    pw.overlays.retain(|ov| {
+    // Ids the caller still declares this frame (`overlay_active` is written during compose).
+    let declared: Vec<u64> = pw.composer.overlay_active
+        .iter()
+        .filter(|(_, active)| **active)
+        .map(|(&id, _)| id)
+        .collect();
+    pw.overlays.retain_mut(|ov| {
         if !ov.closing { return true; }
+        let is_declared = declared.contains(&ov.id);
         // 无 progress（无动画）不应到这里（begin 已移除）；有则等动画完成
         let progress = ov.progress.as_ref().map(|p| p.peek());
-        if !closing_overlay_is_done(progress, ov.closing_since, now) {
+        let done = closing_overlay_is_done(progress, ov.closing_since, now);
+        if is_declared {
+            // The fade finished (or timed out) and the caller still wants this overlay: it is not
+            // going away, so give it back rather than leaving a panel the user can see and not touch.
+            if done && closing_overlay_timed_out(ov.closing_since, now) {
+                ov.closing = false;
+                ov.closing_since = None;
+            }
+            return true;
+        }
+        if !done {
             return true;
         }
         if let Some(p) = ov.progress.as_ref() {
@@ -3002,6 +3148,12 @@ fn finish_closing_overlays(pw: &mut PerWindow) {
         }
         false
     });
+}
+
+/// Whether a close has been pending past [`CLOSING_DEADLINE`] — the safety net for a tween that never
+/// reports done, and the trigger for handing a still-declared overlay back its interactivity.
+fn closing_overlay_timed_out(closing_since: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE)
 }
 
 /// Whether a closing overlay may be dropped: its fade finished, or it has been closing past
@@ -3889,19 +4041,16 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
 /// Falls through (returns false) when no overlay has focus, so callers can
 /// continue with the main tree.
 fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
-    for i in (0..pw.overlays.len()).rev() {
-        let ov = &pw.overlays[i];
-        if ov.closing { continue; }
-        let Some(fid) = ov.focused_id else { continue; };
-        let Some(r) = ov.composer.layout_root_idx() else { continue; };
-        if dispatch_key_in_arena(ov.composer.arena_nodes(), r, fid, ke) {
-            return true;
-        }
-        // Focused overlay did not consume — stop here (a focused surface owns
-        // the key stream; falling through to lower surfaces would double-handle).
-        return false;
-    }
-    false
+    // Only the arena that OWNS the keyboard gets the key. Walking "the first overlay that has focus"
+    // would hand keys to a layer below the modal that is actually on top (an overlay keeps a
+    // remembered focus now, see `claim_keyboard_for_overlay`), and falling through to lower surfaces
+    // would double-handle a key the owner already acted on.
+    let Some(i) = keyboard_scope(pw) else { return false };
+    let ov = &pw.overlays[i];
+    let Some(fid) = ov.focused_id else { return false };
+    let Some(r) = ov.composer.layout_root_idx() else { return false };
+    // The owner did not consume — stop here.
+    dispatch_key_in_arena(ov.composer.arena_nodes(), r, fid, ke)
 }
 
 /// Core key dispatch against one arena: focus path Preview (root→focused) +

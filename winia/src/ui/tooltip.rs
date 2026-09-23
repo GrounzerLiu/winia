@@ -144,6 +144,8 @@ impl Tooltip {
                 offset: self.offset,
                 anchor_slide: None,
                 modal: false,
+                // A tooltip is decoration: it must never take the keyboard away from what it explains.
+                focus_scope: false,
                 dismiss_on_outside: dismiss_outside,
                 // ⚠ Tooltip 浮层必须放行主树点击——浮层盖住锚点（锚点上方
                 // tooltip 与锚点重叠）时点击锚点仍生效（否则 tooltip 挡住

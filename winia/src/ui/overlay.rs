@@ -286,6 +286,19 @@ pub struct OverlayDesc {
     pub(crate) anchor_slide: Option<AnchorSlide>,
     /// Modal (Dialog): draws a scrim and captures outside clicks for dismiss.
     pub(crate) modal: bool,
+    /// Whether this overlay owns the KEYBOARD while it is open: Tab and the arrow keys move focus
+    /// inside its own arena instead of the window's main tree, and the page behind it is out of reach
+    /// until it closes. The modal components (`Dialog`, `AlertDialog`, `ModalBottomSheet`) set it.
+    ///
+    /// Independent of [`Self::modal`] on purpose: `modal` is about the scrim and outside clicks, this
+    /// is about focus. A popup that merely floats over the page (a menu, a tooltip) leaves it false —
+    /// such an overlay takes the keyboard only once something inside it was clicked, the behaviour it
+    /// has always had.
+    ///
+    /// The topmost declaring overlay wins (the ones below are covered by it), and one that declares
+    /// itself a focus scope but has nothing focusable is skipped: Tab keeps working instead of being
+    /// swallowed by a layer that has nowhere to put focus.
+    pub(crate) focus_scope: bool,
     /// Whether an outside click triggers `on_dismiss_request` (non-modal Popup
     /// default true).
     pub(crate) dismiss_on_outside: bool,
@@ -443,6 +456,9 @@ impl Popup {
             offset: self.offset,
             anchor_slide: None,
             modal: false,
+            // A popup takes the keyboard only once something inside it was clicked (`keyboard_scope`
+            // keeps it there while it lasts); it does not grab focus the moment it floats up.
+            focus_scope: false,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
@@ -576,6 +592,8 @@ impl Dialog {
             offset: self.offset,
             anchor_slide: self.anchor_slide,
             modal: true,
+            // A dialog owns the keyboard while it is up (see `OverlayDesc::focus_scope`).
+            focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
             on_dismiss: self.on_dismiss,
@@ -657,6 +675,7 @@ impl DropdownMenu {
                 offset: (0.0, 4.0),
                 anchor_slide: None,
                 modal: false,
+                focus_scope: false,
                 dismiss_on_outside: true,
                 click_passthrough: false,
                 on_dismiss: self.on_dismiss,
