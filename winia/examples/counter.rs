@@ -2,6 +2,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::app;
 
 /// Counter 主界面（#[composable] = 函数级 scope：count/show_alt 等 State 变化 → 本函数重跑）
@@ -105,10 +109,13 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(400.0, 500.0)
+                // Taller than the counters need on their own: the chrome's top app bar takes 64 px.
+                .size(400.0, 560.0)
                 .title("Winia Counter + Scroll")
                 .build(ctx, |ctx| {
-                    counter_ui(ctx);
+                    settings::shell("Winia Counter + Scroll", ctx, |ctx| {
+                        counter_ui(ctx);
+                    });
                 });
         });
     });
