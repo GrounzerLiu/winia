@@ -11,6 +11,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const SECTION_COUNT: u64 = 5;
 const ITEMS_PER_SECTION: u64 = 19;
@@ -96,7 +100,9 @@ fn main() {
             Window::new()
                 .size(520.0, 600.0)
                 .title("stickyHeader Demo")
-                .build(ctx, sticky_header_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("stickyHeader Demo", ctx, sticky_header_demo);
+                });
         });
     });
 }
