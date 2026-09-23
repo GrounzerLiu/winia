@@ -7,6 +7,10 @@
 //! - 与旧版一致的 7-shape Morph 动画
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -21,10 +25,6 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .build(ctx, |ctx| {
-            Text::new("Loading Indicator 演示（M3 Expressive）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "Uncontained（默认）");
             Row::new().spacing(24.0).build(ctx, |ctx| {
                 LoadingIndicator::new().build(ctx);
@@ -76,7 +76,9 @@ fn main() {
             Window::new()
                 .size(420.0, 620.0)
                 .title("Loading Indicator Demo")
-                .build(ctx, loading_indicator_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Loading Indicator Demo", ctx, loading_indicator_demo);
+                });
         });
     });
 }
