@@ -7,6 +7,10 @@
 //! - M3 尺寸变体：full-width / inset / middle-inset（modifier padding 实现）
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -30,10 +34,6 @@ fn divider_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("Divider 演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "列表分隔（HorizontalDivider 默认 1dp）");
             list_item(ctx, "收件箱");
             Divider::horizontal().build(ctx);
@@ -108,7 +108,9 @@ fn main() {
             Window::new()
                 .size(420.0, 560.0)
                 .title("Divider Demo")
-                .build(ctx, divider_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Divider Demo", ctx, divider_demo);
+                });
         });
     });
 }
