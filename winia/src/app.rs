@@ -206,6 +206,11 @@ struct OverlayWindow {
     /// Closing in progress (exit animation playing — kept rendered until done;
     /// no interaction meanwhile)
     closing: bool,
+    /// When `closing` was set. The exit animation is expected to finish long before
+    /// [`CLOSING_DEADLINE`]; if it never reports done (an interrupted or never-advanced tween), a
+    /// closing overlay would otherwise keep rendering its modal scrim forever — which is exactly what a
+    /// user saw: the sheet gone, the dim layer still over the page.
+    closing_since: Option<std::time::Instant>,
     /// Focused node id inside this overlay's own arena (overlay keyboards route
     /// here — the main-tree focus path can never reach overlay nodes).
     /// None = no focus in this overlay.
@@ -2728,6 +2733,7 @@ impl OverlayWindow {
             enter_anim: desc.enter_anim,
             exit_anim: desc.exit_anim,
             closing: false,
+            closing_since: None,
             focused_id: None,
             focused_slot_key: None,
         }
@@ -2859,6 +2865,7 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
         return;
     }
     pw.overlays[idx].closing = true;
+    pw.overlays[idx].closing_since = Some(std::time::Instant::now());
     if let Some(cb) = pw.overlays[idx].on_dismiss.take() {
         (cb)();
     }
@@ -2887,14 +2894,48 @@ fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     }
 }
 
+/// How long a closing overlay may stay in the list before it is removed regardless of its exit
+/// animation. Every exit spec is a few hundred milliseconds; a tween that never reports done (an
+/// interrupted or never-advanced one) used to keep the overlay — and its modal scrim — rendering for the
+/// rest of the process, which is a stuck dim layer over the window that the user cannot get rid of.
+const CLOSING_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
+
 /// 退出动画完成检测：closing 且 progress≈0（动画已播完）→ 移除
 fn finish_closing_overlays(pw: &mut PerWindow) {
+    let now = std::time::Instant::now();
     pw.overlays.retain(|ov| {
         if !ov.closing { return true; }
         // 无 progress（无动画）不应到这里（begin 已移除）；有则等动画完成
-        let done = ov.progress.as_ref().map(|p| p.peek() < 0.001).unwrap_or(true);
-        !done
+        let progress = ov.progress.as_ref().map(|p| p.peek());
+        if !closing_overlay_is_done(progress, ov.closing_since, now) {
+            return true;
+        }
+        if progress.is_some_and(|p| p >= 0.001) {
+            // Past the deadline: snap the fade to its end so the removal is not a visible pop.
+            if let Some(p) = ov.progress.as_ref() {
+                crate::animation::cancel_animation_by_id(p.state_id());
+                p.set(0.0);
+            }
+        }
+        false
     });
+}
+
+/// Whether a closing overlay may be dropped: its fade finished, or it has been closing past
+/// [`CLOSING_DEADLINE`]. The deadline is the safety net for a tween that never reports done — without it
+/// the overlay stayed in the list forever, rendering its modal scrim over a page the user could no longer
+/// dim away (the sheet itself had already slid out of view).
+fn closing_overlay_is_done(
+    progress: Option<f32>,
+    closing_since: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    match progress {
+        // No progress channel at all — nothing to wait for (`begin_overlay_close` removes those at once).
+        None => true,
+        Some(p) if p < 0.001 => true,
+        Some(_) => closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE),
+    }
 }
 
 /// overlay 移除前清理交互状态（hover 补 Exit + press 释放）——
@@ -4558,6 +4599,35 @@ mod window_theme_tests {
         assert!(!first.refresh_theme(), "and then it is idle again");
 
         crate::ui::theme::set_system_dark_mode(None);
+    }
+}
+
+#[cfg(test)]
+mod overlay_close_tests {
+    use super::{closing_overlay_is_done, CLOSING_DEADLINE};
+    use std::time::{Duration, Instant};
+
+    /// A closing overlay is dropped when its fade finished — and, failing that, past the deadline. The
+    /// case in between is the reason the deadline exists: a tween that never reports done kept the overlay
+    /// (and its modal scrim) rendering forever, which a user hit as a stuck dim layer over the page with
+    /// the sheet already gone.
+    #[test]
+    fn a_closing_overlay_waits_for_its_fade_but_not_forever() {
+        let now = Instant::now();
+        assert!(closing_overlay_is_done(None, None, now), "no progress channel: nothing to wait for");
+        assert!(closing_overlay_is_done(Some(0.0), None, now), "the fade reached its end");
+        assert!(
+            !closing_overlay_is_done(Some(1.0), Some(now), now),
+            "a fade in flight is not dropped"
+        );
+        assert!(
+            !closing_overlay_is_done(Some(1.0), Some(now - CLOSING_DEADLINE / 2), now),
+            "…and not before its time"
+        );
+        assert!(
+            closing_overlay_is_done(Some(1.0), Some(now - CLOSING_DEADLINE - Duration::from_millis(1)), now),
+            "…and it is dropped once the deadline passes"
+        );
     }
 }
 
