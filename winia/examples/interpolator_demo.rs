@@ -13,6 +13,10 @@ use winia::animation::interpolator::Interpolator;
 use winia::animation::{AnimationSpec, TweenSpec};
 use winia::modifier::GraphicsLayerParams;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// 全部 30 个插值器（Linear + 29 个表驱动）
 fn all_interpolators() -> Vec<(&'static str, Arc<dyn Interpolator>)> {
@@ -161,7 +165,9 @@ fn main() {
             Window::new()
                 .size(420.0, 560.0)
                 .title("Interpolator Demo")
-                .build(ctx, |ctx| interpolator_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Interpolator Demo", ctx, |ctx| interpolator_demo(ctx));
+                });
         });
     });
 }
