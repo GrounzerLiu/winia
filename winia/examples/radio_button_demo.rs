@@ -8,6 +8,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -42,10 +46,6 @@ fn radio_button_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("RadioButton 演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "状态");
             state_row(ctx, "未选中", false, true);
             state_row(ctx, "已选中", true, true);
@@ -130,7 +130,9 @@ fn main() {
             Window::new()
                 .size(420.0, 600.0)
                 .title("RadioButton Demo")
-                .build(ctx, radio_button_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("RadioButton Demo", ctx, radio_button_demo);
+                });
         });
     });
 }
