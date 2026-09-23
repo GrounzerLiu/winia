@@ -367,6 +367,17 @@ impl SwipeToDismissBox {
         let SwipeToDismissBox { state, background, modifier, allow_start, allow_end, gestures_enabled, on_dismiss } = self;
         let holder = ctx.remember(|| SwipeToDismissBoxState::default());
         let state = state.unwrap_or_else(|| holder.get());
+        // A state that has not been measured yet has NO offset (`AnchoredDraggableState` starts at
+        // NaN and the first layout seeds it from the measured width). The content's placement reads
+        // that offset, and NaN places it nowhere — the row paints its background for that frame. It is
+        // visible whenever a row's state is re-created mid-list: measured, removing a row re-creates
+        // the state of every row below it (their lazy items are re-keyed) and each of them flashed its
+        // revealed panel for a frame. Seed the offset with the current value's anchor — 0 for a row
+        // parked at `Settled`, which is what a fresh state is.
+        if state.offset().is_nan() {
+            let parked = state.position_of(state.settled_value());
+            state.offset_state().set(if parked.is_nan() { 0.0 } else { parked });
+        }
         let settled = state.settled_value();
 
         // `fired` is the once-per-dismissal latch, and it is a plain state read (not a peek) so that

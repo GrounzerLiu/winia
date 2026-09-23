@@ -55,6 +55,14 @@ Two rebuilds it does not survive, both measured:
   that changes position gets a fresh state. A caller who needs state to follow an item across reorders
   should keep it in its own data, keyed by the item.
 
+That re-creation is itself visible, and the component defends against it: a state that has not been
+measured yet has NO offset (`AnchoredDraggableState` starts at `NaN` and the first layout seeds it from
+the measured width), and a placement that reads `NaN` puts the content nowhere — the row paints its
+BACKGROUND for that frame. It showed as a one-frame flash of the revealed panel on every row below a
+removed one: those rows are re-keyed and get fresh states. `SwipeToDismissBox` therefore seeds the offset
+with the current value's anchor (`0` for a row parked at `Settled`) before anything reads it; measured,
+the value the content's placement reads is never `NaN` now, and it was for every re-created row before.
+
 ```rust
 LazyColumn::new()
     .items_from(items, |m| m.id, move |ctx, _i, m| {
