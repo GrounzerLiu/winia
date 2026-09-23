@@ -50,7 +50,6 @@ pub mod bottom_sheet_scaffold;
 pub mod anchored_draggable;
 pub mod sheet_state;
 pub mod surface;
-pub mod swipe_to_dismiss;
 pub mod navigation_bar;
 pub mod navigation_rail;
 pub mod navigation_drawer;
@@ -112,9 +111,6 @@ pub use range_slider::{RangeSlider, RangeThumb, RangeValue};
 pub use segmented_button::{
     CHECK_ICON_PATH, MultiChoiceSegmentedButtonRow, SegmentedButton, SegmentedButtonColors,
     SegmentedButtonDefaults, SingleChoiceSegmentedButtonRow,
-};
-pub use swipe_to_dismiss::{
-    SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,
 };
 pub use scrollbar::{
     VerticalScrollbar, HorizontalScrollbar, LazyScrollbar, HorizontalLazyScrollbar,
