@@ -6,6 +6,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// The inactive half of the crossfading pair below: Material Icons "circle" (filled, 24 dp viewBox),
 /// from Google's own set — `fonts.google.com/icons?icon.set=materialicons&icon.name=circle`, whose
@@ -39,10 +43,6 @@ fn segmented_button_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("SegmentedButton demo (material3 aligned)")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "Single choice (one item is selected)");
             SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
                 for (i, name) in ["Day", "Week", "Month"].iter().enumerate() {
@@ -145,19 +145,8 @@ fn segmented_button_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().height(40.0))
                 .build(ctx);
 
-            // The app's OWN theme switch. It takes the same route the platform's `ThemeChanged` event
-            // does — `set_system_dark_mode` -> the pending flag -> `apply_system_theme` in the redraw
-            // loop — so this doubles as the manual check that a live theme change re-composes the tree.
-            section_title(ctx, "Theme (this window's own switch)");
-            Row::new().spacing(8.0).build(ctx, |ctx| {
-                for (label, mode) in [("Auto", None), ("Light", Some(false)), ("Dark", Some(true))] {
-                    Button::text()
-                        .on_click(move || winia::ui::set_system_dark_mode(mode))
-                        .build(ctx, |ctx| {
-                            Text::new(label).build(ctx);
-                        });
-                }
-            });
+            // The theme switch this demo used to carry is the settings sheet's now: same route
+            // (`set_system_dark_mode` -> pending flag -> `apply_system_theme` in the redraw loop).
         });
 }
 
@@ -167,7 +156,9 @@ fn main() {
             Window::new()
                 .size(460.0, 760.0)
                 .title("Segmented Button Demo")
-                .build(ctx, segmented_button_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Segmented Button Demo", ctx, segmented_button_demo);
+                });
         });
     });
 }
