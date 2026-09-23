@@ -8,6 +8,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::app;
 
@@ -25,10 +29,6 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width())
                 .alignment(winia::layout::Alignment::Center)
                 .build(ctx, |ctx| {
-                    Text::new("Animation Demo")
-                        .font_size(22.0)
-                        .modifier(Modifier::new().padding_vertical(8.0))
-                        .build(ctx);
                     Column::new()
                         .modifier(Modifier::new().layout_weight(1.0))
                         .build(ctx, |_| {});
@@ -425,9 +425,13 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(420.0, 500.0)
+                // A little taller than before: the chrome's top app bar takes 64 px, and the case
+                // list scrolls, so this only decides how much of it the first fold shows.
+                .size(420.0, 640.0)
                 .title("Animation Demo")
-                .build(ctx, |ctx| animation_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Animation Demo", ctx, |ctx| animation_demo(ctx));
+                });
         });
     });
 }
