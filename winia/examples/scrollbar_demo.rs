@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[composable]
 fn scrollbar_demo_ui(ctx: &mut ComposeCtx) {
@@ -211,7 +215,9 @@ fn main() {
                 .size(520.0, 720.0)
                 .title("Scrollbar Demo")
                 .build(ctx, |ctx| {
-                    scrollbar_demo_ui(ctx);
+                    settings::shell("Scrollbar Demo", ctx, |ctx| {
+                        scrollbar_demo_ui(ctx);
+                    });
                 });
         });
     });
