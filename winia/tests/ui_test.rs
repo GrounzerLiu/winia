@@ -681,9 +681,13 @@ fn tab_owns_the_keyboard_inside_a_modal_overlay_and_the_page_gets_it_back() {
     assert!(app.tag_is_focused("open-dialog"), "Tab must reach the page's button");
     app.key("Enter");
     app.expect_text_timeout("dialog-open: yes", Duration::from_secs(5));
-    assert!(
-        app.tag_is_focused("open-dialog"),
-        "opening a dialog must not throw the page's focus away"
+    // The page still remembers where it was, but it must not keep DRAWING a ring behind the scrim:
+    // the memory lives in a slot key while a modal owns the keyboard, so the tree shows no focus at
+    // all until something inside the dialog takes it.
+    assert_eq!(
+        app.focused_tags(),
+        Vec::<String>::new(),
+        "a modal takes the page's ring off the tree (its focus is remembered, not drawn)"
     );
 
     // Tab now works inside the dialog: its first focusable is the field in the text slot.
@@ -691,6 +695,11 @@ fn tab_owns_the_keyboard_inside_a_modal_overlay_and_the_page_gets_it_back() {
     assert!(
         app.overlay_tag_is_focused("dialog-field"),
         "Tab must move focus inside the dialog, not behind its scrim"
+    );
+    assert_eq!(
+        app.focused_tags(),
+        vec!["dialog-field".to_string()],
+        "exactly one node shows focus while a modal is up"
     );
     for key in ["h", "i"] {
         app.key(key);
@@ -703,6 +712,11 @@ fn tab_owns_the_keyboard_inside_a_modal_overlay_and_the_page_gets_it_back() {
     assert!(
         app.tag_is_focused("open-dialog"),
         "closing an overlay must hand the focus back, so a keyboard user does not re-Tab"
+    );
+    assert_eq!(
+        app.focused_tags(),
+        vec!["open-dialog".to_string()],
+        "…and the page's ring is the only one again"
     );
 }
 
