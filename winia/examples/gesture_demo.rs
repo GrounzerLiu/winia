@@ -7,6 +7,10 @@ use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
 use winia::ui::text::Text;
 use winia::ui::Window;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::theme::WiniaTheme;
 use winia::ui::Column;
 use winia::ui::layout_components::Row;
@@ -180,7 +184,9 @@ fn main() {
             Window::new()
                 .size(480.0, 620.0)
                 .title("Gesture Demo")
-                .build(ctx, gesture_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Gesture Demo", ctx, gesture_ui);
+                });
         });
     });
 }
