@@ -5,6 +5,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[composable]
 fn surface_demo(ctx: &mut ComposeCtx) {
@@ -12,8 +16,6 @@ fn surface_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(24.0))
         .spacing(24.0)
         .build(ctx, |ctx| {
-            Text::new("Surface 组件演示").font_size(18.0).build(ctx);
-
             // ① 默认 surface + 圆角 16（主题 surface / on_surface 匹配）
             Surface::new()
                 .shape(Shape::rounded(16.0))
@@ -120,9 +122,11 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(480.0, 480.0)
+                .size(480.0, 560.0)
                 .title("Surface 演示")
-                .build(ctx, |ctx| surface_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Surface 演示", ctx, |ctx| surface_demo(ctx));
+                });
         });
     });
 }
