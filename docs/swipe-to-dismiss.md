@@ -174,5 +174,11 @@ threshold.
   short slow drag springs back; a row with a direction switched off refuses it while the other direction
   still dismisses; and after a dismissal the row that moves up into the freed slot is live — draggable,
   with its content back at the row's own edge (a bounds assertion, because "parked" is a geometry
-  symptom), not carrying the departed row's state. That last row also uses the box's BUILT-IN state
-  (no `state(...)`), so the default path is exercised too.
+  symptom), not carrying the departed row's state. Every fixture row owns its state the way the demo
+  does; the box's built-in state was measured by hand (dismiss → scroll → dismiss) but is not covered by
+  a case.
+
+  ⚠ The cases drive real gestures through the debug server's event injection, which drops an event
+  occasionally: `drag_until_reported` retries the whole gesture (tapping first, to release a pointer a
+  dropped `u` left down) and cannot mask a real regression — a row parked at a dismiss anchor has its
+  drag callbacks gated off, so a re-drag does nothing and the case stays red.

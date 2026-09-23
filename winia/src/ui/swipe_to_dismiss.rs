@@ -108,6 +108,13 @@ impl Ord for SwipeToDismissBoxValue {
 #[derive(Clone)]
 pub struct SwipeToDismissBoxState {
     anchored: AnchoredDraggableState<SwipeToDismissBoxValue>,
+    /// The latch for `on_dismiss`: the dismissed value already reported, if any.
+    ///
+    /// It lives in the STATE rather than in the box's composition group, so it follows a caller-owned
+    /// state across a rebuild: a row whose group is re-created while the state stays parked (a keyed
+    /// list rebuilt under it, the state kept in the caller's own map) must not report the same
+    /// dismissal twice.
+    reported: State<Option<SwipeToDismissBoxValue>>,
 }
 
 impl SwipeToDismissBoxState {
@@ -115,7 +122,17 @@ impl SwipeToDismissBoxState {
     pub fn new(initial_value: SwipeToDismissBoxValue) -> Self {
         let mut anchored = AnchoredDraggableState::new(initial_value);
         anchored.set_velocity_threshold_dp(SWIPE_DISMISS_VELOCITY_THRESHOLD);
-        Self { anchored }
+        Self { anchored, reported: State::new(None) }
+    }
+
+    /// The dismissed value already reported to `on_dismiss`, if any.
+    fn reported(&self) -> Option<SwipeToDismissBoxValue> {
+        self.reported.get()
+    }
+
+    /// Record that a dismissal has been reported.
+    fn set_reported(&self, value: Option<SwipeToDismissBoxValue>) {
+        self.reported.set(value);
     }
 
     /// The anchor the offset sits nearest to (Compose `currentValue`).
@@ -365,6 +382,12 @@ impl SwipeToDismissBox {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) {
         let SwipeToDismissBox { state, background, modifier, allow_start, allow_end, gestures_enabled, on_dismiss } = self;
+        // Declare the scalar parameters: a slot compares these to decide whether this component has to
+        // re-run at all (`ctx.changed` is how the framework's builders do it), and the flags below are
+        // plain values a caller can flip without any other dependency changing.
+        ctx.changed(&allow_start);
+        ctx.changed(&allow_end);
+        ctx.changed(&gestures_enabled);
         let holder = ctx.remember(|| SwipeToDismissBoxState::default());
         let state = state.unwrap_or_else(|| holder.get());
         // A state that has not been measured yet has NO offset (`AnchoredDraggableState` starts at
@@ -380,11 +403,10 @@ impl SwipeToDismissBox {
         }
         let settled = state.settled_value();
 
-        // `fired` is the once-per-dismissal latch, and it is a plain state read (not a peek) so that
-        // the guard below is re-evaluated when it changes.
-        let fired: State<Option<SwipeToDismissBoxValue>> = ctx.remember(|| None);
+        // `fired` is the once-per-dismissal latch. It lives in the STATE (see the field), and it is a
+        // plain state read (not a peek) so that the guard below is re-evaluated when it changes.
         if settled == SwipeToDismissBoxValue::Settled {
-            fired.set(None);
+            state.set_reported(None);
         } else {
             // `offset()` is a TRACKED read: it makes the arrival of the settle animation
             // observable here, which is what lets `on_dismiss` fire after the slide rather than at
@@ -405,8 +427,8 @@ impl SwipeToDismissBox {
                 // still true), which under an animation-flag gate left the row dismissed on screen
                 // while `on_dismiss` never fired.
                 if arrived {
-                    if fired.get() != Some(settled) {
-                        fired.set(Some(settled));
+                    if state.reported() != Some(settled) {
+                        state.set_reported(Some(settled));
                         if let Some(callback) = &on_dismiss {
                             callback(settled);
                         }

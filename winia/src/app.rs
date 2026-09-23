@@ -2653,6 +2653,7 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
         end_gesture(pw); // the target's overlay vanished mid-drag
         return false;
     };
+    let mut axis_undecided = false;
     if pw.gesture_axis.is_none() {
         if let Some((scroll_slot, down)) = pw
             .gesture_scroll_slot
@@ -2664,8 +2665,10 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
             // drag over such a press scrolls nothing and reaches nothing.
             use crate::input::gesture::ScrollAxis;
             match ScrollAxis::classify(local.0 - down.0, local.1 - down.1) {
-                // Undecided (below the slop, or an exact diagonal): neither owner starts.
-                None => return false,
+                // Undecided (below the slop, or an exact diagonal): neither owner starts YET. The move
+                // still reaches the tracker with the drag withheld, so crossing the touch slop keeps
+                // cancelling the tap family exactly as it did before the arbitration existed.
+                None => axis_undecided = true,
                 Some(axis) => {
                     pw.gesture_axis = Some(axis);
                     if axis == ScrollAxis::Vertical {
@@ -2686,8 +2689,9 @@ fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     if pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Vertical) {
         return false; // the scroll session owns the rest of the gesture
     }
-    let allow_drag = pw.gesture_scroll_slot.is_none()
-        || pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Horizontal);
+    let allow_drag = !axis_undecided
+        && (pw.gesture_scroll_slot.is_none()
+            || pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
     let action = {
         let Some(t) = pw.gesture.as_mut() else { return false; };
         t.on_move(local, allow_drag)
