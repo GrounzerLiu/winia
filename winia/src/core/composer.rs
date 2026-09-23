@@ -4539,6 +4539,19 @@ fn test_compose_notification_during_frame_is_next_batch() {
     assert!(!composer.has_pending_states(), "the next batch should consume the notification");
 }
 
+/// A State read at the very root of a composer's content — no scope, no node — must still
+/// subscribe: the read registers against the root fallback key.
+#[test]
+fn test_root_level_read_subscribes_the_composer() {
+    let mut composer = Composer::new();
+    let state = State::new(0i32);
+    composer.compose(|_ctx| {
+        let _ = state.get();
+    });
+    state.set(1);
+    assert!(composer.has_pending_states(), "a root read must leave the composer subscribed");
+}
+
 /// A panic after compose consumes its pending batch must restore that batch for
 /// a retry; this guard does not attempt the larger SlotTable transaction.
 #[test]

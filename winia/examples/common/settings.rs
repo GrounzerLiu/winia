@@ -92,6 +92,19 @@ impl Direction {
 /// `content` is the example body, composed once per frame exactly as it would be without the
 /// chrome; it must fill the space it is given (`fill_max_size`), the same rule `Scaffold`'s content
 /// slot always had.
+///
+/// `#[composable]` is load-bearing here, not decoration — it is what makes the direction switch
+/// reach the whole page. This function READS the direction state and hands it to
+/// `WiniaTheme::with_theme_and_direction`, and a local is a plain thread-local: `provides` does not
+/// invalidate its readers, it only changes what the NEXT reader reads. So the read has to land in a
+/// scope, because marking a scope dirty marks its whole subtree dirty (every group re-enters, every
+/// reader re-reads the local). A plain function called at the root of the window's content — which
+/// is exactly where an example calls this — has no scope to land in: the composer IS notified and
+/// the content DOES re-run with the new direction (traced: `pending=true → COMPOSE`, and the state
+/// id in the consumed batch), but the subtree below skips on cached slots and keeps the layout it
+/// built with the old direction. The sheet has a scope of its own, which is why IT flipped while the
+/// page behind it did not.
+#[composable]
 pub fn shell(
     title: &'static str,
     ctx: &mut ComposeCtx,
