@@ -2,6 +2,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::RichText;
 use winia::app;
 
@@ -93,7 +97,9 @@ fn main() {
             Window::new()
                 .size(520.0, 720.0)
                 .title("Text Selection Demo")
-                .build(ctx, selection_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Text Selection Demo", ctx, selection_ui);
+                });
         });
     });
 }
