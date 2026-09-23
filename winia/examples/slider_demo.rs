@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -113,7 +117,9 @@ fn main() {
             Window::new()
                 .size(420.0, 620.0)
                 .title("Slider Demo")
-                .build(ctx, slider_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Slider Demo", ctx, slider_demo);
+                });
         });
     });
 }
