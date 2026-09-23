@@ -14,6 +14,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::nav::{remember_entry_state, result_event_bus, ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavKey, NavMetadata, NavTransitionSpec, SceneDecoratorStrategy, SceneStrategy};
 
 /// 类型安全路由（对标 Nav3 的 NavKey + @Serializable——winia 无序列化要求）
@@ -290,7 +294,9 @@ fn main() {
             Window::new()
                 .size(600.0, 500.0)
                 .title("Nav3 风格导航")
-                .build(ctx, |ctx| nav_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Nav3 风格导航", ctx, |ctx| nav_demo(ctx));
+                });
         });
     });
 }
