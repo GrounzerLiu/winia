@@ -13,6 +13,10 @@
 use letclone::clone;
 use std::sync::Arc;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// One row's data. `id` is both the list key and the identity the state is remembered against.
 #[derive(Clone, PartialEq)]
@@ -48,8 +52,6 @@ fn swipe_to_dismiss_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(10.0)
         .build(ctx, |ctx| {
-            Text::new("SwipeToDismissBox 演示").font_size(20.0).build(ctx);
-
             // The header is its own scope: it reads the item list, so removing a row re-composes the
             // header without touching the rows themselves.
             let header_items = items.clone();
@@ -195,7 +197,9 @@ fn main() {
             Window::new()
                 .size(480.0, 620.0)
                 .title("SwipeToDismissBox 演示")
-                .build(ctx, |ctx| swipe_to_dismiss_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("SwipeToDismissBox 演示", ctx, |ctx| swipe_to_dismiss_demo(ctx));
+                });
         });
     });
 }
