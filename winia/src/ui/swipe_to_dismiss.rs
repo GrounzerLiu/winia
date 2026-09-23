@@ -41,6 +41,16 @@ pub const SWIPE_DISMISS_VELOCITY_THRESHOLD: f32 = 125.0;
 /// framework's touch slop, used the way Compose's horizontal drag detector uses it.
 const GESTURE_LOCK_SLOP: f32 = crate::input::gesture::TOUCH_SLOP;
 
+/// How close to the dismiss anchor counts as "arrived" for `on_dismiss`.
+///
+/// Not zero: the callback makes the caller rebuild its list, and that rebuild is composed in a LATER
+/// pass (the write happens while the tree is composing), so firing exactly on the anchor paints one
+/// frame of the row with its content already slid out — a fully revealed background flash (reported by
+/// eye in the demo). 4 px is the tail of the settle tween: `EaseOutCubic`'s last 4 px of a width-sized
+/// travel take roughly 20 % of the 250 ms duration (~3 frames at 60 Hz), which is enough for the
+/// rebuild to land on the frame the content clears the row instead of after it.
+const ARRIVAL_EPSILON: f32 = 4.0;
+
 /// The row's own orientation lock (see the drag callbacks in [`SwipeToDismissBox::build`]):
 /// accumulated travel since the drag started, plus whether the horizontal side has won. Once won the
 /// lock is kept, exactly like a drag detector that has taken the touch slop.
@@ -376,7 +386,7 @@ impl SwipeToDismissBox {
             // re-evaluated as the row moves.
             let offset = state.offset();
             if !target.is_nan() {
-                let arrived = !offset.is_nan() && (offset - target).abs() <= 0.5;
+                let arrived = !offset.is_nan() && (offset - target).abs() <= ARRIVAL_EPSILON;
                 // Arrival is judged by the DISTANCE, not by `is_animation_running()`: the offset
                 // sitting on the anchor is the fact the caller cares about, and it is the one signal
                 // that cannot get stuck. Measured: the animation table can keep reporting a finished

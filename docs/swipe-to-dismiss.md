@@ -138,12 +138,14 @@ threshold.
    this number wants.
 5. **`on_dismiss` fires on ARRIVAL, not at the start of the settle.** The caller removes the row in this
    callback, so firing when the settle *begins* would cut the slide-out short. winia waits for the offset
-   to reach the dismiss anchor (the same rule the bottom sheet's `onDismissRequest` follows) — and it
-   judges the arrival by the DISTANCE (`|offset - anchor| <= 0.5`), not by "the animation has stopped".
-   Measured while chasing an intermittent missed dismissal: the animation table can keep reporting a
+   to reach the dismiss anchor — judged by the DISTANCE (within 4 px, `ARRIVAL_EPSILON`), not by "the
+   animation has stopped". Both halves of that are measured: the animation table can keep reporting a
    finished tween as running, and a row parked exactly on its anchor with `is_animation_running()` still
-   true never reported — under a distance check that same row fires. Re-parking is the other half: if the
-   row is off its anchor and nothing is animating (a resize landed while the tween ran, and
+   true never reported; and firing exactly ON the anchor paints one frame of the row with its content
+   already slid out, because the caller's rebuild is composed in a later pass — a fully revealed
+   background flashing for a frame (reported by eye in the demo). The 4 px is the settle tween's tail,
+   enough for the rebuild to land on the frame the content clears the row. Re-parking is the other half:
+   if the row is off its anchor and nothing is animating (a resize landed while the tween ran, and
    `update_anchors` leaves a running animation alone), the check puts it back on the anchor.
 6. **The background is optional.** Compose requires it; here a row with nothing to reveal (a plain delete
    row) can omit it.
