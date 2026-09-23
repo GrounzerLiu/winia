@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -27,10 +31,6 @@ fn card_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new("Card 样式演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             // ── 变体（纯展示，无 on_click）──
             section_title(ctx, "变体（纯展示）");
             Card::new().build(ctx, |ctx| {
@@ -113,7 +113,9 @@ fn main() {
             Window::new()
                 .size(480.0, 640.0)
                 .title("Card Demo")
-                .build(ctx, |ctx| { card_demo(ctx); });
+                .build(ctx, |ctx| {
+                    settings::shell("Card Demo", ctx, |ctx| { card_demo(ctx); });
+                });
         });
     });
 }
