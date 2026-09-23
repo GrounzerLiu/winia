@@ -116,6 +116,14 @@ pub(crate) struct PerWindow {
     /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
     /// while a gesture — or a deferred tap — is still in flight.
     gesture_arena: Option<u64>,
+    /// Dominant axis the current gesture locked onto: decided once, on the first move that is
+    /// decisive, and kept for the rest of the gesture (see `gesture_move`). `None` while undecided.
+    gesture_axis: Option<crate::input::gesture::ScrollAxis>,
+    /// Scroll ancestor recorded for the current gesture when the press landed on an inner drag
+    /// component (a swipeable row inside a list): if the finger turns out to move along the
+    /// scroll's axis, the gesture is handed to that node and the component's drag is cancelled.
+    /// `None` for a press with no scroll on its hit path.
+    gesture_scroll_slot: Option<u64>,
     /// The arena's screen origin, FROZEN when the gesture started. The gesture measures displacement
     /// against it, so an overlay that MOVES under the finger must not add its own motion: the expanded
     /// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS` and is pressable while it moves, and reading the
@@ -237,7 +245,7 @@ impl PerWindow {
         // is that palette (nothing to follow), and its type scale is the default.
         let theme_cell = crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Fixed(theme));
         let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -2083,6 +2091,20 @@ struct DragScroll {
 }
 
 impl DragScroll {
+    /// Open a session at `pos`: the deltas that follow are measured from there. The node the
+    /// session scrolls is re-resolved by slot key on every move (the layout tree is rebuilt
+    /// between frames, so a node index would go stale).
+    fn new(slot: u64, pos: (f32, f32)) -> Self {
+        Self {
+            slot,
+            last_x: pos.0,
+            last_y: pos.1,
+            samples: vec![(std::time::Instant::now(), pos.0, pos.1)],
+        }
+    }
+}
+
+impl DragScroll {
     /// 手指速度（px/s）：最近 ~200ms 窗口的最小二乘斜率。
     /// ⚠ x 轴用"距离现在的时长"（越大越早）——回归斜率符号与真实时间相反，
     /// 取负修正（实测：向上拖 100px 得 +650 而非 -650，fling 方向反了）。
@@ -2608,6 +2630,8 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.gesture_node = Some(node_id);
     pw.gesture_slot = Some(slot);
     pw.gesture_arena = None; // the main tree
+    pw.gesture_axis = None;
+    pw.gesture_scroll_slot = None;
     pw.gesture_arena_origin = (0.0, 0.0);
     // on_press 立即触发（本地坐标）
     let nodes = pw.composer.arena_nodes();
@@ -2616,15 +2640,57 @@ fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 }
 
 /// 指针移动手势入口：tracker 存在即路由（capture——不依赖 hit test）。
+///
+/// A press can be claimed by two owners at once — an inner drag component (a swipeable row, a
+/// slider) and the scroll container it sits in — and the finger's dominant axis decides which one
+/// keeps the gesture (Compose arbitrates in the same place: each drag detector waits for the touch
+/// slop along its own orientation, so the direction the finger moves first decides the owner).
+/// The decision is taken ONCE and holds for the rest of the gesture: handing over mid-gesture
+/// would mean replaying the deltas the component already consumed.
 fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let Some(slot) = pw.gesture_slot else { return false; };
     let Some(local) = gesture_arena_pos(pw, scene_pos) else {
         end_gesture(pw); // the target's overlay vanished mid-drag
         return false;
     };
+    if pw.gesture_axis.is_none() {
+        if let Some((scroll_slot, down)) = pw
+            .gesture_scroll_slot
+            .zip(pw.gesture.as_ref().map(|t| t.down_position()))
+        {
+            // The scroll is armed whenever the press passed over an inner drag component — the
+            // target of the press may still be a plain tap node inside it (a `TextField` inside a
+            // `Slider`, say), and that case needs the arbitration just as much: without it a vertical
+            // drag over such a press scrolls nothing and reaches nothing.
+            use crate::input::gesture::ScrollAxis;
+            match ScrollAxis::classify(local.0 - down.0, local.1 - down.1) {
+                // Undecided (below the slop, or an exact diagonal): neither owner starts.
+                None => return false,
+                Some(axis) => {
+                    pw.gesture_axis = Some(axis);
+                    if axis == ScrollAxis::Vertical {
+                        // The scroll ancestor owns it: cancel the component's drag, so no
+                        // `on_drag_*` callback fires for a gesture it did not get, and open a
+                        // scroll session on the ancestor node — the rest of the gesture (and its
+                        // fling) is the ordinary drag-scroll path from here on. A target with no drag
+                        // of its own has nothing to cancel; the call is then a no-op.
+                        if let Some(t) = pw.gesture.as_mut() {
+                            t.cancel_drag_for_arbitration();
+                        }
+                        pw.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
+                    }
+                }
+            }
+        }
+    }
+    if pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Vertical) {
+        return false; // the scroll session owns the rest of the gesture
+    }
+    let allow_drag = pw.gesture_scroll_slot.is_none()
+        || pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Horizontal);
     let action = {
         let Some(t) = pw.gesture.as_mut() else { return false; };
-        t.on_move(local)
+        t.on_move(local, allow_drag)
     };
     if action == crate::input::gesture::GestureAction::None {
         return false;
@@ -2639,6 +2705,8 @@ fn end_gesture(pw: &mut PerWindow) {
     pw.gesture_node = None;
     pw.gesture_slot = None;
     pw.gesture_arena = None;
+    pw.gesture_axis = None;
+    pw.gesture_scroll_slot = None;
     pw.gesture_arena_origin = (0.0, 0.0);
 }
 
@@ -3316,8 +3384,12 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
                 let scroll_idx = path_scroll_idx(nodes, &path);
                 let drag_idx = path_drag_idx(nodes, &path);
-                // 内层拖拽组件优先于滚动（同一路径上，drag 比 scroll 更深）
                 let inner_comp_drag = inner_component_drag(drag_idx, scroll_idx);
+                // The axis arbitration in `gesture_move` is main-tree only: an overlay drag runs
+                // through `overlay_drag` (its own session, which fires the callbacks itself), not
+                // through the tracker, so there is nothing to hand over here.
+                pw.gesture_axis = None;
+                pw.gesture_scroll_slot = None;
                 if inner_comp_drag {
                     if let Some(didx) = drag_idx {
                         pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
@@ -3331,7 +3403,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     pw.overlay_drag = None;
                     pw.overlay_drag_started = false;
                     pw.overlay_drag_last = None;
-                    pw.overlay_drag_scroll = Some(DragScroll { slot: nodes[t].slot_key, last_x: scene_pos.0, last_y: scene_pos.1, samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)] });
+                    pw.overlay_drag_scroll = Some(DragScroll::new(nodes[t].slot_key, scene_pos));
                 } else if let Some(didx) = drag_idx {
                     // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
                     pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
@@ -3431,6 +3503,8 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                 pw.gesture_node = Some(nid);
                 pw.gesture_slot = Some(slot);
                 pw.gesture_arena = Some(ov_id);
+                pw.gesture_axis = None;
+                pw.gesture_scroll_slot = None;
                 pw.gesture_arena_origin = pw
                     .overlays
                     .iter()
@@ -4102,21 +4176,23 @@ fn handle_pointer_down(
         // 整面板可拖，但列表区按下时内容滚动优先——面板 on_drag 是外层 fallback）。
         // child_drag 仅在「drag 节点比 scroll 节点更深」（内层组件如 slider/switch）
         // 时才成立；drag 是 scroll 祖先（面板）→ 滚动优先，不放行 child_drag。
-        let child_drag = inner_component_drag(path_drag_idx(nodes, &path), path_scroll_idx(nodes, &path));
+        let drag_idx = path_drag_idx(nodes, &path);
+        let scroll_idx = path_scroll_idx(nodes, &path);
+        let child_drag = inner_component_drag(drag_idx, scroll_idx);
+        // An inner drag component and the scroll it sits in both want this gesture; which one gets it
+        // is decided by the finger's dominant axis in `gesture_move`, so record the scroll as the
+        // fallback owner here. `None` when the component stands alone (it owns every direction), and
+        // `None` while a text selection is in progress: the selection keeps the pointer (it is
+        // extended from every move below), so the list must not start scrolling under the finger.
+        pw.gesture_scroll_slot = if child_drag && !selecting {
+            scroll_idx.map(|i| nodes[i].slot_key)
+        } else {
+            None
+        };
         if selecting || child_drag {
             None
         } else {
-            path.iter().rev()
-                .find(|&&i| {
-                    nodes[i].modifier.vertical_scroll_state().is_some()
-                        || nodes[i].modifier.horizontal_scroll_state().is_some()
-                })
-                .map(|&i| DragScroll {
-                    slot: nodes[i].slot_key,
-                    last_x: scene_pos.0,
-                    last_y: scene_pos.1,
-                    samples: vec![(std::time::Instant::now(), scene_pos.0, scene_pos.1)],
-                })
+            scroll_idx.map(|i| DragScroll::new(nodes[i].slot_key, scene_pos))
         }
     })();
 

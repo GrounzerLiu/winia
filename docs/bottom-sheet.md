@@ -90,5 +90,5 @@ the window.
 - `enableDismissFromStartToEnd`-style direction gating does not exist here: a sheet always dismisses
   downward.
 - The drag-to-collapse gesture starts wherever the press landed, so a *horizontal* drag on the panel does
-  nothing (harmless) — unlike `SwipeToDismissBox`, whose axis handling is its own open question
-  (`docs/swipe-to-dismiss-plan.md`, difference 1).
+  nothing (harmless) — unlike `SwipeToDismissBox`, which owns its axis and hands a vertical drag back to
+  the list (`docs/swipe-to-dismiss.md`, Gesture arbitration).

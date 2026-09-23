@@ -53,6 +53,7 @@ pub mod surface;
 pub mod navigation_bar;
 pub mod navigation_rail;
 pub mod navigation_drawer;
+pub mod swipe_to_dismiss;
 pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
@@ -196,6 +197,10 @@ pub use navigation_drawer::{
     DRAWER_CORNER_RADIUS, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE,
     DRAWER_ITEM_SLOT_GAP, DRAWER_ITEM_START_PADDING, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH,
     DRAWER_SHEET_HORIZONTAL_PADDING,
+};
+pub use swipe_to_dismiss::{
+    SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue,
+    SWIPE_DISMISS_POSITIONAL_THRESHOLD, SWIPE_DISMISS_VELOCITY_THRESHOLD,
 };
 pub use shared_transition::{
     BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize,
