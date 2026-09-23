@@ -10,6 +10,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::animation::{AnimationSpec, TweenSpec};
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
@@ -44,10 +48,6 @@ fn button_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("Button 样式演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "样式（ButtonStyle）");
             demo_row(ctx, "Button::filled()", |count| {
                 clone!(count);
@@ -249,7 +249,9 @@ fn main() {
             Window::new()
                 .size(480.0, 760.0)
                 .title("Button Demo")
-                .build(ctx, button_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Button Demo", ctx, button_demo);
+                });
         });
     });
 }
