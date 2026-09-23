@@ -11,6 +11,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -45,7 +49,6 @@ fn sheet_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new("ModalBottomSheet 演示").font_size(16.0).build(ctx);
             Button::text()
                 .on_click({ clone!(visible); move || visible.set(true) })
                 .build(ctx, |ctx| Text::new("打开底部面板").build(ctx));
@@ -151,7 +154,9 @@ fn main() {
             Window::new()
                 .size(480.0, 560.0)
                 .title("ModalBottomSheet 演示")
-                .build(ctx, |ctx| sheet_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("ModalBottomSheet 演示", ctx, |ctx| sheet_demo(ctx));
+                });
         });
     });
 }
