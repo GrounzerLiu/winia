@@ -11,6 +11,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
@@ -77,7 +81,9 @@ fn main() {
             Window::new()
                 .size(480.0, 900.0)
                 .title("方向一 convergence 验证")
-                .build(ctx, |ctx| conv_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("方向一 convergence 验证", ctx, |ctx| conv_demo(ctx));
+                });
         });
     });
 }
