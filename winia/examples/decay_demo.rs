@@ -12,6 +12,10 @@ use letclone::clone;
 use winia::animation::{exponential_decay, push_decay};
 use winia::modifier::GraphicsLayerParams;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[composable]
 fn decay_demo(ctx: &mut ComposeCtx) {
@@ -89,9 +93,11 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(420.0, 280.0)
+                .size(420.0, 320.0)
                 .title("Decay / fling Demo")
-                .build(ctx, |ctx| decay_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Decay / fling Demo", ctx, |ctx| decay_demo(ctx));
+                });
         });
     });
 }
