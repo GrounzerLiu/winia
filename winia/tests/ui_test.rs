@@ -1353,6 +1353,38 @@ fn the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not() {
     settle_shape(&mut app, false, "collapsing brings the rounded corners back");
 }
 
+/// Clicking the scrim dismisses the sheet — the overlay really goes away, with nothing left drawing.
+///
+/// A user hit the failure this guards: the panel slid out of view but the overlay stayed open, so only its
+/// modal scrim was left on screen (a dim layer no further interaction removed). The panel's "I am done
+/// sliding" observer used to be evaluated on a single compose where the tween is still registered; it now
+/// measures geometry while the slide runs, and the overlay layer drops a closing overlay past a deadline
+/// regardless of its fade.
+#[test]
+fn clicking_the_scrim_dismisses_the_sheet_completely() {
+    let mut app = UiTest::launch("bottom_sheet");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+
+    // The scrim: inside the overlay layer, above the panel.
+    app.click(40.0, 40.0);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while app.overlay_count() > 0 {
+        assert!(Instant::now() < deadline, "the sheet's overlay must be gone after a scrim click");
+        std::thread::sleep(Duration::from_millis(50));
+        app.refresh();
+    }
+    // …and the page is undimmed again: a point above the sheet's panel reads the same before and after
+    // the sheet was ever opened (with the sheet open it is the page under the scrim).
+    let page = app.pixel_at_logical(240.0, 100.0).expect("a page pixel");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+    std::thread::sleep(Duration::from_millis(300));
+    let dimmed = app.pixel_at_logical(240.0, 100.0).expect("a page pixel under the scrim");
+    assert!(dimmed.0 < page.0, "the scrim dims the page: {page:?} → {dimmed:?}");
+}
+
+
 /// A popup that is ALREADY OPEN follows the theme as well.
 ///
 /// Its content composes in a composer of its own, under a `CompositionLocal` snapshot captured when the

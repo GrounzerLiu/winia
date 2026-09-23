@@ -14,7 +14,7 @@ case — isolation is unchanged, but the whole suite links skia once (see "addin
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      scenario assertions (35 cases) + the pixel-read parser tests
+        ├─ tests/ui_test.rs      scenario assertions (36 cases) + the pixel-read parser tests
         ├─ tests/ui_fixtures/    fixture sources + fixture_all.rs (the single dispatcher)
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
@@ -196,7 +196,7 @@ Every case drives a real window, so the suite inherits the machine's timing. Mea
 
 | Machine state | Result |
 |---|---|
-| idle (32 cores) | 37/37, ~86 s |
+| idle (32 cores) | 38/38, ~93 s |
 | 16 CPU burners (half the cores) | 25/25, ~78 s — that run had 25 cases |
 | 40 CPU burners (app 2.4-6x slower) | 23-24/25 — ditto; individual timing-sensitive cases fail |
 

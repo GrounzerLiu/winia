@@ -234,15 +234,28 @@ impl ModalBottomSheet {
                 // 「动画完成后再回调」）。
                 let shown: State<bool> = ctx.remember(|| false);
                 let fired: State<bool> = ctx.remember(|| false);
-                if sheet_state.settled_value() != SheetValue::Hidden {
+                let settled_hidden = sheet_state.settled_value() == SheetValue::Hidden;
+                if !settled_hidden {
                     shown.set(true);
                     fired.set(false);
                 }
-                if shown.get()
-                    && sheet_state.settled_value() == SheetValue::Hidden
-                    && !sheet_state.is_animation_running()
-                    && !fired.get()
-                {
+                // "The panel has slid out of view", measured GEOMETRICALLY while the hide runs: the
+                // settle flag flips when the animation is *requested*, so the old
+                // `!is_animation_running()` gate was only ever evaluated on that one compose — where the
+                // tween is still registered — and the callback then never fired. That left the overlay
+                // OPEN with nothing but its scrim drawn: a dim layer over the page that no further
+                // interaction removed (reported by a user; the panel itself had already slid away).
+                // Reading the offset TRACKED here is what makes the condition re-evaluate as the panel
+                // slides, and only while a hide is in flight.
+                let slid_out = if settled_hidden {
+                    let dd = sheet_state.anchored_draggable();
+                    let hidden_at = dd.peek_position_of(&SheetValue::Hidden);
+                    let off = dd.offset();
+                    !off.is_nan() && !hidden_at.is_nan() && off >= hidden_at - 0.5
+                } else {
+                    false
+                };
+                if shown.get() && settled_hidden && (slid_out || !sheet_state.is_animation_running()) && !fired.get() {
                     fired.set(true);
                     if let Some(cb) = &dismiss_cb {
                         (cb)();
