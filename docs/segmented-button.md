@@ -28,6 +28,12 @@ Shared builders: `.enabled(bool)`, `.colors(SegmentedButtonColors)`, `.content_p
 its end corners, anything in between is a rectangle — and "start" is the right side under RTL, so a
 caller passes the same index/count in either direction.
 
+Under RTL the row mirrors its items (item 0 goes to the right edge), which is what keeps those shapes on
+the outer edges, and the content inside each item mirrors with it — the check moves to the trailing side
+of the label and its scale-in grows from the corner facing the label. Compose gets the first by using a
+`Row` for the strip; its content layout places the icon and the label absolutely and does NOT mirror
+them, so the second is a deliberate difference here.
+
 ## 2. Tokens (from `OutlinedSegmentedButtonTokens`, the file Compose reads)
 
 | Token | Value | Where |
@@ -104,6 +110,11 @@ Colors resolve from `enabled × active` (Compose's `containerColor` / `contentCo
 ## 5. Tests
 
 - `item_shape_follows_index_count_and_direction` — the four shape cases in LTR and RTL.
+- `rtl_mirrors_the_strip_so_the_rounded_corners_stay_on_the_outer_edges` — RTL places item 0 at the
+  strip's right edge and the last item at its left, so the shapes `item_shape` hands out land on the
+  outer edges instead of the shared inner ones (reported by eye in the demo).
+- `rtl_swaps_the_icon_and_the_label_inside_the_item` — the check goes to the trailing side of the label
+  under RTL, keeping its distance from the item's outer edge.
 - `colors_resolve_by_state` — the twelve-field table above.
 - `items_are_equal_width_and_share_their_borders` — equal widths, the `n × w − (n − 1)` row width, the
   overlap arithmetic, and the 40 dp row height.

@@ -28,6 +28,7 @@
 use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
+use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape, TransformOrigin};
 use crate::ui::interaction::MutableInteractionSource;
@@ -235,9 +236,17 @@ macro_rules! segmented_row {
             }
 
             pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+                // The direction is resolved and declared the way `Row` does it: the policy has to
+                // MIRROR the item order under RTL (see `SegmentedRowPolicy`), and a policy left over
+                // from the other direction lays the strip the wrong way round.
+                let direction = self
+                    .modifier
+                    .get_layout_direction()
+                    .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+                ctx.changed(&direction);
                 let key = ctx.next_key();
                 let m = Modifier::new().fill_max_width().then(self.modifier);
-                match ctx.start_restartable_group(key, m, SegmentedRowPolicy { overlap: self.space }) {
+                match ctx.start_restartable_group(key, m, SegmentedRowPolicy { overlap: self.space, direction }) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => content(ctx),
                 }
@@ -269,9 +278,15 @@ segmented_row!(
 /// Compose reaches the same geometry with `Arrangement.spacedBy(-space)` and `weight(1f)` inside a row
 /// sized to `IntrinsicSize.Min` plus `Alignment.CenterVertically`. One deliberate difference: when the
 /// parent is narrower than the strip wants to be, winia shrinks the items instead of overflowing.
+///
+/// Under RTL the strip is MIRRORED — item 0 sits at the right edge — which is what Compose's own `Row`
+/// does for it. The shapes depend on it: [`SegmentedButtonDefaults::item_shape`] rounds the first
+/// item's START corners, and start is the right side under RTL, so a strip laid out left-to-right
+/// would put both rounded corners on the shared inner edges and leave the outer edges square.
 #[derive(Debug)]
 struct SegmentedRowPolicy {
     overlap: f32,
+    direction: LayoutDirection,
 }
 
 impl MeasurePolicy for SegmentedRowPolicy {
@@ -306,6 +321,8 @@ impl MeasurePolicy for SegmentedRowPolicy {
         // whose label is narrower than the row stretches, and it is this size the renderer applies.
         let fit = ((avail + (n - 1.0) * self.overlap) / n).max(0.0);
         let item_w = natural.min(fit);
+        let step = item_w - self.overlap;
+        let total = n * item_w - (n - 1.0) * self.overlap;
         let mut placements = Vec::with_capacity(children.len());
         for (i, &child) in children.iter().enumerate() {
             let _ = measure_node(
@@ -314,12 +331,20 @@ impl MeasurePolicy for SegmentedRowPolicy {
                 child,
                 Constraints::new(item_w, item_w, height, height),
             );
+            // Mirroring item 0 to the right edge keeps each item's index meaning its position, so
+            // the shapes stay correct without the caller knowing the direction. Mirroring item i's
+            // left edge is `total - i * step - item_w`, which is `(n - 1 - i) * step`.
+            let x = if self.direction == LayoutDirection::Rtl {
+                (n - 1.0 - i as f32) * step
+            } else {
+                i as f32 * step
+            };
             placements.push(Placement {
                 size: Size::new(item_w, height),
-                position: Point::new(i as f32 * (item_w - self.overlap), 0.0),
+                position: Point::new(x, 0.0),
             });
         }
-        (Size::new(n * item_w - (n - 1.0) * self.overlap, height), placements)
+        (Size::new(total, height), placements)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -450,6 +475,15 @@ impl SegmentedButton {
         ctx.changed(&self.enabled);
         ctx.changed(&self.shape);
         ctx.changed(&self.colors);
+        // The direction the CONTENT mirrors under (see `SegmentedButtonContentPolicy`). Declared like
+        // the others so a direction switch re-enters and the policy is replaced — the shape the caller
+        // passes already changes with it (`item_shape` resolves the direction), except for a lone item
+        // and for the middle of a strip, which are direction-independent.
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        ctx.changed(&direction);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| SegmentedButtonDefaults::colors(&theme));
@@ -530,6 +564,7 @@ impl SegmentedButton {
             has_icon: true,
             pad_h,
             pad_v,
+            direction,
         };
 
         match ctx.start_restartable_group(key, m, policy) {
@@ -580,7 +615,14 @@ impl SegmentedButton {
                             scale_x: p,
                             scale_y: p,
                             alpha: p,
-                            transform_origin: TransformOrigin(0.0, 1.0),
+                            // Compose's `scaleIn(0f, TransformOrigin(0f, 1f))` grows the check out of
+                            // its bottom-LEFT corner, i.e. the corner facing the label. Under RTL the
+                            // icon sits on the other side of the label, so the origin mirrors with it.
+                            transform_origin: if direction == LayoutDirection::Rtl {
+                                TransformOrigin(1.0, 1.0)
+                            } else {
+                                TransformOrigin(0.0, 1.0)
+                            },
                             ..Default::default()
                         }
                     });
@@ -654,6 +696,12 @@ impl SegmentedButton {
 ///
 /// The item's own size is the slot plus the label, with the content padding around them; the row's
 /// policy then gives every item the same width and centres it vertically in the row's height.
+///
+/// Under RTL the content MIRRORS: the icon goes to the trailing (right) side of the label and the
+/// label slides away from it. Compose's own version places both with absolute `place()` and does not
+/// mirror, so this is a deliberate difference — a check mark on the *leading* side of the text is
+/// what the rest of winia does (a `Row` mirrors its children), and a row whose items mirror while
+/// their contents do not reads as a mistake next to them.
 #[derive(Debug)]
 struct SegmentedButtonContentPolicy {
     slot_offset: crate::core::state::State<f32>,
@@ -663,6 +711,7 @@ struct SegmentedButtonContentPolicy {
     has_icon: bool,
     pad_h: f32,
     pad_v: f32,
+    direction: LayoutDirection,
 }
 
 impl MeasurePolicy for SegmentedButtonContentPolicy {
@@ -703,15 +752,29 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         // The icon and the label are one block of `slot + label`; Compose centres that block in the
         // container (`Box(contentAlignment = Center)`), which is what keeps a stretched item's content
         // centred rather than pinned to its start edge.
+        //
+        // Under RTL the block's contents MIRROR: the icon takes the trailing (right) end and the label
+        // the leading one. A child laid out at `x` with width `w` moves to
+        // `block_x + block_w - (x - block_x) - w`, i.e. its distance from the block's right edge is
+        // what its distance from the left edge used to be — the same rule the flex containers apply.
         let block_w = SegmentedButtonDefaults::ICON_SLOT + label_w;
         let block_x = self.pad_h + ((inner_w - block_w) / 2.0).max(0.0);
+        let rtl = self.direction == LayoutDirection::Rtl;
+        let mirrored = |x: f32, w: f32| if rtl { 2.0 * block_x + block_w - x - w } else { x };
         let cy = |h: f32| (content_h - h) / 2.0;
         if self.has_icon {
-            placements[0].position = Point::new(block_x, self.pad_v + cy(placements[0].size.height));
+            let icon = placements[0].size;
+            placements[0].position = Point::new(
+                mirrored(block_x, icon.width),
+                self.pad_v + cy(icon.height),
+            );
         }
         if let Some(p) = placements.get_mut(if self.has_icon { 1 } else { 0 }) {
+            // The label's animated slot offset keeps its meaning: it slides AWAY from the icon as the
+            // check appears, which is +x in LTR and −x in RTL.
+            let x = block_x + SegmentedButtonDefaults::ICON_SLOT + offset;
             p.position = Point::new(
-                block_x + SegmentedButtonDefaults::ICON_SLOT + offset,
+                mirrored(x, p.size.width),
                 self.pad_v + cy(p.size.height),
             );
         }
@@ -858,6 +921,43 @@ mod tests {
         );
     }
 
+    /// Under RTL the strip is mirrored: item 0 sits at the RIGHT edge, which is the side
+    /// [`SegmentedButtonDefaults::item_shape`] rounds for it. Without the mirror both rounded corners
+    /// land on the shared inner edges and the outer edges come out square (reported from the demo).
+    #[test]
+    fn rtl_mirrors_the_strip_so_the_rounded_corners_stay_on_the_outer_edges() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = compose_row(3, 0, &theme, LayoutDirection::Rtl);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.layout_root_idx().expect("root");
+        let items = row_children(&composer);
+        let nodes = composer.arena_nodes();
+        let w = nodes[items[0]].measured_size.width;
+        let step = w - SegmentedButtonDefaults::BORDER_WIDTH;
+        let total = nodes[root].measured_size.width;
+        assert_eq!(items.len(), 3);
+
+        // Item 0 is the FIRST composed and the LAST in x: mirrored, it ends at the row's right edge.
+        // (The corners `item_shape` gives that item are covered by its own test; what matters here is
+        // that the item carrying them ends up on the edge they round.)
+        let first = &nodes[items[0]];
+        assert!(
+            (first.position.x - 2.0 * step).abs() < 0.01,
+            "item 0 must sit at the right edge in RTL (x={}, expected {})",
+            first.position.x,
+            2.0 * step
+        );
+        assert!(
+            (first.position.x + first.measured_size.width - total).abs() < 0.01,
+            "item 0's right edge must land on the row's right edge"
+        );
+        // The last item mirrors to the left edge.
+        let last = &nodes[items[2]];
+        assert!(last.position.x.abs() < 0.01, "the last item sits at the left edge in RTL");
+        // The middle never moves: mirroring swaps the ends, it does not reorder the sequence.
+        assert!((nodes[items[1]].position.x - step).abs() < 0.01, "the middle item stays centred");
+    }
+
     /// Equal width means the WIDEST item's width, not the parent's: a narrow row wraps (Compose's
     /// `IntrinsicSize.Min` row), and a parent too narrow to hold the strip shrinks the items instead of
     /// letting them overflow.
@@ -984,6 +1084,75 @@ mod tests {
         assert!(
             again < 0.5,
             "the second time a segment is picked its check must animate in too, got alpha {again}"
+        );
+    }
+
+    /// Under RTL the icon and the label swap sides INSIDE the item: the check moves to the trailing
+    /// (right) end and the label to the leading one. Compose's own content policy places both with
+    /// absolute `place()` and does not mirror, so this is a deliberate difference — see
+    /// [`SegmentedButtonContentPolicy`].
+    #[test]
+    fn rtl_swaps_the_icon_and_the_label_inside_the_item() {
+        /// (icon x, label x) for one active item, measured in `dir`.
+        fn content_x(dir: LayoutDirection) -> (f32, f32) {
+            let theme = ThemeColors::light_from_seed(0x6750A4);
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme_and_direction(theme.clone(), dir, ctx, |ctx| {
+                    SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                        SegmentedButton::new(true, || {})
+                            .shape(SegmentedButtonDefaults::item_shape(0, 1))
+                            .build(ctx, |ctx| {
+                                Text::new("Only").build(ctx);
+                            });
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let item = nodes[root].children[0];
+            let icon = nodes[item].children[0];
+            let label = nodes[item].children[1];
+            (nodes[icon].position.x, nodes[label].position.x)
+        }
+
+        let (icon_ltr, label_ltr) = content_x(LayoutDirection::Ltr);
+        assert!(
+            icon_ltr < label_ltr,
+            "LTR draws the check BEFORE the label (icon {icon_ltr}, label {label_ltr})"
+        );
+        let (icon_rtl, label_rtl) = content_x(LayoutDirection::Rtl);
+        assert!(
+            icon_rtl > label_rtl,
+            "RTL draws the check AFTER the label (icon {icon_rtl}, label {label_rtl})"
+        );
+        // The block is centred, so the content keeps its distance from the item's edges: the check's
+        // outer edge is `pad_h` from the item's leading edge in LTR and from its trailing edge in RTL.
+        let item_w = {
+            let theme = ThemeColors::light_from_seed(0x6750A4);
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    SingleChoiceSegmentedButtonRow::new().build(ctx, |ctx| {
+                        SegmentedButton::new(true, || {})
+                            .shape(SegmentedButtonDefaults::item_shape(0, 1))
+                            .build(ctx, |ctx| {
+                                Text::new("Only").build(ctx);
+                            });
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 200.0, 0.0, 100.0));
+            let root = composer.layout_root_idx().expect("root");
+            composer.arena_nodes()[composer.arena_nodes()[root].children[0]].measured_size.width
+        };
+        let icon_outer_ltr = icon_ltr;
+        let icon_outer_rtl = item_w - (icon_rtl + SegmentedButtonDefaults::ICON_SIZE);
+        assert!(
+            (icon_outer_ltr - icon_outer_rtl).abs() < 1.0,
+            "the check keeps its distance from the item's outer edge when mirrored \
+             (ltr {icon_outer_ltr}, rtl {icon_outer_rtl}, item {item_w})"
         );
     }
 
