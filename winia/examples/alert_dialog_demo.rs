@@ -38,8 +38,7 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(24.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new("AlertDialog").font_size(20.0).build(ctx);
-            Divider::horizontal().build(ctx);
+            // No heading of its own: the shared chrome's top app bar carries the title.
             for (label, which) in [
                 ("Two actions (confirm + dismiss)", Open::TwoAction),
                 ("One action", Open::OneAction),
