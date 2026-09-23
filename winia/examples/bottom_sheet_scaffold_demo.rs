@@ -10,6 +10,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -94,7 +98,6 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().fill_max_size().padding(16.0))
                     .spacing(12.0)
                     .build(ctx, |ctx| {
-                        Text::new("BottomSheetScaffold 演示").font_size(18.0).build(ctx);
                         Text::new("常驻底部片，peek 96dp，上拖显示更多内容（对标 Compose Standard BottomSheet）")
                             .font_size(12.0)
                             .color(WiniaTheme::colors().on_surface_variant)
@@ -113,7 +116,9 @@ fn main() {
             Window::new()
                 .size(480.0, 720.0)
                 .title("BottomSheetScaffold 演示")
-                .build(ctx, |ctx| scaffold_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("BottomSheetScaffold 演示", ctx, |ctx| scaffold_demo(ctx));
+                });
         });
     });
 }
