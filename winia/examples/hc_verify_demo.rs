@@ -14,6 +14,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
@@ -35,10 +39,6 @@ fn hc_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("高度缓存方案 A 验证（debug-server）")
-                .font_size(18.0)
-                .modifier(Modifier::new().padding(8.0))
-                .build(ctx);
             Text::new("步骤：滚动到 50 → 前部插入 10 项 → 观察 firstVisible 是否按 key 保持")
                 .font_size(12.0)
                 .color(WiniaTheme::colors().on_surface_variant)
@@ -127,7 +127,9 @@ fn main() {
             Window::new()
                 .size(480.0, 640.0)
                 .title("Height Cache Verify (方案 A)")
-                .build(ctx, |ctx| hc_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Height Cache Verify (方案 A)", ctx, |ctx| hc_demo(ctx));
+                });
         });
     });
 }
