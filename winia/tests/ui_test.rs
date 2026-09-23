@@ -1426,3 +1426,177 @@ fn an_open_popup_follows_the_theme() {
     assert!(window.is_some_and(|l| l > 160.0), "the window follows as well, luma={window:?}");
 }
 
+// ═══════════════════════════════════════════════════════════════
+// fixture_swipe_dismiss: SwipeToDismissBox rows inside a scrolling list
+// ═══════════════════════════════════════════════════════════════
+
+/// Reads the list's scroll offset out of the fixture's status line.
+fn read_voffset(app: &mut UiTest) -> f32 {
+    app.refresh();
+    app.all_texts()
+        .iter()
+        .find_map(|s| {
+            s.find("voffset: ").and_then(|i| {
+                s[i + "voffset: ".len()..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<f32>().ok())
+            })
+        })
+        .unwrap_or(-1.0)
+}
+
+/// Whether the fixture's tree currently contains `needle` (a fresh read, not a cached tree).
+fn has_text(app: &mut UiTest, needle: &str) -> bool {
+    app.refresh();
+    app.all_texts().iter().any(|t| t.contains(needle))
+}
+
+/// Drags `from → to` until the fixture reports `expected`, retrying the gesture itself: the debug
+/// event injection drops an `m`/`u` occasionally (the same flakiness the scroll cases retry for), and a
+/// dropped RELEASE leaves a row parked mid-swipe instead of settled — nothing else can dismiss it.
+///
+/// Each retry first taps the row's own start point: a tap is a press/release pair, which ends any
+/// gesture a dropped `u` left open. The window is generous because a settle tween has to finish before
+/// `on_dismiss` reports; the tray cannot hide a real regression, because a row parked at a dismiss
+/// anchor has its drag callbacks gated off — a re-drag then does nothing at all, so a row that never
+/// settles can never pass.
+fn drag_until_reported(app: &mut UiTest, from: (f32, f32), to: (f32, f32), expected: &str) {
+    for attempt in 1..=4 {
+        app.drag(from.0, from.1, to.0, to.1);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if has_text(app, expected) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        eprintln!("[ui-test] attempt {attempt}: `{expected}` was not reported — resetting and retrying");
+        app.click(from.0, from.1);
+    }
+    app.expect_text_timeout(expected, Duration::from_secs(5));
+}
+
+/// Given a list of swipe rows, When a finger drags VERTICALLY over one of them, Then the list scrolls
+/// and no row is dismissed.
+///
+/// This is the arbitration that makes the component usable in a list: the press is claimed by both the
+/// row's `on_drag` and the list's scroll, and the finger's axis decides which one keeps it
+/// (`app::gesture_move`). Without that, the row — the deeper node — would take the gesture, ignore the
+/// vertical motion, and leave the list stuck.
+#[test]
+fn a_vertical_drag_over_a_swipe_row_scrolls_the_list() {
+    let mut app = UiTest::launch("swipe_dismiss");
+    app.expect_text("count: 10");
+    assert_eq!(read_voffset(&mut app), 0.0, "the list starts at the top");
+
+    // Row 3 sits around y 175..223; the finger travels 140 px upwards inside it. Retried for the same
+    // reason as the scroll cases (the injection link drops the occasional event).
+    let mut offset = 0.0;
+    for attempt in 1..=3 {
+        app.drag(190.0, 200.0, 190.0, 60.0);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            offset = read_voffset(&mut app);
+            if offset > 40.0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if offset > 40.0 {
+            break;
+        }
+        eprintln!("[ui-test] vertical drag attempt {attempt} did not scroll (voffset={offset})");
+    }
+    assert!(offset > 40.0, "a vertical drag must scroll the list, voffset={offset}");
+    app.expect_text("count: 10"); // …and it must not have dismissed anything
+    app.expect_text("last: none");
+}
+
+/// Given a swipe row, When the finger drags it horizontally past the dismiss threshold, Then the row
+/// leaves and `on_dismiss` reports which way it went.
+#[test]
+fn a_long_horizontal_drag_dismisses_the_row() {
+    let mut app = UiTest::launch("swipe_dismiss");
+    app.expect_text("count: 10");
+
+    // Row 0 sits around y 31..79; the finger travels 280 px to the left.
+    drag_until_reported(&mut app, (340.0, 55.0), (60.0, 55.0), "count: 9");
+
+    app.expect_text("last: 0 left");
+    app.expect_text("row 1"); // the rest of the list is untouched
+}
+
+/// Given a swipe row, When the finger drags it a short way and lets go slowly, Then the row springs
+/// back: the distance is under the 56 px positional threshold and the release is too slow to be a
+/// fling.
+#[test]
+fn a_short_slow_horizontal_drag_settles_the_row_back() {
+    let mut app = UiTest::launch("swipe_dismiss");
+    app.expect_text("count: 10");
+
+    // 12 px over eight steps: the last step is ~1.5 px per 20 ms (~75 px/s, a clear margin under the
+    // 125 px/s fling threshold), so the release is judged by distance — and 12 px is far below the
+    // 56 px threshold. A larger distance shrinks that margin: the velocity is `delta / dt` per
+    // PROCESSED delta, so a step the fixture drains together with the previous one would read as a
+    // fling and this row would dismiss.
+    app.drag(300.0, 55.0, 288.0, 55.0);
+    std::thread::sleep(Duration::from_millis(500)); // let the settle animation finish
+
+    app.expect_text("count: 10");
+    app.expect_text("last: none");
+    app.expect_text("row 0");
+}
+
+/// Given a row whose leftward direction is switched off, When it is dragged that way, Then it stays
+/// put — while the other direction still dismisses it.
+#[test]
+fn a_disabled_dismiss_direction_leaves_the_row_in_place() {
+    let mut app = UiTest::launch("swipe_dismiss");
+    app.expect_text("count: 10");
+
+    // Row 1 sits around y 79..127.
+    app.drag(340.0, 103.0, 60.0, 103.0); // leftwards: refused
+    std::thread::sleep(Duration::from_millis(500));
+    app.expect_text("count: 10");
+    app.expect_text("last: none");
+    // (This half alone would also pass if the drag had been dropped altogether; the rightward drag
+    // below is what proves the row is alive and took the refusal on purpose.)
+
+    drag_until_reported(&mut app, (60.0, 103.0), (340.0, 103.0), "count: 9"); // rightwards: allowed
+    app.expect_text("last: 1 right");
+}
+
+/// Given a list whose rows are keyed by item id, When the top row is dismissed, Then the row that
+/// moves up into its place is a LIVE row: draggable in its own right, not carrying the departed row's
+/// parked offset.
+///
+/// A rebuild that is not keyed — a plain `for` loop over the data — hands the arriving item the
+/// remembered state of the position it moved into. The box would come up settled at the dismiss
+/// anchor: content parked off the row and gestures gated off, which is what this case catches.
+/// `LazyColumn::items_from` keys the item's composition group, so the state follows the ITEM.
+#[test]
+fn the_row_that_moves_into_a_dismissed_slot_is_live() {
+    let mut app = UiTest::launch("swipe_dismiss");
+    app.expect_text("count: 10");
+
+    // Row 0 goes first, towards the trailing edge…
+    drag_until_reported(&mut app, (340.0, 55.0), (60.0, 55.0), "count: 9");
+    app.expect_text("last: 0 left");
+
+    // The arriving row must not be carrying the departed row's parked offset: its content sits at the
+    // row's own left edge. Text alone cannot see the difference — the parked symptom is GEOMETRY (the
+    // content laid out one width away, leaving nothing but the background visible), so assert bounds.
+    app.refresh();
+    let (x, _, _, _) = app.find_tag("sd-row-1").expect("the row that moved up into the freed slot");
+    assert!(
+        (x - 12.0).abs() < 1.0,
+        "the row that moved up must sit at the list's left edge (x=12), got x={x}"
+    );
+
+    // …and it must still take a dismissal of its own, the other way (row 1 refuses the leftward
+    // direction, so the rightward one is what proves it alive).
+    drag_until_reported(&mut app, (60.0, 55.0), (340.0, 55.0), "count: 8");
+    app.expect_text("last: 1 right");
+}
+

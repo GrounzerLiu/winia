@@ -52,6 +52,8 @@ mod search_results;
 mod segmented_button;
 #[path = "fixture_subwindow.rs"]
 mod subwindow;
+#[path = "fixture_swipe_dismiss.rs"]
+mod swipe_dismiss;
 #[path = "fixture_text_field.rs"]
 mod text_field;
 #[path = "fixture_theme_follow.rs"]
@@ -91,6 +93,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("search_results", search_results::main),
     ("segmented_button", segmented_button::main),
     ("subwindow", subwindow::main),
+    ("swipe_dismiss", swipe_dismiss::main),
     ("text_field", text_field::main),
     ("theme_follow", theme_follow::main),
     ("theme_typography", theme_typography::main),

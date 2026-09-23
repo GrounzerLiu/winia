@@ -26,6 +26,36 @@ pub(crate) const DOUBLE_TAP_SLOP: f32 = 50.0;
 /// 长按判定时长（毫秒）
 pub(crate) const LONG_PRESS_TIMEOUT_MS: u128 = 500;
 
+/// Which way a gesture (or the scroll container it might belong to) moves.
+///
+/// A press can be claimed by two owners at once — an inner drag component (a swipeable row, a
+/// slider) and the scroll container it sits in — and the finger's dominant axis decides which
+/// one keeps the gesture. Compose arbitrates in the same place: its drag detectors each wait for
+/// the touch slop along their own orientation, so the direction the finger moves first decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl ScrollAxis {
+    /// Dominant axis of a displacement from the press point, or `None` while it is still
+    /// undecided: below the touch slop (nothing has started yet) or on an exact diagonal (either
+    /// could win — wait for another move instead of guessing).
+    pub(crate) fn classify(dx: f32, dy: f32) -> Option<Self> {
+        let (ax, ay) = (dx.abs(), dy.abs());
+        if ax.max(ay) < TOUCH_SLOP {
+            None
+        } else if ax > ay {
+            Some(Self::Horizontal)
+        } else if ay > ax {
+            Some(Self::Vertical)
+        } else {
+            None
+        }
+    }
+}
+
 /// 手势状态机输出动作
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum GestureAction {
@@ -143,33 +173,36 @@ impl GestureTracker {
         }
     }
 
-    /// 指针移动——返回动作（drag 系列或 None）
-    pub(crate) fn on_move(&mut self, pos: (f32, f32)) -> GestureAction {
+    /// 指针移动——返回动作（drag 系列或 None）。
+    ///
+    /// `allow_drag` gates *starting* the drag only: an inner component whose axis is still being
+    /// arbitrated (see `ScrollAxis`) cancels the tap as usual once the touch slop is crossed, but
+    /// must not fire `on_drag_start` yet — the gesture may be about to be handed to the enclosing
+    /// scroll. A drag that was held back can still start on a later move (the finger may cross the
+    /// slop along a diagonal that decides nothing); once it has started, this flag is ignored, and
+    /// a drag cancelled by [`Self::cancel_drag_for_arbitration`] never re-arms.
+    pub(crate) fn on_move(&mut self, pos: (f32, f32), allow_drag: bool) -> GestureAction {
         let delta = (pos.0 - self.last_pos.0, pos.1 - self.last_pos.1);
         self.last_pos = pos;
-        // 未超过 slop：检测是否刚越过
         if !self.slop_passed {
             let dx = pos.0 - self.down_pos.0;
             let dy = pos.1 - self.down_pos.1;
-            if dx * dx + dy * dy >= TOUCH_SLOP * TOUCH_SLOP {
-                self.slop_passed = true;
-                if self.has_drag {
-                    self.dragging = true;
-                    return GestureAction::DragStart(pos);
-                }
-                // 无 drag 回调：slop 后 tap 取消（静默）
+            if dx * dx + dy * dy < TOUCH_SLOP * TOUCH_SLOP {
                 return GestureAction::None;
             }
-            return GestureAction::None;
+            self.slop_passed = true;
         }
-        // 已超过 slop 且在拖拽
         if self.dragging {
             return GestureAction::DragMove(pos, delta);
+        }
+        if self.has_drag && allow_drag {
+            self.dragging = true;
+            return GestureAction::DragStart(pos);
         }
         GestureAction::None
     }
 
-    /// 指针释放——返回动作（tap 系列 / drag end / None）
+    /// 指针释放——返回动作（tap 系列 / drag-end / None）
     pub(crate) fn on_up(&mut self) -> GestureAction {
         if self.dragging {
             return GestureAction::DragEnd;
@@ -216,6 +249,20 @@ impl GestureTracker {
     pub(crate) fn tap_context(&self) -> Option<(Instant, (f32, f32))> {
         self.last_tap_time.zip(self.last_tap_pos)
     }
+
+    pub(crate) fn down_position(&self) -> (f32, f32) {
+        self.down_pos
+    }
+
+    /// Give the drag up after all (the enclosing scroll won the axis arbitration): the gesture keeps
+    /// cancelling the tap but stops tracking a drag, so no `on_drag_*` callback — not even a
+    /// `DragCancel` — fires for a gesture the component never received. The caller (`app::gesture_move`)
+    /// keeps the axis locked for the rest of the gesture, which is what stops a later `on_move` from
+    /// starting the drag again; this call itself does not latch anything.
+    pub(crate) fn cancel_drag_for_arbitration(&mut self) {
+        self.slop_passed = true;
+        self.dragging = false;
+    }
 }
 
 // ═══════════════ 测试 ═══════════════
@@ -238,7 +285,7 @@ mod tests {
     fn test_tap_moved_within_slop() {
         // 移动 < slop 仍算 tap
         let mut t = tracker(false);
-        assert_eq!(t.on_move((14.0, 12.0)), GestureAction::None);
+        assert_eq!(t.on_move((14.0, 12.0), true), GestureAction::None);
         assert_eq!(t.on_up(), GestureAction::Tap((10.0, 10.0)), "slop 内移动仍是 tap");
     }
 
@@ -246,7 +293,7 @@ mod tests {
     fn test_tap_cancelled_by_slop() {
         // 移动超过 slop 且无 drag 回调 → tap 取消
         let mut t = tracker(false);
-        assert_eq!(t.on_move((30.0, 10.0)), GestureAction::None);
+        assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::None);
         assert_eq!(t.on_up(), GestureAction::None, "超过 slop 的 tap 应取消");
     }
 
@@ -254,12 +301,12 @@ mod tests {
     fn test_drag_sequence() {
         let mut t = tracker(true);
         // 未超 slop：无动作
-        assert_eq!(t.on_move((15.0, 10.0)), GestureAction::None);
+        assert_eq!(t.on_move((15.0, 10.0), true), GestureAction::None);
         // 超 slop：DragStart（首次）
-        assert_eq!(t.on_move((30.0, 10.0)), GestureAction::DragStart((30.0, 10.0)));
+        assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::DragStart((30.0, 10.0)));
         // 后续：DragMove(pos, delta)
         assert_eq!(
-            t.on_move((50.0, 20.0)),
+            t.on_move((50.0, 20.0), true),
             GestureAction::DragMove((50.0, 20.0), (20.0, 10.0))
         );
         assert_eq!(t.on_up(), GestureAction::DragEnd);
@@ -268,11 +315,11 @@ mod tests {
     #[test]
     fn test_drag_start_only_once() {
         let mut t = tracker(true);
-        t.on_move((30.0, 10.0)); // slop
-        t.on_move((40.0, 10.0));
+        t.on_move((30.0, 10.0), true); // slop
+        t.on_move((40.0, 10.0), true);
         // 第二次大移动仍是 DragMove（start 只一次）
         assert_eq!(
-            t.on_move((60.0, 10.0)),
+            t.on_move((60.0, 10.0), true),
             GestureAction::DragMove((60.0, 10.0), (20.0, 0.0))
         );
     }
@@ -327,7 +374,7 @@ mod tests {
     #[test]
     fn test_drag_cancel() {
         let mut t = tracker(true);
-        t.on_move((30.0, 10.0)); // drag start
+        t.on_move((30.0, 10.0), true); // drag start
         assert_eq!(t.on_cancel(), GestureAction::DragCancel);
     }
 
@@ -335,5 +382,44 @@ mod tests {
     fn test_cancel_without_drag_noop() {
         let mut t = tracker(false);
         assert_eq!(t.on_cancel(), GestureAction::None);
+    }
+
+    #[test]
+    fn axis_classification_waits_for_a_decisive_move() {
+        use ScrollAxis::{Horizontal, Vertical};
+        // Below the touch slop nothing has started, so nothing can be decided.
+        assert_eq!(ScrollAxis::classify(4.0, 3.0), None);
+        assert_eq!(ScrollAxis::classify(0.0, 0.0), None);
+        // One axis clearly ahead decides, in either sign.
+        assert_eq!(ScrollAxis::classify(-20.0, 6.0), Some(Horizontal));
+        assert_eq!(ScrollAxis::classify(6.0, -20.0), Some(Vertical));
+        // An exact diagonal is undecided: either owner could take it, so wait for the next move.
+        assert_eq!(ScrollAxis::classify(12.0, 12.0), None);
+        assert_eq!(ScrollAxis::classify(-9.0, 9.0), None);
+    }
+
+    #[test]
+    fn a_held_back_drag_can_still_start_on_a_later_move() {
+        // The finger crosses the slop on a diagonal that decides nothing (7,5), so the component
+        // is not allowed to start yet; the next move is clearly horizontal and the drag begins
+        // there — a drag that was merely held back is not cancelled.
+        let mut t = tracker(true);
+        t.on_move((17.0, 15.0), false);
+        assert_eq!(t.on_move((30.0, 15.0), true), GestureAction::DragStart((30.0, 15.0)));
+        assert_eq!(
+            t.on_move((40.0, 15.0), true),
+            GestureAction::DragMove((40.0, 15.0), (10.0, 0.0))
+        );
+    }
+
+    #[test]
+    fn an_arbitration_cancel_does_not_rearm_the_drag() {
+        // The scroll won: the component's drag is dead for the rest of the gesture, and the
+        // release must not look like the end of a drag the component never began.
+        let mut t = tracker(true);
+        t.on_move((30.0, 10.0), true);
+        t.cancel_drag_for_arbitration();
+        assert_eq!(t.on_move((40.0, 10.0), false), GestureAction::None);
+        assert_eq!(t.on_up(), GestureAction::None);
     }
 }

@@ -14,7 +14,7 @@ case — isolation is unchanged, but the whole suite links skia once (see "addin
 cargo test --features debug-server
         │
         ├─ tests/ui/mod.rs       UiTest 封装（进程管理 + 管道协议 + 断言辅助）
-        ├─ tests/ui_test.rs      scenario assertions (36 cases) + the pixel-read parser tests
+        ├─ tests/ui_test.rs      scenario assertions (41 cases) + the pixel-read parser tests
         ├─ tests/ui_fixtures/    fixture sources + fixture_all.rs (the single dispatcher)
         └─ tests/{event_flow,layout_snapshot,render_snapshot}.rs  库行为快照测试
                 │
@@ -174,6 +174,11 @@ tooltips are the one overlay that deliberately lets the press through.
 | an_open_popup_follows_the_theme | theme_follow | a popup left open across the switch changes too (it composes under a snapshot the declaring tree refreshes) |
 | the_window_content_composes_under_the_declared_typography_and_direction | theme_typography | a window declared under RTL + a 32 px type scale: the content mirrors and the headline follows the scale (the publish in `Window::build` is what carries it) |
 | bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll | bottom_sheet | expands-first, then the list scrolls; a downward drag scrolls the list back while the sheet stays; at the top it collapses the sheet in two steps (Compose M3's nested-scroll rule, not a bug) |
+| a_vertical_drag_over_a_swipe_row_scrolls_the_list | swipe_dismiss | a swipe row inside a scrolling list: the axis decides the owner, so a vertical drag scrolls the list and dismisses nothing |
+| a_long_horizontal_drag_dismisses_the_row | swipe_dismiss | a horizontal drag past the 56 px threshold removes the row and `on_dismiss` reports the direction |
+| a_short_slow_horizontal_drag_settles_the_row_back | swipe_dismiss | a short, slow drag stays under both thresholds and the row springs back |
+| a_disabled_dismiss_direction_leaves_the_row_in_place | swipe_dismiss | `enable_dismiss_from_end_to_start(false)`: that direction is refused, the other still dismisses |
+| the_row_that_moves_into_a_dismissed_slot_is_live | swipe_dismiss | after a dismissal the arriving row is live: draggable again, its content at the row's own edge (bounds, not just text) |
 
 ### Reading pixels (`px`)
 

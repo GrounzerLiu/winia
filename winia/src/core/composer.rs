@@ -636,6 +636,17 @@ impl<'a> ComposeCtx<'a> {
         let counter = self.composer.remember_path_counters.entry(base).or_insert(0);
         let c = *counter;
         *counter += 1;
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_REMEMBER_TRACE").is_ok() {
+            eprintln!(
+                "[remember] compose={} base={:#x} n={} key={:#x} stmt={:?}",
+                self.composer.compose_count,
+                base,
+                c,
+                crate::core::composer::mix_key(base, c as u64),
+                STMT_STACK.with(|s| s.borrow().last().copied())
+            );
+        }
         // key = fnv(base, 序号)——全 64 位混合，不丢身份熵。⚠ 不能用
         // (base << 32) | c（左移丢弃 base 高 32 位）或 base 高 32 位 | c
         // （丢弃 base 低 32 位 → 身份只剩 2^32 空间——checkbox 循环子项碰撞）。
