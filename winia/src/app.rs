@@ -2740,6 +2740,13 @@ impl OverlayWindow {
     }
 
     fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
+        // A desc only reaches this method while its overlay is still DECLARED (a closing overlay is not
+        // re-registered), so the caller bringing one back — open, close, open again inside the exit fade,
+        // where the id is reused — has to cancel the pending close: leaving `closing` set kept the overlay
+        // un-interactive (`hit_overlay` skips closing ones) and let the fade remove it a moment after it
+        // was reopened, which showed as a panel flashing.
+        self.closing = false;
+        self.closing_since = None;
         self.anchor_slot = desc.anchor_slot;
         self.position = desc.position;
         self.anchor_slide = desc.anchor_slide;
@@ -2910,12 +2917,12 @@ fn finish_closing_overlays(pw: &mut PerWindow) {
         if !closing_overlay_is_done(progress, ov.closing_since, now) {
             return true;
         }
-        if progress.is_some_and(|p| p >= 0.001) {
-            // Past the deadline: snap the fade to its end so the removal is not a visible pop.
-            if let Some(p) = ov.progress.as_ref() {
-                crate::animation::cancel_animation_by_id(p.state_id());
-                p.set(0.0);
-            }
+        if let Some(p) = ov.progress.as_ref() {
+            // A fade that never reported done: drop it and stop driving the state (it is about to be
+            // dropped, and a stray animation would keep writing to it). This cut IS visible — the fade
+            // was still somewhere between 1 and 0 — which is the price of the deadline; it only happens
+            // when the animation system already failed.
+            crate::animation::cancel_animation_by_id(p.state_id());
         }
         false
     });
@@ -4613,6 +4620,13 @@ mod overlay_close_tests {
     /// the sheet already gone.
     #[test]
     fn a_closing_overlay_waits_for_its_fade_but_not_forever() {
+        // The deadline has to stay in the same order of magnitude as the exit specs (a few hundred
+        // milliseconds): the test below derives its instants from it, so a constant of minutes would pass
+        // the test and still leave a stuck scrim on screen for minutes.
+        assert!(
+            CLOSING_DEADLINE <= Duration::from_millis(2000),
+            "CLOSING_DEADLINE is a safety net, not a grace period: {CLOSING_DEADLINE:?}"
+        );
         let now = Instant::now();
         assert!(closing_overlay_is_done(None, None, now), "no progress channel: nothing to wait for");
         assert!(closing_overlay_is_done(Some(0.0), None, now), "the fade reached its end");

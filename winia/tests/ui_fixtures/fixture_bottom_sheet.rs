@@ -48,7 +48,7 @@ fn bottom_sheet_fixture(ctx: &mut ComposeCtx) {
                         Text::new("sheet header").build(ctx);
                         // Inside a bounded, clipped box: a LazyColumn given unbounded height from the sheet's
                         // offset container lays out no items at all (the demo's shape, which works). The
-                        // geometry (560-tall window, 360-tall list, a footer) mirrors `bottom_sheet_demo` so
+                        // geometry (560-tall window, 520-tall list, a footer) mirrors `bottom_sheet_demo` so
                         // the sheet's PartiallyExpanded anchor is a real one — a panel shorter than half the
                         // window collapses partial and expanded into one, and the interaction under test
                         // (expands-first) disappears with it.
@@ -56,7 +56,7 @@ fn bottom_sheet_fixture(ctx: &mut ComposeCtx) {
                             .modifier(Modifier::new()
                                 .fill_max_width()
                                 // Taller than the window on purpose: the panel then reaches the window
-                                // height when expanded, which is when M3 squares its top corners.
+                                // height when expanded, which is when WINIA drops its top corners (its own rule, not M3's).
                                 .height(520.0)
                                 .clip(Shape::RoundedRect { corner_radius: 12.0 }))
                             .build(ctx, |ctx| {

@@ -1219,6 +1219,10 @@ const DEFAULT_HEADLINE_HEIGHT: f32 = 30.0;
 /// only the leftover to the list; a downward delta is the list's while it can scroll, and the sheet's once
 /// it cannot — so dragging down with the list at its top collapses the sheet, which IS the dismissal
 /// gesture rather than a bug (that is what this fixture's shape used to look like from the outside).
+///
+/// The androidx source, for whoever needs it again (`material3/SheetDefaults.kt`):
+/// `onPreScroll { if (delta < 0 && source == NestedScrollSource.UserInput) dispatchRawDelta(delta) }`,
+/// `onPostScroll { if (source == NestedScrollSource.UserInput && delta != 0f) dispatchRawDelta(delta) }`.
 #[test]
 fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
     // `find_tag_in_overlay` reads the cached tree, and the sheet animates its settle, so every read is
@@ -1273,12 +1277,20 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
 
     // (4) A long downward drag with the list at its top goes to the SHEET — M3's dismissal gesture — and
     // from Expanded that is PartiallyExpanded first, so the sheet is still there (its footer moves down
-    // with the panel).
+    // with the panel). The wait requires the footer to come to REST (two reads a frame apart): a settle
+    // tween is still running when the drag helper returns, and a footer that is merely passing through the
+    // sampled position would satisfy a bare `>` without the release having landed anywhere.
     let before = row_y(&mut app, "bs-footer").expect("the sheet footer");
     let top = row_y(&mut app, "bs-row-0").expect("row 0 at the top again") + 15.0;
     app.drag(x, top, x, top + 400.0);
     wait_for(&mut app, "a downward drag at the top of the list must move the sheet", |a| {
-        row_y(a, "bs-footer").is_some_and(|y| y > before + 50.0)
+        let first = row_y(a, "bs-footer");
+        std::thread::sleep(Duration::from_millis(50));
+        let second = row_y(a, "bs-footer");
+        match (first, second) {
+            (Some(f), Some(s)) => f > before + 50.0 && (f - s).abs() <= 1.0,
+            _ => false,
+        }
     });
     assert_eq!(
         app.overlay_count(),
