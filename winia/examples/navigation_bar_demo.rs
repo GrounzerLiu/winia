@@ -10,6 +10,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 // Material 图标（24dp 视口经典路径）
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
@@ -95,8 +99,10 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
     let h_selected = ctx.remember(|| 0usize);
     let favorites = ctx.remember(|| 3i32);
 
-    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), LayoutDirection::Ltr, ctx, |ctx| {
-        Column::new()
+    // The direction is the chrome's to give now: this scope pinned LTR so the two item layouts could
+    // be compared side by side, but it also meant the settings sheet's switch could not mirror the
+    // page. It follows the sheet now, and the comparison still holds — the bar shows both variants.
+    Column::new()
             .modifier(Modifier::new().fill_max_size())
             .build(ctx, |ctx| {
                 Text::new("Compact windows - vertical items")
@@ -120,11 +126,15 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().padding(16.0))
                 .build(ctx);
             });
-    });
 }
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new().size(720.0, 420.0).title("Navigation Bar Demo").build(ctx, navigation_bar_demo);
+        Window::new()
+            .size(720.0, 484.0)
+            .title("Navigation Bar Demo")
+            .build(ctx, |ctx| {
+                settings::shell("Navigation Bar Demo", ctx, navigation_bar_demo);
+            });
     });
 }
