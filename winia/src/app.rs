@@ -845,6 +845,10 @@ impl ApplicationHandler for AppState {
                         let lp = p.to_logical::<f32>(pw.scale_factor);
                         (lp.x, lp.y)
                     }
+                    // `MouseScrollDelta` is `#[non_exhaustive]` in winit 0.31 (it was marked so in
+                    // 0.31.0-beta.3), so a future variant must not break this match: an unknown
+                    // delta scrolls nothing rather than being guessed at.
+                    _ => (0.0, 0.0),
                 };
                 // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
                 // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
