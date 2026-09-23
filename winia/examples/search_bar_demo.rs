@@ -8,6 +8,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 const FRUITS: &[&str] = &[
@@ -172,7 +176,9 @@ fn main() {
             Window::new()
                 .size(420.0, 700.0)
                 .title("SearchBar Demo")
-                .build(ctx, search_bar_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("SearchBar Demo", ctx, search_bar_demo);
+                });
         });
     });
 }
