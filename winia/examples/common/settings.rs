@@ -90,8 +90,10 @@ impl Direction {
 ///
 /// `title` is the top app bar's title — the window's own title stays where the example sets it.
 /// `content` is the example body, composed once per frame exactly as it would be without the
-/// chrome; it must fill the space it is given (`fill_max_size`), the same rule `Scaffold`'s content
-/// slot always had.
+/// chrome. It must emit exactly ONE root node filling the space it is given (`fill_max_size`): the
+/// body sits in `Scaffold`'s content slot, which lays out a single child — an example whose body
+/// emitted several siblings straight into the window root (as several of them used to) has to put
+/// them in a `Column`.
 ///
 /// `#[composable]` is load-bearing here, not decoration — it is what makes the direction switch
 /// reach the whole page. This function READS the direction state and hands it to
