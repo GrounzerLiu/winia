@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// Secondary label color, from the theme so it stays readable in both light and dark.
 fn label_color() -> Color {
@@ -33,10 +37,6 @@ fn range_slider_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("RangeSlider demo (material3 aligned)")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "Continuous (a price window)");
             RangeSlider::new(price.get())
                 .value_range(0.0, 1.0)
@@ -120,7 +120,9 @@ fn main() {
             Window::new()
                 .size(460.0, 720.0)
                 .title("Range Slider Demo")
-                .build(ctx, range_slider_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Range Slider Demo", ctx, range_slider_demo);
+                });
         });
     });
 }
