@@ -5,6 +5,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winit::keyboard::{Key, NamedKey};
 
 /// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
@@ -21,7 +25,9 @@ fn main() {
             Window::new()
                 .size(520.0, 500.0)
                 .title("Keyboard Events Demo")
-                .build(ctx, |ctx| keyboard_demo_ui(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Keyboard Events Demo", ctx, |ctx| keyboard_demo_ui(ctx));
+                });
         });
     });
 }
@@ -34,9 +40,6 @@ fn keyboard_demo_ui(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_width().fill_max_height().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-
-            Text::new("■ Key Event Demo — Tab to switch focus, type keys")
-                .font_size(15.0).color(WiniaTheme::colors().on_surface_variant).build(ctx);
 
             // ═══ 第一个焦点节点（响应所有按键）═══
             Text::new("▶ Node 1: captures all keys")
