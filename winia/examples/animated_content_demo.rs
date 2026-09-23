@@ -9,6 +9,10 @@ use letclone::clone;
 use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
 use winia::prelude::*;
 
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 #[composable]
 fn animated_content_demo(ctx: &mut ComposeCtx) {
     let page = ctx.remember(|| 0u32);
@@ -16,11 +20,7 @@ fn animated_content_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().padding(16.0).fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("AnimatedContent (fade + sizeTransform)")
-                .font_size(20.0)
-                .color(Color::from_argb(255, 233, 30, 99))
-                .build(ctx);
-
+            // No heading of its own: the shared chrome's top app bar carries the title.
             Row::new()
                 .modifier(Modifier::new().fill_max_width().padding_vertical(8.0))
                 .build(ctx, |ctx| {
@@ -89,9 +89,13 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(460.0, 320.0)
+                // Taller than the content needs on its own: the shared chrome's top app bar
+                // takes its 64 px off the top of the window.
+                .size(460.0, 380.0)
                 .title("AnimatedContent Demo")
-                .build(ctx, |ctx| animated_content_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("AnimatedContent Demo", ctx, |ctx| animated_content_demo(ctx));
+                });
         });
     });
 }
