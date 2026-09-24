@@ -5979,4 +5979,140 @@ fn test_same_stmt_remember_count_change_resets() {
     let id2 = first_holder.borrow().clone().unwrap().id();
     assert_ne!(id1, id2,
         "同语句内 remember 数量变化 = 序号平移 = 重置（Compose 语义，非漂移 bug——明确记录）");
+
+}
+
+/// What a derived expression does to invalidation — measured, because the obvious claim is wrong.
+///
+/// The claim would be: "a reader of a value derived from a fast-moving source re-runs on every source
+/// change, even when the derived value is unchanged." Measured, that is NOT what happens. A reader that
+/// declares the derived value as its param (which every component does) Skips while the value is equal
+/// and re-runs exactly when it flips; what re-runs on every source change is the scope that owns the
+/// READ. `docs/state.md` records what that means for anyone reaching for `derivedStateOf`.
+#[cfg(test)]
+mod derived_expression_tests {
+    use super::*;
+    use crate::layout::BoxLayout;
+    use crate::layout::constraints::Constraints;
+    use crate::modifier::Modifier;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn a_derived_value_reenters_its_reader_only_when_it_changes() {
+        let source = crate::core::state::State::new(0.0f32);
+        let owner_enters = Rc::new(Cell::new(0usize));
+        let reader_enters = Rc::new(Cell::new(0usize));
+        let source_in = source.clone();
+        let owner_in = owner_enters.clone();
+        let reader_in = reader_enters.clone();
+
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            let source = source_in.clone();
+            let owner = owner_in.clone();
+            let reader = reader_in.clone();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                let owner_key = ctx.next_key();
+                match ctx.start_restartable_group(owner_key, Modifier::new(), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        owner.set(owner.get() + 1);
+                        // The derived expression, read in the owning scope.
+                        let past = source.get() > 300.0;
+
+                        // The reader: its only declared param is the DERIVED value.
+                        let reader_key = ctx.next_key();
+                        ctx.changed(&past);
+                        match ctx.start_restartable_group(reader_key, Modifier::new(), BoxLayout::new()) {
+                            GroupStatus::Skip => {}
+                            GroupStatus::Enter => {
+                                reader.set(reader.get() + 1);
+                            }
+                        }
+                        ctx.end_restartable_group();
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            // A group can only Skip when the previous frame left a cached subtree to restore.
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+
+        frame(&mut composer);
+        assert_eq!((owner_enters.get(), reader_enters.get()), (1, 1), "the first frame enters both");
+
+        // CONTROL: an idle frame Skips both, so the counts below mean something.
+        frame(&mut composer);
+        assert_eq!((owner_enters.get(), reader_enters.get()), (1, 1), "CONTROL: an idle frame Skips");
+
+        // The source moves three times and the derived value stays false.
+        for value in [10.0f32, 120.0, 299.0] {
+            source.set(value);
+            frame(&mut composer);
+        }
+        assert_eq!(
+            owner_enters.get(),
+            4,
+            "the scope that owns the READ re-runs for every source change — that is the cost of a \
+             derived expression, and what a `derivedStateOf`-style state object would avoid"
+        );
+        assert_eq!(
+            reader_enters.get(),
+            1,
+            "but the reader must NOT re-run: its declared param never changed"
+        );
+
+        // The derived value flips.
+        source.set(301.0);
+        frame(&mut composer);
+        assert_eq!(reader_enters.get(), 2, "and it re-runs when the value it declared changes");
+        assert_eq!(owner_enters.get(), 5);
+    }
+
+    /// The flip side of the same rule, and why every component declares its params: a group that
+    /// declares nothing and reads nothing is NEVER re-entered, so it keeps what it composed with even
+    /// when the value it was built from changed in the scope above it.
+    #[test]
+    fn a_group_that_declares_nothing_keeps_what_it_was_built_with() {
+        let source = crate::core::state::State::new(0.0f32);
+        let enters = Rc::new(Cell::new(0usize));
+        let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let source_in = source.clone();
+        let enters_in = enters.clone();
+        let seen_in = seen.clone();
+
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            let source = source_in.clone();
+            let enters = enters_in.clone();
+            let seen = seen_in.clone();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                let value = source.get();
+                let key = ctx.next_key();
+                // NOTE: no `ctx.changed(&value)` — this is the mistake this test records.
+                match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        enters.set(enters.get() + 1);
+                        seen.borrow_mut().push(value);
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+
+        frame(&mut composer);
+        source.set(42.0);
+        frame(&mut composer);
+
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[0.0],
+            "a group with no declared params is not re-entered, so it keeps the value it composed \
+             with — declaring what you read is what makes a component update"
+        );
+        assert_eq!(enters.get(), 1);
+    }
 }
