@@ -416,6 +416,48 @@ impl WindowSemantics {
         }
     }
 
+    /// A fingerprint of the tree's SHAPE: which elements exist, in what order, with how many
+    /// children each has. Names and states are deliberately not in it — a label changing is a
+    /// property change, not a structural one, and a client that cares re-reads the property.
+    ///
+    /// A platform bridge compares this frame's fingerprint with the last one to decide whether to tell
+    /// its clients the tree changed, so it has to be cheap (one pass, no allocation) and stable
+    /// (the same tree always hashes the same).
+    pub fn structure_fingerprint(&self) -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let mut mix = |value: u64| {
+            hash ^= value;
+            hash = hash.wrapping_mul(0x100000001b3);
+        };
+        // The overlay ids are part of the shape: a dialog appearing IS a structural change.
+        for overlay in &self.overlays {
+            mix(overlay.id);
+        }
+        for (node, _) in self.flatten() {
+            mix(node.node_id);
+            mix(node.children.len() as u64);
+        }
+        hash
+    }
+
+    /// The path of the element that currently has the keyboard focus, if any.
+    ///
+    /// This is what a focus-changed notification needs: the path addresses the element, and the bridge
+    /// turns it into a provider. Depth-first, so the innermost focused element wins — an element whose
+    /// child is also focused is not the focus.
+    pub fn focused_path(&self) -> Option<Vec<usize>> {
+        let mut found: Option<Vec<usize>> = None;
+        let mut visit = |node: &SemanticsNode, _origin: (f32, f32), path: Vec<usize>| {
+            if node.focused {
+                found = Some(path);
+            }
+        };
+        for (index, (node, origin)) in self.top_level().into_iter().enumerate() {
+            walk_with_paths(node, vec![index], origin, &mut visit);
+        }
+        found
+    }
+
     /// Every element of the window, parents before children, main tree first then each overlay — what
     /// a query that is not addressed by path needs ("the focused element", "the element under this
     /// point").
@@ -611,6 +653,23 @@ fn own_name(node: &LayoutNode) -> Option<String> {
     None
 }
 
+/// Depth-first walk handing each element its index path and the origin its coordinates are relative
+/// to. `crate::accessibility` has its own copy for the provider tree; this one is here because
+/// [`WindowSemantics::focused_path`] needs it on every platform.
+fn walk_with_paths(
+    node: &SemanticsNode,
+    path: Vec<usize>,
+    origin: (f32, f32),
+    f: &mut impl FnMut(&SemanticsNode, (f32, f32), Vec<usize>),
+) {
+    f(node, origin, path.clone());
+    for (index, child) in node.children.iter().enumerate() {
+        let mut child_path = path.clone();
+        child_path.push(index);
+        walk_with_paths(child, child_path, origin, f);
+    }
+}
+
 /// The names an absorbed subtree contributes, in tree order.
 fn joined_name(absorbed: &[SemanticsNode]) -> Option<String> {
     let names: Vec<String> = absorbed.iter().filter_map(|node| node.effective_name()).collect();
@@ -767,6 +826,139 @@ mod tests {
             });
         }
         out
+    }
+
+    /// A one-window snapshot around `main` — what the platform bridge's change detection reads.
+    fn snapshot_of(main: Vec<SemanticsNode>) -> WindowSemantics {
+        WindowSemantics {
+            main,
+            overlays: Vec::new(),
+            window_size: (100.0, 100.0),
+            scale_factor: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_structure_fingerprint_tracks_shape_not_content() {
+        // Frames of ONE composer, which is what a bridge ever compares (a different composer means a
+        // different window, and node ids come from a process-wide counter).
+        let mut composer = Composer::new();
+        let label = crate::State::new("a".to_string());
+        let extra = crate::State::new(false);
+
+        let mut frame = |composer: &mut Composer| {
+            let label = label.clone();
+            let extra = extra.clone();
+            composer.compose(|ctx| {
+                WiniaTheme::light(ctx, |ctx| {
+                    Column::new().build(ctx, |ctx| {
+                        Text::new(label.get()).build(ctx);
+                        if extra.get() {
+                            Text::new("second".to_string()).build(ctx);
+                        }
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+            let root = composer.layout_root_idx().expect("layout root");
+            snapshot_of(semantics_tree(composer.arena_nodes(), root))
+        };
+
+        let first = frame(&mut composer);
+        // The CONTROL the fingerprint has to pass: nothing changed, so nothing is reported. An id that
+        // drifted every frame would make this fail, and with it every provider cache in the bridge.
+        let again = frame(&mut composer);
+        assert_eq!(
+            first.structure_fingerprint(),
+            again.structure_fingerprint(),
+            "an unchanged tree has the same fingerprint — node ids included, which is the invariant the \
+             bridge's cached providers rely on"
+        );
+        let ids_of = |snapshot: &WindowSemantics| -> Vec<u64> {
+            snapshot.flatten().into_iter().map(|(node, _)| node.node_id).collect()
+        };
+        assert_eq!(ids_of(&first), ids_of(&again), "and the ids themselves are stable across frames");
+
+        // A renamed label is a property change, not a structural one.
+        label.set("b".to_string());
+        let renamed = frame(&mut composer);
+        assert_eq!(
+            first.structure_fingerprint(),
+            renamed.structure_fingerprint(),
+            "a different label is not structure — reporting it as such would make every counter tick \
+             look like a rebuilt tree"
+        );
+
+        // An element appearing IS structure.
+        extra.set(true);
+        let added = frame(&mut composer);
+        assert_ne!(
+            first.structure_fingerprint(),
+            added.structure_fingerprint(),
+            "an element appearing is a structural change"
+        );
+    }
+
+    #[test]
+    fn the_structure_fingerprint_notices_an_overlay() {
+        let base = snapshot_of(tree_of(|ctx| {
+            Text::new("page").build(ctx);
+        }));
+        let mut with_overlay = base.clone();
+        with_overlay.overlays.push(OverlaySemantics {
+            id: 7,
+            origin: (10.0, 10.0),
+            nodes: vec![SemanticsNode {
+                node_id: 99,
+                role: Some(SemanticsRole::Dialog),
+                name: Some("Confirm".into()),
+                state: SemanticsState::new(),
+                clickable: false,
+                focused: false,
+                bounds: (0.0, 0.0, 50.0, 50.0),
+                children: Vec::new(),
+            }],
+        });
+        assert_ne!(
+            base.structure_fingerprint(),
+            with_overlay.structure_fingerprint(),
+            "a dialog appearing is the structural change a client most needs to hear about"
+        );
+    }
+
+    #[test]
+    fn the_focused_path_addresses_the_focused_element() {
+        // Focus is placed on a click target, which is what Tab reaches; the path has to address it so
+        // a bridge can hand UIA a provider for exactly that element.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::light(ctx, |ctx| {
+                Column::new().build(ctx, |ctx| {
+                    Text::new("First").build(ctx);
+                    Button::filled().on_click(|| {}).build(ctx, |ctx| {
+                        Text::new("Second").build(ctx);
+                    });
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let root = composer.layout_root_idx().unwrap();
+
+        // Nothing is focused before anything moves the ring.
+        assert_eq!(
+            snapshot_of(semantics_tree(composer.arena_nodes(), root)).focused_path(),
+            None
+        );
+
+        // `focus_next` writes the flags in place (the nodes are not copyable), so it borrows the arena.
+        assert!(
+            crate::layout::node::focus_next(composer.arena_nodes_mut(), root),
+            "the button is focusable"
+        );
+        let after = snapshot_of(semantics_tree(composer.arena_nodes(), root));
+        let path = after.focused_path().expect("a focusable took the ring");
+        let (node, _) = after.resolve(&path).expect("the path addresses an element");
+        assert!(node.clickable, "and it leads to the element that owns the focus");
     }
 
     #[test]

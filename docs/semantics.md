@@ -159,9 +159,6 @@ Two gaps the bridge surfaces in the examples themselves:
 
 Known limits of this slice:
 
-- One-way events: there is no `UiaRaiseStructureChangedEvent` / `AutomationFocusChanged`, so a client
-  that caches the tree learns about changes by re-reading. The snapshot is rebuilt every frame, so a
-  re-read is always current.
 - Toggle and SelectionItem fire, but they do it the way Invoke does — by queueing a click
   (`UiAction::Invoke`), because a click is winia's one activation path. The element's own handler
   decides the new value, which is why the provider does not compute it. `AddToSelection` /
@@ -173,3 +170,43 @@ Known limits of this slice:
   method the provider declines to perform.
 - The window's own rectangle and the native frame come from the host provider; the semantics tree
   describes the client area.
+- Name and state changes are NOT announced. The two notifications below cover focus and shape; a
+  counter going 3→4, a checkbox being ticked by code, a progress bar advancing — all of those change
+  a property, and a client sees them when it re-reads the element. Announcing them would need
+  `UiaRaiseAutomationPropertyChangedEvent` per property plus a way to know which properties a client
+  cares about.
+
+## Notifications
+
+A screen reader that has to poll is a screen reader that misses things, so the bridge raises the two
+events that matter for navigation. `notify` runs once per rendered frame, right after the snapshot is
+published:
+
+| change | event |
+|---|---|
+| the focused element moved | `UIA_AutomationFocusChangedEventId`, raised from the newly focused element (from the window root when focus left every element) |
+| the tree's SHAPE changed | `UIA_StructureChangedEventId` with `ChildrenInvalidated`, from the root — "I do not know which child moved, re-read" |
+
+Both are gated on `UiaClientsAreListening`: with nobody listening the bridge does nothing at all, and
+forgets what it last reported so a client attaching later sees the next change as its first
+(it reads the current state on attach anyway).
+
+The shape comparison is [`crate::semantics::WindowSemantics::structure_fingerprint`] — node ids and
+child counts, NOT names or states. That distinction is the point: a label changing is a property
+change, and reporting it as a structural change would make every counter tick look like a rebuilt
+tree. It also pins an invariant the bridge depends on: **node ids are stable across frames**, which is
+what lets a provider be cached per element and what the fingerprint's stability rests on (both
+asserted in `semantics::tests`).
+
+Verified end to end with `tools/uia_focus_verify.py` + `tools/verify_uia_focus.ps1` (unversioned): a
+real UIA client in C# registers both handlers, the driver presses Tab three times and opens a dialog,
+and the counts match the app's own — 4 focus changes and 1 structural change, with the last focus
+event naming `ControlType.Button 'One action'`. Two traps are encoded in that probe because both cost
+a debugging round:
+
+- A PowerShell scriptblock cannot be the handler: UIA invokes it on a COM callback thread, where it
+  fails silently (measured: the app raised three events, all `S_OK`, and the handler counted zero).
+  The probe compiles a C# class with `Add-Type`.
+- Registering on the desktop root counts every application: the first run's "focus change" was
+  `ControlType.ListItem 'Escrcpy'` — another editor on the same machine. The handler filters by
+  process id and scopes the structure subscription to the window under test.

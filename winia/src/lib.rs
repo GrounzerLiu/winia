@@ -44,6 +44,7 @@ pub mod accessibility {
         false
     }
     pub fn uninstall(_window: &dyn winit::window::Window, _window_id: u64) {}
+    pub fn notify(_window_id: u64, _snapshot: &crate::semantics::WindowSemantics) {}
 }
 pub mod app;
 pub mod effect;

@@ -1629,12 +1629,17 @@ impl ApplicationHandler for AppState {
                         // The two numbers a platform bridge needs to turn logical bounds into
                         // physical ones. Where the window sits on screen is the bridge's own business
                         // — it has the handle, and the answer changes whenever the user moves it.
-                        crate::semantics::publish(wid, crate::semantics::WindowSemantics {
+                        let snapshot = crate::semantics::WindowSemantics {
                             main: main_nodes,
                             overlays,
                             window_size: (pw.width, pw.height),
                             scale_factor: pw.scale_factor as f32,
-                        });
+                        };
+                        // Tell the platform bridge what changed since the last frame — it raises the
+                        // structure/focus notifications its clients listen for, and does nothing at
+                        // all when no client is listening (feature `accessibility`; a no-op otherwise).
+                        crate::accessibility::notify(wid, &snapshot);
+                        crate::semantics::publish(wid, snapshot);
                     }
                 }));
                 match panic_result {
