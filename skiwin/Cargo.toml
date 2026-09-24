@@ -4,14 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-# 注意：feature 组合必须匹配 skia-binaries 发布页中实际存在的预编译二进制文件
-# Windows 可用: gl-jpegd-jpege-pdf-textlayout-vulkan
-# 需要 skia-safe features: gl + vulkan + textlayout + gpu
+# Backends. `SkiaWindow::new` tries the compiled ones in the order vulkan → gl → cpu unless
+# WINIA_RENDER_BACKEND pins one (docs/rendering-backends.md).
+#
+# Careful with skia-bindings: it resolves its prebuilt Skia archive by an EXACT feature key
+# (e.g. ...-x86_64-pc-windows-msvc-d3d-gl-jpegd-jpege-pdf-svg-textlayout-vulkan), and only a fixed
+# set of keys is published. Enabling a GPU feature on skiwin alone therefore asks for a key that may
+# not exist and silently falls back to compiling Skia from source. winia's manifest pins the full
+# Windows feature set so that every winia build resolves to a published archive — check backend
+# features through winia, not through skiwin.
 vulkan = ["ash", "vulkano", "skia-safe/vulkan", "skia-safe/gpu"]
 gl = ["skia-safe/gl", "skia-safe/gpu", "glutin", "glutin-winit", "raw-window-handle"]
-# textlayout 是必需的：不启用则无法命中 gl-*-textlayout-vulkan 二进制
 textlayout = ["skia-safe/textlayout"]
 #d3d = ["skia-safe/d3d", "windows"]
+
 
 [dependencies]
 winit = { workspace = true }

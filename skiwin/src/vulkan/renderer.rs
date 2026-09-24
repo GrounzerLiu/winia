@@ -21,6 +21,8 @@ use skia_safe::{
 
 use winit::{dpi::PhysicalSize, window::Window};
 
+use crate::{SkiwinError, SkiwinResult};
+
 pub struct VulkanRenderer {
     pub window: Arc<Box<dyn Window>>,
     /// Shared Skia context - NOT destroyed on drop to allow reuse (e.g., Android background/foreground)
@@ -56,46 +58,33 @@ impl Drop for VulkanRenderer {
 }
 
 impl VulkanRenderer {
+    /// Fails instead of exiting: everything here can fail on a machine whose driver cannot give us
+    /// a swapchain, and `SkiaWindow::new` falls back to another backend when it does.
     pub fn new(
         window: Arc<Box<dyn Window>>,
         queue: Arc<Queue>,
         skia_ctx: Arc<Mutex<gpu::DirectContext>>,
-    ) -> Self {
+    ) -> SkiwinResult<Self> {
         let instance = queue.device().instance();
         let device = queue.device();
         let queue = queue.clone();
 
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap_or_else(|e| {
-            let msg = format!("Failed to create Vulkan surface in renderer: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+        let surface = Surface::from_window(instance.clone(), window.clone())
+            .map_err(|e| SkiwinError::Vulkan(format!("creating the renderer's surface: {e}")))?;
         let window_size = window.surface_size();
 
         let (swapchain, _images) = {
             let surface_capabilities = device
                 .physical_device()
                 .surface_capabilities(&surface, Default::default())
-                .unwrap_or_else(|e| {
-                    let msg = format!("Failed to get surface capabilities: {e}");
-                    log::error!("{msg}");
-                    #[cfg(debug_assertions)]
-                    panic!("{msg}");
-                    std::process::exit(1);
-                });
+                .map_err(|e| {
+                    SkiwinError::Vulkan(format!("reading the surface capabilities: {e}"))
+                })?;
 
             let surface_formats = device
                 .physical_device()
                 .surface_formats(&surface, Default::default())
-                .unwrap_or_else(|e| {
-                    let msg = format!("Failed to get surface formats: {e}");
-                    log::error!("{msg}");
-                    #[cfg(debug_assertions)]
-                    panic!("{msg}");
-                    std::process::exit(1);
-                });
+                .map_err(|e| SkiwinError::Vulkan(format!("reading the surface formats: {e}")))?;
 
 
             let (image_format, _) = surface_formats
@@ -105,13 +94,7 @@ impl VulkanRenderer {
                         || *format == vulkano::format::Format::R8G8B8A8_UNORM
                 })
                 .cloned()
-                .unwrap_or_else(|| {
-                    let msg = "No supported surface format found (need B8G8R8A8_UNORM or R8G8B8A8_UNORM)".to_string();
-                    log::error!("{msg}");
-                    #[cfg(debug_assertions)]
-                    panic!("{msg}");
-                    std::process::exit(1);
-                });
+                .ok_or(SkiwinError::UnsupportedSurfaceFormat)?;
 
             Swapchain::new(
                 device.clone(),
@@ -137,13 +120,7 @@ impl VulkanRenderer {
                     ..Default::default()
                 },
             )
-            .unwrap_or_else(|e| {
-                let msg = format!("Failed to create swapchain: {e}");
-                log::error!("{msg}");
-                #[cfg(debug_assertions)]
-                panic!("{msg}");
-                std::process::exit(1);
-            })
+            .map_err(|e| SkiwinError::Vulkan(format!("creating the swapchain: {e}")))?
         };
 
         let render_pass = vulkano::single_pass_renderpass!(
@@ -163,19 +140,13 @@ impl VulkanRenderer {
                 depth_stencil: {},
             },
         )
-        .unwrap_or_else(|e| {
-            let msg = format!("Failed to create render pass: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+        .map_err(|e| SkiwinError::Vulkan(format!("creating the render pass: {e}")))?;
 
         let framebuffers = vec![];
         let swapchain_is_valid = false;
         let last_render = Some(sync::now(device.clone()).boxed());
 
-        VulkanRenderer {
+        Ok(VulkanRenderer {
             skia_ctx,
             queue,
             window,
@@ -184,7 +155,7 @@ impl VulkanRenderer {
             render_pass,
             framebuffers,
             last_render,
-        }
+        })
     }
 
     pub fn invalidate_swapchain(&mut self) {
@@ -306,8 +277,9 @@ impl VulkanRenderer {
     where
         F: FnOnce(&mut skia_safe::Surface),
     {
-        // draw 入口消费截图请求（提前返回路径也消费——flag 不残留跨帧/跨窗口）
-        let want_capture = crate::vulkan::capture::take_capture_request();
+        // Consume the capture request at the entry point: early returns below must not leave the flag
+        // set for another frame or another window to consume.
+        let want_capture = crate::capture::take_capture_request();
 
         // Clean up finished resources to prevent memory leaks
         if let Some(last_render) = self.last_render.as_mut() {
@@ -358,9 +330,9 @@ impl VulkanRenderer {
 
             skia_ctx.lock().flush_and_submit();
 
-            // 调试截图：flush 后读回（保证读到真实呈现帧）
+            // Debug screenshot: read back after the flush, so the capture is the presented frame.
             if want_capture {
-                crate::vulkan::capture::capture_surface(&mut surface);
+                crate::capture::capture_surface(&mut surface);
             }
 
             let previous_future = self.last_render.take();

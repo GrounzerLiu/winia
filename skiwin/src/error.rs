@@ -1,4 +1,4 @@
-/// skiwin 渲染后端错误类型
+/// Skiwin render backend errors.
 #[derive(Debug, thiserror::Error)]
 pub enum SkiwinError {
     #[error("Vulkan error: {0}")]
@@ -9,6 +9,9 @@ pub enum SkiwinError {
 
     #[error("softbuffer error: {0}")]
     SoftBuffer(String),
+
+    #[error("the {0} backend is not compiled into this build")]
+    UnsupportedBackend(&'static str),
 
     #[error("surface lost, needs recreation")]
     SurfaceLost,
@@ -23,5 +26,5 @@ pub enum SkiwinError {
     UnsupportedSurfaceFormat,
 }
 
-/// 便捷 Result 类型别名
+/// Convenience alias.
 pub type SkiwinResult<T> = Result<T, SkiwinError>;

@@ -29,14 +29,13 @@ pub(crate) struct PendingWindow {
     pub created_id: Option<u64>,
     pub theme: Option<crate::ui::theme::WindowTheme>,
 }
-use skiwin::{SkiaWindowTrait, vulkan::VulkanSkiaWindow};
-use skiwin::vulkan::{request_capture, take_capture};
+use skiwin::capture::{request_capture, take_capture};
+use skiwin::{SkiaWindow, SkiaWindowTrait};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
-use winit::monitor::MonitorHandleProvider;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
@@ -47,7 +46,7 @@ enum FocusDir { Left, Right, Up, Down }
 
 /// 查询窗口当前所在显示器的刷新率 → 帧间隔（mHz：300000 = 300Hz）。
 /// 查询失败返回 None——调用方保留旧值（创建期才回退 16ms）。
-fn current_frame_interval(sw: &VulkanSkiaWindow) -> Option<std::time::Duration> {
+fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
     let mhz = sw.current_monitor()
         .and_then(|m| m.current_video_mode())
         .and_then(|v| v.refresh_rate_millihertz())
@@ -59,7 +58,7 @@ fn current_frame_interval(sw: &VulkanSkiaWindow) -> Option<std::time::Duration> 
 
 pub(crate) struct PerWindow {
     pub(crate) composer: Composer,
-    pub(crate) skia_window: Option<VulkanSkiaWindow>,
+    pub(crate) skia_window: Option<SkiaWindow>,
     width: f32, height: f32,
     pub(crate) scale_factor: f64,
     pub(crate) focused_id: Option<u64>,
@@ -1996,7 +1995,7 @@ impl AppState {
         let frame_interval = mhz_opt
             .map(|mhz| std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
             .unwrap_or(std::time::Duration::from_millis(16));
-        let skia_window = VulkanSkiaWindow::new(event_loop, w);
+        let skia_window = SkiaWindow::new(event_loop, w);
         let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
         // How this window resolves its theme. A `Window` node passes the cell it shares with its declaring
         // tree; a window opened directly follows the system (`Auto`), which is what an unspecified theme

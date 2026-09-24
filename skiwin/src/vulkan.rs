@@ -1,12 +1,9 @@
-mod capture;
 mod context;
 mod renderer;
 
-pub use capture::{request_capture, take_capture};
-
 use crate::vulkan::context::VulkanRenderContext;
 use crate::vulkan::renderer::VulkanRenderer;
-use crate::SkiaWindowTrait;
+use crate::{SkiwinResult, SkiaWindowTrait};
 use skia_safe::Surface;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -20,14 +17,19 @@ pub struct VulkanSkiaWindow {
 }
 
 impl VulkanSkiaWindow {
-    pub fn new(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> Self {
+    /// Fails when this machine has no usable Vulkan (no loader, no device, no swapchain) — the
+    /// error propagates so `SkiaWindow::new` can fall through to another backend.
+    pub fn new(
+        event_loop: &dyn ActiveEventLoop,
+        window: Arc<Box<dyn Window>>,
+    ) -> SkiwinResult<Self> {
         let mut render_ctx = VulkanRenderContext::default();
-        let renderer = render_ctx.renderer_for_window(event_loop, window.clone());
-        Self {
+        let renderer = render_ctx.renderer_for_window(event_loop, window.clone())?;
+        Ok(Self {
             render_ctx,
             renderer: Some(renderer),
             window,
-        }
+        })
     }
 }
 

@@ -18,6 +18,8 @@ use winit::event_loop::ActiveEventLoop;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::Window;
 
+use crate::{SkiwinError, SkiwinResult};
+
 use super::renderer::VulkanRenderer;
 
 /// Global shared Vulkan queue that persists across all windows.
@@ -33,26 +35,33 @@ impl VulkanRenderContext {
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         window: Arc<Box<dyn Window>>,
-    ) -> VulkanRenderer {
+    ) -> SkiwinResult<VulkanRenderer> {
         let queue = {
             let mut shared = SHARED_QUEUE.lock();
             if shared.is_none() {
-                *shared = Some(Self::shared_queue(event_loop, window.clone()));
+                *shared = Some(Self::shared_queue(event_loop, window.clone())?);
             }
-            shared.as_ref().expect("shared_queue should be initialized").clone()
+            shared
+                .as_ref()
+                .ok_or_else(|| SkiwinError::Vulkan("shared queue was not initialised".into()))?
+                .clone()
         };
 
-        let skia_ctx = self
-            .skia_ctx
-            .get_or_insert_with(|| Self::create_skia_context(&queue))
-            .clone();
+        let skia_ctx = match self.skia_ctx.clone() {
+            Some(ctx) => ctx,
+            None => {
+                let ctx = Self::create_skia_context(&queue)?;
+                self.skia_ctx = Some(ctx.clone());
+                ctx
+            }
+        };
 
         self.queue = Some(queue.clone());
 
-        VulkanRenderer::new(window.clone(), queue, skia_ctx)
+        Ok(VulkanRenderer::new(window.clone(), queue, skia_ctx)?)
     }
 
-    fn create_skia_context(queue: &Arc<Queue>) -> Arc<Mutex<gpu::DirectContext>> {
+    fn create_skia_context(queue: &Arc<Queue>) -> SkiwinResult<Arc<Mutex<gpu::DirectContext>>> {
         let library = queue.device().instance().library();
         let instance = queue.device().instance();
         let device = queue.device();
@@ -91,30 +100,23 @@ impl VulkanRenderContext {
                 ),
                 None,
             )
-            .unwrap_or_else(|| {
-                let msg = "Failed to create Skia Vulkan context".to_string();
-                log::error!("{msg}");
-                #[cfg(debug_assertions)]
-                panic!("{msg}");
-                #[allow(unreachable_code)]
-                std::process::exit(1);
-            });
+            .ok_or_else(|| {
+                SkiwinError::Vulkan("Skia could not create a Vulkan context".into())
+            })?;
 
-            Arc::new(Mutex::new(direct_context))
+            Ok(Arc::new(Mutex::new(direct_context)))
         }
     }
 
-    fn shared_queue(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> Arc<Queue> {
-        let library = VulkanLibrary::new().unwrap_or_else(|e| {
-            let msg = format!("Vulkan libraries not found on system: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+    fn shared_queue(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> SkiwinResult<Arc<Queue>> {
+        let library = VulkanLibrary::new()
+            .map_err(|e| SkiwinError::Vulkan(format!("no Vulkan loader or ICD: {e}")))?;
 
-        let display_handle = event_loop.display_handle().unwrap();
-        let required_extensions = Surface::required_extensions(&display_handle).unwrap();
+        let display_handle = event_loop
+            .display_handle()
+            .map_err(|e| SkiwinError::Vulkan(format!("no display handle: {e}")))?;
+        let required_extensions = Surface::required_extensions(&display_handle)
+            .map_err(|e| SkiwinError::Vulkan(format!("querying surface extensions: {e}")))?;
 
         #[cfg(debug_assertions)]
         let enabled_layers = {
@@ -144,30 +146,23 @@ impl VulkanRenderContext {
                 ..Default::default()
             },
         )
-        .unwrap_or_else(|e| {
-            let msg = format!("Could not create instance supporting: {required_extensions:?}: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+        .map_err(|e| {
+            SkiwinError::Vulkan(format!(
+                "no instance supports {required_extensions:?}: {e}"
+            ))
+        })?;
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
 
-        let surface = Surface::from_window(instance.clone(), window.clone()).unwrap_or_else(|e| {
-            let msg = format!("Failed to create Vulkan surface: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+        let surface = Surface::from_window(instance.clone(), window.clone())
+            .map_err(|e| SkiwinError::Vulkan(format!("creating the window surface: {e}")))?;
 
         let (physical_device, queue_family_index) = instance
             .enumerate_physical_devices()
-            .unwrap()
+            .map_err(|e| SkiwinError::Vulkan(format!("enumerating devices: {e}")))?
             .filter(|p| p.supported_extensions().contains(&device_extensions))
             .filter_map(|p| {
                 p.queue_family_properties()
@@ -187,13 +182,7 @@ impl VulkanRenderContext {
                 PhysicalDeviceType::Other => 4,
                 _ => 5,
             })
-            .unwrap_or_else(|| {
-                let msg = "No suitable physical device found".to_string();
-                log::error!("{msg}");
-                #[cfg(debug_assertions)]
-                panic!("{msg}");
-                std::process::exit(1);
-            });
+            .ok_or(SkiwinError::NoDevice)?;
 
 
         let (_, mut queues) = Device::new(
@@ -207,21 +196,11 @@ impl VulkanRenderContext {
                 ..Default::default()
             },
         )
-        .unwrap_or_else(|e| {
-            let msg = format!("Device initialization failed: {e}");
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        });
+        .map_err(|e| SkiwinError::Vulkan(format!("device initialisation failed: {e}")))?;
 
-        queues.next().unwrap_or_else(|| {
-            let msg = "No queue returned from device".to_string();
-            log::error!("{msg}");
-            #[cfg(debug_assertions)]
-            panic!("{msg}");
-            std::process::exit(1);
-        })
+        queues
+            .next()
+            .ok_or_else(|| SkiwinError::Vulkan("no queue returned from the device".into()))
     }
 }
 

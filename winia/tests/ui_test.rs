@@ -1286,6 +1286,12 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
         app.refresh();
         app.find_tag_in_overlay(tag).map(|(_, y, _, _)| y)
     }
+    // The lowest-indexed row on screen. Scroll amount after a drag depends on the fling, so assertions about
+    // "did the list move" are written against this index rather than against a specific row tag or y.
+    fn first_visible_row(app: &mut UiTest) -> Option<usize> {
+        app.refresh();
+        (0..40).find(|i| app.find_tag_in_overlay(&format!("bs-row-{i}")).is_some())
+    }
     fn wait_for(app: &mut UiTest, what: &str, mut cond: impl FnMut(&mut UiTest) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(4);
         loop {
@@ -1310,6 +1316,15 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
     wait_for(&mut app, "the sheet expands under an upward drag", |a| {
         row_y(a, "bs-row-0").is_some_and(|y0| y0 < row0.1)
     });
+    // Settle, not merely "started moving": an upward delta belongs to the sheet until it is fully expanded,
+    // so a list drag begun mid-settle has part of its 140 px eaten by the sheet and may not push row 0 out at
+    // all. That window is what makes this test fail on a slow backend, where the settle takes more frames.
+    wait_for(&mut app, "the expanded sheet comes to rest", |a| {
+        let first = row_y(a, "bs-row-0");
+        std::thread::sleep(Duration::from_millis(50));
+        let second = row_y(a, "bs-row-0");
+        matches!((first, second), (Some(f), Some(s)) if f < row0.1 && (f - s).abs() <= 1.0)
+    });
 
     // (2) Now that it is expanded, the same gesture scrolls the LIST: row 0 leaves the viewport.
     let start_y = row_y(&mut app, "bs-row-0").expect("row 0 after expanding") + 20.0;
@@ -1319,16 +1334,34 @@ fn bottom_sheet_drag_routing_keeps_the_list_in_charge_of_its_own_scroll() {
     });
 
     // (3) A downward drag now belongs to the LIST: it scrolls back and the sheet stays open.
-    app.refresh();
-    let visible = app
-        .find_tag_in_overlay("bs-row-3")
-        .or_else(|| app.find_tag_in_overlay("bs-row-1"))
-        .expect("a visible row to drag down");
-    app.drag(visible.0 + 20.0, visible.1 + 15.0, visible.0 + 20.0, visible.1 + 150.0);
-    wait_for(&mut app, "a downward drag must scroll the list back, not close the sheet", |a| {
-        row_y(a, "bs-row-0").is_some()
-    });
-    assert_eq!(app.overlay_count(), 1, "the sheet is still open after a downward drag on the list");
+    // Two things here cannot be hardcoded. Which rows are on screen depends on how far step (2)'s drag and
+    // fling carried the list, so ask for the first row that IS visible rather than for two hand-picked tags
+    // (row 1 leaves the viewport after one row of scrolling, row 3 after three). And one 150 px drag is only
+    // guaranteed to bring the list a few rows back, while step (4) needs it AT THE TOP — so the first drag
+    // makes the point (a lower-indexed row appears, the sheet is untouched) and drags repeat, bounded, until
+    // row 0 is back.
+    let before_row = first_visible_row(&mut app).expect("a row on screen after step (2)");
+    for attempt in 0..12 {
+        let visible = (0..40)
+            .find_map(|i| app.find_tag_in_overlay(&format!("bs-row-{i}")))
+            .unwrap_or_else(|| panic!("no row on screen while scrolling back (attempt {attempt})"));
+        app.drag(visible.0 + 20.0, visible.1 + 15.0, visible.0 + 20.0, visible.1 + 150.0);
+        wait_for(&mut app, "a downward drag must scroll the list back, not close the sheet", |a| {
+            a.overlay_count() == 1
+        });
+        let now = first_visible_row(&mut app).expect("a row on screen after scrolling back");
+        if attempt == 0 {
+            assert!(now < before_row, "the downward drag scrolled the list back under the sheet");
+        }
+        if now == 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        first_visible_row(&mut app),
+        Some(0),
+        "the list is back at its top row before the sheet gesture"
+    );
 
     // (4) A long downward drag with the list at its top goes to the SHEET — M3's dismissal gesture — and
     // from Expanded that is PartiallyExpanded first, so the sheet is still there (its footer moves down

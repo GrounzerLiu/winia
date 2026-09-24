@@ -1,6 +1,7 @@
 # UI 测试（界面级集成测试）
 
-通过真实运行**测试专用 fixture**（Vulkan 窗口 + 渲染循环），向 fixture 进程注入操作
+通过真实运行**测试专用 fixture**（Skia 窗口 + 渲染循环；默认 Vulkan，可用 `WINIA_RENDER_BACKEND`
+固定为 gl/cpu，见 docs/rendering-backends.md），向 fixture 进程注入操作
 （点击/滚动/拖拽），从树 JSON 断言界面状态——验证**重组/布局/多窗口**等真实行为。
 
 **Fixtures are separate from examples**: examples only demonstrate; the UI suite uses the scenarios

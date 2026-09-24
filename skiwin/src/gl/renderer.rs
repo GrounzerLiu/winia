@@ -60,6 +60,10 @@ impl GlRenderer {
     where
         F: FnOnce(&mut skia_safe::Surface),
     {
+        // Consume the capture request at the entry point, so an early return below cannot leave the
+        // flag set for another window's next frame to consume.
+        let want_capture = crate::capture::take_capture_request();
+
         // Ensure context is current for this window (important for multi-window)
         if let Err(e) = self.context.make_current(&self.surface) {
             eprintln!("Failed to make GL context current: {:?}", e);
@@ -112,6 +116,12 @@ impl GlRenderer {
 
         // Flush Skia rendering
         skia_ctx.flush_and_submit();
+
+        // Debug screenshot: read back after the flush so what lands in the capture is the frame
+        // that was actually submitted.
+        if want_capture {
+            crate::capture::capture_surface(&mut skia_surface);
+        }
 
         // Drop the lock before swapping
         drop(skia_ctx);
