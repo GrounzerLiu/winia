@@ -40,32 +40,32 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 568 | 80 | 108 |
-| 200 | 1559 | 328 | 456 |
-| 800 | 7036 | 1544 | 2151 |
+| 50 | 586 | 73 | 104 |
+| 200 | 1514 | 313 | 428 |
+| 800 | 6472 | 1309 | 2023 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
 | 50 | 755 | 107 | 133 |
 | 200 | 4861 | 444 | 560 |
-| 800 | 27153 | 2787 | 3778 |
+| 800 | 27370 | 2709 | 3671 |
 
-16x the rows costs ~19x an idle frame and ~20x a one-row update. In the original figures recorded here
+16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
-Two runs were taken for these figures and they agreed to a few percent on the box scene (idle 1544 /
-1458, one row 2151 / 2199, layout-idle 287 / 283); the text scene is the noisier of the two (its idle
-frame moved 2787 / 2832 while its one-row update moved 3778 / 3426, which is why this document quotes
+Two runs were taken for these figures and they agreed to a few percent on the box scene (idle 1309 /
+1276, one row 2023 / 2064, layout-idle 304 / 272); the text scene is the noisier of the two (its idle
+frame moved 2709 / 3197 while its one-row update moved 3671 / 3636, which is why this document quotes
 the fast sample rather than treating a single text figure as a precise one).
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 1123 | 285 |
-| one row moved | 1596 | ~600 |
+| idle | 992 | 272 |
+| one row moved | 1476 | ~600 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -73,15 +73,17 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 1086 | 0 |
-| container dirty, every row Skips | 1514 | 0 |
-| one row dirty (the same loop + one rebuild) | 1620 | 1 |
+| idle (container Skips, so the loop does not run) | 992 | 0 |
+| container dirty, every row Skips | 1595 | 0 |
+| one row dirty (the same loop + one rebuild) | 1567 | 1 |
 
-The loop over 800 rows costs **~430 µs**, and re-entering one row inside it costs **nothing measurable**
-(+100 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
-Instrumented attribution of that ~430 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
+The loop over 800 rows costs **~575 µs**, and re-entering one row inside it costs **nothing measurable**
+(-28 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+Instrumented attribution of that ~575 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
 of group machinery, the rest being the container's own entry plus rows materializing one by one instead
-of as one cached subtree.
+of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
+carries whatever the container's re-entry costs on top of the loop — that is why it reads larger than
+the sum of its instrumented parts.)
 
 ### Correction: the 5 ms was NOT the Skip decision
 
@@ -267,22 +269,43 @@ are the ones that cover it; the UI suite being green says nothing about it. (Che
 really was fresh: `cargo test --test ui_test` does rebuild `target/debug/fixture_all.exe` — mtime
 verified moving with a source edit — so a green UI run after a lib change is testing the new code.)
 
+### A sixth fix: two per-node hash structures in `materialize`'s claim path
+
+`materialize` walks the descriptor tree and, for every Skipped node, claims the cached arena node: it
+looked the key up in `prev_node_by_key`, then looked it up AGAIN to remove it (a `.get` guarded by a
+shape check, then `.remove().unwrap()`) — two hashes per node, 4000 times a frame — and marked the
+claim in `reused_nodes: HashSet<usize>`, a third hash. Both are now one operation each: the key is
+removed once (the shape check runs on the removed value and, in the rare mismatch case, the key is put
+back so the compose tail still recycles its node), and the reuse marks are a bit vector over arena
+indices — `contains` and `insert` are a shift and a test, which is what the tail's `free_node_skip` and
+the shared-element detach need as well.
+
+| frame-level, boxes 800 rows (best of two runs) | before | after |
+|---|---|---|
+| **compose only, idle** | 1123 µs | **992 µs** (-12%) |
+| idle frame | 1458 µs | **1276 µs** (-12%) |
+| one row updated | 2151 µs | **1992 µs** (-7%) |
+
+The skip-recovery tests are the ones that cover this path (`test_skip_recovery_sig_mismatch_direct`
+asserts the key survives a shape mismatch, which is exactly what the put-back has to preserve), and the
+full UI suite passes with them.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
 states that matter: every group Skipped, and one row's state moved. The layout column is after the
-fifth fix, the compose column after the third (the fourth and fifth barely touch it).
+fifth fix, the compose column after the third (the fourth through sixth barely touch it).
 
 | bucket | idle (0 entered) | one row updated |
 |---|---|---|
-| `materialize` (desc tree + node reuse walk) | ~255 µs | ~270 µs |
+| `materialize` (desc tree + node reuse walk) | ~200 µs | ~215 µs |
 | `prune_stale_child_links` (arena walk) | ~130 µs | ~150 µs |
 | `collect_live_keys` | ~100 µs | ~100 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
 | the row loop (800 reads + 800 Skip decisions) | — | ~430 µs |
-| **compose total** | **~590 µs** | **~900 µs** |
+| **compose total** | **~530 µs** | **~840 µs** |
 
 | layout, same tree | idle, before the fourth fix | idle, after the fifth |
 |---|---|---|
@@ -391,15 +414,19 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **`materialize`: ~255-270 µs per frame in both states** — the largest single item left on the compose
-  side. `collect_desc_tree` recurses through a Skipped subtree and builds a `DescNode` per node — one
+- **`materialize`'s remaining ~200 µs per frame** — the largest single item left on the compose side. `collect_desc_tree` recurses through a Skipped subtree and builds a `DescNode` per node — one
   `Vec` and one `Modifier` clone each — then `materialize_node` walks those descriptors to reuse the
   cached nodes by key. For a subtree that skipped, both halves are pure overhead: the structure is by
   definition what it already was, and the nodes are already in `prev_node_by_key`. The cheap direction
   is to record the subtree as a single skip descriptor and claim the cached nodes from the arena
   directly (their `children: Vec<usize>` is the walk), which is exactly the protocol the comments in
   this area are full of war stories about — dup-key panics, vanishing subtrees, ghost flights — so it
-  needs its own round with the full UI suite, not a quick edit.
+  needs its own round with the full UI suite, not a quick edit. The shape check is the hard part: the
+  current one compares each descriptor's child count with the cached node's, and a whole-subtree claim
+  has to reproduce that strength without a descriptor per node. (The design this is heading for, worked
+  out but deliberately not taken this round: carry the subtree's node count and the root's child count
+  on the single skip descriptor, verify the count as the claim walks, and keep the per-node path as the
+  fallback when either check fails.)
 - **`prune_stale_child_links`: ~130 µs per frame.** A defensive whole-arena walk, and the current
   comment insists it runs for EVERY compose (moving it into an early-returning function once took the
   repair off the default path and a stale listing reached the `[dup-key]` guard). Skipping it on frames
@@ -413,16 +440,17 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   0.01 µs. The per-entry data is small now (106 µs is the insert of 4000 entries); making the *rebuild*
   incremental, or having the cache borrow the arena instead of copying out of it, is what is left, and
   it needs the same care the fourth fix took around rollback.
-- **The row loop's ~430 µs**: 800 iterations at ~540 ns (105 ns read, ~330 ns group machinery, the rest
+- **The row loop's ~575 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
   materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation (~75 ns)
   or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The five defects that *were*
+and each is one round of work with this bench as the measuring stick. The six defects that *were*
 bugs — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write,
 a reverse graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied
-two maps it was about to rebuild, and a frame cache that carried a whole `Modifier` per node for one
-text comparison — were all found by measuring one bucket and finding something else inside it.
+two maps it was about to rebuild, a frame cache that carried a whole `Modifier` per node for one text
+comparison, and two per-node hash lookups in `materialize`'s claim path — were all found by measuring
+one bucket and finding something else inside it.
 
 ## Re-running any of this
 

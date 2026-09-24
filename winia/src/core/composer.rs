@@ -930,7 +930,7 @@ struct ComposeRuntimeSnapshot {
     group_skip_stack: Vec<bool>,
     overlay_active: HashMap<u64, bool>,
     entered_compose_keys: HashSet<u64>,
-    reused_nodes: std::collections::HashSet<usize>,
+    reused_nodes: crate::layout::node::NodeMarks,
 }
 
 /// Restores the small, non-owning compose runtime context on panic. The full
@@ -1729,7 +1729,7 @@ pub struct Composer {
     /// 上帧布局树：slot_key → arena 节点索引（阶段D 节点复用——start_node 按 key 复用槽位）
     pub(crate) prev_node_by_key: HashMap<u64, usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
-    pub(crate) reused_nodes: std::collections::HashSet<usize>,
+    pub(crate) reused_nodes: crate::layout::node::NodeMarks,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
@@ -1833,7 +1833,7 @@ impl Composer {
             prev_nodes: HashMap::new(),
             pending_params: Vec::new(),
             prev_node_by_key: HashMap::new(),
-            reused_nodes: std::collections::HashSet::new(),
+            reused_nodes: crate::layout::node::NodeMarks::default(),
             selection_registrar: None,
             lifecycle: crate::ui::window::LifecycleState::default(),
             adaptive: crate::ui::adaptive::AdaptiveContext::new(),
@@ -2500,7 +2500,7 @@ impl Composer {
         dependency_frame.commit();
         // 回收本帧未复用的上帧节点（结构变化移除的子树——on_remove 触发）；
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = crate::layout::node::NodeMarks::default();
         for (key, idx) in self.prev_node_by_key.drain() {
             // 收集移除的 slot_key（layout_deps 死 key 清理）
             self.removed_slot_keys.insert(key);
@@ -6001,7 +6001,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
     // 断言：签名不等 → 重建（new_root != old_root）而非恢复缓存
     assert_ne!(new_root, old_root, "签名不等应重建而非恢复缓存");
     // 旧 root 未被复用（不在 reused_nodes）；key 保留在 prev_node_by_key（待 compose 末尾回收 free）
-    assert!(!composer.reused_nodes.contains(&old_root), "旧节点不应标记复用（待回收）");
+    assert!(!composer.reused_nodes.contains(old_root), "旧节点不应标记复用（待回收）");
     assert!(composer.prev_node_by_key.contains_key(&old_root_key),
         "key 应保留待回收（否则旧节点 arena 泄漏）");
 }
