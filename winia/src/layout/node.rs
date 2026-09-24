@@ -96,6 +96,39 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
 }
 
+/// What a modifier says about its text, in the form the frame cache stores and compares.
+///
+/// Every field here affects measurement or rendering: the content, the alignment, **the colour** (an
+/// alpha 0→1 fade must re-measure, or the cached paragraph keeps its transparent paint and the text
+/// never appears), the size, weight, slant, line count, spacing, line height and overflow. A change in
+/// any of them has to invalidate a folded measurement even when the slot stayed clean.
+pub(crate) type TextSnapshot = (
+    String,
+    crate::ui::TextAlign,
+    crate::modifier::Color,
+    f32,
+    crate::ui::text::FontWeight,
+    crate::ui::text::FontSlant,
+    usize,
+    bool,
+    f32,
+    Option<f32>,
+    crate::ui::TextOverflow,
+);
+
+/// The text a modifier carries, or `None` if it has no text element. Rich text is deliberately
+/// reported as a fixed value that differs from any plain snapshot — a rich-text change is
+/// conservatively treated as "changed".
+pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
+    modifier.elements().iter().find_map(|el| match el {
+        ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
+            Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
+        }
+        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, crate::ui::text::FontSlant::Upright, 0, true, 0.0, None, crate::ui::TextOverflow::Clip)),
+        _ => None,
+    })
+}
+
 /// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
 /// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测。
 /// 检查 modifier 文本内容差异（决定"折叠测量是否失效"）：
@@ -103,17 +136,7 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 /// 影响测量/渲染结果的属性**（color 变化必须触发重测——否则淡入动画
 /// （alpha 0→1）后 cached_paragraph 仍是透明色，渲染画不出文字）
 pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
-    let text_of = |m: &Modifier| -> Option<(String, crate::ui::TextAlign, crate::modifier::Color, f32, crate::ui::text::FontWeight, crate::ui::text::FontSlant, usize, bool, f32, Option<f32>, crate::ui::TextOverflow)> {
-        m.elements().iter().find_map(|el| match el {
-            ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
-                Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
-            }
-            // RichText 变化保守视为不同
-            ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, crate::ui::text::FontSlant::Upright, 0, true, 0.0, None, crate::ui::TextOverflow::Clip)),
-            _ => None,
-        })
-    };
-    text_of(a) != text_of(b)
+    text_snapshot(a) != text_snapshot(b)
 }
 
 /// 检查 modifier 中是否包含 RichTextContent
@@ -249,9 +272,19 @@ pub struct LayoutNode {
 
 /// LayoutNode 的缓存快照。新增 LayoutNode 字段时，必须同步更新此结构
 /// 及 to_cached() / restore_from() 方法。
+///
+/// The cache holds what a FRAME actually reads back — a membership test, the folded measurement a
+/// rebuilt node restores from, and the text comparison below. It deliberately does not hold the node's
+/// `Modifier`: that was a `Vec` clone per node per frame, plus a `String` allocation through every
+/// `TextContent`, to serve exactly one check (`modifier_text_content_differs`), and nothing else read
+/// it. Measured at 4001 nodes: 182 µs of an idle 800-row layout, on a frame whose whole measurement
+/// folded in 0.01 µs (`docs/benchmarks.md`). What the check needs instead is `text`.
 #[derive(Debug, Clone)]
 pub(crate) struct CachedNode {
-    pub modifier: Modifier,
+    /// The node's text last frame (see [`text_snapshot`]) — the one thing that needed the modifier.
+    /// `None` for a node that carried no text, which is most of them, and which is why the box scene
+    /// pays nothing for this.
+    pub text: Option<TextSnapshot>,
     pub measured_size: Size,
     /// Content box while a flight reports a placeholder size. It MUST travel with
     /// `measured_size`: after `place()` the latter holds the size the PARENT was
@@ -263,10 +296,6 @@ pub(crate) struct CachedNode {
     pub dirty: bool,
     pub cached_constraints: Option<Constraints>,
     pub slot_key: u64,
-    /// 结构签名（P3-1）：上帧直接子节点数——Skip 恢复命中条件之一。
-    /// 子树结构增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则
-    /// 放弃恢复（走 Enter 重建），防旧内容缓存张冠李戴。
-    pub children_count: usize,
     pub registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
 }
 
@@ -274,7 +303,15 @@ impl LayoutNode {
     /// 生成可缓存快照（编译器强制覆盖所有需缓存字段）
     pub(crate) fn to_cached(&self) -> CachedNode {
         CachedNode {
-            modifier: self.modifier.clone(),
+            // Gated on the content flags the node already carries: `text_snapshot` walks the modifier's
+            // elements, and for the thousands of nodes that have no text that walk is pure overhead.
+            // (A node whose flags are stale in the "says no text but has it" direction only pays a
+            // redundant re-measure next frame — the conservative direction.)
+            text: if self.has_text_content || self.has_richtext_content {
+                text_snapshot(&self.modifier)
+            } else {
+                None
+            },
             measured_size: self.measured_size,
             flight_content_size: self.flight_content_size,
             position: self.position,
@@ -282,14 +319,12 @@ impl LayoutNode {
             dirty: self.dirty,
             cached_constraints: self.cached_constraints,
             slot_key: self.slot_key,
-            children_count: self.children.len(),
             registrar: self.registrar.clone(),
         }
     }
 
-    /// 从缓存恢复节点状态
+    /// 从缓存恢复节点状态（缓存携带的字段——见 [`CachedNode`] 的说明：`modifier` 不在其中）。
     pub(crate) fn restore_from(&mut self, cached: &CachedNode) {
-        self.modifier = cached.modifier.clone();
         self.measured_size = cached.measured_size;
         self.flight_content_size = cached.flight_content_size;
         self.position = cached.position;
