@@ -1716,6 +1716,21 @@ fn semantics_are_published_per_frame_and_follow_the_state() {
         None
     }
 
+    /// The first element declared as a live region, depth-first.
+    fn find_live_region<'a>(items: &'a [serde_json::Value]) -> Option<&'a serde_json::Value> {
+        for item in items {
+            if item["liveRegion"].is_string() {
+                return Some(item);
+            }
+            if let Some(hit) = find_live_region(
+                item["children"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+            ) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
     let snapshot = app.semantics_until(Duration::from_secs(3), |s| {
         find(main_tree(s), "Merged button").is_some()
     })
@@ -1765,6 +1780,24 @@ fn semantics_are_published_per_frame_and_follow_the_state() {
         .filter(|bar| bar["state"]["progress"].is_object())
         .count();
     assert_eq!(with_value, 1, "exactly one of them reports a value");
+
+    // A snackbar, shown by a real click, is a LIVE REGION whose message is announced unprompted — and
+    // its action stays a separate, invokable element. Both halves matter: declaring the mode on the
+    // whole bar instead absorbed the action button, leaving a screen reader able to hear the message
+    // but with nothing to invoke.
+    app.click_tag("sem-show-snackbar");
+    let with_snackbar = app
+        .semantics_until(Duration::from_secs(3), |s| {
+            find_live_region(main_tree(s)).is_some()
+        })
+        .expect("a snapshot with the snackbar");
+    let items = main_tree(&with_snackbar);
+    let region = find_live_region(items).expect("the snackbar's message is a live region");
+    assert_eq!(region["liveRegion"], "polite", "a snackbar is information, not an alarm");
+    assert_eq!(region["name"], "Saved", "and the announced text is the message");
+    let undo = find(items, "Undo").expect("the action button must stay its own element");
+    assert_eq!(undo["role"], "button");
+    assert_eq!(undo["clickable"], true, "and stay invokable, not absorbed by the region");
 
     // The state follows a real click: on → off through the checkbox's own handler.
     let checkbox = find_role(main_tree(&snapshot), "checkbox").expect("the checkbox");
