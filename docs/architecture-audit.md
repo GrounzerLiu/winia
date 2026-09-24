@@ -287,7 +287,12 @@ Theme provider 位于 winia/src/ui/theme.rs:254-367，Density provider 位于 wi
 
 render::render 入口位于 winia/src/render.rs:20-22，主遍历位于 winia/src/render.rs:595-1042，顺序是 backdrop blur、graphics layer、shadow、modifier 绘制、scroll clip/translate、children、ripple/focus。backdrop blur 位于 winia/src/render.rs:1174-1274，使用 device-space snapshot、3*sigma margin、surface clamp、CropRect blur 和逆矩阵 draw-back；旋转 ancestor 或自身 graphics transform 仍是近似限制。
 
-skiwin 统一 trait 位于 skiwin/src/lib.rs:21-101，但 app 直接持有 VulkanSkiaWindow。Vulkan acquire/device-loss 在 skiwin/src/vulkan/renderer.rs:269-295 的 debug 构建会 panic；CPU resize/present 错误在 skiwin/src/cpu.rs:69-123 也存在 debug panic 路径。
+Backend selection goes through the `skiwin::SkiaWindow` enum, which `app` holds instead of a concrete
+`VulkanSkiaWindow`, and `SkiaWindow::new` falls back Vulkan → GL → CPU when a backend cannot
+initialise (`docs/rendering-backends.md`). Initialisation failures return `SkiwinError` rather than
+panicking or calling `exit(1)`. Per-frame recovery is still fatal in debug builds: Vulkan
+acquire/device-loss at skiwin/src/vulkan/renderer.rs:269-295. CPU resize/present errors now log and
+drop the frame instead of panicking.
 
 RedrawRequested 的 catch_unwind 位于 winia/src/app.rs:951-995；连续 30 次 panic 后 render_disabled，见 winia/src/app.rs:983-994。此策略能防止 panic 风暴，但把可恢复的用户 content panic 与 backend 故障合并为永久停更。
 

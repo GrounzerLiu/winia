@@ -5,7 +5,10 @@ edition = "2024"
 description = "A declarative UI framework powered by Skia — Compose-inspired, pure Rust"
 
 [features]
-default = ["vulkan"]
+# Both GPU backends are on by default so a machine without a Vulkan ICD still renders on the GPU:
+# `SkiaWindow::new` tries Vulkan, then GL, then the CPU/softbuffer path. Pin one backend with
+# `WINIA_RENDER_BACKEND=vulkan|gl|cpu` — see docs/rendering-backends.md.
+default = ["vulkan", "gl"]
 vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
 debug-server = []

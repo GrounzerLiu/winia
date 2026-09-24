@@ -1,14 +1,15 @@
-mod context;
-mod renderer;
-
-use crate::gl::context::GlRenderContext;
-use crate::gl::renderer::GlRenderer;
-use crate::SkiaWindowTrait;
+use crate::{SkiwinResult, SkiaWindowTrait};
 use skia_safe::Surface;
 use std::ops::Deref;
 use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
+
+mod context;
+mod renderer;
+
+use crate::gl::context::GlRenderContext;
+use crate::gl::renderer::GlRenderer;
 
 pub struct GlSkiaWindow {
     #[allow(dead_code)]
@@ -18,14 +19,16 @@ pub struct GlSkiaWindow {
 }
 
 impl GlSkiaWindow {
-    pub fn new(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> Self {
+    /// Every step can fail on a machine whose GL driver is missing, too old, or software-only, and
+    /// the reason is propagated so `SkiaWindow::new` can still fall through to the CPU backend.
+    pub fn new(event_loop: &dyn ActiveEventLoop, window: Arc<Box<dyn Window>>) -> SkiwinResult<Self> {
         let mut render_ctx = GlRenderContext::default();
-        let renderer = render_ctx.renderer_for_window(event_loop, window.clone());
-        Self {
+        let renderer = render_ctx.renderer_for_window(event_loop, window.clone())?;
+        Ok(Self {
             render_ctx,
             renderer: Some(renderer),
             window,
-        }
+        })
     }
 }
 
@@ -67,4 +70,3 @@ impl AsRef<dyn Window> for GlSkiaWindow {
         self.window.as_ref().as_ref()
     }
 }
-

@@ -144,7 +144,7 @@ let gl_saved = if let Some(gl) = gl_params {
 
 ### 11. winit / Vulkan-GL-CPU 后端对接
 
-- 后端 = `skiwin::vulkan::VulkanSkiaWindow`（app.rs:32、1350）；skiwin 提供 cpu/d3d/gl/vulkan 多后端（skiwin/src/{cpu,d3d,gl,vulkan}.rs），vulkan feature = ash + vulkano + skia-safe/vulkan+gpu。
+- 后端 = `skiwin::SkiaWindow`（app.rs:32）：运行期在 vulkan → gl → cpu 间回退，`WINIA_RENDER_BACKEND` 可固定其一（docs/rendering-backends.md）；d3d 仍是未编译的 stub（skiwin/src/d3d.rs，`// mod d3d;`）。
 - render.rs 不感知后端——统一收 `&Canvas`。`frame_interval` 由显示器刷新率对齐（app.rs:1342-1349）。
 
 ### 12. render-only 事件：redraw 调度 / pending 帧合并
