@@ -1749,6 +1749,23 @@ fn semantics_are_published_per_frame_and_follow_the_state() {
     let text = find(main_tree(&snapshot), "Plain label").expect("the plain text");
     assert_eq!(text["role"], serde_json::Value::Null);
 
+    // A progress bar reports its value — what a screen reader announces as a percentage. The
+    // INDETERMINATE one reports the role and no value: "in progress" is not "0 percent".
+    let bar = find_role(main_tree(&snapshot), "progressbar").expect("the determinate progress bar");
+    assert_eq!(bar["state"]["progress"]["value"], 0.25);
+    assert_eq!(bar["state"]["progress"]["min"], 0.0);
+    assert_eq!(bar["state"]["progress"]["max"], 1.0);
+    let mut bars: Vec<&serde_json::Value> = Vec::new();
+    for node in main_tree(&snapshot) {
+        collect_role(node, "progressbar", &mut bars);
+    }
+    assert_eq!(bars.len(), 2, "both progress bars are in the tree");
+    let with_value = bars
+        .iter()
+        .filter(|bar| bar["state"]["progress"].is_object())
+        .count();
+    assert_eq!(with_value, 1, "exactly one of them reports a value");
+
     // The state follows a real click: on → off through the checkbox's own handler.
     let checkbox = find_role(main_tree(&snapshot), "checkbox").expect("the checkbox");
     assert_eq!(checkbox["state"]["checked"], "on");
@@ -1782,6 +1799,16 @@ fn semantics_are_published_per_frame_and_follow_the_state() {
         "a modal's contents must be reachable: {dialog_tree:?}"
     );
     assert!(find(dialog_tree, "Confirm").is_some());
+
+    /// Every element with this role, depth-first.
+    fn collect_role<'a>(item: &'a serde_json::Value, role: &str, out: &mut Vec<&'a serde_json::Value>) {
+        if item["role"] == role {
+            out.push(item);
+        }
+        for child in item["children"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            collect_role(child, role, out);
+        }
+    }
 
     /// The first element in the tree with this role.
     fn find_role<'a>(items: &'a [serde_json::Value], role: &str) -> Option<&'a serde_json::Value> {
@@ -1891,4 +1918,78 @@ fn a_state_list_drives_a_lazy_column_through_real_mutations() {
     }
     wait_for_count(&mut app, 0);
     assert!(!has_row(&mut app, 2), "and no rows are left");
+}
+
+// ── Long press fires at its deadline ──
+
+/// `on_long_press` arrives while the finger is still DOWN, at the 500 ms deadline — not on release.
+///
+/// This is the user-visible half of the change: a caller that wants to open a context menu (or start
+/// a drag, or buzz) on a hold has to be told at the hold, and until now it was told at the release.
+/// The assertion that makes it a test of THAT: the pointer is never released before the count is
+/// checked, and the release then adds nothing.
+///
+/// Driven with explicit `d`/`u` so the press is genuinely held: the fixture's zones are the same ones
+/// `a_popup_tap_zone_fires_the_tap_family_like_the_main_tree` uses.
+#[test]
+fn a_long_press_fires_while_the_pointer_is_still_down() {
+    /// The counter the fixture prints, as the tree reports it.
+    fn counter(app: &mut UiTest, label: &str) -> Option<u32> {
+        app.refresh();
+        app.all_texts().into_iter().find_map(|text| {
+            let after = text.split(&format!("{label}:")).nth(1)?;
+            let digits: String = after.trim().chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+    }
+    fn wait_for(app: &mut UiTest, label: &str, expected: u32) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if counter(app, label) == Some(expected) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "`{label}` never became {expected}; the tree says {:?}",
+                counter(app, label)
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    let mut app = UiTest::launch("popup_tap");
+    app.expect_text("main-holds: 0");
+    let (x, y, w, h) = app.find_tag("main-tap-zone").expect("the page tap zone");
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+
+    // Press and HOLD: no `u` yet, and the count must arrive on its own.
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    wait_for(&mut app, "main-holds", 1);
+    assert_eq!(
+        counter(&mut app, "main-taps"),
+        Some(0),
+        "a hold is not a tap, and the press is still down"
+    );
+
+    // Releasing ends the gesture without a second long press and without a tap.
+    app.send(&format!("u {} {}", cx as i32, cy as i32));
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(counter(&mut app, "main-holds"), Some(1), "the release must not fire it again");
+    assert_eq!(counter(&mut app, "main-taps"), Some(0), "and must not turn the hold into a tap");
+
+    // A quick press-and-release is still a tap, in the same window and the same fixture: the deadline
+    // machinery did not swallow short presses.
+    app.send(&format!("d {} {}", cx as i32, cy as i32));
+    app.send(&format!("u {} {}", cx as i32, cy as i32));
+    wait_for(&mut app, "main-taps", 1);
+    assert_eq!(counter(&mut app, "main-holds"), Some(1), "and no hold was invented");
+
+    // The popup's arena goes through the same path (the deadline sweep dispatches through the
+    // gesture's own arena, so a popup hold has to fire too).
+    let (px, py, pw_, ph) = app.find_tag_in_overlay("popup-tap-zone").expect("the popup tap zone");
+    app.send(&format!("d {} {}", (px + pw_ / 2.0) as i32, (py + ph / 2.0) as i32));
+    wait_for(&mut app, "popup-holds", 1);
+    app.send(&format!("u {} {}", (px + pw_ / 2.0) as i32, (py + ph / 2.0) as i32));
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(counter(&mut app, "popup-holds"), Some(1), "and only once there either");
 }

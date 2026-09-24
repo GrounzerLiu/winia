@@ -323,6 +323,18 @@ impl LinearProgressIndicator {
                 })
         };
 
+        // Accessibility: a progress bar that reports only its role tells a screen reader nothing —
+        // the value is what the widget IS. Determinate bars report it (Compose's
+        // `ProgressBarRangeInfo`); an indeterminate one has no value to report, which is not the same
+        // as zero, so it stays silent about progress and announces itself as a progress bar only.
+        let m = m.semantics(match self.indeterminate {
+            true => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar),
+            false => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar)
+                .state(crate::semantics::SemanticsState::new().progress(self.progress, 0.0, 1.0)),
+        });
+
         let m = m.then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
@@ -724,6 +736,15 @@ impl CircularProgressIndicator {
                     color, track_color, cap, gap, stroke_width, progress,
                 })
         };
+
+        // Same rule as the linear indicator: the value is the point of the widget.
+        let m = m.semantics(match self.indeterminate {
+            true => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar),
+            false => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar)
+                .state(crate::semantics::SemanticsState::new().progress(self.progress, 0.0, 1.0)),
+        });
 
         let m = m.then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {

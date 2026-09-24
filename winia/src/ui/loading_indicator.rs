@@ -209,6 +209,11 @@ impl LoadingIndicator {
                 global_rotation: global_rotation.clone(),
             });
 
+        // A loading indicator is a spinner: it is always indeterminate, so it declares the role and
+        // no value (there is no progress to report).
+        let m = m.semantics(crate::semantics::SemanticsConfig::new()
+            .role(crate::semantics::SemanticsRole::ProgressBar));
+
         let m = m.then(self.modifier);
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {

@@ -54,8 +54,11 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
     UIA_IsOffscreenPropertyId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID,
     UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_PROPERTY_ID,
-    ISelectionItemProvider, ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
+    IRangeValueProvider, IRangeValueProvider_Impl, ISelectionItemProvider,
+    ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
     ToggleState_Indeterminate, ToggleState_Off, ToggleState_On,
+    UIA_IsRangeValuePatternAvailablePropertyId, UIA_RangeValueMaximumPropertyId,
+    UIA_RangeValueMinimumPropertyId, UIA_RangeValuePatternId, UIA_RangeValueValuePropertyId,
     UIA_RadioButtonControlTypeId, UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
     UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
     UIA_ToggleToggleStatePropertyId, UIA_WindowControlTypeId, UiaGetReservedNotSupportedValue,
@@ -417,6 +420,9 @@ fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
     if pattern_id == UIA_SelectionItemPatternId {
         return element.state.selected_value().is_some();
     }
+    if pattern_id == UIA_RangeValuePatternId {
+        return element.state.progress_value().is_some();
+    }
     false
 }
 
@@ -489,6 +495,51 @@ impl ISelectionItemProvider_Impl for SelectionItemPattern_Impl {
         // The container (a radio group, a tab row) is not modelled as an element of its own, so there is
         // nothing to name; a client falls back to walking up the fragment tree.
         Err(not_implemented())
+    }
+}
+
+/// The RangeValue pattern: what makes a progress bar useful to a screen reader ("50 percent")
+/// instead of merely present ("progress bar").
+///
+/// Read-only on purpose: a progress bar reports progress, it does not accept a value. UIA expresses
+/// that with `IsReadOnly`, and `SetValue` answers `UIA_E_NOTSUPPORTED` rather than pretending to
+/// accept one — the same rule as every other refusal in this file.
+#[implement(IRangeValueProvider)]
+struct RangeValuePattern {
+    value: f64,
+    min: f64,
+    max: f64,
+}
+
+impl IRangeValueProvider_Impl for RangeValuePattern_Impl {
+    fn SetValue(&self, _val: f64) -> WinResult<()> {
+        Err(not_implemented())
+    }
+
+    fn Value(&self) -> WinResult<f64> {
+        Ok(self.value)
+    }
+
+    fn IsReadOnly(&self) -> WinResult<windows::core::BOOL> {
+        Ok(windows::core::BOOL::from(true))
+    }
+
+    fn Maximum(&self) -> WinResult<f64> {
+        Ok(self.max)
+    }
+
+    fn Minimum(&self) -> WinResult<f64> {
+        Ok(self.min)
+    }
+
+    fn LargeChange(&self) -> WinResult<f64> {
+        // UIA wants the step sizes; a read-only bar has none. Zero is the documented "no meaningful
+        // change" answer, and clients that care check `IsReadOnly` first.
+        Ok(0.0)
+    }
+
+    fn SmallChange(&self) -> WinResult<f64> {
+        Ok(0.0)
     }
 }
 
@@ -581,6 +632,14 @@ fn variant_not_supported() -> VARIANT {
     }
 }
 
+fn variant_double(value: f64) -> VARIANT {
+    variant_with(|inner| {
+        inner.vt = windows::Win32::System::Variant::VT_R8;
+        // SAFETY: `dblVal` is a plain f64.
+        unsafe { inner.Anonymous.dblVal = value };
+    })
+}
+
 fn variant_double_array(values: &[f64]) -> VARIANT {
     // SAFETY: propsys allocates and fills a SAFEARRAY of R8 from the slice, which outlives the call.
     unsafe { InitVariantFromDoubleArray(values).unwrap_or_default() }
@@ -665,6 +724,18 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                     selected: element.state.selected_value().unwrap_or(false),
                 }
                 .into(),
+                UIA_RangeValuePatternId => {
+                    let (current, min, max) = element
+                        .state
+                        .progress_value()
+                        .unwrap_or((0.0, 0.0, 1.0));
+                    RangeValuePattern {
+                        value: current as f64,
+                        min: min as f64,
+                        max: max as f64,
+                    }
+                    .into()
+                }
                 // `supports_pattern` answers false for anything else, so reaching here is a bug — and
                 // saying so beats handing back a pattern that is not the one that was asked for.
                 _ => Err(not_implemented())?,
@@ -691,6 +762,7 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
                 UIA_IsKeyboardFocusablePropertyId
                 | UIA_HasKeyboardFocusPropertyId
                 | UIA_IsInvokePatternAvailablePropertyId
+                | UIA_IsRangeValuePatternAvailablePropertyId
                 | UIA_IsOffscreenPropertyId => Ok(variant_bool(false)),
                 UIA_ClassNamePropertyId => Ok(variant_bstr("WiniaWindow")),
                 UIA_FrameworkIdPropertyId => Ok(variant_bstr("winia")),
@@ -716,6 +788,21 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             UIA_IsInvokePatternAvailablePropertyId => {
                 Ok(variant_bool(supports_pattern(&node, UIA_InvokePatternId)))
             }
+            UIA_IsRangeValuePatternAvailablePropertyId => Ok(variant_bool(
+                supports_pattern(&node, UIA_RangeValuePatternId),
+            )),
+            UIA_RangeValueValuePropertyId => match node.state.progress_value() {
+                Some((current, _, _)) => Ok(variant_double(current as f64)),
+                None => Ok(variant_not_supported()),
+            },
+            UIA_RangeValueMinimumPropertyId => match node.state.progress_value() {
+                Some((_, min, _)) => Ok(variant_double(min as f64)),
+                None => Ok(variant_not_supported()),
+            },
+            UIA_RangeValueMaximumPropertyId => match node.state.progress_value() {
+                Some((_, _, max)) => Ok(variant_double(max as f64)),
+                None => Ok(variant_not_supported()),
+            },
             UIA_ToggleToggleStatePropertyId => match node.state.checked_value() {
                 // ToggleState: 0 off, 1 on, 2 indeterminate — what a tri-state checkbox reports.
                 Some(ToggleableState::On) => Ok(variant_i32(1)),
@@ -1033,6 +1120,38 @@ mod tests {
         assert!(supports_pattern(&radio, UIA_SelectionItemPatternId));
         assert!(supports_pattern(&radio, UIA_InvokePatternId));
         assert!(!supports_pattern(&radio, UIA_TogglePatternId));
+    }
+
+    #[test]
+    fn a_progress_bar_offers_range_value_and_its_number() {
+        let bar = element(
+            Some(SemanticsRole::ProgressBar),
+            false,
+            SemanticsState::new().progress(30.0, 0.0, 100.0),
+        );
+        assert!(supports_pattern(&bar, UIA_RangeValuePatternId), "a value to report means the pattern");
+        assert!(!supports_pattern(&bar, UIA_InvokePatternId), "a progress bar is not clickable");
+
+        // And the number itself reads back through the interface a client uses.
+        let provider = RangeValuePattern { value: 30.0, min: 0.0, max: 100.0 };
+        let provider: IRangeValueProvider = provider.into();
+        // SAFETY: COM calls into the implementation above; the provider outlives them.
+        unsafe {
+            assert_eq!(provider.Value().expect("a value"), 30.0);
+            assert_eq!(provider.Minimum().expect("a min"), 0.0);
+            assert_eq!(provider.Maximum().expect("a max"), 100.0);
+            assert!(provider.IsReadOnly().expect("a flag").as_bool(), "progress is not settable");
+            assert!(provider.SetValue(50.0).is_err(), "and refuses rather than pretending");
+        }
+    }
+
+    #[test]
+    fn an_indeterminate_progress_bar_reports_no_value() {
+        // A spinner has no value; a reader is told it is a progress bar and nothing more. Reporting
+        // zero would be a lie — the difference between "0 percent" and "in progress".
+        let spinner = element(Some(SemanticsRole::ProgressBar), false, SemanticsState::new());
+        assert!(!supports_pattern(&spinner, UIA_RangeValuePatternId));
+        assert_eq!(spinner.state.progress_value(), None);
     }
 
     #[test]

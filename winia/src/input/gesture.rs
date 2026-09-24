@@ -10,8 +10,10 @@
 //! - **延迟 tap**（Compose 语义）：节点注册 onDoubleTap 时，onTap 延迟到双击
 //!   窗口结束（300ms）再触发；窗口内第二次按下同节点 → 取消第一次 tap（只发
 //!   DoubleTap）；超时或按下其他节点 → 补发 Tap。`PendingTap` 承载该状态。
-//! - **长按**：down 持续 > 500ms 且未超过 slop（当前在 up 时判定——
-//!   与 Compose 的"到时即时触发"有差异，注释注明；后续可接帧时钟精确化）
+//! - **长按**：down 持续到 500ms 且未超过 slop → 在**到点当下**触发（对齐 Compose
+//!   `detectTapGestures`：`onLongPress` 在按住期间到达，不等抬手）。由事件循环轮询
+//!   `poll_long_press` 驱动，`WaitUntil` 保证 idle 时也会在那个时刻醒来；抬手只是
+//!   结束手势，不会再发一次长按，也不再发 tap。
 //! - **drag capture**：drag 开始后事件跟随手势节点（指针移出组件仍接收）
 //! - 拖拽增量 delta = 当前位置 - 上次位置
 
@@ -25,6 +27,9 @@ pub(crate) const DOUBLE_TAP_TIMEOUT_MS: u128 = 300;
 pub(crate) const DOUBLE_TAP_SLOP: f32 = 50.0;
 /// 长按判定时长（毫秒）
 pub(crate) const LONG_PRESS_TIMEOUT_MS: u128 = 500;
+/// The same timeout as a `Duration`, which is what the deadline arithmetic wants.
+pub(crate) const LONG_PRESS_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(LONG_PRESS_TIMEOUT_MS as u64);
 
 /// Which way a gesture (or the scroll container it might belong to) moves.
 ///
@@ -98,6 +103,9 @@ pub(crate) struct GestureTracker {
     /// 双击状态：上一次 tap 的时刻/位置
     last_tap_time: Option<Instant>,
     last_tap_pos: Option<(f32, f32)>,
+    /// Has this gesture's long press already fired? It fires AT the deadline now, so the release must
+    /// neither fire it again nor fall through to a tap — the press was consumed.
+    long_press_fired: bool,
 }
 
 /// 延迟 tap（节点注册 `on_double_tap` 时——Compose `detectTapGestures` 语义）。
@@ -170,7 +178,32 @@ impl GestureTracker {
             has_drag,
             last_tap_time: last_tap.map(|(t, _)| t),
             last_tap_pos: last_tap.map(|(_, p)| p),
+            long_press_fired: false,
         }
+    }
+
+    /// When this gesture's long press is due, or `None` when it can no longer happen: it already
+    /// fired, the finger moved past the touch slop, or a drag took the gesture.
+    ///
+    /// The event loop registers this with `WaitUntil`, so the long press arrives at its deadline even
+    /// when the window is idle and no further input is coming.
+    pub(crate) fn long_press_deadline(&self) -> Option<Instant> {
+        if self.long_press_fired || self.slop_passed || self.dragging {
+            return None;
+        }
+        Some(self.down_time + LONG_PRESS_TIMEOUT)
+    }
+
+    /// Fire the long press if its deadline has passed — what makes `on_long_press` reach the callback
+    /// while the finger is still down, instead of on release. Returns the action at most once per
+    /// gesture; the caller dispatches it through the gesture's arena, like every other gesture action.
+    pub(crate) fn poll_long_press(&mut self, now: Instant) -> Option<GestureAction> {
+        let deadline = self.long_press_deadline()?;
+        if now < deadline {
+            return None;
+        }
+        self.long_press_fired = true;
+        Some(GestureAction::LongPress(self.down_pos))
     }
 
     /// 指针移动——返回动作（drag 系列或 None）。
@@ -207,6 +240,11 @@ impl GestureTracker {
         if self.dragging {
             return GestureAction::DragEnd;
         }
+        if self.long_press_fired {
+            // The press was consumed by a long press that already fired at its deadline: no second
+            // long press, and no tap either.
+            return GestureAction::None;
+        }
         if self.slop_passed {
             // 移动过但未拖拽（无 drag 回调）——静默
             return GestureAction::None;
@@ -214,6 +252,10 @@ impl GestureTracker {
         // 未移动：长按 or tap or double-tap
         let held = self.down_time.elapsed().as_millis();
         if held >= LONG_PRESS_TIMEOUT_MS {
+            // The deadline passed but the sweep has not run yet (the loop was busy, or the release and
+            // the deadline arrived in the same batch). Fire it here so the press is not simply lost —
+            // `long_press_fired` keeps it to one action per gesture either way.
+            self.long_press_fired = true;
             return GestureAction::LongPress(self.down_pos);
         }
         // 双击检测：上次 tap 在时间窗内且位置接近
@@ -252,6 +294,15 @@ impl GestureTracker {
 
     pub(crate) fn down_position(&self) -> (f32, f32) {
         self.down_pos
+    }
+
+    /// A tracker that believes the press started at `down_time` — the clock the deadline arithmetic
+    /// reads. Test-only: production creates trackers at the real press moment.
+    #[cfg(test)]
+    pub(crate) fn with_down_time(node_id: u64, pos: (f32, f32), has_drag: bool, down_time: Instant) -> Self {
+        let mut tracker = Self::new(node_id, pos, has_drag, None);
+        tracker.down_time = down_time;
+        tracker
     }
 
     /// Give the drag up after all (the enclosing scroll won the axis arbitration): the gesture keeps
@@ -382,6 +433,77 @@ mod tests {
     fn test_cancel_without_drag_noop() {
         let mut t = tracker(false);
         assert_eq!(t.on_cancel(), GestureAction::None);
+    }
+
+    #[test]
+    fn a_long_press_fires_at_its_deadline_while_still_held() {
+        // The behaviour change this replaced: `on_long_press` used to arrive on RELEASE, so a caller
+        // could not react to a hold until the finger came up. Compose fires it at the deadline.
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
+        let deadline = start + LONG_PRESS_TIMEOUT;
+        assert_eq!(t.long_press_deadline(), Some(deadline), "the deadline is the press + the timeout");
+
+        assert_eq!(t.poll_long_press(start + LONG_PRESS_TIMEOUT / 2), None, "not yet");
+        assert_eq!(
+            t.poll_long_press(deadline),
+            Some(GestureAction::LongPress((10.0, 10.0))),
+            "at the deadline, with the finger still down"
+        );
+        assert_eq!(t.poll_long_press(deadline + LONG_PRESS_TIMEOUT), None, "and only once");
+    }
+
+    #[test]
+    fn a_fired_long_press_is_not_followed_by_a_tap() {
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
+        t.poll_long_press(start + LONG_PRESS_TIMEOUT);
+        assert_eq!(
+            t.on_up(),
+            GestureAction::None,
+            "the press was consumed by the long press: no second long press, and no tap"
+        );
+    }
+
+    #[test]
+    fn moving_past_the_slop_cancels_a_pending_long_press() {
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
+        t.on_move((40.0, 10.0), true);
+        assert_eq!(t.long_press_deadline(), None, "a moving finger is not a hold");
+        assert_eq!(t.poll_long_press(start + LONG_PRESS_TIMEOUT * 2), None);
+    }
+
+    #[test]
+    fn a_dragging_gesture_has_no_long_press() {
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), true, start);
+        t.on_move((40.0, 10.0), true); // drag starts
+        assert_eq!(t.long_press_deadline(), None);
+        assert_eq!(t.poll_long_press(start + LONG_PRESS_TIMEOUT * 2), None);
+    }
+
+    #[test]
+    fn a_deadline_that_the_sweep_missed_still_fires_on_release() {
+        // The event loop was busy (or the release and the deadline landed in one batch): the release
+        // must not silently swallow the press. It fires here, once.
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
+        std::thread::sleep(std::time::Duration::from_millis(LONG_PRESS_TIMEOUT_MS as u64 + 20));
+        assert_eq!(t.on_up(), GestureAction::LongPress((10.0, 10.0)), "the hold still counts");
+        assert!(t.long_press_fired, "and it is recorded, so nothing fires again");
+    }
+
+    #[test]
+    fn a_quick_release_is_still_a_tap() {
+        // The deadline machinery must not turn short presses into holds.
+        let start = Instant::now();
+        let mut t = GestureTracker::with_down_time(1, (10.0, 10.0), false, start);
+        assert_eq!(
+            t.on_up(),
+            GestureAction::Tap((10.0, 10.0)),
+            "a release before the deadline is a tap"
+        );
     }
 
     #[test]
