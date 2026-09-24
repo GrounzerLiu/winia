@@ -221,6 +221,11 @@ struct Tree {
     /// Read the row's state inside the row's own scope (see [`row_scoped`]) instead of handing the
     /// value down from the list's closure.
     scoped_reads: bool,
+    /// The container's own state, read by the container itself. Writing it re-enters the container —
+    /// so the row loop runs — while every row's declared parameter keeps its value, so every row
+    /// Skips. This is the control that separates "the loop ran" from "a row changed".
+    tick: State<i64>,
+    tick_reads: bool,
 }
 
 impl Tree {
@@ -230,6 +235,8 @@ impl Tree {
             states: (0..rows).map(|i| State::new(i as i64)).collect(),
             kind,
             scoped_reads,
+            tick: State::new(0),
+            tick_reads: false,
         }
     }
 
@@ -253,8 +260,14 @@ impl Tree {
         let states = self.states.clone();
         let kind = self.kind;
         let scoped = self.scoped_reads;
+        let tick = if self.tick_reads { Some(self.tick.clone()) } else { None };
         self.composer.compose(winia::app_root!(move |ctx: &mut ComposeCtx| {
             Column::new().build(ctx, |ctx| {
+                // Read in the CONTAINER's own scope: this is what makes the container the dependent,
+                // so writing the tick re-enters it and the row loop below runs.
+                if let Some(tick) = &tick {
+                    black_box(tick.get());
+                }
                 for state in &states {
                     if scoped {
                         row_scoped(ctx, state.clone(), kind);
@@ -501,6 +514,57 @@ fn dirty_position(rows: usize) {
     }
 }
 
+/// The missing control: what does the row loop cost when NO row changes?
+///
+/// "One row updated" runs the row loop `rows` times; an idle frame does not run it at all, because the
+/// container Skips. So the difference between the two prices the LOOP as if it were the update. Here a
+/// state the CONTAINER itself read moves: the container re-enters (the loop runs, every row takes its
+/// Skip decision) and no row's declared parameter changed, so no row re-enters. The gap between this
+/// and "one row updated" is the update's own cost; this line is the traversal's.
+fn container_dirty() {
+    println!("--- the row loop with no row changed (boxes) ---");
+    for rows in [50usize, 200, 800] {
+        let mut tree = Tree::new(rows, Kind::Boxes, false);
+        tree.tick_reads = true;
+        tree.frame();
+        let entries = Rc::new(std::cell::Cell::new(0));
+        let mut tick = 0i64;
+        let loop_only = measure(
+            &format!("compose, container dirty (every row skips), {rows} rows"),
+            100,
+            9,
+            &entries,
+            || {
+                tick += 1;
+                tree.tick.set(tick);
+                tree.compose_only();
+                entries.set(entries.get() + take_rows_run());
+                black_box(tick);
+            },
+        );
+        loop_only.report();
+
+        let mut tree = Tree::new(rows, Kind::Boxes, false);
+        tree.frame();
+        let entries = Rc::new(std::cell::Cell::new(0));
+        let mut moved = 0i64;
+        let one = measure(
+            &format!("compose, one row dirty (loop + 1 row), {rows} rows"),
+            100,
+            9,
+            &entries,
+            || {
+                moved += 1;
+                tree.states[rows / 2].set(moved);
+                tree.compose_only();
+                entries.set(entries.get() + take_rows_run());
+                black_box(moved);
+            },
+        );
+        one.report();
+    }
+}
+
 fn collections() -> Vec<Result> {
     let mut out = Vec::new();
     for len in [100usize, 1000, 10_000] {
@@ -576,11 +640,20 @@ fn main() {
     println!("(debug_assertions = {})", cfg!(debug_assertions));
     println!("(the fastest of 9 samples, with the median beside it; entered = what actually ran)\n");
 
+    // A fast path to run one scene while iterating on it: `cargo bench -p winia -- container`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "container") {
+        container_dirty();
+        return;
+    }
+
     scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
     println!();
     scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
 
     dirty_position(800);
+
+    container_dirty();
 
     layout_reality(Kind::Boxes, "boxes");
     layout_reality(Kind::Text, "text");
