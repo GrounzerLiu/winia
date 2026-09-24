@@ -270,6 +270,63 @@ impl Tree {
     fn layout_only(&mut self) {
         self.composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     }
+
+    /// Lay out with a DIFFERENT constraint, which invalidates every node's fold and forces a real
+    /// re-measure of the whole tree. This is the upper bound the "one row updated" figure has to be
+    /// read against: if they are equal, one row's update re-measures everything; if the update is far
+    /// below it, the fold is doing its job and what remains is the traversal.
+    fn layout_forced(&mut self, width: f32) {
+        self.composer.layout(Constraints::new(0.0, width, 0.0, 400.0));
+    }
+}
+
+/// How much of the layout cost of "one row updated" is a REAL re-measure, and how much is the walk
+/// with per-node folds?
+///
+/// The fold in `measure_node_inner` returns a cached size when a node is neither dirty nor
+/// layout-dirty and its constraints are unchanged, so a walk over unchanged rows should cost a
+/// comparison each — small, but not free at 800 rows, and this says which of the two dominates.
+fn layout_reality(kind: Kind, label: &str) {
+    let rows = 800;
+    println!("\n--- what layout actually does ({label}, {rows} rows) ---");
+
+    let mut tree = Tree::new(rows, kind, false);
+    tree.frame();
+    let entries = Rc::new(std::cell::Cell::new(0));
+    let idle = measure("layout, idle", 200, 9, &entries, || {
+        tree.layout_only();
+    });
+    idle.report();
+
+    // One row changes: compose + layout, then only the layout half is timed (compose runs first so the
+    // layout sees the state the update produced).
+    let mut tree = Tree::new(rows, kind, false);
+    tree.frame();
+    let mut moved = 0i64;
+    let entries = Rc::new(std::cell::Cell::new(0));
+    let one = measure("layout, one row updated", 200, 9, &entries, || {
+        moved += 1;
+        tree.states[rows / 2].set(moved);
+        tree.compose_only();
+        take_rows_run();
+        tree.layout_only();
+        black_box(moved);
+    });
+    one.report();
+
+    // A different constraint: every cached constraint differs, so the whole tree re-measures. The gap
+    // between this and the line above is the fold's contribution.
+    let mut tree = Tree::new(rows, kind, false);
+    tree.frame();
+    let mut width = 400.0f32;
+    let entries = Rc::new(std::cell::Cell::new(0));
+    let forced = measure("layout, EVERY size re-measured", 200, 9, &entries, || {
+        // Alternating by a pixel invalidates the fold every frame without changing the structure.
+        width = if width == 400.0 { 401.0 } else { 400.0 };
+        tree.layout_forced(width);
+        black_box(width);
+    });
+    forced.report();
 }
 
 fn scaling(kind: Kind, scoped: bool, label: &str) -> Vec<Result> {
@@ -450,6 +507,9 @@ fn main() {
     scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
     println!();
     scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
+
+    layout_reality(Kind::Boxes, "boxes");
+    layout_reality(Kind::Text, "text");
 
     breakdown(Kind::Boxes, false, 800);
     println!();
