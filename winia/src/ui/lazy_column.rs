@@ -464,12 +464,21 @@ impl<A: LazyAxis> LazyList<A> {
     /// 从数据列表迭代（对标 `items(items, key: (item) -> Any, itemContent)`）——
     /// **用户要求的"稳定 key 迭代"入口**：key 从数据 id 提取，列表前部增删
     /// 后滚动位置按 key 保持。
+    /// Takes the list as an `Arc<Vec<T>>` or anything that converts into one — notably a
+    /// [`crate::StateList`] snapshot, so a list that observes its own mutations feeds the lazy list
+    /// without copying its elements:
+    ///
+    /// ```ignore
+    /// LazyColumn::new()
+    ///     .items_from(rows.snapshot(), |row| row.id, |ctx, _i, row| { /* ... */ })
+    /// ```
     pub fn items_from<T: Send + Sync + 'static>(
         mut self,
-        list: Arc<Vec<T>>,
+        list: impl Into<Arc<Vec<T>>>,
         key: impl Fn(&T) -> u64 + Send + Sync + 'static,
         content: impl Fn(&mut ComposeCtx, usize, &T) + Send + Sync + 'static,
     ) -> Self {
+        let list = list.into();
         let k = Arc::new(key);
         let c = Arc::new(content);
         let lk = list.clone();

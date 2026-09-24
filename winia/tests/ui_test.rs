@@ -1808,3 +1808,87 @@ fn semantics_are_published_per_frame_and_follow_the_state() {
         (x + w / 2.0, y + h / 2.0)
     }
 }
+
+// ── Observable collections ──
+
+/// A `StateList` drives a `LazyColumn` through real mutations in a real window: push adds a row, pop
+/// takes the last one away, removing the FIRST re-keys the rest.
+///
+/// The unit tests in `winia/src/core/state_list.rs` cover the collection's own contract. What this adds
+/// is the integration a caller depends on: the snapshot goes into `items_from` without copying
+/// elements, and a mutation reaches the RENDERED rows. The row count is the assertion that matters — a
+/// list that failed to notify would keep drawing the rows it was built with.
+#[test]
+fn a_state_list_drives_a_lazy_column_through_real_mutations() {
+    /// The count the fixture prints, as the tree reports it.
+    fn count(app: &mut UiTest) -> Option<usize> {
+        app.refresh();
+        // The tree reports the node as , so the digits have to be taken out of the
+        // middle rather than parsed as the whole tail.
+        app.all_texts()
+            .into_iter()
+            .find_map(|text| {
+                let after = text.split("count:").nth(1)?;
+                let digits: String = after.trim().chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+    }
+    /// Poll: a click lands on the next frame, so the count follows a moment later.
+    fn wait_for_count(app: &mut UiTest, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if count(app) == Some(expected) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the rendered count never became {expected}; the tree still says {:?}",
+                count(app)
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    fn has_row(app: &mut UiTest, id: i32) -> bool {
+        app.refresh();
+        app.find_tag(&format!("sl-row-{id}")).is_some()
+    }
+
+    let mut app = UiTest::launch("state_list");
+    wait_for_count(&mut app, 3);
+    assert!(
+        has_row(&mut app, 1) && has_row(&mut app, 3),
+        "the fixture's first three rows must be composed"
+    );
+
+    // push: a new row appears, and it is the one the fixture computed (one past the largest id).
+    app.click_tag("sl-push");
+    wait_for_count(&mut app, 4);
+    assert!(has_row(&mut app, 4), "the pushed row must be composed");
+
+    app.click_tag("sl-push");
+    wait_for_count(&mut app, 5);
+    assert!(has_row(&mut app, 5));
+
+    // pop: back to four, and the id that goes away is the last one.
+    app.click_tag("sl-pop");
+    wait_for_count(&mut app, 4);
+    assert!(!has_row(&mut app, 5), "the popped row must be gone");
+    assert!(has_row(&mut app, 1), "and the others stay");
+
+    // remove(0): the first row leaves and the rest keep their identity — their keys are ids, not
+    // positions, so a list that re-keyed by index would land the wrong content here.
+    app.click_tag("sl-drop-first");
+    wait_for_count(&mut app, 3);
+    assert!(!has_row(&mut app, 1), "the first row must be gone");
+    assert!(
+        has_row(&mut app, 2) && has_row(&mut app, 3) && has_row(&mut app, 4),
+        "the remaining rows keep their ids"
+    );
+
+    // Emptying it: popping past the start is not a panic, it is an empty list.
+    for _ in 0..4 {
+        app.click_tag("sl-pop");
+    }
+    wait_for_count(&mut app, 0);
+    assert!(!has_row(&mut app, 2), "and no rows are left");
+}
