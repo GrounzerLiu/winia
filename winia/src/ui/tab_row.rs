@@ -600,6 +600,12 @@ impl Tab {
         } else {
             Modifier::new()
         };
+        item_modifier = item_modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Tab)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().selected(self.selected).enabled(enabled)),
+        );
         let item_modifier = item_modifier.then(self.modifier);
 
         // 自定义 content 版：直接包装点击+ripple（颜色动画由用户 content 自理）

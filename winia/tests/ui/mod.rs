@@ -353,6 +353,43 @@ impl UiTest {
         self.pixel(w / 2, h / 2).map(|(_, _, r, g, b, a)| (r, g, b, a))
     }
 
+    /// The semantics snapshot of the last rendered frame — the same JSON the `sem` command answers
+    /// with: `{"main":[…] ,"overlays":[{"id":N,"tree":[…]}]}`, where each element carries its role,
+    /// name, state and bounds.
+    ///
+    /// This is what a screen reader would be told. It is published once per frame (like the tree
+    /// JSON), so a read right after a click can land before the frame that reflects it: requests are
+    /// retried until `wait` accepts the snapshot or `timeout` expires, and the last one is returned
+    /// either way for the caller to assert on.
+    pub fn semantics_until(
+        &mut self,
+        timeout: Duration,
+        mut wait: impl FnMut(&serde_json::Value) -> bool,
+    ) -> Option<serde_json::Value> {
+        let deadline = Instant::now() + timeout;
+        let mut last = None;
+        loop {
+            self.send("sem");
+            if let Some(line) = self.read_prefixed_line("SEMANTICS:", Duration::from_millis(800)) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim_start_matches("SEMANTICS:")) {
+                    if wait(&value) {
+                        return Some(value);
+                    }
+                    last = Some(value);
+                }
+            }
+            if Instant::now() >= deadline {
+                return last;
+            }
+            std::thread::sleep(Duration::from_millis(80));
+        }
+    }
+
+    /// The semantics snapshot as it stands now.
+    pub fn semantics(&mut self) -> Option<serde_json::Value> {
+        self.semantics_until(Duration::from_millis(600), |_| true)
+    }
+
     /// Frame (physical) size of the current frame. Asked for as an OUT-OF-FRAME point, whose reply carries
     /// the size without a second request answering a different question than `centre_pixel` asked.
     pub fn frame_size(&mut self) -> Option<(u32, u32)> {

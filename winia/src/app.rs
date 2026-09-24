@@ -1554,8 +1554,14 @@ impl ApplicationHandler for AppState {
                 // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
                 let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let wid = window_id.into_raw() as u64;
+                    let mut main_semantics: Option<String> = None;
                     pw.recompose_layout_render(window_id, |nodes, root_idx, surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
+                        // Built here, where the arena is already in hand: the semantics tree is a
+                        // traversal of it, and carrying the arena out would mean cloning it per frame.
+                        main_semantics = Some(crate::semantics::semantics_json(
+                            &crate::semantics::semantics_tree(nodes, root_idx),
+                        ));
                     });
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
                     // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
@@ -1565,6 +1571,19 @@ impl ApplicationHandler for AppState {
                             .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
                     }).collect();
                     debug::set_overlay_trees(wid, ov_trees);
+                    // The semantics snapshot rides the same frame: an accessibility query has to see
+                    // what the frame that just rendered declared, or a screen reader reads a stale
+                    // selection. The overlays' arenas are walked too, so a modal's contents are in the
+                    // tree a platform bridge descends.
+                    let overlay_semantics: Vec<(u64, String)> = pw.overlays.iter().filter_map(|ov| {
+                        ov.composer.layout_root_idx().map(|r| {
+                            (ov.id, crate::semantics::semantics_json(&crate::semantics::semantics_tree(ov.composer.arena_nodes(), r)))
+                        })
+                    }).collect();
+                    debug::update_semantics(
+                        wid,
+                        &debug::semantics_snapshot(main_semantics.as_deref(), &overlay_semantics),
+                    );
                 }));
                 match panic_result {
                     Ok(()) => {

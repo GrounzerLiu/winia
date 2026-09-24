@@ -646,6 +646,10 @@ pub(crate) enum ModifierElement {
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
+    /// Accessibility declaration (role / name / state) — resolved into the semantics tree by
+    /// `crate::semantics`. A node with this element still does layout as usual; the element exists
+    /// only to be read (like `TestTag`), so it is a no-op for layout, drawing and input.
+    Semantics(crate::semantics::SemanticsConfig),
     /// 布局方向——本节点 padding start/end 的解析方向；Row/Column 组件
     /// 优先读自身此元素（其次 CompositionLocal 全局方向）。
     /// ⚠ 当前**不**向子树继承（对标 Compose 的子树级方向用
@@ -1255,6 +1259,43 @@ impl Modifier {
     /// 标记，UI 测试/调试树用其定位节点（树 JSON 的 `tag` 字段）。
     pub fn test_tag(self, tag: impl Into<String>) -> Self {
         self.push(ModifierElement::TestTag { tag: tag.into() })
+    }
+
+    /// Declare what this node is, for a screen reader and for tests (Compose
+    /// `Modifier.semantics { ... }`).
+    ///
+    /// A node that declares a role, a name or a state appears in the semantics tree
+    /// (`crate::semantics::semantics_tree`); a click target claims its whole subtree and reports as
+    /// ONE element named by the text it contains. Everything else stays transparent.
+    ///
+    /// Declarations along one chain MERGE by position: a field set later wins, and a field left
+    /// unset keeps the earlier value. That is what lets a component state its role while a caller
+    /// adds only a content description, and it is why components declare before they append the
+    /// caller's modifier (`modifier.semantics(role).then(user_modifier)`) — the caller's declaration
+    /// then wins where the two overlap.
+    ///
+    /// ```ignore
+    /// Modifier::new()
+    ///     .semantics(SemanticsConfig::new().role(SemanticsRole::Tab))
+    ///     .then(Modifier::new().semantics(SemanticsConfig::new().content_description("Home")))
+    /// // → role = Tab, description = Home
+    /// ```
+    pub fn semantics(self, config: crate::semantics::SemanticsConfig) -> Self {
+        self.push(ModifierElement::Semantics(config))
+    }
+
+    /// This chain's merged accessibility declaration: every `semantics` element folded in chain
+    /// order, later fields winning over earlier ones.
+    pub fn semantics_config(&self) -> crate::semantics::SemanticsConfig {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::Semantics(config) => Some(config),
+                _ => None,
+            })
+            .fold(crate::semantics::SemanticsConfig::default(), |merged, config| {
+                config.clone().or(merged)
+            })
     }
 
     /// 布局方向——本节点 padding start/end 解析 + Row/Column 容器布局方向。
@@ -2432,6 +2473,7 @@ impl Debug for ModifierElement {
                 .finish(),
             Self::OnSizeChanged { .. } => f.write_str("OnSizeChanged"),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
+            Self::Semantics(config) => f.debug_tuple("Semantics").field(config).finish(),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
             Self::ZIndex(z) => f.debug_tuple("ZIndex").field(z).finish(),
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
@@ -3209,6 +3251,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             aw == bw && ah == bh
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
+        // Semantics carries visible state (a tab's selection): a change must re-enter the node.
+        (Semantics(a), Semantics(b)) => a == b,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
         (ZIndex(az), ZIndex(bz)) => az == bz,
         // Shared-element marker: only scope + key + kind decide Skip. `z_index`

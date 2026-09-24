@@ -1,7 +1,11 @@
 # The semantics gap (accessibility)
 
-> Status: **known gap, deliberately not started.** Written down so the next person does not have to
-> rediscover the shape of it, and so the components that want semantics have somewhere to point.
+> Status: **partly closed.** The model and a debug consumer exist now — `docs/semantics.md` has what
+> is implemented, the deliberately small property set, and what a platform bridge still needs. What
+> follows is the original analysis, kept because its reasoning about ORDER (model vs bridge, and why
+> neither alone is right) is what the implemented slice followed, and because the per-component table
+> below is still the checklist for what each component should declare. Read the two together: the
+> statements below about "nothing exists" describe the state this document was written in.
 > Companion: `docs/segmented-button-plan.md` (difference #1 there is this document).
 
 ## What is missing

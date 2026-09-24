@@ -303,6 +303,12 @@ impl IconButton {
         if let Some(b) = border {
             modifier = modifier.border(b.width, b.color, shape);
         }
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Button)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
+        );
         modifier = modifier.then(self.modifier);
 
         if self.enabled {

@@ -368,6 +368,12 @@ impl FloatingActionButton {
                 ..Default::default()
             });
         }
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Button)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
+        );
         modifier = modifier.then(self.modifier);
 
         if self.enabled {
@@ -838,6 +844,12 @@ impl ExtendedFloatingActionButton {
                 ..Default::default()
             });
         }
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Button)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
+        );
         modifier = modifier.then(self.modifier);
 
         if self.enabled {

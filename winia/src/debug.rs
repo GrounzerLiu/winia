@@ -142,6 +142,9 @@ struct DebugData {
     /// window_id → [(overlay_id, JSON)]，按 z 序（栈序）排列；
     /// 每帧整体替换（overlay 关闭后条目自动消失，无残留）
     overlay_trees: std::collections::HashMap<u64, Vec<(u64, (f32, f32), String)>>,
+    /// 每个窗口的语义树快照（`crate::semantics`；主树 + 弹出层）——`sem` 命令读它，
+    /// 每帧整体替换。The shape is `{"main":[…],"overlays":[{"id":N,"tree":[…]}]}`.
+    semantics: std::collections::HashMap<u64, String>,
 }
 
 pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
@@ -150,6 +153,7 @@ pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
         pixel_frames: Default::default(),
         trees: Default::default(),
         overlay_trees: Default::default(),
+        semantics: Default::default(),
     });
     state.pixel_frames.insert(window_id, PixelFrame {
         pixels: pixels.to_vec(),
@@ -313,11 +317,52 @@ mod request_tests {
     }
 }
 
+/// Replace one window's semantics snapshot — called once per rendered frame, like `update_tree`,
+/// so a `sem` query always answers with what the last frame actually declared.
+pub fn update_semantics(window_id: u64, json: &str) {
+    let mut data = DEBUG_STATE.lock().unwrap();
+    if data.is_none() {
+        *data = Some(DebugData {
+            pixel_frames: Default::default(),
+            trees: Default::default(),
+            overlay_trees: Default::default(),
+            semantics: Default::default(),
+        });
+    }
+    if let Some(ref mut d) = *data {
+        d.semantics.insert(window_id, json.to_string());
+    }
+}
+
+/// The semantics snapshot of one window, `"[]"`-shaped when nothing has been published yet.
+pub fn semantics_json(window_id: u64) -> String {
+    let data = DEBUG_STATE.lock().unwrap();
+    data.as_ref()
+        .and_then(|d| d.semantics.get(&window_id))
+        .cloned()
+        .unwrap_or_else(|| "{\"main\":[],\"overlays\":[]}".to_string())
+}
+
+/// Assemble the per-window semantics snapshot from the pieces the frame already produced:
+/// the main tree's JSON (`None` before the first layout) and each overlay's, `(overlay_id, json)`
+/// in z order.
+pub fn semantics_snapshot(main: Option<&str>, overlays: &[(u64, String)]) -> String {
+    let overlay_json: Vec<String> = overlays
+        .iter()
+        .map(|(id, json)| format!("{{\"id\":{id},\"tree\":{json}}}"))
+        .collect();
+    format!(
+        "{{\"main\":{},\"overlays\":[{}]}}",
+        main.unwrap_or("[]"),
+        overlay_json.join(",")
+    )
+}
+
 /// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default(), semantics: Default::default() });
     }
     if let Some(ref mut d) = *data {
         d.trees.insert(window_id, json.to_string());
@@ -334,7 +379,7 @@ pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, (f32, f32), String)>) 
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
         if trees.is_empty() { return; }
-        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default(), semantics: Default::default() });
     }
     if let Some(ref mut d) = *data {
         if trees.is_empty() {
@@ -351,6 +396,7 @@ pub fn remove_tree(window_id: u64) {
         d.trees.remove(&window_id);
         d.overlay_trees.remove(&window_id);
         d.pixel_frames.remove(&window_id);
+        d.semantics.remove(&window_id);
     }
 }
 
@@ -597,6 +643,12 @@ pub fn start_stdin_channel() {
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
                     println!("TREE:{}", all_trees_json());
                 }
+                // sem: the SEMANTICS tree of the last rendered frame — role/name/state per element,
+                // what a screen reader would be told. Same prefix convention as TREE:.
+                "sem" => {
+                    let id = legacy_target().unwrap_or(0);
+                    println!("SEMANTICS:{}", semantics_json(id));
+                }
                 // px <x> <y>: one pixel of the last captured frame, as TEXT. The binary `p` frame only
                 // travels over the WebSocket; this line form is what the UI-test harness (stdin/stdout)
                 // can read, so a test can assert on what was actually drawn — the only way to see a
@@ -730,6 +782,10 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             }
             "t" => {
                 let _ = write.send(Message::text(all_trees_json())).await;
+            }
+            "sem" => {
+                let id = legacy_target().unwrap_or(0);
+                let _ = write.send(Message::text(semantics_json(id))).await;
             }
             // tr [n]: the last n animation-trace records, one JSON object per line — a live view of
             // what an animation is doing, no WINIA_ANIM_TRACE file needed. Empty without `anim-trace`.

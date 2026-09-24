@@ -261,6 +261,14 @@ fn checkbox_impl(
                 .ripple(&interaction, theme.on_surface, false);
         }
     }
+    // Accessibility: role plus the tri-state value — Off and Indeterminate are different answers,
+    // which is why this is not a bool.
+    m = m.semantics(
+        crate::semantics::SemanticsConfig::new()
+            .role(crate::semantics::SemanticsRole::Checkbox)
+            .merge_descendants(true)
+            .state(crate::semantics::SemanticsState::new().checked(state).enabled(enabled)),
+    );
     m = m.then(modifier);
 
     match ctx.start_restartable_group(

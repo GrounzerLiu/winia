@@ -635,6 +635,16 @@ impl Button {
             });
         }
 
+        // Accessibility: this is a button, and whether it is enabled is part of what it reports.
+        // Declared before the caller's modifier is appended, so a caller's own declaration merges
+        // over this one per field.
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Button)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().enabled(self.enabled)),
+        );
+
         // 追加用户 modifier（在外层，可覆盖默认样式）
         modifier = modifier.then(self.modifier);
 

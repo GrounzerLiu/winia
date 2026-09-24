@@ -31,6 +31,7 @@ pub mod render;
 pub mod animation;
 pub mod nested_scroll;
 pub mod nav;
+pub mod semantics;
 pub mod app;
 pub mod effect;
 pub(crate) mod input;
@@ -49,6 +50,10 @@ pub mod debug {
     pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
     pub fn update_tree(_window_id: u64, _json: &str) {}
     pub fn set_overlay_trees(_window_id: u64, _trees: Vec<(u64, (f32, f32), String)>) {}
+    pub fn update_semantics(_window_id: u64, _json: &str) {}
+    pub fn semantics_snapshot(_main: Option<&str>, _overlays: &[(u64, String)]) -> String {
+        String::new()
+    }
     pub fn remove_tree(_window_id: u64) {}
     pub fn screenshot_requested(_window_id: u64) -> bool { false }
     pub fn screenshot_done(_window_id: u64) {}

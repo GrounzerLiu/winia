@@ -46,6 +46,8 @@ mod resize;
 mod scaffold;
 #[path = "fixture_scroll.rs"]
 mod scroll;
+#[path = "fixture_semantics.rs"]
+mod semantics;
 #[path = "fixture_search_results.rs"]
 mod search_results;
 #[path = "fixture_segmented_button.rs"]
@@ -92,6 +94,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("scroll", scroll::main),
     ("search_results", search_results::main),
     ("segmented_button", segmented_button::main),
+    ("semantics", semantics::main),
     ("subwindow", subwindow::main),
     ("swipe_dismiss", swipe_dismiss::main),
     ("text_field", text_field::main),
