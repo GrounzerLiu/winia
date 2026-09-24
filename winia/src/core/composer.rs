@@ -1345,22 +1345,27 @@ struct LayoutTransactionSnapshot {
     scroll_limits: Vec<(crate::core::state::Backchannel<f32>, f32)>,
 }
 
+/// The state a layout frame can change on a node that already existed.
+///
+/// Deliberately NOT the whole node. `LayoutTransaction` exists so a panic mid-layout leaves the
+/// composer recoverable, and what it keeps is the set of fields layout actually writes: measure writes
+/// the size, the flags and the scroll metrics, and placement writes the position. What is left out is
+/// out because layout cannot touch it — the modifier chain, the child list, the measure policy and the
+/// content flags are all composition products, written by `materialize::materialize` while COMPOSING,
+/// and the transaction's whole lifetime sits inside `layout()`.
+///
+/// Cloning them cost a `Vec` per node plus — through a `TextContent`'s `String` — a string per text
+/// node, every frame. Measured at 4001 nodes, that clone was the single largest item in layout, larger
+/// than measurement itself; removing it cut an idle 800-row frame by 40% (`docs/benchmarks.md`).
+///
+/// Rollback already forces a complete retry (`dirty = true`, cached constraints and paragraph cleared),
+/// so nothing here has to preserve a partially rebuilt measurement either.
 #[derive(Clone)]
 struct LayoutNodeTransactionState {
     idx: usize,
-    id: u64,
-    modifier: Modifier,
-    measure_policy: Option<usize>,
-    has_text_content: bool,
-    has_richtext_content: bool,
-    has_image_content: bool,
     focused: bool,
-    layout_direction: crate::layout::LayoutDirection,
-    slot_key: u64,
-    parent_id: Option<u64>,
     measured_size: crate::layout::node::Size,
     position: crate::layout::node::Point,
-    children: Vec<usize>,
     scroll_viewport_height: f32,
     scroll_viewport_width: f32,
     scroll_content_height: f32,
@@ -1383,19 +1388,9 @@ impl LayoutTransaction {
             .enumerate()
             .map(|(idx, node)| LayoutNodeTransactionState {
                 idx,
-                id: node.id,
-                modifier: node.modifier.clone(),
-                measure_policy: node.measure_policy,
-                has_text_content: node.has_text_content,
-                has_richtext_content: node.has_richtext_content,
-                has_image_content: node.has_image_content,
                 focused: node.focused,
-                layout_direction: node.layout_direction,
-                slot_key: node.slot_key,
-                parent_id: node.parent_id,
                 measured_size: node.measured_size,
                 position: node.position,
-                children: node.children.clone(),
                 scroll_viewport_height: node.scroll_viewport_height,
                 scroll_viewport_width: node.scroll_viewport_width,
                 scroll_content_height: node.scroll_content_height,
@@ -1459,19 +1454,9 @@ impl LayoutTransaction {
 
         for state in snapshot.node_state {
             if let Some(node) = composer.arena.nodes.get_mut(state.idx) {
-                node.id = state.id;
-                node.modifier = state.modifier;
-                node.measure_policy = state.measure_policy;
-                node.has_text_content = state.has_text_content;
-                node.has_richtext_content = state.has_richtext_content;
-                node.has_image_content = state.has_image_content;
                 node.focused = state.focused;
-                node.layout_direction = state.layout_direction;
-                node.slot_key = state.slot_key;
-                node.parent_id = state.parent_id;
                 node.measured_size = state.measured_size;
                 node.position = state.position;
-                node.children = state.children;
                 node.scroll_viewport_height = state.scroll_viewport_height;
                 node.scroll_viewport_width = state.scroll_viewport_width;
                 node.scroll_content_height = state.scroll_content_height;

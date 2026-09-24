@@ -304,20 +304,36 @@ fn layout_reality(kind: Kind, label: &str) {
     let mut tree = Tree::new(rows, kind, false);
     tree.frame();
     let entries = Rc::new(std::cell::Cell::new(0));
-    let idle_composed = measure("layout, after composing an unchanged tree", 200, 9, &entries, || {
+    let idle_composed = measure("compose(unclean)+layout, nothing changed", 200, 9, &entries, || {
         tree.compose_only();
         take_rows_run();
         tree.layout_only();
     });
     idle_composed.report();
 
-    // One row changes: compose + layout, then only the layout half is timed (compose runs first so the
-    // layout sees the state the update produced).
+    // Compose ALONE with one row changed. This is the arm that matters: an earlier version of this
+    // scene labelled the next measurement "layout, one row updated" while the timed closure ran
+    // `compose_only()` first, so a compose cost was being read as a layout cost and the layout pass was
+    // blamed for it (docs/benchmarks.md records the correction).
     let mut tree = Tree::new(rows, kind, false);
     tree.frame();
     let mut moved = 0i64;
     let entries = Rc::new(std::cell::Cell::new(0));
-    let one = measure("layout, one row updated", 200, 9, &entries, || {
+    let compose_one = measure("compose, one row updated", 200, 9, &entries, || {
+        moved += 1;
+        tree.states[rows / 2].set(moved);
+        tree.compose_only();
+        entries.set(entries.get() + take_rows_run());
+        black_box(moved);
+    });
+    compose_one.report();
+
+    // The whole frame, for the same change — compose and layout together, which is what an app pays.
+    let mut tree = Tree::new(rows, kind, false);
+    tree.frame();
+    let mut moved = 0i64;
+    let entries = Rc::new(std::cell::Cell::new(0));
+    let frame_one = measure("frame (compose+layout), one row updated", 200, 9, &entries, || {
         moved += 1;
         tree.states[rows / 2].set(moved);
         tree.compose_only();
@@ -325,15 +341,15 @@ fn layout_reality(kind: Kind, label: &str) {
         tree.layout_only();
         black_box(moved);
     });
-    one.report();
+    frame_one.report();
 
-    // A different constraint: every cached constraint differs, so the whole tree re-measures. The gap
-    // between this and the line above is the fold's contribution.
+    // A different constraint: every cached constraint differs, so the whole tree re-measures. Nothing is
+    // composed in this arm, so it is a pure layout figure.
     let mut tree = Tree::new(rows, kind, false);
     tree.frame();
     let mut width = 400.0f32;
     let entries = Rc::new(std::cell::Cell::new(0));
-    let forced = measure("layout, EVERY size re-measured", 200, 9, &entries, || {
+    let forced = measure("layout only, EVERY size re-measured", 200, 9, &entries, || {
         // Alternating by a pixel invalidates the fold every frame without changing the structure.
         width = if width == 400.0 { 401.0 } else { 400.0 };
         tree.layout_forced(width);
@@ -431,7 +447,9 @@ fn breakdown(kind: Kind, scoped: bool, rows: usize) {
     one.frame();
     let mut moved = 0i64;
     let entries = Rc::new(std::cell::Cell::new(0));
-    let layout_one = measure("layout only, one row updated", 100, 9, &entries, || {
+    // Named for what it times: the WHOLE frame, compose included. Labelling this "layout only" is the
+    // mistake an earlier version made, and it read a 5 ms compose cost as a layout cost.
+    let frame_one = measure("frame, one row updated", 100, 9, &entries, || {
         moved += 1;
         one.states[rows / 2].set(moved);
         one.compose_only();
@@ -439,7 +457,48 @@ fn breakdown(kind: Kind, scoped: bool, rows: usize) {
         one.layout_only();
         black_box(moved);
     });
-    layout_one.report();
+    frame_one.report();
+}
+
+/// Does the cost of one dirty row depend on WHERE it is in the list?
+///
+/// If the work is proportional to the row's index, something positional is going on — a rebuild of the
+/// slots after the dirty one, say — rather than a per-change cost. If it is flat, the cost is the
+/// change itself and the position is irrelevant.
+fn dirty_position(rows: usize) {
+    println!("
+--- where is the dirty row? (boxes, {rows} rows) ---");
+    for index in [0usize, rows / 4, rows / 2, rows - 1] {
+        let mut tree = Tree::new(rows, Kind::Boxes, false);
+        tree.frame();
+        let entries = Rc::new(std::cell::Cell::new(0));
+        let mut moved = 0i64;
+        let r = measure(&format!("compose, row {index} dirty"), 100, 9, &entries, || {
+            moved += 1;
+            tree.states[index].set(moved);
+            tree.compose_only();
+            entries.set(entries.get() + take_rows_run());
+            black_box(moved);
+        });
+        r.report();
+    }
+    // And two rows at once, to see whether the cost adds up per dirty row or per neighbor span.
+    for count in [2usize, 10] {
+        let mut tree = Tree::new(rows, Kind::Boxes, false);
+        tree.frame();
+        let entries = Rc::new(std::cell::Cell::new(0));
+        let mut moved = 0i64;
+        let r = measure(&format!("compose, {count} rows dirty (adjacent)"), 100, 9, &entries, || {
+            moved += 1;
+            for i in 0..count {
+                tree.states[rows / 2 + i].set(moved);
+            }
+            tree.compose_only();
+            entries.set(entries.get() + take_rows_run());
+            black_box(moved);
+        });
+        r.report();
+    }
 }
 
 fn collections() -> Vec<Result> {
@@ -520,6 +579,8 @@ fn main() {
     scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
     println!();
     scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
+
+    dirty_position(800);
 
     layout_reality(Kind::Boxes, "boxes");
     layout_reality(Kind::Text, "text");

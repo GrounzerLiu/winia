@@ -83,64 +83,69 @@ read placement. (The two shapes are otherwise identical; the first version of th
 content in the scoped row and appeared to win, which is the kind of comparison error this document is
 annotated to avoid.)
 
-## The layout figure is not a lower bound — it is pathological
+## Where a one-row update actually goes (and one correction)
 
-The layout pass folds: `measure_node_inner` returns a cached size when a node is neither dirty nor
-layout-dirty and its constraints are unchanged. So the question "is that 7.5 ms a real re-measure or a
-walk with cheap folds?" has a measurable answer: **force a real re-measure** by laying out with a
-changed constraint, which invalidates every node's fold.
+An earlier version of this document said "the layout figure is pathological: one row's update costs 4x
+more than re-measuring the whole tree". **That was a measurement artifact of my own making**, and it is
+worth recording because it is easy to repeat: the arm labelled "layout, one row updated" ran
+`compose_only()` inside the timed closure, so a compose cost was being read as a layout cost. The
+benchmark's labels now say exactly what each arm times.
 
-800 rows, boxes:
+With the arms separated (boxes, 800 rows, after the fix below):
 
-| layout of the same tree | fast sample |
+| arm | fast sample |
 |---|---|
-| idle (nothing changed) | 1066 µs |
-| after composing an UNCHANGED tree | 2486 µs |
-| **one row's state moved** | **9377 µs** |
-| **every size re-measured** (constraint changed, fold invalidated everywhere) | **2350 µs** |
+| compose only, nothing changed | ~1200 µs |
+| **compose only, one row updated** | **6250 µs** |
+| layout only, nothing composed | 700 µs |
+| layout only, every size re-measured | 1495 µs |
+| frame (compose + layout), one row updated | 7980 µs |
 
-Re-measuring the ENTIRE tree is **4x cheaper** than the frame in which one row's state moved. Whatever
-that extra ~8 ms is, it is not measurement work: there is less measurement in that frame than in the
-one below it. (The text scene has the same shape: 2176 idle, 10511 one row, 20450 everything.)
+Frame minus compose puts the layout of a one-row update at **~1730 µs** — between an idle layout (700)
+and a full re-measure (1495). **Layout is fine.** The cost is all in composition: **+5 ms for one dirty
+row**, and that is the number to explain.
 
-The `after composing an unchanged tree` row is the control that splits it into two separate costs,
-neither of them measurement:
+### It is a binary cost, not a per-row one
 
-| | boxes, 800 rows | step |
+| compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| layout, nothing composed | 1029 µs | — |
-| + compose ran, nothing changed | 2486 µs | **+1457 µs just for having composed** |
-| + exactly ONE group re-entered | 7992 µs | **+5506 µs for one row** |
-| (for scale: every size re-measured) | 1962 µs | |
+| row 0 dirty | 6438 µs | 1 |
+| row 400 dirty | 6310 µs | 1 |
+| row 799 dirty | 6277 µs | 1 |
+| 2 adjacent rows dirty | 6744 µs | 2 |
+| 10 adjacent rows dirty | 6707 µs | 10 |
 
-So there are two suspects, and they are independent:
+Flat in WHERE the dirty row is and flat in HOW MANY rows are dirty. One dirty row costs the same as
+ten. So this is not per-change work; something switches on when anything is dirty.
 
-1. **Composing at all makes the next layout ~1.4 ms more expensive** at this size. A prime candidate is
-   visible in the code: `LayoutTransaction::new` runs on every `layout()` call and eagerly clones
-   per-node state for the whole arena — `modifier.clone()` and `children.clone()` for every node, which
-   is thousands of heap allocations per frame.
-2. **A partial re-materialization is pathological.** One row re-entering costs 5.5 ms MORE than
-   re-measuring the whole tree, so the walk itself is not the problem — something about a tree that is
-   mostly reused and partly new is.
+### The mechanism
 
-Neither is concluded: both are hypotheses with a reproduction. The next step is the phase-level split
-that tells them apart — `layout` timed in its parts (measure / `collect_nodes` / `collect_node_keys`)
-rather than as a whole, which is a temporary `WINIA_LAYOUT_TRACE` instrumentation kept as
-`target/probe/layout_trace.patch` in the working tree (unversioned, apply with `git apply`).
+A phase split inside `compose()` (a temporary `WINIA_COMPOSE_TRACE`, kept as an unversioned patch in
+the working tree) puts **5.0 ms of the 5.2 ms in the content closure itself** — the loop over rows.
 
-And the extra grows superlinearly where a per-change cost would be flat:
+The loop does not run at all when nothing is dirty: the container's slot is Clean, so
+`start_restartable_group` Skips it and its body is never entered (measured: content = 0.7 µs). When one
+row's state changes, `mark_dirty_path_scope` marks the dirty slot **and every ancestor** dirty — the
+ancestors' bodies must run to re-check their children. In this scene the state read sits in the
+container's scope, so the container is the dependent, its 800-row loop re-executes, and every row takes
+a Skip decision. **799 Skip decisions cost ~5 ms, about 6 µs each.**
 
-| rows | idle | one row moved | extra |
-|---|---|---|---|
-| 50 | 125 | 164 | 39 µs |
-| 200 | 504 | 869 | 365 µs |
-| 800 | 3452 | 11393 | 7941 µs |
+That is the shape to attack, and it is a different problem from the one this section originally
+described: not layout invalidation, but **what a Skip decision costs** (a slot lookup, a `changed`
+parameter push with a heap allocation per call, a modifier comparison) and **how far a dirty mark
+propagates**.
 
-16x the rows is 200x the extra. So "can layout be improved?" answers itself: the current figure is not
-a floor, it is a defect. **What the defect IS has not been determined** — this benchmark times frames,
-not the pipeline, and telling "the dirty node's own re-measure is expensive" from "the dirty node's
-re-measure invalidates something O(tree) around it" needs a profiler rather than a frame timer. The
-tables above are the reproduction and the success criterion for that work.
+## One fix landed: the layout transaction
+
+`LayoutTransaction::new` runs on every `layout()` call and snapshots the arena so a panic mid-layout can
+roll back. It used to snapshot each node's `modifier` (a `Vec`, and through a `TextContent`'s `String` a
+string per text node) and `children` (another `Vec`) — fields layout cannot touch, because they are
+composition products written by `materialize` while composing, and the transaction's lifetime sits
+inside `layout()`. At 4001 nodes the phase split put that clone at 1.2 ms — larger than measurement
+itself (measure: 115 µs, `collect_nodes`: 700 µs, transaction: 1200 µs).
+
+Snapshotting only the fields layout writes took an 800-row idle frame from **3452 µs to 1998 µs (-42%)**
+and a one-row update from **11393 µs to 7701 µs (-32%)**, with the full library suite green.
 
 ## Collections: `StateList` vs `State<Vec>`
 
@@ -187,14 +192,25 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **Layout invalidation is not scoped.** This is the largest single item: ~7.5 ms of the 800-row
-  one-row update is layout, on a frame where nothing changed size. Making a re-entered subtree's
-  layout invalidation local would move the largest number in this document.
-- **The idle frame is not free** (~3.5 ms at 800 rows): composing a tree in which every group Skips
-  still walks the slot tree and replays each skipped group's structure. A cheaper skip path would
-  lower every frame, not just updates.
-- **The ancestor re-run.** A state read in a parent re-invokes every child so each can take a Skip
-  decision. Measured as ~5.3 ms of extra composition at 800 rows.
+- **The ancestor re-run is the big one: ~5 ms of the 800-row one-row update.** A state read in a
+  container's scope makes the container the dependent; marking it dirty marks its ancestors, and their
+  bodies re-execute — here the container's body is the loop over 800 rows, so 799 Skip decisions cost
+  ~5 ms. Two levers, and they are separate pieces of work:
+  (a) what a Skip decision costs (~6 µs each: a slot lookup, a `changed` parameter push that allocates,
+  a modifier comparison);
+  (b) how far a dirty mark propagates (does every ancestor need to *enter*, or only to re-check?).
+- **`collect_nodes` + `collect_node_keys` rebuild whole-tree maps on every layout** (~0.8 ms of a 4001
+  node layout, second only to the transaction). Measured, not yet attacked.
+- **The idle frame is not free** (~2.0 ms at 800 rows): composing a tree in which every group Skips
+  still walks the slot tree and replays each skipped group's structure.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and
 comparable. Each is a candidate for its own round, with this bench as the measuring stick.
+
+## Re-running any of this
+
+The benchmark's own traps are documented in the file where they bit, and the two phase splits used for
+the investigation are kept as unversioned patches in the working tree
+(`target/probe/layout_trace.patch`, `target/probe/compose_trace.patch`; apply with `git apply` and run
+with `WINIA_LAYOUT_TRACE=1` / `WINIA_COMPOSE_TRACE=1`). They are throwaway instrumentation, not part of
+the framework: `cargo bench` in a clean tree prints the tables above and nothing else.
