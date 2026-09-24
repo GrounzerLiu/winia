@@ -95,12 +95,38 @@ changed constraint, which invalidates every node's fold.
 | layout of the same tree | fast sample |
 |---|---|
 | idle (nothing changed) | 1066 µs |
+| after composing an UNCHANGED tree | 2486 µs |
 | **one row's state moved** | **9377 µs** |
 | **every size re-measured** (constraint changed, fold invalidated everywhere) | **2350 µs** |
 
 Re-measuring the ENTIRE tree is **4x cheaper** than the frame in which one row's state moved. Whatever
 that extra ~8 ms is, it is not measurement work: there is less measurement in that frame than in the
 one below it. (The text scene has the same shape: 2176 idle, 10511 one row, 20450 everything.)
+
+The `after composing an unchanged tree` row is the control that splits it into two separate costs,
+neither of them measurement:
+
+| | boxes, 800 rows | step |
+|---|---|---|
+| layout, nothing composed | 1029 µs | — |
+| + compose ran, nothing changed | 2486 µs | **+1457 µs just for having composed** |
+| + exactly ONE group re-entered | 7992 µs | **+5506 µs for one row** |
+| (for scale: every size re-measured) | 1962 µs | |
+
+So there are two suspects, and they are independent:
+
+1. **Composing at all makes the next layout ~1.4 ms more expensive** at this size. A prime candidate is
+   visible in the code: `LayoutTransaction::new` runs on every `layout()` call and eagerly clones
+   per-node state for the whole arena — `modifier.clone()` and `children.clone()` for every node, which
+   is thousands of heap allocations per frame.
+2. **A partial re-materialization is pathological.** One row re-entering costs 5.5 ms MORE than
+   re-measuring the whole tree, so the walk itself is not the problem — something about a tree that is
+   mostly reused and partly new is.
+
+Neither is concluded: both are hypotheses with a reproduction. The next step is the phase-level split
+that tells them apart — `layout` timed in its parts (measure / `collect_nodes` / `collect_node_keys`)
+rather than as a whole, which is a temporary `WINIA_LAYOUT_TRACE` instrumentation kept as
+`target/probe/layout_trace.patch` in the working tree (unversioned, apply with `git apply`).
 
 And the extra grows superlinearly where a per-change cost would be flat:
 

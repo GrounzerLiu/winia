@@ -293,10 +293,23 @@ fn layout_reality(kind: Kind, label: &str) {
     let mut tree = Tree::new(rows, kind, false);
     tree.frame();
     let entries = Rc::new(std::cell::Cell::new(0));
-    let idle = measure("layout, idle", 200, 9, &entries, || {
+    let idle = measure("layout, idle (no compose)", 200, 9, &entries, || {
         tree.layout_only();
     });
     idle.report();
+
+    // CONTROL: compose an UNCHANGED tree, then lay it out. If this is as expensive as the
+    // one-row update, the cost is not the state change at all — it is something about having
+    // composed, and the earlier comparison was measuring two different things.
+    let mut tree = Tree::new(rows, kind, false);
+    tree.frame();
+    let entries = Rc::new(std::cell::Cell::new(0));
+    let idle_composed = measure("layout, after composing an unchanged tree", 200, 9, &entries, || {
+        tree.compose_only();
+        take_rows_run();
+        tree.layout_only();
+    });
+    idle_composed.report();
 
     // One row changes: compose + layout, then only the layout half is timed (compose runs first so the
     // layout sees the state the update produced).
