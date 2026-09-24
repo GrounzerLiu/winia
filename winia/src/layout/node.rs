@@ -486,6 +486,45 @@ impl Default for LayoutNode {
 
 // ── NodeArena：布局树节点池（arena 索引树，节点跨重组复用）──
 
+/// A set of arena node indices, kept as a bit vector.
+///
+/// `materialize` marks every node it claims (the frame's reuse decisions) and the compose tail asks
+/// about every key it drains, so both sides touch this once per node per frame. Arena indices are
+/// dense (`0..nodes.len()`), which makes "is this node marked" a bit test instead of a hash: the
+/// `HashSet<usize>` this replaced cost a SipHash per insert AND per lookup, in a path that runs 4000
+/// times a frame (`docs/benchmarks.md`).
+///
+/// `clear` drops the length instead of zeroing every word — the storage is reused, and a shorter
+/// vector simply answers `false` for indices it no longer covers.
+#[derive(Clone, Default)]
+pub(crate) struct NodeMarks {
+    words: Vec<u64>,
+}
+
+impl NodeMarks {
+    /// Marks `idx`; returns whether it was NOT marked before (the visit-once idiom the shared-element
+    /// detach uses to walk a subtree).
+    pub(crate) fn insert(&mut self, idx: usize) -> bool {
+        let word = idx / 64;
+        if word >= self.words.len() {
+            self.words.resize(word + 1, 0);
+        }
+        let bit = 1u64 << (idx % 64);
+        let was_set = self.words[word] & bit != 0;
+        self.words[word] |= bit;
+        !was_set
+    }
+
+    pub(crate) fn contains(&self, idx: usize) -> bool {
+        let word = idx / 64;
+        word < self.words.len() && self.words[word] & (1u64 << (idx % 64)) != 0
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.words.clear();
+    }
+}
+
 /// 布局树节点池：所有 LayoutNode 存于 `nodes`，树通过索引（`children: Vec<usize>`）
 /// 组织。节点**跨重组持久**（对象级复用——组合 diff 只更新内容，不重建对象）。
 pub struct NodeArena {
@@ -537,11 +576,11 @@ impl NodeArena {
     pub fn free_node_skip(
         &mut self,
         idx: usize,
-        skip: &std::collections::HashSet<usize>,
-        visited: &mut std::collections::HashSet<usize>,
+        skip: &NodeMarks,
+        visited: &mut NodeMarks,
     ) {
         if !visited.insert(idx) { return; }
-        if skip.contains(&idx) { return; }
+        if skip.contains(idx) { return; }
         // 防御：被 free 的节点不应在本帧树中（复用节点在 skip；新建节点不在
         // prev_node_by_key——若破坏该不变量会静默误 free 本帧节点）
         debug_assert!(

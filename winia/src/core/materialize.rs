@@ -207,10 +207,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
         // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
         // 注意：签名不等时**不 remove**——key 留待 compose 末尾回收（free），
-        // 否则旧节点成为 arena 孤儿（泄漏）。
-        match composer.prev_node_by_key.get(&key) {
-            Some(&idx) if children.len() == composer.arena.nodes[idx].children.len() => {
-                let idx = composer.prev_node_by_key.remove(&key).unwrap();
+        // 否则旧节点成为 arena 孤儿（泄漏）。所以这里的 `remove` 成功与否要先看签名，
+        // 不匹配时把 key 放回去（罕见路径，代价是一次 insert）。
+        match composer.prev_node_by_key.remove(&key) {
+            Some(idx) if children.len() == composer.arena.nodes[idx].children.len() => {
                 composer.reused_nodes.insert(idx);
                 let n = &mut composer.arena.nodes[idx];
                 n.children.clear();
@@ -242,12 +242,19 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 保留现状即可；同帧二次物化则保留第一次设置的 dirty。
                 Some(idx)
             }
-            _ => {
+            removed_idx => {
                 // 防御降级：Skip 恢复失败（无缓存/结构签名不等）→ 按 Enter 重建
                 // （dirty=true 重测）。否则节点缺失 → 子树塌缩（间歇性坐标错乱）。
                 // 子树完整优先于测量折叠——下一帧 key 稳定后恢复 Skip。
                 // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
                 // 返回 Some(idx) 走统一挂接路径。
+                //
+                // Signature mismatch means the key was removed above but must stay for the
+                // compose tail to recycle its node; a missing node means there was nothing to
+                // remove. Putting a *present* key back is the only case that has to restore it.
+                if let Some(idx) = removed_idx {
+                    composer.prev_node_by_key.insert(key, idx);
+                }
                 let pidx = policy.map(|p| composer.arena.alloc_policy(p));
                 let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
                 // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal

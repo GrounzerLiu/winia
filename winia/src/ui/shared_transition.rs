@@ -2602,7 +2602,7 @@ impl Composer {
                 .children
                 .iter()
                 .copied()
-                .filter(|c| self.reused_nodes.contains(c))
+                .filter(|c| self.reused_nodes.contains(*c))
                 .collect();
             if !taken.is_empty() {
                 crate::debug_log!(
@@ -2803,8 +2803,8 @@ impl Composer {
         // removal murders the live successor. Stale slots self-clean via
         // truncate/Enter-prune.
         if self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
-            let mut visited = HashSet::new();
-            self.arena.free_node_skip(idx, &HashSet::new(), &mut visited);
+            let mut visited = crate::layout::node::NodeMarks::default();
+            self.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
         }
         self.transition_layer.retain(|&x| x != idx);
     }
@@ -3701,8 +3701,8 @@ impl Composer {
             if let (Some(slot), Some(idx)) = (sslot, sidx) {
                 let owner = &mut all[si];
                 if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
-                    let mut visited = HashSet::new();
-                    owner.arena.free_node_skip(idx, &HashSet::new(), &mut visited);
+                    let mut visited = crate::layout::node::NodeMarks::default();
+                    owner.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
                 }
                 owner.transition_layer.retain(|&x| x != idx);
             }
@@ -3732,8 +3732,8 @@ impl Composer {
         if let (Some(slot), Some(idx)) = (a.flight.source_slot, a.source_idx) {
             if let Some(owner) = all.iter_mut().find(|c| c.composer_id == a.source_cid) {
                 if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
-                    let mut visited = HashSet::new();
-                    owner.arena.free_node_skip(idx, &HashSet::new(), &mut visited);
+                    let mut visited = crate::layout::node::NodeMarks::default();
+                    owner.arena.free_node_skip(idx, &crate::layout::node::NodeMarks::default(), &mut visited);
                 }
                 owner.transition_layer.retain(|&x| x != idx);
             }
@@ -4121,8 +4121,8 @@ impl Composer {
         {
             let owner = &mut all[owner_idx];
             if owner.arena.nodes.get(p.src_idx).is_some_and(|n| n.slot_key == p.old_slot) {
-                let mut visited = HashSet::new();
-                owner.arena.free_node_skip(p.src_idx, &HashSet::new(), &mut visited);
+                let mut visited = crate::layout::node::NodeMarks::default();
+                owner.arena.free_node_skip(p.src_idx, &crate::layout::node::NodeMarks::default(), &mut visited);
             }
             owner.transition_layer.retain(|&x| x != p.src_idx);
         }
