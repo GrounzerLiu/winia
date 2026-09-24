@@ -133,6 +133,25 @@ detached cell — useful for tests, hoisted owners, and `Arc`-shared models.
 pub struct DerivedValue<T>(pub(crate) Arc<dyn Fn() -> T + Send + Sync>);
 DerivedValue::new(f)  // cf. Compose derivedStateOf { }
 DerivedValue::get(&self) -> T   // re-runs f; inner get() calls subscribe
+
+**Difference from Compose (open).** `derivedStateOf` caches its result and, when a dependency changes
+but the recomputed value is `==` the previous one, does NOT invalidate its readers. winia's
+`DerivedValue` does neither: `get()` re-runs the closure every time, and a reader becomes a direct
+dependent of the underlying states, so it recomposes even when the derived value is unchanged.
+Values are correct either way — this is over-invalidation, not a wrong read.
+
+Closing it needs a dependency identity for the derived value itself, which the current design has no
+room for:
+
+1. `get()` would compute under a *capture* mode that routes the inner reads to the derived value's own
+   id instead of the reader's slot key, and register the READER against that id.
+2. The composer's notification path would then have to recompute a derived id when one of its
+   dependencies moves, and walk ITS dependents only if the new value differs.
+
+Step 2 is what makes it a mechanism rather than a field: today the notify path is `state id → slot
+keys`, straight through. Until then, a caller that needs the suppression can compare at the call site
+(`if derived.get() != last { last = derived.get(); ... }`) or keep the value in a `State` and set it
+only when it changed — `State::set` already skips equal values.
 pub type DerivedFloat = DerivedValue<f32>;
 ```
 

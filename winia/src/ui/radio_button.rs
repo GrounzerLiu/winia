@@ -153,6 +153,13 @@ fn radio_button_impl(
                 .ripple(&interaction, theme.on_surface, false);
         }
     }
+    // Accessibility: a radio is SELECTED, not checked (Compose's `selectable` → `Selected`).
+    m = m.semantics(
+        crate::semantics::SemanticsConfig::new()
+            .role(crate::semantics::SemanticsRole::RadioButton)
+            .merge_descendants(true)
+            .state(crate::semantics::SemanticsState::new().selected(selected).enabled(enabled)),
+    );
     m = m.then(modifier);
 
     match ctx.start_restartable_group(

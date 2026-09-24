@@ -35,6 +35,7 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `p` | 取最近一帧像素——**二进制帧** = 8 字节头（W、H 各 u32 LE）+ RGBA | binary / `no frame` |
 | `t` | 读全部窗口布局树 JSON | JSON 字符串 |
 | `px <x> <y>` | one pixel of the current frame as TEXT — `WxH:x y r g b a`, `WxH:out-of-frame` or `none`. The line form of `p`, usable over the stdin channel (a UI test) and easy for a script to parse; the frame must be captured first (`r`). Coordinates are FRAME (physical) pixels — the exception to the note below — and `WxH` comes back with the answer, so a caller that only knows logical coordinates can scale. The four color bytes are RGBA, premultiplied by alpha. The layout tree cannot replace it: a theme-derived color is resolved at build time, so every `bg(...)` prints as `<dynamic>`. | `<W>x<H>:…`（不带 `PIXEL:` 前缀） |
+| `sem` | The SEMANTICS tree of the last rendered frame — role / name / state / bounds per accessible element, once per window: `{"main":[…],"overlays":[{"id":N,"tree":[…]}]}`. Published on every rendered frame while this feature is on, so it says what the frame that just drew declared, not what a later frame will. See `docs/semantics.md`. | JSON string (stdin: `SEMANTICS:` prefix) |
 | `q` | 强制退出应用（测试收尾兜底） | （进程退出） |
 
 ⚠ **坐标均为逻辑像素**（非物理像素；HiDPI 下物理 = 逻辑 × scale_factor，

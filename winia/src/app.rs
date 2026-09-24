@@ -879,6 +879,15 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
+        // Actions the accessibility bridge queued: UIA calls a provider on its own schedule, so the
+        // provider only records what was asked for and this — the frame loop — performs it, running
+        // the same callback a real click or Tab would.
+        if crate::semantics::has_actions() {
+            let windows: Vec<WindowId> = self.windows.keys().copied().collect();
+            for wid in windows {
+                self.consume_ui_actions(wid);
+            }
+        }
         self.was_animating = animating;
     }
 
@@ -1033,6 +1042,9 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::CloseRequested => {
                 if let Some(ref mut cb) = pw.on_close { cb(); }
+                if let Some(ref sw) = pw.skia_window {
+                    crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
+                }
                 self.windows.remove(&window_id);
                 // 清理 debug 树条目（窗口关闭后不再渲染——残留会让 UI 测试误判）
                 debug::remove_tree(window_id.into_raw() as u64);
@@ -1047,6 +1059,9 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::Destroyed => {
                 if let Some(cid) = pw.created_id { crate::ui::window::CREATED.lock().unwrap().remove(&cid); }
+                if let Some(ref sw) = pw.skia_window {
+                    crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
+                }
                 self.windows.remove(&window_id);
                 debug::remove_tree(window_id.into_raw() as u64);
                 for pw in self.windows.values() {
@@ -1554,8 +1569,15 @@ impl ApplicationHandler for AppState {
                 // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
                 let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let wid = window_id.into_raw() as u64;
+                    // Built only when something consumes it (the debug server or the accessibility
+                    // bridge): it is a full tree walk per frame, and `publishing_enabled` is a const,
+                    // so a plain build never pays for it.
+                    let mut main_nodes = Vec::new();
                     pw.recompose_layout_render(window_id, |nodes, root_idx, surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
+                        if crate::semantics::publishing_enabled() {
+                            main_nodes = crate::semantics::semantics_tree(nodes, root_idx);
+                        }
                     });
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
                     // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
@@ -1565,6 +1587,27 @@ impl ApplicationHandler for AppState {
                             .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
                     }).collect();
                     debug::set_overlay_trees(wid, ov_trees);
+                    if crate::semantics::publishing_enabled() {
+                        // The overlays' arenas are walked too, so a modal's contents are in the tree a
+                        // screen reader descends. Each keeps its screen origin: its tree is in the
+                        // overlay's own coordinates.
+                        let overlays = pw.overlays.iter().filter_map(|ov| {
+                            ov.composer.layout_root_idx().map(|r| crate::semantics::OverlaySemantics {
+                                id: ov.id,
+                                origin: ov.screen_pos,
+                                nodes: crate::semantics::semantics_tree(ov.composer.arena_nodes(), r),
+                            })
+                        }).collect();
+                        // The two numbers a platform bridge needs to turn logical bounds into
+                        // physical ones. Where the window sits on screen is the bridge's own business
+                        // — it has the handle, and the answer changes whenever the user moves it.
+                        crate::semantics::publish(wid, crate::semantics::WindowSemantics {
+                            main: main_nodes,
+                            overlays,
+                            window_size: (pw.width, pw.height),
+                            scale_factor: pw.scale_factor as f32,
+                        });
+                    }
                 }));
                 match panic_result {
                     Ok(()) => {
@@ -1687,6 +1730,44 @@ impl AppState {
     /// 消费 DevTools 注入事件（点击/按键/滚动/拖拽等——UI 测试 + WS 调试）。
     /// 在 window_event（RedrawRequested）与 new_events（兜底）两处调用：
     /// 多窗口下主窗口可能在后台——RedrawRequested 不来时事件卡队列，
+    /// Perform the actions a platform bridge (or anything else off the UI thread) queued for this
+    /// window. Invoke runs the node's real click callback; Focus moves the ring to the node.
+    fn consume_ui_actions(&mut self, window_id: WindowId) {
+        let wid = window_id.into_raw() as u64;
+        let actions = crate::semantics::take_actions(wid);
+        if actions.is_empty() {
+            return;
+        }
+        let Some(pw) = self.windows.get_mut(&window_id) else { return };
+        for action in actions {
+            match action {
+                crate::semantics::UiAction::Invoke(node_id) => {
+                    // The arena is borrowed immutably and the callback only sets state, which is what
+                    // a real click does too.
+                    let nodes = pw.composer.arena_nodes();
+                    if !crate::semantics::click_node_by_id(nodes, node_id) {
+                        log::debug!("[accessibility] invoke: node {node_id} has no click action");
+                    }
+                }
+                crate::semantics::UiAction::Focus(node_id) => {
+                    // Read the root first: the arena is borrowed mutably by the call.
+                    let root = pw.composer.layout_root_idx();
+                    if let Some(root) = root {
+                        let nodes = pw.composer.arena_nodes_mut();
+                        crate::layout::node::set_focus_by_id(nodes, root, node_id);
+                    }
+                    if let Some(ref sw) = pw.skia_window {
+                        sw.set_ime_allowed(false);
+                    }
+                }
+            }
+        }
+        if let Some(ref sw) = pw.skia_window {
+            sw.request_redraw();
+        }
+        debug::wake();
+    }
+
     /// new_events 每轮事件批次必然执行——保证注入事件不丢失。
     fn consume_debug_events(&mut self, window_id: WindowId) {
         let Some(pw) = self.windows.get_mut(&window_id) else { return };
@@ -1996,6 +2077,9 @@ impl AppState {
             .map(|mhz| std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
             .unwrap_or(std::time::Duration::from_millis(16));
         let skia_window = SkiaWindow::new(event_loop, w);
+        // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
+        // otherwise, and unconditional at the call site so nothing here needs feature gates).
+        crate::accessibility::install(&*skia_window, window_id.into_raw() as u64);
         let content = pending.content.unwrap_or_else(|| Box::new(|_| {}));
         // How this window resolves its theme. A `Window` node passes the cell it shares with its declaring
         // tree; a window opened directly follows the system (`Auto`), which is what an unspecified theme

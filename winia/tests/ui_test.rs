@@ -1688,3 +1688,123 @@ fn the_row_that_moves_into_a_dismissed_slot_is_live() {
     app.expect_text("last: 1 right");
 }
 
+
+// ── Semantics (accessibility) ──
+
+/// The semantics snapshot reaches a client, names what it should, follows a click, and carries the
+/// overlays — the four things a screen reader depends on. The model's own rules are unit-tested in
+/// `winia/src/semantics.rs`; this is the channel.
+#[test]
+fn semantics_are_published_per_frame_and_follow_the_state() {
+    let mut app = UiTest::launch("semantics");
+
+    /// The main tree, or an empty slice.
+    fn main_tree(snapshot: &serde_json::Value) -> &Vec<serde_json::Value> {
+        snapshot["main"].as_array().expect("main is an array")
+    }
+
+    /// Depth-first search of the whole snapshot (main tree only) for a name.
+    fn find<'a>(items: &'a [serde_json::Value], name: &str) -> Option<&'a serde_json::Value> {
+        for item in items {
+            if item["name"] == name {
+                return Some(item);
+            }
+            if let Some(hit) = find(item["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), name) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    let snapshot = app.semantics_until(Duration::from_secs(3), |s| {
+        find(main_tree(s), "Merged button").is_some()
+    })
+    .expect("a semantics snapshot");
+
+    // A click target reads as ONE element named by its label, with the role the component declared.
+    let button = find(main_tree(&snapshot), "Merged button").expect("the button by its label");
+    assert_eq!(button["role"], "button");
+    assert_eq!(button["clickable"], true);
+    assert!(
+        button["children"].as_array().is_some_and(|c| c.is_empty()),
+        "the label was absorbed, not left hanging: {button}"
+    );
+
+    // A disabled control still reports its role, its name AND that it is disabled.
+    let disabled = find(main_tree(&snapshot), "Disabled button").expect("the disabled button");
+    assert_eq!(disabled["role"], "button");
+    assert_eq!(disabled["state"]["enabled"], false);
+
+    // Roles that differ in Compose differ here: checked vs selected.
+    let switch = find_role(main_tree(&snapshot), "switch").expect("the switch");
+    assert_eq!(switch["state"]["checked"], "on");
+    let radio = find_role(main_tree(&snapshot), "radiobutton").expect("the radio");
+    assert_eq!(radio["state"]["selected"], false);
+
+    // An icon is announced only when it was given a description.
+    let icon = find(main_tree(&snapshot), "Described icon").expect("the described icon");
+    assert_eq!(icon["role"], "image");
+
+    // Plain text is an element with a name and no role.
+    let text = find(main_tree(&snapshot), "Plain label").expect("the plain text");
+    assert_eq!(text["role"], serde_json::Value::Null);
+
+    // The state follows a real click: on → off through the checkbox's own handler.
+    let checkbox = find_role(main_tree(&snapshot), "checkbox").expect("the checkbox");
+    assert_eq!(checkbox["state"]["checked"], "on");
+    let (cx, cy) = node_center(checkbox);
+    app.click(cx, cy);
+    let after = app
+        .semantics_until(Duration::from_secs(3), |s| {
+            find_role(main_tree(s), "checkbox")
+                .and_then(|c| c["state"]["checked"].as_str().map(str::to_string))
+                .as_deref()
+                == Some("off")
+        })
+        .expect("a snapshot after the click");
+    let checkbox = find_role(main_tree(&after), "checkbox").expect("the checkbox after the click");
+    assert_eq!(
+        checkbox["state"]["checked"], "off",
+        "the snapshot must follow the click, not lag a frame behind it"
+    );
+
+    // An open dialog is part of the snapshot, and its own contents are in it.
+    app.click_tag("sem-open-dialog");
+    let with_dialog = app
+        .semantics_until(Duration::from_secs(3), |s| {
+            s["overlays"].as_array().is_some_and(|o| !o.is_empty())
+        })
+        .expect("a snapshot with the dialog");
+    let overlays = with_dialog["overlays"].as_array().expect("overlays is an array");
+    let dialog_tree = overlays[0]["tree"].as_array().expect("an overlay tree");
+    assert!(
+        find(dialog_tree, "Dialog title").is_some(),
+        "a modal's contents must be reachable: {dialog_tree:?}"
+    );
+    assert!(find(dialog_tree, "Confirm").is_some());
+
+    /// The first element in the tree with this role.
+    fn find_role<'a>(items: &'a [serde_json::Value], role: &str) -> Option<&'a serde_json::Value> {
+        for item in items {
+            if item["role"] == role {
+                return Some(item);
+            }
+            if let Some(hit) = find_role(item["children"].as_array().map(Vec::as_slice).unwrap_or(&[]), role) {
+                return Some(hit);
+            }
+        }
+        None
+    }
+
+    /// The centre of an element, from the bounds the snapshot reports (logical coordinates).
+    fn node_center(node: &serde_json::Value) -> (f32, f32) {
+        let b = node["bounds"].as_array().expect("bounds");
+        let (x, y, w, h) = (
+            b[0].as_f64().unwrap_or(0.0) as f32,
+            b[1].as_f64().unwrap_or(0.0) as f32,
+            b[2].as_f64().unwrap_or(0.0) as f32,
+            b[3].as_f64().unwrap_or(0.0) as f32,
+        );
+        (x + w / 2.0, y + h / 2.0)
+    }
+}

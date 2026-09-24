@@ -687,7 +687,18 @@ impl Icon {
             auto_mirror: self.auto_mirror,
             axes: self.axes,
         };
-        let modifier = Modifier::new().size(w, h).draw_icon(spec).then(self.modifier);
+        // An icon that was given a description is an image with a name; one without is decorative
+        // and must stay out of the semantics tree entirely (Compose: a null `contentDescription` is
+        // "not announced", which is not the same as "announced as empty").
+        let mut modifier = Modifier::new().size(w, h);
+        if let Some(description) = self.content_description.as_deref() {
+            modifier = modifier.semantics(
+                crate::semantics::SemanticsConfig::new()
+                    .role(crate::semantics::SemanticsRole::Image)
+                    .content_description(description),
+            );
+        }
+        let modifier = modifier.draw_icon(spec).then(self.modifier);
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             GroupStatus::Skip => {}

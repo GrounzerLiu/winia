@@ -377,6 +377,14 @@ impl Switch {
                     .on_drag_cancel(on_drag_cancel);
             }
         }
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Switch)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new()
+                    .checked_bool(self.checked)
+                    .enabled(self.enabled)),
+        );
         modifier = modifier.then(self.modifier);
 
         match ctx.start_restartable_group(

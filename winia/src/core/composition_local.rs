@@ -148,16 +148,21 @@ impl<T: Clone + 'static> CompositionLocal<T> {
     /// 即使是同一个 `CompositionLocal` 再次嵌套，`rposition` 也能弹出最内层。
     ///
     /// ⚠ **`provides` does not invalidate its readers** — it only changes what the NEXT reader
-    /// reads. For a new value to actually reach them, the provider's enclosing **scope** has to
-    /// re-run AND each reader has to re-run: a reader picks the local up again only when the group
-    /// it sits in is re-entered because it was marked dirty. So when a state feeds a local, the read
-    /// belongs inside a scope (`#[composable]` function, or a container's restartable group):
-    /// marking a scope marks its whole subtree (`mark_dirty_subtree`), and every reader re-reads.
-    /// A read that lands at the **root of a window's content** has no scope to land in — it registers
-    /// against the root fallback key — so the marking covers only that key: the content does re-run
-    /// with the new value, but the subtree skips on cached slots and the page keeps the layout it
-    /// built with the old one. `examples/common/settings.rs` (`shell`) hit exactly this; the
-    /// measurements are in the comment there.
+    /// reads. A reader picks the local up again only when the group it sits in is re-entered, and a
+    /// group that declared nothing about itself is Skipped and keeps what it composed with.
+    ///
+    /// A state-fed provider therefore has to do two things: read the state inside a **scope**
+    /// (`#[composable]` function, or a container's restartable group), and call
+    /// [`crate::core::composer::ComposeCtx::mark_subtree_dirty`] when the value it is about to
+    /// provide differs from the previous frame's. The read marks the scope (so the provider itself
+    /// re-runs), and the marking re-enters every reader inside it. `WiniaTheme::provide_resolved` is
+    /// the worked example: it remembers what it last provided, and dirties its subtree when the
+    /// resolved palette, typography or direction moves.
+    ///
+    /// Only the read-inside-a-scope half is load-bearing for the provider itself: a read that lands at
+    /// the root of a window's content has no scope to register against, so nothing marks the provider
+    /// to re-run and it keeps resolving the old value. `examples/common/settings.rs` (`shell`) hit
+    /// exactly this; the measurements are in the comment there.
     pub fn provides<R>(&self, value: T, f: impl FnOnce() -> R) -> R {
         let arc: Arc<dyn Any> = Arc::new(value);
         SLOTS.with(|s| s.borrow_mut().push((self.id, arc)));

@@ -313,6 +313,16 @@ mod request_tests {
     }
 }
 
+/// The semantics snapshot of one window as JSON, `[]`-shaped when nothing has been published yet.
+///
+/// Read from `crate::semantics`, which is the one store the frame loop publishes into — the
+/// accessibility bridge reads the SAME snapshots (they are kept as a tree there, not as this string).
+pub fn semantics_json(window_id: u64) -> String {
+    crate::semantics::published(window_id)
+        .map(|snapshot| snapshot.json())
+        .unwrap_or_else(|| "{\"main\":[],\"overlays\":[]}".to_string())
+}
+
 /// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
@@ -351,6 +361,7 @@ pub fn remove_tree(window_id: u64) {
         d.trees.remove(&window_id);
         d.overlay_trees.remove(&window_id);
         d.pixel_frames.remove(&window_id);
+        crate::semantics::forget(window_id);
     }
 }
 
@@ -597,6 +608,12 @@ pub fn start_stdin_channel() {
                     // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
                     println!("TREE:{}", all_trees_json());
                 }
+                // sem: the SEMANTICS tree of the last rendered frame — role/name/state per element,
+                // what a screen reader would be told. Same prefix convention as TREE:.
+                "sem" => {
+                    let id = legacy_target().unwrap_or(0);
+                    println!("SEMANTICS:{}", semantics_json(id));
+                }
                 // px <x> <y>: one pixel of the last captured frame, as TEXT. The binary `p` frame only
                 // travels over the WebSocket; this line form is what the UI-test harness (stdin/stdout)
                 // can read, so a test can assert on what was actually drawn — the only way to see a
@@ -730,6 +747,10 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             }
             "t" => {
                 let _ = write.send(Message::text(all_trees_json())).await;
+            }
+            "sem" => {
+                let id = legacy_target().unwrap_or(0);
+                let _ = write.send(Message::text(semantics_json(id))).await;
             }
             // tr [n]: the last n animation-trace records, one JSON object per line — a live view of
             // what an animation is doing, no WINIA_ANIM_TRACE file needed. Empty without `anim-trace`.

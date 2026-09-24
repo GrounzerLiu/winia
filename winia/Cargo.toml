@@ -12,6 +12,10 @@ default = ["vulkan", "gl"]
 vulkan = ["skiwin/vulkan"]
 gl = ["skiwin/gl"]
 debug-server = []
+# Windows UI Automation provider: publishes the semantics tree (`crate::semantics`) to screen
+# readers and to any UIA client, over the window's own HWND. OFF by default — it needs the `windows`
+# crate, and a plain build should not carry a COM server it does not use. See docs/semantics.md.
+accessibility = ["dep:windows", "dep:windows-core"]
 # Per-frame animation trace (`anim_trace`): records every animated subject's layout vs painted
 # geometry plus its opacity so a run can be inspected afterwards. OFF by default — without it every
 # emission point is a no-op that compiles away. The output path comes from WINIA_ANIM_TRACE; no
@@ -46,6 +50,22 @@ arboard = "3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 skia-safe = { workspace = true, features = ["vulkan", "textlayout", "svg", "gl", "d3d"] }
+# The UIA bridge (feature `accessibility`) and nothing else. `Win32_UI_Shell` is where
+# SetWindowSubclass lives — winit does not forward WM_GETOBJECT, so the window procedure has to be
+# hooked to answer it.
+# `#[implement]` generates paths through `::windows_core`, so the core crate has to be a
+# dependency in its own right, not just a transitive one.
+windows-core = { version = "0.62", optional = true }
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 [dev-dependencies]
 serde_json = "1"
 

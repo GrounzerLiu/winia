@@ -634,6 +634,29 @@ impl WiniaTheme {
             let _ = SYSTEM_THEME_STATE.get();
         }
         let on_surface = colors.on_surface;
+        // A `CompositionLocal` does not invalidate its readers, so the provider has to: when the resolved
+        // theme differs from the previous frame's, everything inside composed with the old value —
+        // padding, alignment, colors — and has to run again. Without this, a theme or direction switch
+        // only reached components that happened to read a state directly (measured: a param-less group
+        // between the provider and the reader stayed on the previous palette after the system mode moved).
+        //
+        // The previous values live in a backchannel: it has the same slot stability as `remember` but
+        // never notifies, and this frame is already composing — waking the composer for a value it is
+        // reading right now would only schedule an empty pass.
+        // The tuple is cheap to clone and every field is `PartialEq`; the backchannel keeps a COPY, so
+        // the values below still move into the locals.
+        // Keyed by the POSITION rather than by a remembered call site: this function also runs from a
+        // window's per-frame wrapper, where there is no `#[composable]` call site to key off, and two
+        // providers inside one composer must not share the memory of what they last provided.
+        const NAMESPACE: u64 = 0x7769_6E69_6174_6865; // "winia the(me)"
+        let prev = ctx.remember_backchannel_at_key(ctx.position_key(NAMESPACE), || {
+            crate::core::state::Backchannel::new((colors, typography.clone(), direction))
+        });
+        let resolved = (colors, typography.clone(), direction);
+        if prev.get() != resolved {
+            prev.set(resolved);
+            ctx.mark_subtree_dirty();
+        }
         let _restore = SpecGuard(CURRENT_THEME_SPEC.with(|s| s.borrow_mut().replace(spec)));
         LOCAL_DIRECTION.provides(direction, || {
             LOCAL_COLORS.provides(colors, || {
@@ -727,13 +750,16 @@ mod tests {
         px[20 * 40 + 20][0] as i32
     }
 
-    /// A theme change only reaches the tree when the composer is told, and it has to be told about the
-    /// whole SUBTREE: `WiniaTheme::auto` resolved its colors when its group last composed, and a
-    /// param-less wrapper between the theme and the content would otherwise be Skipped and keep them
-    /// (the SearchBar filtering bug had that shape). This drives the same three steps
-    /// `PerWindow::refresh_theme` does, and the middle one shows the dirtying is load-bearing.
+    /// A theme change carries itself into an idle subtree.
+    ///
+    /// The provider compares what it is about to provide with the previous frame's and dirties its own
+    /// subtree when they differ, so a param-less wrapper between the theme and the content re-runs and
+    /// picks the new palette up. Before that, the same shape kept the colors it composed with until
+    /// something outside told the composer (`mark_content_dirty`, which `PerWindow::refresh_theme`
+    /// performs) — the SearchBar filtering bug had exactly that shape, and this test used to assert the
+    /// stale behavior as the contract.
     #[test]
-    fn a_theme_change_needs_the_subtree_dirty() {
+    fn a_theme_change_reaches_an_idle_subtree_by_itself() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::core::composer::Composer;
 
@@ -746,19 +772,110 @@ mod tests {
         composer.compose(scene);
         let light = centre_pixel(&mut composer);
 
-        // The value changed, but nothing told the tree: the colors stay as composed.
+        // The system mode moves. Nothing external tells the tree about it, and the subtree is idle: the
+        // provider itself has to carry the new palette in.
         set_system_dark_mode(Some(true));
         composer.recompose(scene);
-        assert_eq!(centre_pixel(&mut composer), light, "without the dirtying an idle subtree keeps its colors");
+        assert_ne!(
+            centre_pixel(&mut composer),
+            light,
+            "the provider must reach an idle subtree on its own"
+        );
 
-        // The step `refresh_theme` performs.
+        // The window-level step is still what SCHEDULES the frame (`needs_recomposition`); it must stay
+        // harmless now that the provider propagates too.
         composer.mark_content_dirty();
         composer.recompose(scene);
-        assert_ne!(centre_pixel(&mut composer), light, "the recomposition must pick the new theme up");
+        assert_ne!(centre_pixel(&mut composer), light, "and the external dirtying still works");
 
         // Hand the mode back: it is process-global.
         set_system_dark_mode(None);
     }
+
+    /// A reader that changed nothing about ITSELF still has to pick up a new local value.
+    ///
+    /// This is the gap `CompositionLocal::provides` documents: the local is a stack, and a reader only
+    /// re-reads when its own group is re-entered. A param-less wrapper declares nothing, so once the
+    /// provider resolves a NEW direction/theme it would otherwise keep the old one — the components
+    /// inside compiled their padding, alignment and colors from it. The provider closes that by
+    /// dirtying its own subtree when the resolved values differ from the previous frame's.
+    #[test]
+    fn a_local_change_reaches_a_reader_that_declared_nothing() {
+        let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        use crate::core::composer::{Composer, ComposeCtx, GroupStatus};
+        use crate::layout::BoxLayout;
+        use crate::layout::LayoutDirection;
+        use crate::modifier::Modifier;
+        use crate::ui::text::Text;
+
+        // Records what the reader actually built with, on every run — and every SKIP, so a test can
+        // tell "the reader re-read the local" from "the reader never skipped in the first place".
+        fn reader(
+            ctx: &mut ComposeCtx,
+            seen: &std::rc::Rc<std::cell::RefCell<Vec<LayoutDirection>>>,
+            skips: &std::rc::Rc<std::cell::Cell<usize>>,
+        ) {
+            let key = ctx.next_key();
+            // A param-less wrapper: it declares nothing, so nothing about IT changes between frames.
+            match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => { skips.set(skips.get() + 1); }
+                GroupStatus::Enter => {
+                    seen.borrow_mut().push(WiniaTheme::direction());
+                    let leaf = ctx.next_key();
+                    let dir = if WiniaTheme::direction() == LayoutDirection::Rtl { "rtl" } else { "ltr" };
+                    Text::new(dir).build(ctx);
+                    let _ = leaf;
+                }
+            }
+            ctx.end_restartable_group();
+        }
+
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen_in = seen.clone();
+        let skips = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let skips_in = skips.clone();
+        let direction = crate::State::new(LayoutDirection::Ltr);
+        let direction_in = direction.clone();
+
+        let scene: Box<dyn Fn(&mut ComposeCtx)> = Box::new(move |ctx: &mut ComposeCtx| {
+            let dir = direction_in.get();
+            WiniaTheme::with_theme_typography_and_direction(
+                ThemeColors::default_light(),
+                Typography::default(),
+                dir,
+                ctx,
+                |ctx| reader(ctx, &seen_in, &skips_in),
+            );
+        });
+
+        // A frame is compose → layout: the LAYOUT pass is what fills `prev_nodes`, and a group can only
+        // Skip when it has a cached subtree to restore (composer.rs:2054). A test that composes twice
+        // without laying out never sees a Skip at all, so its "the reader kept the old value" would be
+        // vacuous — that mistake is what the CONTROL below exists to catch.
+        let mut frame = |composer: &mut Composer, scene: &dyn Fn(&mut ComposeCtx)| {
+            composer.compose(|ctx| scene(ctx));
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        let mut composer = Composer::new();
+        frame(&mut composer, &scene);
+        assert_eq!(seen.borrow().as_slice(), [LayoutDirection::Ltr], "first frame reads the provided value");
+
+        // CONTROL: does this group skip AT ALL when nothing changed? If it never skips, a test built on
+        // it cannot see the local-invalidation bug and proves nothing.
+        frame(&mut composer, &scene);
+        assert_eq!(seen.borrow().len(), 1, "CONTROL: an unchanged frame must Skip the reader");
+        assert!(skips.get() >= 1, "CONTROL: the group skipped");
+
+        // Swap the DIRECTION only. The reader itself declares nothing, so its group is Skippable.
+        direction.set(LayoutDirection::Rtl);
+        frame(&mut composer, &scene);
+        assert_eq!(
+            seen.borrow().as_slice(),
+            [LayoutDirection::Ltr, LayoutDirection::Rtl],
+            "a reader inside the provider must re-read after the provided value changed"
+        );
+    }
+
 
     /// The shape of a WINDOW, end to end at the composer level: the declaring tree samples the intent and
     /// PUBLISHES it into the window's cell, the window's own composer composes under the cell's palette,

@@ -546,6 +546,26 @@ impl SegmentedButton {
                     .ripple_with_shape(&interaction, content_color, true, shape);
             }
         }
+        // Accessibility: M3 reports a segment as a radio with `selected` in a single-choice row,
+        // and as a checkbox with `checked` in a multi-choice one — the same split as the click
+        // callback it was built with.
+        let single_choice = self.on_click.is_some();
+        let role = if single_choice {
+            crate::semantics::SemanticsRole::RadioButton
+        } else {
+            crate::semantics::SemanticsRole::Checkbox
+        };
+        let active_state = if single_choice {
+            crate::semantics::SemanticsState::new().selected(active)
+        } else {
+            crate::semantics::SemanticsState::new().checked_bool(active)
+        };
+        m = m.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(role)
+                .merge_descendants(true)
+                .state(active_state.enabled(enabled)),
+        );
         m = m.then(self.modifier);
 
         // The label slides between "centred without an icon" and "after the icon slot" as the check

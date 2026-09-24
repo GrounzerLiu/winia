@@ -248,7 +248,17 @@ impl Image {
         // filter_quality 仅影响绘制——渲染每帧全量执行，无需声明 changed）
         ctx.changed(&self.source);
         let key = ctx.next_key();
-        let modifier = self.modifier.image_content(
+        // A described image is an image with a name; an undescribed one is decorative and stays out
+        // of the semantics tree (the parameter used to be inert — see docs/semantics.md).
+        let mut base = self.modifier;
+        if let Some(description) = self.content_description.as_deref() {
+            base = base.semantics(
+                crate::semantics::SemanticsConfig::new()
+                    .role(crate::semantics::SemanticsRole::Image)
+                    .content_description(description),
+            );
+        }
+        let modifier = base.image_content(
             self.source,
             self.content_scale,
             self.alignment,
