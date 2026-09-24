@@ -36,6 +36,8 @@ The claim that recomposition is scoped to the changed subtree is **true as state
 ## The frame is O(tree), and now it is linear
 
 Five rows in the fast column are µs/frame. Boxes = sized containers only; text = a `Text` per row.
+These are the figures after the first two fixes in this document; the third is inside this machine's
+noise at frame level and is evidenced by the profile instead.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
@@ -50,7 +52,7 @@ Five rows in the fast column are µs/frame. Boxes = sized containers only; text 
 | 800 | 28440 | 3192 | 3897 |
 
 16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
-(before either of the two fixes below) the same two ratios were 28x and 70x — the difference was a
+(before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
@@ -144,6 +146,62 @@ Two regression tests came with it, of two deliberately different kinds:
 the frame is the walk, not the reads, so a list does not need to be contorted for read placement. (The
 two shapes are otherwise identical; the first version of this scene built less content in the scoped
 row and appeared to win, which is the kind of comparison error this document is annotated to avoid.)
+
+### A third fix: don't rebuild a graph that did not change
+
+The same shape of defect, one level up. Both `reconcile_compose_deps` and the layout tail derive the
+reverse dependency index (`slot_deps`, `layout_deps`) from the forward one (`compose_slot_reads`,
+`layout_slot_reads`) by clearing it and rebuilding it from scratch — and they did that on every frame,
+including the frames where the forward graph is exactly what it already was. That is the common case:
+an idle frame records no reads at all (`recorded=0`, verified with the profiler), and the frame where
+one row's state moved re-records the *same* 800 reads, so the set is unchanged.
+
+Both now compare the new read set with the stored one per entered slot (and watch for dead-slot removals)
+and only rebuild when something actually moved. `cleanup_signal_subscriptions` still runs every frame
+from the layout path with the union of both graphs, so the subscriptions are still pruned exactly once
+per frame.
+
+| instrumented bucket, boxes 800 rows | idle compose | one row updated |
+|---|---|---|
+| reconcile (rebuild + cleanup) | 110 µs → **3.9 µs** | 190 µs → **131 µs** |
+| frame-level figure | within noise (±10%) | within noise (±10%) |
+
+The frame-level effect is **inside this machine's run-to-run noise**, and that is worth saying plainly
+rather than quoting one lucky run: the profile is the evidence here, not the headline timer. The
+reason it is still worth keeping is that the rebuild's cost is proportional to the *dependency graph*,
+not to the work the frame did — the bench's own graph is small (one slot reading 800 states), where a
+real screen has many slots each reading several, so the same guard removes a larger figure there.
+
+## What the frame's O(tree) floor is made of (instrumented)
+
+With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
+states that matter: every group Skipped, and one row's state moved.
+
+| bucket | idle (0 entered) | one row updated |
+|---|---|---|
+| `materialize` (desc tree + node reuse walk) | ~600 µs | ~560 µs |
+| `prune_stale_child_links` (arena walk) | ~245 µs | ~255 µs |
+| `slot_table.truncate` + `collect_live_keys` | ~190 µs | ~185 µs |
+| `register_modifier_deps` (arena walk) | ~61 µs | ~61 µs |
+| compose setup (snapshots, resets, pending drain) | ~125 µs | ~115 µs |
+| reconcile (after the third fix) | ~4 µs | ~131 µs |
+| the row loop (800 reads + 800 Skip decisions) | — | ~520 µs |
+| **compose total** | **~1.25 ms** | **~1.95 ms** |
+
+| layout, same tree | idle | notes |
+|---|---|---|
+| `LayoutTransaction::new` | ~170 µs | clones `prev_nodes` + `prev_node_by_key` |
+| `measure` | **~0.04 µs** | every node folds — nothing re-measures |
+| `collect_nodes` | ~325 µs | rebuilds `prev_nodes` wholesale |
+| `collect_node_keys` | ~101 µs | rebuilds `prev_node_by_key` wholesale |
+| the rest (dirty marks, deps, cleanup) | ~130 µs | |
+| **layout total** | **~725 µs** | |
+
+Layout's idle cost is almost entirely bookkeeping *about* the tree rather than work on it: the
+transaction snapshots two whole-tree maps, then `collect_nodes`/`collect_node_keys` throw them away and
+rebuild them, every frame, for a tree in which measurement folded at 0.04 µs. That — plus
+`materialize`'s per-frame desc tree and the two arena walks in compose — is where a frame's O(tree)
+floor lives, and it is the next round's work rather than this one's.
 
 ## The layout half (and one artifact of a mislabelled arm)
 
@@ -240,30 +298,46 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **Composition's O(tree) floor, ~1.2 ms at 800 rows with nothing entered** (`compose only, idle` 1225
-  µs). The instrumented split puts it in `materialize` (~540 µs), `reconcile_compose_deps` (~510 µs),
-  `slot_table.truncate` + `collect_live_keys` (~180 µs) and setup (~110 µs) — all per-frame walks over
-  the whole composition, none of them doing anything with the rows that did not change. This is now the
-  largest single item in a one-row update (1653 µs), larger than the update's own loop.
-- **Layout's O(tree) floor, ~780 µs idle**, of which `LayoutTransaction::new` clones two whole-tree maps
-  (`prev_nodes`, `prev_node_by_key`) that layout immediately clears and rebuilds, and
-  `collect_nodes`/`collect_node_keys` rebuild them again. Snapshotting-by-move and reusing the map
-  allocations is the obvious shape; it needs the same care the first layout fix took (what layout may
-  write, and what a rollback must restore).
-- **The loop's 800 iterations, +520 µs** (~650 ns each: ~105 ns read, ~330 ns group machinery, the rest
-  materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation
-  (~75 ns) or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
+- **`materialize`: ~600 µs per frame in both states.** `collect_desc_tree` recurses through a Skipped
+  subtree and builds a `DescNode` per node — one `Vec` and one `Modifier` clone each — then
+  `materialize_node` walks those descriptors to reuse the cached nodes by key. For a subtree that
+  skipped, both halves are pure overhead: the structure is by definition what it already was, and the
+  nodes are already in `prev_node_by_key`. The cheap direction is to record the subtree as a single
+  skip descriptor and claim the cached nodes from the arena directly (their `children: Vec<usize>` is
+  the walk), which is exactly the protocol the comments in this area are full of war stories about
+  — dup-key panics, vanishing subtrees, ghost flights — so it needs its own round with the full UI
+  suite, not a quick edit.
+- **`prune_stale_child_links`: ~250 µs per frame.** A defensive whole-arena walk, and the current
+  comment insists it runs for EVERY compose (moving it into an early-returning function once took the
+  repair off the default path and a stale listing reached the `[dup-key]` guard). Skipping it on frames
+  that entered nothing is plausible and unproven: what needs establishing first is whether a frame with
+  no Entered node can create a stale listing at all.
+- **`slot_table.truncate` + `collect_live_keys`: ~190 µs per frame**, a whole-slot-tree walk that
+  produces the live-key set the two reconciles consume. It is the input to the guards above, so it is
+  the next thing to make incremental.
+- **Layout's two whole-tree map rebuilds (~600 µs idle)**: `LayoutTransaction::new` clones
+  `prev_nodes`/`prev_node_by_key` (layout writes both, so the snapshot is legitimate — but a move
+  instead of a clone, or reusing the map allocations across frames, removes most of it), and
+  `collect_nodes`/`collect_node_keys` rebuild them from scratch afterwards for a tree whose measurement
+  folded at 0.04 µs.
+- **The row loop's ~520 µs**: 800 iterations at ~650 ns (105 ns read, ~330 ns group machinery, the rest
+  materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation (~75 ns)
+  or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
 
-None of these is claimed as a bug: they are the cost of the current design, now visible and comparable.
-Each is a candidate for its own round, with this bench as the measuring stick. A read that is O(tracked
-signals) *was* a bug and is fixed above; the difference is worth keeping in mind when reading a target.
+None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
+and each is one round of work with this bench as the measuring stick. The three defects that *were*
+bugs — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write,
+and a reverse graph rebuilt when its forward graph had not moved — were all found by measuring one
+bucket and finding something else inside it.
 
 ## Re-running any of this
 
 The benchmark's own traps are documented in the file where they bit, and the phase splits used for the
 investigations are kept as unversioned patches in the working tree:
 `target/probe/layout_trace.patch` (`WINIA_LAYOUT_TRACE=1`), `target/probe/compose_trace.patch`
-(`WINIA_COMPOSE_TRACE=1`) and `target/probe/skip_prof.patch` (`WINIA_SKIP_PROF=1`, the per-call
-profile that found the quadratic read). Apply with `git apply`; they are throwaway instrumentation,
-not part of the framework — `cargo bench` in a clean tree prints the tables above and nothing else,
-and `cargo bench -p winia -- container` runs just the loop control scene.
+(`WINIA_COMPOSE_TRACE=1`) and `target/probe/skip_prof_full.patch` / `skip_prof_refined.patch`
+(`WINIA_SKIP_PROF=1`, the per-call profile that found the quadratic read and then the floor split).
+They are throwaway instrumentation, not part of the framework: apply them with `git apply` to the
+revision they were taken on (the subscription fix `1940a7a` for the profiler) and revert them before
+committing — `cargo bench` in a clean tree prints the tables above and nothing else, and
+`cargo bench -p winia -- container` runs just the loop control scene.

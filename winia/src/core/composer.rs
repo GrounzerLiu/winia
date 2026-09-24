@@ -2226,36 +2226,70 @@ impl Composer {
     ) {
         let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
         let mut current_signals: HashMap<StateId, Arc<StateSignal>> = HashMap::new();
+        // Reads recorded against a slot that is not live: dropped from the graph, but the signal was
+        // already subscribed to (the read happened), so the subscription is dirty even when the graph
+        // is not — see `changed` below.
+        let mut dropped_reads = 0usize;
         for (signal, slot_key) in recorded {
             current_signals.entry(signal.id()).or_insert_with(|| signal.clone());
             if live_keys.contains(&slot_key) {
                 reads_by_slot.entry(slot_key).or_default().insert(signal.id());
+            } else {
+                dropped_reads += 1;
             }
         }
 
         // A skipped subtree keeps its previous read set; an Entered slot gets
         // the exact set observed in this frame, including an empty set.
+        //
+        // `changed` records whether that actually moved anything, because the reverse graph below is a
+        // pure function of the forward one and rebuilding it is the expensive half: a whole-tree walk
+        // that clears and re-creates a set per state. It ran every frame — including the frames where
+        // every read set is exactly what it already was, which is the common case (measured at 800
+        // rows: 110 µs of an idle frame's compose, and the same figure on the frame where one row's
+        // state moved, since the container re-records the same 800 reads).
+        let mut changed = false;
+        let before = self.compose_slot_reads.len();
         self.compose_slot_reads.retain(|key, _| live_keys.contains(key));
+        changed |= self.compose_slot_reads.len() != before;
         let entered = self.entered_compose_keys.clone();
         for key in entered {
-            match reads_by_slot.remove(&key) {
-                Some(reads) if !reads.is_empty() => {
+            let new_set = match reads_by_slot.remove(&key) {
+                Some(reads) if !reads.is_empty() => Some(reads),
+                _ => None,
+            };
+            let same = match (self.compose_slot_reads.get(&key), new_set.as_ref()) {
+                (None, None) => true,
+                (Some(old), Some(new)) => old == new,
+                _ => false,
+            };
+            changed |= !same;
+            match new_set {
+                Some(reads) => {
                     self.compose_slot_reads.insert(key, reads);
                 }
-                _ => {
+                None => {
                     self.compose_slot_reads.remove(&key);
                 }
             }
         }
         // Be tolerant of a read recorded by a node whose entry marker was not
         // reached (for example, a modifier callback during materialization).
-        for (key, reads) in reads_by_slot {
-            self.compose_slot_reads.entry(key).or_default().extend(reads);
+        if !reads_by_slot.is_empty() {
+            changed = true;
+            for (key, reads) in reads_by_slot {
+                self.compose_slot_reads.entry(key).or_default().extend(reads);
+            }
         }
+        // A read against a dead slot means the subscription may hold a signal the graph does not, so
+        // the cleanup has to run even though the graph is unchanged.
+        changed |= dropped_reads > 0;
 
-        self.rebuild_compose_reverse_deps();
+        if changed {
+            self.rebuild_compose_reverse_deps();
+            self.cleanup_signal_subscriptions();
+        }
         self.signal_handles.extend(current_signals);
-        self.cleanup_signal_subscriptions();
         self.debug_assert_dependency_graphs();
     }
 
@@ -2562,12 +2596,29 @@ impl Composer {
 
         // Replace only slots that actually ran measure. A cached slot is absent
         // from measured_keys and therefore keeps its last successful reads.
+        //
+        // As in `reconcile_compose_deps`, the reverse index below is a pure function of this forward
+        // one, so it is only rebuilt when something here actually moved: a layout in which every node
+        // folded (nothing measured, nothing read) then costs a few map lookups instead of a graph
+        // rebuild. `cleanup_signal_subscriptions` still runs every frame — it is the one place that
+        // prunes both graphs' subscriptions, and it runs with their union.
+        let mut changed = false;
         for slot_key in measured_keys {
-            match reads_by_slot.remove(&slot_key) {
-                Some(reads) if !reads.is_empty() => {
+            let new_set = match reads_by_slot.remove(&slot_key) {
+                Some(reads) if !reads.is_empty() => Some(reads),
+                _ => None,
+            };
+            let same = match (self.layout_slot_reads.get(&slot_key), new_set.as_ref()) {
+                (None, None) => true,
+                (Some(old), Some(new)) => old == new,
+                _ => false,
+            };
+            changed |= !same;
+            match new_set {
+                Some(reads) => {
                     self.layout_slot_reads.insert(slot_key, reads);
                 }
-                _ => {
+                None => {
                     self.layout_slot_reads.remove(&slot_key);
                 }
             }
@@ -2575,12 +2626,14 @@ impl Composer {
         // Compose confirmed removals before rebuilding the reverse index so a
         // dead slot cannot reappear from an old forward edge.
         for &slot_key in &self.removed_slot_keys {
-            self.layout_slot_reads.remove(&slot_key);
+            changed |= self.layout_slot_reads.remove(&slot_key).is_some();
             self.layout_dirty_keys.remove(&slot_key);
         }
         self.removed_slot_keys.clear();
 
-        self.rebuild_layout_reverse_deps();
+        if changed {
+            self.rebuild_layout_reverse_deps();
+        }
 
         self.cleanup_signal_subscriptions();
         self.debug_assert_dependency_graphs();
