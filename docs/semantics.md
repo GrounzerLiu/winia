@@ -129,10 +129,22 @@ Role mapping:
 UIA has no switch control type, so a switch lands on CheckBox — the nearest honest neighbour, since
 what it reports (a toggleable state) is what the control type means.
 
+**An element can offer several patterns at once**, and what it offers follows from what it can do: a
+click target offers Invoke, a checked control offers Toggle, a selected one offers SelectionItem. A
+checkbox is therefore Invoke *and* Toggle — a client may click it or read and change its state, and
+`IsInvokePatternAvailable` is true alongside a working Toggle. (An earlier version returned a single
+pattern per element, which left an enabled checkbox offering only Invoke while its Toggle state sat
+unreachable.)
+
 Two gaps the bridge surfaces in the examples themselves:
 
 - An icon-only control has no text to be named by, so it needs `content_description`. The shared
   example chrome's settings button was announced as the window's own title until it was given one.
+- A control whose label is a SIBLING rather than a child reports an empty name: `Column { Text("Row 1");
+  Checkbox(..) }` composes a checkbox with nothing inside it, so the element has no name to announce.
+  Naming it is `Modifier::semantics(SemanticsConfig::new().content_description("Row 1"))` on the
+  control (Compose has the same requirement — a label next to a control is not associated with it
+  automatically). The checkboxes in `checkbox_demo` read as `''` for exactly this reason.
 - Nothing announces status changes: there is no `liveRegion` equivalent, so a snackbar or a
   `LoadingIndicator` is silent. That is the next thing a screen-reader user would notice.
 
@@ -141,7 +153,14 @@ Known limits of this slice:
 - One-way events: there is no `UiaRaiseStructureChangedEvent` / `AutomationFocusChanged`, so a client
   that caches the tree learns about changes by re-reading. The snapshot is rebuilt every frame, so a
   re-read is always current.
-- Only the Invoke pattern actually fires; Toggle and SelectionItem are reported (so a client can read
-  and present them) but calling them returns an error rather than performing the action.
+- Toggle and SelectionItem fire, but they do it the way Invoke does — by queueing a click
+  (`UiAction::Invoke`), because a click is winia's one activation path. The element's own handler
+  decides the new value, which is why the provider does not compute it. `AddToSelection` /
+  `RemoveFromSelection` are refused with `UIA_E_NOTSUPPORTED`: winia's selectable controls are
+  single-choice, so "add to the selection" has no meaning and saying so beats faking it.
+- A refusal must be an ERROR, not S_OK. Measured: answering `AddToSelection` with the same empty
+  `Error` that means "no pattern" made the client see success — the empty `Error` maps to S_OK, which
+  is what `GetPatternProvider` needs for "this element does not have that pattern", but a lie for a
+  method the provider declines to perform.
 - The window's own rectangle and the native frame come from the host provider; the semantics tree
   describes the client area.

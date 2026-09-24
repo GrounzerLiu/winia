@@ -32,6 +32,7 @@
 //! | the window itself | Window | — |
 
 use crate::semantics::{SemanticsNode, SemanticsRole, WindowSemantics};
+use crate::ui::checkbox::ToggleableState;
 use std::sync::Arc;
 use windows::core::{implement, Interface, IUnknown, Result as WinResult};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -53,6 +54,8 @@ use windows::Win32::UI::Accessibility::{
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
     UIA_IsOffscreenPropertyId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID,
     UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_PROPERTY_ID,
+    ISelectionItemProvider, ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
+    ToggleState_Indeterminate, ToggleState_Off, ToggleState_On,
     UIA_RadioButtonControlTypeId, UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
     UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
     UIA_ToggleToggleStatePropertyId, UIA_WindowControlTypeId, UiaGetReservedNotSupportedValue,
@@ -60,7 +63,7 @@ use windows::Win32::UI::Accessibility::{
     UiaHostProviderFromHwnd, UiaRect, UiaReturnRawElementProvider,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
-use windows::Win32::UI::WindowsAndMessaging::{OBJID_CLIENT, WM_GETOBJECT};
+use windows::Win32::UI::WindowsAndMessaging::WM_GETOBJECT;
 
 /// Our subclass id — arbitrary, but it must be unique within the window procedure.
 const SUBCLASS_ID: usize = 0x776E_6961; // "wnia"
@@ -286,14 +289,7 @@ impl Provider {
         }
     }
 
-    fn child(&self, index: usize) -> Self {
-        let mut path = self.path.clone();
-        path.push(index);
-        Self {
-            window_id: self.window_id,
-            path,
-        }
-    }
+
 
     /// The snapshot this provider reads — `None` before the window's first frame, which a client has
     /// to tolerate (it can attach while the app is still starting up).
@@ -403,19 +399,97 @@ fn control_type_for(role: Option<SemanticsRole>) -> UIA_CONTROLTYPE_ID {
     }
 }
 
-/// The one pattern an element supports, if any. A clickable element offers Invoke; a toggleable one
-/// offers Toggle (checked) or SelectionItem (selected) — the same split its state carries.
-fn pattern_id_for(element: &ElementData) -> Option<UIA_PATTERN_ID> {
-    if element.clickable {
-        return Some(UIA_InvokePatternId);
+/// Whether an element offers a pattern.
+///
+/// An element can offer several at once, and the ones it offers follow from what it can do: a click
+/// target offers Invoke, a checked control offers Toggle, a selected one offers SelectionItem. A
+/// checkbox is therefore Invoke AND Toggle — `IsInvokePatternAvailable` and the Toggle state are both
+/// true of it, and a client may use either. (An earlier version returned a single pattern, which made
+/// an enabled checkbox offer only Invoke and left a client looking for Toggle with nothing, even
+/// though the state was right there.)
+fn supports_pattern(element: &ElementData, pattern_id: UIA_PATTERN_ID) -> bool {
+    if pattern_id == UIA_InvokePatternId {
+        return element.clickable;
     }
-    if element.state.checked_value().is_some() {
-        return Some(UIA_TogglePatternId);
+    if pattern_id == UIA_TogglePatternId {
+        return element.state.checked_value().is_some();
     }
-    if element.state.selected_value().is_some() {
-        return Some(UIA_SelectionItemPatternId);
+    if pattern_id == UIA_SelectionItemPatternId {
+        return element.state.selected_value().is_some();
     }
-    None
+    false
+}
+
+/// The Toggle pattern: `Toggle()` presses a checkbox or switch, and `ToggleState()` reports it.
+///
+/// winia has one activation path — a click — so this queues the same `UiAction::Invoke` the Invoke
+/// pattern does. The element's own handler decides what the new value is (a tri-state checkbox cycles
+/// through Indeterminate), which is why the provider does not compute it.
+#[implement(IToggleProvider)]
+struct TogglePattern {
+    window_id: u64,
+    node_id: u64,
+    state: ToggleableState,
+}
+
+impl IToggleProvider_Impl for TogglePattern_Impl {
+    fn Toggle(&self) -> WinResult<()> {
+        crate::semantics::request_action(
+            self.window_id,
+            crate::semantics::UiAction::Invoke(self.node_id),
+        );
+        Ok(())
+    }
+
+    fn ToggleState(&self) -> WinResult<windows::Win32::UI::Accessibility::ToggleState> {
+        Ok(match self.state {
+            ToggleableState::On => ToggleState_On,
+            ToggleableState::Off => ToggleState_Off,
+            ToggleableState::Indeterminate => ToggleState_Indeterminate,
+        })
+    }
+}
+
+/// The SelectionItem pattern: `Select()` picks a radio, tab or segment; `IsSelected()` reports it.
+///
+/// `AddToSelection` and `RemoveFromSelection` are refused: winia's selectable controls are
+/// single-choice (a radio group, a tab row), so "add to the selection" has no meaning for them —
+/// reporting that honestly is better than pretending the click did something it did not.
+#[implement(ISelectionItemProvider)]
+struct SelectionItemPattern {
+    window_id: u64,
+    node_id: u64,
+    selected: bool,
+}
+
+impl ISelectionItemProvider_Impl for SelectionItemPattern_Impl {
+    fn Select(&self) -> WinResult<()> {
+        crate::semantics::request_action(
+            self.window_id,
+            crate::semantics::UiAction::Invoke(self.node_id),
+        );
+        Ok(())
+    }
+
+    fn AddToSelection(&self) -> WinResult<()> {
+        // Single-choice controls have no "add to the selection"; saying so is the honest answer, and it
+        // must be an ERROR — S_OK here would tell the client the click happened.
+        Err(not_implemented())
+    }
+
+    fn RemoveFromSelection(&self) -> WinResult<()> {
+        Err(not_implemented())
+    }
+
+    fn IsSelected(&self) -> WinResult<windows::core::BOOL> {
+        Ok(windows::core::BOOL::from(self.selected))
+    }
+
+    fn SelectionContainer(&self) -> WinResult<IRawElementProviderSimple> {
+        // The container (a radio group, a tab row) is not modelled as an element of its own, so there is
+        // nothing to name; a client falls back to walking up the fragment tree.
+        Err(not_implemented())
+    }
 }
 
 /// The Invoke pattern: what a client calls to "press" an element.
@@ -467,30 +541,27 @@ fn variant_with(build: impl FnOnce(&mut VariantInner)) -> VARIANT {
 fn variant_i32(value: i32) -> VARIANT {
     variant_with(|inner| {
         inner.vt = VT_I4;
-        // SAFETY: writing a Copy scalar to a union arm is what the arm is for.
-        unsafe { inner.Anonymous.lVal = value };
+        // Writing a union arm is safe here: `Anonymous` is a `Copy` scalar field and the struct is a
+        // fresh local, so nothing is being overwritten.
+        inner.Anonymous.lVal = value;
     })
 }
 
 fn variant_bool(value: bool) -> VARIANT {
     variant_with(|inner| {
         inner.vt = VT_BOOL;
-        // SAFETY: as above; -1 is VARIANT_TRUE.
-        unsafe {
-            inner.Anonymous.boolVal =
-                windows::Win32::Foundation::VARIANT_BOOL(if value { -1 } else { 0 })
-        };
+        // As above; -1 is VARIANT_TRUE.
+        inner.Anonymous.boolVal =
+            windows::Win32::Foundation::VARIANT_BOOL(if value { -1 } else { 0 });
     })
 }
 
 fn variant_bstr(value: &str) -> VARIANT {
     variant_with(|inner| {
         inner.vt = VT_BSTR;
-        // SAFETY: the VARIANT takes ownership of the BSTR and UIA frees it with VariantClear — which
-        // is exactly why the union field is `ManuallyDrop<BSTR>`.
-        unsafe {
-            inner.Anonymous.bstrVal = core::mem::ManuallyDrop::new(windows::core::BSTR::from(value))
-        };
+        // The VARIANT takes ownership of the BSTR and UIA frees it with VariantClear — which is
+        // exactly why the union field is `ManuallyDrop<BSTR>`.
+        inner.Anonymous.bstrVal = core::mem::ManuallyDrop::new(windows::core::BSTR::from(value));
     })
 }
 
@@ -501,8 +572,8 @@ fn variant_not_supported() -> VARIANT {
     match unsafe { UiaGetReservedNotSupportedValue() } {
         Ok(value) => variant_with(|inner| {
             inner.vt = windows::Win32::System::Variant::VT_UNKNOWN;
-            // SAFETY: the VARIANT takes ownership of the interface reference.
-            unsafe { inner.Anonymous.punkVal = core::mem::ManuallyDrop::new(Some(value)) };
+            // The VARIANT takes ownership of the interface reference.
+            inner.Anonymous.punkVal = core::mem::ManuallyDrop::new(Some(value));
         }),
         // The sentinel cannot be fetched at all (uiautomationcore missing): an empty VARIANT is the
         // least wrong answer, where an error would fail the whole property read.
@@ -527,10 +598,18 @@ fn not_supported() -> windows::core::Error {
 }
 
 /// "This provider does not implement that pattern", in the shape the protocol asks for it: S_OK with
-/// a NULL out parameter. That is what an empty `Error` produces — windows-rs remaps S_OK to its own
-/// sentinel so it can live in a `Result`, and COM treats any non-negative HRESULT as success.
+/// a NULL out parameter — which is what `GetPatternProvider` must return for a pattern an element
+/// does not have. An empty `Error` produces exactly that (windows-rs remaps S_OK to its own sentinel
+/// so it can live in a `Result`; COM treats any non-negative HRESULT as success).
 fn no_pattern() -> windows::core::Error {
     windows::core::Error::empty()
+}
+
+/// "This method is not supported" — for a method the provider implements but refuses, where S_OK
+/// would be a lie: it tells the client the action happened. Measured: returning `no_pattern` (S_OK)
+/// from `AddToSelection` made the client see success, which is worse than seeing a failure.
+fn not_implemented() -> windows::core::Error {
+    windows::core::HRESULT(windows::Win32::UI::Accessibility::UIA_E_NOTSUPPORTED as i32).into()
 }
 
 /// Depth-first walk of a subtree, handing each element its index path and origin.
@@ -564,12 +643,32 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
         let Some(element) = self.element() else {
             return Err(no_pattern());
         };
-        if pattern_id_for(&element) == Some(pattern_id) && pattern_id == UIA_InvokePatternId {
-            let pattern = InvokePattern {
-                window_id: self.window_id,
-                node_id: element.node_id,
+        // Every pattern `supports_pattern` advertises is one this hands out — a client that reads the
+        // `IsXxxPatternAvailable` property and then asks for the pattern must not come up empty, which
+        // is what happened while Toggle and SelectionItem were advertised but unimplemented.
+        if supports_pattern(&element, pattern_id) {
+            let unknown: IUnknown = match pattern_id {
+                UIA_InvokePatternId => InvokePattern {
+                    window_id: self.window_id,
+                    node_id: element.node_id,
+                }
+                .into(),
+                UIA_TogglePatternId => TogglePattern {
+                    window_id: self.window_id,
+                    node_id: element.node_id,
+                    state: element.state.checked_value().unwrap_or(ToggleableState::Off),
+                }
+                .into(),
+                UIA_SelectionItemPatternId => SelectionItemPattern {
+                    window_id: self.window_id,
+                    node_id: element.node_id,
+                    selected: element.state.selected_value().unwrap_or(false),
+                }
+                .into(),
+                // `supports_pattern` answers false for anything else, so reaching here is a bug — and
+                // saying so beats handing back a pattern that is not the one that was asked for.
+                _ => Err(not_implemented())?,
             };
-            let unknown: IUnknown = pattern.into();
             return Ok(unknown);
         }
         // A client asking for a pattern an element does not have is routine — the window root, every
@@ -615,13 +714,13 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             UIA_IsContentElementPropertyId | UIA_IsControlElementPropertyId => Ok(variant_bool(true)),
             UIA_IsOffscreenPropertyId => Ok(variant_bool(false)),
             UIA_IsInvokePatternAvailablePropertyId => {
-                Ok(variant_bool(pattern_id_for(&node) == Some(UIA_InvokePatternId)))
+                Ok(variant_bool(supports_pattern(&node, UIA_InvokePatternId)))
             }
             UIA_ToggleToggleStatePropertyId => match node.state.checked_value() {
                 // ToggleState: 0 off, 1 on, 2 indeterminate — what a tri-state checkbox reports.
-                Some(crate::ui::checkbox::ToggleableState::On) => Ok(variant_i32(1)),
-                Some(crate::ui::checkbox::ToggleableState::Off) => Ok(variant_i32(0)),
-                Some(crate::ui::checkbox::ToggleableState::Indeterminate) => Ok(variant_i32(2)),
+                Some(ToggleableState::On) => Ok(variant_i32(1)),
+                Some(ToggleableState::Off) => Ok(variant_i32(0)),
+                Some(ToggleableState::Indeterminate) => Ok(variant_i32(2)),
                 None => Ok(variant_not_supported()),
             },
             UIA_SelectionItemIsSelectedPropertyId => match node.state.selected_value() {
@@ -659,6 +758,9 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
 // ═══════════════════════════════════════════════════════════
 
 
+// The `NavigateDirection_*` names are globals by the SDK's naming, matched on as if they were enum
+// variants — which is how the generated bindings model them.
+#[allow(non_upper_case_globals)]
 impl Provider_Impl {
     fn navigate_inner(&self, direction: NavigateDirection) -> WinResult<IRawElementProviderFragment> {
         match direction {
@@ -840,5 +942,164 @@ impl IRawElementProviderFragmentRoot_Impl for Provider_Impl {
             .into()),
             None => Err(not_supported()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::semantics::SemanticsState;
+
+    fn element(
+        role: Option<SemanticsRole>,
+        clickable: bool,
+        state: SemanticsState,
+    ) -> ElementData {
+        ElementData {
+            node_id: 1,
+            role,
+            name: Some("x".to_string()),
+            state,
+            clickable,
+            focused: false,
+        }
+    }
+
+    #[test]
+    fn every_role_maps_to_a_control_type() {
+        // The mapping is the contract a client reads: getting a role wrong makes a screen reader
+        // announce the wrong kind of control, which is worse than announcing nothing.
+        let cases = [
+            (SemanticsRole::Button, UIA_ButtonControlTypeId),
+            (SemanticsRole::Checkbox, UIA_CheckBoxControlTypeId),
+            // UIA has no switch type; a switch is a toggleable control, so CheckBox it is.
+            (SemanticsRole::Switch, UIA_CheckBoxControlTypeId),
+            (SemanticsRole::RadioButton, UIA_RadioButtonControlTypeId),
+            (SemanticsRole::Tab, UIA_TabItemControlTypeId),
+            (SemanticsRole::Image, UIA_ImageControlTypeId),
+            (SemanticsRole::ProgressBar, UIA_ProgressBarControlTypeId),
+            (SemanticsRole::Dialog, UIA_PaneControlTypeId),
+        ];
+        for (role, expected) in cases {
+            assert_eq!(control_type_for(Some(role)).0, expected.0, "{role:?}");
+        }
+        // A named element with no role is text — `Text` and `RichText` compose exactly that.
+        assert_eq!(control_type_for(None).0, UIA_TextControlTypeId.0);
+    }
+
+    #[test]
+    fn a_click_target_offers_invoke() {
+        let button = element(Some(SemanticsRole::Button), true, SemanticsState::new());
+        assert!(supports_pattern(&button, UIA_InvokePatternId));
+        // A plain button has no toggle or selection state, so it offers neither.
+        assert!(!supports_pattern(&button, UIA_TogglePatternId));
+        assert!(!supports_pattern(&button, UIA_SelectionItemPatternId));
+    }
+
+    #[test]
+    fn a_clickable_checkbox_offers_invoke_and_toggle() {
+        // The case that made "one pattern per element" wrong: an ENABLED checkbox is clickable AND
+        // checked, and a client may address it with either pattern.
+        let checkbox = element(
+            Some(SemanticsRole::Checkbox),
+            true,
+            SemanticsState::new().checked_bool(true),
+        );
+        assert!(supports_pattern(&checkbox, UIA_InvokePatternId));
+        assert!(supports_pattern(&checkbox, UIA_TogglePatternId));
+        assert!(!supports_pattern(&checkbox, UIA_SelectionItemPatternId));
+    }
+
+    #[test]
+    fn a_disabled_checkbox_still_offers_toggle() {
+        // Its state is readable and a screen reader must be able to announce it; `IsEnabled` is what
+        // tells the client not to act on it.
+        let disabled = element(
+            Some(SemanticsRole::Checkbox),
+            false,
+            SemanticsState::new().checked(crate::ui::checkbox::ToggleableState::Indeterminate),
+        );
+        assert!(!supports_pattern(&disabled, UIA_InvokePatternId));
+        assert!(supports_pattern(&disabled, UIA_TogglePatternId));
+    }
+
+    #[test]
+    fn a_selected_control_offers_selection_item() {
+        let radio = element(
+            Some(SemanticsRole::RadioButton),
+            true,
+            SemanticsState::new().selected(true),
+        );
+        assert!(supports_pattern(&radio, UIA_SelectionItemPatternId));
+        assert!(supports_pattern(&radio, UIA_InvokePatternId));
+        assert!(!supports_pattern(&radio, UIA_TogglePatternId));
+    }
+
+    #[test]
+    fn an_element_with_no_action_offers_no_pattern() {
+        // A label: name and role, neither clickable nor toggleable. Advertising a pattern here is what
+        // made clients ask for one and get nothing back.
+        let label = element(None, false, SemanticsState::new());
+        assert!(!supports_pattern(&label, UIA_InvokePatternId));
+        assert!(!supports_pattern(&label, UIA_TogglePatternId));
+        assert!(!supports_pattern(&label, UIA_SelectionItemPatternId));
+    }
+
+    #[test]
+    fn toggle_state_carries_all_three_values() {
+        // The tri-state checkbox depends on this: "indeterminate" must not collapse into "off".
+        let state_of = |state| {
+            let pattern = TogglePattern {
+                window_id: 0,
+                node_id: 0,
+                state,
+            };
+            let provider: IToggleProvider = pattern.into();
+            // SAFETY: the call goes through COM into the implementation above; the provider is alive for
+            // the call and owns nothing the caller has to free.
+            unsafe { provider.ToggleState().expect("a state").0 }
+        };
+        assert_eq!(state_of(ToggleableState::On), ToggleState_On.0);
+        assert_eq!(state_of(ToggleableState::Off), ToggleState_Off.0);
+        assert_eq!(
+            state_of(ToggleableState::Indeterminate),
+            ToggleState_Indeterminate.0
+        );
+    }
+
+    #[test]
+    fn selection_item_reports_its_selection_and_refuses_multi_select() {
+        let selected = SelectionItemPattern {
+            window_id: 0,
+            node_id: 0,
+            selected: true,
+        };
+        let provider: ISelectionItemProvider = selected.into();
+        // SAFETY: COM calls into the implementation above; the provider outlives each call.
+        unsafe {
+            assert_eq!(provider.IsSelected().expect("a value").as_bool(), true);
+            // Single-choice controls: "add to the selection" is refused rather than faked.
+            assert!(provider.AddToSelection().is_err());
+            assert!(provider.RemoveFromSelection().is_err());
+        }
+    }
+
+    #[test]
+    fn an_action_from_a_bridge_is_queued_for_this_window_only() {
+        // The provider must not run application code, so what it does is queue — and the queue has to
+        // keep windows apart, or a dialog's action would land on the page behind it.
+        crate::semantics::request_action(4242, crate::semantics::UiAction::Invoke(7));
+        crate::semantics::request_action(4243, crate::semantics::UiAction::Focus(9));
+        assert!(crate::semantics::has_actions());
+        assert_eq!(
+            crate::semantics::take_actions(4242),
+            vec![crate::semantics::UiAction::Invoke(7)]
+        );
+        assert_eq!(
+            crate::semantics::take_actions(4243),
+            vec![crate::semantics::UiAction::Focus(9)]
+        );
+        assert!(!crate::semantics::has_actions(), "the queue is drained");
+        assert!(crate::semantics::take_actions(4242).is_empty());
     }
 }
