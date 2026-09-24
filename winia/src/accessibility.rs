@@ -61,9 +61,12 @@ use windows::Win32::UI::Accessibility::{
     UIA_RangeValueMinimumPropertyId, UIA_RangeValuePatternId, UIA_RangeValueValuePropertyId,
     UIA_RadioButtonControlTypeId, UIA_SelectionItemIsSelectedPropertyId, UIA_SelectionItemPatternId,
     UIA_TabItemControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
-    UIA_ToggleToggleStatePropertyId, UIA_WindowControlTypeId, UiaGetReservedNotSupportedValue,
+    UIA_AutomationFocusChangedEventId, UIA_StructureChangedEventId, UIA_ToggleToggleStatePropertyId,
+    UIA_WindowControlTypeId, StructureChangeType_ChildrenInvalidated, UiaClientsAreListening,
+    UiaGetReservedNotSupportedValue,
     UiaRootObjectId,
-    UiaHostProviderFromHwnd, UiaRect, UiaReturnRawElementProvider,
+    UiaHostProviderFromHwnd, UiaRaiseAutomationEvent, UiaRaiseStructureChangedEvent, UiaRect,
+    UiaReturnRawElementProvider,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::WM_GETOBJECT;
@@ -115,6 +118,126 @@ pub fn uninstall(window: &dyn winit::window::Window, window_id: u64) {
     unregister_hwnd(window_id);
     forget_providers(window_id);
     crate::semantics::forget(window_id);
+    if let Ok(mut store) = REPORTED.lock() {
+        if let Some(store) = store.as_mut() {
+            store.remove(&window_id);
+        }
+    }
+}
+
+/// What the bridge remembers about a window between frames, to tell what actually changed.
+///
+/// Both halves are compared, not recomputed on demand: the frame loop calls [`notify`] once per
+/// rendered frame, and a notification is only worth raising when the previous frame looked different.
+#[derive(Default)]
+struct LastReported {
+    /// The tree's shape, from [`crate::semantics::WindowSemantics::structure_fingerprint`].
+    structure: u64,
+    /// The path of the focused element, or `None` when nothing is focused.
+    focus: Option<Vec<usize>>,
+    /// Whether a first frame has been reported: the first one RECORDS the state instead of announcing
+    /// it. A client that attaches later asks `GetFocus`; announcing the startup focus would be noise,
+    /// and there is nothing to compare it against.
+    seen_a_frame: bool,
+}
+
+static REPORTED: std::sync::Mutex<Option<std::collections::HashMap<u64, LastReported>>> =
+    std::sync::Mutex::new(None);
+
+/// Report this frame's semantics to UIA: raise `StructureChanged` when the tree's shape changed, and
+/// `AutomationFocusChanged` when the focused element moved.
+///
+/// Called once per rendered frame by the frame loop, right after the snapshot is published. Nothing is
+/// raised unless a client is listening: `UiaClientsAreListening` is the platform's own answer to "is
+/// anyone there", and without a listener the events would be built for nobody.
+pub fn notify(window_id: u64, snapshot: &crate::semantics::WindowSemantics) {
+    let trace = std::env::var_os("WINIA_A11Y_TRACE").is_some();
+    // SAFETY: a plain query.
+    let listening = unsafe { UiaClientsAreListening() }.as_bool();
+    if !listening {
+        // Nobody is listening: forget what was last reported so that a client attaching later sees
+        // the next change as the first one (it reads the current state itself on attach).
+        if let Ok(mut store) = REPORTED.lock() {
+            if let Some(store) = store.as_mut() {
+                store.remove(&window_id);
+            }
+        }
+        if trace {
+            eprintln!("[accessibility] notify: no client is listening");
+        }
+        return;
+    }
+
+    let structure = snapshot.structure_fingerprint();
+    let focus = snapshot.focused_path();
+
+    let (structure_changed, focus_moved) = {
+        let mut store = REPORTED.lock().unwrap();
+        let last = store
+            .get_or_insert_with(Default::default)
+            .entry(window_id)
+            .or_default();
+        let structure_changed = last.seen_a_frame && last.structure != structure;
+        let focus_moved = last.seen_a_frame && last.focus != focus;
+        last.structure = structure;
+        last.focus = focus.clone();
+        last.seen_a_frame = true;
+        (structure_changed, focus_moved)
+    };
+
+    if trace {
+        eprintln!(
+            "[accessibility] notify: listening={listening} structure_changed={structure_changed} \
+             focus_moved={focus_moved} focus={focus:?}"
+        );
+    }
+
+    if structure_changed {
+        // The whole subtree is invalidated rather than a specific child, because this is the answer
+        // for "I do not know which element moved": a client re-reads the tree.
+        let root = root_provider(window_id);
+        // SAFETY: UIA marshals the call; a NULL runtime id with `ChildrenInvalidated` is the documented
+        // "the whole subtree is new" form.
+        let _ = unsafe {
+            UiaRaiseStructureChangedEvent(
+                &root,
+                StructureChangeType_ChildrenInvalidated,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+    }
+
+    if focus_moved {
+        if let Some(path) = focus {
+            // The element itself is the source of the event: a client that receives it calls
+            // `GetFocus` (or reads the element from the sender) to learn where focus went.
+            let provider = cached_provider(window_id, &path, || {
+                Provider {
+                    window_id,
+                    path: path.clone(),
+                }
+            });
+            if let Ok(simple) = provider.cast::<IRawElementProviderSimple>() {
+                // SAFETY: as above.
+                let result = unsafe { UiaRaiseAutomationEvent(&simple, UIA_AutomationFocusChangedEventId) };
+                if trace {
+                    eprintln!("[accessibility] raised focus-changed for {path:?}: {result:?}");
+                }
+            } else if trace {
+                eprintln!("[accessibility] could not cast the provider for {path:?}");
+            }
+        } else {
+            // Focus left every element: there is no element to raise from, so the window's root
+            // answers instead — a client that asks `GetFocus` then gets nothing, which is the truth.
+            let root = root_provider(window_id);
+            // SAFETY: as above.
+            let result = unsafe { UiaRaiseAutomationEvent(&root, UIA_AutomationFocusChangedEventId) };
+            if trace {
+                eprintln!("[accessibility] raised focus-changed (left everything): {result:?}");
+            }
+        }
+    }
 }
 
 fn hwnd_of(window: &dyn winit::window::Window) -> Option<HWND> {
