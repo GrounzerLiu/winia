@@ -52,7 +52,14 @@ role.
 | `SegmentedButton` | `RadioButton` (single-choice) / `Checkbox` (toggleable) | `selected` / `checked` |
 | `Tab` | `Tab` | `selected`, `enabled` |
 | `Icon`, `Image` | `Image` | — |
+| `LinearProgressIndicator`, `CircularProgressIndicator` (and the wavy pair) | `ProgressBar` | `progress(current, min, max)` when determinate |
+| `LoadingIndicator` | `ProgressBar` | — (a spinner has no value) |
 | `Text`, `RichText` | *(none — a name and no role)* | — |
+
+A progress bar reports its **value**, not just its role: `UIA_RangeValue` with `value`/`min`/`max`
+and `IsReadOnly` true (progress is reported, not set). Only a determinate bar has one — an
+indeterminate bar announces itself as a progress bar and no percentage, because "in progress" and
+"0 percent" are different things a screen reader must not conflate.
 
 `Icon::content_description` / `Image::content_description` used to be inert parameters ("winia has no
 semantics tree — reserved", as the old comment said); they now name the element, and an image or icon
@@ -121,7 +128,7 @@ Role mapping:
 | RadioButton, single-choice SegmentedButton | RadioButton | SelectionItem |
 | Tab | TabItem | SelectionItem |
 | Image | Image | — |
-| ProgressBar | ProgressBar | — |
+| ProgressBar | ProgressBar | RangeValue (read-only) when a value is reported |
 | Dialog | Pane | — |
 | *(no role, but named)* | Text | — |
 | the window itself | Window | — |
@@ -145,8 +152,10 @@ Two gaps the bridge surfaces in the examples themselves:
   Naming it is `Modifier::semantics(SemanticsConfig::new().content_description("Row 1"))` on the
   control (Compose has the same requirement — a label next to a control is not associated with it
   automatically). The checkboxes in `checkbox_demo` read as `''` for exactly this reason.
-- Nothing announces status changes: there is no `liveRegion` equivalent, so a snackbar or a
-  `LoadingIndicator` is silent. That is the next thing a screen-reader user would notice.
+- Nothing announces status changes: there is no `liveRegion` equivalent, so a snackbar is silent —
+  it appears and disappears without a word. A `LoadingIndicator` at least reads as a progress bar
+  now; what it cannot do is ANNOUNCE that it appeared. That is the next thing a screen-reader user
+  would notice.
 
 Known limits of this slice:
 

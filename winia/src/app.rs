@@ -868,6 +868,34 @@ impl ApplicationHandler for AppState {
         if let Some(d) = next_tap_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
+        // Long press fires AT its deadline, while the finger is still down (Compose
+        // `detectTapGestures`: `onLongPress` arrives during the press, not on release). The tracker
+        // is polled here, and the `WaitUntil` below is what wakes an idle window at that moment.
+        //
+        // Nothing is duplicated for it: the gesture, its slot and its arena are already on the
+        // window, so the deadline only has to be remembered until it passes.
+        let mut next_long_press: Option<std::time::Instant> = None;
+        for pw in self.windows.values_mut() {
+            let fired = pw.gesture.as_mut().and_then(|tracker| tracker.poll_long_press(now));
+            if let Some(action) = fired {
+                let (slot, arena) = (pw.gesture_slot, pw.gesture_arena);
+                if let Some(slot) = slot {
+                    let fired_callback = fire_in_gesture_arena(pw, arena, slot, action);
+                    if fired_callback {
+                        if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
+                    }
+                }
+            }
+            if let Some(deadline) = pw.gesture.as_ref().and_then(|tracker| tracker.long_press_deadline()) {
+                next_long_press = Some(match next_long_press {
+                    Some(existing) => existing.min(deadline),
+                    None => deadline,
+                });
+            }
+        }
+        if let Some(d) = next_long_press {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(d));
+        }
         // DevTools 事件兜底消费：只遍历有 queued events 的窗口，避免每轮
         // 事件批次空转全部窗口；legacy target 0 只会匹配 parent。
         let targets = debug::queued_event_targets();

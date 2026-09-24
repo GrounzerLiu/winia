@@ -91,6 +91,10 @@ pub struct SemanticsState {
     checked: Option<ToggleableState>,
     expanded: Option<bool>,
     enabled: Option<bool>,
+    /// A progress value with its range — Compose's `ProgressBarRangeInfo`. `None` on an
+    /// indeterminate indicator: there IS no value, which is different from a value of zero, and a
+    /// screen reader should say "in progress" rather than "0 percent".
+    progress: Option<(f32, f32, f32)>,
 }
 
 impl SemanticsState {
@@ -128,6 +132,24 @@ impl SemanticsState {
         self
     }
 
+    /// A progress value and the range it sits in — what a screen reader announces as a percentage,
+    /// and the reason a progress bar without it is just an unnamed shape. The range is explicit
+    /// because a caller's units are their own (bytes, steps, seconds).
+    pub fn progress(mut self, current: f32, min: f32, max: f32) -> Self {
+        debug_assert!(max > min, "a progress range needs max > min, got {min}..{max}");
+        debug_assert!(
+            (min..=max).contains(&current),
+            "the progress value {current} is outside {min}..{max}"
+        );
+        self.progress = Some((current, min, max));
+        self
+    }
+
+    /// The progress value and range, if this node reports one.
+    pub fn progress_value(&self) -> Option<(f32, f32, f32)> {
+        self.progress
+    }
+
     pub fn selected_value(&self) -> Option<bool> {
         self.selected
     }
@@ -146,7 +168,11 @@ impl SemanticsState {
 
     /// Whether this state says nothing at all.
     pub fn is_unspecified(&self) -> bool {
-        self.selected.is_none() && self.checked.is_none() && self.expanded.is_none() && self.enabled.is_none()
+        self.selected.is_none()
+            && self.checked.is_none()
+            && self.expanded.is_none()
+            && self.enabled.is_none()
+            && self.progress.is_none()
     }
 
     /// Fill in every field this state leaves open from `fallback` — the merge direction: a node's own
@@ -157,6 +183,7 @@ impl SemanticsState {
             checked: self.checked.or(fallback.checked),
             expanded: self.expanded.or(fallback.expanded),
             enabled: self.enabled.or(fallback.enabled),
+            progress: self.progress.or(fallback.progress),
         }
     }
 }
@@ -664,6 +691,9 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
     }
     if let Some(enabled) = node.state.enabled_value() {
         state.push(format!("\"enabled\":{enabled}"));
+    }
+    if let Some((current, min, max)) = node.state.progress_value() {
+        state.push(format!("\"progress\":{{\"value\":{current},\"min\":{min},\"max\":{max}}}"));
     }
     out.push_str(&format!(
         "{{{}}},\"clickable\":{},\"focused\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",

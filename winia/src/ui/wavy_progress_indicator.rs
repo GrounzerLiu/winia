@@ -470,6 +470,17 @@ impl LinearWavyProgressIndicator {
                 })
         };
 
+
+        // Same rule as the plain indicators: the value is what a progress bar IS to a screen reader,
+        // and an indeterminate one has none to report.
+        let m = m.semantics(match self.indeterminate {
+            true => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar),
+            false => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar)
+                .state(crate::semantics::SemanticsState::new().progress(self.progress, 0.0, 1.0)),
+        });
+
         let m = m.then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {
             GroupStatus::Skip => {}
@@ -1246,6 +1257,17 @@ impl CircularWavyProgressIndicator {
                     cache: shapes_cache.clone(),
                 })
         };
+
+
+        // Same rule as the plain indicators: the value is what a progress bar IS to a screen reader,
+        // and an indeterminate one has none to report.
+        let m = m.semantics(match self.indeterminate {
+            true => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar),
+            false => crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::ProgressBar)
+                .state(crate::semantics::SemanticsState::new().progress(self.progress, 0.0, 1.0)),
+        });
 
         let m = m.then(self.modifier);
         match ctx.start_restartable_group(key, m, BoxLayout::new()) {

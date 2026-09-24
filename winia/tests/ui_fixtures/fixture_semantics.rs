@@ -67,6 +67,15 @@ fn semantics_fixture(ctx: &mut ComposeCtx) {
                 .content_description("Described icon")
                 .build(ctx);
 
+            // A determinate progress bar reports its VALUE (what a screen reader announces as a
+            // percentage), an indeterminate one reports only that it is a progress bar.
+            LinearProgressIndicator::new(0.25)
+                .modifier(Modifier::new().test_tag("sem-progress"))
+                .build(ctx);
+            LinearProgressIndicator::indeterminate()
+                .modifier(Modifier::new().test_tag("sem-progress-spin"))
+                .build(ctx);
+
             Button::text()
                 .on_click({
                     let visible = visible.clone();
