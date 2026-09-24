@@ -83,6 +83,39 @@ read placement. (The two shapes are otherwise identical; the first version of th
 content in the scoped row and appeared to win, which is the kind of comparison error this document is
 annotated to avoid.)
 
+## The layout figure is not a lower bound — it is pathological
+
+The layout pass folds: `measure_node_inner` returns a cached size when a node is neither dirty nor
+layout-dirty and its constraints are unchanged. So the question "is that 7.5 ms a real re-measure or a
+walk with cheap folds?" has a measurable answer: **force a real re-measure** by laying out with a
+changed constraint, which invalidates every node's fold.
+
+800 rows, boxes:
+
+| layout of the same tree | fast sample |
+|---|---|
+| idle (nothing changed) | 1066 µs |
+| **one row's state moved** | **9377 µs** |
+| **every size re-measured** (constraint changed, fold invalidated everywhere) | **2350 µs** |
+
+Re-measuring the ENTIRE tree is **4x cheaper** than the frame in which one row's state moved. Whatever
+that extra ~8 ms is, it is not measurement work: there is less measurement in that frame than in the
+one below it. (The text scene has the same shape: 2176 idle, 10511 one row, 20450 everything.)
+
+And the extra grows superlinearly where a per-change cost would be flat:
+
+| rows | idle | one row moved | extra |
+|---|---|---|---|
+| 50 | 125 | 164 | 39 µs |
+| 200 | 504 | 869 | 365 µs |
+| 800 | 3452 | 11393 | 7941 µs |
+
+16x the rows is 200x the extra. So "can layout be improved?" answers itself: the current figure is not
+a floor, it is a defect. **What the defect IS has not been determined** — this benchmark times frames,
+not the pipeline, and telling "the dirty node's own re-measure is expensive" from "the dirty node's
+re-measure invalidates something O(tree) around it" needs a profiler rather than a frame timer. The
+tables above are the reproduction and the success criterion for that work.
+
 ## Collections: `StateList` vs `State<Vec>`
 
 The read is where the type pays for itself. A `State<Vec<T>>` read hands back a full clone of the
