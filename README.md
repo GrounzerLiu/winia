@@ -44,6 +44,7 @@ fn main() {
 - **动画**：Tween / Spring / Keyframes / Repeatable / Decay + `animate_*AsState` 族 + AnimatedVisibility / AnimatedContent / AnimatedSize / Crossfade
 - **渲染**：Skia（Vulkan/GL/CPU）、GraphicsLayer 2D/3D 透视、HiDPI、背景模糊（即时 snapshot，对齐 Compose 语义）
 - **调试**：`debug-server` 特性——WebSocket 调试通道（模拟点击/滚动/截图/读布局树）
+- **无障碍**：`semantics` 语义树（role / name / state，`Modifier::semantics`）+ `accessibility` 特性——Windows UI Automation 桥，屏幕阅读器可读取并操作界面（默认关闭；见 `docs/semantics.md`）
 
 ## 运行与测试
 

@@ -131,8 +131,16 @@ pub fn shell(
                             move |ctx| {
                                 IconButton::new()
                                     .on_click(move || sheet_open.set(true))
+                                    // An icon-only button has no text to be named by, so it says what
+                                    // it is itself — without this a screen reader (and the UIA tree)
+                                    // has nothing to announce but the window's own title.
+                                    .modifier(Modifier::new().semantics(
+                                        SemanticsConfig::new().content_description("Settings"),
+                                    ))
                                     .build(ctx, |ctx| {
-                                        Icon::svg_path(SETTINGS_ICON).build(ctx);
+                                        Icon::svg_path(SETTINGS_ICON)
+                                            .content_description("Settings")
+                                            .build(ctx);
                                     });
                             }
                         })

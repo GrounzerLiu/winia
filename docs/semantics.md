@@ -1,6 +1,6 @@
 # Semantics (accessibility)
 
-> Status: **the model and a debug consumer are in; the platform bridge is not.**
+> Status: **the model, a debug consumer, and the Windows UI Automation bridge are in.**
 > Companion to `docs/semantics-gap.md`, which is the original analysis of why this was hard and what
 > it would take — its "do it when a consumer exists" recommendation is what this slice follows.
 
@@ -72,30 +72,76 @@ is Compose's distinction too.
 
 Dead ends kept from the analysis: `docs/semantics-gap.md`.
 
-## What is NOT here yet: the platform bridge
+## The Windows bridge (feature `accessibility`)
 
-Nothing publishes this tree to Windows UI Automation, AT-SPI or macOS AX. That is the next slice, and
-the doc-comment order in `semantics-gap.md` still holds: one platform, end to end, however crude.
+```bash
+cargo build --example alert_dialog_example --features accessibility
+# then, from any UIA client — Narrator, Inspect.exe, or the probe in tools/:
+powershell -File tools/verify_uia.ps1 -ProcessName alert_dialog_demo -Invoke "Settings"
+```
 
-What a Windows bridge needs, now that the model is settled:
+Off by default, and Windows-only: it needs the `windows` crate, and a plain build should not carry a
+COM server it does not use. Off Windows (or without the feature) `crate::accessibility` is a no-op
+module with the same two functions, so call sites in `app.rs` stay unconditional.
 
-1. `WM_GETOBJECT` (`OBJID_CLIENT` / `UiaRootObjectId`) — winit does not forward it, so the HWND needs
-   `SetWindowSubclass` over the handle from `window.window_handle()`.
-2. `IRawElementProviderSimple` + `IRawElementProviderFragment( Root)` over the snapshot, mapping
-   role → `ControlType`, name → `Name`, `clickable` → `InvokePattern`, `checked`/`selected` →
-   `ToggleState`/`SelectionItem`, `enabled` → `IsEnabled`, bounds → `BoundingRectangle` (logical →
-   screen coordinates).
-3. The snapshot is already published per frame, so the provider can read it without touching the
-   composer — that part is done.
+How it reaches a client:
 
-Known gaps in the channel worth knowing before writing that bridge:
+1. `SetWindowSubclass` hooks the window procedure, because **winit does not forward `WM_GETOBJECT`**
+   — and that message is the whole entry point.
+2. The hook answers exactly one spelling of the request, `lParam == UiaRootObjectId`. Measured: also
+   answering `OBJID_CLIENT` (the older MSAA convention) makes UIA accept the provider but never walk
+   past the first element.
+3. `UiaReturnRawElementProvider` hands UIA the provider; everything after that is COM calls into
+   `IRawElementProviderSimple` / `_Fragment` / `_FragmentRoot`, served from the published snapshot.
+4. Actions go back the other way: `IInvokeProvider::Invoke` and `IFragment::SetFocus` **queue** a
+   `UiAction` instead of running application code, and the frame loop performs it
+   (`consume_ui_actions` in `app.rs`), running the same callback a real click or Tab would. A provider
+   is called at a moment the app does not control — it must not run a callback, and it must not block.
 
-- The snapshot is built **once per frame** while the `debug-server` feature is on (the tree JSON
-  already worked this way). Under the feature that is a traversal plus a string per frame per window;
-  without it, everything compiles away. If the bridge needs it in a normal build, it should ask for a
-  snapshot lazily (the `screenshot_requested` one-shot pattern) instead of publishing every frame.
-- Overlay contents are in the snapshot (`{"overlays":[{"id":N,"tree":[…]}]}`), but a dialog gets no
-  `Dialog` role marker of its own yet — the role is declared and mapped, nothing declares it on the
-  container.
-- Status text is absent: `snackbar` and `loading_indicator` announce nothing, and there is no
-  `liveRegion` equivalent to announce them with.
+Things that are load-bearing, each of which was measured rather than assumed:
+
+- **Providers are cached per `(window, path)`.** UIA compares the providers it gets back: an element it
+  has already seen must come back as the same instance, or the walk collapses to a single child.
+- **Only the root returns a host provider** (`HostRawElementProvider`). Answering with the window's
+  host for every element made each child advertise the window's `WindowPattern` and `TransformPattern`.
+- **`GetRuntimeId` is derived from the element's own `node_id`**, so an element keeps its identity
+  across frames. (UIA does not appear to call it for these fragments — it derives identity from the
+  host — but a client that does gets a stable answer.)
+- **Unsupported properties answer with `UiaGetReservedNotSupportedValue`**, not an error: the protocol
+  distinguishes "no value" from "not supported", and an error fails the whole property read.
+- **A pattern an element does not have answers S_OK with a NULL interface** (`no_pattern`), which is
+  what "not implemented" means for `GetPatternProvider` — a client asking the wrong pattern is routine.
+
+Role mapping:
+
+| semantics | UIA control type | pattern |
+|---|---|---|
+| Button | Button | Invoke |
+| Checkbox, Switch | CheckBox | Toggle |
+| RadioButton, single-choice SegmentedButton | RadioButton | SelectionItem |
+| Tab | TabItem | SelectionItem |
+| Image | Image | — |
+| ProgressBar | ProgressBar | — |
+| Dialog | Pane | — |
+| *(no role, but named)* | Text | — |
+| the window itself | Window | — |
+
+UIA has no switch control type, so a switch lands on CheckBox — the nearest honest neighbour, since
+what it reports (a toggleable state) is what the control type means.
+
+Two gaps the bridge surfaces in the examples themselves:
+
+- An icon-only control has no text to be named by, so it needs `content_description`. The shared
+  example chrome's settings button was announced as the window's own title until it was given one.
+- Nothing announces status changes: there is no `liveRegion` equivalent, so a snackbar or a
+  `LoadingIndicator` is silent. That is the next thing a screen-reader user would notice.
+
+Known limits of this slice:
+
+- One-way events: there is no `UiaRaiseStructureChangedEvent` / `AutomationFocusChanged`, so a client
+  that caches the tree learns about changes by re-reading. The snapshot is rebuilt every frame, so a
+  re-read is always current.
+- Only the Invoke pattern actually fires; Toggle and SelectionItem are reported (so a client can read
+  and present them) but calling them returns an error rather than performing the action.
+- The window's own rectangle and the native frame come from the host provider; the semantics tree
+  describes the client area.
