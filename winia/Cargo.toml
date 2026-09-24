@@ -78,3 +78,10 @@ serde_json = "1"
 [[bin]]
 name = "fixture_all"
 path = "tests/ui_fixtures/fixture_all.rs"
+
+# ── Benchmarks: ONE target with its own harness (no criterion — see the file's header) ──
+# `cargo bench -p winia`. The figures are checked into docs/benchmarks.md with the machine they came
+# from; this is a measuring stick for changes, not a cross-machine scoreboard.
+[[bench]]
+name = "recompose"
+harness = false
