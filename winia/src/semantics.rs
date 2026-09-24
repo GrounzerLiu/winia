@@ -199,6 +199,7 @@ pub struct SemanticsConfig {
     content_description: Option<String>,
     state: SemanticsState,
     merge_descendants: bool,
+    live_region: LiveRegionMode,
 }
 
 impl SemanticsConfig {
@@ -247,6 +248,24 @@ impl SemanticsConfig {
         self.merge_descendants
     }
 
+    /// Mark this element as a live region — Compose's `liveRegion = LiveRegionMode.Polite`.
+    ///
+    /// A live region is content that changes WITHOUT the user moving focus to it, and that a screen
+    /// reader should therefore announce when it does: a snackbar appearing, a status line updating, a
+    /// validation message. This is the one case where a component expects to be spoken unprompted.
+    ///
+    /// [`LiveRegionMode::Polite`] waits for the reader to finish what it is saying; `Assertive`
+    /// interrupts. A snackbar is polite — it is information, not an alarm.
+    pub fn live_region(mut self, mode: LiveRegionMode) -> Self {
+        self.live_region = mode;
+        self
+    }
+
+    /// This element's live-region mode.
+    pub fn live_region_mode(&self) -> LiveRegionMode {
+        self.live_region
+    }
+
     /// Fill every field this config leaves open from `fallback` — how a caller's declaration is
     /// folded into the one the component already made: what the caller sets wins, and what it does
     /// not mention keeps the component's value, so adding a content description does not wipe the
@@ -259,8 +278,22 @@ impl SemanticsConfig {
             // A claim cannot be un-made: `merge_descendants(false)` is the default, so `true` from
             // either side stands.
             merge_descendants: self.merge_descendants || fallback.merge_descendants,
+            // Same rule: `Off` is the default, so the loudest declaration wins.
+            live_region: self.live_region.max(fallback.live_region),
         }
     }
+}
+
+/// How urgently a live region's changes should be announced — Compose's `LiveRegionMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum LiveRegionMode {
+    /// Not a live region (the default): nobody announces this without focus.
+    #[default]
+    Off,
+    /// Announced when the reader is free — information (a snackbar, a status line).
+    Polite,
+    /// Announced immediately, interrupting — an alert.
+    Assertive,
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -278,6 +311,9 @@ pub struct SemanticsNode {
     /// Whether this element has a click action (a `clickable`/click node in its modifier chain).
     pub clickable: bool,
     pub focused: bool,
+    /// Whether this element is announced when it changes without focus (see
+    /// [`SemanticsConfig::live_region`]).
+    pub live_region: LiveRegionMode,
     /// Absolute bounds in logical pixels: `(x, y, width, height)`, scroll offsets applied — the same
     /// space `hit_test` works in, so a platform bridge can hand these to the OS and an action can be
     /// fired by id without hit-testing.
@@ -604,6 +640,11 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             state: config.state_value().or(absorbed_state),
             clickable: clickable || absorbed.iter().any(|child| child.clickable),
             focused: node.focused,
+            // An absorbed live region stays live: a snackbar wrapping its message is one element, and
+            // the mode came from the wrapper.
+            live_region: config
+                .live_region_mode()
+                .max(absorbed.iter().map(|child| child.live_region).max().unwrap_or_default()),
             bounds,
             children: Vec::new(),
         });
@@ -625,6 +666,7 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             state: config.state_value(),
             clickable,
             focused: node.focused,
+            live_region: config.live_region_mode(),
             bounds,
             children,
         });
@@ -755,10 +797,15 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
         state.push(format!("\"progress\":{{\"value\":{current},\"min\":{min},\"max\":{max}}}"));
     }
     out.push_str(&format!(
-        "{{{}}},\"clickable\":{},\"focused\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
+        "{{{}}},\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
         state.join(","),
         node.clickable,
         node.focused,
+        match node.live_region {
+            LiveRegionMode::Off => "null",
+            LiveRegionMode::Polite => "\"polite\"",
+            LiveRegionMode::Assertive => "\"assertive\"",
+        },
     ));
     for (i, child) in node.children.iter().enumerate() {
         if i > 0 {
@@ -915,6 +962,7 @@ mod tests {
                 state: SemanticsState::new(),
                 clickable: false,
                 focused: false,
+                live_region: LiveRegionMode::Off,
                 bounds: (0.0, 0.0, 50.0, 50.0),
                 children: Vec::new(),
             }],
@@ -1159,6 +1207,78 @@ mod tests {
         assert_eq!(tree.len(), 1, "one clickable element: {:?}", names(&tree));
         assert!(tree[0].clickable);
         assert_eq!(tree[0].state.checked_value(), Some(ToggleableState::On));
+    }
+
+    #[test]
+    fn a_live_region_keeps_its_mode_through_a_merge() {
+        // The shape a snackbar has: a claimed subtree, announced unprompted. The mode has to survive
+        // the claim — the element a client is told about is the wrapper, not the text inside it.
+        let tree = tree_of(|ctx| {
+            Row::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new()
+                        .merge_descendants(true)
+                        .live_region(LiveRegionMode::Polite),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("Message sent").build(ctx);
+                });
+        });
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].live_region, LiveRegionMode::Polite);
+        assert_eq!(tree[0].effective_name().as_deref(), Some("Message sent"), "and it is named");
+    }
+
+    #[test]
+    fn an_ordinary_element_is_not_a_live_region() {
+        // The default matters as much as the setting: if everything announced itself unprompted, a
+        // screen reader would be unusable. Only what asks for it is spoken without focus.
+        let tree = tree_of(|ctx| {
+            Text::new("Just text").build(ctx);
+        });
+        assert_eq!(tree[0].live_region, LiveRegionMode::Off);
+    }
+
+    #[test]
+    fn the_loudest_live_region_declaration_wins() {
+        // A component declares `Polite` (a snackbar is information); a caller may raise it to
+        // `Assertive`. The other direction does not lower it — the same rule the claim follows.
+        let raised = SemanticsConfig::new()
+            .live_region(LiveRegionMode::Assertive)
+            .or(SemanticsConfig::new().live_region(LiveRegionMode::Polite));
+        assert_eq!(raised.live_region_mode(), LiveRegionMode::Assertive);
+
+        let not_lowered = SemanticsConfig::new()
+            .live_region(LiveRegionMode::Off)
+            .or(SemanticsConfig::new().live_region(LiveRegionMode::Assertive));
+        assert_eq!(not_lowered.live_region_mode(), LiveRegionMode::Assertive);
+    }
+
+    #[test]
+    fn the_json_carries_the_live_region_mode() {
+        let tree = tree_of(|ctx| {
+            Row::new()
+                .modifier(Modifier::new().semantics(
+                    SemanticsConfig::new()
+                        .merge_descendants(true)
+                        .live_region(LiveRegionMode::Polite),
+                ))
+                .build(ctx, |ctx| {
+                    Text::new("Saved").build(ctx);
+                });
+        });
+        let json = semantics_json(&tree);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed[0]["liveRegion"], "polite");
+        assert_eq!(parsed[0]["name"], "Saved");
+
+        // And an ordinary element reports null, not a mode.
+        let plain = tree_of(|ctx| {
+            Text::new("plain").build(ctx);
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(&semantics_json(&plain)).expect("valid JSON");
+        assert_eq!(parsed[0]["liveRegion"], serde_json::Value::Null);
     }
 
     #[test]

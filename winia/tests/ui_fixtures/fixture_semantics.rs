@@ -18,6 +18,7 @@ fn semantics_fixture(ctx: &mut ComposeCtx) {
     // A real tri-state, so the test can watch the snapshot follow a click.
     let checked = ctx.remember(|| ToggleableState::On);
     let picked = ctx.remember(|| false);
+    let snackbar = ctx.remember(|| SnackbarHostState::new()).get();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
@@ -83,6 +84,25 @@ fn semantics_fixture(ctx: &mut ComposeCtx) {
                 })
                 .modifier(Modifier::new().test_tag("sem-open-dialog"))
                 .build(ctx, |ctx| Text::new("Open dialog").build(ctx));
+
+            // A live region with an action: the message is announced unprompted, and the action has to
+            // stay its OWN element. (Measured: declaring the live region on the whole bar absorbed the
+            // action button, so a screen reader could hear the message but had nothing to invoke.)
+            Button::text()
+                .on_click({
+                    let host = snackbar.clone();
+                    move || {
+                        host.show(
+                            SnackbarData::new("Saved")
+                                .action("Undo", || {})
+                                .duration(SnackbarDuration::Indefinite),
+                        )
+                    }
+                })
+                .modifier(Modifier::new().test_tag("sem-show-snackbar"))
+                .build(ctx, |ctx| Text::new("Show snackbar").build(ctx));
+
+            SnackbarHost::new(snackbar.clone()).build(ctx);
         });
 
     AlertDialog::new(visible.get())

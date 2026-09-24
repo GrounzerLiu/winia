@@ -337,10 +337,25 @@ impl Snackbar {
             .spacing(8.0)
             .build(ctx, |ctx| {
                 // message（weight 弹性占位——action/dismiss 靠右）
+                //
+                // Accessibility: the MESSAGE is the live region, not the whole bar. A snackbar is the
+                // textbook live region — it appears without the user doing anything, and being noticed is
+                // its entire purpose — and `Polite` because it is information rather than an alarm: the
+                // reader finishes what it is saying first (Compose declares `LiveRegionMode.Polite` on
+                // its Snackbar for the same reason).
+                //
+                // Measured, and it is why the mode is here rather than on the Row: claiming the Row's
+                // subtree absorbed the ACTION BUTTON, so a screen reader could hear the message but had
+                // no element left to invoke "Undo" on — the announced name even read "文件已保存 撤销".
+                // On the message alone, the announcement is exactly the message and the action stays its
+                // own reachable element.
                 crate::ui::Text::new(data.message.as_str())
                     .font_size(14.0)
                     .color(fg)
-                    .modifier(Modifier::new().layout_weight(1.0))
+                    .modifier(Modifier::new()
+                        .layout_weight(1.0)
+                        .semantics(crate::semantics::SemanticsConfig::new()
+                            .live_region(crate::semantics::LiveRegionMode::Polite)))
                     .build(ctx);
                 // action 按钮（M3：inversePrimary 色文本）
                 if let Some(action_label) = &data.action_label {

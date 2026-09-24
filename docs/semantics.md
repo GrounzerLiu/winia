@@ -54,6 +54,7 @@ role.
 | `Icon`, `Image` | `Image` | — |
 | `LinearProgressIndicator`, `CircularProgressIndicator` (and the wavy pair) | `ProgressBar` | `progress(current, min, max)` when determinate |
 | `LoadingIndicator` | `ProgressBar` | — (a spinner has no value) |
+| `Snackbar` | *(none — a message)* | `live_region(Polite)` |
 | `Text`, `RichText` | *(none — a name and no role)* | — |
 
 A progress bar reports its **value**, not just its role: `UIA_RangeValue` with `value`/`min`/`max`
@@ -152,10 +153,11 @@ Two gaps the bridge surfaces in the examples themselves:
   Naming it is `Modifier::semantics(SemanticsConfig::new().content_description("Row 1"))` on the
   control (Compose has the same requirement — a label next to a control is not associated with it
   automatically). The checkboxes in `checkbox_demo` read as `''` for exactly this reason.
-- Nothing announces status changes: there is no `liveRegion` equivalent, so a snackbar is silent —
-  it appears and disappears without a word. A `LoadingIndicator` at least reads as a progress bar
-  now; what it cannot do is ANNOUNCE that it appeared. That is the next thing a screen-reader user
-  would notice.
+- A `LoadingIndicator` reads as a progress bar with no value, which is right — but nothing ANNOUNCES
+  that it appeared. A live region would, and an indicator is a reasonable candidate: it is the
+  component whose appearance is the information. `Snackbar` already does this; the loading family has
+  not been given the mode, because a spinner that lingers would be announced on every frame it stays
+  mounted and the honest answer needs a decision about when it is "new".
 
 Known limits of this slice:
 
@@ -170,26 +172,47 @@ Known limits of this slice:
   method the provider declines to perform.
 - The window's own rectangle and the native frame come from the host provider; the semantics tree
   describes the client area.
-- Name and state changes are NOT announced. The two notifications below cover focus and shape; a
-  counter going 3→4, a checkbox being ticked by code, a progress bar advancing — all of those change
-  a property, and a client sees them when it re-reads the element. Announcing them would need
-  `UiaRaiseAutomationPropertyChangedEvent` per property plus a way to know which properties a client
-  cares about.
+- A property change on an element that is NOT focused is not announced. A counter going 3→4, a
+  checkbox ticked by code, a progress bar advancing — a client sees those when it re-reads. That is
+  deliberate and bounded on purpose; see the notifications section for why announcing them would make
+  a screen reader unusable. Content that must be spoken unprompted says so with `live_region`.
 
 ## Notifications
 
-A screen reader that has to poll is a screen reader that misses things, so the bridge raises the two
-events that matter for navigation. `notify` runs once per rendered frame, right after the snapshot is
-published:
+A screen reader that has to poll is a screen reader that misses things, so the bridge raises the
+events that matter. `notify` runs once per rendered frame, right after the snapshot is published:
 
 | change | event |
 |---|---|
 | the focused element moved | `UIA_AutomationFocusChangedEventId`, raised from the newly focused element (from the window root when focus left every element) |
 | the tree's SHAPE changed | `UIA_StructureChangedEventId` with `ChildrenInvalidated`, from the root — "I do not know which child moved, re-read" |
+| a property of the **focused** element changed | `UiaRaiseAutomationPropertyChangedEvent` for `Name`, `IsEnabled`, `ToggleState`, `SelectionItemIsSelected`, `RangeValue.Value` |
+| a **live region** appeared or its text changed | `UIA_LiveRegionChangedEventId`, raised from that element |
 
-Both are gated on `UiaClientsAreListening`: with nobody listening the bridge does nothing at all, and
-forgets what it last reported so a client attaching later sees the next change as its first
+All four are gated on `UiaClientsAreListening`: with nobody listening the bridge does nothing at all,
+and forgets what it last reported so a client attaching later sees the next change as its first
 (it reads the current state on attach anyway).
+
+**Property changes are reported for the focused element only, and that bound is the design.** At most
+one element has focus, so this can never flood a client. Reporting every element's changes would: a
+progress bar advancing is a property change every frame, and a screen reader announcing each one is
+unusable — which is why Compose announces a bar's value when it is focused, not as it moves. The old
+value is reported as an empty VARIANT ("changed, previous value unknown", UIA's own convention for
+this) and the new one is read back from the provider, so the event can never disagree with what a
+client would get by asking.
+
+**Live regions are the other case: content that changes without focus arriving at it.**
+`SemanticsConfig::live_region(LiveRegionMode::Polite | Assertive)` marks an element, and the mode also
+goes out as `UIA_LiveSettingPropertyId` (0 off / 1 polite / 2 assertive). `Snackbar` declares itself
+polite, which is what makes it spoken at all.
+
+Getting that declaration in the right place took a measurement: put on the whole snackbar row it
+**absorbed the action button** (a claim owns its subtree), so a client could hear "文件已保存 撤销"
+and had no element left to invoke Undo on. The mode belongs on the message, which leaves the bar as
+`Text '文件已保存' LIVE=polite` next to `Button '撤销' click` — the announcement is exactly the
+message and the action stays reachable. `semantics_are_published_per_frame_and_follow_the_state`
+asserts both halves, and `tools/uia_live_region_verify.py` + `verify_uia_live_region.ps1` (unversioned)
+confirm a real UIA client receives the event.
 
 The shape comparison is [`crate::semantics::WindowSemantics::structure_fingerprint`] — node ids and
 child counts, NOT names or states. That distinction is the point: a label changing is a property
