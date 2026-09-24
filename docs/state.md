@@ -136,24 +136,43 @@ DerivedValue::get(&self) -> T   // re-runs f; inner get() calls subscribe
 pub type DerivedFloat = DerivedValue<f32>;
 ```
 
-**Difference from Compose (open).** `derivedStateOf` caches its result and, when a dependency changes
-but the recomputed value is `==` the previous one, does NOT invalidate its readers. winia's
-`DerivedValue` does neither: `get()` re-runs the closure every time, and a reader becomes a direct
-dependent of the underlying states, so it recomposes even when the derived value is unchanged.
-Values are correct either way — this is over-invalidation, not a wrong read.
+**What it is, and what it is not.** `DerivedValue` is a *lazy expression*: an `Arc<dyn Fn>` that
+`get()` calls. There is no memoization, no cached result and no dependency identity of its own — it is
+the type `&alpha * 200.0 + 50.0` evaluates to, so the expression can be passed around and read where
+it is needed.
 
-Closing it needs a dependency identity for the derived value itself, which the current design has no
-room for:
+**Measured, because the obvious claim about it is wrong.** The tempting claim is "a reader of a value
+derived from a fast-moving source re-runs on every source change, even when the derived value is
+unchanged". It does not:
 
-1. `get()` would compute under a *capture* mode that routes the inner reads to the derived value's own
-   id instead of the reader's slot key, and register the READER against that id.
-2. The composer's notification path would then have to recompute a derived id when one of its
-   dependencies moves, and walk ITS dependents only if the new value differs.
+```
+source moves 3x, derived value stays false      owner scope: 1→4    reader: 1 (unchanged)
+source moves once, derived value flips          owner scope: 5      reader: 2
+```
 
-Step 2 is what makes it a mechanism rather than a field: today the notify path is `state id → slot
-keys`, straight through. Until then, a caller that needs the suppression can compare at the call site
-(`if derived.get() != last { last = derived.get(); ... }`) or keep the value in a `State` and set it
-only when it changed — `State::set` already skips equal values.
+The reader is a group that declares the **derived value** as its param — which is what every component
+does (`Text::build` declares its content) — so param-based Skip protects it, and it re-enters exactly
+when the value it declared changes. What re-runs for every source change is the scope that owns the
+READ (and therefore recomputes the expression). Both halves are locked in by
+`core::composer::derived_expression_tests`.
+
+**The remaining difference from Compose.** `derivedStateOf` is a *state object*: it owns the reads of
+its dependencies, recomputes when they move, and only invalidates its readers when the value differs —
+so a reader needs no params at all. winia's protection comes from the reader declaring what it read.
+The case that differs is therefore narrow: a scope that reads a cheap derived value from a fast source
+and declares nothing. `docs/state.md`'s rule for that shape is the ordinary one — declare what you
+read (`ctx.changed(&value)`, or take the value as a component param) — and
+`a_group_that_declares_nothing_keeps_what_it_was_built_with` shows what happens without it: the group
+keeps what it composed with, silently.
+
+A `derivedStateOf` equivalent is possible, and its shape is known: the derived object would have to
+recompute **outside the tree**, which needs a callback subscriber kind in `StateSignal` (today
+`subscribers` holds only `Weak<ComposerSubscription>`) plus a dependency-capture mode on reads so the
+object can re-subscribe when its read set changes. It is not written because the measured gap above is
+narrow and the change touches the notify path every state in the framework goes through. A caller who
+needs the memoization today compares at the call site (`if derived.get() != last { last = derived.get();
+... }`) or keeps the value in a `State` and sets it only on change — `State::set` already skips equal
+values.
 
 Arithmetic is implemented for `f32` only (`impl_derived_arith`: `Add/Sub/Mul/Div`
 for `DerivedFloat` and `&State<f32>`, plus `f32 * &State<f32>`), so layout
