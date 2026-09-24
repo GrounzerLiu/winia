@@ -274,7 +274,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
                 if !node.dirty {
                     if let Some(cached) = composer.prev_nodes.get(&key) {
-                        if crate::layout::node::modifier_text_content_differs(&cached.modifier, &node.modifier) {
+                        if crate::layout::node::text_snapshot(&node.modifier) != cached.text {
                             node.dirty = true;
                         }
                     }
@@ -363,7 +363,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）
             if !dirty {
                 if let Some(cached) = composer.prev_nodes.get(&key) {
-                    if crate::layout::node::modifier_text_content_differs(&cached.modifier, &n.modifier) {
+                    if crate::layout::node::text_snapshot(&n.modifier) != cached.text {
                         n.dirty = true;
                     }
                 }

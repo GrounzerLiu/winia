@@ -40,32 +40,32 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 616 | 89 | 117 |
-| 200 | 1462 | 349 | 468 |
-| 800 | 6151 | 1572 | 2383 |
+| 50 | 568 | 80 | 108 |
+| 200 | 1559 | 328 | 456 |
+| 800 | 7036 | 1544 | 2151 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 774 | 111 | 138 |
-| 200 | 4817 | 475 | 585 |
-| 800 | 25886 | 3226 | 4274 |
+| 50 | 755 | 107 | 133 |
+| 200 | 4861 | 444 | 560 |
+| 800 | 27153 | 2787 | 3778 |
 
-16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
+16x the rows costs ~19x an idle frame and ~20x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
-Two runs were taken for these figures and they agreed to a few percent on the box scene (idle 1572 /
-1654, one row 2383 / 2594, layout-idle 460 / 454); the text scene is the noisier of the two (its idle
-frame moved 3226 / 3234 while its one-row update moved 4274 / 3551, which is why this document quotes
+Two runs were taken for these figures and they agreed to a few percent on the box scene (idle 1544 /
+1458, one row 2151 / 2199, layout-idle 287 / 283); the text scene is the noisier of the two (its idle
+frame moved 2787 / 2832 while its one-row update moved 3778 / 3426, which is why this document quotes
 the fast sample rather than treating a single text figure as a precise one).
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 1086 | 440 |
-| one row moved | 1515 | ~560 |
+| idle | 1123 | 285 |
+| one row moved | 1596 | ~600 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -219,37 +219,85 @@ restore disabled, and it had to be built carefully: the first two versions armed
 that never ran (a leaf whose slot is clean and whose layout is not dirty keeps its cached measurement —
 the same "the test passed because nothing happened" trap this document keeps recording).
 
+### A fifth fix: the frame cache carried a whole `Modifier` per node
+
+`collect_nodes` rebuilds a per-node cache (`prev_nodes`) on every layout. Each entry was a `CachedNode`
+holding a copy of the node's **`Modifier`** — a `Vec` of elements, and through every `TextContent` a
+`String` — so a frame allocated and freed a `Vec` per node (and a string per text node) to keep data
+almost nothing read. Under the per-call profiler, at 4001 nodes: **182 µs of an idle layout's
+`collect_nodes`**, on a frame whose real measurement folded in 0.01 µs.
+
+The modifier was read in exactly two places, both asking the same question — "is this node's text
+different from last frame's, while the slot stayed clean?" (`Text` whose string is recomputed by a
+parent that re-entered, `TextField` input). So the cache now stores what that question needs: a
+`text_snapshot` — the content plus every style field that affects measurement or rendering (colour
+included: an alpha 0→1 fade changes no size, and a folded measurement would keep painting the cached
+paragraph transparent), or `None` for the thousands of nodes with no text at all.
+
+| instrumented bucket, boxes 800 rows, idle | before | after |
+|---|---|---|
+| `collect_nodes`: `to_cached` + insert | 182 µs | **106 µs** |
+| `collect_nodes` total | 339 µs | **282 µs** |
+
+| frame-level, boxes 800 rows (best of two runs) | before | after |
+|---|---|---|
+| **layout only, idle** | 460 µs | **285 µs** (-38%) |
+| idle frame | 1572 µs | **1458 µs** (-7%) |
+| one row updated | 2383 µs | **2151 µs** (-10%) |
+
+The isolated layout arm moves far more than the frame, and the difference is where the old design paid
+twice: dropping a `CachedNode` with a `Modifier` inside it frees that `Vec`, so the cache's whole
+lifetime (fill, then drop when the transaction commit replaces it) was allocation churn. The rest of
+the bucket — 106 µs — is the `HashMap` insert of 4000 small entries, which is the next step if this
+path needs more.
+
+Two tests guard the semantics, and both were verified to fail when the behaviour they cover is
+removed — which is the only reason to trust them:
+
+* `test_text_content_change_remeasures` (pre-existing) fails with the comparison disabled: the reused
+  leaf never re-measures (`w=0` both frames).
+* `test_text_style_change_remeasures` (new) changes **only the colour** and requires the leaf to be
+  dirty; it fails when `color` is dropped from the snapshot, which is the failure mode a
+  fields-not-copied rewrite has.
+
+**One honest negative result**: the UI suite does NOT exercise this path. With a freshly built fixture
+and the comparison disabled, `click_updates_state_and_keeps_structure` and the three `text_field` tests
+all still pass — the flows they drive make the text leaf dirty in some other way. The unit tests above
+are the ones that cover it; the UI suite being green says nothing about it. (Checked that the fixture
+really was fresh: `cargo test --test ui_test` does rebuild `target/debug/fixture_all.exe` — mtime
+verified moving with a source edit — so a green UI run after a lib change is testing the new code.)
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
-states that matter: every group Skipped, and one row's state moved. The layout column is AFTER the
-fourth fix; the compose column is unchanged by it.
+states that matter: every group Skipped, and one row's state moved. The layout column is after the
+fifth fix, the compose column after the third (the fourth and fifth barely touch it).
 
 | bucket | idle (0 entered) | one row updated |
 |---|---|---|
-| `materialize` (desc tree + node reuse walk) | ~600 µs | ~560 µs |
-| `prune_stale_child_links` (arena walk) | ~245 µs | ~255 µs |
-| `slot_table.truncate` + `collect_live_keys` | ~190 µs | ~185 µs |
-| `register_modifier_deps` (arena walk) | ~61 µs | ~61 µs |
-| compose setup (snapshots, resets, pending drain) | ~125 µs | ~115 µs |
-| reconcile (after the third fix) | ~4 µs | ~131 µs |
+| `materialize` (desc tree + node reuse walk) | ~255 µs | ~270 µs |
+| `prune_stale_child_links` (arena walk) | ~130 µs | ~150 µs |
+| `collect_live_keys` | ~100 µs | ~100 µs |
+| `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
+| compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
+| reconcile (after the third fix) | ~2 µs | ~68 µs |
 | the row loop (800 reads + 800 Skip decisions) | — | ~430 µs |
-| **compose total** | **~1.25 ms** | **~1.95 ms** |
+| **compose total** | **~590 µs** | **~900 µs** |
 
-| layout, same tree | idle (before the fourth fix) | idle (after) |
+| layout, same tree | idle, before the fourth fix | idle, after the fifth |
 |---|---|---|
 | `LayoutTransaction::new` | ~170 µs (149 of it the map clone) | ~15 µs |
-| `measure` | **~0.04 µs** — every node folds, nothing re-measures | same |
-| `collect_nodes` | ~680 µs | ~582 µs |
-| `collect_node_keys` | ~261 µs | ~226 µs |
+| `measure` | **~0.01-0.04 µs** — every node folds, nothing re-measures | same |
+| `collect_nodes` | ~680 µs | ~280 µs (106 of it the insert) |
+| `collect_node_keys` | ~261 µs | ~120 µs |
 | the rest (dirty marks, deps, cleanup) | ~120 µs | ~90 µs |
-| **layout total** | **~1230 µs** | **~958 µs** |
+| **layout total** | **~1230 µs** | **~490 µs** |
 
-What is left of layout's idle cost is bookkeeping *about* the tree rather than work on it: `collect_nodes`
-builds a `CachedNode` per node (a `Modifier` clone each — 288 µs of the 582), `collect_node_keys` builds
-its index, and both walk the arena. `materialize`'s per-frame desc tree, `prune_stale_child_links` and
-the two compose-side maps are the same kind of thing on the compose side — that is where the next round's
-targets are, and they are listed below.
+What is left of an idle frame is bookkeeping *about* the tree rather than work on it, on both sides:
+`materialize` rebuilds a descriptor for every node and then walks them to claim the cached ones,
+`prune_stale_child_links` walks the whole arena as a defensive repair, `collect_live_keys` walks the
+slot tree, and layout rebuilds the two whole-tree maps. None of it does anything with the rows that did
+not change — they are the next round's targets, and they are listed below.
 
 ### Read placement still does not matter
 
@@ -343,38 +391,38 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **`materialize`: ~600 µs per frame in both states.** `collect_desc_tree` recurses through a Skipped
-  subtree and builds a `DescNode` per node — one `Vec` and one `Modifier` clone each — then
-  `materialize_node` walks those descriptors to reuse the cached nodes by key. For a subtree that
-  skipped, both halves are pure overhead: the structure is by definition what it already was, and the
-  nodes are already in `prev_node_by_key`. The cheap direction is to record the subtree as a single
-  skip descriptor and claim the cached nodes from the arena directly (their `children: Vec<usize>` is
-  the walk), which is exactly the protocol the comments in this area are full of war stories about
-  — dup-key panics, vanishing subtrees, ghost flights — so it needs its own round with the full UI
-  suite, not a quick edit.
-- **`prune_stale_child_links`: ~250 µs per frame.** A defensive whole-arena walk, and the current
+- **`materialize`: ~255-270 µs per frame in both states** — the largest single item left on the compose
+  side. `collect_desc_tree` recurses through a Skipped subtree and builds a `DescNode` per node — one
+  `Vec` and one `Modifier` clone each — then `materialize_node` walks those descriptors to reuse the
+  cached nodes by key. For a subtree that skipped, both halves are pure overhead: the structure is by
+  definition what it already was, and the nodes are already in `prev_node_by_key`. The cheap direction
+  is to record the subtree as a single skip descriptor and claim the cached nodes from the arena
+  directly (their `children: Vec<usize>` is the walk), which is exactly the protocol the comments in
+  this area are full of war stories about — dup-key panics, vanishing subtrees, ghost flights — so it
+  needs its own round with the full UI suite, not a quick edit.
+- **`prune_stale_child_links`: ~130 µs per frame.** A defensive whole-arena walk, and the current
   comment insists it runs for EVERY compose (moving it into an early-returning function once took the
   repair off the default path and a stale listing reached the `[dup-key]` guard). Skipping it on frames
   that entered nothing is plausible and unproven: what needs establishing first is whether a frame with
-  no Entered node can create a stale listing at all.
-- **`slot_table.truncate` + `collect_live_keys`: ~190 µs per frame**, a whole-slot-tree walk that
-  produces the live-key set the two reconciles consume. It is the input to the guards above, so it is
-  the next thing to make incremental.
-- **`collect_nodes`'s per-node `CachedNode` (288 µs of an idle layout, after the fourth fix)** and the
-  `collect_node_keys` index beside it (~226 µs): both rebuild whole-tree maps from the arena every
-  frame, for a frame in which measurement folded at 0.04 µs. Reusing the maps' allocations is done;
-  making the *rebuild* incremental (or making the cache borrow the arena instead of copying out of it)
-  is the next step, and it needs the same care the fourth fix took around rollback.
+  no Entered node can create a stale listing at all — a shared-element flight ending is the case to
+  check, since `retain_shared_sources` re-parents nodes on frames where nothing recomposed.
+- **`collect_live_keys`: ~100 µs per frame**, a whole-slot-tree walk producing the live-key set the two
+  reconciles consume. It is the input to the guards above, so it is the next thing to make incremental.
+- **`collect_nodes`'s remaining ~280 µs and the `collect_node_keys` index beside it (~120 µs)**: both
+  rebuild whole-tree maps from the arena every frame, for a frame in which measurement folded at
+  0.01 µs. The per-entry data is small now (106 µs is the insert of 4000 entries); making the *rebuild*
+  incremental, or having the cache borrow the arena instead of copying out of it, is what is left, and
+  it needs the same care the fourth fix took around rollback.
 - **The row loop's ~430 µs**: 800 iterations at ~540 ns (105 ns read, ~330 ns group machinery, the rest
   materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation (~75 ns)
   or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The four defects that *were*
+and each is one round of work with this bench as the measuring stick. The five defects that *were*
 bugs — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write,
-a reverse graph rebuilt when its forward graph had not moved, and a layout snapshot that deep-copied
-two maps it was about to rebuild — were all found by measuring one bucket and finding something else
-inside it.
+a reverse graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied
+two maps it was about to rebuild, and a frame cache that carried a whole `Modifier` per node for one
+text comparison — were all found by measuring one bucket and finding something else inside it.
 
 ## Re-running any of this
 

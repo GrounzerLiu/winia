@@ -5122,6 +5122,70 @@ fn test_text_content_change_remeasures() {
     assert!(w2 > w1, "文本内容变化后复用 leaf 应重测（宽度变）：frame1 w={} frame2 w={}（冻结则 bug 复发）", w1, w2);
 }
 
+/// A text STYLE change must re-measure too, not just a content change.
+///
+/// The frame cache used to hold the node's whole `Modifier`, so every field the text carries was
+/// compared; it now holds a [`crate::layout::node::text_snapshot`] instead, which is cheaper but only
+/// as faithful as the fields that snapshot copies. The one that bites hardest is the colour: an alpha
+/// 0→1 fade changes nothing about the size, so a folded measurement would keep painting the cached
+/// paragraph with its TRANSPARENT colour and the text would never appear — the reason the original
+/// check compares colour at all. This test changes nothing but the colour, and requires the leaf to be
+/// dirty after compose (i.e. before layout gets a chance to fold it).
+#[test]
+fn test_text_style_change_remeasures() {
+    let mut composer = Composer::new();
+    let holder = std::cell::RefCell::new(None::<crate::core::state::State<String>>);
+
+    let build = |composer: &mut Composer, alpha: u8| {
+        composer.compose(|ctx| {
+            let value = ctx.remember(|| "".to_string());
+            *holder.borrow_mut() = Some(value.clone());
+            let root_key = ctx.next_key();
+            match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = value.get(); // 依赖注册到容器 scope（对标 TextField）
+                    let k = ctx.next_key();
+                    let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                        content: "hello".to_string(),
+                        font_size: 14.0,
+                        // The only thing that differs between the two frames.
+                        color: crate::modifier::Color::from_argb(alpha, 0, 0, 0),
+                        font_weight: crate::ui::text::FontWeight::NORMAL,
+                        font_style: crate::ui::text::FontSlant::Upright,
+                        max_lines: usize::MAX,
+                        align: crate::ui::TextAlign::Left,
+                        overflow: crate::ui::TextOverflow::Clip,
+                        soft_wrap: true,
+                        letter_spacing: 0.0,
+                        line_height: None,
+                    });
+                    ctx.start_leaf(k, modifier);
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+    };
+
+    build(&mut composer, 0); // invisible
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0));
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    assert!(!composer.arena_nodes()[leaf].dirty, "precondition: frame 1 measured and folded");
+
+    // 帧2：alpha 0 → 255（容器 Enter，leaf slot 仍 Clean）→ 必须判定为变化
+    let s = holder.borrow().clone().unwrap();
+    s.set("trigger".to_string());
+    build(&mut composer, 255);
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    assert!(
+        composer.arena_nodes()[leaf].dirty,
+        "a colour change must re-measure the reused leaf (otherwise the paragraph keeps the old paint)"
+    );
+}
+
 #[test]
 fn test_stmt_key_stable_across_structure_change() {
     let mut composer = Composer::new();
