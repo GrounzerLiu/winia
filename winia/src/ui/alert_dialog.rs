@@ -197,6 +197,9 @@ impl BasicAlertDialog {
             offset: (0.0, 0.0),
             anchor_slide: None,
             modal: true,
+            // A dialog owns the keyboard while it is up: Tab works inside the dialog, and the page
+            // behind the scrim cannot be reached.
+            focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
             on_dismiss,

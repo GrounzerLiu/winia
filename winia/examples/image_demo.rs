@@ -11,6 +11,10 @@
 //! - SVG 文件来源（复用 IconSource 解码）
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const SAMPLE_PNG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/sample.png");
 const HOME_SVG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/home.svg");
@@ -58,10 +62,6 @@ fn image_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .spacing(8.0)
         .build(ctx, |ctx| {
-            Text::new("Image 组件演示（对齐 Compose foundation Image）")
-                .font_size(20.0)
-                .build(ctx);
-
             // ── 固有尺寸 ──
             section_title(ctx, "固有尺寸（无 modifier——按位图像素布局）");
             Image::file(SAMPLE_PNG).build(ctx);
@@ -154,7 +154,9 @@ fn main() {
             Window::new()
                 .size(520.0, 720.0)
                 .title("Image Demo")
-                .build(ctx, |ctx| { image_demo(ctx); });
+                .build(ctx, |ctx| {
+                    settings::shell("Image Demo", ctx, |ctx| { image_demo(ctx); });
+                });
         });
     });
 }

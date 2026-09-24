@@ -19,6 +19,10 @@
 use letclone::clone;
 use winia::animation::SpringSpec;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// Flight shaping. A spring's speed follows `sqrt(stiffness / mass)`, so the
 /// slow-motion spring keeps the same motion character. Measured flight
@@ -215,7 +219,9 @@ fn main() {
                 .size(420.0, 560.0)
                 .title("Shared Transition Hero")
                 .build(ctx, |ctx| {
-                    hero_demo(ctx);
+                    settings::shell("Shared Transition Hero", ctx, |ctx| {
+                        hero_demo(ctx);
+                    });
                 });
         });
     });

@@ -665,6 +665,61 @@ fn an_overlay_press_zone_receives_the_press_gesture() {
     app.expect_text_timeout("presses: 1", Duration::from_secs(5));
 }
 
+/// Tab belongs to a modal overlay, and closing one gives the keyboard back to the page.
+///
+/// Keyboard only, no pointer: Tab reaches the page's button, Enter opens the dialog, Tab moves focus
+/// INSIDE the dialog (before this, Tab walked the page behind the scrim, so a dialog could not be
+/// reached without a mouse), Escape closes it — and the page still holds the focus it had, so the
+/// next Tab continues from there instead of starting over.
+#[test]
+fn tab_owns_the_keyboard_inside_a_modal_overlay_and_the_page_gets_it_back() {
+    let mut app = UiTest::launch("overlay_focus");
+    app.expect_text("dialog-open: no");
+
+    // The fixture's only focusable on the page is the button that opens the dialog.
+    app.key("Tab");
+    assert!(app.tag_is_focused("open-dialog"), "Tab must reach the page's button");
+    app.key("Enter");
+    app.expect_text_timeout("dialog-open: yes", Duration::from_secs(5));
+    // The page still remembers where it was, but it must not keep DRAWING a ring behind the scrim:
+    // the memory lives in a slot key while a modal owns the keyboard, so the tree shows no focus at
+    // all until something inside the dialog takes it.
+    assert_eq!(
+        app.focused_tags(),
+        Vec::<String>::new(),
+        "a modal takes the page's ring off the tree (its focus is remembered, not drawn)"
+    );
+
+    // Tab now works inside the dialog: its first focusable is the field in the text slot.
+    app.key("Tab");
+    assert!(
+        app.overlay_tag_is_focused("dialog-field"),
+        "Tab must move focus inside the dialog, not behind its scrim"
+    );
+    assert_eq!(
+        app.focused_tags(),
+        vec!["dialog-field".to_string()],
+        "exactly one node shows focus while a modal is up"
+    );
+    for key in ["h", "i"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("dialog-field: hi", Duration::from_secs(5));
+
+    // Escape closes it, and the page is still standing where it was.
+    app.key("Escape");
+    app.expect_text_timeout("dialog-open: no", Duration::from_secs(5));
+    assert!(
+        app.tag_is_focused("open-dialog"),
+        "closing an overlay must hand the focus back, so a keyboard user does not re-Tab"
+    );
+    assert_eq!(
+        app.focused_tags(),
+        vec!["open-dialog".to_string()],
+        "…and the page's ring is the only one again"
+    );
+}
+
 /// A drag inside a popup reaches the same value as the same drag in the main tree.
 ///
 /// The overlay drag path used to pass WINDOW coordinates into callbacks whose contract is

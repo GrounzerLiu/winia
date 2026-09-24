@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::core::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{GraphicsLayerParams, Modifier, Shape};
@@ -20,10 +24,6 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
         .spacing(14.0)
         .modifier(Modifier::new().padding(24.0).fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("GraphicsLayer 3D 演示")
-                .font_size(22.0)
-                .color(WiniaTheme::colors().on_surface_variant)
-                .build(ctx);
             Text::new(format!(
                 "rotationX={:.0}° rotationY={:.0}° camera={:.0} shadow={:.0}",
                 rx.get(), ry.get(), cam.get(), elev.get()
@@ -118,7 +118,9 @@ fn main() {
             Window::new()
                 .size(640.0, 520.0)
                 .title("GraphicsLayer 3D Demo")
-                .build(ctx, graphics_layer_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("GraphicsLayer 3D Demo", ctx, graphics_layer_ui);
+                });
         });
     });
 }

@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const LANDSCAPE_JPG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/landscape.jpg");
 
@@ -54,9 +58,11 @@ fn main() {
                 .size(900.0, 640.0)
                 .title("Blur Demo")
                 .build(ctx, |ctx| {
-                    Stack::new()
-                        .modifier(Modifier::new().fill_max_size())
-                        .build(ctx, |ctx| { blur_demo(ctx); });
+                    settings::shell("Blur Demo", ctx, |ctx| {
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| { blur_demo(ctx); });
+                    });
                 });
         });
     });

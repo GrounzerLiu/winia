@@ -10,6 +10,10 @@
 //! Run: cargo run -p winia --example draw_wrap_demo
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[derive(Debug)]
 struct BeforeBlue;
@@ -126,7 +130,9 @@ fn main() {
             Window::new()
                 .size(520.0, 300.0)
                 .title("DrawWrapNode Demo")
-                .build(ctx, draw_wrap_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("DrawWrapNode Demo", ctx, draw_wrap_demo);
+                });
         });
     });
 }

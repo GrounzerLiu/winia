@@ -10,6 +10,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -28,10 +32,6 @@ fn progress_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("Progress Indicator 演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "Linear determinate（进度 50%）");
             LinearProgressIndicator::new(progress.get()).build(ctx);
 
@@ -111,7 +111,9 @@ fn main() {
             Window::new()
                 .size(420.0, 720.0)
                 .title("Progress Indicator Demo")
-                .build(ctx, progress_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Progress Indicator Demo", ctx, progress_demo);
+                });
         });
     });
 }

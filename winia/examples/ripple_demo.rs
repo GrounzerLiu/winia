@@ -11,6 +11,10 @@ use letclone::clone;
 use winia::core::composer::GroupStatus;
 use winia::layout::{Alignment, BoxLayout};
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -66,9 +70,6 @@ fn ripple_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("Ripple 两层模型演示")
-                .font_size(20.0)
-                .build(ctx);
             Text::new("悬停看背景层；点击看前景层（前景裁剪到背景的范围和形状）")
                 .font_size(13.0)
                 .color(WiniaTheme::colors().on_surface_variant)
@@ -107,7 +108,9 @@ fn main() {
             Window::new()
                 .size(560.0, 660.0)
                 .title("Ripple Demo")
-                .build(ctx, ripple_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Ripple Demo", ctx, ripple_demo);
+                });
         });
     });
 }

@@ -27,6 +27,10 @@
 use letclone::clone;
 use winia::animation::{SpringSpec, TweenSpec};
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const LANDSCAPE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assets/landscape.jpg");
 
@@ -262,7 +266,9 @@ fn main() {
                 .size(420.0, 620.0)
                 .title("Shared Transition — Image")
                 .build(ctx, |ctx| {
-                    image_flight_demo(ctx);
+                    settings::shell("Shared Transition — Image", ctx, |ctx| {
+                        image_flight_demo(ctx);
+                    });
                 });
         });
     });

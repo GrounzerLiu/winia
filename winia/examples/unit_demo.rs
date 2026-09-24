@@ -6,6 +6,10 @@
 //! 3. Offset/Size 运算
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[composable]
 fn unit_demo(ctx: &mut ComposeCtx) {
@@ -14,10 +18,6 @@ fn unit_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().padding(16.0).fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("Unit Demo")
-                .font_size(22.sp())
-                .modifier(Modifier::new().padding_vertical(8.0))
-                .build(ctx);
 
             Text::new("Text sizes: 22.sp(), 14.sp(), 12.sp(), 10.sp()")
                 .font_size(14.sp())
@@ -134,7 +134,9 @@ fn main() {
             Window::new()
                 .size(420.0, 520.0)
                 .title("Unit Demo")
-                .build(ctx, |ctx| unit_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Unit Demo", ctx, |ctx| unit_demo(ctx));
+                });
         });
     });
 }

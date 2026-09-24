@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
 use winia::core::composer::ComposeCtx;
 use winia::composable;
@@ -25,10 +29,6 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
             let (last_display, last_menu, last_dialog) = (last.clone(), last.clone(), last.clone());
             move |ctx| {
 
-            Text::new("Overlay 组件演示")
-                .font_size(22.0)
-                .color(winia::modifier::Color::from_argb(255, 40, 40, 40))
-                .build(ctx);
             Text::new(format!("上次选择: {}", last_display.get()))
                 .font_size(14.0)
                 .color(winia::modifier::Color::from_argb(255, 120, 120, 120))
@@ -240,7 +240,9 @@ fn main() {
             Window::new()
                 .size(560.0, 720.0)
                 .title("Overlay Demo")
-                .build(ctx, overlay_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Overlay Demo", ctx, overlay_ui);
+                });
         });
     });
 }

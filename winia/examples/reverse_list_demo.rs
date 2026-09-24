@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 const MESSAGE_COUNT: usize = 200;
@@ -36,10 +40,6 @@ fn reverse_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("reverseLayout 演示（最新消息在底部）")
-                .font_size(20.0)
-                .modifier(Modifier::new().padding(8.0))
-                .build(ctx);
             Text::new("滚轮/拖拽：向上滚看更旧的消息；滚动方向与正向一致")
                 .font_size(12.0)
                 .color(WiniaTheme::colors().on_surface_variant)
@@ -97,7 +97,9 @@ fn main() {
             Window::new()
                 .size(520.0, 600.0)
                 .title("reverseLayout Demo")
-                .build(ctx, reverse_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("reverseLayout Demo", ctx, reverse_demo);
+                });
         });
     });
 }

@@ -2,6 +2,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
 // Material 图标（24dp 视口经典路径）
@@ -13,11 +17,9 @@ const PERSON_PATH: &str = "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 
 #[composable]
 fn scaffold_demo(ctx: &mut ComposeCtx) {
     let count = ctx.remember(|| 0i32);
-    let rtl = ctx.remember(|| false);
     // NavigationBar 选中项 + alwaysShowLabel 切换
     let selected = ctx.remember(|| 0usize);
     let always_label = ctx.remember(|| true);
-    let direction = if rtl.get() { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
 
     // TopAppBar nested scroll behavior：Standard 不可折叠，但滚动时 content_offset
     // 会累积，从而触发 scrolled 容器色。
@@ -27,80 +29,85 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
     let nested_behavior = TopAppBarScrollBehavior::enter_always(app_bar_state, TOP_APP_BAR_HEIGHT);
     let connection = nested_behavior.nested_scroll_connection_with_scroll(scroll.clone()).expect("nested behavior connection");
 
-    WiniaTheme::with_theme_and_direction(WiniaTheme::colors(), direction, ctx, |ctx| {
+    // The layout direction is the chrome's to give now (its settings sheet): this demo
+    // carried an inline toggle that provided it for the whole page, and two switches
+    // writing one CompositionLocal meant the settings one looked dead here.
         Scaffold::new({
-            clone!(scroll, connection);
-            move |ctx, _padding| {
-            Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll.clone()).nested_scroll(connection.clone())).build(ctx, |ctx| {
-                for index in 0..30 {
-                    Text::new(format!("Content item {index}"))
-                        .modifier(Modifier::new().padding(16.0).fill_max_width())
-                        .build(ctx);
-                }
-            });
-        }
-        })
-        .top_bar({
-            clone!(rtl, always_label, behavior);
-            move |ctx| {
-            TopAppBar::new(|ctx| Text::new("Scaffold demo").build(ctx))
-                .scroll_behavior(behavior.clone())
-                .actions({
-                    clone!(rtl, always_label);
-                    move |ctx| {
-                    Button::text().on_click({ clone!(rtl); move || rtl.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("RTL").build(ctx));
-                    Button::text().on_click({ clone!(always_label); move || always_label.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("Label").build(ctx));
-                }
-                })
-                .build(ctx);
-        }
-        })
-        .bottom_bar({
-            clone!(selected, always_label);
-            move |ctx| {
-            NavigationBar::new({
-                clone!(selected, always_label);
-                move |ctx| {
-                let destinations = [
-                    ("Home", HOME_PATH),
-                    ("Search", SEARCH_PATH),
-                    ("Favorites", FAVORITE_PATH),
-                    ("Profile", PERSON_PATH),
-                ];
-                for (index, (name, path)) in destinations.iter().enumerate() {
-                    let name = *name;
-                    let path = *path;
-                    let is_selected = selected.get() == index;
-                    let always = always_label.get();
-                    NavigationBarItem::new(is_selected, move |ctx| {
-                        Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
-                    })
-                    .label(move |ctx| Text::new(name).build(ctx))
-                    .always_show_label(always)
-                    .on_click({ clone!(selected); move || selected.set(index) })
+        clone!(scroll, connection);
+        move |ctx, _padding| {
+        Column::new().modifier(Modifier::new().fill_max_size().vertical_scroll(scroll.clone()).nested_scroll(connection.clone())).build(ctx, |ctx| {
+            for index in 0..30 {
+                Text::new(format!("Content item {index}"))
+                    .modifier(Modifier::new().padding(16.0).fill_max_width())
                     .build(ctx);
-                }
+            }
+        });
+    }
+    })
+    .top_bar({
+        clone!(always_label, behavior);
+        move |ctx| {
+        TopAppBar::new(|ctx| Text::new("Scaffold demo").build(ctx))
+            .scroll_behavior(behavior.clone())
+            .actions({
+                clone!(always_label);
+                move |ctx| {
+                Button::text().on_click({ clone!(always_label); move || always_label.update(|value| *value = !*value) }).build(ctx, |ctx| Text::new("Label").build(ctx));
             }
             })
             .build(ctx);
-        }
-        })
-        .floating_action_button({
-            clone!(count);
+    }
+    })
+    .bottom_bar({
+        clone!(selected, always_label);
+        move |ctx| {
+        NavigationBar::new({
+            clone!(selected, always_label);
             move |ctx| {
-            FloatingActionButton::new().on_click({ clone!(count); move || count.update(|value| *value += 1) }).build(ctx, |ctx| Icon::svg_path(PLUS_PATH).build(ctx));
+            let destinations = [
+                ("Home", HOME_PATH),
+                ("Search", SEARCH_PATH),
+                ("Favorites", FAVORITE_PATH),
+                ("Profile", PERSON_PATH),
+            ];
+            for (index, (name, path)) in destinations.iter().enumerate() {
+                let name = *name;
+                let path = *path;
+                let is_selected = selected.get() == index;
+                let always = always_label.get();
+                NavigationBarItem::new(is_selected, move |ctx| {
+                    Icon::svg_path(path).size(NAVIGATION_BAR_ICON_SIZE).build(ctx);
+                })
+                .label(move |ctx| Text::new(name).build(ctx))
+                .always_show_label(always)
+                .on_click({ clone!(selected); move || selected.set(index) })
+                .build(ctx);
+            }
         }
         })
         .build(ctx);
+    }
+    })
+    .floating_action_button({
+        clone!(count);
+        move |ctx| {
+        FloatingActionButton::new().on_click({ clone!(count); move || count.update(|value| *value += 1) }).build(ctx, |ctx| Icon::svg_path(PLUS_PATH).build(ctx));
+    }
+    })
+    .build(ctx);
 
-        Text::new(format!("FAB clicks: {} | tab: {} | direction: {:?}", count.get(), selected.get(), direction))
-            .modifier(Modifier::new().absolute_offset(16.0, 96.0))
-            .build(ctx);
-    });
+    Text::new(format!("FAB clicks: {} | tab: {}", count.get(), selected.get()))
+        .modifier(Modifier::new().absolute_offset(16.0, 96.0))
+        .build(ctx);
 }
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new().size(360.0, 640.0).title("Scaffold Demo").build(ctx, scaffold_demo);
+        Window::new()
+            .size(360.0, 704.0)
+            .title("Scaffold Demo")
+            .build(ctx, |ctx| {
+                settings::shell("Scaffold Demo", ctx, scaffold_demo);
+            });
     });
 }

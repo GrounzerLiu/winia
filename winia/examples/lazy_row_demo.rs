@@ -7,6 +7,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -42,10 +46,6 @@ fn lazy_row_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("LazyRow 演示（1000 项横向懒加载）")
-                .font_size(20.0)
-                .modifier(Modifier::new().padding(8.0))
-                .build(ctx);
             Text::new("横向拖拽滚动 + 松手惯性 fling（touchpad 横向滚轮）")
                 .font_size(12.0)
                 .color(WiniaTheme::colors().on_surface_variant)
@@ -91,7 +91,9 @@ fn main() {
             Window::new()
                 .size(520.0, 360.0)
                 .title("LazyRow Demo")
-                .build(ctx, lazy_row_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("LazyRow Demo", ctx, lazy_row_demo);
+                });
         });
     });
 }

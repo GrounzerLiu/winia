@@ -14,6 +14,11 @@
 use letclone::clone;
 use winia::prelude::*;
 
+// The shared example chrome: a top app bar with a settings button, and the bottom sheet that
+// switches the theme mode and the layout direction. Every example includes this file.
+#[path = "common/settings.rs"]
+mod settings;
+
 /// Which dialog is open, if any.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Open {
@@ -33,8 +38,7 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(24.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
-            Text::new("AlertDialog").font_size(20.0).build(ctx);
-            Divider::horizontal().build(ctx);
+            // No heading of its own: the shared chrome's top app bar carries the title.
             for (label, which) in [
                 ("Two actions (confirm + dismiss)", Open::TwoAction),
                 ("One action", Open::OneAction),
@@ -215,7 +219,9 @@ fn main() {
                 // the cap instead of matching the window by coincidence.
                 .size(700.0, 620.0)
                 .title("AlertDialog")
-                .build(ctx, |ctx| alert_dialog_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("AlertDialog", ctx, |ctx| alert_dialog_demo(ctx));
+                });
         });
     });
 }

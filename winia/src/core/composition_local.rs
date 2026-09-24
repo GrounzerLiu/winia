@@ -146,6 +146,18 @@ impl<T: Clone + 'static> CompositionLocal<T> {
 
     /// 在闭包执行期间提供新值。嵌套 provides 通过 unique ID 正确隔离——
     /// 即使是同一个 `CompositionLocal` 再次嵌套，`rposition` 也能弹出最内层。
+    ///
+    /// ⚠ **`provides` does not invalidate its readers** — it only changes what the NEXT reader
+    /// reads. For a new value to actually reach them, the provider's enclosing **scope** has to
+    /// re-run AND each reader has to re-run: a reader picks the local up again only when the group
+    /// it sits in is re-entered because it was marked dirty. So when a state feeds a local, the read
+    /// belongs inside a scope (`#[composable]` function, or a container's restartable group):
+    /// marking a scope marks its whole subtree (`mark_dirty_subtree`), and every reader re-reads.
+    /// A read that lands at the **root of a window's content** has no scope to land in — it registers
+    /// against the root fallback key — so the marking covers only that key: the content does re-run
+    /// with the new value, but the subtree skips on cached slots and the page keeps the layout it
+    /// built with the old one. `examples/common/settings.rs` (`shell`) hit exactly this; the
+    /// measurements are in the comment there.
     pub fn provides<R>(&self, value: T, f: impl FnOnce() -> R) -> R {
         let arc: Arc<dyn Any> = Arc::new(value);
         SLOTS.with(|s| s.borrow_mut().push((self.id, arc)));

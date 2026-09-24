@@ -8,6 +8,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
@@ -144,7 +148,9 @@ fn main() {
             Window::new()
                 .size(520.0, 620.0)
                 .title("Navigation drawer")
-                .build(ctx, |ctx| navigation_drawer_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Navigation drawer", ctx, |ctx| navigation_drawer_demo(ctx));
+                });
         });
     });
 }

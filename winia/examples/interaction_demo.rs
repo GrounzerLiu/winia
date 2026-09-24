@@ -5,6 +5,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::core::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Shape};
@@ -27,11 +31,6 @@ fn interaction_ui(ctx: &mut ComposeCtx) {
         .spacing(16.0)
         .modifier(Modifier::new().padding(24.0).fill_max_size())
         .build(ctx, |ctx| {
-            Text::new("InteractionSource 演示")
-                .font_size(22.0)
-                .color(WiniaTheme::colors().on_surface_variant)
-                .build(ctx);
-
             // ── 状态实时展示（读取 src 注册依赖——变化自动重组）──
             Text::new(format!(
                 "状态: enabled={} pressed={} hovered={} focused={} dragged={}",
@@ -110,7 +109,9 @@ fn main() {
             Window::new()
                 .size(520.0, 560.0)
                 .title("Interaction Demo")
-                .build(ctx, interaction_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Interaction Demo", ctx, interaction_ui);
+                });
         });
     });
 }

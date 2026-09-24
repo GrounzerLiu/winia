@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::Chip;
 
 fn section_title(ctx: &mut ComposeCtx, title: &str) {
@@ -122,9 +126,12 @@ fn main() {
     winia::run_app!(|ctx| {
         winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
             winia::ui::window::Window::new()
-                .size(520.0, 400.0)
+                // Taller than the cases need on their own: the chrome's top app bar takes 64 px.
+                .size(520.0, 460.0)
                 .title("Chips Demo")
-                .build(ctx, chip_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Chips Demo", ctx, chip_ui);
+                });
         });
     });
 }

@@ -27,6 +27,10 @@
 use letclone::clone;
 use winia::animation::SpringSpec;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 const APP_BAR_H: f32 = 90.0;
 const CONTROLS_Y: f32 = 452.0;
@@ -188,7 +192,9 @@ fn main() {
                 .size(420.0, 560.0)
                 .title("Pinned bar over a shared-element flight")
                 .build(ctx, |ctx| {
-                    pinned_bar_demo(ctx);
+                    settings::shell("Pinned bar over a shared-element flight", ctx, |ctx| {
+                        pinned_bar_demo(ctx);
+                    });
                 });
         });
     });

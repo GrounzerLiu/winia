@@ -13,6 +13,10 @@ use letclone::clone;
 use winia::prelude::*;
 use winia::animation::{SpringSpec, TweenSpec};
 
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 fn main() {
     winia::run_app!(|ctx| {
         // Follow the system theme: with no theme node the window is pinned to the light default.
@@ -21,11 +25,21 @@ fn main() {
                 .size(420.0, 900.0)
                 .title("AnimatedVisibility Demo")
                 .build(ctx, |ctx| {
-                    panel_a(ctx);
-                    panel_b(ctx);
-                    panel_c(ctx);
-                    panel_d(ctx);
-                    panel_e(ctx);
+                    // Each panel keeps its own caption button — the top bar carries the window's
+                    // title, and the five cases are labelled individually. The chrome's content slot
+                    // takes ONE child (it is a Scaffold slot), so the five panels go into a Column; the
+                    // window's root slot used to stack them by itself.
+                    settings::shell("AnimatedVisibility Demo", ctx, |ctx| {
+                        Column::new()
+                            .modifier(Modifier::new().fill_max_size())
+                            .build(ctx, |ctx| {
+                                panel_a(ctx);
+                                panel_b(ctx);
+                                panel_c(ctx);
+                                panel_d(ctx);
+                                panel_e(ctx);
+                            });
+                    });
                 });
         });
     });

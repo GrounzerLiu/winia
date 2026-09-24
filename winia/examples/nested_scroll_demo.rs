@@ -24,6 +24,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// 把内层列表滚到底后的剩余 delta 转给外层 ScrollState 的 connection。
 /// 对齐 §3.8 语义：`on_post_scroll(consumed_by_child, available)`——
@@ -174,7 +178,9 @@ fn main() {
                 .size(420.0, 720.0)
                 .title("Nested Scroll Demo")
                 .build(ctx, |ctx| {
-                    nested_scroll_demo(ctx);
+                    settings::shell("Nested Scroll Demo", ctx, |ctx| {
+                        nested_scroll_demo(ctx);
+                    });
                 });
         });
     });

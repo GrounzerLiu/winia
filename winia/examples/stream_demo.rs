@@ -2,6 +2,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::app;
 use std::time::Duration;
 
@@ -11,7 +15,9 @@ fn main() {
             Window::new()
                 .size(360.0, 340.0)
                 .title("Stream Observer Demo")
-                .build(ctx, |ctx| stream_demo_ui(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Stream Observer Demo", ctx, |ctx| stream_demo_ui(ctx));
+                });
         });
     });
 }

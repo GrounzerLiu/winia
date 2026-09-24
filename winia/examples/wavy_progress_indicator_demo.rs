@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -26,10 +30,6 @@ fn wavy_progress_indicator_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .build(ctx, |ctx| {
-            Text::new("Wavy Progress Indicator 演示（M3 Expressive）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "Slider 控制进度（Linear + Circular determinate）");
             Slider::new(progress.get())
                 .on_value_change({ clone!(progress); move |nv| progress.update(|s| *s = nv) })
@@ -82,7 +82,9 @@ fn main() {
             Window::new()
                 .size(480.0, 720.0)
                 .title("Wavy Progress Indicator Demo")
-                .build(ctx, wavy_progress_indicator_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Wavy Progress Indicator Demo", ctx, wavy_progress_indicator_demo);
+                });
         });
     });
 }

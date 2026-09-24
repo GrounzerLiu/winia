@@ -3,6 +3,10 @@
 //! 仅使用现有组件 API，不使用 ctx.start_leaf / ctx.end_node 低级模式。
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
 /// a box on a light page and vanished on a dark one (this demo follows the system theme now), so the marks
@@ -253,7 +257,9 @@ fn main() {
             Window::new()
                 .size(480.0, 700.0)
                 .title("Layout Demo")
-                .build(ctx, |ctx| layout_demo_ui(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Layout Demo", ctx, |ctx| layout_demo_ui(ctx));
+                });
         });
     });
 }

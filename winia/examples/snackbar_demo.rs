@@ -16,6 +16,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 #[composable]
 fn snackbar_demo(ctx: &mut ComposeCtx) {
@@ -122,7 +126,9 @@ fn main() {
             Window::new()
                 .size(480.0, 560.0)
                 .title("Snackbar 演示")
-                .build(ctx, |ctx| snackbar_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Snackbar 演示", ctx, |ctx| snackbar_demo(ctx));
+                });
         });
     });
 }

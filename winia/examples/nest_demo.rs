@@ -9,6 +9,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ComposeCtx;
 use winia::core::state::State;
 
@@ -189,7 +193,9 @@ fn main() {
                 .size(420.0, 640.0)
                 .title("Nesting Demo")
                 .build(ctx, |ctx| {
-                    nest_demo(ctx);
+                    settings::shell("Nesting Demo", ctx, |ctx| {
+                        nest_demo(ctx);
+                    });
                 });
         });
     });

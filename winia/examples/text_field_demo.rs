@@ -18,6 +18,10 @@
 //! 运行：`cargo run -p winia --example text_field_demo`
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::{TextField, TextFieldValue};
 use winia::ui::text_transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
 
@@ -340,7 +344,9 @@ fn main() {
             Window::new()
                 .size(520.0, 700.0)
                 .title("TextField Test")
-                .build(ctx, text_field_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("TextField Test", ctx, text_field_ui);
+                });
         });
     });
 }

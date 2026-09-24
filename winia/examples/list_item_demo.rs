@@ -2,6 +2,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn label(ctx: &mut ComposeCtx, value: &str) {
     Text::new(value)
@@ -18,8 +22,6 @@ fn list_item_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(ctx.remember(|| ScrollState::new()).get()))
         .build(ctx, |ctx| {
-            Text::new("ListItem (Material 3)").font_size(22.0).build(ctx);
-
             label(ctx, "一行");
             ListItem::new(|ctx| Text::new("账户设置").build(ctx))
                 .leading_content(|ctx| Text::new("⚙").font_size(20.0).build(ctx))
@@ -58,7 +60,12 @@ fn list_item_demo(ctx: &mut ComposeCtx) {
 fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
-            Window::new().size(460.0, 720.0).title("ListItem Demo").build(ctx, list_item_demo);
+            Window::new()
+                .size(460.0, 720.0)
+                .title("ListItem Demo")
+                .build(ctx, |ctx| {
+                    settings::shell("ListItem Demo", ctx, list_item_demo);
+                });
         });
     });
 }

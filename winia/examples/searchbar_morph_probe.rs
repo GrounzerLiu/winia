@@ -15,6 +15,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::overlay::{Dialog, OverlayAnimSpec};
 use winia::ui::shared_transition::{current_shared_scope, OverlayClip, SharedTransitionLayout};
 
@@ -145,7 +149,9 @@ fn main() {
             Window::new()
                 .size(720.0, 560.0)
                 .title("SearchBar shared-morph probe")
-                .build(ctx, probe_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("SearchBar shared-morph probe", ctx, probe_ui);
+                });
         });
     });
 }

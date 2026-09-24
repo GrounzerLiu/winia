@@ -15,6 +15,10 @@ use winia::nav::{
     ListDetailStrategy, NavBackStack, NavDisplay, NavEntry, NavTransitionSpec, SceneStrategy,
 };
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// Type-safe routes (compares to Nav3's `NavKey` with `@Serializable`; winia needs no serialization).
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
@@ -366,7 +370,9 @@ fn main() {
                 .size(420.0, 620.0)
                 .title("Nav × Shared Elements")
                 .build(ctx, |ctx| {
-                    demo(ctx);
+                    settings::shell("Nav × Shared Elements", ctx, |ctx| {
+                        demo(ctx);
+                    });
                 });
         });
     });

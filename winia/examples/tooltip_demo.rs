@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 use winia::ui::Tooltip;
 
 #[composable]
@@ -75,9 +79,11 @@ fn main() {
     winia::run_app!(|ctx| {
         winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
             winia::ui::window::Window::new()
-                .size(480.0, 300.0)
+                .size(480.0, 364.0)
                 .title("Tooltip Demo")
-                .build(ctx, tooltip_ui);
+                .build(ctx, |ctx| {
+                    settings::shell("Tooltip Demo", ctx, tooltip_ui);
+                });
         });
     });
 }

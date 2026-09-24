@@ -4,6 +4,10 @@
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 /// A neutral highlight over the page — `on_surface` at a low alpha. The black overlay this replaces marked
 /// a text box on a light page and vanished on a dark one (this demo follows the system theme now), so the
@@ -20,7 +24,9 @@ fn main() {
                 .size(540.0, 700.0)
                 .title("Text Demo")
                 .build(ctx, |ctx| {
-                    text_demo_ui(ctx);
+                    settings::shell("Text Demo", ctx, |ctx| {
+                        text_demo_ui(ctx);
+                    });
                 });
         });
     });

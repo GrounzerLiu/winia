@@ -539,6 +539,25 @@ impl UiTest {
         node_tag_is_focused(&self.tree, tag)
     }
 
+    /// Tags of every node the tree shows as focused, across the main tree and every overlay entry.
+    ///
+    /// The framework keeps ONE visible focus: a layer that is not the keyboard owner remembers where
+    /// its focus was in a slot key, not in the tree, so a test can assert this list has exactly one
+    /// entry whenever something is focused — two entries mean a layer is drawing a ring it should
+    /// not be showing (or the single-owner rule broke).
+    pub fn focused_tags(&mut self) -> Vec<String> {
+        self.refresh();
+        let mut out = Vec::new();
+        // Both sides of the split: `for_each_window_scoped` visits either the main-tree entries or
+        // the popup entries, and this assertion is about every layer at once.
+        for overlay_only in [false, true] {
+            for_each_window_scoped(&self.tree, overlay_only, |_, _, _, root| {
+                collect_focused_tags(root, &mut out);
+            });
+        }
+        out
+    }
+
     /// Find a tag inside the POPUP entries, in WINDOW coordinates. Main-tree lookups skip
     /// popups on purpose, so popup content needs its own entry point; a popup node's tree
     /// coordinates are layer-local, and this adds that layer's screen origin.
@@ -846,6 +865,29 @@ fn find_node_tag_scoped(tree: &Value, tag: &str, overlay_only: bool) -> Option<(
         }
     });
     found
+}
+
+fn collect_focused_tags(n: &Value, out: &mut Vec<String>) {
+    if let Some(arr) = n.as_array() {
+        for child in arr {
+            collect_focused_tags(child, out);
+        }
+        return;
+    }
+    if n.get("focused").and_then(|value| value.as_bool()).unwrap_or(false) {
+        out.push(
+            n.get("tag")
+                .and_then(|value| value.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("<untagged>")
+                .to_string(),
+        );
+    }
+    for key in ["children", "content", "root"] {
+        if let Some(child) = n.get(key) {
+            collect_focused_tags(child, out);
+        }
+    }
 }
 
 fn node_tag_is_focused(tree: &Value, tag: &str) -> bool {

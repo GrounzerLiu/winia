@@ -188,6 +188,9 @@ impl ModalBottomSheet {
             offset: (0.0, 0.0),
             anchor_slide: None,
             modal: true,
+            // The modal sheet owns the keyboard while it is up: Tab works inside the sheet, and the
+            // page behind the scrim cannot be reached.
+            focus_scope: true,
             dismiss_on_outside: true,
             click_passthrough: false,
             on_dismiss: on_dismiss_req.map(|cb| {

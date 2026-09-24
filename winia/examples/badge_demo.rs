@@ -7,6 +7,10 @@
 //! - 自定义颜色
 
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
 
 fn section_title(ctx: &mut ComposeCtx, text: &str) {
     Text::new(text)
@@ -23,10 +27,6 @@ fn badge_demo(ctx: &mut ComposeCtx) {
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
-            Text::new("Badge 演示（material3 对齐）")
-                .font_size(20.0)
-                .build(ctx);
-
             section_title(ctx, "BadgedBox 组合（小徽章 / 数字 / 最大字符）");
             Row::new()
                 .modifier(Modifier::new().padding_vertical(3.0))
@@ -123,7 +123,9 @@ fn main() {
             Window::new()
                 .size(420.0, 600.0)
                 .title("Badge Demo")
-                .build(ctx, badge_demo);
+                .build(ctx, |ctx| {
+                    settings::shell("Badge Demo", ctx, badge_demo);
+                });
         });
     });
 }
