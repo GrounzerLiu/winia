@@ -287,6 +287,60 @@ impl<'a> ComposeCtx<'a> {
         self.composer.overlay_active.insert(id, active);
     }
 
+    /// Remember a write-back channel under an EXPLICIT key.
+    ///
+    /// The sibling of [`ComposeCtx::remember_at_key`] for state a provider has to keep per frame about
+    /// ITSELF: no notification (the composer is already running), and no stable-call-site lookup — that
+    /// lookup panics outside a `#[composable]`/keyed context, which a provider cannot require, since
+    /// `WiniaTheme::provide_resolved` also runs from a window's per-frame wrapper.
+    ///
+    /// The caller owns key uniqueness: use [`crate::core::composer::mix_key`] over the position's
+    /// identity so two providers in one composer never share a slot.
+    pub fn remember_backchannel_at_key<T: Clone + 'static>(
+        &mut self,
+        key: u64,
+        init: impl FnOnce() -> crate::core::state::Backchannel<T>,
+    ) -> crate::core::state::Backchannel<T> {
+        self.composer.slot_table.remember_handle(key, init)
+    }
+
+    /// A key for "the composition position we are at right now", mixed with `namespace`.
+    ///
+    /// A provider needs a per-SITE key: two `WiniaTheme::with_*` calls in one composer must not share
+    /// the memory of what they last provided, or each would see the other's value as a change and dirty
+    /// its subtree every frame. The position is the current group (a container's or scope's key, which
+    /// is statement-derived and therefore stable) or, before any group, the slot path.
+    pub fn position_key(&self, namespace: u64) -> u64 {
+        let base = match GROUP_STACK.with(|s| s.borrow().last().copied()) {
+            Some(key) => key,
+            None => {
+                // No group yet (a window's content wrapper is the common case): hash the slot path.
+                let mut h: u64 = 0xcbf29ce484222325;
+                for &idx in self.composer.slot_table.current_path() {
+                    h ^= idx as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                h
+            }
+        };
+        mix_key(base, namespace)
+    }
+
+    /// Invalidate everything composed INSIDE this position — what a `CompositionLocal` provider calls
+    /// when the value it is about to provide differs from the previous frame's.
+    ///
+    /// Why a provider has to do this itself: `provides` only changes what the NEXT reader reads. A
+    /// reader re-reads a local when its own group runs again, and a group is re-entered only when it is
+    /// dirty. A container that declares nothing about itself (`start_restartable_group` with an
+    /// unchanged modifier and no `ctx.changed`) is therefore Skipped and keeps the value it composed
+    /// with — the layout, padding and colors it built from the old one. Marking the inner slots makes
+    /// those readers run again.
+    ///
+    /// Call it only when the value actually changed: it costs a re-entry of the whole subtree.
+    pub fn mark_subtree_dirty(&mut self) {
+        self.composer.mark_inner_slots_dirty();
+    }
+
     /// 当前组合节点的 slot_key（DropdownMenu 锚点用）
     pub fn composer_slot_key(&self) -> u64 {
         self.composer.slot_table.active_slot_key()
@@ -2575,6 +2629,20 @@ impl Composer {
     pub fn mark_content_dirty(&mut self) {
         self.needs_recomposition = true;
         SlotTable::mark_dirty_subtree(&mut self.slot_table.root_slot);
+    }
+
+    /// Mark every slot INSIDE the current composition position dirty, leaving the slot we are in alone.
+    ///
+    /// This is the CompositionLocal companion. A local is a stack, and a reader only picks a new value
+    /// up when its own group runs again — so a provider whose value changed has to dirty the readers it
+    /// is about to wrap, or a group that declared nothing about itself keeps what it composed with.
+    /// Marking the position's children (not the position itself) keeps the enclosing group's own Skip
+    /// decision out of it: it re-enters next frame only if something else asks it to.
+    pub(crate) fn mark_inner_slots_dirty(&mut self) {
+        let slot = self.slot_table.current_slot();
+        for child in &mut slot.children {
+            SlotTable::mark_dirty_subtree(child);
+        }
     }
 
     fn has_pending_compose_states(&self) -> bool {
