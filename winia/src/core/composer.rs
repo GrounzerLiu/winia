@@ -1380,7 +1380,23 @@ struct LayoutTransaction {
 }
 
 impl LayoutTransaction {
-    fn new(composer: &Composer) -> Self {
+    /// Takes the two whole-tree maps layout is about to rebuild, and keeps them for rollback.
+    ///
+    /// `prev_nodes` and `prev_node_by_key` are both cleared and rebuilt from the arena by `layout()`
+    /// (`collect_nodes` / `collect_node_keys`), so the snapshot needs their old content only because a
+    /// panic has to leave the composer exactly as it was — and that content is genuinely needed. It
+    /// does not follow that it must be COPIED: the rebuild begins by clearing, so while the new content
+    /// is being built nothing reads what the composer had. Moving the maps into the snapshot is
+    /// therefore equivalent, and it removes a deep clone of every node's `CachedNode` — which carries a
+    /// `Modifier` (a `Vec` of elements, some holding strings) and a `RefCell`. Measured: 149 µs of an
+    /// idle 800-row layout (4001 nodes), on a frame whose actual measurement folded in 0.04 µs
+    /// (`docs/benchmarks.md`).
+    ///
+    /// What remains is the drop of the snapshot's map at commit (which the clone paid too) plus one
+    /// allocation for the map being rebuilt — which is why `collect_nodes` and `collect_node_keys`
+    /// reserve up front rather than letting a `HashMap` grow into 4000 entries. Rollback is unchanged:
+    /// it restores the maps it took.
+    fn new(composer: &mut Composer) -> Self {
         let node_state = composer
             .arena
             .nodes
@@ -1409,12 +1425,12 @@ impl LayoutTransaction {
         }
 
         Self {
-            composer: composer as *const Composer as *mut Composer,
+            composer: composer as *mut Composer,
             snapshot: Some(LayoutTransactionSnapshot {
                 pending: composer.pending_states.pending_ids(),
                 layout_dirty_keys: composer.layout_dirty_keys.clone(),
-                prev_nodes: composer.prev_nodes.clone(),
-                prev_node_by_key: composer.prev_node_by_key.clone(),
+                prev_nodes: std::mem::take(&mut composer.prev_nodes),
+                prev_node_by_key: std::mem::take(&mut composer.prev_node_by_key),
                 layout_slot_reads: composer.layout_slot_reads.clone(),
                 layout_deps: composer.layout_deps.clone(),
                 layout_signal_handles: composer.layout_signal_handles.clone(),
@@ -4099,6 +4115,97 @@ fn test_layout_dependency_panic_rolls_back_new_subscription() {
     should_panic.store(false, AtomicOrdering::Relaxed);
     composer.layout(constraints);
     assert!(!composer.has_pending_states(), "retry should consume the retained invalidation");
+}
+
+/// A panic while measuring must leave the cached node maps as they were.
+///
+/// `LayoutTransaction` MOVES `prev_nodes` and `prev_node_by_key` into its snapshot before layout
+/// rebuilds them (it used to deep-clone them, which cost 149 µs of an idle 800-row layout). The move
+/// is only correct because a rollback puts them back — and nothing else in the suite would notice if
+/// it did not: the maps are read by the NEXT compose's materialize, where a missing entry does not
+/// panic, it silently fails the Skip and rebuilds the subtree. This test therefore checks the maps
+/// directly and then the observable consequence, that the next idle compose Skips again.
+/// A panic while measuring must leave the cached node maps as they were.
+///
+/// `LayoutTransaction` MOVES `prev_nodes` and `prev_node_by_key` into its snapshot before layout
+/// rebuilds them (it used to deep-clone them, which cost 149 µs of an idle 800-row layout). The move
+/// is only correct because a rollback puts them back — and nothing else in the suite would notice if
+/// it did not: the maps are read by the NEXT compose's materialize, where a missing entry does not
+/// panic, it silently fails the Skip and rebuilds the subtree. So this checks the maps directly, and
+/// then the observable consequence, that the next idle compose can still Skip.
+#[test]
+fn test_layout_panic_restores_cached_node_maps() {
+    use std::panic::AssertUnwindSafe;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let layout_state = State::new(20.0f32);
+    let should_panic = Arc::new(AtomicBool::new(false));
+    let mut leaf_key = 0u64;
+
+    // The panicking closure is a MEASURE-time width, and it reads a State so the node has a layout
+    // dependency — that is what `set_animating` below uses to force a re-measure without recomposing
+    // (a leaf whose slot is clean and whose layout is not dirty keeps its cached measurement).
+    let build = |composer: &mut Composer,
+                 layout_state: &State<f32>,
+                 should_panic: &Arc<AtomicBool>,
+                 leaf_key: &mut u64| {
+        let flag = should_panic.clone();
+        let width_state = layout_state.clone();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let leaf = ctx.next_key();
+                    *leaf_key = leaf;
+                    ctx.start_leaf(leaf, Modifier::new().width(move || {
+                        let value = width_state.get();
+                        if flag.load(AtomicOrdering::Relaxed) {
+                            panic!("measure panic");
+                        }
+                        value
+                    }).height(10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+    };
+
+    build(&mut composer, &layout_state, &should_panic, &mut leaf_key);
+    composer.layout(constraints);
+    assert!(composer.prev_nodes.contains_key(&leaf_key), "layout must cache the leaf");
+    assert!(composer.prev_node_by_key.contains_key(&leaf_key), "layout must index the leaf");
+
+    // A DIRECT layout that panics, with no compose in between: compose drains `prev_node_by_key` as it
+    // claims nodes, so this is the frame shape in which both maps are non-empty when layout takes them.
+    should_panic.store(true, AtomicOrdering::Relaxed);
+    layout_state.as_raw().set_animating(21.0);
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| composer.layout(constraints)));
+    assert!(result.is_err(), "the measure panic must reach the caller");
+
+    // The maps layout took are back: the failed frame must not have consumed the previous frame's cache.
+    assert!(composer.prev_nodes.contains_key(&leaf_key),
+        "rollback must restore the cached node map the failed layout took");
+    assert!(composer.prev_node_by_key.contains_key(&leaf_key),
+        "rollback must restore the cached node index the failed layout took");
+    assert!(composer.arena.root.is_some(), "rollback must restore the tree");
+
+    // And the restored cache is USABLE: the retry lays out, and the frame after it Skips the container.
+    should_panic.store(false, AtomicOrdering::Relaxed);
+    composer.layout(constraints);
+    let mut skipped = false;
+    composer.compose(|ctx| {
+        let key = ctx.next_key();
+        match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+            GroupStatus::Skip => skipped = true,
+            GroupStatus::Enter => {}
+        }
+        ctx.end_restartable_group();
+    });
+    assert!(skipped, "the frame after a rolled-back layout must be able to Skip from the restored cache");
 }
 
 /// T2 布局失效传播：layout_dirty_keys 命中的节点 + 祖先链全部标 layout_dirty
