@@ -133,6 +133,8 @@ detached cell — useful for tests, hoisted owners, and `Arc`-shared models.
 pub struct DerivedValue<T>(pub(crate) Arc<dyn Fn() -> T + Send + Sync>);
 DerivedValue::new(f)  // cf. Compose derivedStateOf { }
 DerivedValue::get(&self) -> T   // re-runs f; inner get() calls subscribe
+pub type DerivedFloat = DerivedValue<f32>;
+```
 
 **Difference from Compose (open).** `derivedStateOf` caches its result and, when a dependency changes
 but the recomputed value is `==` the previous one, does NOT invalidate its readers. winia's
@@ -152,8 +154,6 @@ Step 2 is what makes it a mechanism rather than a field: today the notify path i
 keys`, straight through. Until then, a caller that needs the suppression can compare at the call site
 (`if derived.get() != last { last = derived.get(); ... }`) or keep the value in a `State` and set it
 only when it changed — `State::set` already skips equal values.
-pub type DerivedFloat = DerivedValue<f32>;
-```
 
 Arithmetic is implemented for `f32` only (`impl_derived_arith`: `Add/Sub/Mul/Div`
 for `DerivedFloat` and `&State<f32>`, plus `f32 * &State<f32>`), so layout
@@ -163,7 +163,54 @@ expression re-evaluate when `alpha` changes. Each operator builds a new
 the operators to `Dp / Offset / Size` is tracked in `docs/state-handles.md`
 §7.4.)
 
-## 7. Passing State around
+## 7. `StateList` / `StateMap`: observable collections
+
+```rust
+let rows: StateList<Row> = ctx.remember(|| StateList::from_vec(initial)).get();
+rows.push(row);                       // one copy, made by the list
+for row in rows.snapshot().iter() {}  // tracked read: an Arc clone, no element copies
+```
+
+| | |
+|---|---|
+| `StateList<T>` | `new` `from_vec` `snapshot` `peek` `len` `is_empty` `get` `contains` `to_vec` `push` `extend` `insert` `remove` `pop` `set` `clear` `retain` `sort_by` `swap` `truncate` `update` `replace` `state` |
+| `StateMap<K, V>` | `new` `from_pairs` `snapshot` `peek` `len` `is_empty` `get` `contains_key` `keys` `values` `to_vec` `insert` `insert_if_absent` `remove` `clear` `update` `state` |
+
+Remembered like any other handle (`LazyListState`, `SheetState`): the slot holds it across frames and
+`get()` hands the `Clone`-able handle out. The collection owns its own observable, so this is not a
+`State<StateList<..>>` — mutating the handle is what notifies.
+
+**What it buys over `State<Vec<T>>`.** Two costs hid in the old shape, and both grew with the
+collection: the call site cloned the whole vector to mutate it, and `State::set` compared it element by
+element to decide whether anything changed (`Vec::eq` short-circuits on the first difference, so a push
+to a 10 000-element list compared all 10 000 before noticing the length differed). A `StateList` holds
+one shared snapshot and replaces it on mutation, and the snapshot's `PartialEq` is **pointer
+identity** — one pointer compare answers "did it change", and a read is one `Arc` clone.
+
+**What it does not buy: per-element invalidation.** A reader of the list is a dependent of the whole
+list, so any mutation re-runs it — the same as before. Compose is no different at this layer: a
+`SnapshotStateList` notifies its readers for any structural change, and `LazyColumn`'s efficiency comes
+from keyed item reuse, not from the list saying which index moved. What changed is the cost of
+*detecting* a change and of reading the value, not the number of readers woken.
+
+**Equality differs from `State::set`, deliberately.** `set` skips notification for an equal value; a
+list compares snapshots by identity, so `push(x); pop();` notifies twice even though the content came
+back to where it started — two mutations happened. Replacing the list with its own snapshot
+(`list.replace(list.snapshot())`) is the no-op case identity is there for.
+
+**Feeding a lazy list** is the reason the snapshot converts into `Arc<Vec<T>>`: `items_from` accepts
+either, so the elements are shared rather than copied —
+
+```rust
+LazyColumn::new()
+    .items_from(rows.snapshot(), |row| row.id, |ctx, _i, row| { /* ... */ })
+    .build(ctx);
+```
+
+`nav.rs`'s `NavBackStack` still wraps `State<Vec<K>>`; navigation mutates rarely and re-notifies the
+whole stack, which is a trade it documents. Moving it to `StateList` is available but not done.
+
+## 8. Passing State around
 
 - Handles are cheap `Arc` clones: pass `&State<T>` to callees that only
   read, move/clone owned handles into components and callbacks that must
@@ -182,7 +229,7 @@ the operators to `Dp / Offset / Size` is tracked in `docs/state-handles.md`
   value lives behind an `RwLock` in an `Arc`), so handles move freely into
   `'static` component slots and effect closures.
 
-## 8. Pitfalls
+## 9. Pitfalls
 
 1. **Silent write to the wrong handle.** `Backchannel`/`Visual` writes never
    notify. If a value that must recompose its readers is stored in one,

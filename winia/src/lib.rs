@@ -86,12 +86,15 @@ pub use core::composer::{ComposeCtx, Composer};
 pub use core::state::{
     Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
 };
+// Observable collections: `mutableStateListOf` / `mutableStateMapOf`.
+pub use core::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
 pub use nested_scroll::{NestedScrollConnection, NestedScrollDispatcher, NestedScrollSource, ScrollDelta, ScrollVelocity};
 pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
     pub use crate::core::composer::ComposeCtx;
+    pub use crate::core::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
     pub use crate::core::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
     };
