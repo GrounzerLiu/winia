@@ -33,57 +33,119 @@ The `entered` column is the point of the benchmark. It says how many of the tree
 Exactly one group re-enters, and an idle frame re-enters none, at every size (50 / 200 / 800 rows).
 The claim that recomposition is scoped to the changed subtree is **true as stated**.
 
-## What does not hold: the frame is O(tree)
+## The frame is O(tree), and now it is linear
 
 Five rows in the fast column are µs/frame. Boxes = sized containers only; text = a `Text` per row.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 679 | 125 | 164 |
-| 200 | 1609 | 504 | 869 |
-| 800 | 13422 | 3452 | 11393 |
+| 50 | 605 | 107 | 136 |
+| 200 | 1568 | 448 | 572 |
+| 800 | 7156 | 1927 | 2746 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 896 | 176 | 299 |
-| 200 | 8015 | 837 | 1355 |
-| 800 | 43581 | 6308 | 14315 |
+| 50 | 763 | 136 | 162 |
+| 200 | 5268 | 581 | 685 |
+| 800 | 28440 | 3192 | 3897 |
 
-16x the rows costs ~28x an idle frame and ~70x a one-row update. Entering ONE group does not make the
-frame cheap, and the gap between idle and one-row widens with the tree rather than staying fixed.
+16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
+(before either of the two fixes below) the same two ratios were 28x and 70x — the difference was a
+quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
+is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 1722 | 1322 |
-| one row moved | 7001 | 8836 |
+| idle | 1225 | 777 |
+| one row moved | 1653 | ~880 |
 
-So a one-row update spends ~5.3 ms more in composition and ~7.5 ms more in layout than an idle frame
-of the same tree. Composition's extra is the ancestor chain re-running its closures — the read that
-drove the update sits in the list's scope, so the list's closure re-runs and every row takes a cheap
-Skip decision.
+and the control that splits composition's extra into "the walk" and "the update" — a state the
+CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
+is unchanged:
 
-The layout figure is the larger one, and it is not confined to the row that changed. That row's own
-share of an idle layout is ~1/800 of 1322 µs, under 2 µs; the extra 7.5 ms is on the order of four
-thousand rows' worth. The frame's own sizes are fixed by `Modifier::size` in the box scene, so nothing
-changed size and yet layout got 7x more expensive. **A re-entered subtree's layout invalidation is not
-local** — that is what the numbers say. (Which internal step spends it — re-materialising nodes,
-re-running the measure walk, or the parent's policy visiting every child — is not something this
-benchmark distinguishes; it measures the frame, not the pipeline. Pinning that down is the first task
-of the optimization round, not a conclusion of this one.)
+| compose, boxes 800 rows | fast sample | groups entered |
+|---|---|---|
+| idle (container Skips, so the loop does not run) | 1225 | 0 |
+| container dirty, every row Skips | 1745 | 0 |
+| one row dirty (the same loop + one rebuild) | 1643 | 1 |
 
-### Read placement does not matter here
+The loop over 800 rows costs **+520 µs**, and re-entering one row inside it costs **nothing measurable**
+(-100 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+Instrumented attribution of that 520 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
+of group machinery, the rest being the container's own entry plus rows materializing one by one instead
+of as one cached subtree.
 
-`row_scoped` (the row reads its own state handle, so the row's scope is the dependent) was measured
-against `row` (the list reads and passes the value down). At 800 rows: idle 3460 vs 3452, one row
-11207 vs 11393 — **no difference beyond noise**. The frame is dominated by the layout walk and the
-composition skip-walk, not by how many closures re-run, so a list does not need to be contorted for
-read placement. (The two shapes are otherwise identical; the first version of this scene built less
-content in the scoped row and appeared to win, which is the kind of comparison error this document is
-annotated to avoid.)
+### Correction: the 5 ms was NOT the Skip decision
 
-## Where a one-row update actually goes (and one correction)
+An earlier version of this document (and the work that followed it) attributed the one-row update's
+extra ~5 ms to "799 Skip decisions at ~6 µs each". **That number was wrong in the same way the layout
+artifact further down was wrong: it came from dividing a section total by a count.** The phase split
+showed 5.0 of 5.2 ms inside the content closure, the closure contains the row loop, the loop runs 800
+times — and the quotient was read as a per-iteration cost without ever measuring an iteration.
+
+Measuring the iteration says otherwise. With a temporary per-call profiler (`WINIA_SKIP_PROF`, kept as
+`target/probe/skip_prof.patch`), at 800 rows with one dirty row:
+
+| per call | before the fix | after |
+|---|---|---|
+| `State::get` (the loop's read) | **6221 ns** | **105 ns** |
+| `changed()` (param declaration) | 284 ns | 75 ns |
+| `start_restartable_group` (slot lookup + Skip decision + slot writes) | 587 ns | 323 ns |
+| `next_key()` | 124 ns | 48 ns |
+| the whole frame's 800 reads | **4989 µs** | 84 µs |
+
+The 6 µs was a **read**, not a Skip decision: 800 reads cost 5.0 ms of a 7.4 ms compose. The Skip
+machinery was ~1.1 µs per row all along (~0.9 ms for the loop), so attacking it first would have bought
+very little.
+
+### The mechanism: quadratic subscription bookkeeping
+
+`State::get` records a dependency, and `ComposerSubscription::subscribe_signal` — the "is this signal
+already tracked?" step — **scanned every signal the composer had ever read, twice per read** (`retain`
+plus `any`, each with a `Weak::upgrade` per entry). A list of N rows reading N states therefore cost
+O(N²) weak-pointer upgrades per frame: at 800 rows, 800 × 800 × 2 ≈ 1.3M, ~5 ms. The scan's answer was
+almost always the same (`yes, tracked`) — it asked a membership question of a container that had no
+index.
+
+### The fix
+
+`ComposerSubscription::signals` is a `HashMap<StateId, Weak<StateSignal>>` keyed by signal id, so the
+question is a hash lookup and the answer is stored once per signal. Dead entries (a dropped State's
+weak) are overwritten on the next read of that id, and dropped by the per-frame `retain_signals` and by
+`unsubscribe_all` at teardown — the two places that already iterated the container for real work.
+
+| arm | before | after | |
+|---|---|---|---|
+| one row updated, 800 rows (boxes) | 7701 µs | **2746 µs** | -64% |
+| cold frame, 800 rows (boxes) | 9716 µs | **7156 µs** | -26% |
+| idle frame, 800 rows (boxes) | 1998 µs | **1927 µs** | flat, as it should be |
+
+("before" is the state after the layout-transaction fix, so the two compose: 11393 µs → 2746 µs on the
+box one-row update, -76% overall. The text scene moved the same way — at 800 rows, one row updated
+14315 µs originally and 3897 µs now, cold 43581 µs and 28440 µs — but its "before" there is the
+original figure rather than post-layout-fix, so it is quoted here rather than tabulated.)
+
+Two regression tests came with it, of two deliberately different kinds:
+
+* `repeated_reads_track_one_entry_per_signal` — deterministic, pins the container's shape (repeat reads
+  must not grow it).
+* `reading_many_states_does_not_rescan_every_tracked_signal` — a **ratio**, deliberately loose: 40x the
+  states may not cost more than 200x the time. Linear work measured ~40x, and the old shape was verified
+  to fail it by reinstating the scans (774 µs vs 1.004 s, a 1300x ratio). It is in the suite because this
+  defect was invisible to every correctness assertion in the repo.
+
+### Read placement still does not matter
+
+`row_scoped` (the row reads its own state handle, so the row's scope is the dependent) against `row`
+(the list reads and passes the value down). At 800 rows: idle 1994 vs 1927, one row updated 2609 vs
+2746 — **no difference beyond noise**. Now that reads are cheap the conclusion is stronger than before:
+the frame is the walk, not the reads, so a list does not need to be contorted for read placement. (The
+two shapes are otherwise identical; the first version of this scene built less content in the scoped
+row and appeared to win, which is the kind of comparison error this document is annotated to avoid.)
+
+## The layout half (and one artifact of a mislabelled arm)
 
 An earlier version of this document said "the layout figure is pathological: one row's update costs 4x
 more than re-measuring the whole tree". **That was a measurement artifact of my own making**, and it is
@@ -91,49 +153,35 @@ worth recording because it is easy to repeat: the arm labelled "layout, one row 
 `compose_only()` inside the timed closure, so a compose cost was being read as a layout cost. The
 benchmark's labels now say exactly what each arm times.
 
-With the arms separated (boxes, 800 rows, after the fix below):
+With the arms separated (boxes, 800 rows, before the subscription fix):
 
 | arm | fast sample |
 |---|---|
 | compose only, nothing changed | ~1200 µs |
-| **compose only, one row updated** | **6250 µs** |
+| compose only, one row updated | 6250 µs |
 | layout only, nothing composed | 700 µs |
 | layout only, every size re-measured | 1495 µs |
 | frame (compose + layout), one row updated | 7980 µs |
 
-Frame minus compose puts the layout of a one-row update at **~1730 µs** — between an idle layout (700)
-and a full re-measure (1495). **Layout is fine.** The cost is all in composition: **+5 ms for one dirty
-row**, and that is the number to explain.
+Frame minus compose put the layout of a one-row update at ~1730 µs — between an idle layout (700) and a
+full re-measure (1495), so **layout was never the problem**: it re-measures nothing when nothing
+changed size, and its walk is the tree, not the update. The cost was all in composition, and the
+correction above says what it was.
 
-### It is a binary cost, not a per-row one
+The old flat-in-position and flat-in-count evidence still explains the *shape* of that cost, correctly,
+even though the number derived from it was wrong:
 
-| compose, boxes 800 rows | fast sample | groups entered |
-|---|---|---|
-| row 0 dirty | 6438 µs | 1 |
-| row 400 dirty | 6310 µs | 1 |
-| row 799 dirty | 6277 µs | 1 |
-| 2 adjacent rows dirty | 6744 µs | 2 |
-| 10 adjacent rows dirty | 6707 µs | 10 |
+| compose, boxes 800 rows | then | now | groups entered |
+|---|---|---|---|
+| row 0 dirty | 6438 µs | 1653 µs | 1 |
+| row 400 dirty | 6310 µs | 1651 µs | 1 |
+| row 799 dirty | 6277 µs | 1656 µs | 1 |
+| 2 adjacent rows dirty | 6744 µs | 1648 µs | 2 |
+| 10 adjacent rows dirty | 6707 µs | 1662 µs | 10 |
 
-Flat in WHERE the dirty row is and flat in HOW MANY rows are dirty. One dirty row costs the same as
-ten. So this is not per-change work; something switches on when anything is dirty.
-
-### The mechanism
-
-A phase split inside `compose()` (a temporary `WINIA_COMPOSE_TRACE`, kept as an unversioned patch in
-the working tree) puts **5.0 ms of the 5.2 ms in the content closure itself** — the loop over rows.
-
-The loop does not run at all when nothing is dirty: the container's slot is Clean, so
-`start_restartable_group` Skips it and its body is never entered (measured: content = 0.7 µs). When one
-row's state changes, `mark_dirty_path_scope` marks the dirty slot **and every ancestor** dirty — the
-ancestors' bodies must run to re-check their children. In this scene the state read sits in the
-container's scope, so the container is the dependent, its 800-row loop re-executes, and every row takes
-a Skip decision. **799 Skip decisions cost ~5 ms, about 6 µs each.**
-
-That is the shape to attack, and it is a different problem from the one this section originally
-described: not layout invalidation, but **what a Skip decision costs** (a slot lookup, a `changed`
-parameter push with a heap allocation per call, a modifier comparison) and **how far a dirty mark
-propagates**.
+Flat in WHERE the dirty row is and flat in HOW MANY rows are dirty, then and now: neither the change
+nor its position is the cost, because the container's closure re-runs either way and the loop it
+contains is the frame.
 
 ## One fix landed: the layout transaction
 
@@ -192,25 +240,30 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **The ancestor re-run is the big one: ~5 ms of the 800-row one-row update.** A state read in a
-  container's scope makes the container the dependent; marking it dirty marks its ancestors, and their
-  bodies re-execute — here the container's body is the loop over 800 rows, so 799 Skip decisions cost
-  ~5 ms. Two levers, and they are separate pieces of work:
-  (a) what a Skip decision costs (~6 µs each: a slot lookup, a `changed` parameter push that allocates,
-  a modifier comparison);
-  (b) how far a dirty mark propagates (does every ancestor need to *enter*, or only to re-check?).
-- **`collect_nodes` + `collect_node_keys` rebuild whole-tree maps on every layout** (~0.8 ms of a 4001
-  node layout, second only to the transaction). Measured, not yet attacked.
-- **The idle frame is not free** (~2.0 ms at 800 rows): composing a tree in which every group Skips
-  still walks the slot tree and replays each skipped group's structure.
+- **Composition's O(tree) floor, ~1.2 ms at 800 rows with nothing entered** (`compose only, idle` 1225
+  µs). The instrumented split puts it in `materialize` (~540 µs), `reconcile_compose_deps` (~510 µs),
+  `slot_table.truncate` + `collect_live_keys` (~180 µs) and setup (~110 µs) — all per-frame walks over
+  the whole composition, none of them doing anything with the rows that did not change. This is now the
+  largest single item in a one-row update (1653 µs), larger than the update's own loop.
+- **Layout's O(tree) floor, ~780 µs idle**, of which `LayoutTransaction::new` clones two whole-tree maps
+  (`prev_nodes`, `prev_node_by_key`) that layout immediately clears and rebuilds, and
+  `collect_nodes`/`collect_node_keys` rebuild them again. Snapshotting-by-move and reusing the map
+  allocations is the obvious shape; it needs the same care the first layout fix took (what layout may
+  write, and what a rollback must restore).
+- **The loop's 800 iterations, +520 µs** (~650 ns each: ~105 ns read, ~330 ns group machinery, the rest
+  materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation
+  (~75 ns) or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
 
-None of these is claimed as a bug: they are the cost of the current design, now visible and
-comparable. Each is a candidate for its own round, with this bench as the measuring stick.
+None of these is claimed as a bug: they are the cost of the current design, now visible and comparable.
+Each is a candidate for its own round, with this bench as the measuring stick. A read that is O(tracked
+signals) *was* a bug and is fixed above; the difference is worth keeping in mind when reading a target.
 
 ## Re-running any of this
 
-The benchmark's own traps are documented in the file where they bit, and the two phase splits used for
-the investigation are kept as unversioned patches in the working tree
-(`target/probe/layout_trace.patch`, `target/probe/compose_trace.patch`; apply with `git apply` and run
-with `WINIA_LAYOUT_TRACE=1` / `WINIA_COMPOSE_TRACE=1`). They are throwaway instrumentation, not part of
-the framework: `cargo bench` in a clean tree prints the tables above and nothing else.
+The benchmark's own traps are documented in the file where they bit, and the phase splits used for the
+investigations are kept as unversioned patches in the working tree:
+`target/probe/layout_trace.patch` (`WINIA_LAYOUT_TRACE=1`), `target/probe/compose_trace.patch`
+(`WINIA_COMPOSE_TRACE=1`) and `target/probe/skip_prof.patch` (`WINIA_SKIP_PROF=1`, the per-call
+profile that found the quadratic read). Apply with `git apply`; they are throwaway instrumentation,
+not part of the framework — `cargo bench` in a clean tree prints the tables above and nothing else,
+and `cargo bench -p winia -- container` runs just the loop control scene.

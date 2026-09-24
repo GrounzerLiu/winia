@@ -7,6 +7,7 @@
 //! - 通知走 StateSignal（按读取订阅的 Composer）+ notify_version
 
 use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
@@ -37,9 +38,17 @@ impl StateId {
 pub(crate) struct ComposerSubscription {
     id: u64,
     pending: Mutex<Vec<StateId>>,
-    /// Signals subscribed during the current and partial frames. Weak entries
+    /// Signals subscribed during the current and partial frames, keyed by signal id. Weak entries
     /// let Composer drop clean up even when composition unwinds through panic.
-    signals: Mutex<Vec<Weak<StateSignal>>>,
+    ///
+    /// Keyed rather than a list because this is touched on EVERY `State::get`: the registration is
+    /// "is this signal already tracked", and with a list that question was two full scans over every
+    /// signal the composer had ever read — quadratic in the number of rows a list reads, and measured
+    /// at 6.2 µs per read (a 800-row frame spent 5 ms of its 7.4 ms re-reading 800 states, each read
+    /// scanning the 800 it had already tracked). A dead entry is simply overwritten on the next read
+    /// of that signal; the scans that actually drop entries are `retain_signals` (per frame) and
+    /// `unsubscribe_all` (teardown).
+    signals: Mutex<HashMap<StateId, Weak<StateSignal>>>,
     /// Once a Composer drops, no in-flight read may create a new subscription.
     closed: std::sync::atomic::AtomicBool,
 }
@@ -51,7 +60,7 @@ impl ComposerSubscription {
         Arc::new(Self {
             id: NEXT_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed),
             pending: Mutex::new(Vec::new()),
-            signals: Mutex::new(Vec::new()),
+            signals: Mutex::new(HashMap::new()),
             closed: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -67,13 +76,13 @@ impl ComposerSubscription {
         if self.closed.load(Ordering::Acquire) {
             return None;
         }
-        signals.retain(|weak| weak.upgrade().is_some());
         let queue = Arc::downgrade(self);
         let observed_revision = signal.subscribe(queue.clone());
-        if observed_revision.is_some()
-            && !signals.iter().any(|weak| weak.upgrade().is_some_and(|item| item.id() == signal.id()))
-        {
-            signals.push(Arc::downgrade(signal));
+        if observed_revision.is_some() {
+            // One entry per signal id: re-reading a state already tracked costs a hash lookup and a
+            // weak-pointer store, not a scan. (Overwriting the entry is also how a dead one — its
+            // strong count gone — is replaced.)
+            signals.insert(signal.id(), Arc::downgrade(signal));
         }
         observed_revision
     }
@@ -84,7 +93,7 @@ impl ComposerSubscription {
         let mut signals = self.signals.lock();
         self.closed.store(true, Ordering::Release);
         let tracked = std::mem::take(&mut *signals);
-        for weak in tracked {
+        for weak in tracked.values() {
             if let Some(signal) = weak.upgrade() {
                 signal.unsubscribe(self.id);
             }
@@ -95,7 +104,7 @@ impl ComposerSubscription {
     fn signal_ids(&self) -> std::collections::HashSet<StateId> {
         self.signals
             .lock()
-            .iter()
+            .values()
             .filter_map(|weak| weak.upgrade().map(|signal| signal.id()))
             .collect()
     }
@@ -106,9 +115,9 @@ impl ComposerSubscription {
     pub(crate) fn retain_signals(&self, live_ids: &std::collections::HashSet<StateId>) {
         let mut signals = self.signals.lock();
         let mut removed = Vec::new();
-        signals.retain(|weak| {
+        signals.retain(|id, weak| {
             let Some(signal) = weak.upgrade() else { return false };
-            if live_ids.contains(&signal.id()) {
+            if live_ids.contains(id) {
                 true
             } else {
                 removed.push(signal);
@@ -1308,6 +1317,64 @@ mod tests {
         queue.unsubscribe_all();
         state.set(1);
         assert!(queue.is_empty(), "取消订阅后不应再收到 State 通知");
+    }
+
+    /// Re-reading a state must not grow the tracked set: the container is keyed by signal id.
+    ///
+    /// The shape this pins down is also the fix for a measured defect — the container used to be a
+    /// list, and every read scanned it to answer "already tracked?", which made a list of N rows cost
+    /// O(N²) per frame (800 rows: 5 ms of a 7.4 ms frame, `docs/benchmarks.md`).
+    #[test]
+    fn repeated_reads_track_one_entry_per_signal() {
+        let queue = ComposerSubscription::new();
+        let a = State::new(1i32);
+        let b = State::new(2i32);
+        let mut frame = begin_compose_deps_with_queue(Arc::downgrade(&queue));
+        for _ in 0..5 {
+            a.get();
+            b.get();
+        }
+        take_deps();
+        frame.commit();
+        assert_eq!(queue.signal_ids().len(), 2, "repeat reads must track one entry per signal");
+    }
+
+    /// Reading N states must not cost O(N²).
+    ///
+    /// A ratio rather than an absolute figure, deliberately loose: linear work is ~40x for 40x the
+    /// states, while the scan this replaced was ~1600x, so the bound separates the two shapes with a
+    /// wide margin on any machine. Written because the defect it guards was invisible to a
+    /// correctness test — every assertion still passed while a frame spent 5 ms on 800 reads.
+    #[test]
+    fn reading_many_states_does_not_rescan_every_tracked_signal() {
+        fn measure(states: usize) -> std::time::Duration {
+            let queue = ComposerSubscription::new();
+            let handles: Vec<State<i64>> = (0..states as i64).map(State::new).collect();
+            let mut frame = begin_compose_deps_with_queue(Arc::downgrade(&queue));
+            for handle in &handles {
+                handle.get(); // warm the tracking, then time steady-state reads
+            }
+            let mut best = std::time::Duration::MAX;
+            for _ in 0..3 {
+                let start = std::time::Instant::now();
+                for _ in 0..5 {
+                    for handle in &handles {
+                        handle.get();
+                    }
+                }
+                best = best.min(start.elapsed());
+            }
+            take_deps();
+            frame.commit();
+            best
+        }
+
+        let small = measure(50);
+        let large = measure(2000);
+        assert!(
+            large < small * 200,
+            "40x the states must not cost more than 200x the time: {small:?} vs {large:?}"
+        );
     }
 
     #[test]
