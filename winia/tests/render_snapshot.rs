@@ -317,3 +317,249 @@ fn z_index_reorders_sibling_painting() {
         "with z_index the raised (earlier) sibling paints on top"
     );
 }
+
+// ── Brushes / gradients ──
+//
+// These read PIXELS, which is the only way to test a gradient: nothing in the layout tree or the
+// semantics tree names a color. Each test states the gradient's direction and then asserts what the
+// renderer actually put at the two ends and the middle.
+
+use winia::brush::{Brush, BrushTile};
+
+const RED: (u8, u8, u8) = (255, 0, 0);
+const BLUE: (u8, u8, u8) = (0, 0, 255);
+
+fn red() -> Color {
+    Color::from_argb(255, 255, 0, 0)
+}
+
+fn blue() -> Color {
+    Color::from_argb(255, 0, 0, 255)
+}
+
+/// Draw one `w`x`h` node filled with `brush` — a value or a closure, as the modifier takes.
+fn brush_scene(brush: impl Into<winia::brush::BrushSource>, w: f32, h: f32) -> skia_safe::Surface {
+    let brush = brush.into();
+    let (mut surface, _) = render_ui(w, h, winia::app_root!(move |ctx| {
+        use winia::ui::layout_components::Column;
+        Column::new()
+            .modifier(Modifier::new().size(w, h).background_brush(brush, Shape::Rectangle))
+            .build(ctx, |_| {});
+    }));
+    surface
+}
+
+/// The RGB at a point.
+fn rgb(surface: &mut skia_safe::Surface, x: i32, y: i32) -> (u8, u8, u8) {
+    let (r, g, b, _) = pixel(surface, x, y);
+    (r, g, b)
+}
+
+#[test]
+fn a_linear_gradient_runs_left_to_right_by_default() {
+    let mut surface = brush_scene(Brush::linear_gradient([red(), blue()]), 100.0, 100.0);
+
+    // Sampling at x=2 and x=97 stays clear of the antialiased first and last column.
+    let left = rgb(&mut surface, 2, 50);
+    let middle = rgb(&mut surface, 50, 50);
+    let right = rgb(&mut surface, 97, 50);
+
+    assert!(color_close(left, RED, 12), "the left end is the first stop, got {left:?}");
+    assert!(color_close(right, BLUE, 12), "the right end is the last stop, got {right:?}");
+    assert!(
+        left.0 > middle.0 && middle.0 > right.0 && left.2 < middle.2 && middle.2 < right.2,
+        "red falls and blue rises across the run: {left:?} {middle:?} {right:?}"
+    );
+    assert!(color_close(middle, (128, 0, 128), 30), "the middle is the even blend, got {middle:?}");
+
+    // A horizontal gradient is constant down its length.
+    assert_eq!(rgb(&mut surface, 50, 5), rgb(&mut surface, 50, 95));
+}
+
+#[test]
+fn the_orientation_helpers_run_the_other_ways() {
+    let mut surface = brush_scene(Brush::linear_gradient([red(), blue()]).vertical(), 100.0, 100.0);
+    assert!(color_close(rgb(&mut surface, 50, 2), RED, 12), "vertical: the top is the first stop");
+    assert!(color_close(rgb(&mut surface, 50, 97), BLUE, 12), "vertical: the bottom is the last stop");
+
+    let mut surface = brush_scene(Brush::linear_gradient([red(), blue()]).diagonal(), 100.0, 100.0);
+    assert!(color_close(rgb(&mut surface, 3, 3), RED, 24), "diagonal: top-left is the first stop");
+    assert!(color_close(rgb(&mut surface, 96, 96), BLUE, 24), "diagonal: bottom-right is the last stop");
+}
+
+#[test]
+fn a_radial_gradient_runs_outward_from_the_centre() {
+    // The centre is the node's MIDDLE, whatever the aspect ratio: a radial brush's `from` is a centre,
+    // not the linear brush's start point. (Getting that wrong put the whole pattern around the left
+    // edge — measured, then fixed.)
+    let mut surface = brush_scene(Brush::radial_gradient([red(), blue()]), 200.0, 100.0);
+
+    assert!(color_close(rgb(&mut surface, 100, 50), RED, 12), "the centre is the first stop");
+    // Half the SHORTER side is 50, so 25px out is halfway along the ramp in every direction.
+    for (label, sample) in [
+        ("east", rgb(&mut surface, 125, 50)),
+        ("west", rgb(&mut surface, 75, 50)),
+        ("north", rgb(&mut surface, 100, 25)),
+        ("south", rgb(&mut surface, 100, 75)),
+    ] {
+        assert!(
+            color_close(sample, (153, 0, 102), 30),
+            "{label} at 25px of a 50px radius is halfway along the ramp, got {sample:?}"
+        );
+    }
+    // And the far end of the radius is the last stop.
+    let edge = rgb(&mut surface, 100, 97);
+    assert!(edge.2 > 200 && edge.0 < 40, "the radius reaches the shorter side's edge, got {edge:?}");
+}
+
+#[test]
+fn a_radial_radius_is_a_fraction_of_the_shorter_side() {
+    // On a wide node a radius of 0.5 reaches the top and bottom edges, not the far left/right ones —
+    // which is what lets a "spotlight" gradient fill a card at any aspect ratio.
+    let mut surface = brush_scene(Brush::radial_gradient([red(), blue()]), 200.0, 100.0);
+    let top = rgb(&mut surface, 100, 3);
+    assert!(top.2 > 190, "the top edge is at the radius' end, got {top:?}");
+
+    // A radius of 1.5 of the shorter side has not been reached at the far left yet.
+    let mut surface = brush_scene(Brush::radial_gradient([red(), blue()]).radius(1.5), 200.0, 100.0);
+    let left = rgb(&mut surface, 3, 50);
+    assert!(
+        left.2 < 200 && left.0 > 60,
+        "a radius of 1.5 of the shorter side is still not reached at the far left, got {left:?}"
+    );
+}
+
+#[test]
+fn a_sweep_gradient_wraps_clockwise_from_three_oclock() {
+    // Skia's convention (and CSS conic-gradient's): 0 degrees at the +x axis, clockwise, one full
+    // turn. With two stops at 0.0 and 0.5 the run reaches the second color at 180 degrees (9 o'clock)
+    // and holds from there back around to 3 o'clock.
+    let mut surface = brush_scene(
+        Brush::sweep_gradient([red(), blue()]).positions([0.0, 0.5]),
+        100.0,
+        100.0,
+    );
+
+    assert!(color_close(rgb(&mut surface, 97, 50), RED, 12), "the sweep starts at 3 o'clock");
+    assert!(color_close(rgb(&mut surface, 50, 97), (128, 0, 128), 30), "6 o'clock is halfway");
+    assert!(color_close(rgb(&mut surface, 3, 50), BLUE, 12), "9 o'clock is the last stop");
+    assert!(color_close(rgb(&mut surface, 50, 3), BLUE, 12), "and 12 o'clock holds it");
+}
+
+#[test]
+fn explicit_stops_place_the_colors() {
+    // Everything before the first stop holds the first color, so at the middle (0.5) a gradient whose
+    // stops start at 0.8 is still red.
+    let mut surface = brush_scene(Brush::linear_gradient([red(), blue()]).positions([0.8, 1.0]), 100.0, 100.0);
+    assert!(color_close(rgb(&mut surface, 40, 50), RED, 6), "before the first stop the color holds");
+
+    // And a gradient that finishes at 0.2 is already blue past it.
+    let mut surface = brush_scene(Brush::linear_gradient([red(), blue()]).positions([0.0, 0.2]), 100.0, 100.0);
+    assert!(color_close(rgb(&mut surface, 60, 50), BLUE, 6), "past the last stop the color holds");
+}
+
+#[test]
+fn a_gradient_is_clipped_to_the_shape() {
+    let (mut surface, _) = render_ui(100.0, 100.0, winia::app_root!(move |ctx| {
+        use winia::ui::layout_components::Column;
+        Column::new()
+            .modifier(Modifier::new().size(100.0, 100.0).background_brush(
+                Brush::linear_gradient([Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)]),
+                Shape::RoundedRect { corner_radius: 30.0 },
+            ))
+            .build(ctx, |_| {});
+    }));
+    let corner = rgb(&mut surface, 2, 2);
+    assert!(
+        corner.0 > 200 && corner.1 > 200 && corner.2 > 200,
+        "the corner outside a 30dp radius stays background, got {corner:?}"
+    );
+    let inside = rgb(&mut surface, 50, 50);
+    assert!(inside.0 > 0 || inside.2 > 0, "and the fill is clipped to the shape, not erased");
+}
+
+#[test]
+fn a_tile_mode_repeats_or_mirrors_past_the_gradient() {
+    // A tile mode only shows where the gradient's SPAN ends and the node continues — and the span is
+    // set by `from_to`, not by the stop positions: the span maps onto the node, so a default brush
+    // already fills it and Repeat/Mirror have nothing left to tile. (Measured: with stops up to 0.5
+    // the ramp's second half stayed blue under every mode, so the stop positions were the wrong lever.)
+    let ramps = |tile: BrushTile, x: i32| -> u8 {
+        let (mut surface, _) = render_ui(100.0, 10.0, winia::app_root!(move |ctx| {
+            use winia::ui::layout_components::Column;
+            Column::new()
+                .modifier(Modifier::new().size(100.0, 10.0).background_brush(
+                    Brush::linear_gradient([Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)])
+                        .from_to((0.0, 0.5), (0.5, 0.5))
+                        .tile(tile),
+                    Shape::Rectangle,
+                ))
+                .build(ctx, |_| {});
+        }));
+        rgb(&mut surface, x, 5).0
+    };
+
+    // Inside the span all three are the same ramp: red at its start, most of the way to blue by its
+    // end. (The span's exact end is where they part — Repeat restarts there, Mirror turns around, and
+    // only Clamp holds the last color — so the samples stay inside it.)
+    for tile in [BrushTile::Clamp, BrushTile::Repeat, BrushTile::Mirror] {
+        assert!(ramps(tile, 0) > 240, "every mode ramps from red at the span's start");
+        let near_end = ramps(tile, 40);
+        assert!(near_end < 70, "and the ramp has run most of its length by the span's end, got {near_end}");
+    }
+
+    // Past the end, the three modes differ — which is the whole point of the setting.
+    // One fifth of the way past the span's end is enough for all three to have diverged: Clamp is at
+    // the last color, Mirror has come a fifth of the way back toward red, and Repeat is a fifth into
+    // running the ramp again.
+    let (clamp, repeat, mirror) = (
+        ramps(BrushTile::Clamp, 60),
+        ramps(BrushTile::Repeat, 60),
+        ramps(BrushTile::Mirror, 60),
+    );
+    assert!(clamp < 20, "Clamp holds the last color, got {clamp}");
+    assert!(mirror > 30 && mirror < 90, "Mirror runs it backwards, got {mirror}");
+    assert!(repeat > 180, "Repeat runs the ramp again, got {repeat}");
+    assert!(
+        repeat > mirror + 60 && mirror > clamp + 10,
+        "the three are distinct: clamp={clamp} mirror={mirror} repeat={repeat}"
+    );
+}
+
+#[test]
+fn a_brush_from_a_closure_is_read_at_paint_time() {
+    // The animated-brush hook: `background_brush` takes a closure, so a gradient can follow state.
+    let saw_closure = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = saw_closure.clone();
+    let brush = move || {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        Brush::linear_gradient([Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)])
+    };
+    let mut surface = brush_scene(brush, 100.0, 100.0);
+    assert!(color_close(rgb(&mut surface, 2, 50), RED, 12), "the closure's brush painted");
+    assert!(
+        saw_closure.load(std::sync::atomic::Ordering::Relaxed),
+        "and it ran at paint time, not at build time"
+    );
+}
+
+#[test]
+fn a_degenerate_brush_paints_nothing_instead_of_panicking() {
+    // No colors, and a zero-length gradient: both are caller mistakes, and both must leave the surface
+    // alone rather than panic inside a render pass.
+    let mut surface = brush_scene(Brush::linear_gradient(Vec::new()), 100.0, 100.0);
+    assert!(rgb(&mut surface, 2, 50).0 > 200, "an empty gradient paints nothing");
+
+    let mut surface = brush_scene(
+        Brush::linear_gradient([red(), blue()]).from_to((0.5, 0.5), (0.5, 0.5)),
+        100.0,
+        100.0,
+    );
+    assert!(rgb(&mut surface, 2, 50).0 > 200, "a zero-length gradient paints nothing");
+}
+
+#[test]
+fn a_solid_brush_is_the_same_as_a_solid_background() {
+    let mut surface = brush_scene(Brush::solid(red()), 100.0, 100.0);
+    assert_eq!(rgb(&mut surface, 50, 50), RED, "a solid brush fills with its color");
+}

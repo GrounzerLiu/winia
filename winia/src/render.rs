@@ -424,6 +424,26 @@ fn render_modifier_element<'a>(
             }
             None
         }
+        ModifierElement::BackgroundBrush { brush_fn, shape } => {
+            // The brush is resolved here, at paint time, which is what lets a closure read animated
+            // state per frame. `last_background` is deliberately NOT set: the border-merge
+            // optimization below compares colors, and a gradient is not one.
+            let brush = (brush_fn)();
+            match morph_radii {
+                Some(r) => {
+                    let Some(paint) = brush_paint(&brush, rect) else { return None };
+                    canvas.draw_rrect(
+                        skia_safe::RRect::new_rect_radii(
+                            rect,
+                            &crate::ui::shared_transition::rrect_vectors(r),
+                        ),
+                        &paint,
+                    );
+                }
+                None => draw_brush(canvas, rect, &brush, shape),
+            }
+            None
+        }
         ModifierElement::Border { width, color, shape } => {
             // 边框色与形状均等于容器时合并为纯填充（M3 drawBox 语义）：
             // 半透明色在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
@@ -1382,6 +1402,7 @@ fn render_pass1(
         // 颜色由组件组合期从主题捕获（node.focus_color）
         let focus_shape = node.modifier.elements().iter().rev().find_map(|el| match el {
             ModifierElement::Background { shape, .. }
+            | ModifierElement::BackgroundBrush { shape, .. }
             | ModifierElement::Border { shape, .. }
             | ModifierElement::BorderDynamic { shape, .. }
             | ModifierElement::Clip { shape } => Some(*shape),
@@ -1505,6 +1526,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             let clip_shape = (*shape).or_else(|| {
                 node.modifier.elements().iter().rev().find_map(|el| match el {
                     ModifierElement::Background { shape, .. }
+                    | ModifierElement::BackgroundBrush { shape, .. }
                     | ModifierElement::Border { shape, .. }
                     | ModifierElement::BorderDynamic { shape, .. } => {
                         Some(*shape)
@@ -1777,10 +1799,16 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
     paint.set_anti_alias(true);
+    paint_shape(canvas, rect, &paint, shape);
+}
+
+/// Fill `shape` inside `rect` with an already prepared paint — the one place the shape set is turned
+/// into a draw call, shared by solid backgrounds and brushes.
+fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::modifier::Shape) {
     match shape {
-        crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, &paint); }
+        crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, paint); }
         crate::modifier::Shape::RoundedRect { corner_radius } => {
-            canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), &paint);
+            canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), paint);
         }
         crate::modifier::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(rect, &[
@@ -1789,13 +1817,13 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
                 skia_safe::Vector::new(0.0, 0.0),
                 skia_safe::Vector::new(0.0, 0.0),
             ]);
-            canvas.draw_rrect(rr, &paint);
+            canvas.draw_rrect(rr, paint);
         }
         crate::modifier::Shape::RightRoundedRect { radius } => {
-            canvas.draw_rrect(rrect_right_rounded(rect, *radius), &paint);
+            canvas.draw_rrect(rrect_right_rounded(rect, *radius), paint);
         }
         crate::modifier::Shape::LeftRoundedRect { radius } => {
-            canvas.draw_rrect(rrect_left_rounded(rect, *radius), &paint);
+            canvas.draw_rrect(rrect_left_rounded(rect, *radius), paint);
         }
         crate::modifier::Shape::Pill => {
             let r = rect.width().min(rect.height()) / 2.0;
@@ -1806,8 +1834,107 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
             // against the box, so a non-square box is a stadium. Drawing a true
             // circle left most of a wide box unpainted.
             let r = rect.width().min(rect.height()) / 2.0;
-            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), paint);
         }
+    }
+}
+
+/// Fill `shape` with a [`crate::brush::Brush`].
+///
+/// The two absolute cases are resolved here, against the node's rect: a gradient's coordinates are
+/// fractions of the bounds (see the [`crate::brush`] module docs), so a gradient fills any size node.
+fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::brush::Brush, shape: &crate::modifier::Shape) {
+    match brush {
+        crate::brush::Brush::Solid(color) => draw_background(canvas, rect, color, shape),
+        _ => {
+            let Some(paint) = brush_paint(brush, rect) else { return };
+            paint_shape(canvas, rect, &paint, shape);
+        }
+    }
+}
+
+/// A paint whose shader is `brush`, in the node's `rect` — `None` for a degenerate brush (no colors,
+/// or a zero-length gradient), which paints nothing rather than panicking.
+fn brush_paint(brush: &crate::brush::Brush, rect: Rect) -> Option<Paint> {
+    use skia_safe::gradient::{Colors, Gradient, Interpolation};
+
+    let (stops, positions, tile, geometry) = match brush {
+        crate::brush::Brush::Solid(_) => return None,
+        crate::brush::Brush::Linear(g) => (
+            g.stops(),
+            g.positions_ref(),
+            g.tile_mode(),
+            (g.from(), g.to(), 0.0),
+        ),
+        crate::brush::Brush::Radial(g) => (
+            g.stops(),
+            g.positions_ref(),
+            g.tile_mode(),
+            (g.from(), g.from(), g.radius_value()),
+        ),
+        crate::brush::Brush::Sweep(g) => (
+            g.stops(),
+            g.positions_ref(),
+            g.tile_mode(),
+            (g.from(), g.from(), 0.0),
+        ),
+    };
+    if stops.is_empty() {
+        return None;
+    }
+
+    let color4fs: Vec<Color4f> = stops.iter().map(Color4f::from).collect();
+    let colors = Colors::new(&color4fs, positions, skia_tile(tile), None);
+    let gradient = Gradient::new(colors, Interpolation::default());
+
+    // Fractional → absolute, against the node's own rect.
+    let absolute = |(fx, fy): (f32, f32)| {
+        skia_safe::Point::new(
+            rect.left + fx * rect.width(),
+            rect.top + fy * rect.height(),
+        )
+    };
+    let (from, to, radius) = geometry;
+    let shader = match brush {
+        crate::brush::Brush::Linear(_) => {
+            let (start, end) = (absolute(from), absolute(to));
+            if start == end {
+                return None; // A zero-length gradient has no direction to run in.
+            }
+            skia_safe::gradient::shaders::linear_gradient((start, end), &gradient, None)
+        }
+        crate::brush::Brush::Radial(_) => {
+            // The radius is a fraction of the SHORTER side, so the gradient reaches the nearest pair
+            // of edges whatever the aspect ratio.
+            let r = radius * rect.width().min(rect.height());
+            if r <= 0.0 {
+                return None;
+            }
+            skia_safe::gradient::shaders::radial_gradient((absolute(from), r), &gradient, None)
+        }
+        // A full turn, in DEGREES: Skia documents the range as degrees with 0 at the +x axis and the
+        // CSS conic-gradient convention (`skia/include/effects/SkGradient.h`, `SweepGradient`). The
+        // sweep runs clockwise from 3 o'clock, so `Brush::sweep_gradient` needs no angle options.
+        crate::brush::Brush::Sweep(_) => skia_safe::gradient::shaders::sweep_gradient(
+            absolute(from),
+            (0.0, 360.0),
+            &gradient,
+            None,
+        ),
+        crate::brush::Brush::Solid(_) => return None,
+    }?;
+
+    let mut paint = Paint::default();
+    paint.set_anti_alias(true);
+    paint.set_shader(shader);
+    Some(paint)
+}
+
+fn skia_tile(tile: crate::brush::BrushTile) -> skia_safe::TileMode {
+    match tile {
+        crate::brush::BrushTile::Clamp => skia_safe::TileMode::Clamp,
+        crate::brush::BrushTile::Repeat => skia_safe::TileMode::Repeat,
+        crate::brush::BrushTile::Mirror => skia_safe::TileMode::Mirror,
     }
 }
 

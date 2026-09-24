@@ -672,6 +672,12 @@ pub(crate) enum ModifierElement {
     // ── Draw 类 ──
     /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
     Background { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
+    /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
+    /// shader, and its geometry is resolved against the node's bounds at paint time.
+    BackgroundBrush {
+        brush_fn: Arc<dyn Fn() -> crate::brush::Brush + Send + Sync>,
+        shape: Shape,
+    },
     /// 边框
     Border { width: f32, color: Color, shape: Shape },
     BorderDynamic { width: f32, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
@@ -1396,6 +1402,31 @@ impl Modifier {
         let bg = color.into();
         self.push(ModifierElement::Background {
             color_fn: bg.0,
+            shape: shape.into(),
+        })
+    }
+
+    /// Fill the node with a [`crate::brush::Brush`] — a gradient, or a solid color chosen at
+    /// runtime (Compose `Modifier.background(brush, shape)`).
+    ///
+    /// ```ignore
+    /// Modifier::new().background_brush(
+    ///     Brush::linear_gradient([colors.primary, colors.tertiary]).diagonal(),
+    ///     Shape::rounded(16.0),
+    /// )
+    /// ```
+    ///
+    /// Accepts a value or a closure, so a gradient can follow animated state the same way
+    /// `background` accepts an animated color. Gradient coordinates are FRACTIONS of the node's
+    /// bounds — see the module docs on [`crate::brush`] for why that differs from Compose.
+    pub fn background_brush(
+        self,
+        brush: impl Into<crate::brush::BrushSource>,
+        shape: impl Into<Shape>,
+    ) -> Self {
+        let source = brush.into();
+        self.push(ModifierElement::BackgroundBrush {
+            brush_fn: source.0,
             shape: shape.into(),
         })
     }
@@ -2479,6 +2510,9 @@ impl Debug for ModifierElement {
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
             Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
+            Self::BackgroundBrush { shape, .. } => {
+                f.debug_struct("BackgroundBrush").field("shape", shape).finish()
+            }
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
             Self::BorderDynamic { width, shape, .. } => f
                 .debug_struct("BorderDynamic")
@@ -3251,6 +3285,11 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             aw == bw && ah == bh
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
+        // As with `Background`, the closure is not comparable — but the shape is, and a shape change
+        // has to re-enter the node (it changes the fill's geometry).
+        (BackgroundBrush { shape: ashape, .. }, BackgroundBrush { shape: bshape, .. }) => {
+            ashape == bshape
+        }
         // Semantics carries visible state (a tab's selection): a change must re-enter the node.
         (Semantics(a), Semantics(b)) => a == b,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
