@@ -1302,6 +1302,20 @@ impl SlotTable {
     /// already holds this subtree" a checked fact rather than an assumption. A mismatch claims
     /// nothing (the marks go to a scratch set that is merged only on success), so the caller's
     /// fallback starts from an untouched arena.
+    ///
+    /// The verification is not a formality — something DOES mutate the arena between the `layout` that
+    /// fills `prev_node_by_key` and this walk: `app.rs` runs `poll_shared_flights()` after `layout()`,
+    /// and a flight detachment unlinks nodes (`detach_source`'s `children.retain`). That is the window
+    /// the child-order comparison above exists for, and `test_stale_arena_shape_makes_the_claim_bail`
+    /// exercises it directly by swapping a container's children.
+    ///
+    /// **The walk has two jobs and both are load-bearing.** It verifies, and it MARKS every node of the
+    /// subtree as reused — the compose tail then frees everything in `prev_node_by_key` that is not
+    /// marked, and `free_node_skip` reads the same set. Skipping the walk (rather than just the
+    /// comparisons) was tried as a measurement and corrupts the tree on the first idle frame: the
+    /// unmarked descendants get recycled under the live subtree, come back as `LayoutNode::default()`
+    /// with key 0, and `collect_node_keys` panics with `[dup-key]` on two nodes claiming that key. So
+    /// "claim without walking" is not a cheaper claim; it is a broken one.
     fn try_claim_skipped_subtree(slot: &Slot, ctx: &mut ClaimCtx) -> Option<usize> {
         let root = *ctx.prev.get(&slot.key)?;
         ctx.scratch.clear();

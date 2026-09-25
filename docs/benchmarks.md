@@ -878,6 +878,56 @@ Recorded rather than taken, with the numbers that justify the call. If a future 
 decision to make first is not "how do I remove the allocation" but "is compose allowed to write to the
 arena", and the answer to that one belongs in `docs/architecture-audit.md`, not here.
 
+### A seventeenth round: the verify walk's price was a bucket label
+
+The target was "`materialize`'s verification walk, ~100 µs per frame". Both halves of that are wrong, and
+the round is a measurement again rather than a fix.
+
+**The ~100 µs was never the verification.** It came from the thirteenth fix's probe of
+`collect_desc_tree`, which times the descriptor-tree walk AND the claim together. The verification's own
+price had never been measured.
+
+**Measured by removing it.** The claim walk's comparisons (the `prev_node_by_key` lookup per node and the
+child-order comparison) were disabled in a bench build and the idle frame compared, six runs each way,
+fastest of each:
+
+| idle frame, boxes 800 rows | fast sample |
+|---|---|
+| with the claim's comparisons | 614 µs |
+| comparisons disabled (the walk — and therefore the marks — still ran) | **597 µs** |
+
+So the comparisons cost **~17 µs**, not ~100: the mark-and-traverse part is the rest, and it is not
+separable — see below.
+
+**The first attempt at that experiment was wrong in an instructive way.** It disabled the WHOLE walk
+(returning "verified" immediately), not just the comparisons — and the bench panicked on its first idle
+frame:
+
+```text
+[dup-key] slot_key 冲突：sk=0x0 节点 idx=5 … 覆盖了已有节点 idx=1
+```
+
+The walk has two jobs: it verifies, and it MARKS every node of the claimed subtree as reused. With the
+marks missing, the compose tail frees those nodes — they are in `prev_node_by_key` and not marked — so
+the live tree's own descendants get recycled under it, come back as `LayoutNode::default()` with
+`slot_key == 0`, and the key walk finds two nodes claiming that key. **"Claim without walking" is not a
+cheaper claim; it is a broken one**, and that is now written at the walk in the code rather than here
+only, because the experiment that found it looked like a safe one-line change.
+
+**And the premise I went looking for was refuted by the code.** The walk re-derives a structure the index
+maps claim to describe, so the tempting simplification is "the maps ARE the arena — the walk is a
+tautology". It is not: `app.rs` calls `poll_shared_flights()` AFTER `layout()`, and a flight detachment
+unlinks nodes (`detach_source`'s `children.retain(...)`). That is a real window in which the arena moves
+under a map that was built before it, and it is exactly what the child-order comparison covers —
+`test_stale_arena_shape_makes_the_claim_bail` already exercises it deliberately.
+
+| what this round established | value |
+|---|---|
+| the verification's real cost (comparisons only) | **~17 µs**, not ~100 |
+| the walk's irreducible part (marks + traversal) | ~80 µs — required, see above |
+| the window the comparisons guard | arena mutations after `layout` (flight detach) |
+| the target | closed: mispriced by ~6x, and the remaining part is an invariant, not overhead |
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -1018,12 +1068,13 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **`materialize`'s remaining ~100 µs per frame**: the verification walk itself (it reads both trees,
-  node for node, so it is ~25 ns per node at 4000 nodes). Making it cheaper means not walking — a
-  maintained per-slot structure fingerprint compared against one kept with the cache would turn the
-  claim into a single comparison, at the cost of a new invariant to maintain in `end_slot` and to
-  cross-check in debug builds. That is the next step if this path matters again; right now it is the
-  second-largest item on the compose side, behind `prune_stale_child_links`.
+- **`materialize`'s claim walk — PRICED AND CLOSED (seventeenth round).** The "~100 µs" was a bucket
+  label (`collect_desc_tree`, which times the descriptor tree and the claim together), not a measurement
+  of the verification: the comparisons cost **~17 µs** (idle frame 614 → 597 with them disabled, best of
+  six each way). The rest of the walk is the marking, and that cannot be dropped — a variant that
+  skipped the walk corrupted the tree to `[dup-key]` on the first idle frame. A structure fingerprint
+  would replace the ~17 µs, not the ~80, so the design it would need (a maintained per-slot digest,
+  cross-checked in debug) is not worth its price. See that round's section.
 - **`prune_stale_child_links`'s remaining ~16 µs**: what is left after the eighth fix is the
   reachability walk plus two buffer allocations per frame (a `Vec<bool>` and the stamp vector). Both
   could be reused across frames instead of reallocated — that needs a home on the `Composer` (or a
@@ -1084,7 +1135,11 @@ disabled — instrumenting the test instead of reasoning about it is what showed
 everything). The sixteenth changed no code at all: it caught the thirteenth round's own split reporting
 its instrumentation (parts summing to 2699 µs inside a 1817 µs container), priced the one target left
 standalone, and closed it as not worth its design cost — which is a result too, and the one this
-document's method is for.
+document's method is for. The seventeenth did the same for the last "measured" target on the compose
+side: the figure was a bucket label rather than a measurement of the thing it named, the real price is
+~6x smaller, and the part that remained turned out to be an invariant — disabling it to measure it
+panicked with `[dup-key]` on the first idle frame, which is how the walk's second job (marking the
+subtree as reused) came to be documented in the code instead of being rediscovered.
 
 ## Re-running any of this
 
