@@ -1620,7 +1620,7 @@ struct LayoutTransactionSnapshot {
     pending: Vec<StateId>,
     layout_dirty_keys: HashSet<u64>,
     prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
-    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    layout_slot_reads: crate::layout::node::SlotKeyMap<HashSet<StateId>>,
     layout_deps: HashMap<StateId, HashSet<u64>>,
     layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
     removed_slot_keys: HashSet<u64>,
@@ -1791,10 +1791,10 @@ impl Drop for LayoutTransaction {
 /// This is intentionally narrower than a SlotTable/arena transaction: it restores
 /// only graph state and subscriptions after a late compose panic.
 struct ComposeDependencySnapshot {
-    compose_slot_reads: HashMap<u64, HashSet<StateId>>,
+    compose_slot_reads: crate::layout::node::SlotKeyMap<HashSet<StateId>>,
     slot_deps: HashMap<StateId, HashSet<u64>>,
     signal_handles: HashMap<StateId, Arc<StateSignal>>,
-    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    layout_slot_reads: crate::layout::node::SlotKeyMap<HashSet<StateId>>,
     layout_deps: HashMap<StateId, HashSet<u64>>,
     layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
     pending: Vec<StateId>,
@@ -1976,7 +1976,15 @@ pub struct Composer {
     /// state_id -> slot_keys 依赖映射
     slot_deps: HashMap<StateId, HashSet<u64>>,
     /// compose 期每个 slot 的完整读取集合；Enter 时替换，Skip 时保留。
-    compose_slot_reads: HashMap<u64, HashSet<StateId>>,
+    ///
+    /// `SlotKeyMap` for the same reason as `entered_compose_keys` beside it: keyed by `slot_key`, and
+    /// the convergence pass looks a key up here up to three times per ENTERING group — 800 groups in a
+    /// list loop is 2400 lookups a frame, and they were paying the std hasher on keys the composer had
+    /// already mixed. Measured on the row loop (800 rows, the container re-running, every row
+    /// skipping): 889 → 840 µs, best of four interleaved runs each way, with the unchanged idle arm as
+    /// the control — the cost is proportional to the ENTERED set, which is what the idle frame does not
+    /// have (`docs/benchmarks.md`).
+    compose_slot_reads: crate::layout::node::SlotKeyMap<HashSet<StateId>>,
     /// compose 依赖对应的 signal handle，用于移除 stale Composer 订阅。
     signal_handles: HashMap<StateId, Arc<StateSignal>>,
     /// layout 依赖对应的 signal handle；compose 与 layout 共享一个队列但独立收敛。
@@ -1988,7 +1996,8 @@ pub struct Composer {
     /// already mixed (`docs/benchmarks.md`).
     entered_compose_keys: crate::layout::node::SlotKeySet,
     /// 布局期每个 slot 的读取集合；测量命中时替换，常量折叠时保留。
-    layout_slot_reads: HashMap<u64, HashSet<StateId>>,
+    /// 与 `compose_slot_reads` 同一理由取 `SlotKeyMap`（见上）。
+    layout_slot_reads: crate::layout::node::SlotKeyMap<HashSet<StateId>>,
     /// 布局依赖反向表（state_id → slot_key；由 layout_slot_reads 重建）
     layout_deps: HashMap<StateId, HashSet<u64>>,
     /// 本帧 pending 消费收集的布局失效 key（layout() 应用后清空）。
@@ -2127,11 +2136,11 @@ impl Composer {
             overlays: Vec::new(),
             overlay_active: HashMap::new(),
             slot_deps: HashMap::new(),
-            compose_slot_reads: HashMap::new(),
+            compose_slot_reads: crate::layout::node::SlotKeyMap::default(),
             signal_handles: HashMap::new(),
             layout_signal_handles: HashMap::new(),
             entered_compose_keys: crate::layout::node::SlotKeySet::default(),
-            layout_slot_reads: HashMap::new(),
+            layout_slot_reads: crate::layout::node::SlotKeyMap::default(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
             removed_slot_keys: HashSet::new(),
@@ -2590,7 +2599,7 @@ impl Composer {
         recorded: Vec<(Arc<StateSignal>, u64)>,
         live_keys: &crate::layout::node::SlotKeySet,
     ) {
-        let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
+        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> = crate::layout::node::SlotKeyMap::default();
         let mut current_signals: HashMap<StateId, Arc<StateSignal>> = HashMap::new();
         // Reads recorded against a slot that is not live: dropped from the graph, but the signal was
         // already subscribed to (the read happened), so the subscription is dirty even when the graph
@@ -2987,7 +2996,7 @@ impl Composer {
             self.layout_slot_reads.clear();
             self.layout_deps.clear();
         }
-        let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
+        let mut reads_by_slot: crate::layout::node::SlotKeyMap<HashSet<StateId>> = crate::layout::node::SlotKeyMap::default();
         for (signal, slot_key) in &recorded {
             reads_by_slot.entry(*slot_key).or_default().insert(signal.id());
             self.layout_signal_handles
