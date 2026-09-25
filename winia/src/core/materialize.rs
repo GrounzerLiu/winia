@@ -519,53 +519,74 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     Some(index)
 }
 
-/// 收集 arena 树 → slot_key 索引的缓存（后序：dirty 子→父冒泡）
+/// Fills BOTH arena maps in one post-order walk: the per-node cache (`slot_key` → `CachedNode`, what
+/// materialize reads back next frame) and the reuse index (`slot_key` → arena index, what start_node
+/// uses to find a node). See the per-piece notes below for why each is shaped the way it is.
 ///
-/// The map is RESERVED up front. `LayoutTransaction` moves the previous frame's map out for rollback,
-/// so this one starts empty with no capacity — and growing a `HashMap` into 4000 entries rehashes it
-/// several times, measured at 128 µs of an idle 800-row layout, more than the clone the move removed.
-/// `arena.nodes.len()` is an upper bound (slots not reachable from the root are never inserted), and a
-/// map that already has capacity pays a comparison here instead of an allocation.
+/// One walk instead of two: they visit the same nodes along the same edges, ~4000 of them at 800 rows,
+/// and doing it twice was the second-largest item in an idle layout (`docs/benchmarks.md`). The two
+/// halves are merged rather than parameterised because neither can be skipped — every frame needs both
+/// maps — so an `Option` flag would only add a branch per node.
+///
+/// Post-order is required for the cache: `dirty` bubbles from child to parent here, so a parent that
+/// has a dirty descendant is marked dirty for the next measure. The index insert happens in the same
+/// visit; the duplicate-key check is order-independent (it fires on whichever node is inserted second).
+///
+/// The maps are RESERVED up front. `LayoutTransaction` moves the previous frame's maps out for
+/// rollback, so these start empty with no capacity — and growing a `HashMap` into 4000 entries
+/// rehashes it several times, measured at 128 µs of an idle 800-row layout, more than the clone that
+/// the move removed. `arena.nodes.len()` is an upper bound (slots not reachable from the root are
+/// never inserted), and a map that already has capacity pays a comparison here instead of an
+/// allocation.
 ///
 /// Children are read by INDEX rather than cloned. The original cloned each node's `children` (a `Vec`)
 /// to satisfy the borrow checker while recursing — one heap allocation per node, per frame, for zero
 /// information: the recursive call takes `&mut NodeArena`, but copying one `usize` out of it ends the
 /// borrow just as well.
-pub(crate) fn collect_nodes(
+pub(crate) fn collect_layout_maps(
     arena: &mut NodeArena,
     idx: usize,
-    map: &mut std::collections::HashMap<u64, crate::layout::node::CachedNode>,
+    nodes: &mut crate::layout::node::SlotKeyMap<crate::layout::node::CachedNode>,
+    keys: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
-    map.reserve(arena.nodes.len());
-    collect_nodes_rec(arena, idx, map);
+    nodes.reserve(arena.nodes.len());
+    keys.reserve(arena.nodes.len());
+    collect_layout_maps_rec(arena, idx, None, 0, nodes, keys);
 }
 
-fn collect_nodes_rec(
+fn collect_layout_maps_rec(
     arena: &mut NodeArena,
     idx: usize,
-    map: &mut std::collections::HashMap<u64, crate::layout::node::CachedNode>,
+    parent: Option<usize>,
+    depth: usize,
+    nodes: &mut crate::layout::node::SlotKeyMap<crate::layout::node::CachedNode>,
+    keys: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
     // 先递归子节点（后序），以便 dirty 从子向父冒泡
     let child_count = arena.nodes[idx].children.len();
     for i in 0..child_count {
         let c = arena.nodes[idx].children[i];
-        collect_nodes_rec(arena, c, map);
+        collect_layout_maps_rec(arena, c, Some(idx), depth + 1, nodes, keys);
         if arena.nodes[c].dirty {
             arena.nodes[idx].dirty = true;
         }
     }
+    insert_reuse_key(arena, idx, parent, depth, keys);
     // 缓存当前节点的可缓存子集
-    map.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
+    nodes.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
 }
 
 /// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）。
 /// 同 slot_key 两节点 = key 冲突（fail-fast panic——不静默覆盖：
 /// 覆盖意味着前一节点状态丢失 + 节点身份错位——dup-key 是组合 bug
 /// 的最终防线，调试信息含 key/节点索引/被覆盖位置）。
+///
+/// Standalone because `materialize`'s repair path (`compose` without a `layout` in between) rebuilds
+/// ONLY the index from the tree it already has; the cache it does not touch.
 pub(crate) fn collect_node_keys(
     arena: &NodeArena,
     idx: usize,
-    map: &mut std::collections::HashMap<u64, usize>,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
     map.reserve(arena.nodes.len());
     collect_node_keys_with_parent(arena, idx, None, map, 0);
@@ -575,8 +596,26 @@ fn collect_node_keys_with_parent(
     arena: &NodeArena,
     idx: usize,
     parent: Option<usize>,
-    map: &mut std::collections::HashMap<u64, usize>,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
     depth: usize,
+) {
+    insert_reuse_key(arena, idx, parent, depth, map);
+    // Same index-not-clone rule as the fused walk (110 µs of an idle 800-row layout).
+    let child_count = arena.nodes[idx].children.len();
+    for i in 0..child_count {
+        let c = arena.nodes[idx].children[i];
+        collect_node_keys_with_parent(arena, c, Some(idx), map, depth + 1);
+    }
+}
+
+/// Inserts `slot_key → idx`, panicking on a collision. Shared by the fused walk and the index-only
+/// one so the diagnostic — which is the whole point of this being a fail-fast — cannot drift.
+fn insert_reuse_key(
+    arena: &NodeArena,
+    idx: usize,
+    parent: Option<usize>,
+    depth: usize,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
     if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
         let (a, b) = (&arena.nodes[idx], &arena.nodes[prev]);
@@ -584,20 +623,10 @@ fn collect_node_keys_with_parent(
             .map(|p| format!("父 idx={} sk={:#x}", p, arena.nodes[p].slot_key))
             .unwrap_or_else(|| "根".to_string());
         panic!(
-            "[dup-key] slot_key 冲突：sk={:#x} 节点 idx={} pos={:?} size={:?} {}（depth={}）\
-             覆盖了已有节点 idx={} pos={:?} size={:?}\
-             ——同一组合位置出现两个节点（key 漂移/结构变化漏配 ctx.key？）。\
-             修复：①结构变化处加 ctx.key() ②检查列表实例隔离 ③组件调用点在 \
-             #[composable] 内",
+            "[dup-key] slot_key 冲突：sk={:#x} 节点 idx={} pos={:?} size={:?} {}（depth={}）             覆盖了已有节点 idx={} pos={:?} size={:?}             ——同一组合位置出现两个节点（key 漂移/结构变化漏配 ctx.key？）。             修复：①结构变化处加 ctx.key() ②检查列表实例隔离 ③组件调用点在              #[composable] 内",
             arena.nodes[idx].slot_key, idx, a.position, a.measured_size, parent_desc, depth,
             prev, b.position, b.measured_size
         );
-    }
-    // Same index-not-clone rule as `collect_nodes` (110 µs of an idle 800-row layout).
-    let child_count = arena.nodes[idx].children.len();
-    for i in 0..child_count {
-        let c = arena.nodes[idx].children[i];
-        collect_node_keys_with_parent(arena, c, Some(idx), map, depth + 1);
     }
 }
 

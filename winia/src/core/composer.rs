@@ -964,7 +964,7 @@ impl Drop for ComposeRuntimeTransaction {
 /// State the claim walk needs while the slot tree is walked (`SlotTable::collect_desc_tree`).
 struct ClaimCtx<'a> {
     arena: &'a crate::layout::node::NodeArena,
-    prev: &'a mut HashMap<u64, usize>,
+    prev: &'a mut crate::layout::node::SlotKeyMap<usize>,
     reused: &'a mut crate::layout::node::NodeMarks,
     /// Indices marked by the claim currently being verified. Merged into `reused` only once the whole
     /// subtree verified, so a mismatch leaves nothing behind.
@@ -1093,7 +1093,7 @@ impl SlotTable {
         &mut self,
         out: &mut Vec<crate::core::materialize::DescNode>,
         arena: &crate::layout::node::NodeArena,
-        prev: &mut HashMap<u64, usize>,
+        prev: &mut crate::layout::node::SlotKeyMap<usize>,
         reused: &mut crate::layout::node::NodeMarks,
     ) -> (usize, usize) {
         fn rec(
@@ -1495,8 +1495,8 @@ impl SlotTable {
 struct LayoutTransactionSnapshot {
     pending: Vec<StateId>,
     layout_dirty_keys: HashSet<u64>,
-    prev_nodes: HashMap<u64, CachedNode>,
-    prev_node_by_key: HashMap<u64, usize>,
+    prev_nodes: crate::layout::node::SlotKeyMap<CachedNode>,
+    prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     layout_slot_reads: HashMap<u64, HashSet<StateId>>,
     layout_deps: HashMap<StateId, HashSet<u64>>,
     layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
@@ -1887,11 +1887,11 @@ pub struct Composer {
     /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
     /// 用 slot_key 而非 slot 路径作键——scope 层不产生 LayoutNode，路径在两棵树不一致，
     /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
-    pub(crate) prev_nodes: HashMap<u64, CachedNode>,
+    pub(crate) prev_nodes: crate::layout::node::SlotKeyMap<CachedNode>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
     pending_params: Vec<Box<dyn ParamValue>>,
     /// 上帧布局树：slot_key → arena 节点索引（阶段D 节点复用——start_node 按 key 复用槽位）
-    pub(crate) prev_node_by_key: HashMap<u64, usize>,
+    pub(crate) prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
     /// How many skipped subtrees the last `materialize` claimed in place, instead of re-encoding them
@@ -2002,9 +2002,9 @@ impl Composer {
             layout_dirty_keys: HashSet::new(),
             removed_slot_keys: HashSet::new(),
             pending_states,
-            prev_nodes: HashMap::new(),
+            prev_nodes: crate::layout::node::SlotKeyMap::default(),
             pending_params: Vec::new(),
-            prev_node_by_key: HashMap::new(),
+            prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
             #[cfg(test)]
             skip_claims: 0,
@@ -2766,11 +2766,15 @@ impl Composer {
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
             // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
+            // + 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）——一趟走完两件事
             self.prev_nodes.clear();
-            crate::core::materialize::collect_nodes(&mut self.arena, root_idx, &mut self.prev_nodes);
-            // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）
             self.prev_node_by_key.clear();
-            crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
+            crate::core::materialize::collect_layout_maps(
+                &mut self.arena,
+                root_idx,
+                &mut self.prev_nodes,
+                &mut self.prev_node_by_key,
+            );
         } else {
             // No root means every old layout dependency is stale.
             self.prev_nodes.clear();
