@@ -3,7 +3,7 @@
 //! 从 composer.rs 拆分（SRP）——物化是"组合产物 → 布局树"的独立关注点：
 //! - `collect_desc_tree`（SlotTable）产出 `DescNode` 树（保留在 composer.rs——需访问 slot 私有字段）
 //! - 本模块消费 DescNode → arena 树（Skip 恢复 / 节点复用 / 降级重建）
-//! - `collect_nodes` / `collect_node_keys`：物化后的 arena 收集（缓存/复用索引）
+//! - `collect_layout_index` / `collect_node_keys`：物化后的 arena 收集（slot_key → 节点索引）
 
 use crate::core::composer::Composer;
 use crate::layout::node::NodeArena;
@@ -330,30 +330,32 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 node.on_remove = on_remove;
                 node.slot_key = key;
                 // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
-                // 此处为最终兜底——从 prev_nodes 恢复缓存测量折叠
-                // （policy 仍缺失时避免测量出 0 尺寸）
-                if let Some(cached) = composer.prev_nodes.get(&key) {
-                    node.measured_size = cached.measured_size;
-                    // MUST travel with `measured_size`: after `place()` the latter is
-                    // the size the PARENT was told, so restoring it without the content
-                    // box resurrects a flight's placeholder as the node's own box
-                    // (review round 3: this third restore site was missed when
-                    // `CachedNode` gained the field).
-                    node.flight_content_size = cached.flight_content_size;
-                    node.cached_constraints = cached.cached_constraints;
-                    node.dirty = false;
-                } else {
-                    node.dirty = true;
-                }
-                // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
-                // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
-                if !node.dirty {
-                    if let Some(cached) = composer.prev_nodes.get(&key) {
-                        if crate::layout::node::text_snapshot(&node.modifier) != cached.text {
+                // 此处为最终兜底——恢复旧测量折叠（policy 仍缺失时避免测量出 0 尺寸）。
+                //
+                // The measurements come from the node this key named — the one just taken out of the
+                // reuse index, which no path has written since layout. They must travel with the
+                // content box: after `place()` `measured_size` holds the size the PARENT was told, so
+                // restoring it without `flight_content_size` resurrects a flight's placeholder as the
+                // node's own box (review round 3: this third restore site was missed when the cache
+                // gained the field).
+                //
+                // No node means no measurement to fold, and the rebuild stays dirty — it measures
+                // once, which is the conservative direction and what this arm did on a cache miss
+                // anyway (measured: the arm itself fires once in the whole library suite).
+                if let Some(idx) = removed_idx {
+                    let prev = &composer.arena.nodes[idx];
+                    node.restore_layout(prev);
+                    // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
+                    // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
+                    if let Some(snap) = &prev.last_text {
+                        if !crate::layout::node::text_content_matches(&node.modifier, snap) {
                             node.dirty = true;
                         }
                     }
+                } else {
+                    node.dirty = true;
                 }
+                node.refresh_text_snapshot();
                 let idx = composer.arena.alloc(node);
                 #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
@@ -405,6 +407,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
                 || n.has_image_content != old_has_image
             {
                 *n.cached_paragraph.borrow_mut() = None;
+                // The text snapshot travels with the paragraph it was compared against: the compare
+                // below is skipped for a node with no text, so a stale snapshot would survive a
+                // text→box→text round trip and let a node whose paragraph was cleared fold over it.
+                n.last_text = None;
                 // 内容类型切换时重置 TextField 专用字段（旧语义残留不适用新类型；
                 // 新类型若需要这些字段，由 desc 条件覆盖写回正确值）
                 clear_textfield_state(n);
@@ -435,28 +441,24 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             // 防御性重置 parent_id（add_child 在末尾重新设置正确的值）
             n.parent_id = None;
             // 文本内容变化检测：依赖注册在父容器 → leaf Slot Clean 但 TextContent 变了
-            // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）
-            if !dirty {
-                if let Some(cached) = composer.prev_nodes.get(&key) {
-                    if crate::layout::node::text_snapshot(&n.modifier) != cached.text {
-                        n.dirty = true;
-                    }
-                }
+            // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）。
+            // The comparison reads the snapshot of the node's LAST materialization, which is exactly
+            // what the node now carries: this needs no map lookup (that lookup was one hash per reused
+            // node per frame), and it is gated on the text flags so a node with no text — the vast
+            // majority in a box tree — never walks its modifier here at all.
+            if !dirty && !n.text_snapshot_matches() {
+                n.dirty = true;
             }
             idx
         } else {
+            // A node that is neither reused nor restored: the previous frame's node for this key would
+            // have been in the reuse index, and it is not (the branch above would have taken it). There
+            // is therefore nothing to fold, and the node starts dirty — it measures once and settles.
             let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
             // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal
             node.layout_direction = desc.direction;
             node.on_remove = on_remove;
             node.slot_key = key;
-            if !dirty {
-                // Clean slot：从上一帧缓存恢复布局部分（measured_size/cached_constraints）——
-                // modifier 用本帧 build 的值（恢复旧 modifier 会覆盖本帧新值，如按钮 label 切换）
-                if let Some(cached) = composer.prev_nodes.get(&key) {
-                    node.restore_layout(cached);
-                }
-            }
             composer.arena.alloc(node)
         };
         Some(idx)
@@ -466,6 +468,13 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         // 兜底（children 已由降级/Enter 路径递归处理）
         return None;
     };
+    // Keep the produced node's `last_text` in step with the modifier it now carries — including the
+    // claimed and skip paths above, which may have replaced it. ONE place, after every arm, because
+    // the reuse arm's compare reads the value this replaces and the arms that do not compare at all
+    // would otherwise leave a snapshot from before their modifier was applied (the next frame's
+    // compare would then see a difference and re-measure a node nothing changed). It allocates only
+    // when the text actually moved.
+    composer.arena.nodes[index].refresh_text_snapshot();
     // 应用文本选择 registrar（组合期写入 desc——物化时落到节点；
     // Skip 恢复路径的节点保留缓存 registrar，不走此处）
     if let Some(reg) = registrar {
@@ -532,61 +541,56 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     Some(index)
 }
 
-/// Fills BOTH arena maps in one post-order walk: the per-node cache (`slot_key` → `CachedNode`, what
-/// materialize reads back next frame) and the reuse index (`slot_key` → arena index, what start_node
-/// uses to find a node). See the per-piece notes below for why each is shaped the way it is.
+/// Rebuilds the reuse index (`slot_key` → arena index, what `start_node` and the claim walk use to
+/// find last frame's node) in one post-order walk, bubbling `dirty` from child to parent on the way.
 ///
-/// One walk instead of two: they visit the same nodes along the same edges, ~4000 of them at 800 rows,
-/// and doing it twice was the second-largest item in an idle layout (`docs/benchmarks.md`). The two
-/// halves are merged rather than parameterised because neither can be skipped — every frame needs both
-/// maps — so an `Option` flag would only add a branch per node.
+/// This walk used to fill a SECOND map in the same visit — a per-node cache (`slot_key` →
+/// `CachedNode`) that materialize read back — and that half was the expensive one: measured by
+/// ablation at **~200 µs of an idle 800-row layout** against **~52 µs** for this index, because the
+/// cost is the value's memory traffic (a whole node snapshot against a `usize`) and not the hashing
+/// (`docs/benchmarks.md`). The cache is gone (see `LayoutNode::last_text` and the readers in
+/// `materialize`): its content lived in the nodes the arena already keeps.
 ///
-/// Post-order is required for the cache: `dirty` bubbles from child to parent here, so a parent that
-/// has a dirty descendant is marked dirty for the next measure. The index insert happens in the same
-/// visit; the duplicate-key check is order-independent (it fires on whichever node is inserted second).
+/// Post-order is required: `dirty` bubbles from child to parent here, so a parent with a dirty
+/// descendant is marked dirty and cannot fold its measurement. The duplicate-key check is
+/// order-independent (it fires on whichever node is inserted second).
 ///
-/// The maps are RESERVED up front. `LayoutTransaction` moves the previous frame's maps out for
-/// rollback, so these start empty with no capacity — and growing a `HashMap` into 4000 entries
-/// rehashes it several times, measured at 128 µs of an idle 800-row layout, more than the clone that
-/// the move removed. `arena.nodes.len()` is an upper bound (slots not reachable from the root are
-/// never inserted), and a map that already has capacity pays a comparison here instead of an
-/// allocation.
+/// The map is RESERVED up front. `LayoutTransaction` moves the previous frame's map out for rollback,
+/// so it starts empty with no capacity — and growing a `HashMap` into 4000 entries rehashes it
+/// several times, measured at 128 µs of an idle 800-row layout, more than the clone the move removed.
+/// `arena.nodes.len()` is an upper bound (slots not reachable from the root are never inserted), and a
+/// map that already has capacity pays a comparison here instead of an allocation.
 ///
 /// Children are read by INDEX rather than cloned. The original cloned each node's `children` (a `Vec`)
 /// to satisfy the borrow checker while recursing — one heap allocation per node, per frame, for zero
 /// information: the recursive call takes `&mut NodeArena`, but copying one `usize` out of it ends the
 /// borrow just as well.
-pub(crate) fn collect_layout_maps(
+pub(crate) fn collect_layout_index(
     arena: &mut NodeArena,
     idx: usize,
-    nodes: &mut crate::layout::node::SlotKeyMap<crate::layout::node::CachedNode>,
     keys: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
-    nodes.reserve(arena.nodes.len());
     keys.reserve(arena.nodes.len());
-    collect_layout_maps_rec(arena, idx, None, 0, nodes, keys);
+    collect_layout_index_rec(arena, idx, None, 0, keys);
 }
 
-fn collect_layout_maps_rec(
+fn collect_layout_index_rec(
     arena: &mut NodeArena,
     idx: usize,
     parent: Option<usize>,
     depth: usize,
-    nodes: &mut crate::layout::node::SlotKeyMap<crate::layout::node::CachedNode>,
     keys: &mut crate::layout::node::SlotKeyMap<usize>,
 ) {
     // 先递归子节点（后序），以便 dirty 从子向父冒泡
     let child_count = arena.nodes[idx].children.len();
     for i in 0..child_count {
         let c = arena.nodes[idx].children[i];
-        collect_layout_maps_rec(arena, c, Some(idx), depth + 1, nodes, keys);
+        collect_layout_index_rec(arena, c, Some(idx), depth + 1, keys);
         if arena.nodes[c].dirty {
             arena.nodes[idx].dirty = true;
         }
     }
     insert_reuse_key(arena, idx, parent, depth, keys);
-    // 缓存当前节点的可缓存子集
-    nodes.insert(arena.nodes[idx].slot_key, arena.nodes[idx].to_cached());
 }
 
 /// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）。

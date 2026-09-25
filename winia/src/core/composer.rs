@@ -12,7 +12,7 @@
 use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
 use crate::ui::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy, CachedNode};
+use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -1619,7 +1619,6 @@ impl SlotTable {
 struct LayoutTransactionSnapshot {
     pending: Vec<StateId>,
     layout_dirty_keys: HashSet<u64>,
-    prev_nodes: crate::layout::node::SlotKeyMap<CachedNode>,
     prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     layout_slot_reads: HashMap<u64, HashSet<StateId>>,
     layout_deps: HashMap<StateId, HashSet<u64>>,
@@ -1668,22 +1667,21 @@ struct LayoutTransaction {
 }
 
 impl LayoutTransaction {
-    /// Takes the two whole-tree maps layout is about to rebuild, and keeps them for rollback.
+    /// Takes the whole-tree reuse index layout is about to rebuild, and keeps it for rollback.
     ///
-    /// `prev_nodes` and `prev_node_by_key` are both cleared and rebuilt from the arena by `layout()`
-    /// (`collect_nodes` / `collect_node_keys`), so the snapshot needs their old content only because a
-    /// panic has to leave the composer exactly as it was — and that content is genuinely needed. It
-    /// does not follow that it must be COPIED: the rebuild begins by clearing, so while the new content
-    /// is being built nothing reads what the composer had. Moving the maps into the snapshot is
-    /// therefore equivalent, and it removes a deep clone of every node's `CachedNode` — which carries a
-    /// `Modifier` (a `Vec` of elements, some holding strings) and a `RefCell`. Measured: 149 µs of an
-    /// idle 800-row layout (4001 nodes), on a frame whose actual measurement folded in 0.04 µs
-    /// (`docs/benchmarks.md`).
+    /// `prev_node_by_key` is cleared and rebuilt from the arena by `layout()`
+    /// (`collect_layout_index`), so the snapshot needs its old content only because a panic has to
+    /// leave the composer exactly as it was — and that content is genuinely needed. It does not follow
+    /// that it must be COPIED: the rebuild begins by clearing, so while the new content is being built
+    /// nothing reads what the composer had. Moving the map into the snapshot is therefore equivalent,
+    /// and it removed a deep clone of every node's cached entry — a `Modifier` (`Vec` + any strings)
+    /// and a `RefCell` per node. Measured: 149 µs of an idle 800-row layout (4001 nodes), on a frame
+    /// whose actual measurement folded in 0.04 µs (`docs/benchmarks.md`).
     ///
     /// What remains is the drop of the snapshot's map at commit (which the clone paid too) plus one
-    /// allocation for the map being rebuilt — which is why `collect_nodes` and `collect_node_keys`
-    /// reserve up front rather than letting a `HashMap` grow into 4000 entries. Rollback is unchanged:
-    /// it restores the maps it took.
+    /// allocation for the map being rebuilt — which is why `collect_layout_index` reserves up front
+    /// rather than letting a `HashMap` grow into 4000 entries. Rollback is unchanged: it restores the
+    /// map it took.
     fn new(composer: &mut Composer) -> Self {
         let node_state = composer
             .arena
@@ -1717,7 +1715,6 @@ impl LayoutTransaction {
             snapshot: Some(LayoutTransactionSnapshot {
                 pending: composer.pending_states.pending_ids(),
                 layout_dirty_keys: composer.layout_dirty_keys.clone(),
-                prev_nodes: std::mem::take(&mut composer.prev_nodes),
                 prev_node_by_key: std::mem::take(&mut composer.prev_node_by_key),
                 layout_slot_reads: composer.layout_slot_reads.clone(),
                 layout_deps: composer.layout_deps.clone(),
@@ -1745,7 +1742,6 @@ impl LayoutTransaction {
 
         composer.pending_states.restore_pending(&snapshot.pending);
         composer.layout_dirty_keys = snapshot.layout_dirty_keys;
-        composer.prev_nodes = snapshot.prev_nodes;
         composer.prev_node_by_key = snapshot.prev_node_by_key;
         composer.layout_slot_reads = snapshot.layout_slot_reads;
         composer.layout_deps = snapshot.layout_deps;
@@ -2012,10 +2008,6 @@ pub struct Composer {
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
     pending_states: Arc<crate::core::state::ComposerSubscription>,
-    /// 上一帧各 slot_key → 节点缓存（用于 clean slot 跳过和子树重放；
-    /// 用 slot_key 而非 slot 路径作键——scope 层不产生 LayoutNode，路径在两棵树不一致，
-    /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
-    pub(crate) prev_nodes: crate::layout::node::SlotKeyMap<CachedNode>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
     ///
     /// Doubles as a RECYCLING buffer: `commit_pending_params` swaps it with the slot's previous vector,
@@ -2144,7 +2136,6 @@ impl Composer {
             layout_dirty_keys: HashSet::new(),
             removed_slot_keys: HashSet::new(),
             pending_states,
-            prev_nodes: crate::layout::node::SlotKeyMap::default(),
             pending_params: Vec::new(),
             pending_next: 0,
             prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
@@ -2442,15 +2433,13 @@ impl Composer {
                 if std::env::var("WINIA_SKIP_TRACE").is_ok() {
                     eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
                         key >> 32, slot_status == SlotStatus::Clean, params_unchanged,
-                        self.prev_nodes.contains_key(&key), self.pending_next);
+                        self.prev_node_by_key.contains_key(&key), self.pending_next);
                 }
             }
-            if params_unchanged {
-                // 有上帧缓存才可 Skip（否则物化无节点可恢复）
-                self.prev_nodes.contains_key(&key)
-            } else {
-                false
-            }
+            // Nothing else to ask: `container_modifier_unchanged` already failed for a key that is not
+            // in the reuse index, and a key with no node is one materialize could not restore — the
+            // same condition the old cache map was consulted for here.
+            params_unchanged
         } else {
             false
         };
@@ -2977,19 +2966,15 @@ impl Composer {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
-            // 收集整棵树的节点信息（measured_size、cached_constraints、modifier），按 slot_key 索引
-            // + 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）——一趟走完两件事
-            self.prev_nodes.clear();
+            // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）+ dirty 冒泡
             self.prev_node_by_key.clear();
-            crate::core::materialize::collect_layout_maps(
+            crate::core::materialize::collect_layout_index(
                 &mut self.arena,
                 root_idx,
-                &mut self.prev_nodes,
                 &mut self.prev_node_by_key,
             );
         } else {
             // No root means every old layout dependency is stale.
-            self.prev_nodes.clear();
             self.prev_node_by_key.clear();
         }
 
@@ -3611,10 +3596,21 @@ use crate::layout::BoxLayout;
             }
             ctx.end_restartable_group();
         });
-        // recompose 后计数非零（具体值取决于 state deps 是否正确触发）
-        assert!(composer.compose_dirty_count + composer.compose_clean_count >= 2,
-            "expected >=2 slots, got dirty={} clean={}",
-            composer.compose_dirty_count, composer.compose_clean_count);
+        // Frame 2, with NO layout in between: the root's slot is Clean, its params are unchanged, and
+        // the arena still holds a node for its key — so the content does not run, and the leaf's slot
+        // is never started. The counts say exactly that: one slot visited, and it was clean.
+        //
+        // This is a deliberate behaviour change that came with reading the reuse index instead of the
+        // frame cache in the Skip decision. The cache is filled by LAYOUT, so a compose with no layout
+        // before it (this test's shape, and a fresh composer's second frame) always Entered; the index
+        // is repaired at the start of every compose from the tree, so the container can Skip here.
+        // Nothing about the resulting tree changes: the skip path re-attaches the node's children from
+        // the index, which is what the count below checks.
+        assert_eq!(composer.compose_clean_count, 1, "frame 2 visits the root slot only");
+        assert_eq!(composer.compose_dirty_count, 0, "…and it is clean, so the content is skipped");
+        let root = composer.layout_root_idx().expect("the tree survives the skip");
+        assert_eq!(composer.arena_nodes()[root].children.len(), 1,
+            "the skipped container's child was re-attached from the index");
     }
 }
 
@@ -3900,7 +3896,7 @@ fn test_parameter_boxes_are_recycled_across_frames() {
     assert!(third <= 2, "and it keeps recycling: got {third} allocations on the third frame");
 }
 
-/// 阶段4 键修复验证：prev_nodes/frame_cache 改用 slot_key 后，
+/// 阶段4 键修复验证：复用索引（slot_key → 节点）改用 slot_key 后，
 /// 无变化帧的 clean group 应真正 Skip（键 miss 时恒 Enter）。
 /// 帧1 组合 root+leaf（无 scope）→ 帧2 无状态变化 → root 应返回 Skip。
 #[test]
@@ -3921,10 +3917,10 @@ fn test_is_skip_after_clean_frame() {
         ctx.end_restartable_group();
     });
 
-    // layout 一次：填充 prev_nodes（真实流程：compose → layout → 下帧 compose）
+    // layout 一次：填充复用索引（真实流程：compose → layout → 下帧 compose）
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
-    // 帧2：无状态变化 → root slot Clean → prev_nodes 按 slot_key 命中 → Skip
+    // 帧2：无状态变化 → root slot Clean → 索引按 slot_key 命中 → Skip
     let mut skip_happened = false;
     composer.compose(|ctx| {
         let root_key = ctx.next_key();
@@ -3939,7 +3935,7 @@ fn test_is_skip_after_clean_frame() {
         ctx.end_restartable_group();
     });
     assert!(skip_happened,
-        "无变化帧的 clean group 应 Skip（prev_nodes 按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
+        "无变化帧的 clean group 应 Skip（复用索引按 slot_key 命中）——若 Enter 说明 is_skip 键 miss");
 }
 
 /// 回归：同帧二次 compose（recompose 循环）——首次物化后 drain 了 prev_node_by_key，
@@ -4029,7 +4025,7 @@ fn test_same_frame_second_compose_retains_tree() {
 }
 
 /// 阶段4 键修复的**关键回归用例**：scope 层存在时（scope 是 slot 树中 group 的父，
-/// LayoutNode 树无 scope 层——两棵树路径不一致），prev_nodes 按 slot_key 索引仍应命中。
+/// LayoutNode 树无 scope 层——两棵树路径不一致），复用索引按 slot_key 仍应命中。
 /// path 键实现下此场景 miss → 恒 Enter；slot_key 键修复后应 Skip。
 #[test]
 fn test_is_skip_with_scope_layer() {
@@ -4051,10 +4047,10 @@ fn test_is_skip_with_scope_layer() {
         ctx.end_scope();
     });
 
-    // layout 一次：填充 prev_nodes（真实流程：compose → layout → 下帧 compose）
+    // layout 一次：填充复用索引（真实流程：compose → layout → 下帧 compose）
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
-    // 帧2：无状态变化 → group slot Clean → prev_nodes 按 slot_key 命中 → Skip（尽管 scope 层在 slot 树中）
+    // 帧2：无状态变化 → group slot Clean → 索引按 slot_key 命中 → Skip（尽管 scope 层在 slot 树中）
     let mut skip_happened = false;
     composer.compose(|ctx| {
         ctx.start_scope();
@@ -4148,7 +4144,7 @@ fn test_param_equal_skip_integration() {
     // 帧1：参数 "hello"（首次 → Enter）
     compose_once(&mut composer, &title, &mut last_status);
     assert_eq!(last_status, Some(GroupStatus::Enter), "首次应 Enter");
-    // layout（prev_nodes 填充）
+    // layout（填充复用索引）
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
     // 帧2：参数未变 → Skip（参数相等 + slot clean）
@@ -4675,24 +4671,16 @@ fn test_layout_dependency_panic_rolls_back_new_subscription() {
     assert!(!composer.has_pending_states(), "retry should consume the retained invalidation");
 }
 
-/// A panic while measuring must leave the cached node maps as they were.
+/// A panic while measuring must leave the reuse index as it was.
 ///
-/// `LayoutTransaction` MOVES `prev_nodes` and `prev_node_by_key` into its snapshot before layout
-/// rebuilds them (it used to deep-clone them, which cost 149 µs of an idle 800-row layout). The move
-/// is only correct because a rollback puts them back — and nothing else in the suite would notice if
-/// it did not: the maps are read by the NEXT compose's materialize, where a missing entry does not
-/// panic, it silently fails the Skip and rebuilds the subtree. This test therefore checks the maps
-/// directly and then the observable consequence, that the next idle compose Skips again.
-/// A panic while measuring must leave the cached node maps as they were.
-///
-/// `LayoutTransaction` MOVES `prev_nodes` and `prev_node_by_key` into its snapshot before layout
-/// rebuilds them (it used to deep-clone them, which cost 149 µs of an idle 800-row layout). The move
-/// is only correct because a rollback puts them back — and nothing else in the suite would notice if
-/// it did not: the maps are read by the NEXT compose's materialize, where a missing entry does not
-/// panic, it silently fails the Skip and rebuilds the subtree. So this checks the maps directly, and
-/// then the observable consequence, that the next idle compose can still Skip.
+/// `LayoutTransaction` MOVES `prev_node_by_key` into its snapshot before layout rebuilds it (it used to
+/// deep-clone the maps, which cost 149 µs of an idle 800-row layout). The move is only correct because
+/// a rollback puts it back — and nothing else in the suite would notice if it did not: the index is
+/// read by the NEXT compose's Skip decision and by materialize, where a missing entry does not panic,
+/// it silently fails the Skip and rebuilds the subtree. So this checks the index directly, and then
+/// the observable consequence, that the next idle compose can still Skip.
 #[test]
-fn test_layout_panic_restores_cached_node_maps() {
+fn test_layout_panic_restores_reuse_index() {
     use std::panic::AssertUnwindSafe;
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
@@ -4734,21 +4722,18 @@ fn test_layout_panic_restores_cached_node_maps() {
 
     build(&mut composer, &layout_state, &should_panic, &mut leaf_key);
     composer.layout(constraints);
-    assert!(composer.prev_nodes.contains_key(&leaf_key), "layout must cache the leaf");
     assert!(composer.prev_node_by_key.contains_key(&leaf_key), "layout must index the leaf");
 
     // A DIRECT layout that panics, with no compose in between: compose drains `prev_node_by_key` as it
-    // claims nodes, so this is the frame shape in which both maps are non-empty when layout takes them.
+    // claims nodes, so this is the frame shape in which the index is non-empty when layout takes it.
     should_panic.store(true, AtomicOrdering::Relaxed);
     layout_state.as_raw().set_animating(21.0);
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| composer.layout(constraints)));
     assert!(result.is_err(), "the measure panic must reach the caller");
 
-    // The maps layout took are back: the failed frame must not have consumed the previous frame's cache.
-    assert!(composer.prev_nodes.contains_key(&leaf_key),
-        "rollback must restore the cached node map the failed layout took");
+    // The index layout took is back: the failed frame must not have consumed the previous frame's one.
     assert!(composer.prev_node_by_key.contains_key(&leaf_key),
-        "rollback must restore the cached node index the failed layout took");
+        "rollback must restore the node index the failed layout took");
     assert!(composer.arena.root.is_some(), "rollback must restore the tree");
 
     // And the restored cache is USABLE: the retry lays out, and the frame after it Skips the container.
@@ -5559,9 +5544,9 @@ fn test_only_one_top_level_node_becomes_the_root() {
         "the LAST top-level desc is the root (the second leaf here)"
     );
     assert_eq!(
-        composer.prev_nodes.len(),
+        composer.prev_node_by_key.len(),
         1,
-        "and the first leaf is not in the layout maps either — it is unreachable from the root"
+        "and the first leaf is not in the layout index either — it is unreachable from the root"
     );
 }
 
@@ -5899,7 +5884,7 @@ fn test_key_stable_across_skip_enter() {
 }
 
 /// 回归测试（TextField 输入不显示 bug）：文本内容变化（依赖注册在父容器 →
-/// leaf slot Clean）→ 复用节点必须重测（modifier_text_content_differs 检测）——
+/// leaf slot Clean）→ 复用节点必须重测（节点的 last_text 快照比对）——
 /// 否则常量折叠 + cached_paragraph 旧内容 → 渲染画旧文本。
 #[test]
 fn test_text_content_change_remeasures() {
@@ -5959,9 +5944,9 @@ fn test_text_content_change_remeasures() {
 
 /// A text STYLE change must re-measure too, not just a content change.
 ///
-/// The frame cache used to hold the node's whole `Modifier`, so every field the text carries was
-/// compared; it now holds a [`crate::layout::node::text_snapshot`] instead, which is cheaper but only
-/// as faithful as the fields that snapshot copies. The one that bites hardest is the colour: an alpha
+/// The comparison used to run against a node's whole cached `Modifier`, so every field the text carries
+/// was compared; it now runs against that node's [`crate::layout::node::TextSnapshot`], which is cheaper
+/// but only as faithful as the fields the snapshot copies. The one that bites hardest is the colour: an alpha
 /// 0→1 fade changes nothing about the size, so a folded measurement would keep painting the cached
 /// paragraph with its TRANSPARENT colour and the text would never appear — the reason the original
 /// check compares colour at all. This test changes nothing but the colour, and requires the leaf to be
@@ -6310,7 +6295,7 @@ fn test_component_param_change_forces_reenter() {
             let _ = ctx;
         });
     });
-    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0)); // prev_nodes 在 layout 更新
+    composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0)); // 复用索引在 layout 更新
     assert_eq!(run_count.get(), 1, "首帧 content 执行");
 
     // 帧 2：spacing 10（参数变化 → Enter——content 重跑）

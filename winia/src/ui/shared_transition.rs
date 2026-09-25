@@ -8485,7 +8485,7 @@ mod tier0_tests {
         crate::animation::clear_all_animations();
     }
 
-    /// A cached/restored node must keep its CONTENT box. `place()` leaves
+    /// A restored node must keep its CONTENT box. `place()` leaves
     /// `measured_size` holding the placeholder size the parent was told, so a
     /// rebuild that copies only that resurrects the placeholder as the node's own
     /// box — the exact confusion the flight layout contract removed (review R3-F3).
@@ -8500,21 +8500,12 @@ mod tier0_tests {
             "precondition: the content box wins over the placeholder size"
         );
 
-        let cached = node.to_cached();
         let mut restored = crate::layout::node::LayoutNode::default();
-        restored.restore_from(&cached);
+        restored.restore_layout(&node);
         assert_eq!(
             restored.content_box(),
             crate::layout::node::Size::new(210.0, 130.0),
-            "the snapshot carries the content box"
-        );
-
-        let mut layout_restored = crate::layout::node::LayoutNode::default();
-        layout_restored.restore_layout(&cached);
-        assert_eq!(
-            layout_restored.content_box(),
-            crate::layout::node::Size::new(210.0, 130.0),
-            "…and so does the layout-only restore"
+            "the restore carries the content box"
         );
     }
 

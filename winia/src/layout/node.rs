@@ -129,14 +129,34 @@ pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
     })
 }
 
-/// 比较两个 modifier 的文本内容（TextContent/RichTextContent 的 content）——
-/// 文本内容变化但 slot Clean（依赖注册在父容器）时，复用节点需重测。
-/// 检查 modifier 文本内容差异（决定"折叠测量是否失效"）：
-/// 内容、对齐、**颜色**、字号、字重、行数、字间距、行高、溢出——**所有
-/// 影响测量/渲染结果的属性**（color 变化必须触发重测——否则淡入动画
-/// （alpha 0→1）后 cached_paragraph 仍是透明色，渲染画不出文字）
-pub(crate) fn modifier_text_content_differs(a: &Modifier, b: &Modifier) -> bool {
-    text_snapshot(a) != text_snapshot(b)
+/// Whether `modifier` still carries the text `snap` was taken from — the comparison that decides if a
+/// folding node's `cached_paragraph` is still valid.
+///
+/// It compares FIELD BY FIELD against the stored snapshot instead of building a second snapshot and
+/// comparing tuples: `text_snapshot` clones the content `String`, so the tuple form allocated on
+/// every reused text node every frame to answer a question that is `true` almost every time. Same
+/// answer, same conservative direction (anything that differs — including a modifier that lost its
+/// text element — reports `false`, which forces the re-measure).
+pub(crate) fn text_content_matches(modifier: &Modifier, snap: &TextSnapshot) -> bool {
+    modifier.elements().iter().any(|el| match el {
+        ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
+            content == &snap.0
+                && *align == snap.1
+                && *color == snap.2
+                && *font_size == snap.3
+                && *font_weight == snap.4
+                && *font_style == snap.5
+                && *max_lines == snap.6
+                && *soft_wrap == snap.7
+                && *letter_spacing == snap.8
+                && *line_height == snap.9
+                && *overflow == snap.10
+        }
+        // Rich text reports the fixed sentinel `text_snapshot` uses: comparing the two is what kept a
+        // rich-text node from re-measuring every frame, and that is the behaviour kept here.
+        ModifierElement::RichTextContent { .. } => snap.0 == "<richtext>",
+        _ => false,
+    })
 }
 
 /// 检查 modifier 中是否包含 RichTextContent
@@ -248,8 +268,8 @@ pub struct LayoutNode {
     pub(crate) composing_color: std::cell::Cell<crate::modifier::Color>,
     /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
     /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
-    /// 转场结束即清 `None`。刻意不进 `CachedNode`——飞行态是瞬态，
-    /// 缓存命中必须从干净状态重建（协调器按 slot 回填）。
+    /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
+    /// 复用命中必须从干净状态重建（协调器按 slot 回填）。
     pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
     /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
     /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
@@ -266,89 +286,68 @@ pub struct LayoutNode {
     /// `PlaceHolderSize`), and parents re-write it from their placements.
     /// `None` = `measured_size` is the content box, as always.
     pub(crate) flight_content_size: Option<Size>,
-}
-
-// ── CachedNode：LayoutNode 的可缓存子集，用于增量重组时恢复节点 ──
-
-/// LayoutNode 的缓存快照。新增 LayoutNode 字段时，必须同步更新此结构
-/// 及 to_cached() / restore_from() 方法。
-///
-/// The cache holds what a FRAME actually reads back — a membership test, the folded measurement a
-/// rebuilt node restores from, and the text comparison below. It deliberately does not hold the node's
-/// `Modifier`: that was a `Vec` clone per node per frame, plus a `String` allocation through every
-/// `TextContent`, to serve exactly one check (`modifier_text_content_differs`), and nothing else read
-/// it. Measured at 4001 nodes: 182 µs of an idle 800-row layout, on a frame whose whole measurement
-/// folded in 0.01 µs (`docs/benchmarks.md`). What the check needs instead is `text`.
-#[derive(Debug, Clone)]
-pub(crate) struct CachedNode {
-    /// The node's text last frame (see [`text_snapshot`]) — the one thing that needed the modifier.
-    /// `None` for a node that carried no text, which is most of them, and which is why the box scene
-    /// pays nothing for this.
-    pub text: Option<TextSnapshot>,
-    pub measured_size: Size,
-    /// Content box while a flight reports a placeholder size. It MUST travel with
-    /// `measured_size`: after `place()` the latter holds the size the PARENT was
-    /// told, so a rebuilt node without this would resurrect the placeholder as its
-    /// own content box — the exact confusion the flight layout contract removed.
-    pub flight_content_size: Option<Size>,
-    pub position: Point,
-    pub focused: bool,
-    pub dirty: bool,
-    pub cached_constraints: Option<Constraints>,
-    pub slot_key: u64,
-    pub registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
+    /// The text this node was last MATERIALIZED with (see [`text_snapshot`]).
+    ///
+    /// It answers the one question the old per-frame cache map held it for: a slot can be Clean while
+    /// the text its node carries changed (the read lives in an ancestor container, so nothing marked
+    /// the leaf dirty), and a node that folds its measurement would then paint `cached_paragraph`'s old
+    /// content. Storing it on the node means the comparison needs no map lookup — and the map itself,
+    /// which cost a `slot_key → CachedNode` insert per node per frame, is gone.
+    ///
+    /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
+    /// clones nothing, so a settled frame does no work here at all.
+    pub(crate) last_text: Option<TextSnapshot>,
 }
 
 impl LayoutNode {
-    /// 生成可缓存快照（编译器强制覆盖所有需缓存字段）
-    pub(crate) fn to_cached(&self) -> CachedNode {
-        CachedNode {
-            // Gated on the content flags the node already carries: `text_snapshot` walks the modifier's
-            // elements, and for the thousands of nodes that have no text that walk is pure overhead.
-            // (A node whose flags are stale in the "says no text but has it" direction only pays a
-            // redundant re-measure next frame — the conservative direction.)
-            text: if self.has_text_content || self.has_richtext_content {
-                text_snapshot(&self.modifier)
-            } else {
-                None
-            },
-            measured_size: self.measured_size,
-            flight_content_size: self.flight_content_size,
-            position: self.position,
-            focused: self.focused,
-            dirty: self.dirty,
-            cached_constraints: self.cached_constraints,
-            slot_key: self.slot_key,
-            registrar: self.registrar.clone(),
+    /// Whether this node's text still matches the snapshot taken when it was last materialized. A
+    /// node with no text matches by definition; `None` (never materialized, or materialized before
+    /// the text arrived) does NOT — which forces the caller's re-measure, the conservative direction.
+    pub(crate) fn text_snapshot_matches(&self) -> bool {
+        if !(self.has_text_content || self.has_richtext_content) {
+            return true;
         }
+        self.last_text
+            .as_ref()
+            .is_some_and(|snap| text_content_matches(&self.modifier, snap))
     }
 
-    /// 从缓存恢复节点状态（缓存携带的字段——见 [`CachedNode`] 的说明：`modifier` 不在其中）。
-    pub(crate) fn restore_from(&mut self, cached: &CachedNode) {
-        self.measured_size = cached.measured_size;
-        self.flight_content_size = cached.flight_content_size;
-        self.position = cached.position;
-        self.focused = cached.focused;
-        self.dirty = cached.dirty;
-        self.cached_constraints = cached.cached_constraints;
-        self.slot_key = cached.slot_key;
-        self.registrar = cached.registrar.clone();
-        self.has_text_content = modifier_has_text(&self.modifier);
-        self.has_richtext_content = modifier_has_richtext(&self.modifier);
+    /// Takes the snapshot again when the text moved, so the next frame's [`Self::text_snapshot_matches`]
+    /// compares against what this frame materialized. Allocates only on a change: `text_snapshot`
+    /// clones the content string, and a settled text node clones nothing per frame.
+    pub(crate) fn refresh_text_snapshot(&mut self) {
+        if !(self.has_text_content || self.has_richtext_content) {
+            // A node with no text holds no snapshot. `text_snapshot_matches` answers `true` for it (a
+            // compare it is not part of), so the clear has to happen before that early return — and it
+            // has to happen: a snapshot surviving a text→box change would let the node, changed back to
+            // Text with the same content, compare against text from before the paragraph was cleared.
+            self.last_text = None;
+            return;
+        }
+        if self.text_snapshot_matches() {
+            return;
+        }
+        self.last_text = text_snapshot(&self.modifier);
     }
 
-    /// 只恢复布局部分（measured_size/cached_constraints/position/focused）——
-    /// 不覆盖 modifier（modifier 用本帧 build 的值；Enter 重建的节点若恢复旧
-    /// modifier，会把本帧新值覆盖成上帧缓存，导致状态变化（如按钮 label）丢失）。
-    /// 用于 start_node 的 clean leaf 恢复；Skip 的 stub 用完整 restore_from。
-    pub(crate) fn restore_layout(&mut self, cached: &CachedNode) {
-        self.measured_size = cached.measured_size;
-        self.flight_content_size = cached.flight_content_size;
-        self.position = cached.position;
-        self.focused = cached.focused;
-        self.dirty = cached.dirty;
-        self.cached_constraints = cached.cached_constraints;
-        self.slot_key = cached.slot_key;
+    /// Restores the layout state a REBUILT node needs from the node its key named — the degraded path
+    /// in `materialize` that has no node to reuse and folds the old measurement instead of measuring
+    /// again (`dirty = false` is what allows that fold).
+    ///
+    /// The three fields are the whole of it, and the first two MUST travel together: after `place()`
+    /// `measured_size` holds the size the PARENT was told, so restoring it without the content box
+    /// resurrects a flight's placeholder as the node's own box (review R3-F3, which found this third
+    /// restore site missed when the field was added to the cache).
+    ///
+    /// Deliberately NOT restored: `modifier` (the node must keep this frame's build — an old one would
+    /// overwrite it and lose a change like a button's new label), `position` (this frame's layout
+    /// places the node), `focused` (written by focus routing outside compose and layout — the fourth
+    /// counterexample in `docs/benchmarks.md`'s tenth attempt) and `slot_key` (the caller sets it).
+    pub(crate) fn restore_layout(&mut self, from: &LayoutNode) {
+        self.measured_size = from.measured_size;
+        self.flight_content_size = from.flight_content_size;
+        self.cached_constraints = from.cached_constraints;
+        self.dirty = false;
     }
 }
 
@@ -397,6 +396,7 @@ impl LayoutNode {
             paint: PaintDisposition::InTree,
             flight_measure: None,
             flight_content_size: None,
+            last_text: None,
         }
     }
 
@@ -480,6 +480,7 @@ impl Default for LayoutNode {
             paint: PaintDisposition::InTree,
             flight_measure: None,
             flight_content_size: None,
+            last_text: None,
         }
     }
 }
@@ -1936,6 +1937,71 @@ mod tests {
         let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
         assert_eq!(nodes[1].position.x, 80.0, "RTL absolute_offset(10) 不镜像（flex 70 + 10）");
     }
+
+    /// The text snapshot compare must be as faithful as the snapshot it reads, and the refresh must
+    /// make a node comparable against what it was just materialized with.
+    ///
+    /// This is the guard behind the re-measure that keeps a folding text node from painting a stale
+    /// paragraph (`materialize`'s reuse path). Its sharp edge is that the comparison is written BY
+    /// HAND field by field — `text_snapshot` clones the content string on every call, so the tuple
+    /// form it replaced allocated per text node per frame — and a field dropped from it is invisible
+    /// everywhere else: the node simply never re-measures for that field. Colour is the field with a
+    /// test of its own at the composer level (an alpha fade changes no size), so it is asserted here
+    /// too; the rest are checked as one set.
+    #[test]
+    fn text_snapshot_compare_sees_every_field_and_refresh_settles() {
+        fn text_node(content: &str, color: crate::modifier::Color) -> LayoutNode {
+            LayoutNode::new(
+                Modifier::new().push(crate::modifier::ModifierElement::TextContent {
+                    content: content.to_string(),
+                    font_size: 14.0,
+                    color,
+                    font_weight: crate::ui::text::FontWeight::NORMAL,
+                    font_style: crate::ui::text::FontSlant::Upright,
+                    max_lines: usize::MAX,
+                    align: crate::ui::TextAlign::Left,
+                    overflow: crate::ui::TextOverflow::Clip,
+                    soft_wrap: true,
+                    letter_spacing: 0.0,
+                    line_height: None,
+                }),
+                None,
+            )
+        }
+
+        let black = crate::modifier::Color::from_argb(255, 0, 0, 0);
+        let transparent = crate::modifier::Color::from_argb(0, 0, 0, 0);
+        let mut node = text_node("hello", black);
+
+        // Never materialized: nothing to compare against, and the caller must be told so.
+        assert!(!node.text_snapshot_matches(), "a node with no snapshot cannot claim to match");
+        node.refresh_text_snapshot();
+        assert!(node.text_snapshot_matches(), "the refresh records the node's own text");
+        assert!(node.last_text.is_some(), "…in the snapshot field, not just in the answer");
+
+        // Same text, every field identical: still matching (this is the per-frame path).
+        node.modifier = text_node("hello", black).modifier.clone();
+        assert!(node.text_snapshot_matches(), "the same text matches");
+
+        // A colour change is a change: the paragraph it paints was shaped in the old colour.
+        node.modifier = text_node("hello", transparent).modifier.clone();
+        assert!(!node.text_snapshot_matches(), "colour is part of the compared set");
+
+        // …and the refresh is what settles it, so the very next compare is clean.
+        node.refresh_text_snapshot();
+        assert!(node.text_snapshot_matches(), "after the refresh the new text is the baseline");
+
+        // Content, size and the layout-affecting flags are compared too.
+        node.modifier = text_node("hello!", transparent).modifier.clone();
+        assert!(!node.text_snapshot_matches(), "content is compared");
+
+        // A node that loses its text has nothing to compare and must not hold a stale snapshot.
+        let mut box_node = LayoutNode::new(Modifier::new().size(10.0, 10.0), None);
+        box_node.last_text = node.last_text.clone();
+        assert!(box_node.text_snapshot_matches(), "a node with no text matches by definition");
+        box_node.refresh_text_snapshot();
+        assert!(box_node.last_text.is_none(), "and the refresh drops the snapshot it cannot use");
+    }
 }
 
 // ── 焦点遍历 ──
@@ -2225,7 +2291,7 @@ fn measure_node_inner(
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
     // 重放 stub：clean-skip 节点无 measure_policy，绝不能重新测量
-    //（无 policy 走叶子分支会返回 0 并污染 prev_nodes 缓存，导致塌缩不可逆）。
+    //（无 policy 走叶子分支会返回 0，把这个 0 写进节点缓存 → 塌缩不可逆）。
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
     // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
     //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
