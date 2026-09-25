@@ -82,12 +82,13 @@ is unchanged:
 | container dirty, every row Skips | 835 | 0 |
 | one row dirty (the same loop + one rebuild) | 839 | 1 |
 
-The loop over 800 rows costs **~415 µs**, and re-entering one row inside it costs **nothing measurable**
+The loop over 800 rows costs **~450 µs**, and re-entering one row inside it costs **nothing measurable**
 (~4 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it. The loop's
-own 415 µs has come down from ~490 µs as the per-node costs the later rounds removed stopped being paid
-800 times over; its internal breakdown is instrumented and therefore only indicative (the thirteenth and
-sixteenth rounds' sections explain why: a probe that costs ~35 ns per point dominates a bucket whose
-calls are ~50 ns).
+own cost has come down from ~490 µs as the per-node costs the later rounds removed stopped being paid
+800 times over, and the twentieth round cut another 5% of it (a hasher the convergence pass was still
+paying for); its internal breakdown is instrumented and therefore only indicative (the thirteenth,
+sixteenth and twentieth rounds' sections explain why: a probe that costs ~35 ns per point dominates a
+bucket whose calls are ~50 ns, and on Windows a clock pair has a 20-40 ns floor of its own).
 
 ### Correction: the 5 ms was NOT the Skip decision
 
@@ -1073,6 +1074,76 @@ of magnitude), and it is next because it is the only one that is paid on the fra
 actually has — one row changed → the container re-runs its 800 iterations. The 16 µs here is paid on
 every frame equally, which is why closing it is the right call rather than chasing it.
 
+### A twentieth round: inside the row loop, and one map that was still on the std hasher
+
+The row loop is the last big bucket: 800 rows re-run because the container's own state moved, every row
+declaring a parameter that did not change, so every row Skips. Measured as `container dirty` minus
+`idle`: **~450 µs** of the compose, ~560 ns per iteration.
+
+**It is not one hot spot, it is about ten small ones.** That is the round's main finding, and getting it
+took two instruments because the obvious one does not work here:
+
+* a **sampled** per-function probe (every 32nd call, guard-start/guard-drop) — per-call clock pairs would
+  cost more than the item, six of them per row on a 500 ns row being the sixteenth round's mistake in a
+  new place. Even sampled, the numbers carry the Windows `Instant` floor (~20-40 ns per pair), so they
+  are upper bounds: `next_group_key` ~45-97 ns, `changed` ~59 ns, `start_restartable_group` ~76 ns (of
+  which `start_slot` ~35, the Skip tail ~38), `end_restartable_group` ~42 ns (of which `end_node` ~37).
+  Two lessons came out of building it: a guard left alive to the end of the function measures everything
+  after it (the first version reported a `stable-base` window containing the two windows after it), and
+  two guards sampling on the same counter land on the same call, so each window contains the other's
+  overhead — the sampling is staggered by slot now.
+* **ablations** (floor-free), each chosen so the control scene produces the same tree with the step
+  disabled: `params_equal` ≈ **28 ns/row** (~22 µs/frame), `container_modifier_unchanged` < 12 ns/row,
+  the Skip tail's three writes < 15 ns/row, and a `dirty_keys.is_empty()` short-circuit in `start_slot`
+  — which the counts suggested should pay (1784 `start_slot` calls a frame) — measured **no win at all**
+  and was dropped: an empty `hashbrown` map has no table to probe, so the removal it guards is ~2 ns.
+
+Two ablations also failed loudly rather than measuring what they were aimed at, which is worth keeping:
+disabling the parameter commit turned the loop into 800 Entering groups (the `entered` column said so),
+and disabling the GROUP_STACK push/pop did the same — for a function whose whole job is decide-Skip,
+"did the scene change shape" is the check that makes a fast number believable.
+
+**The win was in a shared structure's hasher.** The convergence pass after compose looks up
+`compose_slot_reads` up to three times per ENTERING group — 800 groups in this loop is ~2400 lookups a
+frame — and both that map and the local `reads_by_slot` were still `HashMap<u64, _>` with the std hasher
+on keys the composer had already mixed. That is the ninth fix's rule, never applied to these two because
+they are per-frame maps rather than per-node ones; in a list they are per-node-shaped. `SlotKeyMap` on
+both (and on `layout_slot_reads`, which the layout half of the same pass walks):
+
+| compose only, boxes 800 rows, container dirty (every row skips) | value |
+|---|---|
+| before (HEAD, best of three interleaved blocks) | 871-939 µs |
+| after (`SlotKeyMap`), same blocks | **814-913 µs** |
+| per-block difference | **24, 57 and 44 µs** — the same direction in all three |
+| control: compose idle, where the ENTERED set is small | no measurable change (438-442 vs 444-458) |
+
+The control is the evidence that the win is where it is claimed: this pass's cost is proportional to the
+number of groups that RAN, so a frame where only the container ran should not care — and does not. The
+measurement had to be blocked (both runs of one binary, then both of the other) because the machine
+drifts more between blocks than the effect is large: an earlier interleaved-by-pair version of the same
+comparison read 4/4 for the new binary, then 2/2 the other way on a re-run, which is what a
+pair-alternating design does when the first run of a pair is systematically different. Blocking removed
+the ambiguity; the doc's standing rule (best sample, and never compare across runs taken minutes apart)
+is what turned the first result into an artifact and the second into a measurement.
+
+**Not taken, with the reason:** the pass still walks every ENTERED key, and a reader-driven shape (iterate
+the groups that READ, which is what actually changes, and test the few entries in `compose_slot_reads`
+against the entered set) would remove the remaining ~3 hash lookups per entered group — worth ~2% of this
+frame, in exchange for a semantic change in how the dependency graph converges whose failure mode is a
+frozen animation or a missed update. That is the same trade this document refused on `collect_live_keys`
+(a behaviour change in scope pruning) and on the params double-compare below. The hasher swap got 5%
+without touching semantics; the restructure can wait for a reason.
+
+**Also found, also not taken: the same parameter comparison runs twice per declaring group per frame.**
+`ComposeCtx::changed` compares the incoming value against the candidate child slot (and returns the
+answer), then `start_restartable_group` runs `params_equal` over the pending buffer against the slot
+`start_slot` landed on — the same values, compared again, ~28 ns. Collapsing it needs the verdict to be
+carried across the two calls *and* gated on "start_slot reused the slot `changed` looked at", because in
+the structural-change branch the two questions have different answers (the new slot has no parameters, so
+the group must Enter). A coupling across three functions in the key/parameter machinery, with stale
+content as the failure mode, for ~2% of one frame shape: refused, recorded here so the next attempt
+starts from the numbers.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -1089,14 +1160,14 @@ frame-level tables as the sanity check.
 | `collect_live_keys` (after the eleventh and twelfth fixes) | ~35 µs | ~35 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
-| reconcile (after the third fix) | ~2 µs | ~68 µs |
-| the row loop (800 reads + 800 Skip decisions) | — | ~415 µs |
+| reconcile (after the third fix) | ~2 µs | ~45-68 µs (the twentieth round's hasher cut 24-57 µs of it) |
+| the row loop (800 reads + 800 Skip decisions) | — | ~450 µs |
 | **compose total** | **~420 µs** | **~832 µs** |
 
 Those totals are the frame-level `compose only` arms (best of eight) rather than a sum of the buckets
 above, which are instrumented and were taken in different rounds; the row-loop figure is the control
-scene's difference (`container dirty` minus `idle`: 835 − 420 µs). An earlier version of this table read
-~300 / ~840 and was stale by three rounds.
+scene's difference (`container dirty` minus `idle`). An earlier version of this table read ~300 / ~840
+and was stale by three rounds.
 
 The cold frame's split is different from both columns above, because everything in it runs. The
 thirteenth fix measured it as: content 1817 µs (of which `start_restartable_group` 1441, `changed` 503,
@@ -1119,7 +1190,8 @@ slot tree, `materialize`'s verification walk visits both trees, and layout's wal
 index (since the eighteenth round the only whole-tree map there is). None of it does anything with the rows that did not change — they are the next round's targets,
 and they are listed below. Note that the row loop's own cost reads larger than the loop's instrumented
 parts: it is measured against the compose-only idle figure, which came down several times while the
-loop itself did not change.
+loop itself did not change, and since the twentieth round we know the parts sum to about half of it
+(the rest being the row closure's own call and the benchmark's per-row bookkeeping).
 
 ### Read placement still does not matter
 
@@ -1249,11 +1321,17 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   one that had no node to read measured instead. The walk now fills the index only. Idle frame at 800
   rows 828 → 546 µs (boxes) and 1728 → 715 µs (text, where the `String` clone per text node per frame
   was most of the bill); `layout` alone 227 → 154 µs and 1137 → 181 µs. See that round's section.
-- **The row loop's ~415 µs**: 800 iterations at ~520 ns (105 ns read, ~330 ns group machinery, the rest
-  being the container's own re-entry). It has come down from ~490 µs as the per-node costs above were
-  removed, which is the shape to expect: the loop is where those costs were paid 800 times. Each iteration now also runs a small claim verification for its
-  row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
-  descriptor path did — the loop was never in the descriptor path.
+- **The row loop's ~450 µs — ATTRIBUTED (twentieth round), and 5% of it fixed.** 800 iterations at
+  ~560 ns, and the round's finding is that **there is no hot spot to remove**: it is ~10 pieces of 20-100
+  ns, each individually justified (the key lookup, the parameter compare and write, two slot
+  navigations per row — the `#[composable]` fn scope plus the restartable group — the Skip tail, the
+  dependency convergence). Sampled per-function timings and floor-free ablations are in that round's
+  section; the two ablatable items are `params_equal` at ~28 ns/row and `container_modifier_unchanged`
+  below 12 ns. What did come out of it: `compose_slot_reads`, `layout_slot_reads` and the convergence
+  pass's local read map were still on the std hasher — 2400 lookups a frame on pre-mixed keys — and
+  moving them to `SlotKeyMap` cut **24-57 µs** (blocked A/B, and no change on the idle control, which is
+  where the pass is nearly empty). Still open, with their designs and refusal reasons recorded: the
+  reader-driven convergence pass (~2%) and the doubly-run parameter comparison (~2%).
 - **`Box::new(policy)`, ~86 µs on a cold frame — MEASURED AND NOT TAKEN.** The thirteenth fix's table
   said 135 µs; the sixteenth round measured the operation standalone at 27 ns/call (3201 containers =
   ~86 µs) and established that the difference was the probe. It is paid only by frames that Enter
