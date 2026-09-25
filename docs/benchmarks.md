@@ -40,32 +40,35 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 582 | 38 | 72 |
-| 200 | 1872 | 150 | 287 |
-| 800 | 6063 | 683 | 1340 |
+| 50 | 236 | 33 | 63 |
+| 200 | 983 | 134 | 260 |
+| 800 | 4829 | 597 | 1262 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 721 | 51 | 82 |
-| 200 | 4809 | 212 | 344 |
-| 800 | 27004 | 1711 | 2357 |
+| 50 | 715 | 46 | 77 |
+| 200 | 4876 | 198 | 345 |
+| 800 | 26168 | 1618 | 2326 |
 
-16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
+The cold column came down most in the twelfth fix (below): a cold frame builds every node, so it was the
+one paying for the arena's growth by doubling.
+
+16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
-Three runs were taken for these figures: two agreed to within a few percent on the box scene and the
-third was a loaded machine (its text cold frame read 37 ms against 26 ms, and every figure in it was
-worse — noise only ever adds time, which is why the fast sample is the headline). The text scene is
-also intrinsically the noisier of the two, so a single text figure should not be read as precise.
+Eight runs were taken for these figures (the machine was loaded for some of them — its text cold frame
+read 38-42 ms against 26 ms, and noise only ever ADDS time), so each cell above is the fastest of the
+eight. The text scene is also intrinsically the noisier of the two, so a single text figure should not
+be read as precise.
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 682 | 222 |
-| one row moved | ~1120 | ~220 |
+| idle | 637 | 220 |
+| one row moved | ~1116 | ~220 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -73,12 +76,12 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 682 | 0 |
-| container dirty, every row Skips | 1174 | 0 |
-| one row dirty (the same loop + one rebuild) | 1181 | 1 |
+| idle (container Skips, so the loop does not run) | 637 | 0 |
+| container dirty, every row Skips | 1127 | 0 |
+| one row dirty (the same loop + one rebuild) | 1142 | 1 |
 
 The loop over 800 rows costs **~490 µs**, and re-entering one row inside it costs **nothing measurable**
-(~7 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+(~15 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
 Instrumented attribution of that ~490 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
 of group machinery, the rest being the container's own entry plus rows materializing one by one instead
 of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
@@ -579,6 +582,51 @@ So that was measured, and the first answer was wrong twice:
 | compose only, idle | 784 µs | **682 µs** |
 | one row updated | 1423 µs | **1328 µs** |
 
+### A twelfth fix: two `reserve`s that were asking for two elements
+
+The cold frame — every group entering, every node built and measured — had never been split by this
+document's probes. It is the slowest path in the framework by far (6063 µs against an idle frame's 683),
+so this round profiled it first and found two things.
+
+**The arena grew into place.** `materialize` builds the frame's nodes by pushing into
+`NodeArena::nodes`, and a `Vec` growing 0 → 4000 does it by doubling: ~12 reallocations, each MOVING
+every node already in it. A `LayoutNode` is a large struct (a modifier plus a dozen cells), so that is
+megabytes of `memcpy` per cold frame. It is now sized once, up front, from the slot tree's node count.
+
+**And the number it was sized from was 2.** The first version of that reserve read
+`root_slot.children_count` — and that field is written by `end_slot`, which nothing ever calls for the
+ROOT slot, so it holds its constructor value of 1 forever. Both reserves built on it (this one and the
+live-key set's from the previous round) asked for two elements and did nothing at all: the previous
+round's win came entirely from the hasher that shipped with it, and its "reserve" was decoration. The
+bound is now computed by summing the root's children's subtree counts, and a test asserts it against the
+tree materialize actually built. That test was written against the buggy version first, where it reports
+`the bound says 2 nodes but materialize built 9` — and its own first attempt asserted nothing at all,
+because it re-composed a tree whose container had not changed, so the group Skipped and every shape
+built two nodes.
+
+| instrumented, cold frame, boxes 800 rows | before | after |
+|---|---|---|
+| `materialize`'s node loop | 1076 µs | **678 µs** |
+| `collect_live_keys` | 116 µs | **69 µs** |
+| **compose total** | 3821 µs | **3321 µs** |
+
+**The `entered_compose_keys` set got the same treatment** as the live-key set: a `SlotKeySet` instead of
+a plain `HashSet` (one insert per entering group — 4000 on a cold frame), and the dependency reconcile
+now TAKES it rather than cloning it. Those are small next to the arena's memcpy, and their frame-level
+effect is inside this machine's noise; the probe is what shows them, and the probe is where the numbers
+above come from.
+
+| frame-level, boxes 800 rows (best of eight runs) | before | after |
+|---|---|---|
+| **cold frame** | 6063 µs | **4829 µs** (-20%) |
+| idle frame | 666 µs | **597 µs** (-10%) |
+| one row updated | 1328 µs | **1262 µs** (-5%) |
+
+Eight runs were needed because the machine was loaded for several of them (its text cold frame read
+38-42 ms against 26 ms). Noise only ever ADDS time, so every figure here is the fastest of the eight —
+the rule this document has used throughout, applied at a larger sample because this round's effect on
+the idle frame is close to the noise floor.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -592,12 +640,17 @@ frame-level tables as the sanity check.
 |---|---|---|
 | `materialize` (now: verify-and-claim walk) | ~100 µs | ~100 µs |
 | `prune_stale_child_links` (arena walk, after the eighth fix) | ~16 µs | ~16 µs |
-| `collect_live_keys` (after the eleventh fix) | ~50 µs | ~50 µs |
+| `collect_live_keys` (after the eleventh and twelfth fixes) | ~35 µs | ~35 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
-| the row loop (800 reads + 800 Skip decisions) | — | ~510 µs |
+| the row loop (800 reads + 800 Skip decisions) | — | ~490 µs |
 | **compose total** | **~300 µs** | **~840 µs** |
+
+The cold frame's split (the twelfth fix's subject) is different from both columns above, because
+everything in it runs: content 1817 µs, materialize 1333 (of which the node loop 678 and the claim walk
+279), tail 343, live keys 69, prune 67 — compose 3321 µs; layout 1152 (measure 675, the map walk 254,
+transaction 35, rest 128).
 
 | layout, same tree | idle, before the fourth fix | idle, after the ninth |
 |---|---|---|
@@ -717,9 +770,9 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   reachability walk plus two buffer allocations per frame (a `Vec<bool>` and the stamp vector). Both
   could be reused across frames instead of reallocated — that needs a home on the `Composer` (or a
   thread-local) and buys ~1% of the frame, so it waits for a reason.
-- **`collect_live_keys`'s remaining ~50-90 µs** (after the eleventh fix): the inserts dominate, and they
-  are cache misses into a 32 KB table rather than hashing, so no cheaper hasher helps from here. The
-  only way further is to not build the set — see that fix's section: the shape that would make it
+- **`collect_live_keys`'s remaining ~35 µs** (after the eleventh and twelfth fixes): the inserts dominate,
+  and they are cache misses into a table rather than hashing, so no cheaper hasher helps from here. The
+  only way further is to not build the set — see the eleventh fix's section: the shape that would make it
   replaceable ("record the keys that leave the tree") is refuted by a test, because scopes leave residue
   behind. A solution in that direction would have to make scopes prune (or record the residue when it is
   created), which is a behaviour change with its own suite to satisfy, not an optimization.
@@ -728,18 +781,19 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   changed nothing should keep them instead of rebuilding them; the round that tried it established that
   "changed nothing" is not a property anything in this codebase tracks, and the attempt is documented in
   its own section below. What survives is the diagnosis, not the code.
-- **The row loop's ~570 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
+- **The row loop's ~490 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
   descriptor path did — the loop was never in the descriptor path.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The eight defects that *were* bugs
+and each is one round of work with this bench as the measuring stick. The nine defects that *were* bugs
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
 per-node hash lookups in `materialize`'s claim path, ~1600 per-frame allocations in the prune to check
-lists that are almost always already correct, and a SipHash on 8000 pre-mixed keys per frame — were all
+lists that are almost always already correct, a SipHash on 8000 pre-mixed keys per frame, and two
+`Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements) — were all
 found by measuring one bucket and finding something else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round

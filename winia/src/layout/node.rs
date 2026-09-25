@@ -621,6 +621,19 @@ impl NodeArena {
         }
     }
 
+    /// Makes room for `additional` more nodes in one step.
+    ///
+    /// `alloc` pushes into `nodes`, and a `Vec` that grows 0 → 4000 does it by doubling: ~12
+    /// reallocations, each MOVING every node already in it. A `LayoutNode` is a large struct (its
+    /// modifier plus a dozen cells), so on the frame that builds a whole tree that is megabytes of
+    /// `memcpy` — measured as the single largest item in the cold frame's materialize
+    /// (`docs/benchmarks.md`). The count is an upper bound, which is the safe direction here: capacity
+    /// that goes unused costs address space, not work, and a reserve against capacity already
+    /// sufficient is a comparison.
+    pub(crate) fn reserve_nodes(&mut self, additional: usize) {
+        self.nodes.reserve(additional);
+    }
+
     /// 分配/复用槽位（free 优先），返回索引
     pub fn alloc(&mut self, node: LayoutNode) -> usize {
         if let Some(idx) = self.free.pop() {
