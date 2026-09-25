@@ -532,6 +532,12 @@ impl std::hash::Hasher for SlotKeyHasher {
 pub(crate) type SlotKeyMap<V> =
     std::collections::HashMap<u64, V, std::hash::BuildHasherDefault<SlotKeyHasher>>;
 
+/// A set of `slot_key`s (see [`SlotKeyHasher`]). The per-frame live-key set is the reason it exists:
+/// at 800 rows it is ~4000 inserts, and with the std hasher that set alone measured 194 µs of an idle
+/// frame — the walk, the hashing and the growth of a `HashSet` nobody sized up front.
+pub(crate) type SlotKeySet =
+    std::collections::HashSet<u64, std::hash::BuildHasherDefault<SlotKeyHasher>>;
+
 /// A set of arena node indices, kept as a bit vector.
 ///
 /// `materialize` marks every node it claims (the frame's reuse decisions) and the compose tail asks

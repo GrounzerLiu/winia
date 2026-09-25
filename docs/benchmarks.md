@@ -40,15 +40,15 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 581 | 43 | 78 |
-| 200 | 1227 | 176 | 304 |
-| 800 | 6430 | 757 | 1423 |
+| 50 | 582 | 38 | 72 |
+| 200 | 1872 | 150 | 287 |
+| 800 | 6063 | 683 | 1340 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 727 | 55 | 89 |
-| 200 | 5054 | 241 | 368 |
-| 800 | 26071 | 1801 | 2386 |
+| 50 | 721 | 51 | 82 |
+| 200 | 4809 | 212 | 344 |
+| 800 | 27004 | 1711 | 2357 |
 
 16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
@@ -64,8 +64,8 @@ The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 784 | 222 |
-| one row moved | ~1200 | ~220 |
+| idle | 682 | 222 |
+| one row moved | ~1120 | ~220 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -73,13 +73,13 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 784 | 0 |
-| container dirty, every row Skips | 1342 | 0 |
-| one row dirty (the same loop + one rebuild) | 1376 | 1 |
+| idle (container Skips, so the loop does not run) | 682 | 0 |
+| container dirty, every row Skips | 1174 | 0 |
+| one row dirty (the same loop + one rebuild) | 1181 | 1 |
 
-The loop over 800 rows costs **~510 µs**, and re-entering one row inside it costs **nothing measurable**
-(~30 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
-Instrumented attribution of that ~570 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
+The loop over 800 rows costs **~490 µs**, and re-entering one row inside it costs **nothing measurable**
+(~7 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+Instrumented attribution of that ~490 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
 of group machinery, the rest being the container's own entry plus rows materializing one by one instead
 of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
 carries whatever the container's re-entry costs on top of the loop — that is why it reads larger than
@@ -525,6 +525,60 @@ for the cache: whoever writes a field the cache carries marks that node, and `la
 marked entries instead of rebuilding all of them. That is local, it fails loudly (a missing mark leaves
 one node's cache stale, not the frame's), and it does not need any new global invariant.
 
+### An eleventh fix: the live-key set, and the residue question behind it
+
+`collect_live_keys` walks the whole slot tree at the end of every compose and builds a set of the keys
+that are still part of the composition — ~4000 inserts at 800 rows. Instrumented, it cost **194 µs of
+an idle frame**, which made it the largest single item left on the compose side. Both halves of that
+were fixable:
+
+* the set was a plain `HashSet<u64>` — SipHash again, on slot keys the composer had already mixed;
+* it was built without a `reserve`, so a `HashSet` growing into 4000 entries rehashed everything several
+  times on the way.
+
+`SlotKeySet` (the cheap hasher, added with the ninth fix) plus a `reserve` sized from the slot tree's own
+node count (`children_count`, which `end_slot` maintains) took it to **96-122 µs across two probe runs**.
+
+| instrumented, boxes 800 rows | before | after |
+|---|---|---|
+| `collect_live_keys` | 194 µs | **96-122 µs** |
+
+Splitting the walk from the insert showed where the rest goes: with the inserts skipped and only the
+traversal (`visited` checks, the in-skip propagation, the child loops) it is **27 µs**. So ~90 µs is
+inserting 4000 keys into a 32 KB table — cache misses, not hashing. That is the floor for any
+hash-set-shaped answer, which is what makes the next question worth asking.
+
+#### Is the set even necessary?
+
+The set exists to answer a handful of lookups per frame (a read recorded against a slot that is no
+longer live must be dropped). It is a set of `slot_key`s that are live — and "live" here means "composed
+this frame, or inside a skipped subtree". If every slot still in the tree after `truncate()` were live,
+the set would be exactly "the keys in the tree" and could be replaced by recording the keys that LEAVE
+(the rare, small event), which needs no per-frame walk at all.
+
+So that was measured, and the first answer was wrong twice:
+
+1. **A probe over the whole library suite and the bench found zero residue** — no slot ever survived a
+   compose unvisited while outside a skipped subtree. Tempting to conclude the replacement is safe.
+2. A test written to *produce* residue found 9 slots on the first shape it tried… **all of them live**.
+   It was counting after the frame, and materialize consumes the frame's markers (`desc` and
+   `skip_modifier` are `take()`n), so a skipped subtree read afterwards looks unvisited and un-skipped.
+   The count was an artifact of WHEN it was taken.
+3. Counting at the right moment — inside `collect_live_keys`, via a test-visible counter — the first
+   shape (a restartable group whose interior shrinks) reported **0**. Correct: a group that re-enters
+   prunes its own children (`end_restartable_group`'s `retain(visited)`), so nothing is left behind.
+4. A **scope** whose contents shrink is the shape that does it: a scope is visited, never skips, and
+   never prunes (`end_scope` is `end_slot`), so the leaves that stopped being composed stay in the tree.
+   That test now asserts residue > 0 (`test_live_keys_exclude_unvisited_slots`), which is what makes the
+   replacement unsafe — and it is the same trap the tenth attempt fell into: a plausible invariant that
+   the test suite simply never exercises.
+
+| frame-level, boxes 800 rows (best of two runs) | before | after |
+|---|---|---|
+| **idle frame** | 757 µs | **666 µs** |
+| compose only, idle | 784 µs | **682 µs** |
+| one row updated | 1423 µs | **1328 µs** |
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -538,12 +592,12 @@ frame-level tables as the sanity check.
 |---|---|---|
 | `materialize` (now: verify-and-claim walk) | ~100 µs | ~100 µs |
 | `prune_stale_child_links` (arena walk, after the eighth fix) | ~16 µs | ~16 µs |
-| `collect_live_keys` | ~100 µs | ~100 µs |
+| `collect_live_keys` (after the eleventh fix) | ~50 µs | ~50 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
 | the row loop (800 reads + 800 Skip decisions) | — | ~510 µs |
-| **compose total** | **~380 µs** | **~900 µs** |
+| **compose total** | **~300 µs** | **~840 µs** |
 
 | layout, same tree | idle, before the fourth fix | idle, after the ninth |
 |---|---|---|
@@ -663,8 +717,12 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   reachability walk plus two buffer allocations per frame (a `Vec<bool>` and the stamp vector). Both
   could be reused across frames instead of reallocated — that needs a home on the `Composer` (or a
   thread-local) and buys ~1% of the frame, so it waits for a reason.
-- **`collect_live_keys`: ~100 µs per frame**, a whole-slot-tree walk producing the live-key set the two
-  reconciles consume. It is the input to the guards above, so it is the next thing to make incremental.
+- **`collect_live_keys`'s remaining ~50-90 µs** (after the eleventh fix): the inserts dominate, and they
+  are cache misses into a 32 KB table rather than hashing, so no cheaper hasher helps from here. The
+  only way further is to not build the set — see that fix's section: the shape that would make it
+  replaceable ("record the keys that leave the tree") is refuted by a test, because scopes leave residue
+  behind. A solution in that direction would have to make scopes prune (or record the residue when it is
+  created), which is a behaviour change with its own suite to satisfy, not an optimization.
 - **Layout's fused map walk, ~220 µs per frame — attempted and REVERTED**, which is worth recording
   because the target looks so obviously winnable. Both maps are functions of the tree, so a frame that
   changed nothing should keep them instead of rebuilding them; the round that tried it established that
@@ -676,7 +734,7 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   descriptor path did — the loop was never in the descriptor path.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The seven defects that *were* bugs
+and each is one round of work with this bench as the measuring stick. The eight defects that *were* bugs
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
@@ -688,7 +746,10 @@ the frame was treating "the index is empty" as a proxy for something else. The e
 whose planned approach measured FALSE before it was written (see its section), which is worth knowing:
 the plan was on the list for two rounds and one probe retired it in an afternoon. The tenth went the
 other way — written, measured green on the library suite, then reverted when the UI suite found the
-fourth subsystem the cache depends on — and that one is written up for whoever tries it next.
+fourth subsystem the cache depends on — and that one is written up for whoever tries it next. The
+eleventh produced a measurement artifact of its own (a residue count taken after the frame, when the
+markers that identify a skipped subtree have already been consumed) and then the shape that answered the
+question it was asked, which is why the invariant it pins down now has a test instead of a comment.
 
 ## Re-running any of this
 

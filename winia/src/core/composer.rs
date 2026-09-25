@@ -1470,22 +1470,41 @@ impl SlotTable {
 
     /// Collect slot keys that remain part of the current composition. A skipped
     /// subtree is retained structurally even though its descendants were not visited.
-    fn collect_live_keys(&self, out: &mut HashSet<u64>) {
-        fn visit(slot: &Slot, out: &mut HashSet<u64>, in_skip: bool) {
+    ///
+    /// The set is RESERVED from the slot tree's own node count (`children_count`, maintained by
+    /// `end_slot`) rather than growing: a `HashSet` filling up to 4000 entries rehashes everything
+    /// several times on the way, and this runs every frame. `SlotKeySet` carries the cheap hasher for
+    /// the same reason — both together were worth 2x on this call (`docs/benchmarks.md`).
+    ///
+    /// Returns how many slots it SKIPPED: slots that are still in the tree but were not composed this
+    /// frame and are not inside a skipped subtree. The count is free here (the walk is already
+    /// descending past exactly those slots) and it is the evidence for a claim that matters when
+    /// somebody wants to replace this set with "every slot in the tree" — see the test that reads it.
+    /// Note it only means anything at THIS moment: materialize later consumes the frame's markers
+    /// (`desc` and `skip_modifier` are `take()`n), so the same tree read after a frame looks like it
+    /// has far more residue than it did during composition.
+    fn collect_live_keys(&self, out: &mut crate::layout::node::SlotKeySet) -> usize {
+        fn visit(slot: &Slot, out: &mut crate::layout::node::SlotKeySet, in_skip: bool, skipped: &mut usize) {
             if !slot.visited && !in_skip {
+                *skipped += 1;
                 return;
             }
             out.insert(slot.key);
             let child_in_skip = in_skip
                 || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
             for child in &slot.children {
-                visit(child, out, child_in_skip);
+                visit(child, out, child_in_skip, skipped);
             }
         }
 
+        // An upper bound: every slot in the tree, whether or not it turns out to be live.
+        out.reserve(self.root_slot.children_count + 1);
+
+        let mut skipped = 0usize;
         for child in &self.root_slot.children {
-            visit(child, out, false);
+            visit(child, out, false, &mut skipped);
         }
+        skipped
     }
 }
 
@@ -1902,6 +1921,12 @@ pub struct Composer {
     /// Subtrees whose in-place claim was rejected this frame (see `skip_claims`).
     #[cfg(test)]
     pub(crate) skip_claim_bails: usize,
+    /// Slots the last compose found still in the tree but not composed (and not inside a skipped
+    /// subtree) — the slots `collect_live_keys` exists to exclude. Test-visible because the number
+    /// only exists at that moment: materialize consumes the frame's markers (`desc`, `skip_modifier`),
+    /// so counting the same tree after a frame reports slots that were live all along.
+    #[cfg(test)]
+    pub(crate) live_residue: usize,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
@@ -2010,6 +2035,8 @@ impl Composer {
             skip_claims: 0,
             #[cfg(test)]
             skip_claim_bails: 0,
+            #[cfg(test)]
+            live_residue: 0,
             selection_registrar: None,
             lifecycle: crate::ui::window::LifecycleState::default(),
             adaptive: crate::ui::adaptive::AdaptiveContext::new(),
@@ -2414,7 +2441,7 @@ impl Composer {
     fn reconcile_compose_deps(
         &mut self,
         recorded: Vec<(Arc<StateSignal>, u64)>,
-        live_keys: &HashSet<u64>,
+        live_keys: &crate::layout::node::SlotKeySet,
     ) {
         let mut reads_by_slot: HashMap<u64, HashSet<StateId>> = HashMap::new();
         let mut current_signals: HashMap<StateId, Arc<StateSignal>> = HashMap::new();
@@ -2638,8 +2665,13 @@ impl Composer {
         // SizeDynamic 闭包内 State::get() 也要记录依赖（kf/dp 尺寸动画），
         // 由 layout() 末尾统一 clear + drain（见 layout()）。
         self.slot_table.truncate();
-        let mut live_compose_keys = HashSet::new();
-        self.slot_table.collect_live_keys(&mut live_compose_keys);
+        let mut live_compose_keys = crate::layout::node::SlotKeySet::default();
+        let skipped_slots = self.slot_table.collect_live_keys(&mut live_compose_keys);
+        #[cfg(test)]
+        {
+            self.live_residue = skipped_slots;
+        }
+        let _ = skipped_slots;
         live_compose_keys.insert(0);
         // 防御：scope 配对完整性（漏配 end_scope 会导致 SCOPE_STACK 残留跨帧，
         // 使下帧组件外读取注册到失效 scope → 失效静默丢失）
@@ -6119,6 +6151,74 @@ fn test_skip_recovery_structure_change_by_state() {
     build(&mut composer, &holder);
     let r = composer.layout_root_idx().unwrap();
     assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧3 应恢复 A+B");
+}
+
+/// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is
+/// not equivalent to "every slot in the tree".
+///
+/// That equivalence is tempting: the live-key set costs a ~4000-insert walk per frame at 800 rows, all
+/// to answer a handful of lookups, and if the tree only ever held live slots the set could be replaced
+/// by recording the keys that LEAVE the tree (a rare, small event). This test is the reason that
+/// replacement is not safe, and its shape is the point: the tree below shrinks an INNER group's
+/// contents while the outer group re-enters. The outer group's own pruning only drops its direct
+/// children, and the inner group's slot was visited, so the extra leaves stay in the tree with nothing
+/// to prune them.
+///
+/// The number has to be read DURING the frame (`Composer::live_residue` is captured by `compose`
+/// itself): materialize consumes the `desc`/`skip_modifier` markers that identify a skipped subtree, so
+/// the same tree counted afterwards looks like it has far more residue than it did while composing —
+/// which is exactly how a first version of this test came out with 9 slots that were all live.
+#[test]
+fn test_live_keys_exclude_unvisited_slots() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let tick = State::new(0i32);
+    let holder = std::cell::RefCell::new((0u32, 0u32));
+
+    // `outer` re-enters every frame (it reads `tick`); inside it a SCOPE emits a variable number of
+    // leaves. A scope is the interesting container: it is visited and never skips, and unlike a
+    // restartable group it does not prune its children either (`end_scope` is `end_slot`), so nothing
+    // on the path drops the leaves that stopped being composed.
+    let build = |composer: &mut Composer, holder: &std::cell::RefCell<(u32, u32)>| {
+        let (groups, leaves) = *holder.borrow();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    let _ = tick.get();
+                    for _ in 0..groups {
+                        let _scope = ctx.start_scope_keyed(0x5C0FE0DE);
+                        for _ in 0..leaves {
+                            let leaf = ctx.next_key();
+                            ctx.start_leaf(leaf, Modifier::new().size(10.0, 10.0));
+                            ctx.end_node();
+                        }
+                        ctx.end_scope();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+    };
+
+    // 3 groups x 3 leaves, then the interiors shrink to 1: the outer group re-enters, so nothing
+    // skips its way out of being counted.
+    *holder.borrow_mut() = (3, 3);
+    tick.set(tick.get() + 1);
+    build(&mut composer, &holder);
+    assert_eq!(composer.live_residue, 0, "a frame with no leftovers has no residue");
+
+    *holder.borrow_mut() = (3, 1);
+    tick.set(tick.get() + 1);
+    build(&mut composer, &holder);
+    assert!(
+        composer.live_residue > 0,
+        "shrinking the interior of a visited group must leave unvisited slots behind — if this is 0, \
+         the tree prunes them somewhere and `collect_live_keys` could be replaced by 'the keys in the \
+         tree' (in which case that replacement FIXES this test, it does not break it)"
+    );
 }
 
 /// T3：结构签名直接验证——手动构造"缓存 children 数 != desc children 数"，
