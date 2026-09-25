@@ -130,11 +130,54 @@ impl Drop for RuntimeFrameGuard {
 /// 支持跨帧按类型比较（`Box<dyn Any>` 无法通用 PartialEq，用 trait object 桥接）。
 pub(crate) trait ParamValue: Any {
     fn eq_any(&self, other: &dyn Any) -> bool;
+
+    /// Overwrite this value with `value` when it has this slot's type; report whether it did.
+    ///
+    /// This is what lets `changed` REUSE a box instead of allocating one per call: the buffer it writes
+    /// into is the previous frame's parameter vector, handed back by the slot (see
+    /// `Composer::commit_pending_params`), so a container that declares the same parameter types every
+    /// frame — every container in a list — overwrites storage that is already the right shape. A value
+    /// whose type does not match reports `false` and the caller allocates instead.
+    fn set_from_any(&mut self, value: &dyn Any) -> bool;
 }
 
-impl<T: PartialEq + 'static> ParamValue for T {
+impl<T: PartialEq + Clone + 'static> ParamValue for T {
     fn eq_any(&self, other: &dyn Any) -> bool {
         other.downcast_ref::<T>() == Some(self)
+    }
+
+    fn set_from_any(&mut self, value: &dyn Any) -> bool {
+        match value.downcast_ref::<T>() {
+            Some(value) => {
+                *self = value.clone();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Test-only count of parameter BOXES allocated, so a test can assert the recycling actually recycles.
+/// A behavioural test cannot see it: reusing a box and allocating one produce identical state.
+#[cfg(test)]
+pub(crate) mod param_alloc {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ALLOCS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn count() -> u64 {
+        ALLOCS.with(|c| c.get())
+    }
+
+    pub(crate) fn reset() {
+        ALLOCS.with(|c| c.set(0));
+    }
+
+    #[inline]
+    pub(super) fn note() {
+        ALLOCS.with(|c| c.set(c.get() + 1));
     }
 }
 
@@ -509,15 +552,31 @@ impl<'a> ComposeCtx<'a> {
     /// ```
     pub fn changed<T: PartialEq + Clone + 'static>(&mut self, param: &T) -> bool {
         // 与"即将 start 的 child slot"的上帧 params 按序比较
+        let param_idx = self.composer.pending_next;
         let unchanged = {
             let idx = *self.composer.slot_table.child_counters.last().unwrap_or(&0);
-            let param_idx = self.composer.pending_params.len();
             let prev = self.composer.slot_table.current_slot().children.get(idx)
                 .and_then(|c| c.params.get(param_idx))
                 .map(|p| p.eq_any(param));
             prev == Some(true)
         };
-        self.composer.pending_params.push(Box::new(param.clone()));
+        // Write into the buffer at this position, REUSING the box already there when it can hold this
+        // type. The buffer is the previous frame's parameter vector (the slot hands it back at
+        // `commit_pending_params`), so in a list — where every row declares the same parameter types —
+        // the same handful of allocations circulates down the rows instead of one box per row per
+        // frame. A slot holding a different type is dropped and re-allocated, which is also the path
+        // a first frame takes.
+        let reused = match self.composer.pending_params.get_mut(param_idx) {
+            Some(existing) => existing.set_from_any(param),
+            None => false,
+        };
+        if !reused {
+            self.composer.pending_params.truncate(param_idx);
+            self.composer.pending_params.push(Box::new(param.clone()));
+            #[cfg(test)]
+            param_alloc::note();
+        }
+        self.composer.pending_next = param_idx + 1;
         !unchanged
     }
 
@@ -1056,9 +1115,14 @@ impl SlotTable {
         slot.children.get(idx - 1).map(|c| c.key)
     }
 
-    /// 设置当前 slot 的参数（`ComposeCtx::changed` 暂存的参数，start_node 时写入）
-    fn set_current_params(&mut self, params: Vec<Box<dyn ParamValue>>) {
-        self.current_slot().params = params;
+    /// Hands `incoming` to the current slot and returns what the slot held before.
+    ///
+    /// The exchange (rather than an assignment) is what recycles: the returned vector goes back to
+    /// `Composer::pending_params`, where the next `changed` calls overwrite its boxes in place
+    /// (`ParamValue::set_from_any`) instead of allocating new ones.
+    fn replace_current_params(&mut self, mut incoming: Vec<Box<dyn ParamValue>>) -> Vec<Box<dyn ParamValue>> {
+        std::mem::swap(&mut self.current_slot().params, &mut incoming);
+        incoming
     }
 
     /// 设置当前 slot 的节点描述（组合产物——物化阶段消费）
@@ -1939,7 +2003,15 @@ pub struct Composer {
     /// key 是稳定位置标识（路径哈希 + counter），两侧天然对齐）
     pub(crate) prev_nodes: crate::layout::node::SlotKeyMap<CachedNode>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
+    ///
+    /// Doubles as a RECYCLING buffer: `commit_pending_params` swaps it with the slot's previous vector,
+    /// so the boxes (and the `Vec`'s capacity) come back here to be overwritten next frame instead of
+    /// being dropped and re-allocated. Only the first `pending_next` entries are this frame's.
     pending_params: Vec<Box<dyn ParamValue>>,
+    /// Write cursor into `pending_params` — the position the next `changed` writes, and the count of
+    /// declarations made for the group being built. A cursor rather than `pending_params.len()`, because
+    /// that vector now arrives carrying the previous frame's (longer or shorter) parameter list.
+    pending_next: usize,
     /// 上帧布局树：slot_key → arena 节点索引（阶段D 节点复用——start_node 按 key 复用槽位）
     pub(crate) prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
@@ -2060,6 +2132,7 @@ impl Composer {
             pending_states,
             prev_nodes: crate::layout::node::SlotKeyMap::default(),
             pending_params: Vec::new(),
+            pending_next: 0,
             prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
             #[cfg(test)]
@@ -2253,6 +2326,31 @@ impl Composer {
         crate::core::materialize::materialize(self);
     }
 
+    /// Hands this frame's declared parameters to the slot being started, and takes the slot's previous
+    /// parameters back as the buffer for the next declarations.
+    ///
+    /// A no-op when nothing was declared (`pending_next == 0`): the slot keeps its parameters, which is
+    /// what stops a replayed stub from clearing them — a Skipped parent's children must not be forced to
+    /// Enter just because their params were not re-declared.
+    ///
+    /// The exchange is the whole point. Before it, `changed` pushed a fresh `Box` per parameter per
+    /// frame and `set_current_params` dropped the slot's previous vector — so a 800-row list allocated
+    /// 800 boxes a frame (~503 µs of a cold frame's content closure, `docs/benchmarks.md`). Now the
+    /// previous vector comes back and the next `changed` overwrites its boxes in place, which in a list
+    /// means the same few allocations circulate down the rows.
+    fn commit_pending_params(&mut self) {
+        if self.pending_next == 0 {
+            return;
+        }
+        // Hand over exactly this frame's declarations; any tail is last frame's leftovers (a group that
+        // declared more parameters than this one does now). Dropping them here is what keeps the count
+        // honest for a group whose parameter list shrank.
+        self.pending_params.truncate(self.pending_next);
+        let incoming = std::mem::take(&mut self.pending_params);
+        self.pending_params = self.slot_table.replace_current_params(incoming);
+        self.pending_next = 0;
+    }
+
     /// 在组合树中开始一个节点（由组件的 build 方法调用）
     pub fn start_node(&mut self, key: u64, modifier: Modifier, policy: Option<Box<dyn MeasurePolicy>>, on_remove: Option<Box<dyn FnOnce() + Send>>) {
         self.current_group_key = key as u32;
@@ -2261,12 +2359,10 @@ impl Composer {
         // 普通节点：复用 scope slot 时重置为普通（同路径类型切换场景）
         self.slot_table.set_current_scope(false);
         // 写入 `ComposeCtx::changed` 暂存的参数（供下帧比较）——
-        // 仅当 pending 非空（有 changed 声明）；否则保留上帧 params：
+        // 仅当本帧有 changed 声明；否则保留上帧 params：
         // replay 的 stub start_node（pending 空）不清空子 slot params，
         // 避免父 Skip 后子组件参数未变也被强制 Enter
-        if !self.pending_params.is_empty() {
-            self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
-        }
+        self.commit_pending_params();
         #[cfg(test)] { match slot_status { SlotStatus::Clean => self.compose_clean_count += 1, _ => self.compose_dirty_count += 1, } }
 
         // 组合产物写入 Slot（物化阶段消费——完整分离：arena 建节点移出组合阶段）
@@ -2321,17 +2417,18 @@ impl Composer {
         // Clean slot：从缓存恢复（阶段5：加参数相等条件——slot clean 且参数
         // 全相等才 Skip；参数变化（changed 比较）时即使 slot clean 也 Enter）
         let is_skip = if slot_status == SlotStatus::Clean {
-            // 与上帧 slot.params 比较（pending_params = 本帧 changed 暂存；
-            // slot.params 此刻仍是上帧的——本帧写入在其后）
+            // 与上帧 slot.params 比较（pending_params 前 pending_next 项 = 本帧 changed 暂存；
+            // slot.params 此刻仍是上帧的——本帧写入在其后。只比前 pending_next 项：那个 vector 现在
+            // 承载着上一帧的（可能更长/更短的）参数表，是复用缓冲而不是本帧声明）
             let params_unchanged = params_equal(
-                &self.pending_params,
+                &self.pending_params[..self.pending_next],
                 &self.slot_table.current_slot().params,
             ) && self.container_modifier_unchanged(key, &modifier);
             #[cfg(debug_assertions)] {
                 if std::env::var("WINIA_SKIP_TRACE").is_ok() {
                     eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
                         key >> 32, slot_status == SlotStatus::Clean, params_unchanged,
-                        self.prev_nodes.contains_key(&key), self.pending_params.len());
+                        self.prev_nodes.contains_key(&key), self.pending_next);
                 }
             }
             if params_unchanged {
@@ -2349,9 +2446,7 @@ impl Composer {
         }
         // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
         // 仅当 pending 非空（有 changed 声明）；空则保留上帧 params（replay stub 场景）
-        if !self.pending_params.is_empty() {
-            self.slot_table.set_current_params(std::mem::take(&mut self.pending_params));
-        }
+        self.commit_pending_params();
 
         // 组合产物写入 Slot：Enter 写完整描述（物化消费）；Skip 写 None——
         // content 不执行（无新描述），物化时按 key 恢复缓存节点（skip 标记）
@@ -2669,7 +2764,10 @@ impl Composer {
         // compose 末尾统一 free（见下方 drain）
         self.node_stack.clear();
         self.group_skip_stack.clear();
-        self.pending_params.clear();
+        // The parameter buffer is NOT cleared: it arrives holding a slot's previous parameters, which is
+        // exactly the storage the next `changed` wants to overwrite in place. Only the write cursor
+        // resets (`commit_pending_params` is what hands the buffer over, and it counts from the cursor).
+        self.pending_next = 0;
         self.entered_compose_keys.clear();
         // Slot key 0 is the fallback target for top-level State::get().
         self.entered_compose_keys.insert(0);
@@ -3727,6 +3825,65 @@ fn test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent() {
         "the parent's dependency must survive its children going away — a dependency parked on a \
          child's slot is dropped with the child"
     );
+}
+
+/// The parameter buffer recycles its boxes instead of allocating one per declaration per frame.
+///
+/// A behavioural test cannot see this — reusing a box and allocating a fresh one produce identical
+/// state, which is why the round that introduced the recycling needed a counter to prove it did
+/// anything (`param_alloc`). The shape asserted here is what the win looks like: the FIRST frame
+/// allocates one box per declaring group (that is the storage), and every frame after it allocates a
+/// handful — the buffer from the previous frame's last group — because the rest circulate down the rows.
+#[test]
+fn test_parameter_boxes_are_recycled_across_frames() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let rows = 40usize;
+
+    let mut frame = |composer: &mut Composer, tick: i64| {
+        composer.compose(move |ctx| {
+            let root_key = ctx.next_key();
+            ctx.start_container(root_key, Modifier::new(), crate::layout::BoxLayout::new());
+            for row in 0..rows {
+                let key = ctx.next_key();
+                // One declared parameter per row, the shape a list has.
+                let _ = ctx.changed(&(tick + row as i64));
+                match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        let leaf = ctx.next_key();
+                        ctx.start_leaf(leaf, Modifier::new().size(10.0, 10.0));
+                        ctx.end_node();
+                    }
+                }
+                ctx.end_restartable_group();
+            }
+            ctx.end_node();
+        });
+        composer.layout(constraints);
+    };
+
+    param_alloc::reset();
+    frame(&mut composer, 0);
+    let first = param_alloc::count();
+    assert!(
+        first >= rows as u64,
+        "the first frame allocates the boxes it stores (one per declaring group): got {first} for {rows} rows"
+    );
+
+    param_alloc::reset();
+    frame(&mut composer, 1);
+    let second = param_alloc::count();
+    assert!(
+        second <= 2,
+        "the second frame must REUSE the boxes the first frame handed back — got {second} allocations for \
+         {rows} rows (without recycling this is one per row)"
+    );
+
+    param_alloc::reset();
+    frame(&mut composer, 2);
+    let third = param_alloc::count();
+    assert!(third <= 2, "and it keeps recycling: got {third} allocations on the third frame");
 }
 
 /// 阶段4 键修复验证：prev_nodes/frame_cache 改用 slot_key 后，
