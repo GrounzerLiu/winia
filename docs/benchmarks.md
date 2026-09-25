@@ -529,6 +529,12 @@ for the cache: whoever writes a field the cache carries marks that node, and `la
 marked entries instead of rebuilding all of them. That is local, it fails loudly (a missing mark leaves
 one node's cache stale, not the frame's), and it does not need any new global invariant.
 
+**The eighteenth round took a third route and closed the target: the cache was not kept at all.** Its
+measurement first (the cache half of the walk cost ~200 µs of an idle layout, and two of its five readers
+had never fired) showed the map was answering questions the arena's own nodes could answer — so the one
+field a node did not carry moved onto the node, and the map went away. A design that has to keep a
+duplicate in step is not the only way to stop paying for the duplicate.
+
 ### An eleventh fix: the live-key set, and the residue question behind it
 
 `collect_live_keys` walks the whole slot tree at the end of every compose and builds a set of the keys
@@ -928,6 +934,105 @@ under a map that was built before it, and it is exactly what the child-order com
 | the window the comparisons guard | arena mutations after `layout` (flight detach) |
 | the target | closed: mispriced by ~6x, and the remaining part is an invariant, not overhead |
 
+### An eighteenth round: the layout cache map is deleted, not skipped
+
+The last item on the list was layout's fused map walk (~220 µs per frame). The tenth attempt had tried to
+keep both maps on a frame that changed nothing and was reverted; its own write-up pointed at the shape
+that might work instead — **invalidate per node, not per frame**. This round got there, but by neither
+route: it deleted half the walk.
+
+**First, the price, by ablation.** `WINIA_LMAP_ABLATE` skipped one insert or the other at the walk
+(a temporary env-gated switch, removed with the round), so each half was priced by removing it rather
+than by timing it — and timing it would have been the sixteenth round's mistake over again, since the
+walk visits 4000 nodes and an `Instant::now()` pair per node costs more than the thing being measured.
+Idle layout, boxes 800 rows, three interleaved rounds each:
+
+| `layout` only, idle | best of three |
+|---|---|
+| baseline | 411 µs |
+| cache insert dropped (the `CachedNode` build still ran, black-boxed) | 210 µs |
+| index insert dropped | 359 µs |
+| both dropped | 167 µs |
+
+So the cache map cost **~200 µs** and the index **~52 µs** — a 4x difference for two maps of the same
+node count and the same hasher, which is the tell. The two inserts differ in what they write: a whole
+per-node snapshot (`CachedNode`: text snapshot, sizes, constraints, registrar) against a `usize`. The
+bill is that value's memory traffic, not hashing — and not the traversal either, which the third row
+prices at ~167 µs *including the whole measure pass*. A cheaper hasher had already been tried on these
+maps (the ninth fix); nothing about this cost was hash-shaped.
+
+**Then, who reads it.** Counters at each of the cache's five reader sites, run across the library suite
+(1070 tests), the bench, and the UI fixtures:
+
+| reader | frequency |
+|---|---|
+| the Skip decision (`prev_nodes.contains_key`) | every Skip-eligible container, every frame |
+| the text comparison on a reused node | **the live one** — 804 in the library suite, 794 in one typing session of the `text_field` fixture |
+| the fallback restore in materialize (signature mismatch) | 1 in 7500 layouts, 0 elsewhere |
+| the text comparison in that fallback | 1 in 7500 layouts |
+| the restore for a fresh node on a Clean slot | **0 hits — never, in ~30 000 layouts** |
+
+Two of those questions turn out to be the reuse index's question ("is there a node for this key"), one
+needed a value the node itself already holds (`measured_size`, `flight_content_size`,
+`cached_constraints` — read from the node the key named, which is fresher than the snapshot was), one is
+the one field the node did not hold, and one was dead code that had never once found an entry.
+
+**So the map was deleted:**
+
+* `LayoutNode::last_text` — the snapshot the text comparison needs, on the node, written only when it
+  differs, so a settled text node clones nothing (the old walk cloned the content `String` for every
+  text node every frame, which is most of why the text scene moved more than the box scene).
+* The comparison itself is now field-by-field against that snapshot (`text_content_matches`) instead of
+  building a second snapshot and comparing tuples — the tuple form allocated to answer a question whose
+  answer is "yes" almost every time.
+* The Skip decision reads `prev_node_by_key`. A missing key already made `container_modifier_unchanged`
+  fail, so the two conditions collapse into one lookup, and `compose` already repairs that index from the
+  tree when it finds it empty (that repair was added for the same-frame second compose and is now also
+  what makes the gate answerable before `layout` has ever run).
+* The fallback restore reads the node at the index entry it just took. No node means no measurement to
+  fold: the rebuild stays dirty and measures once, which is what that arm did on a cache miss anyway.
+* The fresh-node restore site is gone. It was reachable only with an entry the cache had and the index
+  did not, and it never fired; without it a Clean Entering node measures once and settles.
+
+**One behaviour change came with it, and it is deliberate.** A compose with no `layout` before it (a
+fresh composer's second frame, and several tests) used to Enter every container, because the cache the
+Skip decision read was filled by `layout`. It Skips now — the index is repaired from the tree at the top
+of `compose`. The tree is identical either way (the skip path re-attaches the container's children from
+the index, which the updated test asserts); what changes is that the content does not run. `theme.rs`'s
+note about that test shape was corrected rather than deleted, since the trap it warns about ("a test that
+never Skips would make its own assertion vacuous") is still real, and its CONTROL still holds.
+
+Both columns are this machine in this session: "before" is the profiled run that priced the two halves,
+"after" is the best of the two runs made once the change was complete (the machine drifts ~15% between
+runs; the `layout`-only rows are the steadiest, within 1% across runs, which is why they carry the
+claim and the frame rows are for scale).
+
+| boxes 800 rows | before | after |
+|---|---|---|
+| idle frame | 828 µs | **546 µs** |
+| one row updated | 1521 µs | **1123 µs** |
+| cold frame | 5839 µs | **4732 µs** |
+| `layout` alone, idle | 227 µs | **154 µs** |
+| compose(unclean) + layout, nothing changed | 627 µs | **548 µs** |
+| layout, every size re-measured | 1020 µs | 948 µs |
+
+| text 800 rows | before | after |
+|---|---|---|
+| idle frame | 1728 µs | **715 µs** |
+| one row updated | 2366 µs | **1297 µs** |
+| cold frame | 29162 µs | **24460 µs** |
+| `layout` alone, idle | 1137 µs | **181 µs** |
+| frame (compose + layout), one row updated | 2465 µs | **1350 µs** |
+
+The text scene is where the deletion shows: its `layout` alone falls 6x, because it was paying a
+`String` clone per text node per frame to build a map that only ever had to answer one comparison. The
+"every size re-measured" row barely moves, which is the control — that scenario spends its time in
+measure, not in the walk.
+
+**Verified:** library suite 1071 (including a new unit test for the compare/refresh pair, whose sharp
+edge is that a field dropped from the hand-written comparison is invisible everywhere else), UI suite
+47/47, plus every other test target in the package.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -964,14 +1069,14 @@ layout 1152 (measure 675, the map walk 254, transaction 35, rest 128). The fourt
 |---|---|---|
 | `LayoutTransaction::new` | ~170 µs (149 of it the map clone) | ~15 µs |
 | `measure` | **~0.01-0.04 µs** — every node folds, nothing re-measures | same |
-| the fused map walk (`collect_layout_maps`) | ~940 µs as two walks | **~220 µs** |
+| the fused map walk (`collect_layout_maps`, today's `collect_layout_index` — its cache half was deleted in the eighteenth round) | ~940 µs as two walks | **~220 µs** |
 | the rest (dirty marks, deps, cleanup) | ~120 µs | ~90 µs |
 | **layout total** | **~1230 µs** | **~325 µs** measured on this arm (222 µs in the frame arm) |
 
 What is left of an idle frame is bookkeeping *about* the tree rather than work on it, on both sides:
 `prune_stale_child_links` walks the whole arena as a defensive repair, `collect_live_keys` walks the
-slot tree, `materialize`'s verification walk visits both trees, and layout's fused walk rebuilds the two
-whole-tree maps. None of it does anything with the rows that did not change — they are the next round's targets,
+slot tree, `materialize`'s verification walk visits both trees, and layout's walk rebuilds the reuse
+index (since the eighteenth round the only whole-tree map there is). None of it does anything with the rows that did not change — they are the next round's targets,
 and they are listed below. Note that the row loop's own cost reads larger than the loop's instrumented
 parts: it is measured against the compose-only idle figure, which came down several times while the
 loop itself did not change.
@@ -1085,11 +1190,18 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   replaceable ("record the keys that leave the tree") is refuted by a test, because scopes leave residue
   behind. A solution in that direction would have to make scopes prune (or record the residue when it is
   created), which is a behaviour change with its own suite to satisfy, not an optimization.
-- **Layout's fused map walk, ~220 µs per frame — attempted and REVERTED**, which is worth recording
-  because the target looks so obviously winnable. Both maps are functions of the tree, so a frame that
-  changed nothing should keep them instead of rebuilding them; the round that tried it established that
-  "changed nothing" is not a property anything in this codebase tracks, and the attempt is documented in
-  its own section below. What survives is the diagnosis, not the code.
+- **Layout's fused map walk — CLOSED (eighteenth round), and not by skipping it.** The tenth attempt
+  tried to keep both maps on an untouched frame and was reverted (a global "did anything change" is not
+  a property this codebase tracks; see its section below). The eighteenth measured the walk by ablation
+  first — the cache half `slot_key → CachedNode` cost **~200 µs** of an idle 800-row layout against
+  **~52 µs** for the reuse index, both being value memory traffic rather than hashing — and then counted
+  the cache's readers across the library suite, the bench and the UI fixtures. Three of the four reader
+  sites were cold or dead, the hot one was the text comparison, and the Skip decision read the map only
+  to ask "is there a node for this key". So the map was not kept, it was **deleted**: the text snapshot
+  moved onto the node (`LayoutNode::last_text`), the readers that needed an arena node read it, and the
+  one that had no node to read measured instead. The walk now fills the index only. Idle frame at 800
+  rows 828 → 546 µs (boxes) and 1728 → 715 µs (text, where the `String` clone per text node per frame
+  was most of the bill); `layout` alone 227 → 154 µs and 1137 → 181 µs. See that round's section.
 - **The row loop's ~415 µs**: 800 iterations at ~520 ns (105 ns read, ~330 ns group machinery, the rest
   being the container's own re-entry). It has come down from ~490 µs as the per-node costs above were
   removed, which is the shape to expect: the loop is where those costs were paid 800 times. Each iteration now also runs a small claim verification for its

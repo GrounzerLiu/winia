@@ -848,10 +848,12 @@ mod tests {
             );
         });
 
-        // A frame is compose → layout: the LAYOUT pass is what fills `prev_nodes`, and a group can only
-        // Skip when it has a cached subtree to restore (composer.rs:2054). A test that composes twice
-        // without laying out never sees a Skip at all, so its "the reader kept the old value" would be
-        // vacuous — that mistake is what the CONTROL below exists to catch.
+        // A frame is compose → layout, and this helper is what keeps the two halves in that order. A
+        // group can only Skip when the reuse index holds a node for its key — and while the index is
+        // rebuilt by `layout`, a compose that finds it empty repairs it from the tree first, so a test
+        // that composes twice in a row now Skips too (it restores nodes that were never measured,
+        // which is not the shape this test is about). The CONTROL below is what catches a vacuous
+        // "the reader kept the old value".
         let mut frame = |composer: &mut Composer, scene: &dyn Fn(&mut ComposeCtx)| {
             composer.compose(|ctx| scene(ctx));
             composer.layout(crate::layout::constraints::Constraints::new(0.0, 200.0, 0.0, 200.0));
