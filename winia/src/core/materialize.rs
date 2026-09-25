@@ -14,6 +14,13 @@ pub(crate) struct DescNode {
     /// Skip 节点（组合期 content 未执行——desc 空但非 scope）：
     /// 物化时从 prev_node_by_key 按 key 恢复缓存节点（不新建）
     pub(crate) skip: bool,
+    /// Set when this skipped subtree was claimed IN PLACE while the slot tree was walked
+    /// (`SlotTable::collect_desc_tree`): the arena already holds this subtree, verified node for node
+    /// against the slot tree, and `children` is empty because there was nothing to re-encode. The
+    /// materializer then only attaches the node and applies the root's own payload — the per-node
+    /// rebuild the descriptor tree exists for happened on an earlier frame and nothing changed since.
+    /// `None` means the descriptor (and its children) describe the subtree as usual.
+    pub(crate) claimed: Option<usize>,
     pub(crate) modifier: crate::modifier::Modifier,
     /// Skip 子树内：本帧 build 是否被调用（容器自身调了 set_skip_modifier——
     /// modifier 是父层重跑传入的新值，应应用；后代未执行——modifier 为 default，
@@ -49,7 +56,17 @@ pub(crate) struct DescNode {
 /// 内容确实消失（prev 非空——正常 compose 无产物）清空树（旧行为——避免旧树持续渲染）。
 pub(crate) fn materialize(composer: &mut Composer) {
     let mut descs = Vec::new();
-    composer.slot_table.collect_desc_tree(&mut descs);
+    let claims = composer.slot_table.collect_desc_tree(
+        &mut descs,
+        &composer.arena,
+        &mut composer.prev_node_by_key,
+        &mut composer.reused_nodes,
+    );
+    #[cfg(test)]
+    {
+        composer.skip_claims = claims.0;
+        composer.skip_claim_bails = claims.1;
+    }
     if descs.is_empty() {
         if !(composer.prev_node_by_key.is_empty() && composer.arena.root.is_some()) {
             composer.arena.root = None;
@@ -65,7 +82,18 @@ pub(crate) fn materialize(composer: &mut Composer) {
     // 正解：用**现有树**重建 prev 索引（collect_node_keys）——Skip 节点复用
     // 现有节点（子内容保留），Enter 节点走正常复用+更新路径——内容正确且
     // 不丢失子树（一帧全树重挂的代价仅发生在同帧二次 compose——频率低）。
-    if composer.prev_node_by_key.is_empty() && composer.arena.root.is_some() {
+    //
+    // The empty index means two different things, and only one of them wants the repair. It is empty
+    // before the first layout of a Composer's life, and on any frame composed without a layout in
+    // between (`test_same_frame_second_compose_retains_tree` covers the latter) — there the repair is
+    // the only thing that lets the next materialize reuse nodes instead of rebuilding them. It is
+    // ALSO empty right after an in-place claim took the whole tree (`try_claim_skipped_subtree`), and
+    // there the repair is pure waste: reuse is already guaranteed, and rebuilding the index would add
+    // a whole-tree walk to the frame the claim just made cheap. `claims.0` tells the two apart.
+    if claims.0 == 0
+        && composer.prev_node_by_key.is_empty()
+        && composer.arena.root.is_some()
+    {
         crate::core::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
     }
     composer.arena.root = None;
@@ -198,8 +226,19 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
-    let DescNode { key, skip, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
-    let index = if skip {
+    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    let index = if let Some(idx) = claimed {
+        // Claimed in place while the slot tree was walked: the node AND its subtree are already this
+        // frame's materialization (verified node for node by `try_claim_skipped_subtree`), so there is
+        // nothing to rebuild and — importantly — nothing to clear: the children are the same children.
+        // Only the root's own payload is applied, exactly as the skip path below would.
+        let n = &mut composer.arena.nodes[idx];
+        if !preserve_modifier {
+            n.modifier = modifier;
+            n.layout_direction = direction;
+        }
+        Some(idx)
+    } else if skip {
         // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
         // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
         // 不残留不 free）。无缓存为异常——防御跳过。

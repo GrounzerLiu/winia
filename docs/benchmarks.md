@@ -40,32 +40,31 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 586 | 73 | 104 |
-| 200 | 1514 | 313 | 428 |
-| 800 | 6472 | 1309 | 2023 |
+| 50 | 651 | 60 | 94 |
+| 200 | 1587 | 235 | 375 |
+| 800 | 6442 | 994 | 1652 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 755 | 107 | 133 |
-| 200 | 4861 | 444 | 560 |
-| 800 | 27370 | 2709 | 3671 |
+| 50 | 732 | 77 | 109 |
+| 200 | 4757 | 324 | 467 |
+| 800 | 25764 | 2213 | 2917 |
 
-16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
+16x the rows costs ~17x an idle frame and ~18x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
-Two runs were taken for these figures and they agreed to a few percent on the box scene (idle 1309 /
-1276, one row 2023 / 2064, layout-idle 304 / 272); the text scene is the noisier of the two (its idle
-frame moved 2709 / 3197 while its one-row update moved 3671 / 3636, which is why this document quotes
-the fast sample rather than treating a single text figure as a precise one).
+Two runs were taken for these figures and they agreed to a few percent on the box scene; the text scene
+is the noisier of the two, which is why this document quotes the fast sample rather than treating a
+single text figure as a precise one.
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 992 | 272 |
-| one row moved | 1476 | ~600 |
+| idle | 971 | 275 |
+| one row moved | 1518 | ~130 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -73,13 +72,13 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 992 | 0 |
-| container dirty, every row Skips | 1595 | 0 |
-| one row dirty (the same loop + one rebuild) | 1567 | 1 |
+| idle (container Skips, so the loop does not run) | 971 | 0 |
+| container dirty, every row Skips | 1539 | 0 |
+| one row dirty (the same loop + one rebuild) | 1437 | 1 |
 
-The loop over 800 rows costs **~575 µs**, and re-entering one row inside it costs **nothing measurable**
-(-28 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
-Instrumented attribution of that ~575 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
+The loop over 800 rows costs **~570 µs**, and re-entering one row inside it costs **nothing measurable**
+(-100 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+Instrumented attribution of that ~570 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
 of group machinery, the rest being the container's own entry plus rows materializing one by one instead
 of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
 carries whatever the container's re-entry costs on top of the loop — that is why it reads larger than
@@ -290,22 +289,103 @@ The skip-recovery tests are the ones that cover this path (`test_skip_recovery_s
 asserts the key survives a shape mismatch, which is exactly what the put-back has to preserve), and the
 full UI suite passes with them.
 
+### A seventh fix: a skipped subtree is claimed in place, not re-encoded
+
+The largest single item in any composed frame was `materialize`, and almost all of it was spent
+re-encoding a skipped subtree into descriptors and then walking those descriptors back into the arena.
+The encoding was pure translation: the slot tree says what the subtree is, the descriptors copy that
+statement node by node, and the walk reproduces a tree whose content did not change. Measured at 800
+rows on an idle frame: **197 µs to build the descriptor tree + 193 µs to walk it**.
+
+That is ~30% of the frame for a subtree where nothing changed, and the observation that removes it is
+uncomfortable in how obvious it is: **the arena already holds the answer.** A skipped subtree is by
+definition one whose content did not run, so its slots still describe exactly what the arena was built
+from, and the arena's nodes for it are still there.
+
+So `collect_desc_tree` now tries to keep the subtree where it is. It walks the SLOT subtree and the
+ARENA subtree together, node for node (`SlotTable::try_claim_skipped_subtree`), and only if they match
+exactly — every node's key resolving to exactly the arena child the parent lists at that position,
+scopes hoisted the same way, in order — does it claim: mark the nodes reused, drop their keys from
+`prev_node_by_key` (so the compose tail does not recycle them), and emit ONE descriptor carrying the
+claimed index. The materializer then only attaches the node and applies the root's own payload.
+
+Three properties make the claim provably a no-op beyond bookkeeping, and they are what make it safe:
+
+* **Every slot in the subtree must be inert.** No `desc` left, no `skip_modifier`, no `skip_policy` —
+  because the fallback's per-node work for those is not "reuse the node", it is "apply this payload and
+  consume it" (`take()`), and skipping that would leave the slot in a different state for the next
+  frame. The root is exempt: its payload is what the descriptor carries anyway.
+* **Verification is node for node, not a count.** A count would accept a tree of the same size with a
+  different shape; the walk compares identity and order at every level, which subsumes the shape check
+  the fallback performs at skip boundaries.
+* **A mismatch claims nothing.** Marks go to a scratch set, merged into the frame's reuse set only after
+  the whole subtree verified, so the fallback always starts from an untouched arena.
+
+| instrumented, boxes 800 rows, idle | before | after |
+|---|---|---|
+| `collect_desc_tree` | 197 µs | **100 µs** (now the verification walk) |
+| `materialize_node` loop | 193 µs | **0.13 µs** (one attach per frame) |
+| materialize total | ~390 µs | **~100 µs** |
+
+| frame-level, boxes 800 rows (best of two runs) | before | after |
+|---|---|---|
+| **idle frame** | 1276 µs | **994 µs** (-22%) |
+| one row updated | 2023 µs | **1652 µs** (-18%) |
+| idle frame (text scene) | 2709 µs | **2213 µs** (-18%) |
+| cold frame | 6472 µs | 6442 µs (untouched — a cold frame has nothing to claim) |
+
+Two tests pin the halves that matter, and the second is the one that justifies the walk:
+
+* `test_skipped_subtree_is_claimed_in_place` — an idle frame claims, and the arena keeps the SAME node
+  indices in the SAME order (nothing was rebuilt); a second idle frame claims again.
+* `test_stale_arena_shape_makes_the_claim_bail` — swaps two children in the arena by hand (the only way
+  to reach a stale shape deliberately), then requires `skip_claim_bails >= 1` and the children to come
+  back in SLOT order: the mismatch is noticed and the fallback repairs the tree. The children below the
+  container are still claimed, which is the point of verifying per subtree rather than per frame.
+
+#### Two failures this caused, and what they were really about
+
+Both were places where the rest of the frame relied on `prev_node_by_key` being non-empty as a PROXY,
+and the claim legitimately empties it on any frame whose whole tree was skipped:
+
+1. **`test_layout_dep_survives_const_fold`**: `materialize` refills the index from the existing tree
+   when it finds that index empty (a repair for compose-without-layout), so the compose tail then
+   walked the refilled index and reported every claimed key as *removed* — which pruned a live slot's
+   layout dependency and froze its animation. The drain now skips nodes marked reused: a node in this
+   frame's tree was not removed, so neither its layout dependencies nor its `on_remove` are due.
+2. **`test_same_frame_second_compose_retains_tree`**: that repair is the ONLY thing that lets a
+   compose-without-layout reuse nodes instead of rebuilding them, so it cannot be skipped just because
+   the index is empty. It is now skipped only when this frame's own claim emptied the index
+   (`claims > 0`, where reuse is already guaranteed and the rebuild would be pure waste).
+
+The first failure also cost a measurement until it was dealt with: with the repair firing on every
+frame, the claim saved ~290 µs and paid ~100 µs of it straight back.
+
+#### One thing the walk made worse before it got better
+
+The claim's index bookkeeping first ran per claimed subtree (`retain` over `prev_node_by_key` inside
+each claim). That is fine for one big skipped tree and quadratic for a list of small ones: the one-row
+update went from 2023 µs to **3064 µs**, because 799 row claims each swept an 800-entry map. The sweep
+is now one pass per frame, and the one-row figure is 1652 µs. Worth recording because the claim's win
+is measured against the one-row frame as much as the idle one, and a list is exactly where a
+per-subtree cost stops being cheap.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
-states that matter: every group Skipped, and one row's state moved. The layout column is after the
-fifth fix, the compose column after the third (the fourth through sixth barely touch it).
+states that matter: every group Skipped, and one row's state moved. The compose column is after the
+seventh fix, the layout column after the fifth (the layout side is untouched by the sixth and seventh).
 
 | bucket | idle (0 entered) | one row updated |
 |---|---|---|
-| `materialize` (desc tree + node reuse walk) | ~200 µs | ~215 µs |
+| `materialize` (now: verify-and-claim walk) | ~100 µs | ~100 µs |
 | `prune_stale_child_links` (arena walk) | ~130 µs | ~150 µs |
 | `collect_live_keys` | ~100 µs | ~100 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
-| the row loop (800 reads + 800 Skip decisions) | — | ~430 µs |
-| **compose total** | **~530 µs** | **~840 µs** |
+| the row loop (800 reads + 800 Skip decisions) | — | ~570 µs |
+| **compose total** | **~430 µs** | **~1050 µs** |
 
 | layout, same tree | idle, before the fourth fix | idle, after the fifth |
 |---|---|---|
@@ -317,10 +397,12 @@ fifth fix, the compose column after the third (the fourth through sixth barely t
 | **layout total** | **~1230 µs** | **~490 µs** |
 
 What is left of an idle frame is bookkeeping *about* the tree rather than work on it, on both sides:
-`materialize` rebuilds a descriptor for every node and then walks them to claim the cached ones,
 `prune_stale_child_links` walks the whole arena as a defensive repair, `collect_live_keys` walks the
-slot tree, and layout rebuilds the two whole-tree maps. None of it does anything with the rows that did
-not change — they are the next round's targets, and they are listed below.
+slot tree, `materialize`'s verification walk visits both trees, and layout rebuilds the two whole-tree
+maps. None of it does anything with the rows that did not change — they are the next round's targets,
+and they are listed below. Note that the row loop's own cost now reads larger than the loop's
+instrumented parts, because the compose total it is measured against came down by the seventh fix while
+the loop itself did not change.
 
 ### Read placement still does not matter
 
@@ -414,19 +496,12 @@ loaded machine, so the fast sample is the headline and the median is shown for s
 
 ## Open optimization targets (measured, not attempted)
 
-- **`materialize`'s remaining ~200 µs per frame** — the largest single item left on the compose side. `collect_desc_tree` recurses through a Skipped subtree and builds a `DescNode` per node — one
-  `Vec` and one `Modifier` clone each — then `materialize_node` walks those descriptors to reuse the
-  cached nodes by key. For a subtree that skipped, both halves are pure overhead: the structure is by
-  definition what it already was, and the nodes are already in `prev_node_by_key`. The cheap direction
-  is to record the subtree as a single skip descriptor and claim the cached nodes from the arena
-  directly (their `children: Vec<usize>` is the walk), which is exactly the protocol the comments in
-  this area are full of war stories about — dup-key panics, vanishing subtrees, ghost flights — so it
-  needs its own round with the full UI suite, not a quick edit. The shape check is the hard part: the
-  current one compares each descriptor's child count with the cached node's, and a whole-subtree claim
-  has to reproduce that strength without a descriptor per node. (The design this is heading for, worked
-  out but deliberately not taken this round: carry the subtree's node count and the root's child count
-  on the single skip descriptor, verify the count as the claim walks, and keep the per-node path as the
-  fallback when either check fails.)
+- **`materialize`'s remaining ~100 µs per frame**: the verification walk itself (it reads both trees,
+  node for node, so it is ~25 ns per node at 4000 nodes). Making it cheaper means not walking — a
+  maintained per-slot structure fingerprint compared against one kept with the cache would turn the
+  claim into a single comparison, at the cost of a new invariant to maintain in `end_slot` and to
+  cross-check in debug builds. That is the next step if this path matters again; right now it is the
+  second-largest item on the compose side, behind `prune_stale_child_links`.
 - **`prune_stale_child_links`: ~130 µs per frame.** A defensive whole-arena walk, and the current
   comment insists it runs for EVERY compose (moving it into an early-returning function once took the
   repair off the default path and a stale listing reached the `[dup-key]` guard). Skipping it on frames
@@ -440,17 +515,20 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   0.01 µs. The per-entry data is small now (106 µs is the insert of 4000 entries); making the *rebuild*
   incremental, or having the cache borrow the arena instead of copying out of it, is what is left, and
   it needs the same care the fourth fix took around rollback.
-- **The row loop's ~575 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
-  materialize restoring rows one by one). Attacking `changed()`'s per-call parameter allocation (~75 ns)
-  or the `prev_nodes` lookup per Skipped group is now a small win, not the headline.
+- **The row loop's ~570 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
+  being the container's own re-entry). Each iteration now also runs a small claim verification for its
+  row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
+  descriptor path did — the loop was never in the descriptor path.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The six defects that *were*
-bugs — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write,
-a reverse graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied
-two maps it was about to rebuild, a frame cache that carried a whole `Modifier` per node for one text
-comparison, and two per-node hash lookups in `materialize`'s claim path — were all found by measuring
-one bucket and finding something else inside it.
+and each is one round of work with this bench as the measuring stick. The six defects that *were* bugs —
+a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
+graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
+about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, and two
+per-node hash lookups in `materialize`'s claim path — were all found by measuring one bucket and finding
+something else inside it. The seventh fix is a different shape of change (a design that removes work
+rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
+the frame was treating "the index is empty" as a proxy for something else.
 
 ## Re-running any of this
 

@@ -961,6 +961,25 @@ impl Drop for ComposeRuntimeTransaction {
     }
 }
 
+/// State the claim walk needs while the slot tree is walked (`SlotTable::collect_desc_tree`).
+struct ClaimCtx<'a> {
+    arena: &'a crate::layout::node::NodeArena,
+    prev: &'a mut HashMap<u64, usize>,
+    reused: &'a mut crate::layout::node::NodeMarks,
+    /// Indices marked by the claim currently being verified. Merged into `reused` only once the whole
+    /// subtree verified, so a mismatch leaves nothing behind.
+    scratch: crate::layout::node::NodeMarks,
+    /// Every index this frame's claims have taken, across all of them. The index walk drops these
+    /// from `prev_node_by_key` ONCE per frame at the end — doing it per claim would make a list of N
+    /// small skipped rows cost N scans of an N-entry map (measured: the one-row update went from
+    /// 2023 µs to 3064 µs before this was hoisted out).
+    claimed_frame: crate::layout::node::NodeMarks,
+    /// Subtrees claimed in place during this walk, and subtrees whose claim was REJECTED because the
+    /// arena did not match (test-visible through `Composer::skip_claims` / `skip_claim_bails`).
+    claims: usize,
+    bails: usize,
+}
+
 impl SlotTable {
     fn runtime_snapshot(&self) -> SlotTableRuntimeSnapshot {
         SlotTableRuntimeSnapshot {
@@ -1062,8 +1081,28 @@ impl SlotTable {
     /// visited 语义：本帧活跃（start_slot 置 true；reset 每帧清）——结构回退的
     /// 残留（visited false 且不在 Skip 子树内）不收集；Skip 子树（visited false
     /// 但属于 Skip group）整体收集（skip 标记——物化恢复）
-    pub(crate) fn collect_desc_tree(&mut self, out: &mut Vec<crate::core::materialize::DescNode>) {
-        fn rec(slot: &mut Slot, out: &mut Vec<crate::core::materialize::DescNode>, in_skip: bool, depth: usize) {
+    ///
+    /// A skipped subtree whose slots are all INERT (no desc left, no skip payload left) is claimed
+    /// IN PLACE instead of being re-encoded: the walk verifies node-for-node that the arena already
+    /// holds exactly this subtree, marks the nodes as reused, drops their keys from
+    /// `prev_node_by_key` (so the compose tail does not recycle them), and emits ONE descriptor
+    /// carrying the claimed index. See `try_claim_skipped_subtree` for why that is equivalent, and
+    /// `docs/benchmarks.md` for what it is worth: at 800 rows an idle frame spent ~390 µs building
+    /// and then walking a descriptor tree for a subtree where nothing had changed.
+    pub(crate) fn collect_desc_tree(
+        &mut self,
+        out: &mut Vec<crate::core::materialize::DescNode>,
+        arena: &crate::layout::node::NodeArena,
+        prev: &mut HashMap<u64, usize>,
+        reused: &mut crate::layout::node::NodeMarks,
+    ) -> (usize, usize) {
+        fn rec(
+            slot: &mut Slot,
+            out: &mut Vec<crate::core::materialize::DescNode>,
+            in_skip: bool,
+            depth: usize,
+            ctx: &mut ClaimCtx,
+        ) {
             if !slot.visited && !in_skip {
                 // 本帧未访问且不在 Skip 子树内（结构回退残留）：不收集——
                 // 对应 arena 节点由 prev_node_by_key 回收（free）
@@ -1088,21 +1127,24 @@ impl SlotTable {
                     ime_callback: desc.ime_callback,
                     composing_range: desc.composing_range,
                     direction: desc.direction,
+                    claimed: None,
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
-                    rec(child, &mut node.children, false, depth + 1);
+                    rec(child, &mut node.children, false, depth + 1, ctx);
                 }
                 out.push(node);
             } else if !slot.is_scope {
                 // Skip 子树 slot（content 未执行——desc 空但非 scope）：
                 // 整棵子树按 key 结构恢复（物化时从 prev_node_by_key 恢复——
                 // 不物化上帧 desc——子树整体保留，children 重新挂接）
+                let claimed = SlotTable::try_claim_skipped_subtree(slot, ctx);
                 let sm = slot.skip_modifier.take();
                 let sp = slot.skip_policy.take();
                 let mut node = crate::core::materialize::DescNode {
                     key: slot.key,
                     skip: true,
+                    claimed,
                     modifier: sm.clone().unwrap_or_default(),
                     // 容器自身 build 被调（set_skip_modifier 写入）→ 应用新 modifier；
                     // 后代（Skip 子树内未执行）→ 保留缓存节点 modifier（不清空视觉）
@@ -1122,24 +1164,146 @@ impl SlotTable {
                     direction: slot.direction,
                     children: Vec::new(),
                 };
-                for child in &mut slot.children {
-                    rec(child, &mut node.children, true, depth + 1); // Skip 子树内：子也按同一规则（收集）
+                if claimed.is_none() {
+                    for child in &mut slot.children {
+                        rec(child, &mut node.children, true, depth + 1, ctx); // Skip 子树内：子也按同一规则（收集）
+                    }
                 }
                 #[cfg(debug_assertions)]
                 if std::env::var("WINIA_MAT_PROBE").is_ok() {
-                    eprintln!("[collect] skip key={:x} kids={}", slot.key, node.children.len());
+                    eprintln!(
+                        "[collect] skip key={:x} kids={} claimed={:?}",
+                        slot.key, node.children.len(), claimed
+                    );
                 }
                 out.push(node);
             } else {
                 // scope：不物化——children 提升到最近物化父（保持 in_skip 状态）
                 for child in &mut slot.children {
-                    rec(child, out, in_skip, depth + 1);
+                    rec(child, out, in_skip, depth + 1, ctx);
                 }
             }
         }
+        let mut ctx = ClaimCtx {
+            arena,
+            prev,
+            reused,
+            scratch: crate::layout::node::NodeMarks::default(),
+            claimed_frame: crate::layout::node::NodeMarks::default(),
+            claims: 0,
+            bails: 0,
+        };
         for child in &mut self.root_slot.children {
-            rec(child, out, false, 0);
+            rec(child, out, false, 0, &mut ctx);
         }
+        if ctx.claims > 0 {
+            let claimed = std::mem::take(&mut ctx.claimed_frame);
+            ctx.prev.retain(|_, idx| !claimed.contains(*idx));
+        }
+        (ctx.claims, ctx.bails)
+    }
+
+    /// Tries to keep a skipped subtree exactly where it already is.
+    ///
+    /// A skipped subtree is, by definition, one whose content did not run — so its slots still say
+    /// what they said the last time it was built, and the arena already holds the result of building
+    /// exactly that. Re-encoding it into descriptors and walking them back into the arena (the
+    /// fallback this replaces) reproduces the tree node for node; measured at 800 rows, that cost
+    /// ~390 µs of an idle frame (`docs/benchmarks.md`).
+    ///
+    /// The claim is only taken when it is provably a no-op beyond bookkeeping. That means every slot
+    /// in the subtree must be INERT:
+    ///
+    /// * no `desc` (a live desc is this frame's content waiting to be applied, and the descriptor path
+    ///   consumes it — `take()` — so skipping that would leave the slot in a different state),
+    /// * no `skip_modifier` / `skip_policy` for anything but the root (the same `take()`
+    ///   choreography: a descendant holding a payload would have it applied today and cleared).
+    ///
+    /// The root is exempt because its payload is what the caller carries on the descriptor anyway.
+    /// With every slot inert, the fallback's per-node work reduces to: reuse the node, clear its
+    /// children and re-add the same ones in the same order, keep the same modifier, keep the same
+    /// dirty flag — all of which the arena already satisfies. What is left is the bookkeeping this
+    /// does: mark the nodes (so the compose tail does not recycle them) and drop their keys from
+    /// `prev_node_by_key`.
+    ///
+    /// Verification is node for node, not a count: at every level the arena node's children must be
+    /// exactly the nodes the slot children claim, in order. That subsumes the shape check the
+    /// fallback performs at skip boundaries (which exists so a structure change cannot resurrect a
+    /// stale measurement — `docs/benchmarks.md` tells that story), and it is what makes "the arena
+    /// already holds this subtree" a checked fact rather than an assumption. A mismatch claims
+    /// nothing (the marks go to a scratch set that is merged only on success), so the caller's
+    /// fallback starts from an untouched arena.
+    fn try_claim_skipped_subtree(slot: &Slot, ctx: &mut ClaimCtx) -> Option<usize> {
+        let root = *ctx.prev.get(&slot.key)?;
+        ctx.scratch.clear();
+        if !SlotTable::verify_claimed_node(slot, root, ctx) {
+            ctx.bails += 1;
+            return None;
+        }
+        // Committed: the subtree is the frame's tree, so the drain must not reclaim it (the index is
+        // swept once, at the end of the walk) and every node in it counts as reused (the
+        // shared-element detach reads this set).
+        ctx.reused.merge(&ctx.scratch);
+        ctx.claimed_frame.merge(&ctx.scratch);
+        ctx.claims += 1;
+        Some(root)
+    }
+
+    /// Marks `node_idx` as claimed and verifies it is the node `slot` materializes to, children
+    /// included.
+    fn verify_claimed_node(slot: &Slot, node_idx: usize, ctx: &mut ClaimCtx) -> bool {
+        if !ctx.scratch.insert(node_idx) {
+            return false; // already claimed: a cycle, or two keys naming one node
+        }
+        if ctx.prev.get(&slot.key) != Some(&node_idx) {
+            return false;
+        }
+        let mut pos = 0usize;
+        if !SlotTable::verify_claimed_children(
+            &slot.children,
+            &ctx.arena.nodes[node_idx].children,
+            &mut pos,
+            ctx,
+        ) {
+            return false;
+        }
+        pos == ctx.arena.nodes[node_idx].children.len()
+    }
+
+    /// Walks `slots` against `expected` — the arena children list of the node whose children they
+    /// are — advancing `pos` once per materialized slot. Scopes materialize nothing and pass their
+    /// children through, exactly as the descriptor walk hoists them.
+    fn verify_claimed_children(
+        slots: &[Slot],
+        expected: &[usize],
+        pos: &mut usize,
+        ctx: &mut ClaimCtx,
+    ) -> bool {
+        for slot in slots {
+            if slot.desc.is_some() {
+                // A live desc: the fallback applies it and consumes it. Not inert — bail.
+                return false;
+            }
+            if slot.is_scope {
+                if !SlotTable::verify_claimed_children(&slot.children, expected, pos, ctx) {
+                    return false;
+                }
+                continue;
+            }
+            // A skipped group or an inert leaf. Only the ROOT may still hold a payload; anything
+            // reached here is a descendant, so a payload means the fallback would apply it.
+            if slot.skip_modifier.is_some() || slot.skip_policy.is_some() {
+                return false;
+            }
+            let Some(&node_idx) = expected.get(*pos) else {
+                return false; // the parent lists fewer children than the slots materialize
+            };
+            *pos += 1;
+            if !SlotTable::verify_claimed_node(slot, node_idx, ctx) {
+                return false;
+            }
+        }
+        true
     }
 
     fn start_slot(&mut self, key: u64) -> SlotStatus {
@@ -1730,6 +1894,14 @@ pub struct Composer {
     pub(crate) prev_node_by_key: HashMap<u64, usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
+    /// How many skipped subtrees the last `materialize` claimed in place, instead of re-encoding them
+    /// into descriptors (`SlotTable::try_claim_skipped_subtree`). Test-visible so the tests can tell
+    /// "the fast path ran" from "it bailed" — the two are deliberately indistinguishable in the tree.
+    #[cfg(test)]
+    pub(crate) skip_claims: usize,
+    /// Subtrees whose in-place claim was rejected this frame (see `skip_claims`).
+    #[cfg(test)]
+    pub(crate) skip_claim_bails: usize,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
@@ -1834,6 +2006,10 @@ impl Composer {
             pending_params: Vec::new(),
             prev_node_by_key: HashMap::new(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
+            #[cfg(test)]
+            skip_claims: 0,
+            #[cfg(test)]
+            skip_claim_bails: 0,
             selection_registrar: None,
             lifecycle: crate::ui::window::LifecycleState::default(),
             adaptive: crate::ui::adaptive::AdaptiveContext::new(),
@@ -2502,6 +2678,14 @@ impl Composer {
         // 跳过已复用节点（已挂入本帧树，free 会递归进本帧树形成环）
         let mut visited = crate::layout::node::NodeMarks::default();
         for (key, idx) in self.prev_node_by_key.drain() {
+            // A node marked reused is part of THIS frame's tree — either claimed in place
+            // (`try_claim_skipped_subtree`) or reached through a refilled index. It was not removed,
+            // so neither its layout dependencies nor its `on_remove` are due: reporting it as removed
+            // pruned a live slot's layout dependency and froze its animation (measured:
+            // `test_layout_dep_survives_const_fold` fired exactly that way).
+            if self.reused_nodes.contains(idx) {
+                continue;
+            }
             // 收集移除的 slot_key（layout_deps 死 key 清理）
             self.removed_slot_keys.insert(key);
             self.arena.free_node_skip(idx, &self.reused_nodes, &mut visited);
@@ -5959,6 +6143,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
     let desc = crate::core::materialize::DescNode {
         key: old_root_key,
         skip: true,
+        claimed: None,
         modifier: Modifier::new(),
         preserve_modifier: true,
         policy: None,
@@ -5977,6 +6162,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
         children: vec![crate::core::materialize::DescNode {
             key: leaf0_key,
             skip: true,
+        claimed: None,
             modifier: Modifier::new(),
             preserve_modifier: true,
             policy: None,
@@ -6004,6 +6190,104 @@ fn test_skip_recovery_sig_mismatch_direct() {
     assert!(!composer.reused_nodes.contains(old_root), "旧节点不应标记复用（待回收）");
     assert!(composer.prev_node_by_key.contains_key(&old_root_key),
         "key 应保留待回收（否则旧节点 arena 泄漏）");
+}
+
+/// A skipped subtree whose slots are all inert is claimed in place, and the shape is verified.
+///
+/// The claim is what makes an idle frame cheap (`docs/benchmarks.md`), and its whole safety rests on
+/// `try_claim_skipped_subtree`'s walk: the arena must hold exactly this subtree, node for node. These
+/// two tests pin both halves — that the claim fires on an idle frame, and that a stale arena shape
+/// makes it BAIL rather than keep a tree that no longer matches the slots.
+#[test]
+fn test_skipped_subtree_is_claimed_in_place() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    for _ in 0..3 {
+                        let leaf = ctx.next_key();
+                        ctx.start_leaf(leaf, Modifier::new().size(20.0, 10.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+    };
+
+    build(&mut composer);
+    let root = composer.layout_root_idx().unwrap();
+    let kids: Vec<usize> = composer.arena_nodes()[root].children.clone();
+    assert_eq!(kids.len(), 3, "precondition: three leaves under the container");
+    assert_eq!(composer.skip_claims, 0, "frame 1 entered: nothing to claim");
+
+    // Frame 2: the container's slot is clean and nothing reads state → it Skips with every slot inert.
+    build(&mut composer);
+    assert_eq!(composer.skip_claims, 1, "the skipped subtree must be claimed in place");
+    let root2 = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root2].children, kids,
+        "the claimed subtree is the SAME nodes in the SAME order (nothing was rebuilt)");
+
+    // Frame 3: still idle → claimed again (the claim leaves the slots in the state it found them).
+    build(&mut composer);
+    assert_eq!(composer.skip_claims, 1, "a second idle frame claims again");
+}
+
+/// A stale arena shape must make the claim bail — and the fallback must repair the tree.
+///
+/// This is the failure the whole verification exists for: if the arena no longer matches the slot
+/// tree, keeping it in place would render a structure that the slots do not describe. Corrupting the
+/// arena by hand is the only way to reach that state deliberately.
+#[test]
+fn test_stale_arena_shape_makes_the_claim_bail() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let build = |composer: &mut Composer| {
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    for i in 0..2 {
+                        let leaf = ctx.next_key();
+                        // Distinct keys of the same shape, so a reorder is the only difference.
+                        ctx.start_leaf(leaf, Modifier::new().size(20.0 + i as f32, 10.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+    };
+
+    build(&mut composer);
+    build(&mut composer);
+    assert_eq!(composer.skip_claims, 1, "precondition: the idle frame claims");
+
+    // Corrupt the arena: swap the container's two children. The slots still say [a, b].
+    let root = composer.layout_root_idx().unwrap();
+    let before: Vec<usize> = composer.arena_nodes()[root].children.clone();
+    assert_eq!(before.len(), 2);
+    {
+        let nodes = composer.arena_nodes_mut();
+        nodes[root].children.swap(0, 1);
+    }
+
+    // The next idle frame must notice and rebuild from the slots instead of trusting the arena.
+    build(&mut composer);
+    assert!(composer.skip_claim_bails >= 1, "a shape mismatch must reject the container's claim");
+    let root = composer.layout_root_idx().unwrap();
+    assert_eq!(composer.arena_nodes()[root].children, before,
+        "the fallback rebuilds the children in SLOT order (the corruption is repaired)");
+    // The two leaves are inert subtrees in their own right and are still claimed — the rejection is
+    // per subtree, which is what keeps a single stale subtree from costing the whole frame.
+    assert_eq!(composer.skip_claims, 2, "the leaves are claimed even though their parent bailed");
 }
 
 /// T4：数量相同内容不同（A→B 同位置）——保持恢复（Compose 位置复用语义，不强制 Enter）
