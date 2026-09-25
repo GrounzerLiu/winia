@@ -2198,6 +2198,17 @@ thread_local! {
     pub(crate) static MEASURE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// Puts back the slot key a node's measurement displaced, on the way out — including on an early
+/// return or a panic, which is why it is a guard rather than a line at the end. See the arming site
+/// in `measure_node_inner` for what breaks without it.
+struct ActiveSlotKeyGuard(u64);
+
+impl Drop for ActiveSlotKeyGuard {
+    fn drop(&mut self) {
+        crate::core::composer::set_active_slot_key(self.0);
+    }
+}
+
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -2229,7 +2240,19 @@ fn measure_node_inner(
     // Set ACTIVE_SLOT_KEY = this node's slot so a State::get() inside a dynamic
     // size closure registers its dependency on THIS node (value change → node
     // dirty → recompose + re-measure).
+    //
+    // The key is RESTORED when this measure returns, and that half is load-bearing: this node's
+    // children each arm their own key on the way in, so without a restore the key stays on whatever
+    // descendant measured last, and the PARENT's own post-child reads (a policy's bookkeeping after
+    // its children loop, `ResizeMode` work, a dynamic size resolved after laying children out) are
+    // attributed to a descendant's slot instead. A dependency on a descendant's slot is dropped the
+    // moment that descendant goes away — a lazy row recycled, an `if` branch closed — and the parent
+    // silently stops tracking the state. Measured before this guard existed: a parent's post-child
+    // read landed on a slot that was neither the parent's nor its last child's
+    // (`test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent`).
+    let displaced_key = crate::core::composer::active_slot_key();
     crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
+    let _restore_key = ActiveSlotKeyGuard(displaced_key);
 
     // Flight layout contract (Compose `ResizeMode` / `PlaceHolderSize`), read
     // AFTER the fold check: a folded node must neither arm its slot key nor

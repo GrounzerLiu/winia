@@ -81,8 +81,57 @@ State::set/update()
 - [x] 多窗口上下文隔离：debug event/screenshot/pixel 按窗口路由（`DebugRuntime` + per-window target/queue）。
 - [x] 多窗口上下文隔离：animation registry 生命周期——`clear_animations_for_states` + per-Composer `animation_state_ids`，Composer drop 时清理自有动画。
 - [x] debug runtime session 生命周期：`begin_session`/`end_session`。
-- [ ] 形式化 compose/layout 批次边界，证明 frame 期间到达的新通知只进入下一批。
-- [ ] 修复递归 measure 中 parent post-child State::get 的精确 slot attribution；当前 layout tracking 仍由 measure_node 的 active key 驱动。
+- [x] 形式化 compose/layout 批次边界，证明 frame 期间到达的新通知只进入下一批。
+  （2026-09，`exp/batch-boundary`）**The original wording was wrong and the round corrected it.**
+  The boundary is per **PASS**, not per frame, and the guarantee is not "the next batch" but "a phase
+  never consumes what was enqueued while it was running". Both compose and layout drain their queue at
+  the TOP of the pass; anything enqueued after that drain is left for the next pass whose predicate
+  matches. Three clauses, each with a test in `core/composer.rs`:
+
+  1. A write during **content** is not consumed by that compose pass — and is not lost either:
+     `test_a_write_during_content_recomposes_the_next_pass` asserts the group re-enters on the next pass.
+     (This is the half the older `test_compose_notification_during_frame_is_next_batch` did not cover:
+     it proved the notification stayed queued, not that it still drives a recomposition.)
+  2. A write during **measure** is not consumed by the layout pass that produced it:
+     `test_a_write_during_measure_is_next_layout_batch`.
+  3. A **layout-only** write during compose IS consumed by that same frame's layout
+     (`consume_layout_pending` runs at the top of layout, deliberately, so a layout-only state does not
+     need a whole extra frame): `test_a_layout_only_write_during_compose_is_consumed_by_that_frames_layout`.
+
+  **Why "next frame" cannot be the statement**: the app's frame loop (`app.rs`
+  `recompose_layout_render`) calls `recompose` repeatedly until the queue is quiet, precisely so a
+  notification from a task completing on another thread is not left waiting a frame. So a write during
+  compose pass 1 of frame N is consumed by pass 2 of frame N. What is guaranteed is per-pass, and that
+  is what the tests pin.
+
+  Two things the round found while writing the proofs, both worth knowing: a write to a state with **no
+  subscriber yet** enqueues nothing at all (there is no one to notify — the next layout simply reads the
+  new value), and **a second top-level node in one compose silently replaces the first as the tree's
+  root** (`test_only_one_top_level_node_becomes_the_root`). A debug guard for the latter was written and
+  removed: it fires in 17 existing tests across `loading_indicator`, `progress_indicator`,
+  `wavy_progress_indicator` and `switch`, i.e. components whose tests compose a multi-node component at
+  the top level. Enabling it means deciding per call site (wrap in a container, or keep emitting
+  siblings) — its own round, recorded here so it is not lost.
+- [x] 修复递归 measure 中 parent post-child State::get 的精确 slot attribution；当前 layout tracking 仍由 measure_node 的 active key 驱动。
+  （2026-09，`exp/batch-boundary`）**The item was right, and the bug was real.**
+  `measure_node_inner` armed `ACTIVE_SLOT_KEY` with the node's slot at its top; each CHILD then armed
+  its own key and nothing put the parent's back. So a read in the parent's post-child work was recorded
+  against a descendant's slot. This is not hypothetical: the code right after `policy.measure` reads
+  `lazy_scroll_content_height().map(|s| s.get())`, i.e. every lazy container's scroll sync was
+  attributing its dependency to whichever child measured last. Measured before the fix: a parent's
+  post-child read registered on a key that was neither the parent's nor its last child's.
+
+  The cost is not a crash — the dependency lives on a slot the parent does not own, so it is DROPPED
+  when that descendant goes away (a lazy row recycled, an `if` branch closed) and the parent silently
+  stops tracking the state. The fix is an RAII guard (`ActiveSlotKeyGuard` in `layout/node.rs`) that
+  restores the displaced key when the node's measure returns, including on early return and on panic.
+  Because each level restores its own, the key is the PARENT's throughout the parent's post-child work.
+
+  Tests: `test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent` asserts both the attribution
+  (on the parent, not the last child) and the consequence (the dependency survives the children being
+  removed entirely). Both were verified to FAIL with the restore disabled — the second one is the one
+  that proves what the bug costs, and it needed the first's assertion temporarily skipped to be seen.
+  Full suite green with the fix (lib 1067, UI 47/47, examples compile).
 
 ### Phase 4 - Modifier 与公共状态迁移
 

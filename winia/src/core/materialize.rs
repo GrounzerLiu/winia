@@ -515,6 +515,15 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     if let Some(p) = parent {
         composer.arena.add_child(p, index);
     } else {
+        // NOTE: a second top-level desc silently REPLACES the first as the root — the first stays
+        // materialized but unreachable, so it is never measured and its callbacks never run. That is
+        // pinned by `test_only_one_top_level_node_becomes_the_root` (the behaviour is kept: making the
+        // root a synthetic container would move every node index and id, which reuse, shared elements
+        // and semantics all key off). A debug guard for it was written and removed: it fired in 17
+        // existing tests across `loading_indicator`, `progress_indicator`, `wavy_progress_indicator`
+        // and `switch`, i.e. components whose tests compose a multi-node component at the top level.
+        // Enabling it means deciding per call site (wrap in a container, or keep emitting siblings),
+        // which is its own round — recorded in `docs/state-architecture-progress.md`.
         composer.arena.root = Some(index);
     }
     for child in children {

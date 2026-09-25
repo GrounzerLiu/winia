@@ -552,6 +552,16 @@ State:count.set(1) → notify_state_changed
 
 ## 五、开发路线图
 
+> Status: **historical — this is the v1 plan, kept for its reasoning, NOT a backlog.** Every phase below
+> has shipped: `Text`/`Button`/`Column`/`Row`/`Box`, the modifier chain, `LazyColumn`, the animation
+> system, the theme, the examples, the benchmark. The unchecked boxes are the plan as it was written —
+> most predate the code that closed them. Do not read an empty box here as outstanding work: the live
+> backlog is `docs/state-architecture-progress.md`, plus the per-area gap docs
+> (`docs/semantics-gap.md`, `docs/animation-gap-analysis.md`, `docs/shared-element-gaps.md`).
+>
+> Companions: `docs/architecture-audit.md` (current structural review) and `docs/benchmarks.md`
+> (measured state of the frame).
+
 ### Phase 1 — State + ComposeCtx 核心 ✅ 进行中
 
 - [x] `State<T>` 响应式容器（读追踪、写通知、PartialEq 去重）
