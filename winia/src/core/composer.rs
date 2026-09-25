@@ -189,6 +189,14 @@ pub(crate) fn set_active_slot_key(key: u64) {
     });
 }
 
+/// The slot key measurement is currently attributing reads to.
+///
+/// Read by `measure_node_inner` before it arms its own key, so the key it displaced can be put back
+/// when it returns — see `ActiveSlotKeyGuard` there for why a parent's post-child read needs that.
+pub(crate) fn active_slot_key() -> u64 {
+    ACTIVE_SLOT_KEY.with(|c| c.get())
+}
+
 fn begin_layout_measure_tracking() {
     MEASURED_LAYOUT_KEYS.with(|keys| *keys.borrow_mut() = Some(HashSet::new()));
 }
@@ -3593,6 +3601,105 @@ mod scope_tests {
     }
 }
 
+/// A policy that reads a state AFTER measuring its children — the "parent post-child read" whose slot
+/// attribution the doc's open item is about.
+#[derive(Debug)]
+struct PostChildReadPolicy {
+    handle: State<f32>,
+}
+
+impl crate::layout::node::MeasurePolicy for PostChildReadPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: crate::layout::constraints::Constraints,
+    ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+        let mut h = 0.0f32;
+        for &c in children {
+            let (s, _) = crate::layout::node::measure_node(nodes, policies, c, constraints);
+            h += s.height;
+        }
+        // The read that must be attributed to THIS node, not to the last child measured.
+        let extra = self.handle.get();
+        (crate::layout::node::Size::new(extra, h), Vec::new())
+    }
+
+    fn place(
+        &self,
+        _nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        _children: &[usize],
+        _placements: &[crate::layout::node::Placement],
+    ) {
+    }
+}
+
+/// A parent's State::get AFTER its children measured must register on the PARENT.
+///
+/// `measure_node_inner` arms `ACTIVE_SLOT_KEY` with a node's slot at its top, and each child's measure
+/// re-arms it with the child's slot. Nothing re-arms the PARENT's slot after the children are done, so
+/// a read in the parent's post-child work (a policy's own bookkeeping, a dynamic size resolved after
+/// laying children out) is recorded against the LAST CHILD's slot. The consequence is not a crash: the
+/// dependency lives on a slot the parent does not own, so it is dropped the moment that child goes away
+/// (a lazy list recycling it, an `if` branch closing), and the parent's layout silently stops tracking
+/// the state — the failure mode this file's other layout-dependency tests exist for.
+#[test]
+fn test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let width = State::new(30.0f32);
+
+    let handle = width.clone();
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        ctx.start_container(root_key, Modifier::new(), PostChildReadPolicy { handle });
+        for _ in 0..2 {
+            let leaf_key = ctx.next_key();
+            ctx.start_leaf(leaf_key, Modifier::new().size(10.0, 10.0));
+            ctx.end_node();
+        }
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+
+    let root = composer.layout_root_idx().unwrap();
+    let parent_key = composer.arena_nodes()[root].slot_key;
+    let last_child = *composer.arena_nodes()[root].children.last().unwrap();
+    let last_child_key = composer.arena_nodes()[last_child].slot_key;
+    let width_id = width.signal_id();
+    let registered = composer
+        .layout_deps
+        .get(&width_id)
+        .expect("the post-child read must register SOMETHING");
+
+    assert!(
+        registered.contains(&parent_key),
+        "the parent's post-child read must be attributed to the parent (slot {parent_key:#x}); \
+         registered instead on {registered:?} (the last child is {last_child_key:#x})"
+    );
+    assert!(
+        !registered.contains(&last_child_key),
+        "…and NOT to the last child it happened to measure (slot {last_child_key:#x})"
+    );
+
+    // The consequence, which is what the misattribution actually costs: the dependency must survive
+    // the child it was wrongly attributed to. Here the children are removed entirely (the composer
+    // re-composes the parent with none), and the state must still re-measure the parent.
+    let handle = width.clone();
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        ctx.start_container(root_key, Modifier::new(), PostChildReadPolicy { handle });
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+    assert!(
+        composer.layout_deps.get(&width_id).is_some_and(|keys| keys.contains(&parent_key)),
+        "the parent's dependency must survive its children going away — a dependency parked on a \
+         child's slot is dropped with the child"
+    );
+}
+
 /// 阶段4 键修复验证：prev_nodes/frame_cache 改用 slot_key 后，
 /// 无变化帧的 clean group 应真正 Skip（键 miss 时恒 Enter）。
 /// 帧1 组合 root+leaf（无 scope）→ 帧2 无状态变化 → root 应返回 Skip。
@@ -4980,6 +5087,283 @@ fn test_compose_panic_recovers_next_frame() {
     assert_eq!(composer.arena_nodes()[root_idx].children.len(), 1, "自愈后结构正确");
 }
 
+
+/// The batch boundary, clause 1: a write during a compose PASS is not acted on by that pass, and is
+/// not lost either — the next pass re-enters the group that reads it.
+///
+/// The existing test above proves the notification stays queued. This one proves the other half, which
+/// is the one a user can see: the queued notification still DRIVES a recomposition, on the next pass.
+#[test]
+fn test_a_write_during_content_recomposes_the_next_pass() {
+    let mut composer = Composer::new();
+    let state = State::new(0i32);
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let write_once = std::cell::Cell::new(true);
+
+    let mut pass = |composer: &mut Composer, write: bool| {
+        let runs = runs.clone();
+        let state = state.clone();
+        let write = write && write_once.replace(false);
+        composer.compose(move |ctx| {
+            let value = state.get();
+            runs.set(runs.get() + 1);
+            if write {
+                // A write during content — a user callback, or a task completing on another thread.
+                state.as_raw().set_animating(value + 1);
+            }
+            let key = ctx.next_key();
+            ctx.start_leaf(key, Modifier::new());
+            ctx.end_node();
+        });
+    };
+
+    pass(&mut composer, true);
+    assert_eq!(runs.get(), 1, "the writing pass runs the group once");
+    assert!(
+        composer.has_pending_states(),
+        "a write during content must remain queued, not be consumed by the pass that made it"
+    );
+
+    // The next pass sees the queued notification and re-enters the group.
+    let runs_next = runs.clone();
+    let state_next = state.clone();
+    assert!(composer.recompose(move |ctx| {
+        let value = state_next.get();
+        runs_next.set(runs_next.get() + 1);
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new());
+        ctx.end_node();
+        let _ = value;
+    }));
+    assert_eq!(runs.get(), 2, "the next pass re-enters the group — the notification was not lost");
+    assert!(!composer.has_pending_states(), "and the next pass consumes it");
+}
+
+/// The batch boundary, clause 2: a write DURING MEASURE is not consumed by the layout pass that
+/// produced it — the layout pass drains before it measures.
+///
+/// This is the clause that keeps a frame from acting on its own output: a measure callback that writes
+/// a state (an animation tick, a scroll correction) must not extend the layout it is already inside.
+///
+/// The write has to be provoked by forcing a re-measure, and that is the whole difficulty of this test:
+/// with unchanged constraints every node FOLDS (returns its cached size without running its closure), so
+/// a first version of this test asserted on a frame where the callback never ran at all. The measured
+/// value is asserted too — "something is pending" is not evidence that the write happened.
+#[test]
+fn test_a_write_during_measure_is_next_layout_batch() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    // A constraint that differs by one pixel invalidates every node's fold, so this frame really
+    // measures (the same trick `layout_forced` uses in the bench).
+    let forced = crate::layout::constraints::Constraints::new(0.0, 501.0, 0.0, 500.0);
+    // `width_source` is read during measure (a layout dependency); `written_by_measure` is written by
+    // that same measure callback, and has a layout dependency of its own through a second node.
+    let width_source = State::new(20.0f32);
+    let written_by_measure = State::new(0.0f32);
+    // `AtomicBool` rather than `Cell`: a measure closure has to be `Send`.
+    let write_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let width_flag = write_flag.clone();
+    let written = written_by_measure.clone();
+    let width_for_measure = width_source.clone();
+    let measure_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_for_closure = measure_calls.clone();
+    // Both leaves go inside ONE container: at the top level each desc overwrites `arena.root`, so a
+    // second top-level node is materialized but never measured (its callbacks never run). A first
+    // version of this test had the two leaves at top level and asserted on a closure that never ran.
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        ctx.start_container(root_key, Modifier::new(), crate::layout::BoxLayout::new());
+        let key = ctx.next_key();
+        let effect = written.clone();
+        let flag = width_flag.clone();
+        let calls = calls_for_closure.clone();
+        ctx.start_leaf(key, Modifier::new().width(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let w = width_for_measure.get();
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                effect.as_raw().set_animating(w + 1.0);
+            }
+            w
+        }).height(10.0));
+        ctx.end_node();
+        // A second node reads the written state during measure, giving it a layout dependency.
+        let read_key = ctx.next_key();
+        let source = written_by_measure.clone();
+        ctx.start_leaf(read_key, Modifier::new().width(move || {
+            source.get().max(1.0)
+        }).height(10.0));
+        ctx.end_node();
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+    let written_id = written_by_measure.signal_id();
+    assert!(
+        composer.layout_deps.contains_key(&written_id),
+        "precondition: the written state must have a layout dependency, or the tail drop would eat it"
+    );
+
+    // Frame 2: the write happens during this frame's measure.
+    write_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    let source_a = width_source.clone();
+    let source_b = written_by_measure.clone();
+    let calls_frame2 = measure_calls.clone();
+    let write_flag_frame2 = write_flag.clone();
+    let effect_frame2 = written_by_measure.clone();
+    composer.compose(|ctx| {
+        let root_key = ctx.next_key();
+        ctx.start_container(root_key, Modifier::new(), crate::layout::BoxLayout::new());
+        let key = ctx.next_key();
+        let calls = calls_frame2.clone();
+        let flag = write_flag_frame2.clone();
+        let effect = effect_frame2.clone();
+        ctx.start_leaf(key, Modifier::new().width(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let w = source_a.get();
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                effect.as_raw().set_animating(w + 1.0);
+            }
+            w
+        }).height(10.0));
+        ctx.end_node();
+        let read_key = ctx.next_key();
+        ctx.start_leaf(read_key, Modifier::new().width(move || {
+            source_b.get().max(1.0)
+        }).height(10.0));
+        ctx.end_node();
+        ctx.end_node();
+    });
+    composer.layout(forced);
+    assert_eq!(
+        measure_calls.load(std::sync::atomic::Ordering::Relaxed),
+        2,
+        "the measure closure must have run once per layout pass (a fold would skip it)"
+    );
+    assert_eq!(
+        written_by_measure.get(),
+        21.0,
+        "precondition: the measure callback ran and wrote (without a forced re-measure everything \
+         folds and the write never happens)"
+    );
+    assert!(
+        composer.has_pending_states(),
+        "a write during measure must remain queued for the next batch, not extend this layout"
+    );
+    assert_eq!(
+        composer.pending_state_count(),
+        1,
+        "and it must be queued exactly once"
+    );
+
+    // And the next layout pass consumes it.
+    write_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+    composer.layout(forced);
+    assert!(!composer.has_pending_states(), "the next layout pass consumes the queued write");
+}
+
+/// The batch boundary, clause 3: it is per PHASE, not per frame — a LAYOUT-ONLY write made during
+/// compose IS consumed by that same frame's layout, because layout has not measured yet.
+///
+/// This is deliberate (`consume_layout_pending` runs at the top of layout precisely so a layout-only
+/// state does not need a whole extra frame), and it is the asymmetry that makes "only the next batch"
+/// the wrong way to state the rule: what is guaranteed is that a phase never consumes what was
+/// enqueued while it was running.
+///
+/// The write has to happen on a state that ALREADY has a subscriber, which is why this test runs a
+/// quiet frame first: a notification reaches the queue only through a subscription, so a write to a
+/// state nobody has read yet enqueues nothing at all (there is no one to notify — the value is simply
+/// read fresh by the layout that follows). A first version of this test wrote on the very first frame
+/// and asserted the write was queued; it was not, and not because anything consumed it.
+#[test]
+fn test_a_layout_only_write_during_compose_is_consumed_by_that_frames_layout() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let width = State::new(20.0f32);
+
+    // The state is read only during measure → a layout-only dependency.
+    let build = |composer: &mut Composer, write: Option<f32>| {
+        let w = width.clone();
+        let write_target = width.clone();
+        composer.compose(move |ctx| {
+            let root_key = ctx.next_key();
+            ctx.start_container(root_key, Modifier::new(), crate::layout::BoxLayout::new());
+            let leaf_key = ctx.next_key();
+            ctx.start_leaf(leaf_key, Modifier::new().width(move || w.get()).height(10.0));
+            ctx.end_node();
+            ctx.end_node();
+            if let Some(value) = write {
+                // A write from inside content, now that the state has a subscriber.
+                write_target.set(value);
+            }
+        });
+    };
+
+    // Frame 1 (quiet): subscribe the composer to `width` through the measure that reads it.
+    build(&mut composer, None);
+    composer.layout(constraints);
+    assert!(
+        !composer.has_pending_states(),
+        "precondition: a quiet frame leaves nothing queued"
+    );
+
+    // Frame 2: write it from content.
+    build(&mut composer, Some(99.0));
+    assert!(
+        composer.has_pending_states(),
+        "a layout-only write during compose is queued (compose does not consume it)"
+    );
+    let root = composer.layout_root_idx().unwrap();
+    let leaf = composer.arena_nodes()[root].children[0];
+    composer.layout(constraints);
+    let measured = composer.arena_nodes()[leaf].measured_size.width;
+    assert_eq!(
+        measured, 99.0,
+        "the same frame's layout consumed the layout-only write and measured the NEW value — \
+         layout runs after compose, so there is nothing stale to protect"
+    );
+    assert!(!composer.has_pending_states(), "and the layout pass consumed it");
+}
+
+/// Two top-level nodes in one compose: only ONE of them becomes the tree's root.
+///
+/// `materialize_node` assigns `arena.root = Some(index)` for every desc whose parent is `None`, so a
+/// second top-level desc silently REPLACES the first as the root — the first is materialized into the
+/// arena and then never measured, never painted, and never collected by the layout maps. A real
+/// application never hits this (the root comes from `app_root!`/`run_app!`, one container), but a
+/// hand-written test or an overlay composer can, and the symptom is a node whose callbacks never run:
+/// this was found by a boundary test whose measure closure never fired.
+///
+/// The behaviour is pinned rather than changed: making the root a synthetic container would move every
+/// node's index and id, which the node-reuse, shared-element and semantics paths all index by. What
+/// this test buys is that the next person meets the rule in a test name instead of in a mystery.
+#[test]
+fn test_only_one_top_level_node_becomes_the_root() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    composer.compose(|ctx| {
+        let first = ctx.next_key();
+        ctx.start_leaf(first, Modifier::new().size(10.0, 10.0));
+        ctx.end_node();
+        let second = ctx.next_key();
+        ctx.start_leaf(second, Modifier::new().size(20.0, 20.0));
+        ctx.end_node();
+    });
+    composer.layout(constraints);
+
+    let root = composer.layout_root_idx().expect("a root");
+    let nodes = composer.arena_nodes();
+    assert_eq!(nodes.len(), 2, "both nodes were materialized");
+    assert_eq!(
+        nodes[root].measured_size.width,
+        20.0,
+        "the LAST top-level desc is the root (the second leaf here)"
+    );
+    assert_eq!(
+        composer.prev_nodes.len(),
+        1,
+        "and the first leaf is not in the layout maps either — it is unreachable from the root"
+    );
+}
 
 /// A notification generated after compose drains its batch remains queued for the
 /// next batch instead of being consumed by the current frame.
