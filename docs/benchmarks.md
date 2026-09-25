@@ -42,7 +42,7 @@ These are the figures after the fixes in this document.
 |---|---|---|---|
 | 50 | 236 | 33 | 63 |
 | 200 | 983 | 134 | 260 |
-| 800 | 4594 | 597 | 1189 |
+| 800 | 4594 | 597 | 1142 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
@@ -752,6 +752,56 @@ modifier with the same numbers still Skips (content does not re-run), a changed 
 is written so that a version which only checked the Enter half would pass with the comparison removed
 entirely. The second pins the refill.
 
+### A fifteenth fix: the parameter buffer recycles instead of allocating per declaration
+
+`changed()` pushed a fresh `Box::new(param.clone())` on every call — 8803 calls on a cold frame, one per
+declared parameter per container per frame, and the slot's previous vector was dropped at the same time.
+Now the two vectors EXCHANGE places: the slot hands its previous parameters back
+(`SlotTable::replace_current_params`) and the next frame's declarations overwrite those boxes in place
+(`ParamValue::set_from_any`). In a list — where every row declares the same parameter types — the same
+handful of allocations circulates down the rows instead of one box per row.
+
+The write cursor (`pending_next`) replaces `pending_params.len()` as "how many parameters this frame
+declared": that vector now arrives carrying the previous frame's list, which may be longer or shorter, so
+the Skip comparison reads `&pending_params[..pending_next]`.
+
+| allocations per frame, 40-row list (test-visible counter) | before | after |
+|---|---|---|
+| first frame | 40 | 40 |
+| second frame | 40 | **1** |
+| third frame | 40 | **0** |
+
+That counter exists because **no behavioural test can see this**: reusing a box and allocating a new one
+produce identical state. `test_parameter_boxes_are_recycled_across_frames` asserts the shape above and was
+verified to FAIL (40 allocations on frame 2) with the reuse disabled.
+
+| frame-level, boxes 800 rows (best of eight) | before | after |
+|---|---|---|
+| one row updated | 1189 µs | **1142 µs** (-4%) |
+| one row updated, 200 rows | 257 µs | **244 µs** |
+| idle frame | 603 µs | 601 µs (flat — nothing declares params when nothing enters) |
+| cold frame | 4594 µs | 4597 µs (unchanged — see below) |
+
+#### The cold frame did NOT move, and that corrects the previous section
+
+The thirteenth fix's split reported `changed()` at ~503 µs on a cold frame and listed it as a target. That
+number is real, and this fix does **not** recover it — because of what a "cold frame" is in this bench: it
+builds a FRESH `Composer` for every iteration, so there is no previous frame's buffer to recycle from and
+every box is first-time storage. A composer that has run before recycles; one that has never run cannot.
+
+So the honest accounting is: the cold frame's parameter boxes are the storage the slots need (one per
+declaring group, ~3200 of them at 800 rows), not waste — no fix removes them. What was waste is the
+*re-allocation every frame after that*, and that is what is gone: a steady-state frame declaring 800
+parameters now allocates about one box instead of 800. The one-row-update column is the steady-state
+measurement, and it is the one that moved.
+
+(This is the third figure in this document corrected by asking what a scene actually MEASURES rather than
+what its label says. The original layout table was wrong because an arm labelled "layout" ran a compose
+inside its timed region; the thirteenth fix's own `entries` column had to be read before believing any of
+its numbers; and this one is a scene whose "cold" means a brand-new composer every iteration. The pattern
+is consistent enough to be worth stating plainly: **the label is a hypothesis, and the thing to check
+first is what the code under the timer does.**)
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -912,25 +962,28 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
   descriptor path did — the loop was never in the descriptor path.
-- **The content closure's remaining two Enter-path costs** (found by the thirteenth fix's split; the
-  third — the per-container `Modifier` copy — was taken by the fourteenth):
-  `changed()`'s `Box::new(param.clone())` (~503 µs over 8803 calls) and the per-container
-  `Box::new(policy)` (~135 µs). Both need a redesign — of the parameter mechanism, and of what
-  `NodeDesc` carries so compose can allocate into the arena's policy pool directly — and the thirteenth
-  fix's section records what each would have to solve. (The modifier copy's own section records the
-  digest trap, for whoever is tempted by a cheaper comparison of either one.)
+- **The content closure's remaining Enter-path cost** (found by the thirteenth fix's split; two of the
+  three are now taken — the per-container `Modifier` copy by the fourteenth, `changed()`'s parameter
+  boxing by the fifteenth): the per-container `Box::new(policy)` (~135 µs). It needs `NodeDesc` to carry
+  a policy INDEX instead of a box so compose can allocate into the arena's policy pool directly, which
+  changes the pool's invalidation rules (a node's policy index is replaced when its type changes); the
+  thirteenth fix's section records the shape.
+- **A cold frame's parameter boxes are not recoverable** — they are the storage the slots keep, one per
+  declaring group, and the fifteenth fix's section explains why a fresh composer has nothing to recycle.
+  Anything that removes them has to remove the per-group parameter storage itself, which is a different
+  design (the whole `changed`/`params_equal` skip mechanism).
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The eleven defects that *were* bugs
+and each is one round of work with this bench as the measuring stick. The twelve defects that *were* bugs
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
 per-node hash lookups in `materialize`'s claim path, ~1600 per-frame allocations in the prune to check
 lists that are almost always already correct, a SipHash on 8000 pre-mixed keys per frame, two
 `Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements), a SipHash on
-the per-node path counters, and a `Modifier` clone per Entering container kept only so the next frame
-could compare against it — were all found by measuring one bucket and finding something
-else inside it. The seventh fix is a different shape of change (a design that removes work
+the per-node path counters, a `Modifier` clone per Entering container kept only so the next frame could
+compare against it, and a `Box` per declared parameter per frame that a slot's previous vector could
+have stored — were all found by measuring one bucket and finding something else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
 whose planned approach measured FALSE before it was written (see its section), which is worth knowing:
