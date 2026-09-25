@@ -42,7 +42,7 @@ These are the figures after the fixes in this document.
 |---|---|---|---|
 | 50 | 236 | 33 | 63 |
 | 200 | 983 | 134 | 260 |
-| 800 | 4829 | 597 | 1262 |
+| 800 | 4829 | 597 | 1201 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
@@ -51,7 +51,9 @@ These are the figures after the fixes in this document.
 | 800 | 26168 | 1618 | 2326 |
 
 The cold column came down most in the twelfth fix (below): a cold frame builds every node, so it was the
-one paying for the arena's growth by doubling.
+one paying for the arena's growth by doubling. (The 800-row cold and idle cells are the previous round's
+best of eight; the thirteenth fix's own eight runs put them at 4981 / 608, inside the machine's spread —
+that fix's win is in the one-row column, where it is the frame's ENTER count that pays for it.)
 
 16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
@@ -627,6 +629,73 @@ Eight runs were needed because the machine was loaded for several of them (its t
 the rule this document has used throughout, applied at a larger sample because this round's effect on
 the idle frame is close to the noise floor.
 
+### A thirteenth fix, and the content closure finally split
+
+The cold frame's content closure was the largest bucket this document had never looked inside (1817 µs,
+more than materialize and the whole layout pass). A probe on the entry points every node passes through
+— `next_key`, `changed`, the two group functions, `start_node`/`end_node` — split it, boxes 800 rows,
+3201 groups (one per row, per Row, per Column) and 8803 `changed` calls:
+
+| content closure, cold frame | µs/frame | ns/call |
+|---|---|---|
+| `start_restartable_group` | **1441** | 450 |
+|   of which `start_slot` | 359 | 112 |
+|   of which the skip decision | 189 | 59 |
+|   of which `prev_modifier` CLONE | **297** | **93** |
+|   of which the `NodeDesc` write | 115 | 36 |
+|   of which the params write, direction, pushes | ~340 | ~106 |
+| `changed()` | 503 | 57 |
+| `Box::new(policy)` at the call site (not inside the group) | 135 | 42 |
+| `end_restartable_group` | 305 | 95 |
+| `next_key()` | 212 | 66 |
+| `end_node()` | 103 | 32 |
+
+(These figures carry the probe's own `Instant::now` pairs — ~25 ns each, and several per call — so they
+read high in absolute terms; the RATIOS are what they are for.)
+
+**The fix this round took is the bottom row.** `next_key`'s path counter and `start_slot`'s dirty check
+were still `std::HashMap`/`HashSet<u64>` — SipHash on keys the composer had already mixed, in a path
+that runs 3201 times per cold frame — and so were the `remember` counters. They are `SlotKeyMap`/
+`SlotKeySet` now, the same substitution the ninth fix made for the layout maps and the eleventh for the
+live-key set. Instrumented: `next_key` 212 → 153 µs, `start_slot` 359 → 327 µs.
+
+| frame-level, boxes 800 rows (best of eight runs) | before | after |
+|---|---|---|
+| one row updated | 1262 µs | **1201 µs** |
+| idle frame | 597 µs | 608 µs (noise) |
+| cold frame | 4829 µs | 4981 µs (noise — see below) |
+
+The idle and cold columns are within this machine's run-to-run spread, and that is worth stating rather
+than hiding: the hasher swap helps frames with many ENTERS (a cold frame, a structure change), because
+an idle frame never runs the group loop at all. The instrumented figures are the evidence; the
+frame-level one only confirms the direction.
+
+#### The three targets the split identified, and why none was taken this round
+
+The probe's value is that it turned "content is 1817 µs" into three named candidates with sizes. All
+three are redesigns in the skip decision — the highest-risk area in this codebase, whose comments record
+two rounds of dup-key panics and a ghost that painted nothing — and each needs its own round with the
+reasoning written down first:
+
+* **`prev_modifier` clone, ~297 µs (93 ns/call).** Every Entering container clones its whole `Modifier`
+  (a `Vec` of elements) into the slot so the NEXT frame can compare against it. Two ways out, and the
+  difference between them is the point: (a) store a digest of the comparable params instead — but a
+  hash collision then means "params unchanged" and the container Skips with a stale modifier, i.e. the
+  one failure direction this code must not have; (b) compare against the arena node's modifier instead
+  of storing one — the node IS holding last frame's modifier while compose runs (materialize has not
+  run yet), so the answer is the same, but the node-index map is drained by materialize and refilled,
+  so the same-frame-second-compose case has to be worked out before this is safe. (b) is the promising
+  one: it removes the copy rather than approximating it.
+* **`changed()` ~503 µs over 8803 calls (57 ns/call).** Each call boxes `param.clone()` into
+  `pending_params` for the next frame's comparison, and walks the slot path to find the previous value.
+  Removing the allocation means replacing `Box<dyn ParamValue>` with something inline — a redesign of
+  the parameter mechanism, used by every component in the crate.
+* **`Box::new(policy)` ~135 µs (42 ns/call).** Every container build boxes its policy fresh; the arena
+  has a policy POOL for exactly this reason, and the pool is what `materialize` moves the box into. A
+  version where compose allocates into the pool directly needs `NodeDesc` to carry a policy index
+  instead of a box, which changes the policy pool's invalidation rules (a node's policy index is
+  replaced when its type changes).
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -785,16 +854,24 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
   descriptor path did — the loop was never in the descriptor path.
+- **The content closure's three Enter-path costs** (found by the thirteenth fix's split, none taken):
+  the per-container `Modifier` clone into `prev_modifier` (~297 µs on a cold frame), `changed()`'s
+  `Box::new(param.clone())` (~503 µs over 8803 calls), and the per-container `Box::new(policy)`
+  (~135 µs). All three need a redesign of the skip decision or of the parameter mechanism, and the
+  thirteenth fix's section records what each would have to solve — including which of the two ways to
+  remove the modifier copy carries the dangerous failure mode (a digest can only ever say "unchanged"
+  wrongly, and "unchanged" means a stale modifier).
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The nine defects that *were* bugs
+and each is one round of work with this bench as the measuring stick. The ten defects that *were* bugs
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
 per-node hash lookups in `materialize`'s claim path, ~1600 per-frame allocations in the prune to check
-lists that are almost always already correct, a SipHash on 8000 pre-mixed keys per frame, and two
-`Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements) — were all
-found by measuring one bucket and finding something else inside it. The seventh fix is a different shape of change (a design that removes work
+lists that are almost always already correct, a SipHash on 8000 pre-mixed keys per frame, two
+`Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements), and a
+SipHash on the per-node path counters — were all found by measuring one bucket and finding something
+else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
 whose planned approach measured FALSE before it was written (see its section), which is worth knowing:

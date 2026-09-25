@@ -22,7 +22,6 @@ use std::any::Any;
 use std::cell::Cell;
 use std::cell::RefCell;
 
-
 /// RAII guard：语句作用域结束（含 return/break/continue/panic 提前退出）自动 pop_stmt。
 /// 零大小——Drop 直接操作 thread_local 栈（不持有 &mut ctx，无借用冲突）。
 pub struct StmtGuard;
@@ -916,21 +915,21 @@ pub(crate) struct SlotTable {
     /// 当前 compose 期间活跃的 slot key（用于 State→Slot 的脏标记）
     active_slot_key: u64,
     /// 被 State 变化标记为 dirty 的 slot key 集合
-    dirty_keys: std::collections::HashSet<u64>,
+    dirty_keys: crate::layout::node::SlotKeySet,
 }
 
 struct SlotTableRuntimeSnapshot {
     path: Vec<usize>,
     child_counters: Vec<usize>,
     active_slot_key: u64,
-    dirty_keys: std::collections::HashSet<u64>,
+    dirty_keys: crate::layout::node::SlotKeySet,
 }
 
 struct ComposeRuntimeSnapshot {
     slot_table: SlotTableRuntimeSnapshot,
     current_group_key: u32,
-    path_counters: std::collections::HashMap<u64, u32>,
-    remember_path_counters: std::collections::HashMap<u64, u32>,
+    path_counters: crate::layout::node::SlotKeyMap<u32>,
+    remember_path_counters: crate::layout::node::SlotKeyMap<u32>,
     scope_source_stack: Vec<Option<u64>>,
     key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
@@ -1012,7 +1011,7 @@ impl SlotTable {
             root_slot: Slot::new(0),
             child_counters: vec![0],
             active_slot_key: 0,
-            dirty_keys: std::collections::HashSet::new(),
+            dirty_keys: crate::layout::node::SlotKeySet::default(),
         }
     }
 
@@ -1881,9 +1880,9 @@ pub struct Composer {
     /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
     /// key 不随 Skip/Enter 的 next_key 调用序变化（全局 counter 会因 Skip 的
     /// content 不执行而平移 → key 漂移 → 节点复用错位 + 常量折叠冻结）
-    path_counters: std::collections::HashMap<u64, u32>,
+    path_counters: crate::layout::node::SlotKeyMap<u32>,
     /// 每路径独立 counter（next_remember_key 用——同上，防 remember key 漂移）
-    remember_path_counters: std::collections::HashMap<u64, u32>,
+    remember_path_counters: crate::layout::node::SlotKeyMap<u32>,
 
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
     scope_source_stack: Vec<Option<u64>>,
@@ -2041,8 +2040,8 @@ impl Composer {
             current_group_key: 0,
             compose_transaction: None,
             layout_override_fresh: false,
-            path_counters: std::collections::HashMap::new(),
-            remember_path_counters: std::collections::HashMap::new(),
+            path_counters: crate::layout::node::SlotKeyMap::default(),
+            remember_path_counters: crate::layout::node::SlotKeyMap::default(),
             scope_source_stack: Vec::new(),
             key_override_stack: Vec::new(),
             pending_recomposition: VecDeque::new(),
