@@ -1033,6 +1033,46 @@ measure, not in the walk.
 edge is that a field dropped from the hand-written comparison is invisible everywhere else), UI suite
 47/47, plus every other test target in the package.
 
+### A nineteenth round: the prune's buffers are 0.6 µs, and the note that priced them was wrong
+
+This round produced no code. It priced the entry above it, and the entry was wrong about where the
+function's time goes — which is the third time in four rounds that a target's label did not survive
+being measured (the claim walk's ~100 µs was a bucket label; the "6 µs Skip decision" was a residue
+artifact), so it is worth stating what was actually measured.
+
+Phase timers inside `prune_stale_child_links`, accumulated per call and printed every 500th, compose-only
+at 800 rows (3201 arena nodes — the row tree's real count, not the 800 the scene is named for):
+
+| phase | per call |
+|---|---|
+| `reachable = vec![false; len]` + the stack's first allocation | **0.2 µs** |
+| the reachability DFS (pop, mark, push children) | **10.4 µs** |
+| `dup_stamp = vec![0; len]` (25 KB, zeroed) | **0.4 µs** |
+| the per-parent loop (unreachable clear + duplicate check) | **5.5 µs** |
+| **total** | **16.5 µs** — which is the ~16 µs the eighth fix left and this document kept quoting |
+
+Three `Instant::now()` pairs per frame are ~60 ns against the 16 500 ns being measured, i.e. the
+instrumentation is 0.4% of the item and cannot manufacture a 0.6 µs reading; the phase that is small is
+small and the phases that are large are large.
+
+**So the buffers are 0.6 µs of 16.5, not ~1% of a frame (~5 µs at today's numbers), and the traversal is
+the rest.** Both traversals are cheap per node — 3.2 ns for the DFS, 1.7 ns for the strided parent loop —
+which is what a pointer chase over a 3201-node arena costs when the node struct is ~500 bytes: the DFS
+follows `children` into a second allocation per node and the loop strides the whole node array reading
+one `Vec` header per node. Neither is a layout accident; the only way to remove them is to not visit
+every node, and that is the round-10 shape — a whole-frame invariant that nothing maintains.
+
+The eighth fix had already measured that invariant's premise FALSE on this exact function: a frame with
+**4** groups entered really does repair a stale listing (`AnimatedVisibility` retiring its subtree), so
+"skip it when nothing entered" would have passed the suite and broken one group deeper. Two traversals
+whose failure mode is a `[dup-key]` panic or a ghost that paints nothing are not worth 16 µs of a 546 µs
+idle frame — 2.9%, now a measured number rather than an estimate.
+
+**The next real item is the row loop** (~415 µs, the largest bucket left on the compose side by an order
+of magnitude), and it is next because it is the only one that is paid on the frame shape an application
+actually has — one row changed → the container re-runs its 800 iterations. The 16 µs here is paid on
+every frame equally, which is why closing it is the right call rather than chasing it.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -1180,10 +1220,17 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   skipped the walk corrupted the tree to `[dup-key]` on the first idle frame. A structure fingerprint
   would replace the ~17 µs, not the ~80, so the design it would need (a maintained per-slot digest,
   cross-checked in debug) is not worth its price. See that round's section.
-- **`prune_stale_child_links`'s remaining ~16 µs**: what is left after the eighth fix is the
-  reachability walk plus two buffer allocations per frame (a `Vec<bool>` and the stamp vector). Both
-  could be reused across frames instead of reallocated — that needs a home on the `Composer` (or a
-  thread-local) and buys ~1% of the frame, so it waits for a reason.
+- **`prune_stale_child_links`'s remaining ~16 µs — PRICED AND CLOSED (nineteenth round), and the
+  proposal in this entry was wrong.** It said the remainder was "the reachability walk plus two buffer
+  allocations per frame", and that reusing the buffers "buys ~1% of the frame". Phase timers inside the
+  function, at 800 rows (3201 nodes, the row tree's real node count): allocation **0.2 µs**, reachability
+  DFS **10.4 µs**, stamp-vector allocation **0.4 µs**, per-parent loop **5.5 µs** — so the buffers are
+  **0.6 µs**, four percent of the function and 0.1% of a frame, and reusing them needs a home for three
+  buffers plus a persistent stamp counter. The two traversals are the function, at ~3.2 and ~1.7 ns per
+  node, which is where a pointer chase over a 3201-node arena lands: the only way to move it is to stop
+  walking the whole arena, and that is the round-10 class of change (its premise was measured false on
+  this very function in the eighth fix, where a frame with 4 groups entered really did repair a stale
+  listing). Closed.
 - **`collect_live_keys`'s remaining ~35 µs** (after the eleventh and twelfth fixes): the inserts dominate,
   and they are cache misses into a table rather than hashing, so no cheaper hasher helps from here. The
   only way further is to not build the set — see the eleventh fix's section: the shape that would make it
