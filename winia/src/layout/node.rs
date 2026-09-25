@@ -523,6 +523,17 @@ impl NodeMarks {
     pub(crate) fn clear(&mut self) {
         self.words.clear();
     }
+
+    /// Marks everything `other` marks. Used to move a subtree's claim from a scratch set into the
+    /// frame's reuse set once the claim is known to be good.
+    pub(crate) fn merge(&mut self, other: &NodeMarks) {
+        if other.words.len() > self.words.len() {
+            self.words.resize(other.words.len(), 0);
+        }
+        for (dst, src) in self.words.iter_mut().zip(other.words.iter()) {
+            *dst |= *src;
+        }
+    }
 }
 
 /// 布局树节点池：所有 LayoutNode 存于 `nodes`，树通过索引（`children: Vec<usize>`）
