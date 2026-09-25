@@ -69,8 +69,8 @@ The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 637 | 220 |
-| one row moved | ~1116 | ~220 |
+| idle | 421 | 218 |
+| one row moved | 832 | ~320 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -78,17 +78,16 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 637 | 0 |
-| container dirty, every row Skips | 1127 | 0 |
-| one row dirty (the same loop + one rebuild) | 1142 | 1 |
+| idle (container Skips, so the loop does not run) | 421 | 0 |
+| container dirty, every row Skips | 835 | 0 |
+| one row dirty (the same loop + one rebuild) | 839 | 1 |
 
-The loop over 800 rows costs **~490 µs**, and re-entering one row inside it costs **nothing measurable**
-(~15 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
-Instrumented attribution of that ~490 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
-of group machinery, the rest being the container's own entry plus rows materializing one by one instead
-of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
-carries whatever the container's re-entry costs on top of the loop — that is why it reads larger than
-the sum of its instrumented parts.)
+The loop over 800 rows costs **~415 µs**, and re-entering one row inside it costs **nothing measurable**
+(~4 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it. The loop's
+own 415 µs has come down from ~490 µs as the per-node costs the later rounds removed stopped being paid
+800 times over; its internal breakdown is instrumented and therefore only indicative (the thirteenth and
+sixteenth rounds' sections explain why: a probe that costs ~35 ns per point dominates a bucket whose
+calls are ~50 ns).
 
 ### Correction: the 5 ms was NOT the Skip decision
 
@@ -650,8 +649,11 @@ more than materialize and the whole layout pass). A probe on the entry points ev
 | `next_key()` | 212 | 66 |
 | `end_node()` | 103 | 32 |
 
-(These figures carry the probe's own `Instant::now` pairs — ~25 ns each, and several per call — so they
-read high in absolute terms; the RATIOS are what they are for.)
+(These figures carry the probe's own `Instant::now` pairs — several per call — so they read high in
+absolute terms. **The sixteenth round showed they read so high that the buckets sum to 2699 µs inside a
+container measured at 1817 µs**, i.e. the probe dominates the per-call column and the table cannot be
+added up. It names PLACES that cost something; the sizes have to come from removing a cause and watching
+the frame, or from a standalone measurement. See that round's section.)
 
 **The fix this round took is the bottom row.** `next_key`'s path counter and `start_slot`'s dirty check
 were still `std::HashMap`/`HashSet<u64>` — SipHash on keys the composer had already mixed, in a path
@@ -802,6 +804,80 @@ its numbers; and this one is a scene whose "cold" means a brand-new composer eve
 is consistent enough to be worth stating plainly: **the label is a hypothesis, and the thing to check
 first is what the code under the timer does.**)
 
+### A sixteenth round: the content-closure split was measuring itself
+
+This round was going to remove `Box::new(policy)` — the last per-container allocation the thirteenth fix's
+split named (~135 µs on a cold frame, 42 ns/call). Instead it established that **most of that table is
+instrumentation**, and that the target is not worth what removing it costs.
+
+#### The split's own arithmetic refutes it
+
+The thirteenth fix's buckets, all of them living INSIDE the content closure:
+
+| bucket | µs/frame |
+|---|---|
+| `start_restartable_group` | 1441 |
+| `changed()` | 503 |
+| `Box::new(policy)` | 135 |
+| `end_restartable_group` | 305 |
+| `next_key()` | 212 |
+| `end_node()` | 103 |
+| **sum** | **2699** |
+
+and the content closure it is a split OF, measured by a single timer pair around `content(ctx)`:
+**1817 µs**. The parts exceed the whole by 48%. That cannot happen with real work, and the difference is
+exactly the instrumentation: ~24 800 measurement points (3201 groups + 8803 `changed` + the rest) at
+~35 ns per point — two `Instant::now()` calls plus two thread-local accumulations — is ~880 µs.
+
+So the per-call column of that table is dominated by the probe, not by the framework, and **the buckets
+cannot be added up**. What the split IS still good for is what it was actually used for: naming PLACES
+that cost something (the hashers, the `Modifier` clone, the parameter boxes were all real, and each was
+confirmed by the frame moving when its cause was removed). What it cannot do is size them.
+
+That is a lesson worth stating plainly, because it is the same shape as the artifacts this document
+already records: **an instrument that costs more than the thing it measures reports itself.**
+
+#### What the honest sizes are
+
+Two ways to get a size that is not the probe's, both used in the rounds that followed the split — and
+neither of them is "read the bucket":
+
+* **Remove the cause and watch the frame.** The `Modifier` clone: −8% on a cold frame when it stopped
+  being copied. The parameter boxes: −4% on a one-row update when they stopped being allocated.
+* **Measure the operation standalone.** This round did that for the one target left, because its
+  reported size was the smallest and the doubt was largest:
+
+| standalone, 100 000 iterations, best of 9 | ns/call |
+|---|---|
+| the probe's own enabled path, with the flag a compile-time constant | 0.3 — a CONTROL, not a measurement |
+| `Box::new(BoxLayout::new())` + drop | **27.0** |
+
+The first row is why the harness is only good for the second one: with the enable flag foldable, the
+compiler deletes the timer entirely, so it cannot price the probe that way. The real per-point cost comes
+from the arithmetic above (~880 µs ÷ ~24 800 points ≈ 35 ns), which needs no timer to be believed.
+
+So the allocation is real: 3201 of them on a cold frame is ~86 µs, not 135. Real, and smaller.
+
+#### Why `Box::new(policy)` was not taken
+
+86 µs, and only on frames that Enter containers — an idle frame allocates none, and a one-row update
+allocates one. Removing it needs one of two things, both worse than the prize:
+
+* **Compose writes into the arena's policy pool.** The pool is `Vec<Box<dyn MeasurePolicy>>` with a free
+  list that `materialize` allocates from; a slot would have to remember its index and overwrite the
+  pooled box in place when the policy's concrete type is unchanged (which it is, every frame, for every
+  component). This puts arena writes inside the compose phase — the separation the code documents
+  deliberately, and the thing that currently makes compose's panic rollback tractable — and it needs its
+  own rules for a type change, a slot that disappears, and a panic mid-compose.
+* **Inline storage for small policies.** All the built-in policies are 4-24 bytes (`BoxLayout` is one
+  enum, `ColumnLayout` four fields), so a small-buffer type would remove the allocation outright. That is
+  hand-written unsafe code — or a new dependency, in a workspace that has kept its dependency list
+  deliberately short — for 2% of a cold frame and nothing on a steady-state one.
+
+Recorded rather than taken, with the numbers that justify the call. If a future round needs it, the
+decision to make first is not "how do I remove the allocation" but "is compose allowed to write to the
+arena", and the answer to that one belongs in `docs/architecture-audit.md`, not here.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -819,8 +895,13 @@ frame-level tables as the sanity check.
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
-| the row loop (800 reads + 800 Skip decisions) | — | ~490 µs |
-| **compose total** | **~300 µs** | **~840 µs** |
+| the row loop (800 reads + 800 Skip decisions) | — | ~415 µs |
+| **compose total** | **~420 µs** | **~832 µs** |
+
+Those totals are the frame-level `compose only` arms (best of eight) rather than a sum of the buckets
+above, which are instrumented and were taken in different rounds; the row-loop figure is the control
+scene's difference (`container dirty` minus `idle`: 835 − 420 µs). An earlier version of this table read
+~300 / ~840 and was stale by three rounds.
 
 The cold frame's split is different from both columns above, because everything in it runs. The
 thirteenth fix measured it as: content 1817 µs (of which `start_restartable_group` 1441, `changed` 503,
@@ -958,16 +1039,19 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   changed nothing should keep them instead of rebuilding them; the round that tried it established that
   "changed nothing" is not a property anything in this codebase tracks, and the attempt is documented in
   its own section below. What survives is the diagnosis, not the code.
-- **The row loop's ~490 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
-  being the container's own re-entry). Each iteration now also runs a small claim verification for its
+- **The row loop's ~415 µs**: 800 iterations at ~520 ns (105 ns read, ~330 ns group machinery, the rest
+  being the container's own re-entry). It has come down from ~490 µs as the per-node costs above were
+  removed, which is the shape to expect: the loop is where those costs were paid 800 times. Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
   descriptor path did — the loop was never in the descriptor path.
-- **The content closure's remaining Enter-path cost** (found by the thirteenth fix's split; two of the
-  three are now taken — the per-container `Modifier` copy by the fourteenth, `changed()`'s parameter
-  boxing by the fifteenth): the per-container `Box::new(policy)` (~135 µs). It needs `NodeDesc` to carry
-  a policy INDEX instead of a box so compose can allocate into the arena's policy pool directly, which
-  changes the pool's invalidation rules (a node's policy index is replaced when its type changes); the
-  thirteenth fix's section records the shape.
+- **`Box::new(policy)`, ~86 µs on a cold frame — MEASURED AND NOT TAKEN.** The thirteenth fix's table
+  said 135 µs; the sixteenth round measured the operation standalone at 27 ns/call (3201 containers =
+  ~86 µs) and established that the difference was the probe. It is paid only by frames that Enter
+  containers — an idle frame allocates none, a one-row update one — and removing it needs either compose
+  writing into the arena's policy pool (breaking the separation that makes compose's rollback tractable,
+  with new rules for a policy type change, a vanished slot and a mid-compose panic) or hand-written
+  inline storage for small policies (all the built-ins are 4-24 bytes) in a dependency-light workspace.
+  The sixteenth round's section has both designs and the numbers behind the call.
 - **A cold frame's parameter boxes are not recoverable** — they are the storage the slots keep, one per
   declaring group, and the fifteenth fix's section explains why a fresh composer has nothing to recycle.
   Anything that removes them has to remove the per-group parameter storage itself, which is a different
@@ -997,7 +1081,10 @@ fourteenth nearly shipped a test that could not fail: it called `layout` between
 comparing, which refilled the very index the test was written to check, so it passed with the fix
 disabled — instrumenting the test instead of reasoning about it is what showed the real sequence
 (compose 2 skips on the index the frame's layout left; compose 3 is the one that would have re-entered
-everything).
+everything). The sixteenth changed no code at all: it caught the thirteenth round's own split reporting
+its instrumentation (parts summing to 2699 µs inside a 1817 µs container), priced the one target left
+standalone, and closed it as not worth its design cost — which is a result too, and the one this
+document's method is for.
 
 ## Re-running any of this
 
