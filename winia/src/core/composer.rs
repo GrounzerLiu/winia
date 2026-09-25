@@ -22,6 +22,7 @@ use std::any::Any;
 use std::cell::Cell;
 use std::cell::RefCell;
 
+
 /// RAII guard：语句作用域结束（含 return/break/continue/panic 提前退出）自动 pop_stmt。
 /// 零大小——Drop 直接操作 thread_local 栈（不持有 &mut ctx，无借用冲突）。
 pub struct StmtGuard;
@@ -929,7 +930,7 @@ struct ComposeRuntimeSnapshot {
     node_stack: Vec<usize>,
     group_skip_stack: Vec<bool>,
     overlay_active: HashMap<u64, bool>,
-    entered_compose_keys: HashSet<u64>,
+    entered_compose_keys: crate::layout::node::SlotKeySet,
     reused_nodes: crate::layout::node::NodeMarks,
 }
 
@@ -1468,6 +1469,28 @@ impl SlotTable {
         &self.path
     }
 
+    /// An upper bound on how many layout nodes this composition can materialize: every slot in the
+    /// tree, plus the root. Used by `materialize` to size the arena ONCE instead of letting it grow,
+    /// and by `collect_live_keys` for the live-key set.
+    ///
+    /// Computed by SUMMING the root's children's subtree counts, not by reading the root's own
+    /// `children_count`: that field is written by `end_slot`, and the root slot is never ended, so it
+    /// holds its constructor value (1) forever. A first version of this read it directly and every
+    /// "reserve" built on it asked for 2 nodes — which is how a reserve can look like a win (the
+    /// hasher it shipped with was doing the work) and still be a no-op (`docs/benchmarks.md`).
+    ///
+    /// The bound over-counts (scope slots materialize nothing, and a claimed subtree allocates
+    /// nothing), which is the safe direction: capacity that goes unused costs address space, not work,
+    /// and a reserve against capacity already sufficient is a comparison.
+    pub(crate) fn slot_count_bound(&self) -> usize {
+        1 + self
+            .root_slot
+            .children
+            .iter()
+            .map(|child| child.children_count)
+            .sum::<usize>()
+    }
+
     /// Collect slot keys that remain part of the current composition. A skipped
     /// subtree is retained structurally even though its descendants were not visited.
     ///
@@ -1498,7 +1521,7 @@ impl SlotTable {
         }
 
         // An upper bound: every slot in the tree, whether or not it turns out to be live.
-        out.reserve(self.root_slot.children_count + 1);
+        out.reserve(self.slot_count_bound());
 
         let mut skipped = 0usize;
         for child in &self.root_slot.children {
@@ -1881,7 +1904,11 @@ pub struct Composer {
     /// layout 依赖对应的 signal handle；compose 与 layout 共享一个队列但独立收敛。
     layout_signal_handles: HashMap<StateId, Arc<StateSignal>>,
     /// 帧内实际执行过的 compose slot；用于按 Enter/Skip 语义收敛读取集合。
-    entered_compose_keys: HashSet<u64>,
+    ///
+    /// `SlotKeySet` rather than a plain `HashSet`: this is keyed by `slot_key` and takes one insert per
+    /// ENTERING group — 4000 of them on a cold frame, with the std hasher on keys the composer had
+    /// already mixed (`docs/benchmarks.md`).
+    entered_compose_keys: crate::layout::node::SlotKeySet,
     /// 布局期每个 slot 的读取集合；测量命中时替换，常量折叠时保留。
     layout_slot_reads: HashMap<u64, HashSet<StateId>>,
     /// 布局依赖反向表（state_id → slot_key；由 layout_slot_reads 重建）
@@ -2021,7 +2048,7 @@ impl Composer {
             compose_slot_reads: HashMap::new(),
             signal_handles: HashMap::new(),
             layout_signal_handles: HashMap::new(),
-            entered_compose_keys: HashSet::new(),
+            entered_compose_keys: crate::layout::node::SlotKeySet::default(),
             layout_slot_reads: HashMap::new(),
             layout_deps: HashMap::new(),
             layout_dirty_keys: HashSet::new(),
@@ -2471,7 +2498,11 @@ impl Composer {
         let before = self.compose_slot_reads.len();
         self.compose_slot_reads.retain(|key, _| live_keys.contains(key));
         changed |= self.compose_slot_reads.len() != before;
-        let entered = self.entered_compose_keys.clone();
+        // TAKEN rather than cloned: this is the last reader of the set in the frame (the next compose
+        // clears it), and on a cold frame it holds every entering key — 4000 of them. A panic after
+        // this point restores the set from the frame's runtime snapshot (`capture_compose_runtime`),
+        // so the take is not observable to a rollback either.
+        let entered = std::mem::take(&mut self.entered_compose_keys);
         for key in entered {
             let new_set = match reads_by_slot.remove(&key) {
                 Some(reads) if !reads.is_empty() => Some(reads),
@@ -6151,6 +6182,65 @@ fn test_skip_recovery_structure_change_by_state() {
     build(&mut composer, &holder);
     let r = composer.layout_root_idx().unwrap();
     assert_eq!(composer.arena_nodes()[r].children.len(), 2, "帧3 应恢复 A+B");
+}
+
+/// `SlotTable::slot_count_bound` must be an UPPER bound on what materialize builds.
+///
+/// Two `Vec::reserve` calls are sized from it — the layout arena in `materialize` and the live-key set
+/// in `collect_live_keys` — and both are only worth anything if the number is at least as large as what
+/// is about to be built. The first version of this test's target read `root_slot.children_count`, which
+/// `end_slot` maintains for every slot EXCEPT the root (nothing ever ends the root), so it held its
+/// constructor value of 1: both reserves asked for two elements and neither ever did anything, while
+/// the hasher that shipped with them took the credit. This asserts the bound against the tree that
+/// materialize actually produced, which is the property the callers rely on.
+#[test]
+fn test_slot_count_bound_is_an_upper_bound_on_materialized_nodes() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    for rows in [1usize, 8, 64] {
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            // The container carries a size that CHANGES with `rows`, which is what makes it Enter: with
+            // an unchanged parameter the group Skips and the leaves below are never composed — a first
+            // version of this test built 2 nodes for all three shapes and therefore asserted nothing.
+            match ctx.start_restartable_group(
+                key,
+                Modifier::new().size(100.0 + rows as f32, 100.0),
+                crate::layout::BoxLayout::new(),
+            ) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    for _ in 0..rows {
+                        let leaf = ctx.next_key();
+                        ctx.start_leaf(leaf, Modifier::new().size(10.0, 10.0));
+                        ctx.end_node();
+                    }
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+        let bound = composer.slot_table.slot_count_bound();
+        let built = composer.arena.nodes.len();
+        assert!(
+            built > rows,
+            "{rows} rows: materialize built only {built} nodes — the frame skipped, so this test would \
+             assert nothing (its first version did exactly that)"
+        );
+        assert!(
+            bound >= built,
+            "{rows} rows: the bound says {bound} nodes but materialize built {built} — a reserve sized \
+             from it asks for less than the frame needs, which is how both of this round's reserves came \
+             out as no-ops"
+        );
+        // And it must still be a BOUND, not a constant: the slot tree for N leaves holds the container,
+        // the leaves, and the group's own slot.
+        assert!(
+            bound <= built * 2 + 4,
+            "{rows} rows: the bound ({bound}) is far above what was built ({built}) — it is meant to be \
+             the slot tree's node count, not a constant"
+        );
+    }
 }
 
 /// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is

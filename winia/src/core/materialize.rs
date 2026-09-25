@@ -97,6 +97,10 @@ pub(crate) fn materialize(composer: &mut Composer) {
         crate::core::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
     }
     composer.arena.root = None;
+    // Size the arena before building into it: `alloc` pushes, and a node `Vec` growing 0 → 4000 does it
+    // by doubling, moving every node already in it (~500 bytes each) about a dozen times. See
+    // `NodeArena::reserve_nodes`.
+    composer.arena.reserve_nodes(composer.slot_table.slot_count_bound());
     for desc in descs {
         materialize_node(composer, desc, None);
     }

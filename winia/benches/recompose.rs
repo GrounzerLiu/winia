@@ -646,7 +646,6 @@ fn main() {
         container_dirty();
         return;
     }
-
     scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
     println!();
     scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
