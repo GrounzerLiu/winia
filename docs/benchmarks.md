@@ -481,6 +481,50 @@ walk is where the memory traffic is. It is kept anyway (one traversal, one place
 diagnostic lives, and no second signature to keep in sync), but it is recorded here as a null result
 rather than dressed up as a win. The hasher is what the ~100 µs in the table above came from.
 
+### A tenth attempt: skip the map rebuild when nothing changed — REVERTED
+
+The largest item left on the layout side was the fused map walk (~220 µs per frame, ~29% of an idle
+frame). The maps are a pure function of the arena tree, so a frame in which the tree did not change —
+nothing entered, nothing measured — should keep them. That is the shape of every fix in this document
+so far, and it was written, measured and **reverted**: the code is not in the tree, and this section is
+what the attempt produced.
+
+The reason is not that it was slow to write. It is that **"the frame changed nothing" is not a property
+any part of this codebase maintains**, and the cache depends on node fields written by five different
+subsystems. The signals the attempt added (`arena.structural_version` for identity, `materialize`'s
+touch flag, the measurement keys for measurement) each looked sufficient, and each was refuted by the
+test suite in turn:
+
+1. **A layout with no root armed the validity flag while leaving the maps empty.** With the arena's
+   nodes still present, a later frame whose root came back *without allocating* (a test assembling a
+   tree by hand) passed the check with empty maps and kept them. 58 tests failed on that one line.
+2. **`HashMap::drain()` empties the map.** The first version of "keep the index when the frame was
+   untouched" kept nothing, because the loop that reclaims removed nodes had already drained it. The
+   switch suite caught it (text vanished).
+3. **`materialize` has an early-return path that never reaches `materialize_node`** — the frame that
+   tears the tree down when the content produces no descriptors. `touched` stayed false while the whole
+   tree went away: measured on the snackbar's teardown frame, six index entries, none of them reachable
+   from the root.
+4. **Focus is written outside compose and layout.** `focus_next`/`focus_prev` set `node.focused`, and the
+   cache carries `focused`. Two UI tests that press Tab (the range slider's keyboard model, the modal
+   overlay's) failed: a stale cache restored `focused: false` over the focus the app had just set. The
+   debug-only equivalence check did not catch this one either, which is the important part — the net that
+   had been catching the others has a hole of its own.
+
+Every one of those was fixable, and after the first three the suite was green (1060 lib tests). The
+fourth is what settled it: the list of subsystems whose writes the cache must observe is *open* —
+materialize, measure, focus routing, shared-element retention, the reclaim path — and the cost of
+missing one is silent stale state in the area whose comments already record two rounds of dup-key
+panics and a ghost that painted nothing. The per-frame saving does not buy that.
+
+**What the finding points at instead**, if this is ever attempted again: stop asking "did anything
+change this frame?" (a global question nothing maintains) and make the cache invalidate **per node** —
+the same marks that already work for identity. `reused_nodes` is the proof this is expressible: a bit
+vector over dense arena indices, set by whoever puts a node into the frame. The same shape would work
+for the cache: whoever writes a field the cache carries marks that node, and `layout` updates only the
+marked entries instead of rebuilding all of them. That is local, it fails loudly (a missing mark leaves
+one node's cache stale, not the frame's), and it does not need any new global invariant.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -621,14 +665,11 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   thread-local) and buys ~1% of the frame, so it waits for a reason.
 - **`collect_live_keys`: ~100 µs per frame**, a whole-slot-tree walk producing the live-key set the two
   reconciles consume. It is the input to the guards above, so it is the next thing to make incremental.
-- **Layout's fused map walk, ~220 µs per frame**: it still rebuilds both whole-tree maps from the arena
-  every frame, for a frame in which measurement folded at 0.01 µs. The entries are small, the hashing is
-  cheap, the traversal is one pass — what is left is not making the walk faster but not making it at
-  all: both maps are functions of the tree, so a tree that did not change shape and measured nothing
-  has the same maps it had last frame. Doing that incrementally means deciding who invalidates them
-  (materialize knows which nodes it claimed and allocated; layout knows which it re-measured), and it
-  needs the same care the fourth fix took around rollback. It is the largest single item left on the
-  layout side.
+- **Layout's fused map walk, ~220 µs per frame — attempted and REVERTED**, which is worth recording
+  because the target looks so obviously winnable. Both maps are functions of the tree, so a frame that
+  changed nothing should keep them instead of rebuilding them; the round that tried it established that
+  "changed nothing" is not a property anything in this codebase tracks, and the attempt is documented in
+  its own section below. What survives is the diagnosis, not the code.
 - **The row loop's ~570 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
@@ -645,7 +686,9 @@ found by measuring one bucket and finding something else inside it. The seventh 
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
 whose planned approach measured FALSE before it was written (see its section), which is worth knowing:
-the plan was on the list for two rounds and one probe retired it in an afternoon.
+the plan was on the list for two rounds and one probe retired it in an afternoon. The tenth went the
+other way — written, measured green on the library suite, then reverted when the UI suite found the
+fourth subsystem the cache depends on — and that one is written up for whoever tries it next.
 
 ## Re-running any of this
 
