@@ -40,31 +40,32 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 651 | 60 | 94 |
-| 200 | 1587 | 235 | 375 |
-| 800 | 6442 | 994 | 1652 |
+| 50 | 538 | 48 | 81 |
+| 200 | 1391 | 194 | 328 |
+| 800 | 6026 | 852 | 1542 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 732 | 77 | 109 |
-| 200 | 4757 | 324 | 467 |
-| 800 | 25764 | 2213 | 2917 |
+| 50 | 711 | 64 | 96 |
+| 200 | 4764 | 266 | 409 |
+| 800 | 25960 | 1870 | 2662 |
 
-16x the rows costs ~17x an idle frame and ~18x a one-row update. In the original figures recorded here
+16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
 quadratic term, and what remains is the per-frame walk over the tree, which is what the design says it
 is. Entering ONE group still does not make the frame cheap: the walk that finds that group is the frame.
 
-Two runs were taken for these figures and they agreed to a few percent on the box scene; the text scene
-is the noisier of the two, which is why this document quotes the fast sample rather than treating a
-single text figure as a precise one.
+Three runs were taken for these figures: two agreed to within a few percent on the box scene and the
+third was a loaded machine (its text cold frame read 37 ms against 26 ms, and every figure in it was
+worse — noise only ever adds time, which is why the fast sample is the headline). The text scene is
+also intrinsically the noisier of the two, so a single text figure should not be read as precise.
 
 The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 971 | 275 |
-| one row moved | 1518 | ~130 |
+| idle | 830 | 272 |
+| one row moved | 1285 | ~405 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -72,12 +73,12 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 971 | 0 |
-| container dirty, every row Skips | 1539 | 0 |
-| one row dirty (the same loop + one rebuild) | 1437 | 1 |
+| idle (container Skips, so the loop does not run) | 830 | 0 |
+| container dirty, every row Skips | 1342 | 0 |
+| one row dirty (the same loop + one rebuild) | 1376 | 1 |
 
-The loop over 800 rows costs **~570 µs**, and re-entering one row inside it costs **nothing measurable**
-(-100 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
+The loop over 800 rows costs **~510 µs**, and re-entering one row inside it costs **nothing measurable**
+(~30 µs here, i.e. run-to-run noise). The update is free relative to the walk that finds it.
 Instrumented attribution of that ~570 µs: 84 µs of state reads (~105 ns each, 800 of them) and ~290 µs
 of group machinery, the rest being the container's own entry plus rows materializing one by one instead
 of as one cached subtree. (The loop's own cost is measured against the *compose-only* idle figure, so it
@@ -370,22 +371,80 @@ is now one pass per frame, and the one-row figure is 1652 µs. Worth recording b
 is measured against the one-row frame as much as the idle one, and a list is exactly where a
 per-subtree cost stops being cheap.
 
+### An eighth fix: the prune's per-parent sets, and a premise that turned out false
+
+`prune_stale_child_links` runs on every compose and checks one thing per node: that a parent's child
+list has no duplicates, and that an unreachable parent keeps no list at all. It did the duplicate check
+with a `HashSet` **per parent** plus a filtered `Vec` per parent — at 800 rows, ~1600 allocations per
+frame to check lists that are almost always already correct, measured at **187 µs** of a ~1000 µs idle
+frame.
+
+It is now a generation stamp per node (indices are dense, so a `Vec<u64>` indexed by node index):
+`stamp += 1` per parent, a child is a duplicate if its stamp already equals the current one, and a
+parent whose list is clean never allocates or rewrites anything. The stamp is `u64` on purpose — it
+increments once per parent per frame, so at 60 fps with 1000 parents a 32-bit counter would wrap in
+about 20 hours of continuous running.
+
+| instrumented, boxes 800 rows | before | after |
+|---|---|---|
+| `prune_stale_child_links` | 187 µs | **16 µs** |
+
+| frame-level, boxes 800 rows (best of three runs) | before | after |
+|---|---|---|
+| idle frame | 994 µs | **852 µs** (-14%) |
+| one row updated | 1652 µs | **1530 µs** (-7%) |
+| cold frame | 6442 µs | 6026 µs (-6%) |
+
+#### The premise I went in to check, and why it failed
+
+The documented plan for this function was to make it **conditional**: "skipping it on frames that
+entered nothing is plausible and unproven — what needs establishing first is whether a frame with no
+Entered node can create a stale listing at all". So the first thing this round did was measure that,
+with a temporary probe in the function that logged every frame it REPAIRED (and, in the second pass,
+every frame in the low-entered band, so there would be a denominator) plus the thread name, which under
+`cargo test` is the test name.
+
+Over the full library suite: **121 repairing frames** (2079 logged in the band). Sorting them by how
+much was entered:
+
+| entered | repairing frames | of those, real scenarios |
+|---|---|---|
+| 0-2 | 5 | `ui::snackbar` (tree torn down, `root=None`), `ui::animated_visibility` |
+| 4 | 1 | `ui::animated_visibility::tests::siblings_survive_visibility_toggle` |
+| 6-45 | 115 | every navigation, shared-element and lazy-scroll test |
+
+The premise is false, and the counterexample is not a synthetic one: an `AnimatedVisibility` retiring
+its subtree repairs a stale listing on a frame where **4** groups entered (its own content is gone,
+its siblings are skipped, and only the tick that finishes the exit animation did anything). A rule of
+"skip when `entered <= 2`" would have survived this suite and broken the first time that scenario
+nested one group deeper. Given that this function's failure mode is a `[dup-key]` panic or a ghost that
+paints nothing — and that the codebase's own comments record two rounds of exactly that — the
+conditional was dropped and the function was made cheap instead, which needs no new precondition at
+all and took the same 187 µs off the frame.
+
+The probe is gone (it was temporary), and the measurement it produced is the reason this section
+exists: **a premise can be checked cheaply enough that checking it is the first step, not a
+justification for skipping the work.**
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
 states that matter: every group Skipped, and one row's state moved. The compose column is after the
-seventh fix, the layout column after the fifth (the layout side is untouched by the sixth and seventh).
+eighth fix, the layout column after the fifth (the layout side is untouched by the sixth through
+eighth). These buckets are instrumented figures, so they are immune to the load that makes one
+frame-level run differ from another — they are the better evidence for what a change did, with the
+frame-level tables as the sanity check.
 
 | bucket | idle (0 entered) | one row updated |
 |---|---|---|
 | `materialize` (now: verify-and-claim walk) | ~100 µs | ~100 µs |
-| `prune_stale_child_links` (arena walk) | ~130 µs | ~150 µs |
+| `prune_stale_child_links` (arena walk, after the eighth fix) | ~16 µs | ~16 µs |
 | `collect_live_keys` | ~100 µs | ~100 µs |
 | `register_modifier_deps` (arena walk) | ~30 µs | ~31 µs |
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
-| the row loop (800 reads + 800 Skip decisions) | — | ~570 µs |
-| **compose total** | **~430 µs** | **~1050 µs** |
+| the row loop (800 reads + 800 Skip decisions) | — | ~510 µs |
+| **compose total** | **~430 µs** | **~950 µs** |
 
 | layout, same tree | idle, before the fourth fix | idle, after the fifth |
 |---|---|---|
@@ -400,9 +459,9 @@ What is left of an idle frame is bookkeeping *about* the tree rather than work o
 `prune_stale_child_links` walks the whole arena as a defensive repair, `collect_live_keys` walks the
 slot tree, `materialize`'s verification walk visits both trees, and layout rebuilds the two whole-tree
 maps. None of it does anything with the rows that did not change — they are the next round's targets,
-and they are listed below. Note that the row loop's own cost now reads larger than the loop's
-instrumented parts, because the compose total it is measured against came down by the seventh fix while
-the loop itself did not change.
+and they are listed below. Note that the row loop's own cost reads larger than the loop's instrumented
+parts: it is measured against the compose-only idle figure, which came down several times while the
+loop itself did not change.
 
 ### Read placement still does not matter
 
@@ -502,12 +561,10 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   claim into a single comparison, at the cost of a new invariant to maintain in `end_slot` and to
   cross-check in debug builds. That is the next step if this path matters again; right now it is the
   second-largest item on the compose side, behind `prune_stale_child_links`.
-- **`prune_stale_child_links`: ~130 µs per frame.** A defensive whole-arena walk, and the current
-  comment insists it runs for EVERY compose (moving it into an early-returning function once took the
-  repair off the default path and a stale listing reached the `[dup-key]` guard). Skipping it on frames
-  that entered nothing is plausible and unproven: what needs establishing first is whether a frame with
-  no Entered node can create a stale listing at all — a shared-element flight ending is the case to
-  check, since `retain_shared_sources` re-parents nodes on frames where nothing recomposed.
+- **`prune_stale_child_links`'s remaining ~16 µs**: what is left after the eighth fix is the
+  reachability walk plus two buffer allocations per frame (a `Vec<bool>` and the stamp vector). Both
+  could be reused across frames instead of reallocated — that needs a home on the `Composer` (or a
+  thread-local) and buys ~1% of the frame, so it waits for a reason.
 - **`collect_live_keys`: ~100 µs per frame**, a whole-slot-tree walk producing the live-key set the two
   reconciles consume. It is the input to the guards above, so it is the next thing to make incremental.
 - **`collect_nodes`'s remaining ~280 µs and the `collect_node_keys` index beside it (~120 µs)**: both
@@ -521,14 +578,17 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   descriptor path did — the loop was never in the descriptor path.
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The six defects that *were* bugs —
-a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
+and each is one round of work with this bench as the measuring stick. The seven defects that *were* bugs
+— a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
-about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, and two
-per-node hash lookups in `materialize`'s claim path — were all found by measuring one bucket and finding
+about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
+per-node hash lookups in `materialize`'s claim path, and ~1600 per-frame allocations in the prune to
+check lists that are almost always already correct — were all found by measuring one bucket and finding
 something else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
-the frame was treating "the index is empty" as a proxy for something else.
+the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
+whose planned approach measured FALSE before it was written (see its section), which is worth knowing:
+the plan was on the list for two rounds and one probe retired it in an afternoon.
 
 ## Re-running any of this
 
