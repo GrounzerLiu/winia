@@ -42,7 +42,7 @@ These are the figures after the fixes in this document.
 |---|---|---|---|
 | 50 | 236 | 33 | 63 |
 | 200 | 983 | 134 | 260 |
-| 800 | 4829 | 597 | 1201 |
+| 800 | 4594 | 597 | 1189 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
@@ -50,10 +50,10 @@ These are the figures after the fixes in this document.
 | 200 | 4876 | 198 | 345 |
 | 800 | 26168 | 1618 | 2326 |
 
-The cold column came down most in the twelfth fix (below): a cold frame builds every node, so it was the
-one paying for the arena's growth by doubling. (The 800-row cold and idle cells are the previous round's
-best of eight; the thirteenth fix's own eight runs put them at 4981 / 608, inside the machine's spread —
-that fix's win is in the one-row column, where it is the frame's ENTER count that pays for it.)
+The cold column has moved in the last three fixes: the twelfth stopped the arena growing by doubling,
+the thirteenth removed the last per-node SipHashes, the fourteenth the per-container modifier copy — all
+three are Enter-path costs, which is why the cold frame (every group entering) moves most and the idle
+frame (no group entering) does not move at all.
 
 16x the rows costs ~18x an idle frame and ~20x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
@@ -696,6 +696,62 @@ reasoning written down first:
   instead of a box, which changes the policy pool's invalidation rules (a node's policy index is
   replaced when its type changes).
 
+### A fourteenth fix: the skip decision reads the node instead of a copy of its modifier
+
+The largest item the content-closure split named. Every Entering container cloned its whole `Modifier`
+(a `Vec` of elements, plus any strings they carry) into the slot so the NEXT frame's Skip decision could
+compare against it: ~93 ns per container, ~297 µs on a cold frame. The clone is gone, and so is the
+field it filled (`Slot::prev_modifier` — one writer, one reader).
+
+The comparison now reads the modifier off the ARENA NODE, found through `prev_node_by_key`:
+
+```rust
+match self.prev_node_by_key.get(&key) {
+    Some(&idx) => modifier.param_eq(&self.arena.nodes[idx].modifier),
+    None => false, // no basis for comparison: Enter, which is what a missing prev_modifier did
+}
+```
+
+That is the SAME value, not an approximation. During compose the node still holds what materialize
+applied last frame — materialize runs at the END of compose, and the only other writer of an arena
+node's modifier is materialize itself (checked across the crate: every other `.modifier =` is a
+component builder's own field). Which is why this was preferred over the tempting alternative of storing
+a digest of the comparable parameters: **a digest can only ever answer "unchanged" wrongly**, and
+"unchanged" here means the container Skips while keeping a modifier that no longer matches — the one
+failure direction this code must not have. Reading the node removes the copy instead of approximating it.
+
+#### The refill that makes it work, and why it is free
+
+The index maps are consumed by materialize (its node loop removes each key it reuses, the compose tail
+drains and clears the rest) and rebuilt by `layout`. So between two composes in the SAME frame — which is
+exactly the shape the app's frame loop produces, since it composes repeatedly until its notification
+queue is quiet — the index starts EMPTY on the second pass. Without a fix, every container would find no
+node and Enter: a full re-run of the tree on every frame where a notification arrived mid-compose.
+
+`compose` therefore refills the index from the existing tree when it finds it empty. The refill costs
+nothing extra: it calls the same `collect_node_keys` walk that materialize's own repair would have done
+on those same frames, just earlier. `test_second_compose_in_a_frame_still_skips_unchanged_containers`
+pins it — and it is worth recording that the first version of that test called `layout` between the two
+composes, which refilled the index and hid the problem entirely (the test passed with the refill
+disabled); the failing pass was the THIRD, not the second. Instrumenting the test is what showed the
+real sequence: index 2 entries after the frame's layout → compose 2 skips (index still valid) → compose 3
+would Enter on an empty index.
+
+| frame-level, boxes 800 rows (best of eight) | before | after |
+|---|---|---|
+| **cold frame** | 4981 µs | **4594 µs** (-8%) |
+| one row updated | 1201 µs | **1189 µs** |
+| idle frame | 603 µs | 603 µs (flat — an idle frame never runs the Enter path) |
+
+The idle column being flat is the expected shape, not a shortfall: this cost is only paid by containers
+that Enter, and an idle frame enters nothing. A cold frame enters everything, which is why it moves.
+
+Two tests came with it, and they cover different halves. `test_container_modifier_comparison_skips_
+rebuilt_modifiers_and_enters_on_change` pins the comparison's SEMANTICS from the outside — a rebuilt
+modifier with the same numbers still Skips (content does not re-run), a changed number still Enters — and
+is written so that a version which only checked the Enter half would pass with the comparison removed
+entirely. The second pins the refill.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -716,10 +772,12 @@ frame-level tables as the sanity check.
 | the row loop (800 reads + 800 Skip decisions) | — | ~490 µs |
 | **compose total** | **~300 µs** | **~840 µs** |
 
-The cold frame's split (the twelfth fix's subject) is different from both columns above, because
-everything in it runs: content 1817 µs, materialize 1333 (of which the node loop 678 and the claim walk
-279), tail 343, live keys 69, prune 67 — compose 3321 µs; layout 1152 (measure 675, the map walk 254,
-transaction 35, rest 128).
+The cold frame's split is different from both columns above, because everything in it runs. The
+thirteenth fix measured it as: content 1817 µs (of which `start_restartable_group` 1441, `changed` 503,
+`end_restartable_group` 305, `next_key` 212, `end_node` 103, and `Box::new(policy)` 135 outside), plus
+materialize 1333 (node loop 678, claim walk 279), tail 343, live keys 69, prune 67 — compose 3321 µs;
+layout 1152 (measure 675, the map walk 254, transaction 35, rest 128). The fourteenth fix removed the
+`prev_modifier` clone from `start_restartable_group` (measured 297 µs of that 1441).
 
 | layout, same tree | idle, before the fourth fix | idle, after the ninth |
 |---|---|---|
@@ -854,23 +912,24 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
   descriptor path did — the loop was never in the descriptor path.
-- **The content closure's three Enter-path costs** (found by the thirteenth fix's split, none taken):
-  the per-container `Modifier` clone into `prev_modifier` (~297 µs on a cold frame), `changed()`'s
-  `Box::new(param.clone())` (~503 µs over 8803 calls), and the per-container `Box::new(policy)`
-  (~135 µs). All three need a redesign of the skip decision or of the parameter mechanism, and the
-  thirteenth fix's section records what each would have to solve — including which of the two ways to
-  remove the modifier copy carries the dangerous failure mode (a digest can only ever say "unchanged"
-  wrongly, and "unchanged" means a stale modifier).
+- **The content closure's remaining two Enter-path costs** (found by the thirteenth fix's split; the
+  third — the per-container `Modifier` copy — was taken by the fourteenth):
+  `changed()`'s `Box::new(param.clone())` (~503 µs over 8803 calls) and the per-container
+  `Box::new(policy)` (~135 µs). Both need a redesign — of the parameter mechanism, and of what
+  `NodeDesc` carries so compose can allocate into the arena's policy pool directly — and the thirteenth
+  fix's section records what each would have to solve. (The modifier copy's own section records the
+  digest trap, for whoever is tempted by a cheaper comparison of either one.)
 
 None of these is claimed as a bug: they are the cost of the current design, now visible and comparable,
-and each is one round of work with this bench as the measuring stick. The ten defects that *were* bugs
+and each is one round of work with this bench as the measuring stick. The eleven defects that *were* bugs
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
 per-node hash lookups in `materialize`'s claim path, ~1600 per-frame allocations in the prune to check
 lists that are almost always already correct, a SipHash on 8000 pre-mixed keys per frame, two
-`Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements), and a
-SipHash on the per-node path counters — were all found by measuring one bucket and finding something
+`Vec::reserve` calls sized from a field nothing maintains (so they asked for two elements), a SipHash on
+the per-node path counters, and a `Modifier` clone per Entering container kept only so the next frame
+could compare against it — were all found by measuring one bucket and finding something
 else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
@@ -880,7 +939,12 @@ other way — written, measured green on the library suite, then reverted when t
 fourth subsystem the cache depends on — and that one is written up for whoever tries it next. The
 eleventh produced a measurement artifact of its own (a residue count taken after the frame, when the
 markers that identify a skipped subtree have already been consumed) and then the shape that answered the
-question it was asked, which is why the invariant it pins down now has a test instead of a comment.
+question it was asked, which is why the invariant it pins down now has a test instead of a comment. The
+fourteenth nearly shipped a test that could not fail: it called `layout` between the two composes it was
+comparing, which refilled the very index the test was written to check, so it passed with the fix
+disabled — instrumenting the test instead of reasoning about it is what showed the real sequence
+(compose 2 skips on the index the frame's layout left; compose 3 is the one that would have re-entered
+everything).
 
 ## Re-running any of this
 
