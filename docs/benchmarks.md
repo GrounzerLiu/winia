@@ -40,15 +40,15 @@ These are the figures after the fixes in this document.
 
 | rows | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 538 | 48 | 81 |
-| 200 | 1391 | 194 | 328 |
-| 800 | 6026 | 852 | 1542 |
+| 50 | 581 | 43 | 78 |
+| 200 | 1227 | 176 | 304 |
+| 800 | 6430 | 757 | 1423 |
 
 | rows (text) | cold | idle | one row moved |
 |---|---|---|---|
-| 50 | 711 | 64 | 96 |
-| 200 | 4764 | 266 | 409 |
-| 800 | 25960 | 1870 | 2662 |
+| 50 | 727 | 55 | 89 |
+| 200 | 5054 | 241 | 368 |
+| 800 | 26071 | 1801 | 2386 |
 
 16x the rows costs ~18x an idle frame and ~19x a one-row update. In the original figures recorded here
 (before any of the fixes in this document) the same two ratios were 28x and 70x — the difference was a
@@ -64,8 +64,8 @@ The breakdown at 800 rows (boxes) says where it goes:
 
 | | compose | layout |
 |---|---|---|
-| idle | 830 | 272 |
-| one row moved | 1285 | ~405 |
+| idle | 784 | 222 |
+| one row moved | ~1200 | ~220 |
 
 and the control that splits composition's extra into "the walk" and "the update" — a state the
 CONTAINER reads moves, so the container re-enters and the row loop runs while every row's own parameter
@@ -73,7 +73,7 @@ is unchanged:
 
 | compose, boxes 800 rows | fast sample | groups entered |
 |---|---|---|
-| idle (container Skips, so the loop does not run) | 830 | 0 |
+| idle (container Skips, so the loop does not run) | 784 | 0 |
 | container dirty, every row Skips | 1342 | 0 |
 | one row dirty (the same loop + one rebuild) | 1376 | 1 |
 
@@ -426,6 +426,61 @@ The probe is gone (it was temporary), and the measurement it produced is the rea
 exists: **a premise can be checked cheaply enough that checking it is the first step, not a
 justification for skipping the work.**
 
+### A ninth fix: a hasher for the two layout maps, and a fusion that measured flat
+
+The two maps layout rebuilds every frame — the node cache (`slot_key` → `CachedNode`) and the reuse
+index (`slot_key` → arena index) — were `HashMap<u64, _>` with the std default hasher, i.e. SipHash-1-3
+on a `u64` that the composer had ALREADY mixed. At 800 rows that is ~4000 inserts into each map per
+frame, plus ~4000 lookups back in materialize.
+
+They now use `SlotKeyMap`, whose hasher is `(key ^ (key >> 32)) * FIB`. The multiply is Fibonacci
+hashing (one instruction); the xor before it is the part that matters, because a multiply propagates
+bits upward only — the LOW bits of a product depend only on the low bits of its input, and hashbrown
+indexes with the low bits while taking its control byte from the top 7. Folding the high half down first
+gives both ends of the result a dependency on the whole key.
+
+The hasher has a test, and building it was instructive enough to record. Two versions of that test were
+wrong before one was sharp:
+
+* v1 asserted the busiest bucket stayed within 4x the average. It failed — but the "failure" was my
+  threshold, not the hasher: 800 keys in 256 buckets have a worst bucket around **9 even for sha256**.
+  Recomputing the bound against a strong hash is what showed it.
+* v2 (loosened to 20x) passed… with a **pass-through hasher** deliberately installed. The reason is
+  worth knowing: `slot_key`s are pre-mixed by `mix_key`, so their low bits already spread, and a
+  pass-through is injective — every distinct key gets a distinct hash. The test could not see the
+  difference because it was measuring the same thing twice.
+* v3 is the sharp one, and it tests the property the comment claims: take 256 key pairs that differ ONLY
+  in bit 40 and compare the low 24 bits of their hashes. A pass-through collapses all 256 (the low bits
+  are identical), a bare multiply collapses all 256 (it cannot bring bit 40 down), and the shipped
+  hash collapses 0. The distribution half is kept too, explicitly labelled as "can only catch a total
+  collapse".
+
+| instrumented, boxes 800 rows, idle layout | before | after |
+|---|---|---|
+| both maps (cache + index) | ~300 µs | **~220 µs** |
+
+| frame-level, boxes 800 rows (best of three runs) | before | after |
+|---|---|---|
+| **idle frame** | 852 µs | **757 µs** (-11%) |
+| one row updated | 1530 µs | **1423 µs** (-7%) |
+| compose only, idle | 830 µs | **784 µs** (-6%) |
+| layout only, idle | 272 µs | **222 µs** (-18%) |
+
+The compose column moving is the same hasher seen from the other side: `materialize` looks up
+`prev_node_by_key` once per node and `prev_nodes` at every reused leaf.
+
+#### The fusion that did not pay
+
+The two maps were filled by two separate walks (`collect_nodes`, post-order so `dirty` bubbles up;
+`collect_node_keys`, pre-order for the index). They visit the same nodes along the same edges, so this
+round fused them into one (`collect_layout_maps`) sharing the duplicate-key failure path.
+
+**Measured: within noise.** The reason is visible once stated: the second walk runs immediately after
+the first over the same 4000 nodes and the same child vectors, so it is entirely cache-hot — the first
+walk is where the memory traffic is. It is kept anyway (one traversal, one place where the `[dup-key]`
+diagnostic lives, and no second signature to keep in sync), but it is recorded here as a null result
+rather than dressed up as a win. The hasher is what the ~100 µs in the table above came from.
+
 ## What the frame's O(tree) floor is made of (instrumented)
 
 With the per-call profiler, per frame, boxes 800 rows. The two columns are the same tree in the two
@@ -444,21 +499,20 @@ frame-level tables as the sanity check.
 | compose setup (snapshots, resets, pending drain) | ~70 µs | ~80 µs |
 | reconcile (after the third fix) | ~2 µs | ~68 µs |
 | the row loop (800 reads + 800 Skip decisions) | — | ~510 µs |
-| **compose total** | **~430 µs** | **~950 µs** |
+| **compose total** | **~380 µs** | **~900 µs** |
 
-| layout, same tree | idle, before the fourth fix | idle, after the fifth |
+| layout, same tree | idle, before the fourth fix | idle, after the ninth |
 |---|---|---|
 | `LayoutTransaction::new` | ~170 µs (149 of it the map clone) | ~15 µs |
 | `measure` | **~0.01-0.04 µs** — every node folds, nothing re-measures | same |
-| `collect_nodes` | ~680 µs | ~280 µs (106 of it the insert) |
-| `collect_node_keys` | ~261 µs | ~120 µs |
+| the fused map walk (`collect_layout_maps`) | ~940 µs as two walks | **~220 µs** |
 | the rest (dirty marks, deps, cleanup) | ~120 µs | ~90 µs |
-| **layout total** | **~1230 µs** | **~490 µs** |
+| **layout total** | **~1230 µs** | **~325 µs** measured on this arm (222 µs in the frame arm) |
 
 What is left of an idle frame is bookkeeping *about* the tree rather than work on it, on both sides:
 `prune_stale_child_links` walks the whole arena as a defensive repair, `collect_live_keys` walks the
-slot tree, `materialize`'s verification walk visits both trees, and layout rebuilds the two whole-tree
-maps. None of it does anything with the rows that did not change — they are the next round's targets,
+slot tree, `materialize`'s verification walk visits both trees, and layout's fused walk rebuilds the two
+whole-tree maps. None of it does anything with the rows that did not change — they are the next round's targets,
 and they are listed below. Note that the row loop's own cost reads larger than the loop's instrumented
 parts: it is measured against the compose-only idle figure, which came down several times while the
 loop itself did not change.
@@ -567,11 +621,14 @@ loaded machine, so the fast sample is the headline and the median is shown for s
   thread-local) and buys ~1% of the frame, so it waits for a reason.
 - **`collect_live_keys`: ~100 µs per frame**, a whole-slot-tree walk producing the live-key set the two
   reconciles consume. It is the input to the guards above, so it is the next thing to make incremental.
-- **`collect_nodes`'s remaining ~280 µs and the `collect_node_keys` index beside it (~120 µs)**: both
-  rebuild whole-tree maps from the arena every frame, for a frame in which measurement folded at
-  0.01 µs. The per-entry data is small now (106 µs is the insert of 4000 entries); making the *rebuild*
-  incremental, or having the cache borrow the arena instead of copying out of it, is what is left, and
-  it needs the same care the fourth fix took around rollback.
+- **Layout's fused map walk, ~220 µs per frame**: it still rebuilds both whole-tree maps from the arena
+  every frame, for a frame in which measurement folded at 0.01 µs. The entries are small, the hashing is
+  cheap, the traversal is one pass — what is left is not making the walk faster but not making it at
+  all: both maps are functions of the tree, so a tree that did not change shape and measured nothing
+  has the same maps it had last frame. Doing that incrementally means deciding who invalidates them
+  (materialize knows which nodes it claimed and allocated; layout knows which it re-measured), and it
+  needs the same care the fourth fix took around rollback. It is the largest single item left on the
+  layout side.
 - **The row loop's ~570 µs**: 800 iterations at ~600 ns (105 ns read, ~330 ns group machinery, the rest
   being the container's own re-entry). Each iteration now also runs a small claim verification for its
   row (one hash lookup plus a two-node walk), which is why the loop did not get cheaper when the
@@ -582,9 +639,9 @@ and each is one round of work with this bench as the measuring stick. The seven 
 — a read that was O(tracked signals), a layout snapshot that cloned fields layout cannot write, a reverse
 graph rebuilt when its forward graph had not moved, a layout snapshot that deep-copied two maps it was
 about to rebuild, a frame cache that carried a whole `Modifier` per node for one text comparison, two
-per-node hash lookups in `materialize`'s claim path, and ~1600 per-frame allocations in the prune to
-check lists that are almost always already correct — were all found by measuring one bucket and finding
-something else inside it. The seventh fix is a different shape of change (a design that removes work
+per-node hash lookups in `materialize`'s claim path, ~1600 per-frame allocations in the prune to check
+lists that are almost always already correct, and a SipHash on 8000 pre-mixed keys per frame — were all
+found by measuring one bucket and finding something else inside it. The seventh fix is a different shape of change (a design that removes work
 rather than a defect), and it produced its own two bugs on the way: both of them cases where the rest of
 the frame was treating "the index is empty" as a proxy for something else. The eighth is the one round
 whose planned approach measured FALSE before it was written (see its section), which is worth knowing:

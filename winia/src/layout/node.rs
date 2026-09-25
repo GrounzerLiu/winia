@@ -486,6 +486,52 @@ impl Default for LayoutNode {
 
 // ── NodeArena：布局树节点池（arena 索引树，节点跨重组复用）──
 
+/// The hasher for maps keyed by `slot_key`.
+///
+/// Every key in these maps has already been through the composer's `mix_key` (fnv with two multiplies)
+/// or is a composable's source hash, so they are not the sequential integers a std `HashMap` is tuned
+/// against — and they are not attacker-supplied either: the map is asked "which node had this key".
+/// What it must not do is spend SipHash's rounds on a `u64`. These maps are filled with an entry per
+/// node and read back once per node, every frame, and together they were the largest item left in an
+/// idle layout (`docs/benchmarks.md`).
+///
+/// The hash is `(key ^ (key >> 32)) * FIB`. The multiply (Fibonacci hashing, one instruction) spreads
+/// the key; the xor before it is not decoration — a multiply propagates bits upward only, so the LOW
+/// bits of a product are a function of the low bits of its input, and hashbrown indexes with the low
+/// bits (the top 7 go to the control byte). Folding the high half down first gives both ends of the
+/// result a dependency on the whole key. Measured against a strong hash (sha256, standing in for
+/// SipHash) on the key patterns this framework produces — a row per base, one base with sequential
+/// counters, nested mixes — the worst bucket in 256 is 8-9, against the strong hash's 9-10. (Checked
+/// rather than assumed because a bad hasher is silent: slower, not wrong.)
+#[derive(Default)]
+pub(crate) struct SlotKeyHasher(u64);
+
+impl std::hash::Hasher for SlotKeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    /// Fallback for a non-`u64` key. Nothing uses it, and it is deliberately honest rather than a
+    /// no-op: a future map that keys by something else should still hash, not collapse every key onto
+    /// one bucket.
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0 ^ 0xcbf29ce484222325;
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        self.0 = h;
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (n ^ (n >> 32)).wrapping_mul(0x9E3779B97F4A7C15);
+    }
+}
+
+/// A map keyed by `slot_key` (see [`SlotKeyHasher`]).
+pub(crate) type SlotKeyMap<V> =
+    std::collections::HashMap<u64, V, std::hash::BuildHasherDefault<SlotKeyHasher>>;
+
 /// A set of arena node indices, kept as a bit vector.
 ///
 /// `materialize` marks every node it claims (the frame's reuse decisions) and the compose tail asks
@@ -1130,6 +1176,101 @@ pub(crate) fn scene_to_node_local(
 mod tests {
     use super::*;
     use crate::modifier::Modifier;
+
+    /// The `SlotKeyMap` hasher must use the WHOLE key — and must not collapse a real key set.
+    ///
+    /// Both halves of this are performance properties, not correctness ones (a bad hasher still answers
+    /// correctly, just slowly), which is why they need a test: nothing else in the suite would notice a
+    /// "simplification" of the hasher, and the maps it serves are filled and read once per node per
+    /// frame (`docs/benchmarks.md`).
+    ///
+    /// The first part is the sharp one, and it is the reason the hash folds the high half down before
+    /// multiplying: a multiply propagates bits upward only, so the LOW bits of a product depend only on
+    /// the low bits of its input — and the low bits are what hashbrown indexes with. Two keys that
+    /// differ only in the high half therefore land in the same bucket under a bare multiply. `slot_key`s
+    /// are pre-mixed by the composer, so today's key set rarely looks like that; the test guards the
+    /// SHAPE of the hash rather than today's keys.
+    ///
+    /// The second part is deliberately loose, and the note is worth keeping: 800 keys in 256 buckets
+    /// have a worst bucket around 9 even for a perfect hash (sha256 measures 9-10 on these patterns, the
+    /// shipped hasher 8-9), so this half can only catch a total collapse — it is here to stop a hasher
+    /// that ignores its input, not to rank candidates.
+    #[test]
+    fn slot_key_hasher_uses_the_whole_key_and_spreads_real_keys() {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
+        fn mix_key(base: u64, c: u64) -> u64 {
+            let mut h: u64 = 0xcbf29ce484222325;
+            h ^= base;
+            h = h.wrapping_mul(0x100000001b3);
+            h ^= c;
+            h = h.wrapping_mul(0x100000001b3);
+            h
+        }
+
+        // A deterministic stand-in for the source hashes a composition produces.
+        let mut seed = 0x243F6A8885A308D3u64;
+        let mut next_base = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+
+        let hasher = std::hash::BuildHasherDefault::<SlotKeyHasher>::default();
+        let bucket = |k: u64| -> usize {
+            let mut h = hasher.build_hasher();
+            k.hash(&mut h);
+            h.finish() as usize
+        };
+
+        // Part 1: the high half must reach the LOW bits, which is what a bucket index is made of.
+        let base = next_base();
+        // 256 pairs, each differing only in bit 40 — high enough that a multiply (which propagates
+        // bits upward only) never brings it down, low enough that folding the top half down lands it
+        // inside the window compared below.
+        let collapsed = (0..256u64).filter(|i| {
+            let low = mix_key(base, i + 1) & 0xFFFF_FFFF;
+            (bucket(low) & 0xFF_FFFF) == (bucket(low | (1 << 40)) & 0xFF_FFFF)
+        }).count();
+        assert!(
+            collapsed <= 1,
+            "{collapsed} of 256 key pairs that differ only in the high half hashed into the same low \
+             24 bits — the hasher is dropping the top of the key, which is what the index and the \
+             control byte are both taken from (a bare multiply collapses all 256 of these, and a \
+             pass-through the same; measured)"
+        );
+
+        let mut patterns: Vec<Vec<u64>> = Vec::new();
+        // 800 rows, each its own composable call site.
+        patterns.push((0..800).map(|_| mix_key(next_base(), 1)).collect());
+        // One call site in a loop: one base, 800 sequential counters.
+        patterns.push((1..=800).map(|c| mix_key(base, c)).collect());
+        // Nested: the bases are themselves mixed keys.
+        patterns.push((0..800).map(|i| mix_key(mix_key(next_base(), i), 1 + (i % 3))).collect());
+
+        const BUCKETS: usize = 256;
+        for (i, keys) in patterns.iter().enumerate() {
+            // Precondition: these must be 800 DISTINCT keys, or the test would be measuring the
+            // pattern's own collisions rather than the hasher's spreading (a first version of this
+            // test did exactly that, on a pattern that mostly repeated itself).
+            let distinct: std::collections::HashSet<u64> = keys.iter().copied().collect();
+            assert_eq!(distinct.len(), keys.len(), "pattern {i} must have distinct keys");
+
+            let mut counts = vec![0usize; BUCKETS];
+            for k in keys {
+                counts[bucket(*k) % BUCKETS] += 1;
+            }
+            let busy = *counts.iter().max().unwrap();
+            assert!(
+                busy <= keys.len() / 20,
+                "pattern {i}: the busiest bucket holds {busy} of {} keys — the hasher is not \
+                 spreading them at all (a perfect hash measures ~9 here, an input-ignoring one 800), \
+                 which costs lookups, not correctness",
+                keys.len()
+            );
+        }
+    }
 
     #[test]
     fn test_hit_test_basic() {
