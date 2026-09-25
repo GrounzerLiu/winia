@@ -828,8 +828,6 @@ struct Slot {
     skip_modifier: Option<Modifier>,
     /// 布局方向（组合期捕获——物化期读不到 CompositionLocal）
     direction: crate::layout::LayoutDirection,
-    /// 上帧 modifier（Skip 判定用——param_eq 比较数值参数变化）
-    prev_modifier: Option<Modifier>,
     /// Skip 时保存的容器 policy（外层传入——content 未执行但 policy 可用，
     /// 物化降级/恢复时避免 policy 缺失导致测量 0 尺寸）
     skip_policy: Option<Box<dyn MeasurePolicy>>,
@@ -848,7 +846,6 @@ impl Slot {
             desc: None,
             visited: true, // 新建即本帧活跃
             skip_modifier: None,
-            prev_modifier: None,
             skip_policy: None,
             direction: crate::layout::LayoutDirection::Ltr,
         }
@@ -2329,11 +2326,7 @@ impl Composer {
             let params_unchanged = params_equal(
                 &self.pending_params,
                 &self.slot_table.current_slot().params,
-            ) && {
-                // modifier 数值参数相等（width/背景色等变化 → Enter 重跑内容）
-                let prev_m = self.slot_table.current_slot().prev_modifier.as_ref();
-                prev_m.map(|pm| modifier.param_eq(pm)).unwrap_or(false)
-            };
+            ) && self.container_modifier_unchanged(key, &modifier);
             #[cfg(debug_assertions)] {
                 if std::env::var("WINIA_SKIP_TRACE").is_ok() {
                     eprintln!("[skip] key={} clean={} params_u={} prev={} pending_len={}",
@@ -2375,8 +2368,6 @@ impl Composer {
             // Skip 容器方向也须组合期捕获（同 Enter——物化期读不到 theme）
             self.slot_table.set_skip_direction(direction);
         } else {
-            // Enter：记录本帧 modifier（下帧 Skip 判定比较用）
-            self.slot_table.current_slot().prev_modifier = Some(modifier.clone());
             // Enter：组合期捕获方向（provides 作用域内）——先算再 move
             let direction = modifier.get_layout_direction()
                 .unwrap_or(crate::ui::theme::WiniaTheme::direction());
@@ -2426,6 +2417,30 @@ impl Composer {
         // push 配对——此前此处额外 pop 导致容器组件两次 pop 一次 push →
         // 栈错乱 → 后续依赖注册到错误 Group → State 变化不标记容器 dirty）
         self.end_node();
+    }
+
+    /// Whether this container's modifier matches the one the frame is running against — the second half
+    /// of the Skip decision (`params_equal` is the first).
+    ///
+    /// The comparison target is the ARENA NODE's modifier, which during compose still holds what
+    /// materialize applied last frame. That is the same value the slot used to keep a copy of
+    /// (`Slot::prev_modifier`), and reading it instead removes a `Modifier` clone per Entering container
+    /// per frame — the largest single item the content-closure probe found (~297 µs on a cold frame,
+    /// ~93 ns per container, and a `Modifier` owns a `Vec` plus any strings its elements carry;
+    /// `docs/benchmarks.md`).
+    ///
+    /// It is the same value, not an approximation, which is why this is preferred over storing a digest:
+    /// a digest can only ever answer "unchanged" wrongly, and "unchanged" here means the container Skips
+    /// with a stale modifier — the one failure direction this code must not have.
+    ///
+    /// A missing node means "no basis for comparison" and the container Enters, which is what a missing
+    /// `prev_modifier` used to do. `compose` refills the index when it is empty (a second compose in the
+    /// same frame drains it), so the node is found in every case where a Skip was possible before.
+    fn container_modifier_unchanged(&self, key: u64, modifier: &Modifier) -> bool {
+        match self.prev_node_by_key.get(&key) {
+            Some(&idx) => modifier.param_eq(&self.arena.nodes[idx].modifier),
+            None => false,
+        }
     }
 
     /// Rebuild reverse compose dependencies from the forward per-slot read graph.
@@ -2684,6 +2699,21 @@ impl Composer {
                 }
             }
         }
+        // The `slot_key` → arena-index map is valid for the whole content closure: it is filled by
+        // `layout` and consumed by materialize at the END of compose, so during content it still names
+        // the nodes the previous frame built — which is where a container's Skip decision reads the
+        // modifier it is comparing against (`container_modifier_unchanged`).
+        //
+        // It can be EMPTY here: a second compose in the same frame follows a materialize that drained
+        // it. Refilling costs one tree walk, and only on those frames — materialize's own repair
+        // (`materialize`) does exactly this walk and would do it anyway, so this moves the same work
+        // earlier rather than adding it.
+        if self.prev_node_by_key.is_empty() {
+            if let Some(root_idx) = self.arena.root {
+                crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
+            }
+        }
+
         // Begin an isolated dependency frame. State::get() writes to its active
         // buffer, while nested Composer calls temporarily own their own frame.
         // The frame remains open through materialization and modifier reads.
@@ -6133,6 +6163,118 @@ fn test_component_param_change_forces_reenter() {
     });
     composer.layout(crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0));
     assert_eq!(run_count.get(), 0, "参数未变 → Skip（content 不执行）");
+}
+
+/// The container Skip decision's modifier comparison, pinned from the outside: a REBUILT modifier with
+/// the same numbers still Skips (the content does not re-run), and a changed number still Enters.
+///
+/// This is the safety net for the change that made the comparison read the arena node's modifier instead
+/// of a copy parked in the slot: both halves must survive, and a version of this test that only checked
+/// the Enter half would pass with the comparison removed entirely.
+#[test]
+fn test_container_modifier_comparison_skips_rebuilt_modifiers_and_enters_on_change() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let padding = std::cell::Cell::new(8.0f32);
+
+    let mut frame = |composer: &mut Composer| {
+        let runs = runs.clone();
+        let pad = padding.get();
+        composer.compose(move |ctx| {
+            let key = ctx.next_key();
+            // A modifier with a COMPARABLE parameter (padding is a number) and a rebuilt-every-frame
+            // closure (the content), which is what makes "same numbers" the interesting case.
+            match ctx.start_restartable_group(
+                key,
+                Modifier::new().padding(pad),
+                crate::layout::BoxLayout::new(),
+            ) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    runs.set(runs.get() + 1);
+                    let leaf = ctx.next_key();
+                    ctx.start_leaf(leaf, Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+        composer.layout(constraints);
+    };
+
+    frame(&mut composer);
+    assert_eq!(runs.get(), 1, "frame 1 builds the content");
+    let root = composer.layout_root_idx().unwrap();
+    let key = composer.arena_nodes()[root].slot_key;
+
+    // Rebuilt modifier, same number → Skip (content does NOT re-run).
+    frame(&mut composer);
+    assert_eq!(runs.get(), 1, "a rebuilt-but-numerically-equal modifier must still Skip");
+
+    // Changed number → Enter (content re-runs).
+    padding.set(16.0);
+    frame(&mut composer);
+    assert_eq!(runs.get(), 2, "a changed modifier parameter must re-run the content");
+
+    // And the node carries the new value, which is what the next frame's comparison reads.
+    let root = composer.layout_root_idx().unwrap();
+    let node_pad = composer.arena_nodes()[root]
+        .modifier
+        .get_padding_horizontal()
+        .0;
+    assert_eq!(node_pad, 16.0, "the applied modifier must hold the new padding");
+    assert_ne!(key, 0, "sanity: the container has a real slot key");
+}
+
+/// A second compose in the SAME frame still Skips an unchanged container.
+///
+/// This is what `compose`'s refill of `prev_node_by_key` is for. The map is drained by the frame's first
+/// materialize, so without the refill the container's Skip decision would find no node to compare its
+/// modifier against, and every group would Enter on the second pass — a full re-run of the tree on frames
+/// where a notification arrived mid-compose, which the app's frame loop produces precisely so such
+/// notifications are not lost. With the refill the second pass behaves like the first: unchanged
+/// containers keep what they built.
+#[test]
+fn test_second_compose_in_a_frame_still_skips_unchanged_containers() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 500.0, 0.0, 500.0);
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0usize));
+
+    let mut build = |composer: &mut Composer| {
+        let runs = runs.clone();
+        composer.compose(move |ctx| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new().padding(8.0), crate::layout::BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    runs.set(runs.get() + 1);
+                    let leaf = ctx.next_key();
+                    ctx.start_leaf(leaf, Modifier::new().size(10.0, 10.0));
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        });
+    };
+
+    build(&mut composer);
+    composer.layout(constraints);
+    assert_eq!(runs.get(), 1, "frame 1 builds the content");
+
+    // Second compose in the SAME frame (no layout between them): the index was drained by the first
+    // materialize, and the refill is what lets this pass compare modifiers at all.
+    build(&mut composer);
+    assert_eq!(
+        runs.get(),
+        1,
+        "the second compose in a frame must Skip an unchanged container — if this reads 2, the index \
+         was empty and every group re-entered"
+    );
+
+    // …and a THIRD pass still sees the same thing (the refill is not a one-shot).
+    build(&mut composer);
+    assert_eq!(runs.get(), 1, "later passes in the same frame behave the same way");
 }
 
 /// 参数变化后布局层必须更新（should-fix 回归：Enter 时置 dirty——
