@@ -311,6 +311,68 @@ Readings:
 
 
 
+> ## Phase 4: the structural-change tail (the last millisecond-scale target)
+>
+> The earlier phase tables are about idle and one-row frames. The tail this round looked at is the
+> jump: a click that scrolls to a window of rows that has never been composed. Measured with a probe
+> example (a `Column`, a "jump far" button, and a `LazyColumn` of 5000 items; each click scrolls to a
+> farther window, so every jump is a real structural change), release build, 10 jumps, frames numbered
+> so the app's own counters can be aligned with the driver's actions:
+>
+> | | frames | frame p50 | p90 | p99 | max |
+> |---|---|---|---|---|---|
+> | 4000 px window, 10 jumps | 159 | 1046 µs | 1928 | 3073 | 3639 |
+> | …phase shares over those frames | | compose 35 µs (11 %) | layout 40 µs (17 %) | draw 804 µs (69 %) | |
+> | …and at p90 | | compose 626 µs | layout 653 µs | draw 1110 µs | |
+>
+> The p99 reproduces the ~5.8 ms figure the earlier rounds recorded for a jump frame, and it says
+> something the idle tables could not: **the tail is mostly the draw path, not compose or layout.**
+> The compose and layout medians on these frames are *smaller* than their idle medians (35/40 µs
+> against 263/296 µs on another demo), because a jump frame mostly Skips — the rows that changed are
+> re-measured and reshaped, and everything else folds.
+>
+> ### The reuse-index walk does not transfer to the tail
+>
+> Phase 2 measured that skipping the reuse-index walk buys **148 µs (−7 % of an idle frame)** at 202
+> nodes. On the tail, the same gate measures **nothing**:
+>
+> | arm | layout p50 | layout p90 | layout p99 | layout max | frame p99 |
+> |---|---|---|---|---|---|
+> | baseline | 40 | 653 | 1686 | 1704 | 3073 |
+> | index walk skipped | 31 | 866 | 1596 | 1696 | 3523 |
+>
+> Every figure is inside the run-to-run spread (the same build re-run moves frame p50 by ~10 %), and
+> the frame p99 is *worse* with the gate on. So the −7 % is an idle-frame figure that does not
+> generalise, and the last measured candidate for a layout optimization is now closed too.
+>
+> ## What the tail actually is, and what is left
+>
+> Put together, the frames this round priced are:
+>
+> | frame shape | total | compose | layout | draw | present |
+> |---|---|---|---|---|---|
+> | idle (nothing dirty) | ~0.98 ms | 35 µs | 40 µs | 804 µs | (inside draw) |
+> | one row updated (59 nodes) | 1.65 ms | 263 µs | 296 µs | 520 µs | 361 µs |
+> | jump / structural change | 1.0–3.6 ms | 35–900 µs | 40–1700 µs | 0.8–2.2 ms | (inside draw) |
+>
+> Every optimization candidate this document has priced, and where it ended:
+>
+> | candidate | measured | status |
+> |---|---|---|
+> | `reconcile` rewrite (the named next round in `docs/benchmarks.md`) | 9 µs on a real tree, 0.55 % | closed |
+> | gating `prune_stale_child_links` | 538.7 µs against a 541–546 µs baseline | closed (flat) |
+> | gating `collect_live_keys` | 344.8 µs, but the win is "the read graph stops growing" | closed (not a skip) |
+> | the measure "2× duplication" | a probe defect; one call per node per pass | closed (did not exist) |
+> | the modifier queries (10 linear scans a node) | ~5 % of a measured call | closed (too small) |
+> | the reuse-index walk | −148 µs idle at 202 nodes, **0 on the tail** | closed (does not transfer) |
+> | the present path | 300–400 µs, the same on Vulkan and on the CPU backend | not a framework cost |
+>
+> The honest summary: **for the frame shapes measured here, the framework has no large defect left —
+> what remains is the work the design says it should do (measure, shape, record Skia commands) plus
+> the platform's present cost.** The frame budget that follows from these numbers is unchanged: idle
+> frames are ~1 ms, a structural change 1–3.6 ms, against a 16.7 ms budget at 60 Hz.
+
+
 ## 4. What this round recommends
 
 1. **Do not run the `reconcile` rewrite as a performance round.** It was the named next step on the
@@ -318,12 +380,12 @@ Readings:
    9 µs, 0.55 % of the frame, and the whole compose tail is 3.4 % (2.5 % at 128 nodes). A correct
    incremental rewrite is a graph-invariant change whose failure mode is stale content; 0.55 % does
    not pay for it.
-2. **Layout's 2.95 µs/node is the compose-side target** (phase 2 above). It is the largest per-node
-   slope in the frame, it is paid on every node of every frame, and its two whole-arena walks are only
-   ~1 % of it. The measurement pass has since been split (phase 3): the modifier queries are ~5 % of a
-   measured call and the fold check is free; each node is measured **exactly once** per layout pass
-   (the corrected count below — an earlier 2x report was a probe defect), so what remains is the work
-   the policies and the text shaping genuinely do, not redundancy.
+2. **The compose-side candidate list is now empty.** Layout's 2.95 µs/node was the target (phase 2),
+   but phase 4 showed the only measured lever inside it — the reuse-index walk — buys nothing on the
+   frame shapes that are actually slow, and phases 3/4 retired the rest: the modifier queries are ~5 %
+   of a measured call, the fold check is free, each node is measured exactly once per pass, and the
+   two whole-arena walks are ~1 % of the slope. What is left in layout is the work the policies and
+   the text shaping genuinely do.
 3. **The present path (300–400 µs on both backends) is half the frame and outside the framework's
    control** — softbuffer's blit on CPU, the fence/present path on Vulkan. It is worth understanding
    (a GPU-bound frame is not reducible by CPU work) but it is not a framework optimization.
