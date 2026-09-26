@@ -216,7 +216,9 @@ struct RuntimeFrameGuard { /* restores outer slot/group/statement TLS */ }
   the subcomposition comes out EMPTY, the policy reports `0x0`, and that overwrites the size adoption
   wrote. The root cause is observed, not inferred. See `docs/lookahead-subcompose-feasibility.md`
   §5b and §6; the prototype, its tests and its reproduction are on the branch `exp/lookahead-probe`
-  — this branch's tree does not contain them.
+  — this branch's tree does not contain them. That branch is frozen at `6551334` (deliberately not
+  merged: its `BoxWithConstraints` reads `[0,0]` for its own size in a real window), and the restart
+  entry point is `docs/lookahead-probe-handover.md` on that branch.
 
 ## 变更记录
 
@@ -238,3 +240,4 @@ struct RuntimeFrameGuard { /* restores outer slot/group/statement TLS */ }
 - 本轮：增加 `ComposeDependencyTransaction` 和 `test_compose_late_cleanup_panic_restores_dependency_graph`；late cleanup panic 恢复上一成功帧的 dependency maps/subscriptions，并清理 failed-frame pending。612 项 full library suite、cargo check -p winia --lib、cargo check --workspace 和 git diff --check 通过。
 - 继续：增加 `ComposeRuntimeTransaction`/`ComposeRuntimeSnapshot`，panic 时恢复 path/child_counters/dirty_keys/scope_source_stack/key_override_stack/entered_compose_keys/reused_nodes 等非持有型运行时上下文（SlotTable/arena/remember/on_remove 仍是明确保留边界，持有 `Box<dyn Any>` 与用户回调，见 composer.rs:815-817）。同期完成多窗口上下文隔离：AdaptiveContext per-Composer（adaptive size）、LifecycleState per-Composer（window lifecycle flags）、FocusRequest window_id + CURRENT_FOCUS_WINDOW TLS（FocusRequester 按窗口）、PerWindow::modifiers（App modifier 键）、SelectionRegistrar 删全局 ACTIVE_REGISTRAR 改 CompositionLocal 作用域、DebugRuntime + per-window screenshot/事件队列、animation_state_ids per-Composer + clear_animations_for_states（animation registry 生命周期）、debug begin_session/end_session。620 项 full library suite、cargo check -p winia --lib 通过（cargo test -p winia --lib -- --test-threads=1 实测 620 passed，0 failed）。
 - 未完成：Composer 完整 SlotTable/arena/remember/on_remove 事务 rollback、严格 frame 批次证明、精确递归 measure parent attribution、animation API 从 legacy u32 迁移、modifier builder 副作用迁移。
+- 本轮（文档）：lookahead/subcompose 实验分支 `exp/lookahead-probe` 冻结在 `6551334`（其 `BoxWithConstraints` 在真实窗口里自身读数 `[0,0]`，故不合并），接手入口 `docs/lookahead-probe-handover.md` 写在该分支上；v2 只记状态与入口，不含该分支代码。

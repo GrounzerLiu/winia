@@ -191,5 +191,25 @@ What the experiment (§5b) leaves behind:
 - **Keep the frame-lagged approximation where it already works** (`LazyColumn`, the shared-element
   bounds): both have documented, tested workarounds, and the trail costs them little.
 
-The prototype, its tests and its reproduction are on `exp/lookahead-probe`; this branch's tree does not
-contain them.
+The prototype, its tests and its reproduction are on `exp/lookahead-probe`, **frozen at `6551334`** and
+deliberately not merged; this branch's tree does not contain them.
+
+## 7. If this work is picked up
+
+Start at `docs/lookahead-probe-handover.md` — but note that it sits **on that branch**, not here (this
+branch has no code to point at, so the file would dangle until a fix lands). It carries what a restart
+needs, and what one would not want to rediscover:
+
+- **The acceptance criterion**, already written as a test: the `#[ignore]`d UI test
+  `box_with_constraints_composes_its_content_at_measure_time` with the `bwc` fixture, plus the exact
+  commands for the one fixture binary and the UI suite.
+- **The restart order**, starting from `Composer::subcomposition_cache` — the branch's stub for exactly
+  the missing piece, cross-frame reuse of a composition.
+- **The baselines** measured on that branch: `cargo test -p winia --lib` 1090 passed; the UI suite 47
+  passed with the 1 ignored reproduction.
+- **The four things already ruled out** by measurement — including the two writes at the adoption site
+  that were tried and refuted, and the reason design 1 is not a cheap experiment.
+
+The branch is a prototype plus a reproduction, not shippable code: on it `BoxWithConstraints` reads
+`[0,0]` for its own size in a real window while its adopted child reads `[192,19]`. That is why it is
+frozen rather than merged, and why the reproduction is the acceptance criterion rather than a caveat.
