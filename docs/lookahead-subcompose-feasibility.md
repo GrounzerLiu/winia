@@ -153,6 +153,7 @@ would be paid for this way, not the lookahead composition.
 | does it survive the TLS guards? | yes — the frame's context is intact afterwards (the test composes again on the same thread), and a **panic inside the subcomposition** leaves the outer arena untouched and the next subcomposition working |
 | can its tree be adopted into the outer arena? | yes — nodes moved, child indices re-based, **policy pool appended and every `measure_policy` index re-based** (checked behaviourally against a decoy policy at the colliding index), root stamped with a synthetic key |
 | can adoption happen inside `measure`? | **no** — `MeasurePolicy::measure` receives `&mut Vec<LayoutNode>`, not the arena, so it cannot reach `NodeArena::policies`. Adoption therefore has to be called from a site that has the arena: `Composer::layout` or `materialize` |
+| does the adopted subtree survive the next frame? | **yes** — parented under its component's node and marked reused (the exact predicate the compose tail's prev-drain reads: `reused_nodes.contains(idx)` → `continue`), it is still in the arena after a second full compose + layout, and the frame still renders |
 
 So the feasibility note's worry was misdirected: **design 2 is not blocked by the slot table — the
 inner composition's own table is exactly what makes it safe. It is blocked by the measure trait's
