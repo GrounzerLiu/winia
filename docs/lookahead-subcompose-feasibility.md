@@ -11,6 +11,13 @@
 > lookahead or layer-shift"), `docs/tab-row.md` §7 (no SubcomposeLayout, so a custom indicator slot
 > cannot be injected from the measure-time positions), `docs/shared-element-gaps.md`
 > (`skipToLookaheadSize`, "no lookahead system exists").
+>
+> **This is the branch copy of the note (`exp/lookahead-probe`, frozen at `6551334`), so it carries
+> the prototype's trail: §5c, §5d and "The defect's root cause" document the facility, the defects
+> found on the way, and the one structural defect that stops it. The mainline's copy carries §5b and
+> the recommendation without the code references that only exist here. Reading order for a newcomer:
+> the status note in `docs/lookahead-probe-handover.md` first, then §5c → §5d → the root cause, then
+> the handover's restart steps (it has the commands).**
 
 ## 1. What Compose's two mechanisms actually do
 
@@ -131,12 +138,14 @@ The honest next step is a probe round, not an implementation:
    prev-drain without being marked reused (that is the mechanism that decides it, and the probe in
    point 2 either confirms the "prebuilt descriptor" route or shows it needs the other one), and
    whether a panic inside the inner compose rolls back the outer `LayoutTransaction` correctly.
+>
+> (Both steps were then run: see §5b for the numbers and §5c onwards for where they stopped.)
 
 ## 5b. What the experiment found (branch `exp/lookahead-probe`, 2026-09-26)
 
-Both steps of §5 were run on an experiment branch. Every claim below is a test in that branch's
-`winia/src/ui/subcompose_probe.rs` (removed again before the branch was left in its final state; the
-findings are what is kept).
+Both steps of §5 were run on an experiment branch. Every claim below is a test in this branch's
+`winia/src/ui/subcompose_probe.rs`, which is still in the tree: the probe tests are kept, because they
+are what define the facility's guarantees for whoever picks it up.
 
 **Step 1 — the extra `layout()` is cheap.** Driving 16 flights through `shared_transition_demo` and
 timing the pass the frame handler already runs when a flight first attaches its override:
@@ -294,16 +303,35 @@ re-built each frame; the arrangement cache (`Composer::subcomposition_cache`) is
 reason; and nothing else in the framework uses the facility yet — `LazyColumn` still runs on its anchor
 model, and `TabRow`'s indicator slot is untouched.
 
+## This branch, and that it is frozen
+
+Everything above is an experiment: the code stays on `exp/lookahead-probe` and is **frozen at
+`6551334`**, deliberately not merged, because `BoxWithConstraints` here reads `[0,0]` for its own size
+in a real window while its adopted child reads `[192,19]` — a component with a known-wrong reading is
+worse than the frame-lagged one `v2` ships. What the branch is good for: the facility and its five
+guarantee tests, the materialize/node contract work the adopted subtree needed, a priced alternative
+(a second `layout()`, §5b), and a reproduction that defines the acceptance criterion.
+
+Restart instructions — exact commands, test names, baselines, what was already ruled out — are in
+`docs/lookahead-probe-handover.md`. That file is the entry point; this note is the reasoning behind it.
+
 ## 6. Recommendation
 
-- **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a
-  named function with named invariants (`start_slot`'s visit semantics + `visited`-based orphan
-  collection), and its failure mode is tree corruption.
-- **Price the animation-free second `layout()` first** — it is the cheapest thing that could give
-  `animate_item`/lookahead-style information, and it re-enters no slot.
-- **Then a minimal design-2 subcomposition** for the cases that genuinely need measure-time
-  composition (`BoxWithConstraints`' scope, `TabRow`'s indicator slot). It uses mechanisms the engine
-  already has: explicit keying for identity, `RuntimeFrameGuard` for re-entrancy, the existing
-  materialize/arena path for the output.
-- **Keep the frame-lagged approximation where it already works** (`LazyColumn`, shared elements):
-  both have documented, tested workarounds, and the trail costs them little.
+Both parts of §5 were run, so this is no longer a plan but a reading of the results:
+
+- **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a named
+  function with named invariants (`start_slot`'s visit semantics plus `visited`-based orphan
+  collection) and its failure mode is tree corruption.
+- **The cheap half is priced and worth using on its own:** a second `layout()` under different inputs
+  costs ~191 µs on a 56-node tree (1.1 % of a 60 Hz budget) and re-enters no slot. Anything that needs
+  "where would this be if the animation were not running" can start there.
+- **Design 2 is feasible but has one prerequisite, now named: cross-frame reuse of a composition.**
+  The prototype composed at measure time, adopted the tree into the arena, and survived a frame —
+  until a later compose generation came out empty (§5d). The prerequisite is structural: keep the
+  composition alive between frames and re-arrange it, instead of re-creating it and moving it. Once it
+  exists, `BoxWithConstraints`' scope and `TabRow`'s indicator slot follow.
+- **Keep the frame-lagged approximation where it already works** (`LazyColumn`, the shared-element
+  bounds): both have documented, tested workarounds, and the trail costs them little.
+
+The prototype, its tests and its reproduction are on this branch; the mainline's tree does not contain
+them.
