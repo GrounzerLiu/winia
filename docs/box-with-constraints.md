@@ -23,6 +23,7 @@ BoxWithConstraints::new()
 |---|---|
 | `constraints()` | the whole `layout::Constraints` the box was measured with |
 | `min_width()` / `max_width()` / `min_height()` / `max_height()` | the four bounds, in logical pixels |
+| `min_width_dp()` / `max_width_dp()` / `min_height_dp()` / `max_height_dp()` | the same bounds as `Dp` (logical, NOT `to_px`) |
 | `max_dimension()` / `min_dimension()` | Compose's `maxDimension` / `minDimension` |
 | `is_measured()` | `false` while the value is still the initial unbounded one — see the first-frame note |
 
@@ -64,11 +65,16 @@ Closing the trail needs a real lookahead/subcomposition pass — the same missin
 element work records (`docs/shared-element-transition.md` §3.1) — and that is a framework-level change
 rather than a component one.
 
-## Deliberate deviation: no `Dp`
+## Deliberate difference: the scope speaks the layout coordinate system, not `Dp`
 
-The scope speaks plain `f32` logical pixels, for the same reason as `DrawScope`
-(`docs/canvas.md`): winia has no `Dp` unit type in this layer. `constraints()` is exposed as the
-framework's own `Constraints` so a caller can hand it to a custom `MeasurePolicy` unchanged.
+winia HAS `Dp` (`unit::Dp`, exported by the prelude, accepted by `Modifier::size` and friends) — an
+earlier version of this file claimed otherwise and was wrong. What the scope hands back is `f32`
+logical pixels, because that is what the box was measured in (`Constraints` carries plain numbers) and
+because `Dp::to_px` returns *physical* pixels, which must not meet layout geometry. For a caller that
+wants a bound on the type, the four `*_dp()` accessors (`min_width_dp`, `max_width_dp`,
+`min_height_dp`, `max_height_dp`) carry exactly the same numbers via `Dp::to_logical`, which is the
+identity here. `constraints()` is the framework's own `Constraints`, so it can go straight into a
+custom `MeasurePolicy`.
 
 ## Tests
 
@@ -76,6 +82,6 @@ framework's own `Constraints` so a caller can hand it to a custom `MeasurePolicy
 
 | test | what it pins |
 |---|---|
-| `scope_reports_the_constraints_it_was_handed` | the four bounds, `max_dimension` / `min_dimension`, and that `is_measured()` is false for the initial unbounded value |
+| `scope_reports_the_constraints_it_was_handed` | the four bounds, `max_dimension` / `min_dimension`, the `_dp` forms, and that `is_measured()` is false for the initial unbounded value |
 | `policy_records_the_incoming_constraints` | the write half: the policy records exactly the constraints it was measured with |
 | `box_with_constraints_lays_out_like_a_stack_and_hands_its_content_a_scope` | end to end: the box takes its modifier's size, the content runs, and the first run reads the unmeasured value (the documented trail) |

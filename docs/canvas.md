@@ -44,7 +44,8 @@ Text::new("banded")
 | `draw_rect`, `draw_round_rect`, `draw_oval`, `draw_circle` | filled shapes |
 | `draw_line(from, to, stroke_width, color)` | stroked line |
 | `draw_path(&Path, color)`, `draw_path_paint(&Path, &Paint)` | filled path, or any paint (gradient/shader/stroke) |
-| `draw_text(text, x, y, font_size, color)` | a text run, shaped through the framework's own paragraph code |
+| `draw_text(text, x, y, font_size, color)` | a text run, shaped through the framework's own paragraph code; returns `TextMetrics` |
+| `width_dp()` / `height_dp()` / `size_dp()` / `center_dp()` | the same numbers as `Dp` (logical, NOT `to_px`) |
 
 ## Where it lands in the pipeline
 
@@ -56,17 +57,34 @@ the node's content; `draw_behind`'s runs on the background layer.
 
 ## Deliberate differences from Compose
 
-1. **No `Dp` / `Size` / `Offset` unit types.** winia has none in this layer, so the scope speaks plain
-   `f32` logical pixels and takes `skia_safe::Rect` where a rectangle is needed. (The same absence is
-   why `animateRectAsState` does not exist — `docs/animation-gap-analysis.md`.) Introducing those unit
-   types is its own change with its own call-site migration, and this module deliberately does not
-   start it.
+1. **The scope speaks the layout coordinate system, not `Dp`.** winia HAS `Dp` (`unit::Dp`, exported
+   by the prelude and accepted by `Modifier::size`, `padding`, `offset`, ...) — an earlier version of
+   this file claimed otherwise and was simply wrong. What the scope hands back is `f32` logical pixels,
+   because that is what `Constraints`, `measured_size` and every drawing rect in the engine are in, and
+   mixing the two is the trap `Dp::to_px`'s own docs warn about: `to_px` returns PHYSICAL pixels, which
+   is wrong anywhere the number meets layout geometry. The scope therefore offers `width_dp()`,
+   `height_dp()`, `size_dp()` and `center_dp()`, whose contract is exactly "the same number, spelled on
+   the type" (`Dp::to_logical` is the identity here). Rectangles travel as `skia_safe::Rect` rather
+   than a `unit::Size` plus a `unit::Offset` because a drawing call needs one rectangle; points and
+   lengths are `(f32, f32)` / `f32`.
 2. **The region is the whole node rect and is not clipped.** Compose clamps a `DrawScope` to the
    drawing bounds it was handed; here clipping stays the caller's decision (`Modifier::clip`), which is
    how the framework's own nodes draw.
-3. **No `drawContext` / `TextMeasurer`.** `draw_text` builds its paragraph through
-   `text::build_plain_paragraph` (the same construction a `Text` node uses, so there is one shaping
-   path) and lays it out to the scope's width, unwrapped beyond that.
+3. **No `TextMeasurer` object, but the measurement is returned.** `draw_text` builds its paragraph
+   through `text::build_plain_paragraph` (the same construction a `Text` node uses, so there is one
+   shaping path), lays it out to the scope's width, and returns `TextMetrics`:
+
+   ```rust
+   let m = scope.draw_text("label", 0.0, 0.0, 14.0, Color::BLACK);
+   // centre the *next* run, or size a box around this one, from the measured width:
+   scope.draw_circle(m.width() / 2.0, m.height() / 2.0, 3.0, ACCENT);
+   ```
+   `TextMetrics` carries `width()` / `height()` / `size()` / `rect()` / `origin()` / the `_dp` forms,
+   and `paragraph()` for anything beyond that (per-line metrics, hit testing). It can also draw its own
+   run again — `draw_at(scope, x, y)` and `draw_centered(scope, width, height)` — **reusing the single
+   shaping pass**, so a repeated label or a centred title does not re-shape the string per call. Before
+   this, a caller had to re-derive the layout or hard-code an estimate — the kind of code that drifts
+   the moment the font or the string changes.
 4. **No `drawImage` yet.** An image needs a public image/bitmap handle, which the framework does not
    have (icons and `Image` draw through internal paths). Use `skia_canvas()` in the meantime; a
    `draw_image` follows when an image handle exists.
@@ -96,4 +114,7 @@ the same pattern `modifier.rs` uses for its draw nodes:
 | `scope_geometry_follows_the_node_not_the_window` | `size` / `center` / `rect` describe the node |
 | `canvas_is_a_leaf_that_takes_the_size_its_modifier_gives_it` | zero without a size, the modifier's size with one |
 | `draw_with_content_paints_over_the_nodes_own_background` | the `after` pass is on top of the node's own paint |
+| `dp_accessors_carry_the_logical_numbers` | the `_dp` accessors carry the logical numbers (`to_logical` is the identity) |
+| `draw_text_reports_the_run_it_drew` | the returned metrics are the run's own (two strings differ in width; origin and rect follow the call) |
+| `draw_centered_lands_the_run_at_the_centred_origin` | the centring arithmetic, checked against the paragraph's own line metrics rather than against glyph shapes |
 | `every_primitive_draws_without_disturbing_the_rest_of_the_frame` | every primitive plus degenerate inputs (zero radius, zero-length line, empty path) render without taking the frame down |

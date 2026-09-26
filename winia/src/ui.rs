@@ -61,7 +61,7 @@ pub mod search_bar;
 pub mod draw_scope;
 pub mod box_with_constraints;
 
-pub use draw_scope::{draw_behind, draw_with_content, Canvas, DrawScope};
+pub use draw_scope::{draw_behind, draw_with_content, Canvas, DrawScope, TextMetrics};
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 
 pub use animated_visibility::{

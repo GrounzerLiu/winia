@@ -41,11 +41,15 @@
 //! the layout-override note in `app.rs` and `docs/shared-element-transition.md` §3.1). Closing it
 //! needs a real lookahead/subcomposition pass, which is a framework-level change, not a component.
 //!
-//! # Deliberate deviation: no `Dp`
+//! # Deliberate difference: the scope speaks the layout coordinate system, not `Dp`
 //!
-//! The scope speaks plain `f32` logical pixels, because winia has no `Dp` unit type in this layer
-//! (same reason `docs/frame-cost-probe-round.md` records for geometry types). `Constraints` itself is
-//! exposed as-is, so a caller can pass it on to a policy directly.
+//! winia HAS `Dp` (`crate::unit::Dp`, exported by the prelude, accepted by `Modifier::size` and
+//! friends). What the scope hands back is the layout coordinate system — `f32` logical pixels, what
+//! `Constraints` carries — because that is what the box was measured in, and mixing the two is the trap
+//! `Dp::to_px`'s own docs warn about (it returns physical pixels). The four `*_dp()` accessors spell
+//! the same numbers on the type for a caller that wants to feed a bound straight into a `Modifier`;
+//! `constraints()` is exposed as the framework's `Constraints` so a custom `MeasurePolicy` can take it
+//! unchanged.
 
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
@@ -96,6 +100,26 @@ impl BoxWithConstraintsScope {
     /// The smaller of the two minima — Compose's `minDimension`.
     pub fn min_dimension(&self) -> f32 {
         self.constraints.min_width.min(self.constraints.min_height)
+    }
+
+    // `Dp` forms of the four bounds. The scope hands back the LAYOUT coordinate system (logical
+    // pixels, what `Constraints` carries); these accessors spell the same numbers on the type for a
+    // caller that wants to pass a bound straight into a `Modifier`. `Dp::to_logical` is the identity
+    // here — do NOT round-trip through `to_px`, which is physical pixels (see its own docs).
+    pub fn min_width_dp(&self) -> crate::unit::Dp {
+        crate::unit::Dp(self.constraints.min_width)
+    }
+
+    pub fn max_width_dp(&self) -> crate::unit::Dp {
+        crate::unit::Dp(self.constraints.max_width)
+    }
+
+    pub fn min_height_dp(&self) -> crate::unit::Dp {
+        crate::unit::Dp(self.constraints.min_height)
+    }
+
+    pub fn max_height_dp(&self) -> crate::unit::Dp {
+        crate::unit::Dp(self.constraints.max_height)
     }
 
     /// Whether the box has been measured yet: the initial backchannel value is unbounded, so an
@@ -230,6 +254,19 @@ mod tests {
         );
         assert_eq!(measured.max_dimension(), 400.0, "the larger maximum");
         assert_eq!(measured.min_dimension(), 50.0, "the smaller minimum");
+
+        // The Dp accessors carry the same numbers: layout coordinates ARE logical pixels
+        // (`Dp::to_logical` is the identity), which is why `to_px` must not be used here.
+        assert_eq!(
+            (
+                measured.min_width_dp().to_logical(),
+                measured.max_width_dp().to_logical(),
+                measured.min_height_dp().to_logical(),
+                measured.max_height_dp().to_logical(),
+            ),
+            (100.0, 400.0, 50.0, 300.0),
+            "the dp forms match the raw bounds"
+        );
     }
 
     /// The mechanism behind the component: the measure policy writes the constraints it was given,

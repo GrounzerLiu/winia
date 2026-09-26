@@ -107,7 +107,7 @@ pub mod prelude {
     // The general drawing surface (Compose `Canvas` / `DrawScope`) and the constraints-aware box
     // (Compose `BoxWithConstraints`) — the two entry points a caller reaches for when no existing
     // component expresses what they need.
-    pub use crate::ui::{draw_behind, draw_with_content, BoxWithConstraints, BoxWithConstraintsScope, Canvas, DrawScope};
+    pub use crate::ui::{draw_behind, draw_with_content, BoxWithConstraints, BoxWithConstraintsScope, Canvas, DrawScope, TextMetrics};
     // Accessibility declarations belong in the same scope as `Modifier` — a caller states a role or a
     // name while building the chain.
     pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
