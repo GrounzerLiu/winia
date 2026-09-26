@@ -269,44 +269,45 @@ Readings:
 >    the text shaping a measured `Text` performs. The nested accounting cannot separate those three
 >    without instrumenting the policies themselves, which is where a further round would start.
 >
-> One structural fact worth carrying forward: **613 measured calls for a 202-node tree** — nodes are
-> measured about three times per layout frame (the recursive descent, the two-phase flex loop for
-> weighted children, the lazy container's own pass). Whether those repeats are all load-bearing is
-> exactly what policy-level instrumentation would answer, and it is the largest single lever the
-> numbers here point at (halving the calls halves the phase).
+> One number worth noting from the counters, and then corrected below: the raw call total suggested
+> nodes were measured several times a layout pass. **They are not — see the corrected section below:
+> one measurement per node per pass, no repeats.** The count of calls per pass (44 for a mostly-folded
+> pass, 179/195 for a measured one) is itself informative: a pass where nothing is dirty skips the
+> measure entirely for most nodes.
 >
-> ### The repeats, counted per node
+> ### The repeats, counted per node — CORRECTED: there are none
 >
-> A second probe pass counted measured calls per node and per layout pass (sampled passes; the tree is
-> the probe example: a `Column` holding a `Row` of two buttons plus a `LazyColumn` of ~100 visible
-> rows, 195 nodes):
+> **This section's first version reported a 2x duplication ("every node measured twice per pass", from
+> a `{2: 195}` histogram and a 390-call pass over 195 nodes). That was a defect in the probe, not in
+> the framework: the counter was incremented twice per measured call (once by the call-recording
+> helper, once by the wrapper added alongside it), AND the per-node histogram was reset only on the
+> sampled pass, so every later pass's calls accumulated into it. With both fixed:**
 >
 > ```
-> [measures] pass #3: 390 measured calls over 195 distinct nodes
->   containers 198 / leaves 192
->   calls-per-node (calls: nodes): {2: 195}
->   calls per layout pass, in order (pass, calls): [(0, 0), (1, 44), (2, 223), (3, 195), (4, 390)]
+> [measures] pass #3: 195 measured calls over 195 distinct nodes
+>   containers 99 / leaves 96
+>   calls-per-node (calls: nodes): {1: 195}
+>   calls per layout pass, in order (pass, calls): [(0, 0), (1, 44), (2, 179), (3, 195)]
 > ```
 >
-> Established by this, and no more:
+> And the (pass, idx) sequence, printed whole per pass:
 >
-> 1. **The repeats are real and uniform in the sampled pass**: every one of the 195 nodes was measured
->    exactly twice in that pass (`{2: 195}`, no node once, none three times), while the *whole pass*
->    recorded 390 calls. So the doubling is a property of the pass, not of a subset of nodes.
-> 2. **It is not one call per frame**: the app's own counter recorded **one `Composer::layout()` call
->    per frame** while the measure module counted a pass per call, so the two counters agree — the
->    doubling happens *inside* a single layout call.
-> 3. **The background level is visible in the pass sequence**: `44, 223, 195, 390` calls for the same
->    tree across consecutive passes. The two low figures are passes where most nodes folded (nothing
->    dirty → the constant-fold arm returns before any counter), and the two high ones are passes that
->    measured the tree. The doubling appears in the high figure.
+> | pass | calls | distinct nodes | node visited more than once |
+> |---|---|---|---|
+> | 1 | 44 | 44 | none |
+> | 2 | 179 | 179 | none |
+> | 3 | 195 | 195 | none |
+> | 4 | 195 | 195 | none |
 >
-> NOT established, and deliberately not claimed: **which caller performs the second measurement.**
-> The candidates the code shows are the flex policy's two-phase child loop (`flex.rs:188` and `:219` —
-> phase 2 re-measures WEIGHTED children only, and this tree has none), the lazy container's own child
-> measurement, and `Composer::layout`'s guarded second pass for a flight's layout override
-> (`app.rs:722`, taken only when the poll attached an override for the first time). Telling them apart
-> needs the caller's own counter inside the policy, which is the next probe, not the next guess.
+> Each pass visits every node **exactly once**, in strict depth-first order (`0 1 9 10 11 … 201`).
+> There is therefore no redundant measurement to remove, and the "largest lever" this document
+> pointed at does not exist. The lesson is worth keeping next to it: the instrumentation is part of
+> the measurement, and a counter that is wired in twice produces exactly the finding you were looking
+> for. Both the double increment and the missing reset are recorded here rather than quietly fixed.
+>
+> The corrected per-call interior figures for this tree (same run: 613 calls over 4 passes, ~110 ns
+> of non-policy work a node a frame): `fold` 49 ns, `pre` 178 ns, `post` 35 ns — the modifier queries
+> remain ~5 % of a measured call, and `policy` (which nests the whole subtree) dominates.
 
 
 
@@ -320,9 +321,9 @@ Readings:
 2. **Layout's 2.95 µs/node is the compose-side target** (phase 2 above). It is the largest per-node
    slope in the frame, it is paid on every node of every frame, and its two whole-arena walks are only
    ~1 % of it. The measurement pass has since been split (phase 3): the modifier queries are ~5 % of a
-   measured call and the fold check is free, so what remains is the measure policies — and
-   **613 measured calls for 202 nodes**, i.e. ~3 measurements a node per layout frame. Whether every
-   repeat is load-bearing is the concrete next question, and the largest lever visible from here.
+   measured call and the fold check is free; each node is measured **exactly once** per layout pass
+   (the corrected count below — an earlier 2x report was a probe defect), so what remains is the work
+   the policies and the text shaping genuinely do, not redundancy.
 3. **The present path (300–400 µs on both backends) is half the frame and outside the framework's
    control** — softbuffer's blit on CPU, the fence/present path on Vulkan. It is worth understanding
    (a GPU-bound frame is not reducible by CPU work) but it is not a framework optimization.
