@@ -147,19 +147,25 @@ impl BoxWithConstraints {
     }
 
     /// Compose signature: `BoxWithConstraints(modifier) { /* BoxWithConstraintsScope + content */ }`.
+    ///
+    /// The content is `Fn`, not `FnOnce`: a subcomposition composes again on a LATER frame (its
+    /// parameters are a function of the constraints, which change), so the closure has to be
+    /// re-runnable. Taking it by value made the second frame compose NOTHING — measured in a window:
+    /// `[sub] ... cache=miss nodes=0 root=None size=0x0`, and that `0x0` then overwrote the size the
+    /// adoption pass had written, so the box read `[0,0]` while its adopted child read `[192,19]`.
     pub fn build(
         self,
         ctx: &mut ComposeCtx,
-        content: impl FnOnce(&mut ComposeCtx, BoxWithConstraintsScope) + Send + 'static,
+        content: impl Fn(&mut ComposeCtx, BoxWithConstraintsScope) + Send + 'static,
     ) {
         // The content is handed to the policy and run INSIDE measurement, with the real constraints
-        // (Compose's `SubcomposeLayout` relation). `FnOnce` in a `Mutex` because the policy takes it
-        // by shared reference and each frame's subcomposition runs it exactly once.
+        // (Compose's `SubcomposeLayout` relation). `Fn` shared behind an `Arc` because the policy takes
+        // it by shared reference and every frame's subcomposition runs it once.
         let key = ctx.next_key();
         let policy = ConstraintsSubcomposePolicy {
             alignment: self.alignment,
             first_measure: std::cell::Cell::new(None),
-            content: std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(content)))),
+            content: std::sync::Arc::new(content),
         };
         ctx.start_container(key, self.modifier, policy);
         ctx.end_node();
@@ -186,9 +192,8 @@ struct ConstraintsSubcomposePolicy {
     /// opposite failure: with the guard keyed on nothing, a cap change moved the state but the box
     /// kept reporting the old one, since the subcomposition never re-composed.
     first_measure: std::cell::Cell<Option<(u64, Size)>>,
-    content: std::sync::Arc<
-        std::sync::Mutex<Option<Box<dyn FnOnce(&mut ComposeCtx, BoxWithConstraintsScope) + Send>>>,
-    >,
+    /// The content, re-runnable: a later frame's measurement composes it again (see `build`).
+    content: std::sync::Arc<dyn Fn(&mut ComposeCtx, BoxWithConstraintsScope) + Send>,
 }
 
 impl std::fmt::Debug for ConstraintsSubcomposePolicy {
@@ -214,15 +219,13 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
             }
         }
         let scope = BoxWithConstraintsScope::new(constraints);
-        let content = self.content.lock().unwrap().take();
+        let content = &self.content;
         // The subcomposed content is adopted as this node's child, so its measurement IS this node's
         // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
         // Reporting anything else would leave the box at 0 while holding a sized child — measured
         // while wiring this: the box read [0,0] with a [98,48] child under it.
-        let size = crate::ui::subcompose::subcompose(constraints, move |ctx| {
-            if let Some(content) = content {
-                content(ctx, scope);
-            }
+        let size = crate::ui::subcompose::subcompose(constraints, |ctx| {
+            content(ctx, scope);
         });
         let _ = self.alignment;
         self.first_measure.set(Some((generation, size)));

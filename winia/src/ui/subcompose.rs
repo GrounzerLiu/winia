@@ -138,7 +138,7 @@ impl Subcomposition {
 /// same node and only the last would be adopted.
 pub fn subcompose(
     constraints: Constraints,
-    content: impl FnOnce(&mut ComposeCtx),
+    content: impl Fn(&mut ComposeCtx),
 ) -> Size {
     // ONE composition per frame. The frame handler can run `layout()` more than once in a frame (it
     // does, when a shared flight attaches a layout override), and each of those would otherwise
@@ -337,6 +337,8 @@ mod tests {
     /// (a `BoxWithConstraints` scope, a `TabRow` indicator slot), reduced to one node.
     struct TextSubcomposePolicy {
         text: String,
+        /// Optional counter for "the content ran": the closure given to `subcompose` bumps it.
+        runs: Option<std::sync::Arc<std::sync::Mutex<usize>>>,
     }
 
     impl std::fmt::Debug for TextSubcomposePolicy {
@@ -354,8 +356,14 @@ mod tests {
             constraints: Constraints,
         ) -> (Size, Vec<Placement>) {
             let text = self.text.clone();
+            let runs = self.runs.clone();
+            // `Fn`, not `FnOnce` (the facility re-runs content on a later frame): the clone is moved
+            // into the closure, and each call passes a fresh reference to it.
             let size = subcompose(constraints, move |ctx| {
-                crate::ui::Text::new(text).build(ctx);
+                if let Some(runs) = &runs {
+                    *runs.lock().unwrap() += 1;
+                }
+                crate::ui::Text::new(text.as_str()).build(ctx);
             });
             (size, Vec::new())
         }
@@ -369,9 +377,64 @@ mod tests {
         }
     }
 
-    /// The facility end to end, through a real frame: a component whose content is composed at
-    /// measure time gets its content into the arena, measured by the frame's own layout, and it
-    /// survives a second frame (re-registered and re-adopted each time).
+    /// The content is `Fn`, and a later frame's measurement RUNS it: this is the defect that made a
+    /// `BoxWithConstraints` report `0x0` on the second frame (measured in a window: `[sub] ... nodes=0
+    /// root=None`, the policy reporting `0x0` over the size adoption had written). A `FnOnce` content
+    /// composes NOTHING the second time, and the parent then reports the empty tree's size.
+    #[test]
+    fn a_later_frame_runs_the_content_again_and_the_parent_size_follows_it() {
+        let runs = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+        let runs_in = runs.clone();
+        let build = || {
+            let runs = runs_in.clone();
+            move |ctx: &mut ComposeCtx| {
+                let runs = runs.clone();
+                let key = ctx.next_key();
+                ctx.start_container(
+                    key,
+                    crate::modifier::Modifier::new().size(120.0, 30.0),
+                    TextSubcomposePolicy {
+                        text: "second frame".to_string(),
+                        runs: Some(runs),
+                    },
+                );
+                ctx.end_node();
+            }
+        };
+
+        let mut composer = Composer::new();
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        let first = composer.arena.nodes[root].measured_size;
+        let child = composer.arena.nodes[root].children.first().copied().expect("adopted child");
+        let child_first = composer.arena.nodes[child].measured_size;
+        assert!(child_first.height > 0.0, "the content composed and measured: {child_first:?}");
+        assert!(first.height > 0.0, "and the parent reports it: {first:?}");
+
+        // Frame 2 — a real second measurement of the same node, which is what the app's frame path does
+        // every frame for a subcomposing node. Forced here because the pure-composer path folds a node
+        // whose constraints did not change, and a folded node would prove nothing about the content.
+        composer.compose(build());
+        composer.arena.nodes[root].cached_constraints = None;
+        composer.arena.nodes[root].layout_dirty = true;
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let second = composer.arena.nodes[root].measured_size;
+        assert!(
+            second.height > 0.0,
+            "the parent is still sized on the second frame: {second:?}"
+        );
+        let child = composer.arena.nodes[root].children.first().copied().expect("adopted child");
+        assert_eq!(
+            composer.arena.nodes[child].measured_size.height,
+            second.height,
+            "the parent's size IS its content's size on the second frame too"
+        );
+        let runs = *runs.lock().unwrap();
+        eprintln!("[subcompose-test] content ran {runs} time(s) across two frames");
+    }
+
+    /// And it DRAWS: a real frame renders without tripping the arena's own guards.
     #[test]
     fn a_subcomposed_child_is_adopted_measured_and_survives_a_second_frame() {
         let build = |ctx: &mut ComposeCtx| {
@@ -379,7 +442,7 @@ mod tests {
             ctx.start_container(
                 key,
                 crate::modifier::Modifier::new().size(120.0, 30.0),
-                TextSubcomposePolicy { text: "subcomposed".to_string() },
+                TextSubcomposePolicy { text: "subcomposed".to_string(), runs: None },
             );
             ctx.end_node();
         };

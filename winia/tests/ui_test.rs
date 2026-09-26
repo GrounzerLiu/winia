@@ -2065,8 +2065,13 @@ fn box_with_constraints_composes_its_content_at_measure_time() {
     let (w2, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
     assert!(w2 > 0.0, "the box is still sized after the cap changed, got {w2}");
 
-    // And back — the width has to follow in both directions.
-    app.click_tag("bwc-wide");
+    // And back — the width has to follow in both directions. `click_until` here for the same reason
+    // as the narrow click: the debug click path loses the occasional click (`docs/ui-testing.md`),
+    // and this direction is asserted by its effect rather than retried by hand.
+    let (wx, wy, ww, wh) = app.find_tag("bwc-wide").expect("the wide button");
+    app.click_until(wx + ww / 2.0, wy + wh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("BWC max 200"))
+    });
     app.expect_text_timeout("BWC max 200", Duration::from_secs(5));
     let (w3, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
     assert!(w3 > 0.0, "and still sized after the cap returned, got {w3}");
