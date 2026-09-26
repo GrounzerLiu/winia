@@ -1,14 +1,17 @@
-# `exp/lookahead-probe` — frozen, and how to pick it up
+# `exp/lookahead-probe` — what it does now, and how to pick it up
 
-> Status: **the acceptance test is GREEN and un-ignored (commit `c579ad3`), and the freeze is now
-> about ONE remaining piece: cross-frame reuse of the composition itself.** The component's readings
-> are correct in a real window (the test asserts the first frame's real cap, the box's size, and a
-> cap change re-arranging in both directions), so `BoxWithConstraints` no longer holds a
-> known-wrong reading. What is NOT done is the reuse: MEASURED, the subcomposition is rebuilt every
-> frame (`[subcompose-test] remember values across frames: [1, 2]` — a fresh composition id per
-> frame, so a `remember` inside subcomposed content does not survive). `v2` still ships the
-> frame-lagged version, and merging this branch means merging a component whose content re-composes
-> every frame — cheap for a text, wrong for anything stateful.
+> Status: **the whole objective is in place.** The acceptance test
+> (`box_with_constraints_composes_its_content_at_measure_time`) is GREEN and un-ignored: the content
+> prints the parent's cap on the first frame, the box takes its size from what it composed, and a cap
+> change re-arranges it in both directions. **Cross-frame reuse is implemented too** (`e751261`): the
+> subcomposition keeps its composition, measured by a unique id remembered inside the content —
+> `[1, 1]` across two frames where it used to be `[1, 2]`. Both suites are green: lib 1092, UI 48 with
+> nothing ignored.
+>
+> So this branch is no longer "a prototype with a known-wrong reading"; it is a facility plus one
+> component that uses it, and the remaining question is a MERGE question (does `v2` want
+> `BoxWithConstraints` composed at measure time, with its content re-composed every frame the node
+> measures) rather than a defect.
 >
 > Reasoning and findings: `docs/lookahead-subcompose-feasibility.md` (this branch's copy carries the
 > full trail; the mainline's copy at `7e66804` carries the result and the recommendation without the
@@ -26,23 +29,22 @@
 | `winia/src/ui/box_with_constraints.rs` (rewritten, +272/−179) | `BoxWithConstraints` on the facility, with a `first_measure` generation guard and the `subcomposed` no-fold flag |
 | `winia/src/core/composer.rs`, `winia/src/core/materialize.rs`, `winia/src/layout/node.rs` | the materialize/node contract: `subcomposed_child`, `subcomposed_measurements`, detach/reattach across both reuse arms, previous-subtree release |
 | `winia/tests/ui_fixtures/fixture_bwc.rs` + a `("bwc", …)` row | the window fixture: a box whose parent cap changes on demand |
-| `winia/tests/ui_test.rs` | the reproduction, `#[ignore]`d, reason = the root cause; its green run is the acceptance criterion |
+| `winia/tests/ui_test.rs` | the acceptance test — it ran `#[ignore]`d as the reproduction and is now un-ignored and green in the normal suite |
 | `winia/tests/ui/mod.rs` | `UiTest::find_tag_size`, the helper the reproduction needs (a test that asserts on a component's own size rather than clicking it) |
 
-## The acceptance criterion
+## The acceptance criterion (MET)
 
-One test, currently `#[ignore]`d, and it must run green:
+One test, green in the normal UI suite:
 
 ```
 cargo build -p winia --bin fixture_all --features debug-server
-cargo test -p winia --features debug-server --test ui_test box_with_constraints_composes_its_content_at_measure_time -- --ignored
+cargo test -p winia --features debug-server --test ui_test box_with_constraints_composes_its_content_at_measure_time
 ```
 
-It un-ignores as part of the fix (the attribute's reason text exists only to carry the root cause until
-then). It asserts, in one run: the content prints the real cap on the **first** frame, the box has a
+It asserts, in one run: the content prints the real cap on the **first** frame, the box has a
 non-zero width and height, the cap change re-arranges the content in **both** directions, and exactly
 one subcomposed content node exists after three frames (two live copies would claim one key and trip
-the arena's dup-key guard).
+the arena's dup-key guard). Disabling the fix that makes it pass turns it red — see the rounds below.
 
 Baselines measured on this branch, for comparison after any change:
 
@@ -92,7 +94,26 @@ the TREE be rebuilt (it already is, correctly — the acceptance test passes) an
 rebuild cannot reproduce: the remembered state of the content, keyed by its call sites. That is a
 question about `Composer`'s slot table, not about the arena.
 
-## Round 4 (2026-09-26): carrying the slot table alone is not enough either — measured, reverted
+## Round 5 (2026-09-26): the reuse LANDED — a subcomposition keeps its composition
+
+`e751261` implements it, and the piece that was missing turned out to be the composer's own bookkeeping
+rather than the slot table:
+
+- The last composition per subcomposing node is kept (`SUBCOMPOSITION_CACHE`, in the facility's
+  thread-local set). Adoption takes the inner `Composer` by `&mut` and hands it back after moving its
+  TREE into the outer arena — the ARENA goes, the SLOT TABLE stays, and the next frame composes the
+  content into that table.
+- `Composer::prepare_subcomposition_for_recompose` clears the three pieces of per-node state that
+  pointed into the drained arena: `prev_node_by_key`, the frame's reuse marks, and `arena.root`. Each
+  one was a crash before being cleared (materialize's reuse arm, then `insert_reuse_key` via
+  `collect_layout_index`). The slot table is deliberately untouched.
+
+Measured, both directions: a unique id remembered by the subcomposed content returns `[1, 1]` (was
+`[1, 2]` — a fresh composition every frame), and disabling the cache lookup turns that test red again.
+The acceptance test still passes in the normal UI suite (48 passed, 0 ignored) and the library suite is
+1092 passed.
+
+## Round 4 (2026-09-26): the same route before the preparation — measured, then finished in Round 5
 
 The cheap answer was tried: keep the inner `Composer` with the subcomposing node (a thread-local cache
 keyed by that node's index), compose the next frame's content INTO it (a `remember` reads its value out
@@ -119,39 +140,30 @@ trace technique is reusable: `WINIA_SUBCOMPOSE_TRACE`, driven through the fixtur
 `c 51 36` then `c 123 36`, printed which keys a recompose marked, what materialize received, and
 which nodes each layout pass reached.
 
-## The restart order, if this is picked up
+## Where this goes next (the objective is done)
 
-1. **Re-confirm the defect is still the one described.** Run the `--ignored` test above and read the
-   box's own size out of the failure. If it is not `0x0` anymore, the sections below are stale —
-   re-measure before acting.
-2. **Start from the composition→measure link, not from the arena.** The remaining gap is that a
-   recomposition does not make the node re-measure (see the section above). Read, in this order:
-   `Composer::layout`'s fold check (`winia/src/layout/node.rs`, `measure_node`) and the descriptor's
-   `dirty` flag as `materialize` receives it (`winia/src/core/composer.rs`, `collect_desc_tree`).
-   The question to answer with a measurement is whether the slot that recomposed should have carried
-   `dirty=true` into materialize, and why it did not on that frame.
-3. **Then the cross-frame piece this file originally pointed at:** keep the composition alive between
-   frames and **re-arrange** it, instead of re-creating it per measurement and moving it. The named
-   place is `Composer::subcomposition_cache` (a stub in `subcompose.rs` with its reason written down).
-   Note what that costs: adoption MOVES the inner tree into the outer arena, so a re-usable cache needs
-   the inner side to survive the move (either a copy, or an adoption that leaves the source intact) —
-   and `MeasurePolicy` has no clone hook, which is the first thing to settle.
-4. **Then, and only then, re-run three things:** the `--ignored` test; the tests in
-   `subcompose_probe.rs`; the `BoxWithConstraints` tests (two of them assert first-frame constraints
-   and second-frame sizing, which is where a stale cache will show up first). The lib count should stay
-   at 1091 unless tests are added.
-5. **If it goes green, the merge question is a component question, not a facility question:**
-   `BoxWithConstraints` becomes the second component on the facility, and `TabRow`'s indicator slot is
-   the natural third. Merge only what is exercised.
+1. **The acceptance test is green and un-ignored; keep it that way.** Its commands are above, and
+   disabling either of the two mechanisms behind it turns it red (the composition→measure seeding, and
+   the reuse lookup).
+2. **The remaining question is a MERGE question, not a defect:** does `v2` want `BoxWithConstraints`
+   composed at measure time? If yes, this branch is the thing to merge, and the review should look at
+   what the facility costs per frame (the content is re-composed whenever its node measures, and the
+   content's `remember` state now survives that).
+3. **The facility's natural second user is `TabRow`'s indicator slot** — the case the feasibility note
+   records as genuinely needing measure-time composition. `BoxWithConstraints` was the first; a second
+   user is what would show whether the facility's shape (`subcompose()` called from inside `measure`)
+   is the right one to publish.
+4. **Before adding that second user, re-run:** the `BoxWithConstraints` tests, the subcomposition tests
+   in `subcompose.rs`, the lib suite (1092) and the UI suite (48, nothing ignored).
 
 ## What was already ruled out (do not re-try these)
 
-- **Reusing the inner `Composer` for the next frame's composition** (cache it per node, compose into it
-  again, hand it back after adoption). Tried this round with the full implementation: it compiles and
-  it crashes on the frame that reuses it (`index out of bounds` at `materialize.rs:405`; clearing that
-  index moves the crash to a `[dup-key]` at `materialize.rs:682`), because the composer's per-node
-  state assumes the arena is continuous and adoption left it empty. Reverted. See Round 4 above for the
-  two shapes that would actually make it work.
+- **Reusing the inner `Composer` without preparing it for a NEW composition** (cache it per node, call
+  `compose` on it straight away, hand it back after adoption). Tried in Round 4: it crashes on the frame
+  that reuses it because the composer's per-node bookkeeping still points into the arena adoption
+  drained (`index out of bounds` at `materialize.rs:405`, then in `insert_reuse_key` reached from
+  `collect_layout_index`). Fixed in Round 5 by clearing exactly those three pieces of state — so the
+  lesson is "prepare the composer", not "do not reuse it".
 - **Re-recording the inner composition's reads on the outer node's slot key** (so a state read inside
   the subcomposition marks the component for re-measurement). Tried in this round: it made the box's
   own reading correct, but it broke `a_long_press_fires_while_the_pointer_is_still_down` (the extra
