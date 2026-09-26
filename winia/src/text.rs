@@ -7,7 +7,7 @@ mod text_layout;
 mod inline_drawable;
 
 pub use index_bimap::IndexBiMap;
-pub use paragraph::Paragraph;
+pub use paragraph::{build_plain_paragraph, Paragraph};
 pub use paragraph_builder::ParagraphBuilder;
 pub use text_layout::TextLayout;
 pub use inline_drawable::{InlineDrawable, ImageDrawable, SvgDrawable};

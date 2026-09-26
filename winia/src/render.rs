@@ -549,7 +549,10 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
     }
 }
 
-fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
+/// winia `Color` → Skia color. Public because the `Canvas`/`DrawScope` API
+/// (`crate::ui::draw_scope`) draws through it too — one conversion for the whole crate rather than a
+/// second copy inside the public drawing surface.
+pub fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
 

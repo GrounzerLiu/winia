@@ -58,6 +58,11 @@ pub mod tab_row;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
 pub mod search_bar;
+pub mod draw_scope;
+pub mod box_with_constraints;
+
+pub use draw_scope::{draw_behind, draw_with_content, Canvas, DrawScope};
+pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 
 pub use animated_visibility::{
     AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,

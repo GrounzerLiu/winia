@@ -1,9 +1,34 @@
 use skia_safe::textlayout::paragraph::{ExtendedVisitorInfo, FontInfo, GlyphClusterInfo, GlyphInfo, Paragraph as SkParagraph, VisitorInfo};
-use skia_safe::textlayout::{Affinity, LineMetrics, RectHeightStyle, RectWidthStyle, TextBox, TextRange};
+use skia_safe::textlayout::{Affinity, LineMetrics, ParagraphStyle, RectHeightStyle, RectWidthStyle, TextBox, TextRange, TextStyle};
 use skia_safe::{scalar, Canvas, Font, Path, Point, TextBlob, Unichar};
 use std::collections::HashSet;
 use std::ops::Range;
-use crate::text::IndexBiMap;
+use crate::text::{IndexBiMap, ParagraphBuilder};
+
+/// Build a laid-out paragraph for one plain text run — the same construction `Text` goes through,
+/// exposed for the public drawing surface (`crate::ui::draw_scope`'s `draw_text`) so canvas text is
+/// shaped by one path rather than two.
+///
+/// `width` is the layout width in logical pixels; pass a large value for a single unwrapped line.
+pub fn build_plain_paragraph(
+    text: &str,
+    font_size: f32,
+    color: crate::modifier::Color,
+    width: f32,
+) -> Paragraph {
+    let fc = crate::font::get_font_collection();
+    let mut ts = TextStyle::new();
+    ts.set_font_size(font_size);
+    ts.set_color(crate::render::skia_color(color));
+    let mut style = ParagraphStyle::default();
+    style.set_text_style(&ts);
+    let mut b = ParagraphBuilder::new(&style, fc);
+    b.push_style(&ts);
+    b.add_text(text);
+    let mut p = b.build();
+    p.layout(width);
+    p
+}
 
 pub struct Paragraph {
     paragraph: SkParagraph,
