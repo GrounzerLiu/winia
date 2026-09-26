@@ -44,35 +44,58 @@ Baselines measured on this branch, for comparison after any change:
 
 | command | reading |
 |---|---|
-| `cargo test -p winia --lib` | **1090 passed** (`v2` is 1082) |
+| `cargo test -p winia --lib` | **1091 passed** (`v2` is 1082; the extra one is the content re-run test) |
 | `cargo test -p winia --features debug-server --test ui_test` | **47 passed, 1 ignored** |
+
+## What the cross-frame round has ALREADY fixed (commit `24f2f06`)
+
+Two causes of the empty later generation are gone, so the restart starts from a different place than
+this file first described:
+
+- **The content is re-runnable.** `BoxWithConstraints`' content is composed inside the measurement, so
+  a later frame runs it again; `build` takes `Fn`. With `FnOnce` the second frame composed NOTHING
+  (`[sub] ... nodes=0 root=None size=0x0`), and that `0x0` overwrote the size adoption had written.
+  Locked by `a_later_frame_runs_the_content_again_and_the_parent_size_follows_it`.
+- **A subcomposing node is not folded.** `materialize`'s reuse arm marks it dirty (`measure_node`
+  already refused to fold one), so its composition is re-arranged rather than skipped.
+
+The remaining defect, measured after those two: on a frame where the component's body recomposes but
+the node is materialized with `dirty=false`, `measure_node` folds and the component is NOT
+re-measured — in a window the body ran (traced), the new modifier arrived (`max_width=Fixed(200)`),
+and the box's reported size never followed. The acceptance test fails on exactly that.
 
 ## The restart order, if this is picked up
 
 1. **Re-confirm the defect is still the one described.** Run the `--ignored` test above and read the
    box's own size out of the failure. If it is not `0x0` anymore, the sections below are stale —
    re-measure before acting.
-2. **Read the two mechanisms the fix has to reconcile**, in this order: (a) `Composer::layout`'s
-   adoption pass (`winia/src/ui/subcompose.rs`) — it MOVES the composition's tree into the outer
-   arena, which is what leaves the subcomposition empty on a later generation; (b) materialize's
-   descriptor-driven child rebuild (`winia/src/core/materialize.rs`) — the adopted child has no
-   descriptor, so it needs the detach/reattach arms the branch already added for it.
-3. **Build the piece the fix needs: cross-frame reuse of a composition.** The composition has to stay
-   alive between frames and be **re-arranged** (re-measured with the new constraints), instead of being
-   re-created per measurement and moved. The named place to start is
-   `Composer::subcomposition_cache`, currently a stub in `subcompose.rs` with its reason written down:
-   a per-parent cache of the last subcomposition, keyed by (parent key, content identity), reused when
-   the content function has not changed and the node measures again.
-4. **Then, and only then, re-run three things:** the `--ignored` test; the 5 tests in
-   `subcompose_probe.rs`; the 4 `BoxWithConstraints` tests (two of them assert first-frame constraints
+2. **Start from the composition→measure link, not from the arena.** The remaining gap is that a
+   recomposition does not make the node re-measure (see the section above). Read, in this order:
+   `Composer::layout`'s fold check (`winia/src/layout/node.rs`, `measure_node`) and the descriptor's
+   `dirty` flag as `materialize` receives it (`winia/src/core/composer.rs`, `collect_desc_tree`).
+   The question to answer with a measurement is whether the slot that recomposed should have carried
+   `dirty=true` into materialize, and why it did not on that frame.
+3. **Then the cross-frame piece this file originally pointed at:** keep the composition alive between
+   frames and **re-arrange** it, instead of re-creating it per measurement and moving it. The named
+   place is `Composer::subcomposition_cache` (a stub in `subcompose.rs` with its reason written down).
+   Note what that costs: adoption MOVES the inner tree into the outer arena, so a re-usable cache needs
+   the inner side to survive the move (either a copy, or an adoption that leaves the source intact) —
+   and `MeasurePolicy` has no clone hook, which is the first thing to settle.
+4. **Then, and only then, re-run three things:** the `--ignored` test; the tests in
+   `subcompose_probe.rs`; the `BoxWithConstraints` tests (two of them assert first-frame constraints
    and second-frame sizing, which is where a stale cache will show up first). The lib count should stay
-   at 1090 unless tests are added.
+   at 1091 unless tests are added.
 5. **If it goes green, the merge question is a component question, not a facility question:**
    `BoxWithConstraints` becomes the second component on the facility, and `TabRow`'s indicator slot is
    the natural third. Merge only what is exercised.
 
 ## What was already ruled out (do not re-try these)
 
+- **Re-recording the inner composition's reads on the outer node's slot key** (so a state read inside
+  the subcomposition marks the component for re-measurement). Tried in this round: it made the box's
+  own reading correct, but it broke `a_long_press_fires_while_the_pointer_is_still_down` (the extra
+  re-measures shifted the long-press timing) and did NOT turn the acceptance test green. Reverted —
+  and reverted is the point: the mechanism is sound, its current attachment point is not.
 - **Writing the parent's size at the adoption site.** Tried twice; measured; neither write moves the
   reading. Both attempts are still in the branch's code — they are paths to read, not templates.
 - **A per-frame cache in the policy** (`first_measure`). It is already there, and it is what keeps the

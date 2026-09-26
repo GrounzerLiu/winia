@@ -303,12 +303,49 @@ re-built each frame; the arrangement cache (`Composer::subcomposition_cache`) is
 reason; and nothing else in the framework uses the facility yet — `LazyColumn` still runs on its anchor
 model, and `TabRow`'s indicator slot is untouched.
 
+### The cross-frame round: two causes fixed, and the defect moved (`24f2f06`)
+
+Starting from the observed root cause above, this round found and fixed two of its causes, and the
+measurement moved the defect to a different layer:
+
+1. **The content closure was consumed.** `BoxWithConstraints::build` took `FnOnce` and the policy took
+   the closure out of its `Mutex<Option<..>>`, so the SECOND frame's composition ran an EMPTY content.
+   Traced in a window (`WINIA_SUBCOMPOSE_TRACE`), before and after:
+
+   ```
+   before:  [sub] policy-node=Some(9) cache=miss nodes=0 root=None   size=0x0
+   after:   [sub] policy-node=Some(9) cache=miss nodes=1 root=Some(0) size=86x19
+   ```
+
+   The `0x0` is what overwrote the size the adoption pass had written — the reading the frozen branch
+   was blamed for. `build` now takes `Fn` (the shape Compose's content lambdas have), locked by the
+   library test `a_later_frame_runs_the_content_again_and_the_parent_size_follows_it`, which asserts
+   the content RAN again on a forced second measurement and that the parent's size is the content's.
+2. **A subcomposing node was folded.** `measure_node` already refuses to fold one, but the materialize
+   half was missing: a reused node took its `dirty` flag straight from the descriptor, so a
+   subcomposing node could be materialized clean and fold its measurement. The reuse arm now marks it
+   dirty — its composition has no cross-frame identity yet, so it is re-measured every frame.
+
+**What is still broken, and it is a different layer.** On a frame where the component's body recomposes
+but the node arrives at `measure_node` with `dirty=false`, the fold returns the stale size and the
+component is never re-measured. Traced in a window: after the cap changed, the body ran (`BUILD`), the
+new modifier arrived (`maxWidth = Fixed(200.0)`), and no measurement followed. The remaining gap is
+therefore **the composition→measure link**, not the arena: a recomposition has to reach the node as
+"re-measure".
+
+**And one candidate was measured, refuted and reverted.** Re-recording the inner composition's state
+reads on the outer node's slot key (`state::record_deps_for`) fixed the box's own reading, but it broke
+`a_long_press_fires_while_the_pointer_is_still_down` — the extra re-measures shifted the long-press
+timing — and it did not turn the acceptance test green either. The mechanism is sound; its attachment
+point is not. That is why it is not in the tree.
+
 ## This branch, and that it is frozen
 
-Everything above is an experiment: the code stays on `exp/lookahead-probe` and is **frozen at
-`6551334`**, deliberately not merged, because `BoxWithConstraints` here reads `[0,0]` for its own size
-in a real window while its adopted child reads `[192,19]` — a component with a known-wrong reading is
-worse than the frame-lagged one `v2` ships. What the branch is good for: the facility and its five
+Everything above is an experiment: the code stays on `exp/lookahead-probe`, deliberately not merged,
+because `BoxWithConstraints` here still reads its own size wrong in a real window — a component with a
+known-wrong reading is worse than the frame-lagged one `v2` ships. The branch was frozen at `6551334`;
+the cross-frame round (below, `24f2f06`) fixed two of the three causes it was frozen for, so the
+freeze now covers a NARROWER defect than the original note. What the branch is good for: the facility and its five
 guarantee tests, the materialize/node contract work the adopted subtree needed, a priced alternative
 (a second `layout()`, §5b), and a reproduction that defines the acceptance criterion.
 
