@@ -32,6 +32,20 @@ to show how loud the machine was.
 > and the reverse-graph rebuild — is **56.5 µs, 3.4 % of a real frame**, with the biggest single item
 > (`reconcile_compose_deps`) at 9 µs. `docs/frame-cost-probe-round.md` has the per-section table on
 > both trees, the phase split, and the two ablations that priced the whole-tree walks.
+>
+> **Where that investigation ended (summary of `docs/frame-cost-probe-round.md`).** Every candidate
+> that document priced is now closed, most of them by measurement rather than by opinion:
+> `reconcile_compose_deps` 9 µs on a real tree (0.55 %); gating `prune_stale_child_links` flat;
+> `collect_live_keys`'s win a behaviour change, not a skip; the "every node measured twice" report a
+> **probe defect** (it is one call per node per pass); the per-node modifier queries ~5 % of a measured
+> call; the reuse-index walk −148 µs of an IDLE frame but **0 on the structural-change frames that are
+> actually slow**; the present path 300–400 µs the same on Vulkan and on the CPU fallback, i.e. the
+> platform's cost rather than the framework's. The frame shapes that came out of it: idle ~1 ms, one
+> row updated 1.65 ms, a jump (structural change) 1–3.6 ms, against a 16.7 ms budget at 60 Hz — with
+> the draw path, not compose or layout, the largest phase in the slow ones. Read that document before
+> opening a new optimization round on the compose engine: there is no large defect left in it at these
+> shapes, and the next honest step would be a different instrument (a policy-level split inside
+> `measure`, or a profile of a real app's own workload) rather than another guess.
 
 ## What holds exactly: the scoping
 
