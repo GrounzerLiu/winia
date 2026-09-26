@@ -2034,6 +2034,10 @@ pub struct Composer {
     /// Subcompositions parked during the current layout pass, waiting for adoption
     /// (`ui::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
     pub(crate) subcompositions: Vec<(usize, crate::ui::subcompose::Subcomposition)>,
+    /// A subcomposition this composer can re-arrange instead of re-composing (`ui::subcompose`).
+    /// Taken by the next `subcompose()` call in the same frame and put back by `layout()`'s adoption
+    /// pass, so a second layout pass in one frame reuses the first pass's composition.
+    subcomposition_cache: Option<Box<Composer>>,
     /// How many skipped subtrees the last `materialize` claimed in place, instead of re-encoding them
     /// into descriptors (`SlotTable::try_claim_skipped_subtree`). Test-visible so the tests can tell
     /// "the fast path ran" from "it bailed" — the two are deliberately indistinguishable in the tree.
@@ -2153,6 +2157,7 @@ impl Composer {
             prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
             subcompositions: Vec::new(),
+            subcomposition_cache: None,
             #[cfg(test)]
             skip_claims: 0,
             #[cfg(test)]
@@ -2916,6 +2921,26 @@ impl Composer {
     }
 
     /// 返回 LayoutNode 树的根节点引用
+    /// The constraints this composer's last `layout()` ran under, if any.
+    pub(crate) fn cached_root_constraints(&self) -> Option<Constraints> {
+        self.arena
+            .root
+            .and_then(|root| self.arena.nodes.get(root))
+            .and_then(|node| node.cached_constraints)
+    }
+
+    /// Re-run this composer's layout under new constraints — used for a CACHED subcomposition, whose
+    /// content is already composed and only its arrangement can change.
+    pub(crate) fn relayout_subcomposition(&mut self, constraints: Constraints) {
+        self.layout(constraints);
+    }
+
+    /// Take the cached subcomposition (see the field), if this frame's next `subcompose()` can
+    /// re-arrange it instead of composing again.
+    pub(crate) fn take_cached_subcomposition(&mut self) -> Option<Box<Composer>> {
+        self.subcomposition_cache.take()
+    }
+
     /// Park a subcomposition against the node that composed it, for the adoption pass at the end of
     /// `layout` (`ui::subcompose`). The registry is cleared at the start of every layout pass.
     pub(crate) fn park_subcomposition(
@@ -2995,7 +3020,9 @@ impl Composer {
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
             let parked = std::mem::take(&mut self.subcompositions);
-            crate::ui::subcompose::adopt_parked(
+            // `adopt_parked` hands back the last composition it moved, which becomes the cache a
+            // second layout pass in this same frame can re-arrange instead of re-composing.
+            self.subcomposition_cache = crate::ui::subcompose::adopt_parked(
                 &mut self.arena,
                 &mut self.reused_nodes,
                 parked,

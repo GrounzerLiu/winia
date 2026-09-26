@@ -158,6 +158,7 @@ impl BoxWithConstraints {
         let key = ctx.next_key();
         let policy = ConstraintsSubcomposePolicy {
             alignment: self.alignment,
+            first_measure: std::cell::Cell::new(None),
             content: std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(content)))),
         };
         ctx.start_container(key, self.modifier, policy);
@@ -175,6 +176,12 @@ impl Default for BoxWithConstraints {
 /// measured with, and reports what that content measured.
 struct ConstraintsSubcomposePolicy {
     alignment: Alignment,
+    /// What the first measurement of this frame produced. A second `layout()` in the same frame (the
+    /// frame handler runs one when a shared flight attaches a layout override) measures this node
+    /// again; composing a second time would discard the first composition — which the adoption pass
+    /// has already attached — and report a size derived from a tree nobody will see. Measured while
+    /// wiring this: the box read [0,0] in a real window while its adopted child read [98,48].
+    first_measure: std::cell::Cell<Option<Size>>,
     content: std::sync::Arc<
         std::sync::Mutex<Option<Box<dyn FnOnce(&mut ComposeCtx, BoxWithConstraintsScope) + Send>>>,
     >,
@@ -194,6 +201,11 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         _children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
+        // Already measured this frame: report the same answer instead of composing again (see the
+        // `first_measure` field).
+        if let Some(size) = self.first_measure.get() {
+            return (size, Vec::new());
+        }
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = self.content.lock().unwrap().take();
         // The subcomposed content is adopted as this node's child, so its measurement IS this node's
@@ -206,6 +218,7 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
             }
         });
         let _ = self.alignment;
+        self.first_measure.set(Some(size));
         // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
         // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
         // out under `constraints`, while the engine clamps against the constraints the box's modifier

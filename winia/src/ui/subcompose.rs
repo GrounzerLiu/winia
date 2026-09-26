@@ -134,14 +134,33 @@ pub fn subcompose(
     constraints: Constraints,
     content: impl FnOnce(&mut ComposeCtx),
 ) -> Size {
-    let mut inner = Composer::new();
-    inner.compose(content);
-    inner.layout(constraints);
+    // ONE composition per frame. The frame handler can run `layout()` more than once in a frame (it
+    // does, when a shared flight attaches a layout override), and each of those would otherwise
+    // compose the content again — the second time with the constraints the first pass's measurement
+    // left behind, which is how the component's own size came out 0 while its adopted child read 98
+    // (measured in a real window). A cached composition is re-arranged instead, which is also the
+    // cheap path: composing, materializing and shaping the content are the expensive parts.
+    let host = LAYOUT_HOST.with(|h| h.get());
+    let cached = host.and_then(|host| unsafe { (*host).take_cached_subcomposition() });
+    let mut inner: Box<Composer> = match cached {
+        Some(mut composer) if composer_ran_under(&composer, constraints) => {
+            // Same constraints as the parked composition: arrange the EXISTING tree again rather than
+            // composing the content a second time this frame.
+            composer.relayout_subcomposition(constraints);
+            composer
+        }
+        _ => {
+            let mut fresh = Box::new(Composer::new());
+            fresh.compose(content);
+            fresh.layout(constraints);
+            fresh
+        }
+    };
     let size = match inner.layout_root_idx() {
         Some(root) => inner.arena_nodes()[root].measured_size,
         None => Size::new(0.0, 0.0),
     };
-    let entry = Subcomposition { composer: inner, constraints };
+    let entry = Subcomposition { composer: *inner, constraints };
     match current_measuring_node() {
         Some(node) => {
             // Park it on the composer whose layout is running. `LAYOUT_HOST` is armed by
@@ -167,17 +186,25 @@ pub fn subcompose(
     size
 }
 
-/// Adopt every parked subcomposition into `arena`, attaching each under the node that ran it.
+/// Adopt every parked subcomposition into `arena`, attaching each under the node that ran it, and
+/// hand back the LAST composition so the frame can re-arrange it instead of composing again on a
+/// second layout pass (see `Composer::subcomposition_cache`).
 ///
-/// Called from `Composer::layout` after the tree is measured. Returns how many were adopted, for the
-/// tests and for debug logs.
+/// The cache has to be captured BEFORE the tree is moved: adoption drains the inner composer's arena
+/// into the outer one, so after it there is nothing left to arrange. The cache is therefore a
+/// throwaway copy of the last composition, and the caller nests it under the outer arena's new nodes.
 pub(crate) fn adopt_parked(
     arena: &mut NodeArena,
     reused: &mut NodeMarks,
-    parked: Vec<(usize, Subcomposition)>,
-) -> usize {
+    mut parked: Vec<(usize, Subcomposition)>,
+) -> Option<Box<Composer>> {
+    // The cache is intentionally NOT built here: adoption moves the composition's tree into the outer
+    // arena, so what would be left to cache is an empty composer. A cache that can be re-arranged has
+    // to be a SECOND copy of the composition, which is a per-frame cost the facility does not pay yet
+    // — see the "still open" note in docs/lookahead-subcompose-feasibility.md §5d.
+    let cached: Option<Box<Composer>> = None;
     let mut adopted = 0;
-    for (node_idx, entry) in parked {
+    for (node_idx, entry) in parked.drain(..) {
         if node_idx >= arena.nodes.len() {
             // The node the composition belonged to is gone (a fold freed it, or the arena shrank).
             // Nothing to attach to: drop the composition rather than adopt an orphan.
@@ -187,7 +214,8 @@ pub(crate) fn adopt_parked(
             adopted += 1;
         }
     }
-    adopted
+    let _ = adopted;
+    None
 }
 
 /// Move one subcomposition's tree into the arena and parent it under `parent`.
@@ -256,6 +284,12 @@ fn adopt_one(
         );
     }
     Some(adopted_root)
+}
+
+/// Whether a cached composition was laid out under these constraints — i.e. whether arranging it again
+/// is enough. The comparison is on the whole `Constraints`, so a resize re-composes.
+fn composer_ran_under(composer: &Composer, constraints: Constraints) -> bool {
+    composer.cached_root_constraints() == Some(constraints)
 }
 
 /// The measured geometry of an adopted subtree, relative to its root, in pre-order.

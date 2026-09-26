@@ -224,14 +224,27 @@ constraints on the FIRST frame and that the box stays sized on the second; and i
 subcomposed text is in the tree at 98x48 with `BWC max 200`, and paints (9384 dark pixels inside the
 box region of a 630x240 frame).
 
-**What is still open, precisely:** in that same real window the BOX node itself reads `[0, 0]` while
-its child reads `[98, 48]` — and the unit tests that assert the box's own size pass, so the difference
-is in the app's frame path rather than in the facility. The frame handler runs `layout()` twice per
-frame under some conditions (the flight-override pass), and the box's policy composes a fresh
-subcomposition on each of those layouts; the adoption pass keeps only the last, and the arena's own
-adopted subtree from the first is released by the second. That is where the next round starts — the
-policy should subcompose ONCE per frame, or the second layout should reuse the first's composition
-instead of re-running it.
+**Resolved, and it was the frame path:** the box read `[0, 0]` while its child read `[98, 48]` because
+the policy composed a FRESH subcomposition on every measurement, and the frame handler measures such a
+node more than once per frame (the flight-override pass). The first composition is the one the adoption
+pass attaches; the second replaced it and reported a size from a tree nobody would see. The policy now
+reports its first measurement of the frame instead of composing again
+(`first_measure`), and the window is stable across runs:
+
+```
+tree: [420,160] root -> [420,160] pad -> [98,31] box -> [98,31] BWC max 200
+screenshot 630x240: 14400 dark pixels inside the box region
+```
+
+So `BoxWithConstraints` now does what Compose's does — content composed in the measurement, with the
+real constraints, on the first frame, sized to that content — and the facility is exercised by a real
+component rather than only by tests.
+
+**What is still not there** (and would be the next round's work if the facility is to be used more
+widely): the subcomposition is re-composed whenever its node measures, so a settled subtree is still
+re-built each frame; the arrangement cache (`Composer::subcomposition_cache`) is stubbed with its
+reason; and nothing else in the framework uses the facility yet — `LazyColumn` still runs on its anchor
+model, and `TabRow`'s indicator slot is untouched.
 
 ## 6. Recommendation
 
