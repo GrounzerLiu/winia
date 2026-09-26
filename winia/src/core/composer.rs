@@ -2970,8 +2970,25 @@ impl Composer {
         self.layout(constraints);
     }
 
-    /// Take the cached subcomposition (see the field), if this frame's next `subcompose()` can
-    /// re-arrange it instead of composing again.
+    /// Make a KEPT subcomposition ready for the next frame's composition.
+    ///
+    /// Adoption moves a subcomposition's arena into the outer one, which leaves this composer with an
+    /// empty arena and the per-node bookkeeping `layout()` built from the OLD one. `prev_node_by_key` is
+    /// the reuse index materialize consults before building nodes (`Some(idx)` into an arena that no
+    /// longer has that index — measured as `index out of bounds: the len is 0 but the index is 0`); the
+    /// per-frame reuse marks belong to the same dead frame. The SLOT TABLE is deliberately untouched:
+    /// that is the half this reuse exists for.
+    pub(crate) fn prepare_subcomposition_for_recompose(&mut self) {
+        self.prev_node_by_key.clear();
+        self.reused_nodes.clear();
+        // The arena index the drained tree used. It is read by `layout()` to decide where to start the
+        // reuse walk, and it names a node that is no longer in this arena — the second crash this
+        // preparation had to clear (`index out of bounds` in `insert_reuse_key`, reached from
+        // `collect_layout_index`).
+        self.arena.root = None;
+    }
+
+    /// Take the cached subcomposition (see the field), if this frame's next `subcompose()` can    /// re-arrange it instead of composing again.
     pub(crate) fn take_cached_subcomposition(&mut self) -> Option<Box<Composer>> {
         self.subcomposition_cache.take()
     }

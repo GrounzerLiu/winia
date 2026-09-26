@@ -51,6 +51,13 @@ thread_local! {
     /// (`ACTIVE_SLOT_KEY`, `GROUP_STACK`), with a guard for the same reason: it must be restored on
     /// panic.
     static LAYOUT_HOST: std::cell::Cell<Option<*mut Composer>> = const { std::cell::Cell::new(None) };
+
+    /// The composition that ran for a subcomposing node last frame, so the next frame composes its
+    /// content into the SAME slot table — a `remember` reads its value out of that table by slot key,
+    /// so the table is what has to survive a frame. Keyed by the node being measured; an entry is
+    /// replaced when that node measures again.
+    static SUBCOMPOSITION_CACHE: std::cell::RefCell<std::collections::HashMap<usize, Box<Composer>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 /// Arms [`LAYOUT_HOST`] for the duration of a layout pass, restoring the previous host on drop
@@ -125,6 +132,12 @@ impl Subcomposition {
     pub fn composer_mut(&mut self) -> &mut Composer {
         &mut self.composer
     }
+
+    /// The composer holding this subcomposition's slots/tree. Taken by value so the ADOPTION can keep
+    /// the slot table after moving the tree out of its arena (see `adopt_parked`).
+    pub(crate) fn into_composer(self) -> Composer {
+        self.composer
+    }
 }
 
 /// Subcompose now: compose `content` with `constraints` in its own composer and park the result
@@ -148,11 +161,24 @@ pub fn subcompose(
     // cheap path: composing, materializing and shaping the content are the expensive parts.
     let host = LAYOUT_HOST.with(|h| h.get());
     let cached = host.and_then(|host| unsafe { (*host).take_cached_subcomposition() });
-    let mut inner: Box<Composer> = match cached {
-        Some(mut composer) if composer_ran_under(&composer, constraints) => {
-            // Same constraints as the parked composition: arrange the EXISTING tree again rather than
-            // composing the content a second time this frame.
+    let node = current_measuring_node();
+    // The composition that ran for THIS node last frame, if any: composing the content into its slot
+    // table again is what lets a `remember` inside the content survive the frame.
+    let remembered = node.and_then(|n| SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&n)));
+    let mut inner: Box<Composer> = match (cached, remembered) {
+        // Same constraints as the parked composition: arrange the EXISTING tree again rather than
+        // composing the content a second time this frame.
+        (Some(mut composer), _) if composer_ran_under(&composer, constraints) => {
             composer.relayout_subcomposition(constraints);
+            composer
+        }
+        // A LATER frame, with the composition this node ran last time: compose into it, so the slots
+        // (and the values they remember) carry over.
+        (_, Some(composer)) => {
+            let mut composer = composer;
+            composer.prepare_subcomposition_for_recompose();
+            composer.compose(content);
+            composer.layout(constraints);
             composer
         }
         _ => {
@@ -196,19 +222,14 @@ pub fn subcompose(
 /// hand back the LAST composition so the frame can re-arrange it instead of composing again on a
 /// second layout pass (see `Composer::subcomposition_cache`).
 ///
-/// The cache has to be captured BEFORE the tree is moved: adoption drains the inner composer's arena
-/// into the outer one, so after it there is nothing left to arrange. The cache is therefore a
-/// throwaway copy of the last composition, and the caller nests it under the outer arena's new nodes.
+/// The inner composer is taken out of the entry and handed back to the cache when the adoption
+/// succeeded: its ARENA is drained into the outer arena by `adopt_one`, but its SLOT TABLE is what the
+/// next frame's composition needs (that is where the content's remembered values live).
 pub(crate) fn adopt_parked(
     arena: &mut NodeArena,
     reused: &mut NodeMarks,
     mut parked: Vec<(usize, Subcomposition)>,
 ) -> Option<Box<Composer>> {
-    // The cache is intentionally NOT built here: adoption moves the composition's tree into the outer
-    // arena, so what would be left to cache is an empty composer. A cache that can be re-arranged has
-    // to be a SECOND copy of the composition, which is a per-frame cost the facility does not pay yet
-    // — see the "still open" note in docs/lookahead-subcompose-feasibility.md §5d.
-    let cached: Option<Box<Composer>> = None;
     let mut adopted = 0;
     for (node_idx, entry) in parked.drain(..) {
         if node_idx >= arena.nodes.len() {
@@ -216,8 +237,16 @@ pub(crate) fn adopt_parked(
             // Nothing to attach to: drop the composition rather than adopt an orphan.
             continue;
         }
-        if adopt_one(entry, arena, reused, node_idx).is_some() {
+        let mut composer = entry.into_composer();
+        if adopt_one(&mut composer, arena, reused, node_idx).is_some() {
             adopted += 1;
+            // Keep the composition for THIS node: the next frame composes the content into it, and the
+            // slots (with what they remember) come back. The key is the arena index, which is stable
+            // while the node is: an entry is replaced when the node measures again, and the cache holds
+            // at most one composer per subcomposing node.
+            SUBCOMPOSITION_CACHE.with(|c| {
+                c.borrow_mut().insert(node_idx, Box::new(composer));
+            });
         }
     }
     let _ = adopted;
@@ -234,18 +263,18 @@ pub(crate) fn adopt_parked(
 /// 3. **Reachability**: the root is attached under `parent`, and every adopted node is marked reused —
 ///    the exact predicate the compose tail's prev-drain reads, so the subtree is not reclaimed.
 fn adopt_one(
-    mut entry: Subcomposition,
+    entry: &mut Composer,
     arena: &mut NodeArena,
     reused: &mut NodeMarks,
     parent: usize,
 ) -> Option<usize> {
-    let root = entry.composer.arena.root?;
+    let root = entry.arena.root?;
     let node_base = arena.nodes.len();
     let policy_base = arena.policies.len();
-    for p in entry.composer.arena.policies.drain(..) {
+    for p in entry.arena.policies.drain(..) {
         arena.policies.push(p);
     }
-    let taken: Vec<LayoutNode> = entry.composer.arena.nodes.drain(..).collect();
+    let taken: Vec<LayoutNode> = entry.arena.nodes.drain(..).collect();
     for (i, mut node) in taken.into_iter().enumerate() {
         node.children = node.children.iter().map(|&c| c + node_base).collect();
         node.measure_policy = node.measure_policy.map(|p| p + policy_base);
@@ -550,13 +579,14 @@ mod tests {
             2,
             "the content composed on both frames: {seen:?}"
         );
-        assert_ne!(
+        // The assertion this test was written to flip: the composition (its state included) survives a
+        // frame. It was `assert_ne!` while the reuse did not exist — `[1, 2]`, a fresh composition
+        // each frame.
+        assert_eq!(
             seen[0], seen[1],
-            "MEASURED: the composition is NOT reused across frames — a fresh one runs each frame, so \
-             a `remember` inside the subcomposed content does not survive. This test is the record of \
-             that, and it is the piece of work the component's readings do not need but a stateful \
-             content (an animation, a scroll position) will: keep the inner `Composer` alive between \
-             frames and re-arrange it. When that lands, this assertion flips to `assert_eq!`."
+            "the composition was REUSED across frames: a `remember` inside subcomposed content has to \
+             come back with the same value, or stateful content (an animation, a scroll position) \
+             resets every frame. Measured now: {seen:?}"
         );
     }
 
