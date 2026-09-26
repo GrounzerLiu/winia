@@ -2921,6 +2921,13 @@ impl Composer {
     }
 
     /// 返回 LayoutNode 树的根节点引用
+    /// How many times this composer has composed. A subcomposing policy compares it to tell "the same
+    /// frame measured me twice" (report the first result) from "a later frame measured me again"
+    /// (compose the content again, because its parameters may have changed).
+    pub fn compose_generation(&self) -> u64 {
+        self.compose_count
+    }
+
     /// The constraints this composer's last `layout()` ran under, if any.
     pub(crate) fn cached_root_constraints(&self) -> Option<Constraints> {
         self.arena

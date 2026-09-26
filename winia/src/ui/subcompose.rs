@@ -92,6 +92,12 @@ pub(crate) fn subcomposition_count() -> usize {
     }
 }
 
+/// The outer composer's compose count, or `None` outside a layout pass. A subcomposing policy uses it
+/// to distinguish a second measurement of the SAME frame from a measurement in a later one.
+pub(crate) fn compose_generation() -> Option<u64> {
+    LAYOUT_HOST.with(|h| h.get()).map(|host| unsafe { (*host).compose_generation() })
+}
+
 /// The node index being measured right now, if the caller is inside a `measure` call.
 pub fn current_measuring_node() -> Option<usize> {
     MEASURING_NODE.with(|m| m.get())
@@ -273,8 +279,14 @@ fn adopt_one(
     // Record the subtree's measurements BEFORE the inner arena is dropped: they are relative to the
     // subtree root, so they survive the arena being reshuffled (the base moves, the offsets do not).
     let measurements = measurements_from(&arena.nodes[adopted_root..]);
+    // The parent's size IS its content's size (a plain `Box` rule), and the frame path cannot be
+    // relied on to have re-run the policy at the moment the tree is read: measured in the app frame,
+    // the box node read [0,0] while its adopted child read [192,19]. Writing the root's measurement
+    // here keeps the two in step whenever the subcomposition is adopted.
+    let inner_root_size = measurements.first().map(|(_, s)| *s).unwrap_or(Size::new(0.0, 0.0));
     arena.add_child(parent, adopted_root);
     arena.nodes[parent].subcomposed_child = Some(adopted_root);
+    arena.nodes[parent].measured_size = inner_root_size;
     arena.nodes[parent].subcomposed_measurements = measurements;
     #[cfg(debug_assertions)]
     if std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {

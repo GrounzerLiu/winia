@@ -564,6 +564,14 @@ impl UiTest {
     }
 
     /// 点击稳定 tag 节点。焦点和输入结果由调用方的场景断言验证。
+    /// Size `(w, h)` of the node carrying `tag`, if the tree has it.
+    ///
+    /// `find_tag` gives the origin and size of a clickable box; a test that asserts on a
+    /// component's own measured size (rather than clicking it) needs just the size.
+    pub fn find_tag_size(&self, tag: &str) -> Option<(f32, f32)> {
+        find_node_tag(&self.tree, tag).map(|(_, _, w, h)| (w, h))
+    }
+
     pub fn click_tag(&mut self, tag: &str) {
         let (x, y, w, h) = self.find_tag(tag).unwrap_or_else(|| panic!("找不到 tag `{tag}`"));
         self.click(x + w / 2.0, y + h / 2.0);

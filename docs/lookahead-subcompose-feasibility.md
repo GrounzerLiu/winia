@@ -224,7 +224,30 @@ constraints on the FIRST frame and that the box stays sized on the second; and i
 subcomposed text is in the tree at 98x48 with `BWC max 200`, and paints (9384 dark pixels inside the
 box region of a 630x240 frame).
 
-**Resolved, and it was the frame path:** the box read `[0, 0]` while its child read `[98, 48]` because
+**Correction to the paragraph that used to be here.** An earlier version of this section said the
+window reading was resolved. It was not: the reading came from the `exp/lookahead-probe` verification
+example (where the box's own width is driven by its content through a slightly different path), and
+when the same thing was put into the UI suite as a fixture — the honest test of "does the app show
+it" — the box's own node read `[0,0]` while its adopted child read `[192,19]`.
+
+What is measured, in the app's frame path:
+
+| reading | value |
+|---|---|
+| the subcomposed content's text | `BWC max 200` — the real cap, on the FIRST frame (asserted by the fixture's passing assertions) |
+| the adopted child's size | `[192,19]` — real |
+| the box's OWN measured size | `[0,0]` — **wrong**, and the unit tests that assert it pass |
+
+So the subcomposition works, the content is composed with the real constraints at measure time, and
+the parent's own size is the open defect. Fixing it started from two hypotheses, both of which the
+measurements refuted (the policy's per-frame cache, and adoption's write of the parent size are both
+already in place and neither moves the reading), and several wrong turns were made on the way — one of
+them reading output from a **stale binary** because `cargo build --example` had failed and the failure
+was not read. The reproduction is committed as an `#[ignore]`d UI test with its reason, so a green run
+of that test is the acceptance criterion for the fix, and `docs/ui-testing.md`'s guidance about
+`click_until` applies to it (the fixture's cap buttons are clicked through it).
+
+**What the earlier paragraph described, for the record:** the box read `[0, 0]` while its child read `[98, 48]` because
 the policy composed a FRESH subcomposition on every measurement, and the frame handler measures such a
 node more than once per frame (the flight-override pass). The first composition is the one the adoption
 pass attaches; the second replaced it and reported a size from a tree nobody would see. The policy now

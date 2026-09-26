@@ -2026,3 +2026,61 @@ fn a_long_press_fires_while_the_pointer_is_still_down() {
     std::thread::sleep(Duration::from_millis(250));
     assert_eq!(counter(&mut app, "popup-holds"), Some(1), "and only once there either");
 }
+
+
+/// `BoxWithConstraints` composes its content DURING measurement, with the constraints that
+/// measurement computed — Compose's `SubcomposeLayout` relation.
+///
+/// The regression this pins is the difference between the subcomposition and the frame-lagged
+/// approximation that preceded it: the content must print the parent's cap on the FIRST frame the
+/// window publishes (the old implementation printed its unbounded initial value and only learned the
+/// real one a composition later), the box must take its size from that content, and a change of the
+/// parent's cap must re-arrange the content rather than wait for the next frame. The content fills
+/// the width it is given, so the box's measured width IS the cap the scope reported.
+#[test]
+#[ignore = "OPEN DEFECT on exp/lookahead-probe: the subcomposition composes and reports the real constraints on the FIRST frame (the text asserts pass), but the box's OWN measured size reads [0,0] in the app's frame path while the child under it reads [192,19] — the unit tests asserting the box's size pass, so the difference is in the frame path. Ignored rather than deleted: it is a reproduction with a clear first failure, and a green version is the acceptance criterion for the fix."]
+fn box_with_constraints_composes_its_content_at_measure_time() {
+    let mut app = UiTest::launch("bwc");
+
+    // Frame one: the scope already carries the real cap (200), not the unbounded placeholder, and the
+    // box is sized to the content it composed (the text fills the box, so both are 200 wide).
+    app.expect_text("BWC max 200");
+    let (w, h) = app.find_tag_size("bwc-box").expect("the box is in the tree");
+    assert!(w > 0.0, "the box has a real width, got {w}");
+    assert!(h > 0.0, "and a real height, got {h}");
+    assert!(
+        !app.all_texts().iter().any(|t| t.contains("BWC-not-measured")),
+        "the first frame must not report the unmeasured placeholder: {:?}",
+        app.all_texts()
+    );
+
+    // Narrowing the parent re-arranges the content in the same measure pass. `click_until`, not
+    // `click_tag`: the debug click path loses the occasional click (`docs/ui-testing.md`), and this
+    // one is asserted by its effect rather than retried by hand.
+    let (bx, by, bw, bh) = app.find_tag("bwc-narrow").expect("the narrow button");
+    app.click_until(bx + bw / 2.0, by + bh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("BWC max 120"))
+    });
+    app.expect_text_timeout("BWC max 120", Duration::from_secs(5));
+    let (w2, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
+    assert!(w2 > 0.0, "the box is still sized after the cap changed, got {w2}");
+
+    // And back — the width has to follow in both directions.
+    app.click_tag("bwc-wide");
+    app.expect_text_timeout("BWC max 200", Duration::from_secs(5));
+    let (w3, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
+    assert!(w3 > 0.0, "and still sized after the cap returned, got {w3}");
+
+    // One adopted child, not an accumulation of them: a subcomposed subtree is replaced, never
+    // stacked (two live copies would claim one synthetic key and trip the arena's dup-key guard).
+    let tree = app.tree().expect("a tree");
+    assert_eq!(
+        ui::UiTest::tree_texts(&tree)
+            .iter()
+            .filter(|t| t.contains("BWC max"))
+            .count(),
+        1,
+        "exactly one subcomposed content node after three frames: {:?}",
+        ui::UiTest::tree_texts(&tree)
+    );
+}

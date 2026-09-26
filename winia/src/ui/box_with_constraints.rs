@@ -176,12 +176,16 @@ impl Default for BoxWithConstraints {
 /// measured with, and reports what that content measured.
 struct ConstraintsSubcomposePolicy {
     alignment: Alignment,
-    /// What the first measurement of this frame produced. A second `layout()` in the same frame (the
-    /// frame handler runs one when a shared flight attaches a layout override) measures this node
-    /// again; composing a second time would discard the first composition — which the adoption pass
-    /// has already attached — and report a size derived from a tree nobody will see. Measured while
-    /// wiring this: the box read [0,0] in a real window while its adopted child read [98,48].
-    first_measure: std::cell::Cell<Option<Size>>,
+    /// What this frame's first measurement produced, together with the compose generation it belongs
+    /// to. A second `layout()` in the SAME frame (the frame handler runs one when a shared flight
+    /// attaches a layout override) measures this node again; composing a second time would discard the
+    /// first composition — which the adoption pass has already attached — and report a size derived
+    /// from a tree nobody will see (measured while wiring this: the box read [0,0] while its child read
+    /// [98,48]). A measurement in a LATER frame must compose again, because the content in the
+    /// subcomposition is generally a function of parameters that may have changed — measured as the
+    /// opposite failure: with the guard keyed on nothing, a cap change moved the state but the box
+    /// kept reporting the old one, since the subcomposition never re-composed.
+    first_measure: std::cell::Cell<Option<(u64, Size)>>,
     content: std::sync::Arc<
         std::sync::Mutex<Option<Box<dyn FnOnce(&mut ComposeCtx, BoxWithConstraintsScope) + Send>>>,
     >,
@@ -201,10 +205,13 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         _children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        // Already measured this frame: report the same answer instead of composing again (see the
+        // Already measured in THIS frame: report the same answer instead of composing again (see the
         // `first_measure` field).
-        if let Some(size) = self.first_measure.get() {
-            return (size, Vec::new());
+        let generation = crate::ui::subcompose::compose_generation().unwrap_or(0);
+        if let Some((cached_generation, size)) = self.first_measure.get() {
+            if cached_generation == generation {
+                return (size, Vec::new());
+            }
         }
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = self.content.lock().unwrap().take();
@@ -218,7 +225,7 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
             }
         });
         let _ = self.alignment;
-        self.first_measure.set(Some(size));
+        self.first_measure.set(Some((generation, size)));
         // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
         // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
         // out under `constraints`, while the engine clamps against the constraints the box's modifier
