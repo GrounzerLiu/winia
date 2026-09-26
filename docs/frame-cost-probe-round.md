@@ -246,6 +246,35 @@ Readings:
 > degrades reuse on the following frames, so −148 µs is a lower bound on its cost, not an upper), the
 > modifier-deps walk is not measurable at these sizes, and the rest of layout is the per-node
 > measurement pass itself.
+>
+> ### Inside `measure_node`
+>
+> The measurement pass was then split four ways (`WINIA_MEASURE_PROF`; the calls RECURSE through the
+> policies, so the buckets nest: `policy` covers the subtree). ns **per measured call**:
+>
+> | bucket | 128-node tree (399 calls) | 202-node tree (613 calls) |
+> |---|---|---|
+> | fold check (clean → reuse cached size) | 38 | 42 |
+> | pre-policy: constraint math + the modifier queries (`resolved_size`, `min/max/required_size`, `fixed_size`, padding, fill-max, scroll) | **177** | **160** |
+> | policy (includes the whole child recursion and text shaping) | 88 732 | 65 343 |
+> | post-policy (aspect ratio, scroll clamping, placement bookkeeping) | 36 | 37 |
+>
+> Two readings, both of which retire a hypothesis:
+>
+> 1. **The modifier queries are not the cost.** They are ~5 % of a measured call (177 ns of ~3.5 µs),
+>    i.e. ~100 µs of an 800 µs layout frame in total — worth knowing, not worth a rewrite, and the
+>    idea that "10 linear scans a node" would explain the slope is dead.
+> 2. **Almost all of the cost is inside the measure policies** — `measure_flex`'s two-phase loop
+>    (fixed children, then weighted children with their allocation), `LazyColumn`'s own traversal, and
+>    the text shaping a measured `Text` performs. The nested accounting cannot separate those three
+>    without instrumenting the policies themselves, which is where a further round would start.
+>
+> One structural fact worth carrying forward: **613 measured calls for a 202-node tree** — nodes are
+> measured about three times per layout frame (the recursive descent, the two-phase flex loop for
+> weighted children, the lazy container's own pass). Whether those repeats are all load-bearing is
+> exactly what policy-level instrumentation would answer, and it is the largest single lever the
+> numbers here point at (halving the calls halves the phase).
+
 
 
 ## 4. What this round recommends
