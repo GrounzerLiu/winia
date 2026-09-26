@@ -1,11 +1,14 @@
 # `exp/lookahead-probe` — frozen, and how to pick it up
 
-> Status: **frozen at commit `6551334`; the cross-frame round since then (`24f2f06`, `a06774b`) fixed
-> two of the three causes it was frozen for, so the freeze now covers a narrower defect.** Nothing here
-> is merged into `v2`, and nothing here should be merged as it stands: in a real window the box still
-> does not follow a later change to its caller's state (the composition runs, the measurement does
-> not), which is worse than the frame-lagged version `v2` ships. The branch is kept as a **worked
-> prototype plus a reproduction**, not as shippable code.
+> Status: **the acceptance test is GREEN and un-ignored (commit `c579ad3`), and the freeze is now
+> about ONE remaining piece: cross-frame reuse of the composition itself.** The component's readings
+> are correct in a real window (the test asserts the first frame's real cap, the box's size, and a
+> cap change re-arranging in both directions), so `BoxWithConstraints` no longer holds a
+> known-wrong reading. What is NOT done is the reuse: MEASURED, the subcomposition is rebuilt every
+> frame (`[subcompose-test] remember values across frames: [1, 2]` — a fresh composition id per
+> frame, so a `remember` inside subcomposed content does not survive). `v2` still ships the
+> frame-lagged version, and merging this branch means merging a component whose content re-composes
+> every frame — cheap for a text, wrong for anything stateful.
 >
 > Reasoning and findings: `docs/lookahead-subcompose-feasibility.md` (this branch's copy carries the
 > full trail; the mainline's copy at `7e66804` carries the result and the recommendation without the
@@ -45,8 +48,8 @@ Baselines measured on this branch, for comparison after any change:
 
 | command | reading |
 |---|---|
-| `cargo test -p winia --lib` | **1091 passed** (`v2` is 1082; the extra one is the content re-run test) |
-| `cargo test -p winia --features debug-server --test ui_test` | **47 passed, 1 ignored** |
+| `cargo test -p winia --lib` | **1092 passed** (`v2` is 1082; the extras are the subcomposition tests) |
+| `cargo test -p winia --features debug-server --test ui_test` | **48 passed, 0 ignored** — the acceptance test runs in the normal suite now |
 
 Note on the UI suite's stability, measured while verifying this round: in full-suite runs
 `a_long_press_fires_while_the_pointer_is_still_down` flakes under load — a paired A/B (twice with a

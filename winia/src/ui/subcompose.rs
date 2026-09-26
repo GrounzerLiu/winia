@@ -478,6 +478,88 @@ mod tests {
         crate::render::render(composer.arena_nodes(), root, surface.canvas());
     }
 
+    /// **Is the composition itself reused across frames?** The `remember` inside the subcomposed
+    /// content is the identity probe: a composition that is built fresh every frame resets it, and one
+    /// that survives keeps it. This is the measurement behind the "cross-frame reuse" item — the
+    /// component's readings can be correct (see the test above) while the composition is still rebuilt,
+    /// and the two are separate pieces of work.
+    #[test]
+    fn remember_inside_a_subcomposition_across_frames() {
+        struct RememberProbePolicy {
+            seen: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+        }
+        impl std::fmt::Debug for RememberProbePolicy {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("RememberProbePolicy")
+            }
+        }
+        impl MeasurePolicy for RememberProbePolicy {
+            fn measure(
+                &self,
+                _nodes: &mut Vec<LayoutNode>,
+                _policies: &[Box<dyn MeasurePolicy>],
+                _children: &[usize],
+                constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                let seen = self.seen.clone();
+                let size = subcompose(constraints, |ctx| {
+                    // A unique id per COMPOSITION: `remember` runs once for a fresh composition and
+                    // returns the stored value for a reused one, so an id that survives the frame is
+                    // the evidence that the composition itself did.
+                    static NEXT_COMPOSITION: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(1);
+                    let marker: crate::core::state::State<u64> = ctx.remember(|| {
+                        NEXT_COMPOSITION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    });
+                    let v = marker.get();
+                    seen.lock().unwrap().push(v);
+                    crate::ui::Text::new(format!("marker {v}")).build(ctx);
+                });
+                (size, Vec::new())
+            }
+            fn place(&self, _nodes: &mut Vec<LayoutNode>, _children: &[usize], _placements: &[Placement]) {}
+        }
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let build = || {
+            let seen = seen.clone();
+            move |ctx: &mut ComposeCtx| {
+                let key = ctx.next_key();
+                ctx.start_container(
+                    key,
+                    crate::modifier::Modifier::new().size(120.0, 30.0),
+                    RememberProbePolicy { seen },
+                );
+                ctx.end_node();
+            }
+        };
+
+        let mut composer = Composer::new();
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        composer.arena.nodes[root].cached_constraints = None;
+        composer.arena.nodes[root].layout_dirty = true;
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+
+        let seen = seen.lock().unwrap().clone();
+        eprintln!("[subcompose-test] remember values across frames: {seen:?}");
+        assert_eq!(
+            seen.len(),
+            2,
+            "the content composed on both frames: {seen:?}"
+        );
+        assert_ne!(
+            seen[0], seen[1],
+            "MEASURED: the composition is NOT reused across frames — a fresh one runs each frame, so \
+             a `remember` inside the subcomposed content does not survive. This test is the record of \
+             that, and it is the piece of work the component's readings do not need but a stateful \
+             content (an animation, a scroll position) will: keep the inner `Composer` alive between \
+             frames and re-arrange it. When that lands, this assertion flips to `assert_eq!`."
+        );
+    }
+
     /// `subcompose()` outside a measurement has nowhere to park the composition. The contract is
     /// fail-fast in debug builds rather than a silent no-op that looks like a rendering bug.
     #[test]
