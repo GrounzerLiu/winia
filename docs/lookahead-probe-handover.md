@@ -57,58 +57,47 @@ tree change, twice without) failed once on each side, and it passes every time w
 (`cargo test -p winia --features debug-server --test ui_test a_long_press_fires_while_the_pointer_is_still_down`).
 Do not read a single red run of it as a regression; re-run the filter before believing it.
 
-## What the cross-frame round has ALREADY fixed (commit `24f2f06`)
+## What the earlier cross-frame rounds already fixed
 
-Two causes of the empty later generation are gone, so the restart starts from a different place than
-this file first described:
+Two causes of the empty later generation are gone (commit `24f2f06`), so a restart starts from a
+different place than this file first described:
 
 - **The content is re-runnable.** `BoxWithConstraints`' content is composed inside the measurement, so
   a later frame runs it again; `build` takes `Fn`. With `FnOnce` the second frame composed NOTHING
   (`[sub] ... nodes=0 root=None size=0x0`), and that `0x0` overwrote the size adoption had written.
   Locked by `a_later_frame_runs_the_content_again_and_the_parent_size_follows_it`.
-- **A subcomposing node is not folded.** `materialize`'s reuse arm marks it dirty (`measure_node`
-  already refused to fold one), so its composition is re-arranged rather than skipped.
+- **A subcomposing node reaches layout as a change.** `MeasurePolicy::subcomposes()` plus seeding the
+  node's `slot_key` into `layout_dirty_keys` at the end of `compose` — without it the parent folded
+  before descending and the component kept the previous value's size (commit `c579ad3`).
 
-The remaining defect, measured after those two: on a frame where the component's body recomposes but
-the node is materialized with `dirty=false`, `measure_node` folds and the component is NOT
-re-measured — in a window the body ran (traced), the new modifier arrived (`max_width=Fixed(200)`),
-and the box's reported size never followed. The acceptance test fails on exactly that.
+## Round 3 (2026-09-26): why the reuse is not a small change — measured
 
-### The 2026-09-26 follow-up round: what the link actually is (traced, still unfixed)
+The reuse needs the composition to survive the frame, and the two obvious routes are both blocked by
+facts in the tree, checked this round:
 
-A round of targeted tracing (`WINIA_SUBCOMPOSE_TRACE`, driven through the fixture's stdin/pipe with
-`c 51 36` then `c 123 36`) narrowed the gap to a specific, reproducible statement:
+1. **Adoption drains, so a cache holds an empty composer.** `adopt_parked` (`winia/src/ui/subcompose.rs`)
+   sets its cache to `None` on purpose, with the reason written down: adoption MOVES the inner tree
+   into the outer arena, so what would be left to cache is an empty composer. That is also what the
+   unique-id test measures (`remember values across frames: [1, 2]`).
+2. **Copying the tree instead of moving it needs a clonable node — it is not.** `LayoutNode` carries
+   `on_remove: Option<Box<dyn FnOnce() + Send>>` (node.rs:215), plus `RefCell<Box<dyn Fn(..)>>`
+   callbacks and `RefCell` fields, so it cannot be `Clone`; and its `measure_policy` is an index into
+   `NodeArena.policies: Vec<Box<dyn MeasurePolicy>>` (node.rs:622), whose element type has no clone
+   hook — a copy-adoption would have to map those indices and share or clone the policies.
 
-```
-[bwc-build] cap=Fixed(200) -> [bwc-measure] max_w=200 gen=1     frame 1
-[bwc-build] cap=Fixed(120) -> [bwc-measure] max_w=120 gen=2     narrow click
-[bwc-build] cap=Fixed(120) -> [bwc-measure] max_w=120 gen=3 x2
-[bwc-build] cap=Fixed(200) x2            <- the BODY RUNS, and no [bwc-measure] follows it
-```
+So the piece that has to be decided first is **what exactly must survive a frame**. Copying the whole
+node tree is the expensive answer (a clonable `LayoutNode`, or `Arc<dyn MeasurePolicy>` storage as the
+rest of the repo already does for modifiers). The cheaper answer, and the one to try first, is to let
+the TREE be rebuilt (it already is, correctly — the acceptance test passes) and carry only what the
+rebuild cannot reproduce: the remembered state of the content, keyed by its call sites. That is a
+question about `Composer`'s slot table, not about the arena.
 
-- The body re-runs because the ancestor's `State` read recomposed the parent (`[mark-dirty]` names
-  the Column's and the Row's keys — **never the box's**).
-- `materialize` then receives the box's descriptor with `dirty=false` (`[mat-in] key=830704544334471970
-  skip=false claimed=None dirty=false subcomposed=false`), i.e. a parent entering does NOT make its
-  child containers dirty.
-- So the node is never re-measured, `subcompose()` never runs again, and the content freezes at the
-  previous value. Every later layout then legitimately folds at the root (`[fold] idx=0` only).
+### The 2026-09-26 round that found the composition→measure link (fixed since)
 
-Three attempts at a rule, all measured and all refuted on that same run:
-
-1. `materialize`'s reuse arm marking such a node `dirty` — the flag survives materialize
-   (`[mat-reuse] ... dirty=true`) but `layout()` clears the whole tree's `dirty` and re-derives it.
-2. The same rule setting `layout_dirty` instead — `layout()` also clears that, from
-   `layout_dirty_keys`.
-3. Seeding the node's `slot_key` into `layout_dirty_keys` at the end of `compose`, plus a
-   `MeasurePolicy::subcomposes()` hook (so a policy can declare that its content is composed inside
-   measurement) and setting `layout_dirty` at all three materialize arms — the box still never
-   re-measured. The claim/rebuild interplay (`[mat-arm] ... -> reuse-or-rebuild` twice in one frame,
-   a fresh node the second time, with `subcomposed=false` because only a real measurement sets it)
-   is where the next attempt should look.
-
-None of the three is in the tree: the branch is at `7562eac`, and the probes live in a stash. The
-lib suite is 1091 passed and the UI suite 47 passed + the 1 ignored reproduction on that state.
+That round traced the gap and its result is now the fix described above; it is kept here because the
+trace technique is reusable: `WINIA_SUBCOMPOSE_TRACE`, driven through the fixture's stdin/pipe with
+`c 51 36` then `c 123 36`, printed which keys a recompose marked, what materialize received, and
+which nodes each layout pass reached.
 
 ## The restart order, if this is picked up
 
