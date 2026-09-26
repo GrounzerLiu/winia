@@ -2038,7 +2038,7 @@ fn a_long_press_fires_while_the_pointer_is_still_down() {
 /// parent's cap must re-arrange the content rather than wait for the next frame. The content fills
 /// the width it is given, so the box's measured width IS the cap the scope reported.
 #[test]
-#[ignore = "OPEN DEFECT on exp/lookahead-probe: the subcomposition composes and reports the real constraints on the FIRST frame (the text asserts pass), but the box's OWN measured size reads [0,0] in the app's frame path while the child under it reads [192,19] — the unit tests asserting the box's size pass, so the difference is in the frame path. Ignored rather than deleted: it is a reproduction with a clear first failure, and a green version is the acceptance criterion for the fix."]
+#[ignore = "OPEN DEFECT on exp/lookahead-probe, root-caused by observation: on a LATER compose generation the subcomposition composes NOTHING (measured: `nodes=0 root=None`), so the box's policy reports 0x0 and overwrites the size the adoption pass wrote — the box reads [0,0] while its adopted child reads [192,19]. The cause is that adoption MOVES the composition's tree into the outer arena, so nothing carries it across generations; fixing it needs the cross-frame reuse the feasibility doc records as deferred, not another write at the adoption site (two were tried and measured false). A green run of this test is the acceptance criterion."]
 fn box_with_constraints_composes_its_content_at_measure_time() {
     let mut app = UiTest::launch("bwc");
 

@@ -224,6 +224,31 @@ constraints on the FIRST frame and that the box stays sized on the second; and i
 subcomposed text is in the tree at 98x48 with `BWC max 200`, and paints (9384 dark pixels inside the
 box region of a 630x240 frame).
 
+### The defect's root cause, observed (not inferred)
+
+A round of *targeted observation* — logging every write to a node's measured size with the site that
+made it, plus what each `subcompose()` call produced — settled it:
+
+```
+[bwc] policy: gen=1 -> composed, size=86x19            (frame 1: correct)
+[bwc] policy: gen=2 -> cached from gen 1, refused as stale -> re-composed
+[sub] composer: nodes=1 root=Some(0) size=86x19        (frame 1: the content composed)
+[sub] composer: nodes=0 root=None size=0x0             (frame 2: the content composed NOTHING)
+[size] measure_node:result: idx=9 -> 0x0               (and the policy overwrote the adopted 86x19)
+```
+
+So on a later compose generation the subcomposition comes out **empty**, the policy reports `0x0`, and
+that overwrites the size the adoption pass had written. The cause is structural, not a missing line:
+**adoption MOVES the composition's tree into the outer arena**, so there is nothing left to carry the
+subcomposition into the next generation — a fresh `Composer` re-composes the content, and that content
+lays out to nothing. Making the box's size correct across frames therefore needs the cross-frame reuse
+this document already records as deferred ("the subcomposition is re-composed whenever its node
+measures"), not another write at the adoption site. Two earlier attempts at that write were measured
+and refuted before this observation was made; both are still in the code and neither moves the reading.
+
+The reproduction is the `#[ignore]`d UI test in `winia/tests/ui_test.rs`, whose reason now carries this
+root cause, and the fixture `bwc` in `tests/ui_fixtures/`.
+
 **Correction to the paragraph that used to be here.** An earlier version of this section said the
 window reading was resolved. It was not: the reading came from the `exp/lookahead-probe` verification
 example (where the box's own width is driven by its content through a slightly different path), and
