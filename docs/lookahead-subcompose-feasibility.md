@@ -132,6 +132,41 @@ The honest next step is a probe round, not an implementation:
    point 2 either confirms the "prebuilt descriptor" route or shows it needs the other one), and
    whether a panic inside the inner compose rolls back the outer `LayoutTransaction` correctly.
 
+## 5b. What the experiment found (branch `exp/lookahead-probe`, 2026-09-26)
+
+Both steps of §5 were run on an experiment branch. Every claim below is a test in that branch's
+`winia/src/ui/subcompose_probe.rs` (removed again before the branch was left in its final state; the
+findings are what is kept).
+
+**Step 1 — the extra `layout()` is cheap.** Driving 16 flights through `shared_transition_demo` and
+timing the pass the frame handler already runs when a flight first attaches its override:
+first layout ~405 µs (349–537), the extra pass **~191 µs (178–245)** on a 56-node tree — ~47 % of the
+first pass, **1.1 % of a 60 Hz budget**, and once per flight start rather than per animating frame.
+So "measure the same tree again under different inputs" is affordable; it is bounds discovery that
+would be paid for this way, not the lookahead composition.
+
+**Step 2 — a measure-time subcomposition works, and the blocker is somewhere other than predicted:**
+
+| question | answer |
+|---|---|
+| does composing inside `measure` run? | yes — a fresh `Composer` composes + lays out inside a policy's `measure` and returns a real size |
+| does it survive the TLS guards? | yes — the frame's context is intact afterwards (the test composes again on the same thread), and a **panic inside the subcomposition** leaves the outer arena untouched and the next subcomposition working |
+| can its tree be adopted into the outer arena? | yes — nodes moved, child indices re-based, **policy pool appended and every `measure_policy` index re-based** (checked behaviourally against a decoy policy at the colliding index), root stamped with a synthetic key |
+| can adoption happen inside `measure`? | **no** — `MeasurePolicy::measure` receives `&mut Vec<LayoutNode>`, not the arena, so it cannot reach `NodeArena::policies`. Adoption therefore has to be called from a site that has the arena: `Composer::layout` or `materialize` |
+
+So the feasibility note's worry was misdirected: **design 2 is not blocked by the slot table — the
+inner composition's own table is exactly what makes it safe. It is blocked by the measure trait's
+signature**, and lifting that is a contained change (hand the policy the arena, or route adoption
+through `layout`/`materialize` for components that declare a subcomposition), far smaller than the
+visit-semantics change design 1 needs.
+
+**What was not done in the experiment, and would be the next step if someone picks this up:** a
+subcomposition adopted into a LIVE frame (the probe adopted into a local arena and measured there,
+which is what proves the re-basing; a real component also has to parent the root under its own node
+and survive the frame's prev-drain, which is the "reachability" half of §4). Cost also remains
+unmeasured for a subcomposition on a real frame — the probe's tests are correctness tests, not
+timings.
+
 ## 6. Recommendation
 
 - **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a
