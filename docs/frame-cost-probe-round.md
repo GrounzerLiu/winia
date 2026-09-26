@@ -274,6 +274,39 @@ Readings:
 > weighted children, the lazy container's own pass). Whether those repeats are all load-bearing is
 > exactly what policy-level instrumentation would answer, and it is the largest single lever the
 > numbers here point at (halving the calls halves the phase).
+>
+> ### The repeats, counted per node
+>
+> A second probe pass counted measured calls per node and per layout pass (sampled passes; the tree is
+> the probe example: a `Column` holding a `Row` of two buttons plus a `LazyColumn` of ~100 visible
+> rows, 195 nodes):
+>
+> ```
+> [measures] pass #3: 390 measured calls over 195 distinct nodes
+>   containers 198 / leaves 192
+>   calls-per-node (calls: nodes): {2: 195}
+>   calls per layout pass, in order (pass, calls): [(0, 0), (1, 44), (2, 223), (3, 195), (4, 390)]
+> ```
+>
+> Established by this, and no more:
+>
+> 1. **The repeats are real and uniform in the sampled pass**: every one of the 195 nodes was measured
+>    exactly twice in that pass (`{2: 195}`, no node once, none three times), while the *whole pass*
+>    recorded 390 calls. So the doubling is a property of the pass, not of a subset of nodes.
+> 2. **It is not one call per frame**: the app's own counter recorded **one `Composer::layout()` call
+>    per frame** while the measure module counted a pass per call, so the two counters agree — the
+>    doubling happens *inside* a single layout call.
+> 3. **The background level is visible in the pass sequence**: `44, 223, 195, 390` calls for the same
+>    tree across consecutive passes. The two low figures are passes where most nodes folded (nothing
+>    dirty → the constant-fold arm returns before any counter), and the two high ones are passes that
+>    measured the tree. The doubling appears in the high figure.
+>
+> NOT established, and deliberately not claimed: **which caller performs the second measurement.**
+> The candidates the code shows are the flex policy's two-phase child loop (`flex.rs:188` and `:219` —
+> phase 2 re-measures WEIGHTED children only, and this tree has none), the lazy container's own child
+> measurement, and `Composer::layout`'s guarded second pass for a flight's layout override
+> (`app.rs:722`, taken only when the poll attached an override for the first time). Telling them apart
+> needs the caller's own counter inside the policy, which is the next probe, not the next guess.
 
 
 
