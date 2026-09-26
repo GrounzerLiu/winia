@@ -61,9 +61,9 @@ what the **previous** measure wrote. Consequences, stated plainly:
 - **No auto-refresh when nothing else changes and the constraint is unchanged.** The box is as static
   as its parent; it does not poll.
 
-Closing the trail needs a real lookahead/subcomposition pass — the same missing piece the shared
-element work records (`docs/shared-element-transition.md` §3.1) — and that is a framework-level change
-rather than a component one.
+Closing the trail needs a real lookahead/subcomposition pass — a framework-level change, and the
+subject of `docs/lookahead-subcompose-feasibility.md`, which prices the two possible designs and
+records which one the slot machinery can carry.
 
 ## Deliberate difference: the scope speaks the layout coordinate system, not `Dp`
 
