@@ -77,59 +77,72 @@ handler's entry to the end of overlay composition + draw, with the per-frame deb
 wheel steps, one jump-to-item-500, then 60 steps back — 181 commands, 128 rendered frames,
 `lazy_column_demo` at 420x620, 15 list items composed of 1000, 59-node tree.
 
-The same script was run against a **debug** build and a **release** build, because the first
-measurement (debug only) turned out to be misleading about the production split:
+The same script was run against a **debug** build and a **release** build, and the probe was then
+extended from one total to the frame's phases, because the first measurement (debug only) turned out
+to be misleading about the production split:
 
 | | debug | release |
 |---|---|---|
-| p50 | 2 908 µs | **1 253 µs** |
+| p50 (total) | 2 908 µs | **1 253 µs** → 1 170 µs with the split probe |
 | p90 | 3 177 µs | 1 654 µs |
 | p99 | 6 119 µs | 5 778 µs |
 | max (startup) | 10 164 µs | 8 460 µs |
 | startup frames 1–5 | 2 241–2 385 µs | 712–821 µs |
 
+And the phase split itself (steady frames, 123 debug / 125 release):
+
+| phase | debug p50 | debug share | release p50 | release share |
+|---|---|---|---|---|
+| compose loop | 1 366 µs | 48.8 % | **252 µs** | 22.4 % |
+| main layout | 682 µs | 24.4 % | **317 µs** | 25.4 % |
+| overlay pass | 39 µs | 1.4 % | 6 µs | 0.6 % |
+| predraw (flight poll, focus sync, draw setup) | 54 µs | 1.8 % | 33 µs | 2.6 % |
+| draw (`sw.draw` closure + submit/present) | 647 µs | 23.6 % | **545 µs** | **49.0 %** |
+| after (screenshot readback, IME sync) | 0 µs | 0 % | 0 µs | 0 % |
+| **frame** | **2 839 µs** | | **1 170 µs** | |
+
+> **Correction, same day.** The first version of §3 compared the release frame (1253 µs) with the
+> benchmark's 800-row compose+layout figure (1271 µs) and called the benchmark "not a corner of the
+> frame". The phase split added below shows that was a coincidence of two numbers, not a share: this
+> app's compose+layout is **556 µs** of the 1170 µs frame, and the benchmark reaches 1271 µs by
+> composing 53x more content. The comparison is corrected in place; the phase split is what the round
+> should have measured first.
+
 Readings:
 
-- **A production frame is ~1.25 ms, and that is the same figure the benchmark prices for its own
-  800-row frame** (compose+layout, text, 1 271 µs). So the benchmark is not marginal to the frame:
-  with a real screen of this size it is at the same order as the whole frame, and every microsecond
-  it removes is worth about a microsecond of frame budget — the opposite of what the debug figures
-  suggested (a debug build hides the framework's real cost under unoptimized render/draw code, and
-  it hides it precisely *because* the rest of the frame is ~3x more expensive there).
-  The comparison is across two different trees (the bench composes 800 rows; this demo composes 15),
-  so it is a coincidence of orders rather than a controlled result — but it is the reason the next
-  instrument should split the frame's own phases instead of trusting either number alone.
-- **No warm-up effect, in either build:** the first rendered frames are the cheapest of the run
-  (712–821 µs release against a 1 253 µs p50). The framework's first-frame cost lives in the first
-  *compose of each screen*, not in the first rendered frame.
-- **The structural-change tail is real work, not debug overhead:** p99 (6.1 ms debug / 5.8 ms
-  release) and max (10.2 / 8.5 ms) barely move between builds, where the median moves by 2.3x. The
-  jump-to-item-500 frame is dominated by something that survives optimization — the cold-frame
-  compose path the bench also measures (22066 µs for 800 text rows there, i.e. the same shape at
-  scale).
-- Side observation, useful to the UI suite: with the per-frame debug tree on (the non-profiled
-  build), the same interaction rendered far fewer frames over the same wall-clock time — the tree
-  walk is a large per-frame tax on every debug-server run, which is why `fixture_all` timings are
-  not frame timings.
+- **In a release build the draw path is the largest single phase (545 µs, 49 %)**, with layout (317 µs,
+  25 %) slightly ahead of compose (252 µs, 22 %). Overlays are free (6 µs).
+- **Layout being compose-sized is the surprise.** The bench reports layout at ~1/3 of compose because
+  its container re-runs and every row skips, making compose huge; here nothing is dirty, so layout's
+  *fixed* per-frame work shows through — the same content the §1 table prices: `register_modifier_deps`'s
+  arena walk (~57 µs at 3201 nodes, mostly fixed), `LayoutTransaction` (15 µs), the dirty-mark sweep,
+  and the reuse-index rebuild (~52 µs at 3201 nodes).
+- **compose's real-app figure is far below the bench's per-row machinery.** 252 µs for a 59-node tree
+  is mostly per-frame fixed cost (§1's tail), not per-node work: the bench's 800-row compose-only idle
+  frame is 425 µs for 13.5x the nodes.
+- **The debug build inflates compose 5.4x** (1366 vs 252) while the draw path moves only 1.2x
+  (647 vs 545). A debug build therefore exaggerates the framework's compose share and hides the draw
+  path — the opposite error of the one §3's first version made.
+- **No warm-up effect:** the first rendered frame is the cheapest of the run in both builds
+  (712–821 µs release against a 1170 µs p50).
+- **The structural-change tail is real work:** p99 5.8 ms release against a 1.17 ms p50, and the jump
+  frame is where it lands — the cold-frame shape the bench also prices.
 
 ## 4. What this round recommends
 
-1. **The compose tail is worth a formal round after all, and its target is named.**
-   `reconcile_compose_deps`'s reverse-graph rebuild is ~48 µs of an idle 800-row frame (~57 µs with
-   the cleanup), it is the one large item in §1 whose cost scales with the *read graph* rather than
-   with the tree, and a real screen's graph (many slots × several reads each) is much larger than
-   the bench's single slot × 800 reads. The nineteenth fix already skips the rebuild when the
-   forward graph did not move; what remains is the case where it moved — a one-row update re-records
-   the same 800 reads, marks `changed`, and rebuilds the whole reverse index. A per-slot diff that
-   rewrites only the slots that changed is the round to measure.
-2. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped
-   (538.7 µs against a 541–546 µs baseline, ±10 % noise) and its unconditional call is pinned by a
-   test written for exactly that shape. `collect_live_keys`'s frozen-set ablation (344.8 µs) looks
-   large but buys it by not growing the read graph — a behaviour change, not a skip.
-3. **Split the real frame's phases before touching the render side.** The release figure says a frame
-   and the benchmark are the same order, but it does not say what share of the 1.25 ms is compose,
-   layout, render or present. Extending this probe (draw/submit brackets) is one round of work and
-   would decide whether the next optimization round belongs on the compose side at all.
+1. **Split the draw phase before choosing a side.** It is 49 % of a production frame and it is one
+   number: Skia recording (`render::render` + layer + overlays), present, and the per-frame setup are
+   all inside it. Until that is broken out, "optimize the renderer" is as unsupported as "optimize
+   compose" was.
+2. **compose is close to done; layout is the compose-side target that is left.** Layout's 317 µs is
+   dominated by fixed per-frame work over both trees. Of the items in §1, the ones a real app pays in
+   full are `register_modifier_deps` (arena walk) and layout's reuse-index walk (`collect_layout_index`,
+   ~52 µs at 3201 nodes), plus `reconcile`'s reverse-graph rebuild (~48 µs of compose). The bench's
+   row loop, by contrast, is heavy only because the bench is heavy.
+3. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped (538.7 µs
+   against a 541–546 µs baseline), and `collect_live_keys`'s frozen-set ablation (344.8 µs) buys its
+   win by no longer growing the read graph.
+
 
 
 ## 5. Reproducing

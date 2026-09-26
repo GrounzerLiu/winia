@@ -19,13 +19,15 @@ production and must not be compared with these.
 only ever ADDS time. The reported figure is the fastest of 9 samples; the median is printed beside it
 to show how loud the machine was.
 
-> **What this document does NOT measure: everything outside compose and layout.** In a release build a
-> real app's frame (compose + layout + draw + present + event handling, `lazy_column_demo` under
-> scripted interaction) measured a p50 of **1253 µs**, i.e. the same order as these figures rather
-> than a multiple of them — but a DEBUG build of the same app measured 2908 µs, where the framework's
-> own cost is hidden under unoptimized render code. Read the two together before deciding that the
-> compose side is or is not the bottleneck: `docs/frame-cost-probe-round.md` has the frame-level
-> numbers, the per-section tail split, and the two ablations that priced the whole-tree walks.
+> **What this document does NOT measure: everything outside compose and layout.** A phase-split
+> measurement of a real app (`lazy_column_demo` under scripted interaction, release build) puts a
+> frame's p50 at 1170 µs, of which compose is 252 µs (22 %), layout 317 µs (25 %) and the draw path —
+> Skia recording plus submit/present — **545 µs (49 %)**. The bench reaches 1271 µs for compose+layout
+> alone by composing 53x the content this demo does (800 rows against its 15), i.e. it measures a
+> heavy screen's compose, not the overhead of an ordinary one; and a DEBUG build of the same app reads
+> 2839 µs a frame, where compose is 1366 µs and the draw path only 647 µs, so a debug build exaggerates
+> the compose share. `docs/frame-cost-probe-round.md` has the phase table, the per-section compose-tail
+> split, and the two ablations that priced the whole-tree walks.
 
 ## What holds exactly: the scoping
 
