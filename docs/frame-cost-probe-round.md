@@ -285,9 +285,11 @@ Readings:
    incremental rewrite is a graph-invariant change whose failure mode is stale content; 0.55 % does
    not pay for it.
 2. **Layout's 2.95 µs/node is the compose-side target** (phase 2 above). It is the largest per-node
-   slope in the frame, it is paid on every node of every frame, and its two whole-arena walks are the
-   first thing to measure inside it — `measure_node` itself has to be priced before anything is
-   changed, because at 3201 nodes those two walks account for only ~0.033 µs of the 2.95.
+   slope in the frame, it is paid on every node of every frame, and its two whole-arena walks are only
+   ~1 % of it. The measurement pass has since been split (phase 3): the modifier queries are ~5 % of a
+   measured call and the fold check is free, so what remains is the measure policies — and
+   **613 measured calls for 202 nodes**, i.e. ~3 measurements a node per layout frame. Whether every
+   repeat is load-bearing is the concrete next question, and the largest lever visible from here.
 3. **The present path (300–400 µs on both backends) is half the frame and outside the framework's
    control** — softbuffer's blit on CPU, the fence/present path on Vulkan. It is worth understanding
    (a GPU-bound frame is not reducible by CPU work) but it is not a framework optimization.
@@ -320,6 +322,15 @@ python tmp/drive_lazy_demo.py        # 181 commands; aborts if TREE output stops
 grep '^\[fp\]' frame.log             # one line per rendered frame: <µs>
 taskkill //F //IM lazy_column_demo.exe   # the exe stays locked until it exits (link fails with 1104)
 git checkout -- winia/src/app.rs winia/src/debug.rs
+
+# 3. measure_node's interior — needs a tree whose size can be varied, so it uses a probe example
+#    (two files: the example plus the probe). The example is `lazy_column_demo`'s content with the
+#    window height from PROBE_H; recreate it under `winia/examples/` and build with
+#    `--features debug-server`, then:
+git apply target/probe/measure_interior_probe.patch   # app.rs + composer.rs + debug.rs + node.rs, +232 lines
+PROBE_H=4000 WINIA_DEBUG_PORT=9994 WINIA_MEASURE_PROF=1 ./target/release/examples/<example>.exe > m.log 2>&1 &
+#   connect over the WebSocket, drive the same script, then send `pmeasure` and read `[measure]` from m.log
+git checkout -- winia/src
 ```
 
 Both probes are self-declared throwaway in their own comments (`THROWAWAY PROBE`), gated so a normal
