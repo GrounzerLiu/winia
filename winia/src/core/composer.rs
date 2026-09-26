@@ -2868,6 +2868,34 @@ impl Composer {
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
+        // A subcomposing node has to be re-measured, and the LAYOUT path is what does that: `layout()`
+        // clears every node's `dirty`/`layout_dirty` and re-derives them from `layout_dirty_keys`, then
+        // uses that set to decide which parents descend at all. A node whose slot status was Clean
+        // (its parent entered, so its body re-ran without its slot being marked) arrives here with
+        // `dirty=false`, so the only place left to say "measure me" is this set. Asked of the POLICY
+        // rather than of the node's `subcomposed` flag, because that flag is set BY a measurement and
+        // is therefore false on exactly the nodes that were just rebuilt.
+        for idx in 0..self.arena.nodes.len() {
+            let declares = self.arena.nodes[idx]
+                .measure_policy
+                .and_then(|p| self.arena.policies.get(p))
+                .map(|p| p.subcomposes())
+                .unwrap_or(false)
+                || self.arena.nodes[idx].subcomposed;
+            #[cfg(debug_assertions)]
+            if declares && std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {
+                eprintln!(
+                    "[compose-end] idx={idx} key={} sub={} dirty={} declares={}",
+                    self.arena.nodes[idx].slot_key,
+                    self.arena.nodes[idx].subcomposed,
+                    self.arena.nodes[idx].dirty,
+                    declares
+                );
+            }
+            if declares {
+                self.layout_dirty_keys.insert(self.arena.nodes[idx].slot_key);
+            }
+        }
         // Shared-element flights (Phase 2): detect switches + retain/detach
         // sources BEFORE the prev drain below frees them.
         self.retain_shared_sources();

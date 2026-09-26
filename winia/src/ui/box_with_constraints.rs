@@ -203,6 +203,12 @@ impl std::fmt::Debug for ConstraintsSubcomposePolicy {
 }
 
 impl MeasurePolicy for ConstraintsSubcomposePolicy {
+    /// The framework's only subcomposing policy: its content is composed inside `measure`, so its
+    /// node must be re-measured rather than folded (see the trait method's contract).
+    fn subcomposes(&self) -> bool {
+        true
+    }
+
     fn measure(
         &self,
         _nodes: &mut Vec<crate::layout::node::LayoutNode>,

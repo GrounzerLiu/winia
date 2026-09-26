@@ -2038,7 +2038,6 @@ fn a_long_press_fires_while_the_pointer_is_still_down() {
 /// parent's cap must re-arrange the content rather than wait for the next frame. The content fills
 /// the width it is given, so the box's measured width IS the cap the scope reported.
 #[test]
-#[ignore = "OPEN DEFECT on exp/lookahead-probe, narrowed by measurement on 2026-09-26: the first frame and the narrow re-arrange now PASS (the content is `Fn` again, so a later measurement re-runs it: `[sub] ... nodes=1 root=Some(0) size=86x19` where it used to be `nodes=0 root=None size=0x0`), and the test fails on the SECOND direction — after the wide click the component's body recomposes (traced: `BUILD`), the new modifier arrives (`maxWidth = Fixed(200.0)`), but the node is materialized with `dirty=false`, so `measure_node`'s fold returns the stale size and the component is never re-measured. The gap is therefore the composition→measure link, not the arena. A green run of this test is the acceptance criterion."]
 fn box_with_constraints_composes_its_content_at_measure_time() {
     let mut app = UiTest::launch("bwc");
 

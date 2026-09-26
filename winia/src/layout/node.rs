@@ -769,6 +769,16 @@ pub trait MeasurePolicy: std::fmt::Debug {
 
     /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
+
+    /// Whether this policy composes content DURING measurement (`ui::subcompose`).
+    ///
+    /// Such a node must be re-measured whenever it is materialized: its content is composed inside
+    /// the measurement, so a folded size freezes the content at the previous frame's parameters. The
+    /// node's own `subcomposed` flag is only set BY a real measurement, so it cannot answer this for a
+    /// node that was just rebuilt — asking the policy is what covers that case.
+    fn subcomposes(&self) -> bool {
+        false
+    }
 }
 
 // ── 命中测试 ──
