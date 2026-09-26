@@ -2031,6 +2031,9 @@ pub struct Composer {
     pub(crate) prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
+    /// Subcompositions parked during the current layout pass, waiting for adoption
+    /// (`ui::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
+    pub(crate) subcompositions: Vec<(usize, crate::ui::subcompose::Subcomposition)>,
     /// How many skipped subtrees the last `materialize` claimed in place, instead of re-encoding them
     /// into descriptors (`SlotTable::try_claim_skipped_subtree`). Test-visible so the tests can tell
     /// "the fast path ran" from "it bailed" — the two are deliberately indistinguishable in the tree.
@@ -2149,6 +2152,7 @@ impl Composer {
             pending_next: 0,
             prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
+            subcompositions: Vec::new(),
             #[cfg(test)]
             skip_claims: 0,
             #[cfg(test)]
@@ -2912,6 +2916,16 @@ impl Composer {
     }
 
     /// 返回 LayoutNode 树的根节点引用
+    /// Park a subcomposition against the node that composed it, for the adoption pass at the end of
+    /// `layout` (`ui::subcompose`). The registry is cleared at the start of every layout pass.
+    pub(crate) fn park_subcomposition(
+        &mut self,
+        node: usize,
+        entry: crate::ui::subcompose::Subcomposition,
+    ) {
+        self.subcompositions.push((node, entry));
+    }
+
     pub fn layout_root(&self) -> Option<&LayoutNode> {
         self.arena.root()
     }
@@ -2971,10 +2985,21 @@ impl Composer {
             Arc::downgrade(&self.pending_states),
         );
         begin_layout_measure_tracking();
+        // Subcomposing policies park their compositions while measuring; adopt them right after the
+        // tree is measured and BEFORE the reuse index is rebuilt — an adopted subtree has to be in
+        // that index, or the next frame's reuse path never sees it.
+        self.subcompositions.clear();
+        let _layout_host = crate::ui::subcompose::LayoutHostGuard::arm(self as *mut Composer);
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
+            let parked = std::mem::take(&mut self.subcompositions);
+            crate::ui::subcompose::adopt_parked(
+                &mut self.arena,
+                &mut self.reused_nodes,
+                parked,
+            );
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）+ dirty 冒泡
             self.prev_node_by_key.clear();
             crate::core::materialize::collect_layout_index(
@@ -2983,6 +3008,7 @@ impl Composer {
                 &mut self.prev_node_by_key,
             );
         } else {
+            self.subcompositions.clear();
             // No root means every old layout dependency is stale.
             self.prev_node_by_key.clear();
         }

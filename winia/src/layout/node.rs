@@ -297,6 +297,12 @@ pub struct LayoutNode {
     /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
+    /// Whether the last measurement of this node ran a policy that subcomposed content
+    /// (`ui::subcompose`). Such a node must be measured EVERY frame: its composed subtree lives only
+    /// in the arena, so a folded frame would let materialize clear the parent's `children` and leave
+    /// the subtree detached — measured while writing the facility (the adopted child disappeared on
+    /// the second frame, and the assertion that caught it was the parent's child count going to 0).
+    pub(crate) subcomposed: bool,
 }
 
 impl LayoutNode {
@@ -376,6 +382,7 @@ impl LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            subcomposed: false,
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
@@ -460,6 +467,7 @@ impl Default for LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            subcomposed: false,
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
@@ -2281,7 +2289,20 @@ pub(crate) fn measure_node(
     idx: usize,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
-    measure_node_inner(nodes, policies, idx, constraints)
+    // The fold check lives in `measure_node_inner` (it must also arm the node's slot key etc.); this
+    // wrapper only adds the "which node is measuring" marker that a subcomposing policy needs, and
+    // leaves folded calls with no marker at all — a policy that folds did not run, so a stale marker
+    // would invite a subcomposition nobody asked for.
+    if !nodes[idx].subcomposed && !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+        return (nodes[idx].measured_size, Vec::new());
+    }
+    let displaced = crate::ui::subcompose::swap_measuring_node(Some(idx));
+    let sub_before = crate::ui::subcompose::subcomposition_count();
+    let out = measure_node_inner(nodes, policies, idx, constraints);
+    crate::ui::subcompose::swap_measuring_node(displaced);
+    // Remember whether this node's policy composed anything, so the next frame does not fold it.
+    nodes[idx].subcomposed = crate::ui::subcompose::subcomposition_count() > sub_before;
+    out
 }
 
 fn measure_node_inner(
@@ -2295,7 +2316,7 @@ fn measure_node_inner(
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
     // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
     //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
-    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+    if !nodes[idx].subcomposed && !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
 

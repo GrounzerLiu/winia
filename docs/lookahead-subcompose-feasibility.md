@@ -168,6 +168,43 @@ and survive the frame's prev-drain, which is the "reachability" half of §4). Co
 unmeasured for a subcomposition on a real frame — the probe's tests are correctness tests, not
 timings.
 
+## 5c. The facility, and the one structural conflict left (branch `exp/lookahead-probe`)
+
+The follow-up round built the facility for real — `winia/src/ui/subcompose.rs`, with:
+
+- a thread-local marker (`measure_node` arms the node index while a measurement runs),
+- a registry on the composer that a policy parks its composition in (reached through a
+  `LayoutHostGuard`, the same shape as `ACTIVE_SLOT_KEY`/`GROUP_STACK`),
+- an adoption pass in `Composer::layout` (move, re-base children AND policy indices, parent under the
+  component's node, mark reused),
+- and `BoxWithConstraints` rewritten on top of it, so its content now composes **in the measurement,
+  with the real constraints, on the first frame** — the "one composition behind" deviation is gone,
+  and its tests assert the first run already sees a finite maximum.
+
+Two defects were measured on the way, both now pinned by tests:
+
+1. **A subcomposing node must never fold.** Its subtree lives in the arena, so a folded frame lets
+   materialize clear the parent's `children` and detach it. The node now carries a `subcomposed` flag
+   that refuses the constant-fold arm (`the_box_is_measured_every_frame_so_its_content_is_not_detached`).
+2. **The real-frame path has one structural conflict left, and it is where this stops being a
+   wiring job.** The adopted subtree lives in `parent.children` but has **no descriptor** — it is not
+   in the slot table. A reused parent therefore hits both sides of the problem at once:
+   - materialize's reuse path does `children.clear()` and rebuilds them from descriptors, which drops
+     the adopted child (it is then unreachable from `arena.root`, so `prune_stale_child_links` treats
+     its listing as stale and the node leaks: measured on a real window, the arena held the adopted
+     text node while the box's `children` was empty and the frame printed 3 nodes instead of 4);
+   - keeping it instead and re-adopting a second copy trips `collect_layout_index`'s `[dup-key]` guard,
+     because both copies carry the same key.
+
+   Closing it needs the adopted subtree to **survive materialize**: either the parent records its
+   subcomposed child (a node field, restored when the descriptor-driven children are re-attached), or
+   the subcomposition stops writing into `parent.children` and the materialize walk learns to descend
+   into it. Either way it is a change to the materialize/node contract — not the one-line wiring the
+   probe suggested, and the last thing between this facility and a component that can ship.
+
+So: the mechanism is proven end to end **inside a frame** (adoption runs, the box measures 101x48 from
+its subcomposed content, the subtree is in the arena), and the remaining work is named and bounded.
+
 ## 6. Recommendation
 
 - **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a
