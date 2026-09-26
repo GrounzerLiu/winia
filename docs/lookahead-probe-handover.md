@@ -1,15 +1,16 @@
 # `exp/lookahead-probe` — frozen, and how to pick it up
 
-> Status: **frozen at commit `6551334`.** Nothing here is merged into `v2`, and nothing here should be
-> merged as it stands: `BoxWithConstraints` on this branch reads `[0,0]` for its own size in a real
-> window's frame path (its adopted child reads `[192,19]`), which is worse than the frame-lagged
-> version `v2` ships. The branch is kept as a **worked prototype plus a reproduction**, not as
-> shippable code.
+> Status: **frozen at commit `6551334`; the cross-frame round since then (`24f2f06`, `a06774b`) fixed
+> two of the three causes it was frozen for, so the freeze now covers a narrower defect.** Nothing here
+> is merged into `v2`, and nothing here should be merged as it stands: in a real window the box still
+> does not follow a later change to its caller's state (the composition runs, the measurement does
+> not), which is worse than the frame-lagged version `v2` ships. The branch is kept as a **worked
+> prototype plus a reproduction**, not as shippable code.
 >
 > Reasoning and findings: `docs/lookahead-subcompose-feasibility.md` (this branch's copy carries the
 > full trail; the mainline's copy at `7e66804` carries the result and the recommendation without the
-> code references). Read §5c, §5d and "The defect's root cause" in that order, then come back here for
-> the commands.
+> code references). Read §5c, §5d, "The defect's root cause" and "The cross-frame round" in that order,
+> then come back here for the commands.
 
 ## What is on the branch (not on `v2`)
 
@@ -46,6 +47,12 @@ Baselines measured on this branch, for comparison after any change:
 |---|---|
 | `cargo test -p winia --lib` | **1091 passed** (`v2` is 1082; the extra one is the content re-run test) |
 | `cargo test -p winia --features debug-server --test ui_test` | **47 passed, 1 ignored** |
+
+Note on the UI suite's stability, measured while verifying this round: in full-suite runs
+`a_long_press_fires_while_the_pointer_is_still_down` flakes under load — a paired A/B (twice with a
+tree change, twice without) failed once on each side, and it passes every time when run in isolation
+(`cargo test -p winia --features debug-server --test ui_test a_long_press_fires_while_the_pointer_is_still_down`).
+Do not read a single red run of it as a regression; re-run the filter before believing it.
 
 ## What the cross-frame round has ALREADY fixed (commit `24f2f06`)
 
