@@ -20,14 +20,18 @@ only ever ADDS time. The reported figure is the fastest of 9 samples; the median
 to show how loud the machine was.
 
 > **What this document does NOT measure: everything outside compose and layout.** A phase-split
-> measurement of a real app (`lazy_column_demo` under scripted interaction, release build) puts a
-> frame's p50 at 1170 µs, of which compose is 252 µs (22 %), layout 317 µs (25 %) and the draw path —
-> Skia recording plus submit/present — **545 µs (49 %)**. The bench reaches 1271 µs for compose+layout
-> alone by composing 53x the content this demo does (800 rows against its 15), i.e. it measures a
-> heavy screen's compose, not the overhead of an ordinary one; and a DEBUG build of the same app reads
-> 2839 µs a frame, where compose is 1366 µs and the draw path only 647 µs, so a debug build exaggerates
-> the compose share. `docs/frame-cost-probe-round.md` has the phase table, the per-section compose-tail
-> split, and the two ablations that priced the whole-tree walks.
+> measurement of a real app (`lazy_column_demo`, scripted interaction, release build) puts a frame's
+> p50 at 1649 µs: compose 263 µs (16 %), layout 296 µs (17 %), Skia recording 155 µs (9 %), the
+> surface's submit/present 361 µs (23 %), overlay/predraw 34 µs. The same figure on the CPU backend is
+> 2051 µs with present at 303 µs, so present is a Windows cost common to both backends, not a Vulkan
+> defect.
+>
+> Two consequences this document's arms cannot show. First, its tree is 53x this app's (800 rows
+> against 15), so a figure here is a heavy screen's compose, not an ordinary frame's overhead. Second,
+> and the reason it matters: the **compose tail** these rounds have been pricing — the per-frame walks
+> and the reverse-graph rebuild — is **56.5 µs, 3.4 % of a real frame**, with the biggest single item
+> (`reconcile_compose_deps`) at 9 µs. `docs/frame-cost-probe-round.md` has the per-section table on
+> both trees, the phase split, and the two ablations that priced the whole-tree walks.
 
 ## What holds exactly: the scoping
 

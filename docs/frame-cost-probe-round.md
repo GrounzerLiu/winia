@@ -101,12 +101,60 @@ And the phase split itself (steady frames, 123 debug / 125 release):
 | after (screenshot readback, IME sync) | 0 µs | 0 % | 0 µs | 0 % |
 | **frame** | **2 839 µs** | | **1 170 µs** | |
 
-> **Correction, same day.** The first version of §3 compared the release frame (1253 µs) with the
-> benchmark's 800-row compose+layout figure (1271 µs) and called the benchmark "not a corner of the
-> frame". The phase split added below shows that was a coincidence of two numbers, not a share: this
-> app's compose+layout is **556 µs** of the 1170 µs frame, and the benchmark reaches 1271 µs by
-> composing 53x more content. The comparison is corrected in place; the phase split is what the round
-> should have measured first.
+(Two runs later this table was superseded by the finer one below — 1649 µs a frame, with the draw
+phase split into Skia recording and present. Both are real; the difference is machine load, and the
+SHARES are the stable part. The finer table is the one to read.)
+
+> ## Phase 1: the frame's phases, and one plan refuted by them
+>
+> The probe was extended to the frame's phases and run on the same scripted interaction
+> (`WINIA_FRAME_PROF`; release build; 120 steady frames of 128):
+>
+> | phase | p50 | share |
+> |---|---|---|
+> | compose loop | 263 µs | 15.9 % |
+> | main layout | 296 µs | 17.1 % |
+> | overlay pass | 6 µs | 0.4 % |
+> | predraw (flight poll, focus sync, draw setup) | 28 µs | 1.7 % |
+> | draw — of which Skia recording | 520 µs | 32.5 % |
+> | ↳ `skia` (tree walk + transition layer + overlays) | 155 µs | 9.2 % |
+> | ↳ `flush` (the surface's submit/present) | 361 µs | 23.2 % |
+> | after (screenshot readback, IME sync) | 0 µs | 0 % |
+> | **frame** | **1649 µs** | |
+>
+> Two controls, because the present figure invites a wrong reading:
+>
+> - **`WINIA_RENDER_BACKEND=cpu`**, same script: frame 2051 µs, `draw` 728 µs, `skia` 419 µs,
+>   `flush` 303 µs. So `flush` is 300-400 µs on BOTH backends — with the CPU path it is softbuffer's
+>   blit, with Vulkan the fence/present path — and is not a Vulkan defect. It is the Windows present
+>   floor, outside the framework.
+> - **The compose tail on this same tree**, from the section probe (`psect`, 125 frames): 56.5 µs a
+>   frame — `materialize` 31.3, `reconcile` 9.1, `retain_shared` 5.5, `modifier_deps` 3.0,
+>   `prev_drain` 2.7, `prune` 2.5, `live_keys` 2.3. **That is 3.4 % of the frame**, and the single
+>   item phase 2 of this round planned to rewrite (`reconcile`'s reverse-graph rebuild, ~48 µs of an
+>   800-row bench frame) is **9 µs — 0.55 % — on a real tree.**
+>
+> What this establishes:
+>
+> 1. **The plan to optimize `reconcile` next is refuted, not deferred.** The bench's figures scale
+>    with its 800-row tree; a real screen's tail is 23 % of compose and 3.4 % of the frame, so a
+>    correct, careful rewrite of its largest item buys 0.55 % and would have to be justified by
+>    something other than frame time. Recommendation: do not run it for performance.
+> 2. **The framework's own CPU work is ~750 µs of a 1649 µs frame** (compose 263 + layout 296 +
+>    skia 155 + overlay/predraw 34), the rest being the present floor and the frame's bookkeeping.
+>    At 60 Hz that is ~11 % of the budget for a 59-node screen.
+> 3. **Layout (296 µs) is compose-sized, and that is the compose-side surprise**: with nothing
+>    dirty, what shows through is the fixed per-frame work — `register_modifier_deps`'s arena walk,
+>    the reuse-index rebuild, the transaction, the dirty sweep — not per-node work.
+> 4. **Skia recording is already cheap on Vulkan (155 µs).** On the CPU backend the same recording
+>    costs 419 µs, which is the honest place a renderer round would aim — but that backend is the
+>    fallback, not the default.
+>
+> Reproduce with: `git apply target/probe/frame_phase_probe.patch` (the phase split plus `ptree`),
+> `target/probe/compose_sections_probe.patch` (the tail split plus `psect`), then
+> `tmp/drive_lazy_demo_quit.py` against a demo built with `--features debug-server`, with
+> `WINIA_FRAME_PROF=1` and/or `WINIA_SECT_PROF=1`. The raw logs are
+> `target/probe/frame_phase_split_{debug,release}.log` and `target/probe/frame_drawsplit_release.log`.
 
 Readings:
 
@@ -130,16 +178,20 @@ Readings:
 
 ## 4. What this round recommends
 
-1. **Split the draw phase before choosing a side.** It is 49 % of a production frame and it is one
-   number: Skia recording (`render::render` + layer + overlays), present, and the per-frame setup are
-   all inside it. Until that is broken out, "optimize the renderer" is as unsupported as "optimize
-   compose" was.
-2. **compose is close to done; layout is the compose-side target that is left.** Layout's 317 µs is
-   dominated by fixed per-frame work over both trees. Of the items in §1, the ones a real app pays in
-   full are `register_modifier_deps` (arena walk) and layout's reuse-index walk (`collect_layout_index`,
-   ~52 µs at 3201 nodes), plus `reconcile`'s reverse-graph rebuild (~48 µs of compose). The bench's
-   row loop, by contrast, is heavy only because the bench is heavy.
-3. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped (538.7 µs
+1. **Do not run phase 2 as planned.** The `reconcile` rewrite was the named next round on the strength
+   of the bench's 800-row figures (~48 µs of an idle compose frame). On a real tree it is 9 µs, 0.55 %
+   of the frame, and the whole compose tail is 3.4 %. A correct incremental rewrite is a
+   graph-invariant change with a real risk of stale content; 0.55 % does not pay for it.
+2. **The compose side is essentially done for frame time.** compose 263 µs + layout 296 µs + overlays
+   and predraw 34 µs = 593 µs of a 1649 µs frame, and 82 µs of that is the tail measured above. The
+   remaining compose-side items are the *fixed* per-frame walks that a larger tree amortises and a
+   smaller one cannot avoid.
+3. **If a performance round is wanted, the honest targets are outside the compose engine:**
+   the present path (300–400 µs on both backends — a Windows cost the framework does not control, but
+   it is half the frame and worth understanding before anything else is optimized), Skia recording on
+   the CPU fallback backend (419 µs against 155 µs on Vulkan), and the structural-change tail
+   (p99 5.8 ms against a 1.6 ms p50 — the cold-frame shape, which this round did not split).
+4. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped (538.7 µs
    against a 541–546 µs baseline), and `collect_live_keys`'s frozen-set ablation (344.8 µs) buys its
    win by no longer growing the read graph.
 
