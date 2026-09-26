@@ -176,24 +176,101 @@ Readings:
 - **The structural-change tail is real work:** p99 5.8 ms release against a 1.17 ms p50, and the jump
   frame is where it lands — the cold-frame shape the bench also prices.
 
+> ## Phase 2: the split against tree size, and layout's real shape
+>
+> The phase figures above come from a 59-node screen. A real screen can show several times that, so
+> the same probe was run over a size sweep: the same rows and the same script, only the window height
+> changed (`winia/examples/probe_scaling.rs`, a probe example that was deleted after the run).
+> Release, p50 per arm:
+>
+> | window height | nodes | frame | compose | layout | draw | overlay+predraw |
+> |---|---|---|---|---|---|---|
+> | 620 | 46 | 985 µs | 296 | 246 | 389 | 34 |
+> | 1200 | 72 | 1188 µs | 325 | 365 | 436 | 43 |
+> | 2400 | 128 | 1533 µs | 392 | 549 | 510 | 43 |
+> | 4000 | 202 | 1887 µs | 504 | 724 | 620 | 36 |
+>
+> Least-squares over the four arms:
+>
+> | phase | slope | intercept |
+> |---|---|---|
+> | layout | **2.95 µs/node** | −46 µs |
+> | compose | **1.29 µs/node** | 240 µs |
+> | draw | 1.40 µs/node | 330 µs |
+> | frame | 5.08 µs/node | 730 µs |
+>
+> What this changes:
+>
+> 1. **Layout is the most expensive per-node phase, and it is 3x compose's slope.** The earlier claim
+>    of this document ("layout is compose-sized because nothing is dirty, so what shows through is
+>    fixed work") is right for a 59-node tree and **wrong as a generalisation**: at 128 nodes layout
+>    overtakes compose (549 vs 392 µs) and at 202 it is 1.44x compose. Compose's own slope (1.29 µs a
+>    node) is the row machinery the bench measures; layout's (2.95 µs) is `measure_node` plus the two
+>    whole-arena walks — `register_modifier_deps` and `collect_layout_index`/its reuse index — and it
+>    is paid on every frame for every node, dirty or not.
+> 2. **The frame budget, stated in the unit that matters.** At ~5.1 µs a node a frame at 60 Hz
+>    supports on the order of 3 000 visible nodes before overrun (16.7 ms / 5.1 µs) — minus the
+>    ~730 µs of fixed cost. That is the honest answer to "is winia fast enough": yes for screens of
+>    hundreds of nodes, and the per-node price is what decides the ceiling.
+> 3. **The compose-side target is therefore layout, not `reconcile`.** Layout's slope is where a real
+>    optimization round belongs: `register_modifier_deps` walks the arena to re-register modifier
+>    dependencies every frame regardless of whether any modifier changed, and layout rebuilds the
+>    reuse index over the whole tree every frame. Both are candidates whose cost scales exactly like
+>    the measured slope, and §1 prices them (~57 µs and ~52 µs at 3201 nodes, i.e. ~0.017 and ~0.016 µs
+>    a node — the two together are only ~1 % of the slope, so measuring `measure_node` itself is the
+>    first step of such a round, not implementing a fix).
+>
+> The earlier recommendation stands unchanged for the write side: the `reconcile` rewrite stays
+> unrefuted as a *correctness*-neutral change and refuted as a *frame-time* one (9 µs on a 128-node
+> tree, 0.55 %).
+>
+> ### Layout's interior, by ablation
+>
+> The slope above says layout is where the per-node cost is; the §1 section table says its two
+> whole-arena walks are only ~0.033 µs/node between them, i.e. ~1 % of the slope. To find the rest,
+> the layout body was ablated at two sizes (`WINIA_ABLATE_MEASURE` skips `measure_node` itself,
+> `WINIA_ABLATE_INDEX` the reuse-index walk, `WINIA_ABLATE_MODDEPS` the compose tail's modifier-deps
+> walk):
+>
+> | node count | baseline frame / layout | index off | mod-deps off | measure off |
+> |---|---|---|---|---|
+> | 128 | 1563 / 561 µs | 1651 / 559 (no win) | 1601 / 576 (no win) | cannot render |
+> | 202 | 2067 / 842 µs | **1919 / 759 (−148 µs, −7 % of frame)** | 2037 / 803 (−30 µs, within noise) | cannot render |
+>
+> `measure_node` cannot be skipped outright — with no measurement the tree has no sizes and the frame
+> stops drawing frames at all — so its cost is what remains: at 202 nodes, layout minus the two walks
+> is still ~700 µs, which is 3.5 µs a node inside measurement and its dependants.
+>
+> Conclusion for the next round: **the target is `measure_node`, not the walks.** The reuse-index walk
+> is worth ~7 % of the frame at 202 nodes (a real but secondary number; note its ablation also
+> degrades reuse on the following frames, so −148 µs is a lower bound on its cost, not an upper), the
+> modifier-deps walk is not measurable at these sizes, and the rest of layout is the per-node
+> measurement pass itself.
+
+
 ## 4. What this round recommends
 
-1. **Do not run phase 2 as planned.** The `reconcile` rewrite was the named next round on the strength
-   of the bench's 800-row figures (~48 µs of an idle compose frame). On a real tree it is 9 µs, 0.55 %
-   of the frame, and the whole compose tail is 3.4 %. A correct incremental rewrite is a
-   graph-invariant change with a real risk of stale content; 0.55 % does not pay for it.
-2. **The compose side is essentially done for frame time.** compose 263 µs + layout 296 µs + overlays
-   and predraw 34 µs = 593 µs of a 1649 µs frame, and 82 µs of that is the tail measured above. The
-   remaining compose-side items are the *fixed* per-frame walks that a larger tree amortises and a
-   smaller one cannot avoid.
-3. **If a performance round is wanted, the honest targets are outside the compose engine:**
-   the present path (300–400 µs on both backends — a Windows cost the framework does not control, but
-   it is half the frame and worth understanding before anything else is optimized), Skia recording on
-   the CPU fallback backend (419 µs against 155 µs on Vulkan), and the structural-change tail
-   (p99 5.8 ms against a 1.6 ms p50 — the cold-frame shape, which this round did not split).
-4. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped (538.7 µs
+1. **Do not run the `reconcile` rewrite as a performance round.** It was the named next step on the
+   strength of the bench's 800-row figures (~48 µs of an idle compose frame). On a real tree it is
+   9 µs, 0.55 % of the frame, and the whole compose tail is 3.4 % (2.5 % at 128 nodes). A correct
+   incremental rewrite is a graph-invariant change whose failure mode is stale content; 0.55 % does
+   not pay for it.
+2. **Layout's 2.95 µs/node is the compose-side target** (phase 2 above). It is the largest per-node
+   slope in the frame, it is paid on every node of every frame, and its two whole-arena walks are the
+   first thing to measure inside it — `measure_node` itself has to be priced before anything is
+   changed, because at 3201 nodes those two walks account for only ~0.033 µs of the 2.95.
+3. **The present path (300–400 µs on both backends) is half the frame and outside the framework's
+   control** — softbuffer's blit on CPU, the fence/present path on Vulkan. It is worth understanding
+   (a GPU-bound frame is not reducible by CPU work) but it is not a framework optimization.
+4. **Skia recording is cheap on the default backend** (155 µs at 59 nodes, slope 1.40 µs/node) and 2.7x
+   more expensive on the CPU fallback (419 µs) — the fallback is where a renderer round would aim.
+5. **Do not gate the whole-tree walks.** `prune_stale_child_links` measured flat when skipped (538.7 µs
    against a 541–546 µs baseline), and `collect_live_keys`'s frozen-set ablation (344.8 µs) buys its
    win by no longer growing the read graph.
+6. **The structural-change tail is still unsplit** (p99 5.8 ms against a 1.6 ms p50): the jump frame
+   composes content that has never been composed, which is the cold-frame path the bench prices at
+   22 ms for 800 text rows. It is the last target in this frame whose cost is milliseconds rather than
+   microseconds.
 
 
 
