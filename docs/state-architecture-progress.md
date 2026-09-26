@@ -207,6 +207,17 @@ struct RuntimeFrameGuard { /* restores outer slot/group/statement TLS */ }
 7. 多次 set 在一个消费周期只产生一个 pending StateId，但读到最新值。
 8. StateSignal 通知不在 signal 锁内执行 wake callback；队列去重入队在 signal lock 内线性化，且不执行用户代码。
 
+## Related open item (not part of this file's phase plan)
+
+- **Cross-frame reuse of a composition — the prerequisite for measure-time subcomposition.** A
+  prototype of "compose during measure + adopt the tree into the arena" was verified feasible
+  (composing inside a measure call, adoption with index re-basing, surviving the compose tail, and
+  panic safety all have tests), and it stops at one structural defect: on a later compose generation
+  the subcomposition comes out EMPTY, the policy reports `0x0`, and that overwrites the size adoption
+  wrote. The root cause is observed, not inferred. See `docs/lookahead-subcompose-feasibility.md`
+  §5b and §6; the prototype, its tests and its reproduction are on the branch `exp/lookahead-probe`
+  — this branch's tree does not contain them.
+
 ## 变更记录
 
 - 初始：完成长期 ownerless StateSignal 架构设计。

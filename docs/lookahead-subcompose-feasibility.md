@@ -132,16 +132,64 @@ The honest next step is a probe round, not an implementation:
    point 2 either confirms the "prebuilt descriptor" route or shows it needs the other one), and
    whether a panic inside the inner compose rolls back the outer `LayoutTransaction` correctly.
 
+## 5b. The experiment that was run — and its result (branch-only)
+
+> **This section describes work that lives on the branch `exp/lookahead-probe` only.** The code it
+> talks about (`ui::subcompose`, the `BoxWithConstraints` rewrite, the materialize-contract change) is
+> NOT in this branch's tree. What follows is the finding, kept here so nobody repeats it; the code is
+> on that branch for whoever picks it up.
+
+The design-2 direction was prototyped end to end on that branch. It works far enough to be worth
+recording, and it stops at one structural place:
+
+1. **A measure-time subcomposition can be built and adopted.** A policy composes its content into its
+   own `Composer` during `measure`, parks it, and an adoption pass in `Composer::layout` moves the tree
+   into the outer arena — re-basing child indices AND policy indices, attaching under the component's
+   node, marking the subtree reused. The branch's tests cover composing inside a measure call, its TLS
+   isolation, a panic inside it, and adoption's index re-basing.
+2. **The extra layout a lookahead would need is affordable.** Timed on a real window's flight-start
+   frames (the frame handler already runs a second `layout()` there): first pass ~405 µs, the extra
+   pass ~191 µs on a 56-node tree — 1.1 % of a 60 Hz budget, once per flight start.
+3. **Re-composing the same tree in one frame (the lookahead shape) is blocked by the slot table.**
+   `SlotTable::start_slot` is a destructive visitor — it clears `dirty` on a match, truncates on a
+   mismatch, and `collect_live_keys` keeps only visited slots — so a second pass over the same tree
+   re-runs nothing, and forcing it changes the flags the whole Skip/materialize/drain pipeline reads.
+   That is a visit-semantics change whose failure mode is the corruption the `[dup-key]` guard exists
+   to catch.
+4. **The subcomposition path stops at a structural defect, observed rather than guessed.** On a later
+   compose generation the subcomposition composes NOTHING (measured: `nodes=0`, `root=None`), so the
+   policy reports `0x0` and overwrites the size the adoption pass wrote — the box reads `[0,0]` while
+   its adopted child reads `[192,19]`. The cause: adoption MOVES the composition's tree into the outer
+   arena, so nothing carries the subcomposition across generations. Fixing it needs cross-frame reuse
+   (keep the composition alive between frames and re-arrange it) — a structural piece of work, not
+   another write at the adoption site: two such writes were tried and measured false.
+5. **What it would buy, and what is already solved without it.** `BoxWithConstraints`' scope and
+   `TabRow`'s indicator slot genuinely need measure-time composition; `LazyColumn`'s visible items and
+   the shared-element bounds discovery do NOT — both have documented, tested workarounds
+   (`docs/shared-element-transition.md` §3.1).
+
+So: feasible and prototyped, the cheap half of the lookahead idea is priced, and the remaining work is
+named (cross-frame reuse of a composition) with a reproduction on that branch
+(`winia/tests/ui_test.rs`'s `#[ignore]`d `box_with_constraints_composes_its_content_at_measure_time`
+plus the `bwc` fixture).
+
 ## 6. Recommendation
 
-- **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a
-  named function with named invariants (`start_slot`'s visit semantics + `visited`-based orphan
-  collection), and its failure mode is tree corruption.
-- **Price the animation-free second `layout()` first** — it is the cheapest thing that could give
-  `animate_item`/lookahead-style information, and it re-enters no slot.
-- **Then a minimal design-2 subcomposition** for the cases that genuinely need measure-time
-  composition (`BoxWithConstraints`' scope, `TabRow`'s indicator slot). It uses mechanisms the engine
-  already has: explicit keying for identity, `RuntimeFrameGuard` for re-entrancy, the existing
-  materialize/arena path for the output.
-- **Keep the frame-lagged approximation where it already works** (`LazyColumn`, shared elements):
-  both have documented, tested workarounds, and the trail costs them little.
+What the experiment (§5b) leaves behind:
+
+- **Design 1 (re-composing the same tree in one frame) should not be attempted first.** Its blocker is
+  a named function with named invariants (`start_slot`'s visit semantics plus `visited`-based orphan
+  collection) and its failure mode is tree corruption.
+- **The cheap half is priced and worth using on its own:** a second `layout()` under different inputs
+  costs ~191 µs on a 56-node tree (1.1 % of a 60 Hz budget) and re-enters no slot. Anything that needs
+  "where would this be if the animation were not running" can start there.
+- **Design 2 is feasible but has one prerequisite, now named: `cross-frame reuse of a composition`.**
+  The prototype composed at measure time, adopted the tree into the arena, and survived a frame — until
+  a later compose generation (the observed root cause in §5b.4). That prerequisite is structural: the
+  composition has to stay alive between frames and be re-arranged, instead of being re-created and
+  moved. Once it exists, `BoxWithConstraints`' scope and `TabRow`'s indicator slot follow.
+- **Keep the frame-lagged approximation where it already works** (`LazyColumn`, the shared-element
+  bounds): both have documented, tested workarounds, and the trail costs them little.
+
+The prototype, its tests and its reproduction are on `exp/lookahead-probe`; this branch's tree does not
+contain them.
