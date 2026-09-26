@@ -71,6 +71,42 @@ the node is materialized with `dirty=false`, `measure_node` folds and the compon
 re-measured — in a window the body ran (traced), the new modifier arrived (`max_width=Fixed(200)`),
 and the box's reported size never followed. The acceptance test fails on exactly that.
 
+### The 2026-09-26 follow-up round: what the link actually is (traced, still unfixed)
+
+A round of targeted tracing (`WINIA_SUBCOMPOSE_TRACE`, driven through the fixture's stdin/pipe with
+`c 51 36` then `c 123 36`) narrowed the gap to a specific, reproducible statement:
+
+```
+[bwc-build] cap=Fixed(200) -> [bwc-measure] max_w=200 gen=1     frame 1
+[bwc-build] cap=Fixed(120) -> [bwc-measure] max_w=120 gen=2     narrow click
+[bwc-build] cap=Fixed(120) -> [bwc-measure] max_w=120 gen=3 x2
+[bwc-build] cap=Fixed(200) x2            <- the BODY RUNS, and no [bwc-measure] follows it
+```
+
+- The body re-runs because the ancestor's `State` read recomposed the parent (`[mark-dirty]` names
+  the Column's and the Row's keys — **never the box's**).
+- `materialize` then receives the box's descriptor with `dirty=false` (`[mat-in] key=830704544334471970
+  skip=false claimed=None dirty=false subcomposed=false`), i.e. a parent entering does NOT make its
+  child containers dirty.
+- So the node is never re-measured, `subcompose()` never runs again, and the content freezes at the
+  previous value. Every later layout then legitimately folds at the root (`[fold] idx=0` only).
+
+Three attempts at a rule, all measured and all refuted on that same run:
+
+1. `materialize`'s reuse arm marking such a node `dirty` — the flag survives materialize
+   (`[mat-reuse] ... dirty=true`) but `layout()` clears the whole tree's `dirty` and re-derives it.
+2. The same rule setting `layout_dirty` instead — `layout()` also clears that, from
+   `layout_dirty_keys`.
+3. Seeding the node's `slot_key` into `layout_dirty_keys` at the end of `compose`, plus a
+   `MeasurePolicy::subcomposes()` hook (so a policy can declare that its content is composed inside
+   measurement) and setting `layout_dirty` at all three materialize arms — the box still never
+   re-measured. The claim/rebuild interplay (`[mat-arm] ... -> reuse-or-rebuild` twice in one frame,
+   a fresh node the second time, with `subcomposed=false` because only a real measurement sets it)
+   is where the next attempt should look.
+
+None of the three is in the tree: the branch is at `7562eac`, and the probes live in a stash. The
+lib suite is 1091 passed and the UI suite 47 passed + the 1 ignored reproduction on that state.
+
 ## The restart order, if this is picked up
 
 1. **Re-confirm the defect is still the one described.** Run the `--ignored` test above and read the
