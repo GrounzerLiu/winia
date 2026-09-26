@@ -92,6 +92,26 @@ the TREE be rebuilt (it already is, correctly — the acceptance test passes) an
 rebuild cannot reproduce: the remembered state of the content, keyed by its call sites. That is a
 question about `Composer`'s slot table, not about the arena.
 
+## Round 4 (2026-09-26): carrying the slot table alone is not enough either — measured, reverted
+
+The cheap answer was tried: keep the inner `Composer` with the subcomposing node (a thread-local cache
+keyed by that node's index), compose the next frame's content INTO it (a `remember` reads its value out
+of the slot table by slot key, so the table is the thing that has to survive), and hand it back after
+adoption. It compiles, and it does not work yet — the composer's own per-node state assumes the arena
+is continuous across a re-arrangement, and adoption leaves that arena EMPTY:
+
+- `index out of bounds: the len is 0 but the index is 0` at `materialize.rs:405` — the stale
+  `prev_node_by_key` from the last `layout()` (which the reuse index is rebuilt from) still names the
+  inner arena's old indices, and the next `compose` takes them for reusable nodes;
+- clearing that index before the recompose moves the crash to `materialize.rs:682` (`[dup-key]`), where
+  the tree walk meets the same emptiness from the other side.
+
+So a reusable composer needs its arena story settled FIRST — either adoption that leaves the inner arena
+usable (which is the node-copy problem above) or a composer mode that lays out from a slot table into a
+fresh arena. Both are bigger than a facility patch, and that is the honest state of this piece: the
+component works, the reuse is a framework-shaped piece of work with a named starting point. The
+experiment is not in the tree (the branch is at `429d57f`, lib suite 1092 passed).
+
 ### The 2026-09-26 round that found the composition→measure link (fixed since)
 
 That round traced the gap and its result is now the fix described above; it is kept here because the
@@ -126,6 +146,12 @@ which nodes each layout pass reached.
 
 ## What was already ruled out (do not re-try these)
 
+- **Reusing the inner `Composer` for the next frame's composition** (cache it per node, compose into it
+  again, hand it back after adoption). Tried this round with the full implementation: it compiles and
+  it crashes on the frame that reuses it (`index out of bounds` at `materialize.rs:405`; clearing that
+  index moves the crash to a `[dup-key]` at `materialize.rs:682`), because the composer's per-node
+  state assumes the arena is continuous and adoption left it empty. Reverted. See Round 4 above for the
+  two shapes that would actually make it work.
 - **Re-recording the inner composition's reads on the outer node's slot key** (so a state read inside
   the subcomposition marks the component for re-measurement). Tried in this round: it made the box's
   own reading correct, but it broke `a_long_press_fires_while_the_pointer_is_still_down` (the extra
