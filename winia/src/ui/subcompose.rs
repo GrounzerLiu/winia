@@ -219,9 +219,64 @@ fn adopt_one(
         arena.nodes.push(node);
         reused.insert(node_base + i);
     }
+    // REPLACE, don't stack: the previous frame's adopted subtree for this parent is released first.
+    // Synthetic keys are derived from the parent's key and the node's offset, so every frame's
+    // composition produces the SAME keys — correct for identity, but it means the old copy must be
+    // gone before the new one is inserted, or `collect_node_keys` sees two nodes claiming one key
+    // (measured: `[dup-key] ... 覆盖了已有节点`, both carrying the adopted Text's key).
+    if let Some(previous) = arena.nodes[parent].subcomposed_child.take() {
+        arena.nodes[parent].children.retain(|&c| c != previous);
+        if previous < arena.nodes.len() {
+            arena.free_node(previous);
+        }
+    }
     let adopted_root = root + node_base;
+    // Give every adopted node a SYNTHETIC identity derived from its parent's key and its offset in
+    // the subtree. The inner composition's own keys come from the same call site as the component
+    // (its content is written at that call site), so adopting them unchanged collides with the
+    // component's own node — measured: `[dup-key] ... node idx=2 ... 覆盖了已有节点 idx=1`, both
+    // carrying the Text's key. This is the case `ctx.key(id, ...)` / `start_scope_keyed` exist for:
+    // explicit identity for content whose call site cannot supply a distinct one.
+    let parent_key = arena.nodes[parent].slot_key;
+    for i in 0..=adopted_root - node_base {
+        let idx = node_base + i;
+        arena.nodes[idx].slot_key = crate::core::composer::mix_key(parent_key, i as u64 + 1);
+    }
+    // Record the subtree's measurements BEFORE the inner arena is dropped: they are relative to the
+    // subtree root, so they survive the arena being reshuffled (the base moves, the offsets do not).
+    let measurements = measurements_from(&arena.nodes[adopted_root..]);
     arena.add_child(parent, adopted_root);
+    arena.nodes[parent].subcomposed_child = Some(adopted_root);
+    arena.nodes[parent].subcomposed_measurements = measurements;
+    #[cfg(debug_assertions)]
+    if std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {
+        eprintln!(
+            "[sub] adopted {adopted_root} under {parent}; parent children={:?} size={:?}",
+            arena.nodes[parent].children, arena.nodes[parent].measured_size
+        );
+    }
     Some(adopted_root)
+}
+
+/// The measured geometry of an adopted subtree, relative to its root, in pre-order.
+///
+/// Pre-order matches the order the replay walks; relative offsets keep the values valid when the same
+/// subtree is re-attached at a different arena base on a later frame.
+fn measurements_from(nodes: &[LayoutNode]) -> Vec<(usize, Size)> {
+    fn walk(nodes: &[LayoutNode], offset: usize, out: &mut Vec<(usize, Size)>) {
+        out.push((offset, nodes[offset].measured_size));
+        for &c in &nodes[offset].children {
+            if c >= offset {
+                walk(nodes, c - offset, out);
+            }
+        }
+    }
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    walk(nodes, 0, &mut out);
+    out
 }
 
 #[cfg(test)]

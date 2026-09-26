@@ -196,12 +196,22 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
     ) -> (Size, Vec<Placement>) {
         let scope = BoxWithConstraintsScope::new(constraints);
         let content = self.content.lock().unwrap().take();
+        // The subcomposed content is adopted as this node's child, so its measurement IS this node's
+        // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
+        // Reporting anything else would leave the box at 0 while holding a sized child — measured
+        // while wiring this: the box read [0,0] with a [98,48] child under it.
         let size = crate::ui::subcompose::subcompose(constraints, move |ctx| {
             if let Some(content) = content {
                 content(ctx, scope);
             }
         });
         let _ = self.alignment;
+        // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
+        // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
+        // out under `constraints`, while the engine clamps against the constraints the box's modifier
+        // produced (a different, usually tighter, set). Measured while wiring this: clamping both ways
+        // made the reported width depend on which layer ran last, and the box read 0 on one frame and
+        // 98 on the next.
         (size, Vec::new())
     }
 
@@ -286,6 +296,32 @@ mod tests {
             1,
             "the subcomposed content was adopted under the box"
         );
+    }
+
+    /// The box's size IS its content's size, and that has to hold on the frame the content was
+    /// composed on AND on the next one — a reused parent detaches and re-attaches the adopted child,
+    /// and the size has to travel with it (the frame path measured [0,48] here while the child read
+    /// [98,48]).
+    #[test]
+    fn the_box_sizes_to_its_content_on_the_first_frame_and_the_next() {
+        let build = |ctx: &mut ComposeCtx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().max_width(200.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::ui::Text::new("content").build(ctx);
+                });
+        };
+        let mut composer = Composer::new();
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
+        let root = composer.arena.root.expect("root");
+        let size = composer.arena_nodes()[root].measured_size;
+        assert!(size.width > 0.0, "frame 1: the box is as wide as its content, got {size:?}");
+
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
+        let size2 = composer.arena_nodes()[root].measured_size;
+        assert!(size2.width > 0.0, "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}");
     }
 
     /// A subcomposing node never folds: its subtree lives in the arena, so a folded frame would let

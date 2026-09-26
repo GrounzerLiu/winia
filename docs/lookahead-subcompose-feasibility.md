@@ -202,8 +202,36 @@ Two defects were measured on the way, both now pinned by tests:
    into it. Either way it is a change to the materialize/node contract — not the one-line wiring the
    probe suggested, and the last thing between this facility and a component that can ship.
 
-So: the mechanism is proven end to end **inside a frame** (adoption runs, the box measures 101x48 from
-its subcomposed content, the subtree is in the arena), and the remaining work is named and bounded.
+### 5d. What the materialize-contract round added, and where it stopped
+
+The next round did the materialize work, and the subcomposed subtree now lives through a reused parent:
+
+- `LayoutNode` gained `subcomposed_child` (the adopted child, kept OUT of the descriptor-driven child
+  bookkeeping) and `subcomposed_measurements` (the subtree's measured geometry, relative to its root,
+  replayed when the child is re-attached — without it the subtree comes back 0x0).
+- `materialize`'s **both** reuse arms detach that child across the descriptor-driven rebuild and
+  re-attach it after; the Skip arm's shape check subtracts it, or every reuse would look like a
+  structure change and fall back to a rebuild.
+- Adoption now releases the parent's PREVIOUS adopted subtree before inserting the new one: synthetic
+  keys are derived from the parent key and the node's offset, so every frame's composition produces the
+  same keys — correct for identity, but two live copies claim one key and trip `collect_node_keys`
+  (measured: `[dup-key] … 覆盖了已有节点`, both carrying the adopted Text's key).
+- `BoxWithConstraints` reports the subcomposed size as measured (clamping in both the policy and the
+  engine made the reported width depend on which layer ran last).
+
+Measured result: `cargo test -p winia --lib` 1090 passed, including tests that the content sees real
+constraints on the FIRST frame and that the box stays sized on the second; and in a real window the
+subcomposed text is in the tree at 98x48 with `BWC max 200`, and paints (9384 dark pixels inside the
+box region of a 630x240 frame).
+
+**What is still open, precisely:** in that same real window the BOX node itself reads `[0, 0]` while
+its child reads `[98, 48]` — and the unit tests that assert the box's own size pass, so the difference
+is in the app's frame path rather than in the facility. The frame handler runs `layout()` twice per
+frame under some conditions (the flight-override pass), and the box's policy composes a fresh
+subcomposition on each of those layouts; the adoption pass keeps only the last, and the arena's own
+adopted subtree from the first is released by the second. That is where the next round starts — the
+policy should subcompose ONCE per frame, or the second layout should reuse the first's composition
+instead of re-running it.
 
 ## 6. Recommendation
 

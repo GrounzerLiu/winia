@@ -303,6 +303,20 @@ pub struct LayoutNode {
     /// the subtree detached — measured while writing the facility (the adopted child disappeared on
     /// the second frame, and the assertion that caught it was the parent's child count going to 0).
     pub(crate) subcomposed: bool,
+    /// The arena index of this node's subcomposed child, if its policy composed one
+    /// (`ui::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
+    /// adopted subtree has NO descriptor, so materialize's "clear and rebuild from descriptors" would
+    /// drop it, and the shape check ("does the cached child count match the descriptors?") would
+    /// refuse the reuse path every frame. Both arms therefore treat this index as separate: the child
+    /// is detached before the rebuild and re-attached after it.
+    pub(crate) subcomposed_child: Option<usize>,
+    /// The measurements of the adopted subtree, relative to its root, in pre-order. The
+    /// subcomposition measures itself in its own `layout()`; when materialize reuses the parent and
+    /// detaches/re-attaches the child, those measurements would be lost (the adopted child has no
+    /// policy of its own to re-measure with), so they are cached here and replayed on re-attach.
+    /// Measured while building this: without it the adopted subtree comes back at 0x0 and paints
+    /// nothing.
+    pub(crate) subcomposed_measurements: Vec<(usize, Size)>,
 }
 
 impl LayoutNode {
@@ -383,6 +397,8 @@ impl LayoutNode {
             layout_dirty: false,
             cached_constraints: None,
             subcomposed: false,
+            subcomposed_child: None,
+            subcomposed_measurements: Vec::new(),
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
@@ -468,6 +484,8 @@ impl Default for LayoutNode {
             layout_dirty: false,
             cached_constraints: None,
             subcomposed: false,
+            subcomposed_child: None,
+            subcomposed_measurements: Vec::new(),
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
