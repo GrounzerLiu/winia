@@ -2868,13 +2868,21 @@ impl Composer {
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
-        // A subcomposing node has to be re-measured, and the LAYOUT path is what does that: `layout()`
-        // clears every node's `dirty`/`layout_dirty` and re-derives them from `layout_dirty_keys`, then
-        // uses that set to decide which parents descend at all. A node whose slot status was Clean
-        // (its parent entered, so its body re-ran without its slot being marked) arrives here with
-        // `dirty=false`, so the only place left to say "measure me" is this set. Asked of the POLICY
-        // rather than of the node's `subcomposed` flag, because that flag is set BY a measurement and
-        // is therefore false on exactly the nodes that were just rebuilt.
+        // A subcomposing node the composition touched has to be re-measured, and the LAYOUT path is
+        // what does that: `layout()` clears every node's `dirty`/`layout_dirty` and re-derives them
+        // from `layout_dirty_keys`, then uses that set to decide which parents descend at all. A node
+        // whose slot status was Clean (its parent entered, so its body re-ran without its slot being
+        // marked) arrives here with `dirty=false`, so the only place left to say "measure me" is this
+        // set. Asked of the POLICY rather than of the node's `subcomposed` flag, because that flag is
+        // set BY a measurement and is therefore false on exactly the nodes that were just rebuilt.
+        //
+        // KNOWN TENSION (measured, not resolved): seeded this way, a subcomposing node is re-measured
+        // on every frame that composes — and re-measuring it re-composes its content, which is itself a
+        // change, so a row with a caller-supplied indicator never lets the loop idle (`pending=1`, 157
+        // frames in three seconds, versus ONE frame for the same row with its own indicator). Guarding
+        // this with `dirty` fixes the loop but turns the acceptance test red, so the guard is not the
+        // answer; the discriminator has to be "the CONTENT changed", which is not what either flag says
+        // today. See docs/lookahead-probe-handover.md.
         for idx in 0..self.arena.nodes.len() {
             let declares = self.arena.nodes[idx]
                 .measure_policy

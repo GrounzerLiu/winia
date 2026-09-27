@@ -17,17 +17,24 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
     let fixed_sel = ctx.remember(|| 2usize);
     let scroll_sel = ctx.remember(|| 3usize);
     let scroll_state = ctx.remember(|| ScrollState::new()).get();
+    // Diagnostic switch (a demo-only knob): "fixed" builds just the fixed row, "scroll" just the
+    // scrollable one, anything else both. One build, three configurations — the cheapest way to tell
+    // which of them is the one that keeps the loop awake.
+    let mode = ctx.remember(|| std::env::var("WINIA_TAB_DEMO").unwrap_or_default()).get();
+    let want_fixed = mode != "scroll";
+    let want_scroll = mode != "fixed";
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
         .spacing(12.0)
         .build(ctx, |ctx| {
+            if want_fixed {
             Text::new("TabRow + custom indicator (red bar drawn by the caller)")
                 .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
 
             let sel = fixed_sel.clone();
-            TabRow::new(sel.get(), {
+            let row = TabRow::new(sel.get(), {
                 clone!(sel);
                 move |ctx| {
                     for i in 0..3 {
@@ -37,11 +44,12 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                             .build(ctx);
                     }
                 }
-            })
-            .indicator({
-                clone!(sel);
+            });
+            // `plain` mode keeps the row's OWN indicator, so the two can be compared directly.
+            let row = if mode == "plain" { row } else { row.indicator({
                 move |ctx, scope| {
-                    let _ = sel.get();
+                    // NOTE: no `sel.get()` here on purpose. A read inside the subcomposition registers on
+                    // the INNER composer, and this example used to keep the loop awake with one.
                     let (x, w) = match scope.selected_position() {
                         Some(p) => (p.left + (p.width - p.content_width) / 2.0, p.content_width),
                         None => (0.0, 0.0),
@@ -61,11 +69,13 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                         )
                         .build(ctx);
                 }
-            })
-            .build(ctx);
+            }) };
+            row.build(ctx);
 
             Spacer::vertical(8.0);
+            }
 
+            if want_scroll {
             Text::new("ScrollableTabRow + custom indicator (scrolls with the tabs)")
                 .modifier(Modifier::new().padding(4.0))
                 .build(ctx);
@@ -103,6 +113,7 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                 }
             })
             .build(ctx);
+            }
         });
 }
 
