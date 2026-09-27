@@ -338,6 +338,24 @@ fn adopt_one(
     }
     // Record the subtree's measurements BEFORE the inner arena is dropped: they are relative to the
     // subtree root, so they survive the arena being reshuffled (the base moves, the offsets do not).
+    // The adopted root's OWN `Modifier.offset` is applied BEFORE the geometry is recorded, because the
+    // recorded geometry is what a later frame REPLAYS when it re-attaches the subtree — applying the
+    // offset after recording it meant the fix survived exactly one frame and the next frame restored
+    // the node to the origin. (Measured: the tree, read after frame 1, said the bar was at (288,44)
+    // while a captured frame said the origin; the capture forces a render, so it showed the replayed
+    // geometry.) The place that normally applies it is the PARENT's measure tail, and adoption runs
+    // after that loop has already gone past the new child.
+    {
+        let rtl = arena.nodes[parent].layout_direction == crate::layout::LayoutDirection::Rtl;
+        if let Some((ox, oy)) = arena.nodes[adopted_root].modifier.get_offset() {
+            arena.nodes[adopted_root].position.x += if rtl { -ox } else { ox };
+            arena.nodes[adopted_root].position.y += oy;
+        }
+        if let Some((ax, ay)) = arena.nodes[adopted_root].modifier.get_absolute_offset() {
+            arena.nodes[adopted_root].position.x += ax;
+            arena.nodes[adopted_root].position.y += ay;
+        }
+    }
     let measurements = measurements_from(&arena.nodes[adopted_root..]);
     // The parent's size IS its content's size (a plain `Box` rule) — but only when the component says
     // so (`sized_by_content`). An overlay-shaped slot (a row's indicator) leaves the parent's own
