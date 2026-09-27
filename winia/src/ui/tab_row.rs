@@ -184,6 +184,39 @@ pub struct TabRow {
     divider_color: Option<Color>,
     indicator_color: Option<Color>,
     indicator_shape: Option<Shape>,
+    /// A caller-supplied indicator (Compose's `indicator` slot). Composed DURING measurement with the
+    /// positions this row just computed, which is the only place they exist — see `TabIndicatorScope`.
+    /// `Fn` behind an `Arc`, not `FnOnce`: every measurement runs it (a later frame measures again),
+    /// the same shape `BoxWithConstraints`' content has.
+    indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+}
+
+/// What a custom indicator gets to know: where every tab ended up, and which one is selected.
+///
+/// Compose's `TabRow` hands its indicator a `TabIndicatorScope` with a `tabPositions` list, and those
+/// positions only exist once the row has been measured — which is why the indicator is composed inside
+/// measurement (`ui::subcompose`) instead of by the caller during composition.
+#[derive(Debug, Clone)]
+pub struct TabIndicatorScope {
+    positions: Vec<TabPosition>,
+    selected_index: usize,
+}
+
+impl TabIndicatorScope {
+    /// Every tab's position, in tab order.
+    pub fn tab_positions(&self) -> &[TabPosition] {
+        &self.positions
+    }
+
+    /// The selected tab's index, clamped into range.
+    pub fn selected_index(&self) -> usize {
+        self.selected_index.min(self.positions.len().saturating_sub(1))
+    }
+
+    /// The selected tab's position, if there is a tab at all.
+    pub fn selected_position(&self) -> Option<&TabPosition> {
+        self.positions.get(self.selected_index())
+    }
 }
 
 impl TabRow {
@@ -205,7 +238,25 @@ impl TabRow {
             divider_color: None,
             indicator_color: None,
             indicator_shape: None,
+            indicator_slot: None,
         }
+    }
+
+    /// Supply the indicator yourself (Compose's `indicator` parameter).
+    ///
+    /// The closure runs DURING measurement, with the positions the row computed for this frame
+    /// (`scope.tab_positions()`), so it can draw anything the positions allow — Compose's own
+    /// `SecondaryIndicator`, a custom bar, a set of marks. It is composed into the row's layout, so
+    /// whatever it emits is measured and painted with the row; returning nothing is allowed (an
+    /// indicator that only draws, e.g. through `Modifier::draw`).
+    ///
+    /// Without this, the row's own indicator (a bar over the selected tab, animated) is what is drawn.
+    pub fn indicator(
+        mut self,
+        indicator: impl Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync + 'static,
+    ) -> Self {
+        self.indicator_slot = Some(std::sync::Arc::new(indicator));
+        self
     }
 
     /// 设为 Secondary 风格（指示条全宽直角，内容色 OnSurface）。
@@ -290,6 +341,7 @@ impl TabRow {
             width_state: width_state.clone(),
             initialized: initialized.clone(),
             direction,
+            indicator_slot: self.indicator_slot,
         };
 
         // 根 modifier：背景色 + 用户 modifier
@@ -327,7 +379,6 @@ impl TabRow {
 
 /// TabRow 布局：children = [tab0, tab1, ..., tabN-1, divider, indicator]。
 /// 固定最后两个子节点为 divider 和 indicator。
-#[derive(Debug)]
 struct TabRowLayoutPolicy {
     selected_tab_index: usize,
     follow_content_size: bool,
@@ -335,9 +386,29 @@ struct TabRowLayoutPolicy {
     width_state: State<f32>,
     initialized: std::sync::Arc<AtomicBool>,
     direction: LayoutDirection,
+    /// The caller's indicator, when there is one: composed at measure time with the positions
+    /// (see `TabRow::indicator`).
+    indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+}
+
+/// Manual, not derived: the indicator slot is a closure, which has no `Debug`.
+impl std::fmt::Debug for TabRowLayoutPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TabRowLayoutPolicy")
+            .field("selected_tab_index", &self.selected_tab_index)
+            .field("follow_content_size", &self.follow_content_size)
+            .field("has_indicator_slot", &self.indicator_slot.is_some())
+            .finish()
+    }
 }
 
 impl MeasurePolicy for TabRowLayoutPolicy {
+    /// The row can compose a caller-supplied indicator during measurement, so its node has to be
+    /// re-measured rather than folded (see the trait method's contract).
+    fn subcomposes(&self) -> bool {
+        self.indicator_slot.is_some()
+    }
+
     fn measure(
         &self,
         nodes: &mut Vec<LayoutNode>,
@@ -423,6 +494,24 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             let spec = indicator_spring();
             crate::animation::push_animatable(self.offset_state.clone(), target_offset, spec.clone());
             crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
+        }
+
+        if let Some(slot) = &self.indicator_slot {
+            // The caller's indicator, composed HERE because this is the only place the positions exist.
+            // It replaces the row's own bar (Compose's `indicator` parameter does the same), and it is
+            // laid out in the row's own coordinate space, so `scope.selected_position()` is a position
+            // in the row rather than an offset for the row's bar.
+            let scope = TabIndicatorScope {
+                positions: positions.clone(),
+                selected_index: self.selected_tab_index,
+            };
+            crate::ui::subcompose::subcompose(
+                Constraints::new(0.0, row_width, 0.0, tab_row_height),
+                // The scope is CLONED per call: `subcompose` runs its content as `Fn`, and each call
+                // needs its own copy (a Vec of a few floats per measurement).
+                |ctx| slot(ctx, scope.clone()),
+            );
+            return (Size::new(row_width, tab_row_height), placements);
         }
 
         // 读动画当前值用于 placement（peek 不注册依赖——依赖已在 measure 开头
@@ -1291,6 +1380,63 @@ mod tests {
         // indicator is at index 4
         let ind = &nodes[children[4]];
         assert_eq!(ind.measured_size.height, ACTIVE_INDICATOR_HEIGHT);
+    }
+
+    /// The caller's indicator is composed DURING measurement and sees the positions the row just
+    /// computed — the reason Compose needs `SubcomposeLayout` for this slot, and the thing this branch's
+    /// `ui::subcompose` facility now provides. The positions are measure-time data: a caller cannot
+    /// know them while composing, which is what kept this API out of winia before.
+    #[test]
+    fn a_custom_indicator_is_composed_with_the_measured_positions() {
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Vec<(usize, TabPosition)>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_in = seen.clone();
+        let mut composer = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                TabRow::new(1, |ctx| {
+                    for i in 0..3 {
+                        let label = format!("Tab {i}");
+                        Tab::new(i == 1, || {})
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                })
+                .indicator(move |ctx, scope| {
+                    let selected = scope.selected_position().copied();
+                    seen_in
+                        .lock()
+                        .unwrap()
+                        .push((scope.tab_positions().len(), selected.unwrap_or(TabPosition::new(0.0, 0.0, 0.0))));
+                    // What a caller draws: the selected tab's own width, centred on it.
+                    let pos = scope.selected_position().copied().unwrap_or(TabPosition::new(0.0, 0.0, 0.0));
+                    crate::ui::layout_components::Spacer::vertical(ACTIVE_INDICATOR_HEIGHT)
+                        .modifier(
+                            crate::modifier::Modifier::new()
+                                .fill_max_width()
+                                .padding_vertical(0.0)
+                                .offset(pos.left + (pos.width - pos.content_width) / 2.0, 0.0),
+                        )
+                        .build(ctx);
+                })
+                .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let seen = seen.lock().unwrap().clone();
+        assert!(!seen.is_empty(), "the indicator slot ran during the measurement");
+        let (count, selected) = seen[0];
+        assert_eq!(count, 3, "every tab's position was handed to the indicator");
+        // 360 / 3 = 120 per tab, and tab 1 starts at 120.
+        assert_eq!(
+            (selected.left, selected.width),
+            (120.0, 120.0),
+            "the selected tab's position is the one the row measured: {selected:?}"
+        );
+        assert!(selected.content_width > 0.0, "and its content width is real: {selected:?}");
     }
 
     #[test]
