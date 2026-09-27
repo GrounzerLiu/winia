@@ -46,16 +46,20 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                         Some(p) => (p.left + (p.width - p.content_width) / 2.0, p.content_width),
                         None => (0.0, 0.0),
                     };
-                    Canvas::new()
-                        .modifier(Modifier::new().width(w).height(4.0).offset(x, 0.0))
-                        .build(ctx, move |ds| {
-                            let (w, h) = (ds.width(), ds.height());
-                            ds.draw_round_rect(
-                                skia_safe::Rect::from_wh(w, h),
-                                h / 2.0,
-                                Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
-                            );
-                        });
+                    // A plain modifier-painted bar, NOT `Canvas`: the scrollable row below keeps the
+                    // `Canvas` version, so one frame shows whether the draw-wrap channel on an ADOPTED
+                    // subcomposition node is the problem or the node's geometry is.
+                    Spacer::vertical(4.0)
+                        .modifier(
+                            Modifier::new()
+                                .width(w)
+                                .background(
+                                    Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
+                                    Shape::Rectangle,
+                                )
+                                .offset(x, 44.0),
+                        )
+                        .build(ctx);
                 }
             })
             .build(ctx);
