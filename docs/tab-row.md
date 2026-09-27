@@ -30,6 +30,17 @@ TabRow::new(selected_index, |ctx| { /* Tab ×N */ })
     .modifier(m)
     .build(ctx);
 
+// 自定义指示器（Compose 的 indicator 槽）：闭包在测量期运行，scope 带本帧实测的 tab 位置。
+// 供应它之后，行自身那条动画指示条不再绘制。
+TabRow::new(selected_index, |ctx| { /* Tab ×N */ })
+    .indicator(|ctx, scope| {
+        let pos = scope.selected_position().unwrap();
+        // 在行坐标系里画：pos.left / pos.width / pos.content_width 都是实测值
+        MyIndicator::new(pos.content_width).offset(pos.left + (pos.width - pos.content_width) / 2.0, 0.0)
+            .build(ctx);
+    })
+    .build(ctx);
+
 // 可滚动 TabRow（超出视口横向滚动，选中自动居中）
 ScrollableTabRow::new(selected_index, |ctx| { /* Tab ×N */ })
     .scroll_state(scroll_state)           // 缺省内部 remember 创建
@@ -137,20 +148,21 @@ Tab::new(selected, || on_click())
 
 ## 7. 已知差距（与 Compose 对照）
 
-- **TabIndicatorScope 自定义指示器 API 未做**：Compose 的 indicator 槽依赖
-  SubcomposeLayout（组合期注入用户槽、measure 期喂 tabPositions）。winia 无
-  subcompose 设施——positions 是 measure 期数据，组合期无法注入用户闭包，
-  需先造新机制（布局期写 State + 用户槽 peek 读）或换轻方案（indicator 用户
-  content 槽 + `tab_positions: State<Vec<TabPosition>>` 暴露）。
+- **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`）：`TabRow::indicator(|ctx, scope| ...)`
+  的闭包在**测量期**运行，`scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，
+  与 Compose 的 indicator 槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `ui::subcompose`）；
+  供应自定义指示器时行自身的指示条不再绘制，与 Compose 的 `indicator` 参数一致。
+  待办：`ScrollableTabRow` 尚无此槽（其位置计算含滚动偏移，需同样接一遍）。
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
-## 8. 测试（`ui::tab_row::tests`，21 个）
+## 8. 测试（`ui::tab_row::tests`，22 个）
 
 | 测试 | 覆盖 |
 |---|---|
+| `a_custom_indicator_is_composed_with_the_measured_positions` | 自定义指示器槽：测量期运行、拿到全部位置、选中项对齐实测值 |
 | `tab_row_tabs_equal_width` / `tab_row_primary_indicator_position` / `tab_row_secondary_indicator_width` | 固定等分 + 指示条几何 |
 | `tab_row_rtl_mirror` / `tab_row_rtl_indicator_mirrors` | 固定 RTL 镜像 |
 | `tab_row_0_tabs_does_not_panic` / `tab_row_selected_out_of_range_falls_back_to_origin` | 边界 |
