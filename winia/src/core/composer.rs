@@ -2884,12 +2884,13 @@ impl Composer {
         // answer; the discriminator has to be "the CONTENT changed", which is not what either flag says
         // today. See docs/lookahead-probe-handover.md.
         for idx in 0..self.arena.nodes.len() {
-            let declares = self.arena.nodes[idx]
-                .measure_policy
-                .and_then(|p| self.arena.policies.get(p))
-                .map(|p| p.subcomposes())
-                .unwrap_or(false)
-                || self.arena.nodes[idx].subcomposed;
+            let declares = self.arena.nodes[idx].dirty
+                && (self.arena.nodes[idx]
+                    .measure_policy
+                    .and_then(|p| self.arena.policies.get(p))
+                    .map(|p| p.subcomposes())
+                    .unwrap_or(false)
+                    || self.arena.nodes[idx].subcomposed);
             #[cfg(debug_assertions)]
             if declares && std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {
                 eprintln!(
