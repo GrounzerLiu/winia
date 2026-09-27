@@ -104,11 +104,15 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new()
-            .size(520.0, 260.0)
-            .title("Tab Indicator Demo")
-            .build(ctx, |ctx| {
-                WiniaTheme::auto(ctx, |ctx| tab_indicator_demo(ctx));
-            });
+        // The theme wraps the WINDOW, as every other example does: with it inside the window's build
+        // closure, window-level resolution (surface background, the paint path) runs before any theme
+        // is in scope. This example had it the wrong way round and the caller's indicator came out
+        // BLACK instead of the colour asked for — the framework's paint was reading an unset colour.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(520.0, 260.0)
+                .title("Tab Indicator Demo")
+                .build(ctx, |ctx| tab_indicator_demo(ctx));
+        });
     });
 }
