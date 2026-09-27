@@ -1454,12 +1454,13 @@ idle frame by two orders of magnitude:
 | cold frame | 12448 | 14555 |
 | one row updated | 61767 | 62076–65707 |
 
-A counter run (temporary instrumentation, removed again) explains both rows: an **idle** frame measures
-**0** subcomposing nodes and runs **0** subcompositions, while a **one-row** frame measures **2401**
-(≈3 per node) and runs **800** — so the cost no longer follows the tree on an idle frame, and one row's
-update still re-composes every subcomposition in it, which is where the next attempt starts (why all 800
-nodes come out dirty on a frame where only one group entered; the skip-restore guard in `materialize` is
-the first place to look).
+A counter run explains the idle row and narrows the other one. Temporarily instrumented (removed again):
+an **idle** frame runs **0** subcompositions and, on the one-row frame, **2** nodes are seeded and **2**
+come out of `materialize` dirty — while **800** subcompositions still run. So the remaining cost is not
+the seeding and not materialize; the other ~798 nodes re-measure for a reason neither of those set, and
+the next instrument has to separate the OUTER tree from the inner composers' trees while counting (an
+earlier version of this count did not, and reported "2401 subcomposing nodes measured" when that number
+was mostly the inner trees' own nodes — 800 subcompositions × ~3 nodes each).
 
 ## Re-running any of this
 
