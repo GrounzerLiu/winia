@@ -1523,6 +1523,37 @@ back. For the `bwc` UI fixture it is the mirror image: it passes only with both 
 what makes it a case that had been relying on the accident — with the modifier fix in place it passes on
 the fixed tree too.
 
+### What the branch costs the scenes that PREDATE it (the drop-it-or-keep-it question)
+
+Every change on this branch (the fold rule for a subcomposing node, the compose-end seeding, the
+`apply_layout_dirty` walk, `node_modifier_changed`) sits in the SHARED invalidation path, so the scenes
+that existed before the branch are the ones that would show a regression. They do not:
+
+| scene (800 rows) | v2, from the rounds recorded above | this branch |
+|---|---|---|
+| `boxes`, idle frame | 546–621 | 559 |
+| `boxes`, one row updated | 1142–1247 | **1084** |
+| `boxes`, cold frame | 4732–5332 | 4844 |
+| `text`, idle frame | 715 | 749 |
+| `text`, one row updated | 1297 | 1332 |
+| `text`, cold frame | 24460 | 26445 |
+| `text`, frame (compose+layout), one row updated | 1350 | 1350 |
+| `boxes`, `layout` alone, idle | 154 | 160 |
+| `text`, `layout` alone, idle | 181 | 179 |
+
+Every row is inside the ~15 % run-to-run drift this document warns about at the top of its rounds, and
+the two arms that drifted least across those rounds (the `layout`-alone pair) are equal. The pre-branch
+column is v2's own last recorded state (`8e7dd7c` + its two docs commits; v2 differs from the branch
+point in nothing but those two files), the branch column is `cargo bench -p winia` on `804eae0`, fastest
+of 9 samples.
+
+So the branch costs the scenes it inherited **nothing measurable**. What it costs is the NEW scene: the
+same 800-row tree with one measure-time subcomposition per row runs an idle frame in 1040 µs (against
+559 for `boxes`) and a one-row frame in 1554 µs (against 1084), i.e. **≈0.6 µs per subcomposing node per
+idle frame** — and that is the price of a feature that did not exist before this branch
+(`BoxWithConstraints` composing its content with the constraints measurement just computed, and
+`TabRow`'s caller-supplied indicator slot). A screen that uses neither pays nothing.
+
 ## Re-running any of this
 
 The benchmark's own traps are documented in the file where they bit, and the phase splits used for the
