@@ -171,10 +171,27 @@ Tab::new(selected, || on_click())
   loop is kept in Poll by `animation::is_animating()`, i.e. an animation is alive on every frame and
   never completes. The same four counts on `caae004` (before this round's fix) are 155 / 1 / 150 / 157,
   so it is a separate, pre-existing defect; finding ④ above fixed the same family on the custom-slot
-  path of the FIXED variant, which is why `fixed` is the one combination that idles. The next round
-  starts by isolating `fixed` + its own indicator (only `plain` shows it today, and that mode also
-  builds the scrollable row): likely candidates are the scrollable variant's own indicator pushes and
-  the tab labels' `animate_color_as_state` target.
+  path of the FIXED variant, which is why `fixed` is the one combination that idles.
+
+  **The animation is identified** (walked with a temporary probe on `ACTIVE_ANIMATIONS`, `update`-tick 60
+  apart): it is the spring that centres the selected tab, and the whole chain is
+  `tab_row.rs:1412 scroll_selected_into_view` → `modifier.rs:2821 ScrollState::animate_scroll_to` →
+  `animation::push_animatable_with_done` on one f32 state (`StateId(9)`), pushed exactly once per
+  attempt. Its own dump at tick 600:
+
+  ```
+  spec=Spring(SpringSpec { damping_ratio: 0.6, stiffness: 700.0, mass: 1.0, threshold: 0.01 })
+  from=0.000 to=123.000 elapsed=0.56s disp=-0.0057 vel=-0.2115 peek=122.994
+  ```
+
+  So the spring is sitting ON its target (`peek=122.994` of `123.000`, displacement under the threshold)
+  while its residual VELOCITY stays ~20x over the same threshold, and `Animatable::update`'s completion
+  test requires BOTH (`disp.abs() < threshold && last_velocity.abs() < threshold`) — the animation
+  therefore never finishes on its own criterion, and only the 5 s "extreme parameter protection" ends it
+  (which is why `elapsed` in a later dump is small again: something re-pushes it and the cycle repeats,
+  keeping `is_animating()` true essentially forever). Next step is in `animation.rs`'s spring completion
+  test (a velocity criterion comparable to the displacement one, e.g. against the per-frame step), not in
+  the tab row — and it has to be verified against every spring in the framework, not just this one.
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
