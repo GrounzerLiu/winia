@@ -677,7 +677,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 );
                 state.current_displacement = displacement;
                 // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
-                let done = displacement.abs() < spec.threshold && state.last_velocity.abs() < spec.threshold;
+                // One test, shared with the integrator: see `spring_at_rest`.
+                let done = spring_at_rest(displacement, state.last_velocity, spec.threshold);
                 if done {
                     // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
                     // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
@@ -849,6 +850,32 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
     last.1
 }
 
+/// Whether a spring has come to rest — the ONE place this is decided, because the integrator and
+/// `Animatable::update` both need it and must never disagree.
+///
+/// **The two sides are not in the same unit, and that is deliberate.** The displacement is in the
+/// threshold's unit; the velocity is in that unit per SECOND, so `velocity.abs() < threshold` reads as
+/// "slower than a threshold per second" rather than "within a threshold". The second half is what makes
+/// the animation end at a TURNING POINT of the oscillation — the first moment the amplitude has decayed
+/// under the threshold — and that is what lets a bouncy spring overshoot before it settles: through most
+/// of the flight, passing through the threshold band means the spring is still moving fast.
+///
+/// Scaling the velocity into frames (`velocity * FRAME < threshold`) reads better and is WRONG: it fires
+/// on that first passage, so the bounce is cut. Measured — `ui::shared_transition`'s
+/// `tier0_bouncy_spring_overshoot_renders_then_settles` (damping 0.6, threshold 0.1 on a 0..1 progress)
+/// went from "overshoots past 1.0 and then settles" to "settles at 0.886", i.e. the flight ended while
+/// the spring was still ~11 % short of its target. Scaling it the other way (`velocity * FRAME <
+/// threshold * FRAME`) is exactly the code below.
+///
+/// Compose reaches the same behaviour by a different route: a spring there runs for
+/// `estimateAnimationDurationMillis` — the time it needs to come within one `visibilityThreshold` of the
+/// target — and then reports the exact target (`FloatSpringSpec::getDurationNanos`, androidx
+/// `animation-core`).
+#[inline]
+fn spring_at_rest(displacement: f32, velocity: f32, threshold: f32) -> bool {
+    displacement.abs() < threshold && velocity.abs() < threshold
+}
+
 /// 固定时间步长弹簧积分（accumulator 模式，最多 10 步）
 fn compute_spring_displacement(
     stiffness: f32, damping_ratio: f32, mass: f32,
@@ -868,7 +895,7 @@ fn compute_spring_displacement(
         displacement += *velocity * step;
         total_dt -= step;
     }
-    if displacement.abs() < threshold && velocity.abs() < threshold {
+    if spring_at_rest(displacement, *velocity, threshold) {
         *velocity = 0.0;
         return 0.0;
     }
@@ -1284,8 +1311,65 @@ pub(crate) mod tests {
             );
         }
         let val = target + disp;
-        let done = disp.abs() < threshold && vel.abs() < threshold;
+        // The production test, not a copy of it: a settle assertion has to measure the same criterion
+        // the engine does, or it pins a duration nobody runs.
+        let done = spring_at_rest(disp, vel, threshold);
         (val, done)
+    }
+
+    /// The rest test's second half is what keeps a bouncy spring's overshoot: passing through the
+    /// threshold band while still moving fast is NOT rest. Pinned because "the velocity and the
+    /// displacement are compared in different units" looks like a bug and has already been
+    /// "fixed" once — that attempt cut the bounce and turned
+    /// `ui::shared_transition::tier0_tests::tier0_bouncy_spring_overshoot_renders_then_settles` red
+    /// (see `spring_at_rest`).
+    #[test]
+    fn a_spring_crossing_its_target_is_not_at_rest() {
+        // `SpringSpec::bouncy()`'s threshold on a 0..1 progress.
+        let threshold = 0.1f32;
+        assert!(
+            spring_at_rest(0.05, 0.02, threshold),
+            "under the threshold and nearly still: that is rest, and a bouncy spring has already settled"
+        );
+        assert!(
+            !spring_at_rest(0.05, 3.0, threshold),
+            "inside the band but moving 3 units/s: the bounce is still on its way out"
+        );
+        assert!(
+            !spring_at_rest(1.0, 0.0, threshold),
+            "a whole unit from the target is not rest however still it is"
+        );
+    }
+
+    /// A spring ends on its own criterion, not on the 5 s extreme-parameter protection: from 0 to 123
+    /// with `ui::tab_row`'s indicator spring (damping 0.6 / stiffness 700 / threshold 0.01) the physics
+    /// gives `ln(123 / 0.01) / (0.6 * sqrt(700)) ≈ 0.59 s`, and the value lands EXACTLY on the target.
+    #[test]
+    fn a_spring_finishes_without_waiting_for_the_extreme_parameter_protection() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let state = State::new(0.0f32);
+        let spec = AnimationSpec::Spring(SpringSpec {
+            damping_ratio: 0.6,
+            stiffness: 700.0,
+            mass: 1.0,
+            threshold: 0.01,
+        });
+        push_animatable(state.clone(), 123.0, spec);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while is_animating() && std::time::Instant::now() < deadline {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        let finished = !is_animating();
+        clear_all_animations();
+        assert!(
+            finished,
+            "the spring must settle on its own criterion well inside 3 s (the extreme-parameter \
+             protection only fires at 5 s); value={}",
+            state.peek()
+        );
+        assert_eq!(state.peek(), 123.0, "a finished spring lands exactly on its target");
     }
 
     #[test]

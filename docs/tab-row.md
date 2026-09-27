@@ -162,36 +162,43 @@ Tab::new(selected, || on_click())
   ④ 行自身的指示条动画在自定义槽路径下每帧重推、永不收敛，窗口因此 60fps 空转——提前返回必须放在那段记账之前。
   另：`DrawScope` 的图元走**画布坐标**（`rect()` 即节点在该空间的矩形），在 `(0,0)` 画等于画到窗口原点。
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
-- **An open defect, measured 2026-09-28 and NOT caused by this round's invalidation fix: a window with a
-  `ScrollableTabRow` (and `plain` mode, which keeps both rows' own indicators) never goes idle.**
-  Counted from `[fps]` lines, 8 seconds per mode of `tab_indicator_demo`
-  (`WINIA_TAB_DEMO=<mode>`): `plain` 152 frames / `scroll` 156 / `both` 155 — every one of them with
-  `pending=1` — against `fixed` **1 frame** with `pending=0`. `WINIA_RECOMPOSE_TRACE=1` prints
-  `触发 State: []` for all 160 recomposes, so no state is being written to drive the loop: the event
-  loop is kept in Poll by `animation::is_animating()`, i.e. an animation is alive on every frame and
-  never completes. The same four counts on `caae004` (before this round's fix) are 155 / 1 / 150 / 157,
-  so it is a separate, pre-existing defect; finding ④ above fixed the same family on the custom-slot
-  path of the FIXED variant, which is why `fixed` is the one combination that idles.
-
-  **The animation is identified** (walked with a temporary probe on `ACTIVE_ANIMATIONS`, `update`-tick 60
-  apart): it is the spring that centres the selected tab, and the whole chain is
-  `tab_row.rs:1412 scroll_selected_into_view` → `modifier.rs:2821 ScrollState::animate_scroll_to` →
-  `animation::push_animatable_with_done` on one f32 state (`StateId(9)`), pushed exactly once per
-  attempt. Its own dump at tick 600:
-
-  ```
-  spec=Spring(SpringSpec { damping_ratio: 0.6, stiffness: 700.0, mass: 1.0, threshold: 0.01 })
-  from=0.000 to=123.000 elapsed=0.56s disp=-0.0057 vel=-0.2115 peek=122.994
-  ```
-
-  So the spring is sitting ON its target (`peek=122.994` of `123.000`, displacement under the threshold)
-  while its residual VELOCITY stays ~20x over the same threshold, and `Animatable::update`'s completion
-  test requires BOTH (`disp.abs() < threshold && last_velocity.abs() < threshold`) — the animation
-  therefore never finishes on its own criterion, and only the 5 s "extreme parameter protection" ends it
-  (which is why `elapsed` in a later dump is small again: something re-pushes it and the cycle repeats,
-  keeping `is_animating()` true essentially forever). Next step is in `animation.rs`'s spring completion
-  test (a velocity criterion comparable to the displacement one, e.g. against the per-frame step), not in
-  the tab row — and it has to be verified against every spring in the framework, not just this one.
+- **The `ScrollableTabRow` startup burst — and a correction to what this section first claimed
+  (measured 2026-09-28).** Any mode that builds a `ScrollableTabRow` (`scroll`, `both`, and `plain`,
+  which keeps both rows' own indicators) renders **~140–155 frames inside the first ~0.6 s** of the
+  window's life and then goes idle; `fixed` (the fixed row with a caller-supplied indicator) renders
+  **ONE** frame. This was first written up here as "never goes idle", and that was a MEASUREMENT ERROR:
+  the counts came from fixed-length runs with no timestamps, and stamping the `[fps]` line with wall
+  time shows the whole burst inside half a second — the last line of a **22-second** run reads
+  `render#140 compose#140 pending=1 t=0.54s`, and the count is the same in an 8 s and a 22 s run (the
+  same demo on the tree before this round's fixes: `render#154 … t=0.59s`).
+  Nothing renders forever. What the row actually costs is a ~0.6 s start-up animation: the spring that
+  centres the selected tab (`tab_row.rs:1412 scroll_selected_into_view` →
+  `modifier.rs:2821 ScrollState::animate_scroll_to` → `animation::push_animatable_with_done`, one f32
+  state, pushed once), and 0.6 s is what its own physics gives — damping 0.6 / stiffness 700 from 123 px
+  takes `ln(123 / 0.01) / (0.6 · sqrt(700)) ≈ 0.59 s` to come within the 0.01 px threshold. Two things
+  did come out of the burst:
+  - It runs **un-throttled**: ~140 frames in 0.54 s (~260 fps) while the animation is alive. Not
+    something the tab row can fix (there is no frame pacing in this path), recorded because it is what
+    the frame counts were showing.
+  - The spring's **rest test compares incomparable units, and it stays that way on purpose.** The
+    displacement is in the threshold's unit, the velocity in that unit per SECOND, and both
+    `animation::spring_at_rest`'s halves test against the same 0.01. It looks like a bug — and the
+    probe sample that made this look like a permanent state is exactly the shape that suggests one
+    (`disp=-0.0057`, under the threshold, with `vel=-0.2115`, 20x over it) — but the second half is what
+    makes the animation end at a TURNING POINT of the oscillation, the first moment the amplitude has
+    decayed under the threshold. That is what lets a bouncy spring overshoot before it settles, and it
+    was verified the hard way: scaling the velocity into frames (`velocity * FRAME < threshold`) cut the
+    bounce, and `ui::shared_transition`'s `tier0_bouncy_spring_overshoot_renders_then_settles`
+    (damping 0.6, threshold 0.1 on a 0..1 progress) went from overshooting past 1.0 to settling at
+    0.886 — a flight ending 11 % short of its target. Reverted, and now pinned by
+    `animation::tests::a_spring_crossing_its_target_is_not_at_rest` plus that same transition test, so
+    the next person to read the unit mismatch finds out why it is there. Compose behaves the same way by
+    a different route: a spring there runs for `estimateAnimationDurationMillis` — the time to come
+    within one `visibilityThreshold` of the target — and then reports the exact target
+    (`FloatSpringSpec::getDurationNanos`, androidx `animation-core`). The one thing added for it is
+    `animation::tests::a_spring_finishes_without_waiting_for_the_extreme_parameter_protection`, which
+    pins that a spring ends on its own criterion (≈0.59 s for this one) rather than at the 5 s
+    extreme-parameter protection.
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
