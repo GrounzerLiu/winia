@@ -1440,6 +1440,20 @@ One more figure from the same round: the `children` filter a policy now receives
 subcomposition child is excluded, which is what makes `TabRow`'s `tab_count` right) costs nothing even
 on this 800-subcomposition tree — idle 63233 with it, 63830 without it.
 
+**First attempt at the fix, and what it measured (2026-09-27).** The obvious discriminator was built:
+`materialize` no longer force-marks a subcomposing node dirty, and `measure_node`'s two fold checks no
+longer special-case `subcomposed` — so such a node folds like any other when its composition did not
+change. Both acceptance tests stay green (`box_with_constraints_*`, the tab-indicator fixture) and the
+suites are unchanged, but the idle frame barely moves: **63233 → 62213 µs (−1.6 %)**. The reason is
+visible in a counter run (temporary instrumentation, not in the tree): one idle 800-row frame runs
+**800 subcompositions and 2401 subcomposing-node measurements** (≈3 per node), and the first such node
+measures with `dirty=false layout_dirty=true cached_matches=true` — so **`layout_dirty` is what keeps
+them out of the fold**, not `dirty`. Both writes of `layout_dirty` inside the facility are test-only, so
+the remaining question is which write leaves that node's key in `layout_dirty_keys` (the compose-end
+seeding is `dirty && declares`, so whatever sets `dirty` at compose end is the suspect). That is where
+the next round starts; the fold change is kept because it is the direction the cost needs and it is
+measured green.
+
 ## Re-running any of this
 
 The benchmark's own traps are documented in the file where they bit, and the phase splits used for the

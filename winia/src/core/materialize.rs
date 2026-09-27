@@ -436,18 +436,13 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.on_remove = on_remove;
             n.slot_key = key;
             n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
-            // A subcomposing node is measured EVERY frame, while its composition has no cross-frame
-            // identity yet (`ui::subcompose`'s cache is still per-frame): its content is re-composed on
-            // each measurement, so what it needs from the outer tree is a measurement, not a folded
-            // size. Without this rule the component keeps a stale size — measured in a window: after
-            // the cap changed, the composable body ran (traced) and the new modifier arrived, but the
-            // node was materialized with `dirty=false`, the fold in `measure_node` returned the old
-            // size, and its content kept printing the previous value forever. The same defect is why
-            // `measure_node` already refuses to fold a node with `subcomposed` set; this is the
-            // materialize half of that rule.
-            if n.subcomposed && !n.dirty {
-                n.dirty = true;
-            }
+            // A subcomposing node is re-measured when the COMPOSITION changed, not every frame: the
+            // descriptor's `dirty` (a slot that re-ran, or a node that was rebuilt) is what says its
+            // content may differ, and `n.dirty = dirty` above already carries it. The unconditional
+            // version of this rule is what re-composed every subcomposition on every frame — measured on
+            // the bench's `subcompose` scene as 63233 µs for an idle 800-row frame against 621 µs for the
+            // same tree with plain containers, ≈78 µs per node (docs/benchmarks.md, "What a
+            // measure-time subcomposition costs a frame").
             // 重置 scroll metadata：按轴分别判断（垂直/水平轴 viewport 独立）——
             // vertical↔horizontal 单轴切换时，被移除轴的值也须清零
             // （场景：节点从垂直 scroll 切为水平 scroll，旧垂直 viewport 残留）

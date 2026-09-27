@@ -2321,7 +2321,12 @@ pub(crate) fn measure_node(
     // wrapper only adds the "which node is measuring" marker that a subcomposing policy needs, and
     // leaves folded calls with no marker at all — a policy that folds did not run, so a stale marker
     // would invite a subcomposition nobody asked for.
-    if !nodes[idx].subcomposed && !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+    //
+    // A subcomposing node folds like any other here: its composition is re-run when the COMPOSITION
+    // changed (`dirty` from the descriptor), and that is what re-measures it — folding an unchanged one
+    // is what keeps an idle frame cheap. `layout_dirty` still forces it, which is how a state read
+    // during the measurement (`first_measure`, the flight override) reaches it.
+    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
     let displaced = crate::ui::subcompose::swap_measuring_node(Some(idx));
@@ -2344,7 +2349,8 @@ fn measure_node_inner(
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
     // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
     //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
-    if !nodes[idx].subcomposed && !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+    // A subcomposing node is not special-cased here either — see the wrapper's note.
+    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
 
