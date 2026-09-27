@@ -114,9 +114,16 @@ pub fn current_measuring_node() -> Option<usize> {
 pub struct Subcomposition {
     composer: Composer,
     constraints: Constraints,
+    /// Whether this content DEFINES the parent's size (see `subcompose_overlay`).
+    sized_by_content: bool,
 }
 
 impl Subcomposition {
+    /// Whether this content defines the parent's measured size (see `subcompose_overlay`).
+    fn sized_by_content(&self) -> bool {
+        self.sized_by_content
+    }
+
     /// The measured size of the subcomposed tree.
     pub fn size(&self) -> Size {
         match self.composer.layout_root_idx() {
@@ -151,6 +158,28 @@ impl Subcomposition {
 /// same node and only the last would be adopted.
 pub fn subcompose(
     constraints: Constraints,
+    content: impl Fn(&mut ComposeCtx),
+) -> Size {
+    subcompose_sized(constraints, true, content)
+}
+
+/// [`subcompose`] for content that must NOT take over the parent's measured size.
+///
+/// `BoxWithConstraints`' content defines the box (the box is as big as what it composed), so adoption
+/// writes the subtree root's measurement onto the parent. An OVERLAY-shaped slot must not: measured in
+/// a window, `TabRow`'s own node came out `[0,4]` — the indicator's box, `4.0` being the bar's height —
+/// while the tabs inside it were still `[122,48]`, and a zero-wide row paints nothing, so the tabs and
+/// the bar both disappeared.
+pub fn subcompose_overlay(
+    constraints: Constraints,
+    content: impl Fn(&mut ComposeCtx),
+) -> Size {
+    subcompose_sized(constraints, false, content)
+}
+
+fn subcompose_sized(
+    constraints: Constraints,
+    sized_by_content: bool,
     content: impl Fn(&mut ComposeCtx),
 ) -> Size {
     // ONE composition per frame. The frame handler can run `layout()` more than once in a frame (it
@@ -192,7 +221,7 @@ pub fn subcompose(
         Some(root) => inner.arena_nodes()[root].measured_size,
         None => Size::new(0.0, 0.0),
     };
-    let entry = Subcomposition { composer: *inner, constraints };
+    let entry = Subcomposition { composer: *inner, constraints, sized_by_content };
     match current_measuring_node() {
         Some(node) => {
             // Park it on the composer whose layout is running. `LAYOUT_HOST` is armed by
@@ -237,8 +266,9 @@ pub(crate) fn adopt_parked(
             // Nothing to attach to: drop the composition rather than adopt an orphan.
             continue;
         }
+        let sized_by_content = entry.sized_by_content();
         let mut composer = entry.into_composer();
-        if adopt_one(&mut composer, arena, reused, node_idx).is_some() {
+        if adopt_one(&mut composer, arena, reused, node_idx, sized_by_content).is_some() {
             adopted += 1;
             // Keep the composition for THIS node: the next frame composes the content into it, and the
             // slots (with what they remember) come back. The key is the arena index, which is stable
@@ -267,6 +297,7 @@ fn adopt_one(
     arena: &mut NodeArena,
     reused: &mut NodeMarks,
     parent: usize,
+    sized_by_content: bool,
 ) -> Option<usize> {
     let root = entry.arena.root?;
     let node_base = arena.nodes.len();
@@ -308,14 +339,18 @@ fn adopt_one(
     // Record the subtree's measurements BEFORE the inner arena is dropped: they are relative to the
     // subtree root, so they survive the arena being reshuffled (the base moves, the offsets do not).
     let measurements = measurements_from(&arena.nodes[adopted_root..]);
-    // The parent's size IS its content's size (a plain `Box` rule), and the frame path cannot be
-    // relied on to have re-run the policy at the moment the tree is read: measured in the app frame,
-    // the box node read [0,0] while its adopted child read [192,19]. Writing the root's measurement
-    // here keeps the two in step whenever the subcomposition is adopted.
+    // The parent's size IS its content's size (a plain `Box` rule) — but only when the component says
+    // so (`sized_by_content`). An overlay-shaped slot (a row's indicator) leaves the parent's own
+    // measurement alone: overwriting it there made the row `[0,4]`, so nothing in it painted.
+    // The frame path cannot be relied on to have re-run the policy at the moment the tree is read:
+    // measured in the app frame, the box node read [0,0] while its adopted child read [192,19].
+    // Writing the root's measurement here keeps the two in step whenever the subcomposition is adopted.
     let inner_root_size = measurements.first().map(|(_, s)| *s).unwrap_or(Size::new(0.0, 0.0));
     arena.add_child(parent, adopted_root);
     arena.nodes[parent].subcomposed_child = Some(adopted_root);
-    arena.nodes[parent].measured_size = inner_root_size;
+    if sized_by_content {
+        arena.nodes[parent].measured_size = inner_root_size;
+    }
     arena.nodes[parent].subcomposed_measurements = measurements;
     #[cfg(debug_assertions)]
     if std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {

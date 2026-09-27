@@ -594,6 +594,11 @@ impl PerWindow {
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // DIAGNOSTIC (temporary): which ids stay pending while nothing changes.
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_WHO_RECOMPOSE").is_ok() {
+            eprintln!("[pending] {}", self.composer.debug_pending_ids());
+        }
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
         // scene published this frame, and flushes the previous frame's records.
         //
@@ -792,6 +797,14 @@ impl ApplicationHandler for AppState {
         // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
         // 动画（水波纹/状态层过渡也注册在全局动画列表——自动驱动重绘）
         let animating = crate::animation::update_animations();
+        // DIAGNOSTIC (temporary): what keeps the loop busy.
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_WHO_RECOMPOSE").is_ok() {
+            eprintln!(
+                "[anim] animating={animating} {}",
+                crate::animation::debug_active_animations()
+            );
+        }
         if animating {
             // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
             // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——

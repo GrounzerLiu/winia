@@ -87,6 +87,13 @@ impl ComposerSubscription {
         observed_revision
     }
 
+    /// The ids still queued for this subscription — a diagnostic for "the window never stops rendering
+    /// while nothing changes".
+    #[cfg(debug_assertions)]
+    pub(crate) fn debug_pending(&self) -> Vec<StateId> {
+        self.pending.lock().clone()
+    }
+
     pub(crate) fn unsubscribe_all(self: &Arc<Self>) {
         // Keep the tracking lock while removing signal-side entries so a
         // concurrent read cannot add a new subscription during Composer drop.

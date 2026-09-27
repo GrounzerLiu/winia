@@ -486,26 +486,25 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             (0.0, 0.0)
         };
 
-        if !self.initialized.load(Ordering::Relaxed) {
-            self.offset_state.set(target_offset);
-            self.width_state.set(target_width);
-            self.initialized.store(true, Ordering::Relaxed);
-        } else {
-            let spec = indicator_spring();
-            crate::animation::push_animatable(self.offset_state.clone(), target_offset, spec.clone());
-            crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
-        }
-
         if let Some(slot) = &self.indicator_slot {
             // The caller's indicator, composed HERE because this is the only place the positions exist.
             // It replaces the row's own bar (Compose's `indicator` parameter does the same), and it is
             // laid out in the row's own coordinate space, so `scope.selected_position()` is a position
             // in the row rather than an offset for the row's bar.
+            //
+            // BEFORE the row's own indicator bookkeeping on purpose: those two states drive a spring, and
+            // skipping their `set` while still pushing the animation every frame leaves that spring
+            // chasing a target it never receives — measured as one value animation alive for 312 of 356
+            // loop iterations (`[anim] animating=true values=1`, id `StateId(15)`), which kept the window
+            // repainting at 60 fps with nothing changing.
             let scope = TabIndicatorScope {
                 positions: positions.clone(),
                 selected_index: self.selected_tab_index,
             };
-            crate::ui::subcompose::subcompose(
+            // `subcompose_overlay`, not `subcompose`: an indicator is drawn ON the row, it does not
+            // define the row's size (the tabs do). With the size-defining variant the row's own node
+            // became the indicator's box and the whole row stopped painting.
+            crate::ui::subcompose::subcompose_overlay(
                 Constraints::new(0.0, row_width, 0.0, tab_row_height),
                 // The scope is CLONED per call: `subcompose` runs its content as `Fn`, and each call
                 // needs its own copy (a Vec of a few floats per measurement).
@@ -519,6 +518,17 @@ impl MeasurePolicy for TabRowLayoutPolicy {
                 position: Point::new(0.0, tab_row_height),
             });
             return (Size::new(row_width, tab_row_height), placements);
+        }
+
+        // The row's OWN indicator: initialise on the first measurement, animate afterwards.
+        if !self.initialized.load(Ordering::Relaxed) {
+            self.offset_state.set(target_offset);
+            self.width_state.set(target_width);
+            self.initialized.store(true, Ordering::Relaxed);
+        } else {
+            let spec = indicator_spring();
+            crate::animation::push_animatable(self.offset_state.clone(), target_offset, spec.clone());
+            crate::animation::push_animatable(self.width_state.clone(), target_width, spec);
         }
 
         // 读动画当前值用于 placement（peek 不注册依赖——依赖已在 measure 开头
@@ -1315,7 +1325,8 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
                 positions: positions.clone(),
                 selected_index: self.selected_tab_index,
             };
-            crate::ui::subcompose::subcompose(
+            // Overlay-shaped here too: the tabs define the row's size, not the indicator.
+            crate::ui::subcompose::subcompose_overlay(
                 Constraints::new(0.0, layout_width, 0.0, layout_height),
                 |ctx| slot(ctx, scope.clone()),
             );

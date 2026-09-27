@@ -3170,6 +3170,11 @@ impl Composer {
 
     /// 请求重组（由 State 变化触发）。
     pub fn request_recomposition(&mut self, _key: u64) {
+        // DIAGNOSTIC (temporary): who keeps asking for a recompose.
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_WHO_RECOMPOSE").is_ok() {
+            eprintln!("[who] request_recomposition(key={_key})");
+        }
         self.needs_recomposition = true;
     }
 
@@ -3188,6 +3193,11 @@ impl Composer {
     /// recomposed by key), so a caller should re-register an overlay when its inputs changed rather
     /// than unconditionally every frame.
     pub fn mark_content_dirty(&mut self) {
+        // DIAGNOSTIC (temporary): who keeps asking for a recompose.
+        #[cfg(debug_assertions)]
+        if std::env::var("WINIA_WHO_RECOMPOSE").is_ok() {
+            eprintln!("[who] mark_content_dirty()");
+        }
         self.needs_recomposition = true;
         SlotTable::mark_dirty_subtree(&mut self.slot_table.root_slot);
     }
@@ -3253,6 +3263,25 @@ impl Composer {
     /// 待消费 State 数（vsync 研究——渲染时刻的 pending 积压）
     pub fn pending_state_count(&self) -> usize {
         self.pending_states.len()
+    }
+
+    /// The pending ids with the graphs that still hold them — a diagnostic for "the window never stops
+    /// rendering while nothing changes".
+    #[cfg(debug_assertions)]
+    pub fn debug_pending_ids(&self) -> String {
+        self.pending_states
+            .debug_pending()
+            .into_iter()
+            .map(|id| {
+                format!(
+                    "{:?}(compose={},layout={})",
+                    id,
+                    self.slot_deps.contains_key(&id),
+                    self.layout_deps.contains_key(&id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// 执行待处理的重组。返回 true 表示实际执行了 compose。
