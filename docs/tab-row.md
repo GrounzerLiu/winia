@@ -162,6 +162,19 @@ Tab::new(selected, || on_click())
   ④ 行自身的指示条动画在自定义槽路径下每帧重推、永不收敛，窗口因此 60fps 空转——提前返回必须放在那段记账之前。
   另：`DrawScope` 的图元走**画布坐标**（`rect()` 即节点在该空间的矩形），在 `(0,0)` 画等于画到窗口原点。
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
+- **An open defect, measured 2026-09-28 and NOT caused by this round's invalidation fix: a window with a
+  `ScrollableTabRow` (and `plain` mode, which keeps both rows' own indicators) never goes idle.**
+  Counted from `[fps]` lines, 8 seconds per mode of `tab_indicator_demo`
+  (`WINIA_TAB_DEMO=<mode>`): `plain` 152 frames / `scroll` 156 / `both` 155 — every one of them with
+  `pending=1` — against `fixed` **1 frame** with `pending=0`. `WINIA_RECOMPOSE_TRACE=1` prints
+  `触发 State: []` for all 160 recomposes, so no state is being written to drive the loop: the event
+  loop is kept in Poll by `animation::is_animating()`, i.e. an animation is alive on every frame and
+  never completes. The same four counts on `caae004` (before this round's fix) are 155 / 1 / 150 / 157,
+  so it is a separate, pre-existing defect; finding ④ above fixed the same family on the custom-slot
+  path of the FIXED variant, which is why `fixed` is the one combination that idles. The next round
+  starts by isolating `fixed` + its own indicator (only `plain` shows it today, and that mode also
+  builds the scrollable row): likely candidates are the scrollable variant's own indicator pushes and
+  the tab labels' `animate_color_as_state` target.
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
