@@ -1406,6 +1406,40 @@ side: the figure was a bucket label rather than a measurement of the thing it na
 panicked with `[dup-key]` on the first idle frame, which is how the walk's second job (marking the
 subtree as reused) came to be documented in the code instead of being rediscovered.
 
+## What a measure-time subcomposition costs a frame
+
+`cargo bench -p winia -- subcompose` runs one added scene (`Kind::SubBox`): the SAME row shape as
+`boxes`, with a `BoxWithConstraints` (content: a short `Text`) as each row's first child. The two tables
+differ by exactly that, so the difference is the subcomposition's price. 800 rows:
+
+| scene (800 rows) | `boxes` — no subcomposition | one `BoxWithConstraints` per row |
+|---|---|---|
+| cold frame | 5332 | 12448 |
+| **idle frame** | **621** | **63233** |
+| one row updated | 1247 | 61767 |
+| layout, idle (no compose) | 174 | 176 |
+
+**~78 µs per subcomposing node per frame** on an idle frame: `(63233 − 621) / 800`. An idle compose
+re-composes every subcomposition, while pure layout of the same tree is free (176 µs — unchanged from
+the `boxes` tree of that size).
+
+Where it comes from, measured rather than inferred: the two rules that keep such a node from folding.
+`materialize` marks a subcomposing node dirty each time it is materialized, and `measure_node` refuses
+to fold a node carrying `subcomposed`, so every frame's measurement re-runs the policy, which
+re-composes the content and re-adopts it. It is NOT the compose-end seeding that also puts those nodes
+into `layout_dirty_keys`: disabling that seeding takes the idle frame from 63233 to **60389 µs**
+(−4.5 %), so the seeding is a passenger, not the driver.
+
+What follows: the facility is correct but pays about two orders of magnitude over a plain container per
+frame, so it belongs where a screen has FEW subcompositions — a `BoxWithConstraints` per section, a
+`TabRow` indicator — and not in a list where every row carries one. The discriminator that would fix it
+("did the CONTENT change?") is neither `dirty` nor `subcomposed` today; the tension is written into
+`Composer::compose`'s seeding comment and `docs/lookahead-probe-handover.md`.
+
+One more figure from the same round: the `children` filter a policy now receives (the adopted
+subcomposition child is excluded, which is what makes `TabRow`'s `tab_count` right) costs nothing even
+on this 800-subcomposition tree — idle 63233 with it, 63830 without it.
+
 ## Re-running any of this
 
 The benchmark's own traps are documented in the file where they bit, and the phase splits used for the
