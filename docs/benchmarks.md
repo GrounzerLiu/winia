@@ -1428,31 +1428,38 @@ Where it comes from, measured rather than inferred: the two rules that keep such
 to fold a node carrying `subcomposed`, so every frame's measurement re-runs the policy, which
 re-composes the content and re-adopts it. It is NOT the compose-end seeding that also puts those nodes
 into `layout_dirty_keys`: disabling that seeding takes the idle frame from 63233 to **60389 µs**
-(−4.5 %), so the seeding is a passenger, not the driver.
+(−4.5 %) — measured BEFORE the fold change below, and it is the fold that makes the seeding matter (with
+both, the idle frame drops by two orders of magnitude; the seeding's guard alone only restored the
+compose-tail honesty of the figure).
 
-What follows: the facility is correct but pays about two orders of magnitude over a plain container per
-frame, so it belongs where a screen has FEW subcompositions — a `BoxWithConstraints` per section, a
-`TabRow` indicator — and not in a list where every row carries one. The discriminator that would fix it
-("did the CONTENT change?") is neither `dirty` nor `subcomposed` today; the tension is written into
-`Composer::compose`'s seeding comment and `docs/lookahead-probe-handover.md`.
+What followed from the number: the facility pays about two orders of magnitude over a plain container
+per frame when nothing is done about it, so it belongs where a screen has FEW subcompositions — a
+`BoxWithConstraints` per section, a `TabRow` indicator — and not in a list where every row carries one.
+The last section on this page is the fix that changed that for idle frames, and the row it does NOT fix.
 
 One more figure from the same round: the `children` filter a policy now receives (the adopted
 subcomposition child is excluded, which is what makes `TabRow`'s `tab_count` right) costs nothing even
 on this 800-subcomposition tree — idle 63233 with it, 63830 without it.
 
-**First attempt at the fix, and what it measured (2026-09-27).** The obvious discriminator was built:
-`materialize` no longer force-marks a subcomposing node dirty, and `measure_node`'s two fold checks no
-longer special-case `subcomposed` — so such a node folds like any other when its composition did not
-change. Both acceptance tests stay green (`box_with_constraints_*`, the tab-indicator fixture) and the
-suites are unchanged, but the idle frame barely moves: **63233 → 62213 µs (−1.6 %)**. The reason is
-visible in a counter run (temporary instrumentation, not in the tree): one idle 800-row frame runs
-**800 subcompositions and 2401 subcomposing-node measurements** (≈3 per node), and the first such node
-measures with `dirty=false layout_dirty=true cached_matches=true` — so **`layout_dirty` is what keeps
-them out of the fold**, not `dirty`. Both writes of `layout_dirty` inside the facility are test-only, so
-the remaining question is which write leaves that node's key in `layout_dirty_keys` (the compose-end
-seeding is `dirty && declares`, so whatever sets `dirty` at compose end is the suspect). That is where
-the next round starts; the fold change is kept because it is the direction the cost needs and it is
-measured green.
+**The fix, in two halves, and where it stops (2026-09-27).** The discriminator is now in place: a
+subcomposing node folds like any other when its composition did not change (`materialize` no longer
+force-marks it dirty; `measure_node`'s two fold checks no longer special-case `subcomposed`), and the
+compose-end seeding carries the `dirty` guard it needs (`dirty && declares`). Neither half works alone —
+the guard turned the acceptance test red when it was tried without the fold — and together they move the
+idle frame by two orders of magnitude:
+
+| scene (800 rows) | before | after |
+|---|---|---|
+| idle frame | 63233 | **1045–1089** (−98 %, ≈60x) |
+| cold frame | 12448 | 14555 |
+| one row updated | 61767 | 62076–65707 |
+
+A counter run (temporary instrumentation, removed again) explains both rows: an **idle** frame measures
+**0** subcomposing nodes and runs **0** subcompositions, while a **one-row** frame measures **2401**
+(≈3 per node) and runs **800** — so the cost no longer follows the tree on an idle frame, and one row's
+update still re-composes every subcomposition in it, which is where the next attempt starts (why all 800
+nodes come out dirty on a frame where only one group entered; the skip-restore guard in `materialize` is
+the first place to look).
 
 ## Re-running any of this
 
