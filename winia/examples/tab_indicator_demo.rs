@@ -1,0 +1,114 @@
+//! Custom `TabRow` indicators — Compose's `indicator` slot, composed at measure time.
+//!
+//! Two cases, both built from the positions the row measured this frame:
+//! 1. a rounded RED bar the caller draws through `Canvas` (colour chosen to be unique, so a pixel
+//!    probe can find it), on a fixed `TabRow`;
+//! 2. the same slot on a `ScrollableTabRow`, where the positions live in the scrolling content's
+//!    space, so the indicator scrolls with the tabs.
+
+use letclone::clone;
+use winia::prelude::*;
+
+/// Unique on purpose: a pixel probe can search for exactly this colour.
+const MARKER: (u8, u8, u8) = (0xE5, 0x00, 0x2E);
+
+#[composable]
+fn tab_indicator_demo(ctx: &mut ComposeCtx) {
+    let fixed_sel = ctx.remember(|| 2usize);
+    let scroll_sel = ctx.remember(|| 3usize);
+    let scroll_state = ctx.remember(|| ScrollState::new()).get();
+
+    Column::new()
+        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .spacing(12.0)
+        .build(ctx, |ctx| {
+            Text::new("TabRow + custom indicator (red bar drawn by the caller)")
+                .modifier(Modifier::new().padding(4.0))
+                .build(ctx);
+
+            let sel = fixed_sel.clone();
+            TabRow::new(sel.get(), {
+                clone!(sel);
+                move |ctx| {
+                    for i in 0..3 {
+                        let label = format!("Tab {}", i + 1);
+                        Tab::new({ clone!(sel); sel.get() == i }, { clone!(sel); move || sel.set(i) })
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                }
+            })
+            .indicator({
+                clone!(sel);
+                move |ctx, scope| {
+                    let _ = sel.get();
+                    let (x, w) = match scope.selected_position() {
+                        Some(p) => (p.left + (p.width - p.content_width) / 2.0, p.content_width),
+                        None => (0.0, 0.0),
+                    };
+                    Canvas::new()
+                        .modifier(Modifier::new().width(w).height(4.0).offset(x, 0.0))
+                        .build(ctx, move |ds| {
+                            let (w, h) = (ds.width(), ds.height());
+                            ds.draw_round_rect(
+                                skia_safe::Rect::from_wh(w, h),
+                                h / 2.0,
+                                Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
+                            );
+                        });
+                }
+            })
+            .build(ctx);
+
+            Spacer::vertical(8.0);
+
+            Text::new("ScrollableTabRow + custom indicator (scrolls with the tabs)")
+                .modifier(Modifier::new().padding(4.0))
+                .build(ctx);
+
+            ScrollableTabRow::new(scroll_sel.get(), {
+                clone!(scroll_sel);
+                move |ctx| {
+                    for i in 0..8 {
+                        let label = format!("S{}", i + 1);
+                        Tab::new({ clone!(scroll_sel); scroll_sel.get() == i }, { clone!(scroll_sel); move || scroll_sel.set(i) })
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                }
+            })
+            .scroll_state(scroll_state.clone())
+            .indicator({
+                clone!(scroll_sel);
+                move |ctx, scope| {
+                    let _ = scroll_sel.get();
+                    let (x, w) = match scope.selected_position() {
+                        Some(p) => (p.left + (p.width - p.content_width) / 2.0, p.content_width),
+                        None => (0.0, 0.0),
+                    };
+                    Canvas::new()
+                        .modifier(Modifier::new().width(w).height(4.0).offset(x, 0.0))
+                        .build(ctx, move |ds| {
+                            let (w, h) = (ds.width(), ds.height());
+                            ds.draw_round_rect(
+                                skia_safe::Rect::from_wh(w, h),
+                                h / 2.0,
+                                Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
+                            );
+                        });
+                }
+            })
+            .build(ctx);
+        });
+}
+
+fn main() {
+    winia::run_app!(|ctx| {
+        Window::new()
+            .size(520.0, 260.0)
+            .title("Tab Indicator Demo")
+            .build(ctx, |ctx| {
+                WiniaTheme::auto(ctx, |ctx| tab_indicator_demo(ctx));
+            });
+    });
+}

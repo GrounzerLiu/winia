@@ -511,6 +511,13 @@ impl MeasurePolicy for TabRowLayoutPolicy {
                 // needs its own copy (a Vec of a few floats per measurement).
                 |ctx| slot(ctx, scope.clone()),
             );
+            // The default bar's node still exists (the children list is [tabs.., divider, indicator]),
+            // so give it a ZERO area: without a placement it would keep the previous frame's geometry
+            // and paint on top of the caller's indicator.
+            placements.push(Placement {
+                size: Size::new(0.0, 0.0),
+                position: Point::new(0.0, tab_row_height),
+            });
             return (Size::new(row_width, tab_row_height), placements);
         }
 
@@ -967,6 +974,9 @@ pub struct ScrollableTabRow {
     indicator_shape: Option<Shape>,
     edge_padding: f32,
     min_tab_width: f32,
+    /// A caller-supplied indicator (see [`ScrollableTabRow::indicator`]). Like the fixed variant's,
+    /// it is composed DURING measurement, because the positions are measure-time data.
+    indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }
 
 /// 可滚动 TabRow 默认值（对齐 Compose `TabRowDefaults`）。
@@ -997,7 +1007,20 @@ impl ScrollableTabRow {
             indicator_shape: None,
             edge_padding: SCROLLABLE_TAB_ROW_EDGE_START_PADDING,
             min_tab_width: SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH,
+            indicator_slot: None,
         }
+    }
+
+    /// Supply the indicator yourself — the same contract as [`TabRow::indicator`] (Compose's
+    /// `indicator` parameter), with one difference the scrollable variant owns: the positions are in
+    /// the SCROLLING CONTENT's coordinate space, so an indicator built from them scrolls with the tabs
+    /// (which is what Compose's scrollable indicator does).
+    pub fn indicator(
+        mut self,
+        indicator: impl Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync + 'static,
+    ) -> Self {
+        self.indicator_slot = Some(std::sync::Arc::new(indicator));
+        self
     }
 
     /// 设为 Secondary 风格（指示条全宽直角，内容色 OnSurface）。
@@ -1119,6 +1142,7 @@ impl ScrollableTabRow {
             divider_color,
             indicator_color,
             indicator_shape,
+            indicator_slot: self.indicator_slot,
         };
 
         // 根 modifier：横向滚动容器 + 背景色（background 覆盖视口——滚动内容
@@ -1161,7 +1185,6 @@ impl ScrollableTabRow {
 /// tabs 按内容自然宽（≥ min_tab_width）从左排列；layoutWidth =
 /// 2×edgePadding + ΣtabW；divider 全宽贴底；indicator 居中于选中 tab slot。
 /// ScrollableTabData 等价逻辑：selected 变化 → 计算居中 offset → 动画滚动。
-#[derive(Debug)]
 struct ScrollableTabRowLayoutPolicy {
     selected_tab_index: usize,
     follow_content_size: bool,
@@ -1181,9 +1204,27 @@ struct ScrollableTabRowLayoutPolicy {
     divider_color: Color,
     indicator_color: Color,
     indicator_shape: Shape,
+    /// See [`ScrollableTabRow::indicator`]: composed at measure time with the positions.
+    indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
+}
+
+/// Manual, not derived: the indicator slot is a closure, which has no `Debug`.
+impl std::fmt::Debug for ScrollableTabRowLayoutPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScrollableTabRowLayoutPolicy")
+            .field("selected_tab_index", &self.selected_tab_index)
+            .field("has_indicator_slot", &self.indicator_slot.is_some())
+            .finish()
+    }
 }
 
 impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
+    /// The row can compose a caller-supplied indicator during measurement (see the trait method's
+    /// contract and `ScrollableTabRow::indicator`).
+    fn subcomposes(&self) -> bool {
+        self.indicator_slot.is_some()
+    }
+
     fn measure(
         &self,
         nodes: &mut Vec<LayoutNode>,
@@ -1266,6 +1307,31 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             (0.0, 0.0)
         };
 
+        if let Some(slot) = &self.indicator_slot {
+            // The caller's indicator, composed with the positions this measurement produced. Those
+            // positions are in the SCROLLING CONTENT's space, so what the caller builds scrolls with
+            // the tabs — Compose's scrollable indicator behaves the same way.
+            let scope = TabIndicatorScope {
+                positions: positions.clone(),
+                selected_index: self.selected_tab_index,
+            };
+            crate::ui::subcompose::subcompose(
+                Constraints::new(0.0, layout_width, 0.0, layout_height),
+                |ctx| slot(ctx, scope.clone()),
+            );
+            // The default bar's node still exists (the children list is [tabs.., divider, indicator]),
+            // so give it a ZERO area: without a placement it would keep the previous frame's geometry
+            // and paint on top of the caller's indicator.
+            placements.push(Placement {
+                size: Size::new(0.0, 0.0),
+                position: Point::new(0.0, layout_height),
+            });
+            // Scroll-into-view still runs: the selected tab is centred whether or not the caller draws
+            // the bar (it is the one that needs the offsets recorded by the measure).
+            self.scroll_selected_into_view(&positions, layout_width, is_rtl);
+            return (Size::new(layout_width, layout_height), placements);
+        }
+
         if !self.initialized.load(Ordering::Relaxed) {
             self.offset_state.set(target_offset);
             self.width_state.set(target_width);
@@ -1284,7 +1350,27 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             position: Point::new(current_off, layout_height - indicator_h),
         });
 
-        // ── ScrollableTabData：选中变化 → 居中滚动（对齐 Compose calculateTabOffset）──
+        self.scroll_selected_into_view(&positions, layout_width, is_rtl);
+
+        (Size::new(layout_width, layout_height), placements)
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            if let Some(p) = placements.get(index) {
+                nodes[child].position = p.position;
+                nodes[child].measured_size = p.size;
+            }
+        }
+    }
+}
+
+impl ScrollableTabRowLayoutPolicy {
+    /// ScrollableTabData：选中变化 → 居中滚动（对齐 Compose calculateTabOffset）。
+    ///
+    /// Extracted from `measure` because a caller-supplied indicator takes the same early-return path
+    /// and must still get this: the selected tab is centred whether or not the caller draws the bar.
+    fn scroll_selected_into_view(&self, positions: &[TabPosition], layout_width: f32, is_rtl: bool) {
         let sel = self.selected_tab_index as i32;
         // ⚠ 首帧延迟：policy.measure 执行时滚动容器的 fling_limit 尚未回写
         //（measure_node 在 policy.measure **之后** 才写 fling_limit，node.rs:1535-1551），
@@ -1313,17 +1399,6 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
                 };
                 let spec = indicator_spring();
                 self.scroll_state.animate_scroll_to(target, max_value, spec);
-            }
-        }
-
-        (Size::new(layout_width, layout_height), placements)
-    }
-
-    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
-        for (index, &child) in children.iter().enumerate() {
-            if let Some(p) = placements.get(index) {
-                nodes[child].position = p.position;
-                nodes[child].measured_size = p.size;
             }
         }
     }
@@ -1437,6 +1512,98 @@ mod tests {
             "the selected tab's position is the one the row measured: {selected:?}"
         );
         assert!(selected.content_width > 0.0, "and its content width is real: {selected:?}");
+    }
+
+    /// Supplying an indicator REPLACES the row's own bar (Compose's `indicator` parameter does the
+    /// same). The default bar's node still exists — the children list is [tabs.., divider, indicator] —
+    /// so "replaced" has to mean its geometry is zeroed: a node left without a placement would keep the
+    /// previous frame's box and paint over whatever the caller drew.
+    #[test]
+    fn a_custom_indicator_replaces_the_default_bar() {
+        let mut composer = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                TabRow::new(0, |ctx| {
+                    for i in 0..3 {
+                        let label = format!("Tab {i}");
+                        Tab::new(i == 0, || {})
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                })
+                .indicator(|_ctx, _scope| {
+                    // Deliberately emits nothing: the caller may draw through a modifier instead.
+                })
+                .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = &nodes[root].children;
+        let bar = &nodes[*children.last().unwrap()];
+        assert_eq!(
+            (bar.measured_size.width, bar.measured_size.height),
+            (0.0, 0.0),
+            "the default bar is zeroed when the caller supplies an indicator"
+        );
+    }
+
+    /// The scrollable variant takes the same slot, and its positions are the ones its own tabs were
+    /// placed with — the caller's indicator scrolls with them (Compose's scrollable indicator does too).
+    #[test]
+    fn a_scrollable_row_composes_a_custom_indicator_with_its_positions() {
+        use std::sync::{Arc, Mutex};
+
+        let seen: Arc<Mutex<Vec<TabPosition>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_in = seen.clone();
+        let state = crate::modifier::ScrollState::new();
+        let st_outer = state.clone();
+        let st_inner = state.clone();
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(move |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                ScrollableTabRow::new(1, move |ctx| {
+                    for i in 0..4 {
+                        let label = format!("Tab {i}");
+                        let st = st_inner.clone();
+                        Tab::new(i == 1, move || { let _ = st; })
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                })
+                .scroll_state(st_outer)
+                .indicator(move |_ctx, scope| {
+                    if let Some(pos) = scope.selected_position() {
+                        seen_in.lock().unwrap().push(*pos);
+                    }
+                })
+                .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 200.0, 0.0, 640.0));
+
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let seen = seen.lock().unwrap().clone();
+        assert!(!seen.is_empty(), "the scrollable row composed its indicator slot");
+        // The scope's selected position is the row's own placement for tab 1.
+        let tab1 = &nodes[children[1]];
+        let selected = seen[0];
+        assert!(
+            (selected.left - tab1.position.x).abs() < 0.01,
+            "the position handed to the indicator is the tab's own: {selected:?} vs x={}",
+            tab1.position.x
+        );
+        assert!(
+            (selected.width - tab1.measured_size.width).abs() < 0.01,
+            "and its width matches: {selected:?} vs {}",
+            tab1.measured_size.width
+        );
     }
 
     #[test]

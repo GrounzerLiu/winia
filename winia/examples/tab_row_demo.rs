@@ -152,6 +152,57 @@ Column::new()
             Text::new("← 点击右侧 tab 观察自动滚动 →")
                 .modifier(Modifier::new().padding(8.0))
                 .build(ctx);
+
+            Spacer::vertical(8.0);
+            Divider::horizontal().build(ctx);
+            Spacer::vertical(8.0);
+
+            // ── 自定义指示器（Compose 的 indicator 槽）：调用方在测量期拿到实测位置，自己画 ──
+            // 这里画一条纯红圆角条（颜色独占，便于像素核对）；行自身的指示条会被顶掉。
+            Text::new("TabRow + 自定义指示器（红色条由调用方绘制，位置来自 scope）")
+                .modifier(Modifier::new().padding(8.0))
+                .build(ctx);
+
+            let sel3 = ctx.remember(|| 2usize);
+            TabRow::new(sel3.get(), {
+                clone!(sel3);
+                move |ctx| {
+                    for i in 0..3 {
+                        let label = format!("Custom {}", i + 1);
+                        Tab::new({ clone!(sel3); sel3.get() == i }, { clone!(sel3); move || sel3.set(i) })
+                            .text(move |ctx| Text::new(&label).build(ctx))
+                            .build(ctx);
+                    }
+                }
+            })
+            .indicator({
+                clone!(sel3);
+                move |ctx, scope| {
+                    // The positions are this frame's measurements: draw the bar centred on the
+                    // selected tab, using the tab's CONTENT width (what Compose's indicator uses).
+                    let pos = scope.selected_position().copied();
+                    let _ = sel3.get();
+                    let (x, w) = match pos {
+                        Some(p) => (p.left + (p.width - p.content_width) / 2.0, p.content_width),
+                        None => (0.0, 0.0),
+                    };
+                    let m = Modifier::new()
+                        .width(w)
+                        .height(4.0)
+                        .offset(x, 0.0);
+                    Canvas::new()
+                        .modifier(m)
+                        .build(ctx, move |ds| {
+                            let (w, h) = (ds.width(), ds.height());
+                            ds.draw_round_rect(
+                                skia_safe::Rect::from_wh(w, h),
+                                h / 2.0,
+                                Color::from_argb(255, 0xE5, 0x00, 0x2E),
+                            );
+                        });
+                }
+            })
+            .build(ctx);
     });
 }
 
