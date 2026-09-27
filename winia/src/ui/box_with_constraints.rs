@@ -368,6 +368,51 @@ mod tests {
         assert!(size2.width > 0.0, "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}");
     }
 
+    /// An UNCHANGED box does not re-compose its content — the idle contract, and the reason a screen can
+    /// carry many of these.
+    ///
+    /// The box folds when nothing about it moved (`dirty`, `layout_dirty` and its constraints all
+    /// unchanged), and a folded box composes nothing: the content closure's run count is the observable.
+    /// It is pinned because the invalidation rules around it are easy to widen by accident — the flag the
+    /// compose end seeds from, the layout-invalidation walk, and the modifier comparison added for
+    /// `a_cap_change_in_the_composition_reaches_the_content_the_box_composes` all run on this path, and
+    /// any of them firing on an unchanged frame turns every box on the screen into per-frame work
+    /// (measured at 800 boxes: 63233 µs a frame against 1038; `docs/benchmarks.md`).
+    #[test]
+    fn an_unchanged_box_does_not_recompose_its_content() {
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let build = {
+            let runs = runs.clone();
+            move |ctx: &mut ComposeCtx| {
+                let runs = runs.clone();
+                BoxWithConstraints::new()
+                    .modifier(Modifier::new().size(80.0, 40.0))
+                    .build(ctx, move |ctx, _scope| {
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        crate::ui::Text::new("content").build(ctx);
+                    });
+            }
+        };
+        let mut composer = Composer::new();
+        composer.compose(build.clone());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!(
+            runs.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "frame 1 composes the content once"
+        );
+
+        for frame in 2..=3 {
+            composer.compose(build.clone());
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            assert_eq!(
+                runs.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "frame {frame}: nothing changed, so the box folded and composed no content"
+            );
+        }
+    }
+
     /// The adopted subtree survives the frames the box does NOT measure.
     ///
     /// A subcomposing node's subtree lives in the arena and is re-attached by a measurement, so the one
