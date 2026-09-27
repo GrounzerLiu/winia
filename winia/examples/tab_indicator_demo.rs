@@ -60,10 +60,12 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                     Canvas::new()
                         .modifier(Modifier::new().width(w).height(4.0).offset(x, 44.0))
                         .build(ctx, move |ds| {
-                            let (w, h) = (ds.width(), ds.height());
+                            // Canvas coordinates: draw inside the node's own rect (see the note on the
+                            // scrollable row's indicator below).
+                            let r = ds.rect();
                             ds.draw_round_rect(
-                                skia_safe::Rect::from_wh(w, h),
-                                h / 2.0,
+                                skia_safe::Rect::from_xywh(r.left, r.top, r.width(), r.height()),
+                                r.height() / 2.0,
                                 Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
                             );
                         });
@@ -102,10 +104,13 @@ fn tab_indicator_demo(ctx: &mut ComposeCtx) {
                     Canvas::new()
                         .modifier(Modifier::new().width(w).height(4.0).offset(x, 0.0))
                         .build(ctx, move |ds| {
-                            let (w, h) = (ds.width(), ds.height());
+                            // `ds.rect()` is the node's own rect IN CANVAS COORDINATES: the primitives
+                            // take canvas coordinates, so a caller that draws at (0,0) paints at the
+                            // window's origin (measured: the bar landed there until this was fixed).
+                            let r = ds.rect();
                             ds.draw_round_rect(
-                                skia_safe::Rect::from_wh(w, h),
-                                h / 2.0,
+                                skia_safe::Rect::from_xywh(r.left, r.top, r.width(), r.height()),
+                                r.height() / 2.0,
                                 Color::from_argb(255, MARKER.0, MARKER.1, MARKER.2),
                             );
                         });

@@ -2558,7 +2558,16 @@ fn measure_node_inner(
 
     let mut result = if let Some(pidx) = nodes[idx].measure_policy {
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
-        let children = nodes[idx].children.clone();
+        //
+        // The ADOPTED subcomposition child is left out: this policy did not create it (a subcomposing
+        // component appends it during adoption), and a policy that counts its children read one too
+        // many. Measured on `TabRow`: `tab_count = children.len() - 2` became 4 for a three-tab row, so
+        // each tab measured 488/4 = 122 instead of 488/3 ≈ 162.7, and the indicator was placed with the
+        // four-tab geometry (`node_pos=(287.5,44)` where the three-tab one wants 389.2).
+        let mut children = nodes[idx].children.clone();
+        if let Some(sub) = nodes[idx].subcomposed_child {
+            children.retain(|&c| c != sub);
+        }
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
         // 测量后同步 lazy 内容总高/宽到节点字段（render 的 reverse translate 与
         // apply_scroll_delta 依赖；measure_node 顶部读的是上一帧值——首帧为 0

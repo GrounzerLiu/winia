@@ -1220,6 +1220,14 @@ fn render_pass1(
     }
     // Wrapping draw nodes, before half (exp/draw-wrap-node): same background-layer
     // slot as DrawNode. The after half runs after children + ripple (see below).
+    // DIAGNOSTIC (temporary): where a draw-wrap node is painted, with its own position.
+    #[cfg(debug_assertions)]
+    if std::env::var("WINIA_PAINT_TRACE").is_ok() && node.modifier.draw_wrap_nodes().next().is_some() {
+        eprintln!(
+            "[paint] idx={idx} node_pos=({:.1},{:.1}) abs=({x:.1},{y:.1}) size=({:.1},{:.1})",
+            node.position.x, node.position.y, w, h
+        );
+    }
     for wrap_node in node.modifier.draw_wrap_nodes() {
         wrap_node.draw_before(canvas, rect, &node.modifier);
     }
