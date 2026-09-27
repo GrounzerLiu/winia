@@ -148,21 +148,31 @@ Tab::new(selected, || on_click())
 
 ## 7. 已知差距（与 Compose 对照）
 
-- **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`）：`TabRow::indicator(|ctx, scope| ...)`
-  的闭包在**测量期**运行，`scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，
-  与 Compose 的 indicator 槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `ui::subcompose`）；
-  供应自定义指示器时行自身的指示条不再绘制，与 Compose 的 `indicator` 参数一致。
-  待办：`ScrollableTabRow` 尚无此槽（其位置计算含滚动偏移，需同样接一遍）。
+- **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`，两个变体都有）：
+  `TabRow::indicator(|ctx, scope| ...)` 与 `ScrollableTabRow::indicator(...)` 的闭包在**测量期**运行，
+  `scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，与 Compose 的 indicator
+  槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `ui::subcompose`）；供应自定义指示器时行自身的
+  指示条不再绘制，与 Compose 的 `indicator` 参数一致。
+  可滚动版的位置在**滚动内容坐标系**里，因此调用方画出的指示器随 tab 一起滚（与 Compose 同）。
+  四条落地才暴露、且已修的框架级问题（详见 `docs/lookahead-probe-handover.md`）：
+  ① 采纳会把父节点尺寸覆盖成"内容尺寸"，叠加型槽必须用 `subcompose_overlay()`；
+  ② 采纳发生在测量之后，根节点自己的 `Modifier.offset` 无人施加——现在在采纳处施加，且必须在记录几何
+  之前（否则只活一帧，下一帧重放几何又把它放回原点）；
+  ③ 策略看到的 `children` 里混进了被采纳的子树，使 `tab_count` 多 1（三 tab 行按四等分算）；
+  ④ 行自身的指示条动画在自定义槽路径下每帧重推、永不收敛，窗口因此 60fps 空转——提前返回必须放在那段记账之前。
+  另：`DrawScope` 的图元走**画布坐标**（`rect()` 即节点在该空间的矩形），在 `(0,0)` 画等于画到窗口原点。
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
-## 8. 测试（`ui::tab_row::tests`，22 个）
+## 8. 测试（`ui::tab_row::tests`，24 个；外加 UI fixture 测试 1 个）
 
 | 测试 | 覆盖 |
 |---|---|
 | `a_custom_indicator_is_composed_with_the_measured_positions` | 自定义指示器槽：测量期运行、拿到全部位置、选中项对齐实测值 |
+| `a_custom_indicator_replaces_the_default_bar` / `a_scrollable_row_composes_a_custom_indicator_with_its_positions` | 槽顶掉默认条（默认条归零）；可滚动版位置与 tab 一致 |
+| `ui_test::a_caller_supplied_tab_indicator_is_composed_at_measure_time`（UI fixture，真窗口） | 槽在 `#[composable]` 真实帧里组合真组件、几何真实、切换选中后位移 ≈ 两个 tab 宽——前三条框架级缺陷只有这条路能抓 |
 | `tab_row_tabs_equal_width` / `tab_row_primary_indicator_position` / `tab_row_secondary_indicator_width` | 固定等分 + 指示条几何 |
 | `tab_row_rtl_mirror` / `tab_row_rtl_indicator_mirrors` | 固定 RTL 镜像 |
 | `tab_row_0_tabs_does_not_panic` / `tab_row_selected_out_of_range_falls_back_to_origin` | 边界 |

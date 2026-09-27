@@ -2088,3 +2088,47 @@ fn box_with_constraints_composes_its_content_at_measure_time() {
         ui::UiTest::tree_texts(&tree)
     );
 }
+
+/// A caller-supplied `TabRow` indicator composes DURING measurement, with the positions the row just
+/// computed, and what it draws lands on the selected tab.
+///
+/// This runs through a real `#[composable]` frame on purpose — every defect this slot had was
+/// invisible to a unit test: the macro refused to inject statement keys into a TWO-parameter content
+/// closure (the fixture PANICKED on startup until that was fixed), the adopted subtree's node was
+/// painted at the window origin, and the row counted the adopted child as one of its own (so a
+/// three-tab row measured its tabs for a four-tab one, 488/4 = 122 instead of 488/3 ≈ 162.7). The
+/// geometric assertion below is what catches the last one.
+#[test]
+fn a_caller_supplied_tab_indicator_is_composed_at_measure_time() {
+    let mut app = UiTest::launch("tab_indicator");
+    app.expect_text("sel 0");
+
+    let (x0, y0, w0, h0) = app
+        .find_tag("custom-indicator")
+        .expect("the caller's indicator is in the tree");
+    assert!(w0 > 0.0 && h0 > 0.0, "the indicator has a real box: {w0}x{h0}");
+    assert!(y0 > 0.0, "and a real position: y={y0}");
+    assert!(
+        x0 > 0.0 && x0 + w0 < 420.0,
+        "inside the window: x={x0} w={w0}"
+    );
+
+    // Switching to the third tab has to move it by two tab widths. The row is 420 wide with 16 of
+    // padding on both sides, so 388/3 ≈ 129.3 per tab: the delta is ≈ 258.7 minus the difference in
+    // content widths, and ±10 still fails a four-tab row (2 × 122 = 244).
+    let (bx, by, bw, bh) = app.find_tag("pick-third").expect("the third-tab button");
+    app.click_until(bx + bw / 2.0, by + bh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("sel 2"))
+    });
+    app.expect_text_timeout("sel 2", Duration::from_secs(5));
+
+    let (x2, _, w2, _) = app
+        .find_tag("custom-indicator")
+        .expect("the indicator is still in the tree");
+    assert!(w2 > 0.0, "still sized after the selection changed: {w2}");
+    assert!(
+        (x2 - x0 - 258.7).abs() < 10.0,
+        "the indicator followed the selection by two tab widths: x {x0} -> {x2} (expected ≈ {})",
+        x0 + 258.7
+    );
+}

@@ -18,6 +18,8 @@
 mod click;
 #[path = "fixture_bwc.rs"]
 mod bwc;
+#[path = "fixture_tab_indicator.rs"]
+mod tab_indicator;
 #[path = "fixture_bottom_sheet.rs"]
 mod bottom_sheet;
 #[path = "fixture_dialog_dismiss.rs"]
@@ -82,6 +84,7 @@ mod top_app_bar;
 const SCENARIOS: &[(&str, fn())] = &[
     ("click", click::main),
     ("bwc", bwc::main),
+    ("tab_indicator", tab_indicator::main),
     ("bottom_sheet", bottom_sheet::main),
     ("dialog_dismiss", dialog_dismiss::main),
     ("nest", nest::main),

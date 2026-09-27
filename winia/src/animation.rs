@@ -164,17 +164,6 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
 /// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
 pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::core::state::Animating<T>, target: T, spec: AnimationSpec) {
     let sid = state.state_id();
-    // DIAGNOSTIC (temporary): who pushes an animation that then never ends.
-    #[cfg(debug_assertions)]
-    if std::env::var("WINIA_WHO_ANIM").is_ok() {
-        let bt = std::backtrace::Backtrace::force_capture().to_string();
-        let frames: Vec<&str> = bt
-            .lines()
-            .filter(|l| l.contains("winia::") && !l.contains("animation::"))
-            .take(3)
-            .collect();
-        eprintln!("[anim-push] {sid:?} from {frames:?}");
-    }
     if state.peek() == target {
         // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
         // 若存在目标不同的旧动画，必须取消它——否则旧动画会继续把值拉向旧目标
@@ -492,27 +481,6 @@ pub fn update_animations() -> bool {
         }
     }
     !list.is_empty() || !clist.is_empty()
-}
-
-/// DIAGNOSTIC (temporary): what is still animating, split by kind, with the state ids it drives.
-pub fn debug_active_animations() -> String {
-    let values: Vec<String> = ACTIVE_ANIMATIONS
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|a| format!("{:?}", a.state_id()))
-        .collect();
-    let colors: Vec<String> = ACTIVE_COLOR_ANIMATIONS
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|c| format!("{:?}", c.state.state_id()))
-        .collect();
-    format!(
-        "values={} colors={} value_ids={values:?} color_ids={colors:?}",
-        values.len(),
-        colors.len()
-    )
 }
 
 /// 从所有动画列表移除指定 state 的动画（InfiniteTransition::dispose 用）
