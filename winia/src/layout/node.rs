@@ -297,11 +297,21 @@ pub struct LayoutNode {
     /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
-    /// Whether the last measurement of this node ran a policy that subcomposed content
-    /// (`ui::subcompose`). Such a node must be measured EVERY frame: its composed subtree lives only
-    /// in the arena, so a folded frame would let materialize clear the parent's `children` and leave
-    /// the subtree detached — measured while writing the facility (the adopted child disappeared on
-    /// the second frame, and the assertion that caught it was the parent's child count going to 0).
+    /// Whether this node's OWN measure policy subcomposed content (`ui::subcompose`), recorded by
+    /// [`crate::core::composer::Composer::park_subcomposition`] at the moment it parked the composition.
+    ///
+    /// It is one of the two ways `Composer::compose`'s compose-end seeding recognizes a node that has to
+    /// be re-measured (the other asks the policy, which covers a node that was just REBUILT and has not
+    /// measured since). `layout()` clears `dirty` and `layout_dirty` on every node and re-derives them
+    /// from `layout_dirty_keys`, and a node whose slot was Clean arrives with `dirty = false`, so a
+    /// subcomposing node has no other way to say "measure me" — and a folded frame would let
+    /// `materialize` clear the parent's `children` and leave the adopted subtree detached (measured
+    /// while writing the facility: the adopted child disappeared on the second frame).
+    ///
+    /// It is set by the node that parked, never by counting: "how many subcompositions were parked while
+    /// this node measured" is also true for every ANCESTOR of a subcomposing node, and seeding those put
+    /// the frame's whole tree into `layout_dirty_keys` (measured: an 800-row tree's root carried this
+    /// flag, and one row's update re-measured — and re-subcomposed — all 800).
     pub(crate) subcomposed: bool,
     /// The arena index of this node's subcomposed child, if its policy composed one
     /// (`ui::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
@@ -2230,12 +2240,24 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 ///
 /// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
-/// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
-/// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
+/// Applies layout invalidation: a DFS over the tree marks the nodes whose slot key is in
+/// `dirty_keys`, and marks every ANCESTOR of those nodes.
+///
+/// The ancestor half is the conservative part the framework wants: a parent's placement depends on a
+/// child's size, so a child that must re-measure drags its whole ancestor chain with it. The
+/// DESCENDANT half is deliberately NOT here — a hit node re-measures, and that re-measure reaches its
+/// children through the ordinary fold check (`cached_constraints != constraints`), so marking the
+/// subtree as well only re-measures unchanged nodes.
+///
+/// That is not hypothetical. The walk used to pass `hit || ancestor_dirty` down to the children, which
+/// marks a hit node's ENTIRE subtree, and it cost a factor of 50 on a single update: one row's change
+/// in an 800-row tree whose ROOT was among the hits produced 800 subcompositions and a one-row frame
+/// of 74915 µs, against ≈1600 µs with the subtree marking removed and no hit on the root
+/// (`docs/benchmarks.md` has the tables).
 pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
-    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>) -> bool {
         let hit = dirty_keys.contains(&nodes[idx].slot_key);
-        if hit || ancestor_dirty {
+        if hit {
             nodes[idx].layout_dirty = true;
         }
         // 索引读避免 clone（layout 是热路径）；每次索引读是临时借用，不阻塞递归写
@@ -2243,7 +2265,7 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
         let n = nodes[idx].children.len();
         for i in 0..n {
             let child = nodes[idx].children[i];
-            if walk(nodes, child, dirty_keys, hit || ancestor_dirty) {
+            if walk(nodes, child, dirty_keys) {
                 child_hit = true;
             }
         }
@@ -2252,7 +2274,7 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
         }
         hit || child_hit
     }
-    walk(nodes, root_idx, dirty_keys, false);
+    walk(nodes, root_idx, dirty_keys);
 }
 
 /// Per-frame layout override for a shared-element flight (Compose `ResizeMode`

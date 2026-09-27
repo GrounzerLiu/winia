@@ -23,17 +23,32 @@
 //! has, and the "one composition behind" deviation this module used to document is gone.
 //!
 //! `BoxWithConstraintsScope` reports the constraints the box was measured with, and the content
-//! composes under them on the first frame like every later one. The box's node is marked
-//! `subcomposed`, which keeps it from folding: its composed subtree lives in the arena, so a folded
-//! frame would let materialize clear the parent's `children` and detach it (measured while building
-//! the facility).
+//! composes under them on the first frame like every later one.
+//!
+//! # When the box re-measures
+//!
+//! The box's node is marked `subcomposed` (it composes during measurement), which is what puts its slot
+//! key into the frame's layout invalidation set; its composed subtree lives in the arena and is only
+//! re-attached by a measurement, so a box that never measured again would lose it.
+//!
+//! It does NOT mean "measure every frame". The box folds like any other node when nothing about it
+//! changed, and it re-measures when one of these moved:
+//!
+//! - the composition that builds the box ran and its `Modifier` differs from last frame's — including a
+//!   `max_width` computed from a state read in a PARENT's scope, which is the case the `bwc` UI fixture
+//!   drives (`Composer::node_modifier_changed`);
+//! - the box's node slot was dirtied (a declared parameter or a state read inside the box itself
+//!   changed), which also seeds the key from the compose end;
+//! - a state read DURING the measurement changed (a layout-only dependency, `layout_dirty_keys`).
+//!
+//! Folding an unchanged box is what keeps a screen with many of them cheap; `docs/benchmarks.md` has the
+//! per-frame numbers (`one row updated, 800 rows`: 74915 µs before, ≈1700 µs after).
 //!
 //! # What this is not
 //!
-//! `subcompose` re-runs the content on every frame the box measures (which, because the box never
-//! folds, is every frame), where Compose's subcomposition is skipped when nothing it depends on
-//! changed. It is correct before it is cheap; making the subcomposition skip is the next round, and
-//! it needs the adopted subtree keyed on the component's own key so it can be reused in place.
+//! The content is re-composed on every measurement, and a measurement is what the three cases above ask
+//! for — the box has no way to tell "the content would compose the same" and skip the work, where
+//! Compose's subcomposition is skipped when nothing it depends on changed.
 
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
@@ -353,11 +368,14 @@ mod tests {
         assert!(size2.width > 0.0, "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}");
     }
 
-    /// A subcomposing node never folds: its subtree lives in the arena, so a folded frame would let
-    /// materialize clear `children` and detach it. This is the failure that was measured while
-    /// building the facility (the adopted child disappeared on the second frame), pinned here.
+    /// The adopted subtree survives the frames the box does NOT measure.
+    ///
+    /// A subcomposing node's subtree lives in the arena and is re-attached by a measurement, so the one
+    /// thing that must never happen is materialize dropping it while the node folds. This is the failure
+    /// that was measured while building the facility (the adopted child disappeared on the second
+    /// frame), pinned here — now on a frame where the box legitimately folds (nothing about it changed).
     #[test]
-    fn the_box_is_measured_every_frame_so_its_content_is_not_detached() {
+    fn the_box_keeps_its_adopted_child_across_a_frame_it_did_not_measure() {
         let mut composer = Composer::new();
         let build = |ctx: &mut ComposeCtx| {
             BoxWithConstraints::new()
@@ -372,7 +390,7 @@ mod tests {
         assert_eq!(composer.arena.nodes[root].children.len(), 1, "adopted on frame 1");
         assert!(composer.arena.nodes[root].subcomposed, "the node is marked as subcomposing");
 
-        // Frame 2: nothing dirty, same constraints — the fold must be refused for this node.
+        // Frame 2: nothing dirty, same constraints — the box folds, and the child must still be there.
         composer.compose(build);
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         assert_eq!(
@@ -380,6 +398,72 @@ mod tests {
             1,
             "still exactly one adopted child after a second frame — no detach, no accumulation"
         );
+    }
+
+    /// A state read in the COMPOSITION, feeding the box's own `max_width`, has to reach the content the
+    /// box composes at measure time — on the frame the state changes, not eventually.
+    ///
+    /// This is the shape the `bwc` UI fixture drives (`box_with_constraints_composes_its_content_at_measure_time`),
+    /// reduced to one composer, so the failure is a two-second reproduction instead of a window test. It
+    /// is the test that was written BECAUSE the reduced form failed while the layout-invalidation cascade
+    /// was being fixed: the box is a descendant of the node that read the state, so nothing about that
+    /// cascade may be what re-measures it — its own modifier changed, and that has to carry the change
+    /// down. (Before the fix the UI test timed out on a click that had landed, because the content kept
+    /// its first frame's text.)
+    #[test]
+    fn a_cap_change_in_the_composition_reaches_the_content_the_box_composes() {
+        fn texts(composer: &Composer) -> Vec<String> {
+            fn rec(nodes: &[crate::layout::node::LayoutNode], root: usize, out: &mut Vec<String>) {
+                for el in nodes[root].modifier.elements() {
+                    if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
+                        out.push(content.clone());
+                    }
+                }
+                for &c in &nodes[root].children {
+                    rec(nodes, c, out);
+                }
+            }
+            let mut out = Vec::new();
+            if let Some(root) = composer.arena.root {
+                rec(composer.arena_nodes(), root, &mut out);
+            }
+            out
+        }
+
+        let cap = crate::core::state::State::new(200.0f32);
+        let setter = cap.clone();
+        let build = || {
+            let cap = cap.clone();
+            move |ctx: &mut ComposeCtx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    BoxWithConstraints::new()
+                        .modifier(Modifier::new().max_width(cap.get()))
+                        .build(ctx, |ctx, scope| {
+                            crate::ui::Text::new(format!("BWC max {}", scope.max_width() as i32))
+                                .build(ctx);
+                        });
+                });
+            }
+        };
+
+        let mut composer = Composer::new();
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(texts(&composer), ["BWC max 200"], "frame 1: the box caps the content");
+
+        setter.set(120.0);
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(
+            texts(&composer),
+            ["BWC max 120"],
+            "the narrowed cap reached the subcomposed content on the frame the state changed"
+        );
+
+        setter.set(200.0);
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(texts(&composer), ["BWC max 200"], "and back — both directions");
     }
 
     // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is

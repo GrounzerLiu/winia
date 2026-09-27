@@ -2393,12 +2393,17 @@ impl Composer {
         // WiniaTheme::direction() 已退出作用域读不到（RTL 全局切换失效根因）
         let direction = modifier.get_layout_direction()
             .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        // A Clean slot still has to re-measure when this node's own modifier changed: the modifier is
+        // where a container's or leaf's layout inputs live (`max_width`, `size`, `padding`), and a value
+        // computed from a state read in an ANCESTOR's scope changes them without dirtying this slot.
+        // See `node_modifier_changed`.
+        let dirty = slot_status != SlotStatus::Clean || self.node_modifier_changed(key, &modifier);
         self.slot_table.set_current_desc(Some(NodeDesc {
             key,
             modifier,
             policy,
             on_remove,
-            dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
+            dirty, // 重测标记（slot.dirty 已消费）
             registrar: None,
             focus_color: None,
             composing_color: None,
@@ -2555,6 +2560,27 @@ impl Composer {
     fn container_modifier_unchanged(&self, key: u64, modifier: &Modifier) -> bool {
         match self.prev_node_by_key.get(&key) {
             Some(&idx) => modifier.param_eq(&self.arena.nodes[idx].modifier),
+            None => false,
+        }
+    }
+
+    /// Whether this frame's `modifier` differs from the one the node at `key` was last materialized with
+    /// — i.e. the node's own LAYOUT INPUTS changed, so its measurement cannot be reused.
+    ///
+    /// A container or leaf created by `start_node` has no parameter list of its own; its modifier IS its
+    /// parameter list. A value computed from a state read in an ANCESTOR's scope (`max_width(cap.get())`
+    /// inside a parent's content closure) dirties that ancestor's slot and leaves this node's slot Clean,
+    /// so `slot_status != SlotStatus::Clean` alone answers "nothing changed here" while this node's own
+    /// constraints did change — and a folded measurement then keeps the old size and, for a subcomposing
+    /// node, the content it composed with the old constraints (measured: the `bwc` UI fixture's click
+    /// stopped reaching its `BoxWithConstraints` content). Compose compares the modifier chain for the
+    /// same reason.
+    ///
+    /// `false` when there is no node to compare against: that is not "changed", it is "no basis" —
+    /// materialize rebuilds a node it cannot find and starts it dirty on its own.
+    fn node_modifier_changed(&self, key: u64, modifier: &Modifier) -> bool {
+        match self.prev_node_by_key.get(&key) {
+            Some(&idx) => !modifier.param_eq(&self.arena.nodes[idx].modifier),
             None => false,
         }
     }
@@ -2873,16 +2899,15 @@ impl Composer {
         // from `layout_dirty_keys`, then uses that set to decide which parents descend at all. A node
         // whose slot status was Clean (its parent entered, so its body re-ran without its slot being
         // marked) arrives here with `dirty=false`, so the only place left to say "measure me" is this
-        // set. Asked of the POLICY rather than of the node's `subcomposed` flag, because that flag is
-        // set BY a measurement and is therefore false on exactly the nodes that were just rebuilt.
+        // set. Asked of the POLICY as well as of the node's `subcomposed` flag, because the flag is set
+        // by a parking measurement and is therefore false on a node that was just rebuilt.
         //
-        // KNOWN TENSION (measured, not resolved): seeded this way, a subcomposing node is re-measured
-        // on every frame that composes — and re-measuring it re-composes its content, which is itself a
-        // change, so a row with a caller-supplied indicator never lets the loop idle (`pending=1`, 157
-        // frames in three seconds, versus ONE frame for the same row with its own indicator). Guarding
-        // this with `dirty` fixes the loop but turns the acceptance test red, so the guard is not the
-        // answer; the discriminator has to be "the CONTENT changed", which is not what either flag says
-        // today. See docs/lookahead-probe-handover.md.
+        // The `dirty` guard is load-bearing and the flag has to be precise, or this seeding is what
+        // makes a subcomposing tree re-measure everything: `subcomposed` used to be inferred from a
+        // "how many subcompositions were parked while this node measured" counter, which is true for
+        // every ANCESTOR of a subcomposing node, so the root of an 800-row tree was seeded on every
+        // frame that changed anything and the whole tree re-measured — 800 subcompositions for one
+        // row's update (74915 µs against ≈1600 µs; `docs/benchmarks.md`).
         for idx in 0..self.arena.nodes.len() {
             let declares = self.arena.nodes[idx].dirty
                 && (self.arena.nodes[idx]
@@ -3009,6 +3034,14 @@ impl Composer {
         node: usize,
         entry: crate::ui::subcompose::Subcomposition,
     ) {
+        // The node's OWN policy composed content — recorded here, at the moment it happens, because this
+        // is the only place that knows WHICH node subcomposed. `Composer::compose`'s compose-end seeding
+        // reads the flag to decide whether the node has to be re-measured; inferring it from a
+        // "subcompositions parked so far" counter (which is what the flag used to be) made it true for
+        // every ancestor of a subcomposing node as well — see `LayoutNode::subcomposed`.
+        if node < self.arena.nodes.len() {
+            self.arena.nodes[node].subcomposed = true;
+        }
         self.subcompositions.push((node, entry));
     }
 

@@ -29,41 +29,39 @@ BoxWithConstraints::new()
 
 ## How the constraints get there
 
-winia composes before it measures and has no subcomposition, so the value travels on the framework's
-measure-to-compose channel: the box's `MeasurePolicy` records the constraints it was measured with,
-and the content reads them on its next run.
+The content is composed **during measurement**, inside a subcomposition (`ui::subcompose`), and the
+composed tree is ADOPTED as the box's child — so the scope carries the constraints this measurement just
+computed, which is the relation Compose has. The box is as big as what its content composed (clamped by
+the constraints), so the policy reports the content's measured size instead of a size of its own.
 
-The channel is a **`Reactive<Constraints>`**, and that choice is load-bearing:
+The content closure is `Fn`, not `FnOnce`: a later frame's measurement composes it again — into the
+composition the box kept from the previous frame, so a `remember` inside it survives the frame.
 
-- A `Backchannel` (the channel `LazyListState.content_height` uses) would **not work here** —
-  `set_backchannel` only overwrites the value and never moves the signal's revision, so nothing would
-  ever wake the content. Measured while writing this component: the tree kept printing
-  "not measured yet (frame 1)" forever.
-- `State<Constraints>` notifies on change and **dedups on `PartialEq`**, so a constraint that did not
-  move notifies nobody. That is what keeps the measure-write → recompose → measure cycle bounded
-  instead of self-sustaining.
+## When the box re-measures
 
-## Deliberate behaviour: the value is one composition behind
+`MeasurePolicy::subcomposes()` returns `true` for this policy, and the box's node is marked
+`subcomposed`. That is what keeps the node's slot key in the frame's layout invalidation set: the composed
+subtree lives in the arena and only a measurement re-attaches it, so a folded frame would let materialize
+detach it.
 
-Compose's scope is current *within* the frame (a measure-time subcomposition). Here the content reads
-what the **previous** measure wrote. Consequences, stated plainly:
+It does NOT mean "measure every frame". The box folds like any other node when nothing about it changed,
+and re-measures when one of these moved:
 
-- **The first composition reads the initial value** (`Constraints::UNBOUNDED`: min 0, max `+∞`), so a
-  caller must treat an infinite maximum as "not measured yet" — that is what `is_measured()` is for.
-  The second run has the real constraints; the write itself wakes the composition, so this needs no
-  help from the caller (verified on a real window: the content's second run read
-  `max_width: 200.0` for a 200-wide box inside a 420-wide window, and the committed tree reported the
-  narrow branch).
-- **A change of constraints re-runs the content**, because the write goes through `State::set` and the
-  content read registered a composition dependency. The trail is one composition, not one frame in
-  the common case (the write happens during the frame's layout, and the recompose loop at the top of
-  the frame handler consumes what it enqueued).
-- **No auto-refresh when nothing else changes and the constraint is unchanged.** The box is as static
-  as its parent; it does not poll.
+| trigger | what carries it |
+|---|---|
+| its own `Modifier` differs from last frame's | a value computed in a PARENT's scope, e.g. `.max_width(cap.get())` — `Composer::node_modifier_changed` |
+| its node slot was dirtied | a declared parameter or a state read inside the box changed (the compose end also seeds the slot key) |
+| a state read DURING the measurement changed | a layout-only dependency (`layout_dirty_keys`) |
 
-Closing the trail needs a real lookahead/subcomposition pass — a framework-level change, and the
-subject of `docs/lookahead-subcompose-feasibility.md`, which prices the two possible designs and
-records which one the slot machinery can carry.
+Folding is what keeps a screen with many boxes cheap, and the three triggers are what makes a change
+land on the frame it happened: `docs/benchmarks.md` has the numbers (`one row updated, 800 rows`:
+74915 µs before, 1696 µs after).
+
+## What it is not
+
+The content re-composes on every MEASUREMENT. Compose's subcomposition can skip when nothing it depends
+on changed; here a measurement always re-runs the content closure. Since a measurement only happens for
+one of the three triggers above, that costs nothing on frames that have no work to do.
 
 ## Deliberate difference: the scope speaks the layout coordinate system, not `Dp`
 
@@ -83,5 +81,7 @@ custom `MeasurePolicy`.
 | test | what it pins |
 |---|---|
 | `scope_reports_the_constraints_it_was_handed` | the four bounds, `max_dimension` / `min_dimension`, the `_dp` forms, and that `is_measured()` is false for the initial unbounded value |
-| `policy_records_the_incoming_constraints` | the write half: the policy records exactly the constraints it was measured with |
-| `box_with_constraints_lays_out_like_a_stack_and_hands_its_content_a_scope` | end to end: the box takes its modifier's size, the content runs, and the first run reads the unmeasured value (the documented trail) |
+| `the_content_sees_the_real_constraints_on_the_first_frame` | the content composes DURING the measurement, so frame one already has the real cap (the old design's "one composition behind" trail is gone) |
+| `the_box_sizes_to_its_content_on_the_first_frame_and_the_next` | the box's size IS the content's size, on the composed frame and on the next one (the reused parent detaches and re-attaches the adopted child) |
+| `the_box_keeps_its_adopted_child_across_a_frame_it_did_not_measure` | a frame the box folds does not detach the adopted subtree |
+| `a_cap_change_in_the_composition_reaches_the_content_the_box_composes` | the `bwc` UI fixture's failure, reduced: a state read in a PARENT scope feeding `.max_width(cap.get())` must re-measure the box and reach the content it composes, in both directions |

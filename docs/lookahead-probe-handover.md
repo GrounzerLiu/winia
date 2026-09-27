@@ -147,14 +147,27 @@ which nodes each layout pass reached.
    the reuse lookup).
 2. **The remaining question is a MERGE question, not a defect:** does `v2` want `BoxWithConstraints`
    composed at measure time? If yes, this branch is the thing to merge, and the review should look at
-   what the facility costs per frame (the content is re-composed whenever its node measures, and the
-   content's `remember` state now survives that).
+   what the facility costs per frame — that number is now measured rather than open: `docs/benchmarks.md`
+   carries the tables (`idle 63233 → 1038 µs`, `one row updated 61767 → 1696 µs` at 800 rows) and the
+   three invalidation defects that produced the old figures.
 3. **The facility's natural second user is `TabRow`'s indicator slot** — the case the feasibility note
-   records as genuinely needing measure-time composition. `BoxWithConstraints` was the first; a second
-   user is what would show whether the facility's shape (`subcompose()` called from inside `measure`)
-   is the right one to publish.
-4. **Before adding that second user, re-run:** the `BoxWithConstraints` tests, the subcomposition tests
-   in `subcompose.rs`, the lib suite (1092) and the UI suite (48, nothing ignored).
+   records as genuinely needing measure-time composition. It is DONE on `exp/tab-indicator` (both the
+   fixed and the scrollable variant, one UI fixture test through a real `#[composable]` frame); what it
+   showed is in `docs/tab-row.md` §7. The shape (`subcompose()` / `subcompose_overlay()` called from
+   inside `measure`) held up for both users.
+4. **Before merging, re-run:** the `BoxWithConstraints` tests, the subcomposition tests in
+   `subcompose.rs`, the lib suite (1096) and the UI suite (49, nothing ignored).
+
+### Per-frame cost: what was open here is closed (2026-09-28)
+
+Round 4 left "a subcomposing node is re-measured on every frame that composes, and re-measuring it
+re-composes its content" as a known tension and pointed at this file. It was two defects in the
+invalidation path, not a property of the facility: `subcomposed` was inferred from a counter and so was
+true for every ancestor of a subcomposing node (which seeded the frame's ROOT into `layout_dirty_keys`),
+and `apply_layout_dirty` marked a hit node's whole subtree. Fixing those exposed a third, real gap — a
+node whose own `Modifier` changed did not re-measure when its slot stayed Clean — now covered by
+`Composer::node_modifier_changed`. Details, numbers and the A/B evidence: `docs/benchmarks.md`, the
+section on what a measure-time subcomposition costs a frame.
 
 ## What was already ruled out (do not re-try these)
 
