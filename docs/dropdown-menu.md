@@ -2,6 +2,14 @@
 
 `winia/src/ui/overlay.rs` 的 `DropdownMenu` / `DropdownMenuItem`，以及本文记录的对齐进度与偏差。
 
+## 0. 运行
+
+```bash
+cargo run -p winia --example dropdown_menu_demo --features debug-server
+```
+
+demo 里按顺序演示：① 材质默认（单面板 + 禁用项）② 30 项长菜单（封顶 / 贴边 / 可滚动）③ 样式参数（`offset` / `shape` / `shadow_elevation` / 项 `colors` / `content_padding`）④ 贴近窗口底部的触发器（菜单**向上翻**——M3 候选序列的第二个）。
+
 ## 1. 现状 API
 
 ```rust
