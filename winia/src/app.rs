@@ -2568,9 +2568,15 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                 eprintln!("[apply-scroll] → state.offset 应用前 = {}", current);
             }
             // 滚动极限 = 内容总高度 - 可视区域高度
-            // viewport 高度优先用 scroll_viewport_height（fill_max_height 场景），
-            // 降级到 fixed_size()（固定高度场景），再降级到 0（无限制）。
-            let visible_h = if node.scroll_viewport_height > 0.0 {
+            // The visible size is the node's OWN measured height — what the user sees. It used to prefer
+            // `scroll_viewport_height`, which is the padding-DEDUCTED measure constraint: for a menu
+            // (a 112x424 container holding 20 items with 8dp of padding) that gave a range of
+            // 976 - 408 = 568 where the end is 976 - 424 = 552, so the content scrolled 16px past its end
+            // and the last item sat in dead space (24px with its own padding). Falls back to the viewport
+            // while the node has not been measured yet, and to 0 (no movement) when neither is known.
+            let visible_h = if node.measured_size.height > 0.0 {
+                node.measured_size.height
+            } else if node.scroll_viewport_height > 0.0 {
                 node.scroll_viewport_height
             } else {
                 node.modifier.fixed_size()
@@ -2603,7 +2609,11 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             crate::animation::cancel_animation(&state.offset);
             state.is_scroll_in_progress.set(false);
             let current = state.offset.get();
-            let visible_w = if node.scroll_viewport_width > 0.0 {
+            // Same as the vertical case above: the container's own measured width is what the range ends
+            // against, with the viewport only as a not-measured-yet fallback.
+            let visible_w = if node.measured_size.width > 0.0 {
+                node.measured_size.width
+            } else if node.scroll_viewport_width > 0.0 {
                 node.scroll_viewport_width
             } else {
                 node.modifier.fixed_size()

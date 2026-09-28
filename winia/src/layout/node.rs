@@ -2649,7 +2649,16 @@ fn measure_node_inner(
             if content_h > 0.0 {
                 content_h += pad_bottom;
                 nodes[idx].scroll_content_height = content_h;
-                let max_off = (content_h - nodes[idx].scroll_viewport_height).max(0.0);
+                // The scroll range ends when the CONTENT's bottom meets the container's own bottom, so
+                // the container's height is what belongs here — not the padding-deducted viewport
+                // constraint. `content_h` counts the content from the container's top edge (its children
+                // sit below `pad_top`), so mixing the two double-counted the vertical padding and let a
+                // menu scroll 2*padding past its end: measured with a 112x424 menu holding 20 items,
+                // `content_h` was 976 against a viewport of 424-16 = 408, giving an offset of 568 where
+                // 552 is the end — 16px of dead space under the last item (24 in total with its own 8dp
+                // padding).
+                let node_h = (size.height + pad_y).min(viewport_height + pad_y);
+                let max_off = (content_h - node_h).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
                     ss.fling_limit.set(max_off);
                 }
@@ -2667,7 +2676,9 @@ fn measure_node_inner(
             if content_w > 0.0 {
                 content_w += pad_end;
                 nodes[idx].scroll_content_width = content_w;
-                let max_off = (content_w - nodes[idx].scroll_viewport_width).max(0.0);
+                // Same shape as the vertical case above: the range ends at the container's own edge.
+                let node_w = (size.width + pad_x).min(viewport_width + pad_x);
+                let max_off = (content_w - node_w).max(0.0);
                 if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() {
                     ss.fling_limit.set(max_off);
                 }

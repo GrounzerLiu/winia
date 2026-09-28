@@ -147,6 +147,13 @@ state.animate_scroll_to_item(50, 0.0);
   offset 0 → 887）。普通容器与 lazy 两处同修，回归测试
   `dropdown_menu_does_not_fling_when_the_content_fits`（含"能滚的菜单仍然会 fling"
   的正对照，避免测试空转）。
+  ⚠ 滚动的**上限**要按"容器自身高度"算，不是"扣掉 padding 的约束值"：内容高把
+  padding 算在内（子节点从 pad_top 起排），两者混用会把上下 padding 多算一遍 ——
+  实测 112×424 的菜单（20 项、8dp padding）算出 568，真实末端是 552，末尾多出
+  16px 死区（用户报"底部为什么有这么多空白"）。三处同修：测量期的 fling_limit
+  （`layout/node.rs`，含水平）、滚轮/拖拽 clamp（`app.rs` 的 `apply_scroll_delta`，
+  改用节点 `measured_size`）。回归断言：滚到末端时 `offset == 内容高 − 容器高`，
+  且末项底边 == 容器底边 − 8dp。
 
 ### 2.5 吸顶 header（stickyHeader，对齐 Compose LazyListMeasure 的 pinned 处理）
 

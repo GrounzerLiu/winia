@@ -2469,17 +2469,22 @@ fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
     let range = content_h - ch;
     eprintln!("长菜单 offset={offset} (range≈{range}, container h={ch})");
     assert!(
-        (offset - range).abs() <= 16.0,
-        "the wheel must take the menu to its end: offset {offset} against a range of {range}"
+        (offset - range).abs() <= 1.0,
+        "the wheel must stop exactly at the end: offset {offset} against a range of {range}"
     );
-    // …and the last item is then inside the container (its layout y minus the scroll translation).
+    // …and the content then ends flush with the container's bottom less its own 8dp padding. The clamp
+    // used to work from the padding-DEDUCTED viewport instead, which let the content scroll 16px too far:
+    // the reported "why is there so much blank at the bottom" (24px under the last item, 8 of them real).
     let rendered_y = item19_y - offset;
-    eprintln!("长项 19: layout y={item19_y} h={item19_h} → rendered y={rendered_y}");
+    let rendered_bottom = rendered_y + item19_h;
+    eprintln!(
+        "长项 19: layout y={item19_y} h={item19_h} → rendered y={rendered_y} bottom={rendered_bottom}"
+    );
     assert!(
-        rendered_y >= cy - 1.0 && rendered_y + item19_h <= cy + ch + 1.0,
-        "the last item must be inside the container once scrolled: rendered y {rendered_y} h {item19_h} \
-         against container ({cy}..{})",
-        cy + ch
+        (rendered_bottom - (cy + ch - 8.0)).abs() <= 1.0,
+        "the last item must end at the container's bottom less its 8dp padding: item bottom \
+         {rendered_bottom} against {}",
+        cy + ch - 8.0
     );
 }
 
