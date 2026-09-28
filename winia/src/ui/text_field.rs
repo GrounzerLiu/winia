@@ -766,6 +766,32 @@ pub(crate) fn text_field_visual_color(
     None
 }
 
+/// Whether a text field's node should draw a caret, along the same parent chain [`text_field_visual_color`]
+/// walks: material3's `showCursor = enabled && !readOnly && …`
+/// (`foundation/text/CoreTextField.kt`). A read-only field keeps its focus — it stays selectable and
+/// copyable — but shows no caret, where winia drew one whenever the field had focus.
+///
+/// Defaults to `true` when no visual element is found, which is the bare (variant-less) field: it has no
+/// `readOnly` to consult, and has always drawn its caret.
+pub(crate) fn text_field_show_cursor(
+    nodes: &[crate::layout::node::LayoutNode],
+    root: usize,
+    idx: usize,
+) -> bool {
+    use crate::modifier::ModifierElement;
+    let mut cur = Some(idx);
+    while let Some(i) = cur {
+        for el in nodes[i].modifier.elements() {
+            if let ModifierElement::TextFieldVisual { enabled, read_only, .. } = el {
+                return *enabled && !*read_only;
+            }
+        }
+        cur = nodes[i].parent_id
+            .and_then(|pid| crate::layout::node::find_node_by_id(nodes, root, pid));
+    }
+    true
+}
+
 pub struct TextField {
     value: State<TextFieldValue>,
     on_value_change: Box<dyn Fn(TextFieldValue) + Send + Sync>,
@@ -1640,6 +1666,7 @@ impl TextField {
                     self.enabled,
                     focused,
                     self.is_error,
+                    self.read_only,
                     if self.is_error { colors.error_cursor } else { colors.cursor },
                     indicator_anim,
                     focus_progress,
@@ -2904,6 +2931,47 @@ mod tests {
             ph.map(|(w, h)| w > 0.0 && h > 0.0).unwrap_or(false),
             "快速切换后 placeholder 节点尺寸应为非 0（实际 {:?}）——渲染不可见",
             ph
+        );
+    }
+
+    /// A read-only field draws no caret, and a normal one does.
+    ///
+    /// material3: `val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && …`
+    /// (`foundation/text/CoreTextField.kt`). winia drew a caret whenever the focused node had a collapsed
+    /// selection, so a READ-ONLY field — the exposed dropdown's, for one — blinked a cursor in text nobody
+    /// could type into.
+    ///
+    /// Teeth: dropping the `read_only` term from `text_field_show_cursor` fails the first case here; that is
+    /// the exact shape of the bug this replaced, and the second case keeps the first from passing because
+    /// the helper answers `false` for everything.
+    #[test]
+    fn a_read_only_field_draws_no_caret() {
+        fn show_cursor(read_only: bool) -> bool {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _guard = rt.enter();
+            let value = State::new(TextFieldValue::new("value"));
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                TextField::new(value.clone())
+                    .outlined()
+                    .read_only(read_only)
+                    .build(ctx);
+            });
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            super::text_field_show_cursor(nodes, root, root)
+        }
+
+        assert!(
+            !show_cursor(true),
+            "a read-only field must not draw a caret (material3's showCursor excludes readOnly)"
+        );
+        assert!(
+            show_cursor(false),
+            "an editable field still draws one, so the check above cannot pass by answering false always"
         );
     }
 }

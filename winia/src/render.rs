@@ -1126,7 +1126,7 @@ fn render_pass1(
                 scroll_offset_h = Some(off);
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, focused: _, is_error: _, read_only: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = supporting.as_ref().map_or(0.0, |sv| sv.height());
@@ -1307,7 +1307,11 @@ fn render_pass1(
             // 聚焦判定：优先组合期标记（text-field-v2 容器化——焦点在容器，
             // 输入子节点用 display_focused），回退节点自身 focused
             let focused = node.display_focused.get() || node.focused;
-            if focused && !has_selection {
+            // material3 draws its caret as `showCursor = enabled && !readOnly && …`;
+            // `text_field_show_cursor` reads those two off the container's visual element along the parent
+            // chain (the same walk the cursor colour below uses) and defaults to true for a bare field,
+            // which has neither.
+            if focused && !has_selection && crate::ui::text_field::text_field_show_cursor(nodes, root_idx, idx) {
                 if node.cursor_visible.get() {
                     // ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/
                     // error）——输入 leaf 无此元素，从 leaf 找会回退文本色。

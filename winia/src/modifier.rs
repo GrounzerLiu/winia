@@ -697,6 +697,10 @@ pub(crate) enum ModifierElement {
         enabled: bool,
         focused: bool,
         is_error: bool,
+        /// material3's `readOnly`, carried here because the RENDER needs it: material3 draws its caret as
+        /// `showCursor = enabled && !readOnly && …` (`foundation/text/CoreTextField.kt`), so a read-only
+        /// field shows no caret. winia drew one whenever the field had focus.
+        read_only: bool,
         /// 光标色（组合期解析：error → error_cursor，否则 primary）
         cursor_color: Color,
         /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
@@ -1532,6 +1536,7 @@ impl Modifier {
         enabled: bool,
         focused: bool,
         is_error: bool,
+        read_only: bool,
         cursor_color: Color,
         indicator_color: crate::core::state::State<crate::modifier::Color>,
         focus_progress: crate::core::state::State<f32>,
@@ -1545,6 +1550,7 @@ impl Modifier {
             enabled,
             focused,
             is_error,
+            read_only,
             cursor_color,
             indicator_color,
             focus_progress,

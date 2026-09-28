@@ -275,7 +275,21 @@ if constraints.max_height < 1.0e9 { constraints.max_height }   // 父给多少�
 
 **顺带修的一条 API 语义**：`ExposedDropdownMenuDefaults::trailing_icon` 收 **`State<bool>`** 而不是 `bool`（M3 收 bool）。原因：Compose 会比较参数、参数变了就重跑，而 winia 的组不比较参数 ✗ —— 用 bool 时图标只组合一次、之后被 skip ✗，箭头永远停在同一朝向（实测：展开前后 16 个探测点全无变化 ✗）。在图标**自己的组合里**读状态才会注册依赖 ✓，这是 winia 表达"变了要重画"的方式。签名按 M3 保留 `modifier` 参数（`TrailingIcon(expanded, modifier)`）✓，调用方可以挂 tag 或调尺寸。
 
-### 4.9 待对齐（本轮之后）
+### 4.9 已修：只读输入框不该画光标
+
+M3 的真身（`foundation/text/CoreTextField.kt:449`）：
+
+```kotlin
+val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.hasHighlight()
+```
+
+**只读字段不画光标** ✓。winia 的渲染条件只有 `focused && !has_selection`（`render.rs`）✗ —— 只要能聚焦就画 ✗，于是输入框下拉那块**不能输入的**只读字段会闪一根光标 ✗（上一轮 demo 截图里 `选项 A|` 那道竖线就是它 ✓）。
+
+**修法**：把 `read_only` 挂到容器元素 `TextFieldVisual` 上（M3 也是从字段状态取的 ✓），渲染端沿父链读它（与取光标色 `text_field_visual_color` 同一条父链 ✓），条件变成 `enabled && !read_only` ✓；裸字段（无 variant ✓）没有该元素，默认仍画光标 ✓（与既有行为一致 ✓）。
+
+**验证**：单测 `a_read_only_field_draws_no_caret`（去掉 `read_only` 项即红 ✓，且第二个用例要求可编辑字段仍画光标 ✓，防止"永远返回 false"式的假通过 ✓）；demo 截图里聚焦的只读字段已无光标 ✓。
+
+### 4.10 待对齐（本轮之后）
 
 | 项 | M3 真身 | winia 现状 |
 |---|---|---|
@@ -283,6 +297,6 @@ if constraints.max_height < 1.0e9 { constraints.max_height }   // 父给多少�
 | 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | 无（菜单用 `MenuColumnPolicy` 自己实现，其它组件需照做） |
 | `PrimaryEditable` 的键盘打开 | 聚焦/键盘驱动展开、光标联动 | 只有"点击不切换"，键盘打开与光标联动未实现 |
 
-### 4.10 有意保留的偏差
+### 4.11 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
