@@ -30,6 +30,8 @@ mod nest;
 mod nested_scroll;
 #[path = "fixture_lazy_resize.rs"]
 mod lazy_resize;
+#[path = "fixture_dropdown_menu.rs"]
+mod dropdown_menu;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -89,6 +91,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("tab_indicator", tab_indicator::main),
     ("bottom_sheet", bottom_sheet::main),
     ("dialog_dismiss", dialog_dismiss::main),
+    ("dropdown_menu", dropdown_menu::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),
     ("overlay", overlay::main),

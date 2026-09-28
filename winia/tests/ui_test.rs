@@ -2199,3 +2199,98 @@ fn a_caller_supplied_tab_indicator_is_composed_at_measure_time() {
         x0 + 258.7
     );
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_dropdown_menu：弹出菜单的既有行为（本轮先钉住，再对齐 Compose）
+// ═══════════════════════════════════════════════════════════════
+
+/// What:  a `DropdownMenu` anchored to a trigger button, three items (one disabled).
+/// When:  open it with the trigger, then click an ENABLED item.
+/// Then:  the item's callback ran (`dm-picked`), the menu closed (`dm-open: no`), and the popup entry
+///        is gone from the tree.
+///
+/// The menu had no test at all before this round, and the Compose-alignment work rewrites its geometry
+/// and API — this is the behaviour that must not move while that happens.
+#[test]
+fn dropdown_menu_opens_and_an_item_pick_closes_it() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 0, "a closed menu has no popup entry");
+
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_text_timeout("dm-open: yes", Duration::from_secs(5));
+
+    // The menu itself lives in an overlay entry, which the main-tree assertions deliberately ignore.
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("删除", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 1, "one popup entry while the menu is open");
+
+    app.click_overlay_tag("dm-item-new");
+    app.expect_text_timeout("dm-picked: new", Duration::from_secs(5));
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+
+    // …and its entry is removed, not left behind (the failure mode the overlay `active` recording exists
+    // for: a stale popup that keeps accepting clicks).
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the popup entry must be removed once the menu closes"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// What:  the same menu.
+/// When:  the DISABLED item is clicked.
+/// Then:  nothing fires and the menu stays open — Compose's `DropdownMenuItem(enabled = false)` is not
+///        clickable at all, so the click cannot reach the dismiss path either.
+#[test]
+fn dropdown_menu_a_disabled_item_neither_fires_nor_dismisses() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("删除", Duration::from_secs(5));
+
+    app.click_overlay_tag("dm-item-delete");
+    std::thread::sleep(Duration::from_millis(300));
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("dm-picked: none")),
+        "a disabled item must not fire its callback: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("dm-open: yes")),
+        "a disabled item must not dismiss the menu: {texts:?}"
+    );
+}
+
+/// What:  the same menu.
+/// When:  a click lands outside it (the popup area is 160 wide, anchored left).
+/// Then:  the menu dismisses through `on_dismiss_request`, and nothing was picked.
+#[test]
+fn dropdown_menu_dismisses_on_an_outside_click() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_text_timeout("dm-open: yes", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+
+    // Far right of the menu's own area (the menu is 160 wide, anchored to the left column).
+    app.click(360.0, 220.0);
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("dm-picked: none")),
+        "an outside click must not pick anything: {texts:?}"
+    );
+}

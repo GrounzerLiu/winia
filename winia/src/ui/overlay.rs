@@ -681,7 +681,17 @@ impl DropdownMenu {
                 on_dismiss: self.on_dismiss,
                 enter_anim: None, // DropdownMenu 默认无进入动画
                 exit_anim: None, // DropdownMenu 默认无退出动画
-                content: Box::new(menu),
+                // M3's content is `@Composable ColumnScope.() -> Unit`: the items live in a COLUMN that
+                // the menu owns. winia has no `ColumnScope` receiver, so the menu wraps the content in a
+                // `Column` itself — and it is load-bearing, not cosmetic: composed as top-level siblings
+                // the items collapse to the last one, because a composition's root is a single node
+                // (`materialize`: "wrap in a container, or keep emitting siblings, which is its own
+                // round"). Measured with three items in a bare composer: arena_len=6, and the root was the
+                // LAST item (size 9x12) — the first two were gone, and the same thing showed up in
+                // `overlay_demo` and in the UI fixture's tree.
+                content: Box::new(move |ctx| {
+                    crate::ui::Column::new().build(ctx, |ctx| menu(ctx));
+                }),
                 local_snapshot: Vec::new(),
             });
         }
@@ -695,6 +705,9 @@ pub struct DropdownMenuItem {
     text: String,
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
     enabled: bool,
+    /// 调用方 modifier，追加在内部样式**外层**（同 `Button` 约定：可覆盖默认样式；也是测试挂
+    /// `test_tag` 的入口）——对齐 M3 `DropdownMenuItem(text, onClick, modifier, …)` 的 modifier。
+    modifier: crate::modifier::Modifier,
 }
 
 impl DropdownMenuItem {
@@ -703,7 +716,13 @@ impl DropdownMenuItem {
             text: text.into(),
             on_click: None,
             enabled: true,
+            modifier: crate::modifier::Modifier::new(),
         }
+    }
+
+    pub fn modifier(mut self, modifier: crate::modifier::Modifier) -> Self {
+        self.modifier = modifier;
+        self
     }
 
     pub fn on_click(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
@@ -736,6 +755,7 @@ impl DropdownMenuItem {
         } else {
             modifier
         };
+        let modifier = modifier.then(self.modifier);
         let text = self.text;
         crate::ui::Column::new()
             .modifier(modifier)
