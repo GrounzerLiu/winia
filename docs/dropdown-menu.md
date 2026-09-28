@@ -75,6 +75,8 @@ DropdownMenuItem::new("删除")
 | `dropdown_menu_geometry_matches_the_material3_metrics` | 项宽 ∈ [112, 280]（对 4 个汉字的标签即证明 minWidth 钳制生效）、项高 ≥ 48、容器高 = 3 项 + 上下各 8dp |
 | `dropdown_menu_paints_its_surface` | 容器**确实绘制**：菜单内 8dp 内边距处的像素与页面背景不同（树里看不出颜色，故读帧） |
 | `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` | 20 项菜单：容器完全落在窗口内（`cy+ch ≤ 窗口高`），滚轮把 offset 推到上限附近，末项渲染位置落在容器内 |
+| `dropdown_menu_animates_in_from_its_anchor` | 进出动画：同一帧内两个探针（pivot 侧顶边 vs 远端角）要求出现"既非页面也非稳定面板"的过渡帧 |
+| `dropdown_menu_item_ripples_while_pressed` | 按住菜单项时该处像素变化（实测 242,236,244 → 221,216,223）；去掉波纹即红 |
 
 ## 4. 与 Compose M3 的差异（依据：本地 androidx 源码）
 
@@ -106,6 +108,7 @@ DropdownMenuItem::new("删除")
 | 项背景/圆角 | 无（由容器绘制） | 已去掉原来的写死白底 + 4dp 圆角 |
 | 项文本 | `ProvideTextStyle(typography.labelLarge)` | `WiniaTheme::typography().label_large`（14/20/0.1/Medium，与 M3 同值） |
 | 项内容垂直居中 | `Row(verticalAlignment = Alignment.CenterVertically)` | `Column::new().arrangement(Arrangement::Center)`（见 §2b） |
+| 项波纹 | `clickable(enabled, onClick, interactionSource, indication = ripple(true))` | `clickable_with_source` + `ripple_with_shape(..., bounded = true, Shape::Rectangle)`（同 `Button` 的接法）；`interaction_source(...)` 参数，未设则 `remember` 自持；纯矩形是因为 M3 的项没有 shape——圆角由菜单 Surface 的 `clip(shape)` 负责（`surface.rs`），且 8dp 内边距本来就让首末项不碰圆角 |
 | 项颜色 | `MenuItemColors`：文本 `OnSurface`、图标 `OnSurfaceVariant`、禁用 = 同角色 @38%（`ListItemDisabled*Opacity`） | `MenuItemColors` 六个字段同名同义 + `defaults()`；禁用走 `0.38` alpha（与 navigation 组件同一常量值） |
 | `contentPadding` | `PaddingValues(horizontal = 12dp, vertical = 0)` | `content_padding(h, v)`，默认 `(12, 0)` |
 

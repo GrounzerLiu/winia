@@ -971,6 +971,9 @@ pub struct DropdownMenuItem {
     colors: Option<MenuItemColors>,
     /// M3 `contentPadding`（未设 = 水平 12、垂直 0）。
     content_padding: Option<(f32, f32)>,
+    /// M3 `interactionSource: MutableInteractionSource? = null` — the ripple/hover source. `None` means
+    /// the item makes and remembers its own.
+    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
 }
 
 impl DropdownMenuItem {
@@ -982,6 +985,7 @@ impl DropdownMenuItem {
             modifier: crate::modifier::Modifier::new(),
             colors: None,
             content_padding: None,
+            interaction_source: None,
         }
     }
 
@@ -1013,6 +1017,16 @@ impl DropdownMenuItem {
         self
     }
 
+    /// M3 `interactionSource` — the press/hover source behind the item's ripple. Left unset the item owns
+    /// one (material3's `null` default).
+    pub fn interaction_source(
+        mut self,
+        source: crate::ui::interaction::MutableInteractionSource,
+    ) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
+
     /// `#[composable]`: same contract as Popup/Dialog (marks a composition unit).
     #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx) {
@@ -1028,19 +1042,34 @@ impl DropdownMenuItem {
             .padding_horizontal(pad_h)
             .padding_vertical(pad_v);
         let on_click = self.on_click;
+        let colors = self.colors.clone().unwrap_or_else(MenuItemColors::defaults);
+        let text_color = colors.text_color(self.enabled);
+        // M3's item is `clickable(enabled, onClick, interactionSource, indication = ripple(true))`: a
+        // ripple bounded to the item, in the content colour, on an interaction source the item owns unless
+        // the caller passes one — the same wiring `Button` uses (`clickable_with_source` +
+        // `ripple_with_shape`). The shape is a plain rectangle because M3 gives the item no `shape`: the
+        // menu's own Surface clips the corners (`surface.rs` applies `clip(shape)`), and the 8dp vertical
+        // padding already keeps the top and bottom items clear of them.
+        let interaction = self
+            .interaction_source
+            .unwrap_or_else(|| ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get());
         let modifier = if self.enabled {
-            modifier.clickable(move || {
+            let modifier = modifier.clickable_with_source(&interaction, move || {
                 if let Some(cb) = &on_click {
                     (cb)();
                 }
-            })
+            });
+            modifier.ripple_with_shape(
+                &interaction,
+                text_color,
+                true,
+                crate::modifier::Shape::Rectangle,
+            )
         } else {
             modifier
         };
         let modifier = modifier.then(self.modifier);
         let text = self.text;
-        let colors = self.colors.unwrap_or_else(MenuItemColors::defaults);
-        let text_color = colors.text_color(self.enabled);
         // M3 typography: `ProvideTextStyle(MaterialTheme.typography.labelLarge)`.
         let style = crate::ui::theme::WiniaTheme::typography().label_large;
         // `Arrangement::Center` is material3's `Row(verticalAlignment = Alignment.CenterVertically)`: the

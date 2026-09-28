@@ -2615,3 +2615,43 @@ fn dropdown_menu_animates_in_from_its_anchor() {
          {inner_settled:?}: {samples:?}"
     );
 }
+
+/// What:  an open `DropdownMenu`, with the first item's centre read before and during a held press.
+/// When:  the pointer goes down on the item and stays there.
+/// Then:  the pixel under it changes — the item paints a ripple, material3's
+///        `clickable(..., indication = ripple(true))`.
+///
+/// Read from ONE capture per state: the ripple expands over a few frames, so the press is held for 200ms
+/// before the second capture. Without the ripple the press paints nothing (the item has no background of
+/// its own) and both reads are the menu's surface.
+#[test]
+fn dropdown_menu_item_ripples_while_pressed() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    app.refresh();
+    let (ix, iy, iw, ih) = app.find_tag_in_overlay("dm-item-new").expect("the first item");
+    // Toward the item's trailing edge: inside the item but clear of the label's glyphs, which are
+    // anti-aliased and would shrink the measured delta.
+    let probe = (ix + iw - 6.0, iy + ih / 2.0);
+    let (fw, fh) = app.frame_size().expect("a frame");
+    let (sx, sy) = (fw as f32 / 420.0, fh as f32 / 520.0);
+
+    let before = app
+        .pixels_at_logical_scaled(&[probe], sx, sy)[0]
+        .expect("a pixel before the press");
+    app.send(&format!("d {} {}", probe.0 as i32, probe.1 as i32));
+    std::thread::sleep(Duration::from_millis(200));
+    let pressed = app
+        .pixels_at_logical_scaled(&[probe], sx, sy)[0]
+        .expect("a pixel while pressed");
+    app.send(&format!("u {} {}", probe.0 as i32, probe.1 as i32));
+    eprintln!("菜单项波纹: 未按下={before:?} 按住中={pressed:?}");
+
+    assert_ne!(
+        pressed, before,
+        "a held press must paint the item's ripple (probe {probe:?}): {before:?} -> {pressed:?}"
+    );
+}
