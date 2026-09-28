@@ -980,6 +980,11 @@ pub struct DropdownMenuItem {
     /// M3 `interactionSource: MutableInteractionSource? = null` — the ripple/hover source. `None` means
     /// the item makes and remembers its own.
     interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
+    /// M3 `leadingIcon: @Composable (() -> Unit)? = null` — winia's slot convention is a boxed `FnOnce`,
+    /// as in `ListItem::leading_content`.
+    leading_icon: Option<Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>>,
+    /// M3 `trailingIcon: @Composable (() -> Unit)? = null`.
+    trailing_icon: Option<Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>>,
 }
 
 impl DropdownMenuItem {
@@ -992,6 +997,8 @@ impl DropdownMenuItem {
             colors: None,
             content_padding: None,
             interaction_source: None,
+            leading_icon: None,
+            trailing_icon: None,
         }
     }
 
@@ -1030,6 +1037,26 @@ impl DropdownMenuItem {
         source: crate::ui::interaction::MutableInteractionSource,
     ) -> Self {
         self.interaction_source = Some(source);
+        self
+    }
+
+    /// M3 `leadingIcon` — drawn in a box at least 24dp wide
+    /// (`ListTokens.ListItemLeadingIconSize`), tinted with `MenuItemColors::leading_icon_color`, and the
+    /// label starts 12dp after it.
+    pub fn leading_icon(
+        mut self,
+        content: impl FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.leading_icon = Some(Box::new(content));
+        self
+    }
+
+    /// M3 `trailingIcon` — same box and tinting on the other side, with 12dp between the label and it.
+    pub fn trailing_icon(
+        mut self,
+        content: impl FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.trailing_icon = Some(Box::new(content));
         self
     }
 
@@ -1084,18 +1111,72 @@ impl DropdownMenuItem {
         let text = self.text;
         // M3 typography: `ProvideTextStyle(MaterialTheme.typography.labelLarge)`.
         let style = crate::ui::theme::WiniaTheme::typography().label_large;
-        // `Arrangement::Center` is material3's `Row(verticalAlignment = Alignment.CenterVertically)`: the
-        // item is at least 48dp tall while its label is ~20px, and without the centring the label sits at
-        // the item's TOP — which reads as asymmetric padding around the menu (measured before this:
-        // text `pos:[12,0]` in a 48-tall item, i.e. 28px below the text and 0 above it).
-        crate::ui::Column::new()
-            .arrangement(crate::layout::node::Arrangement::Center)
+        // The item is material3's `Row(verticalAlignment = Alignment.CenterVertically)` — winia's
+        // `Row::alignment(Alignment::Center)` centres on the cross axis. (Fixing the centring is what
+        // removed the "asymmetric padding" a screenshot showed: the label used to sit at the item's TOP,
+        // `pos:[12,0]` in a 48-tall row, i.e. 28px below it and 0 above.)
+        //
+        // The three children and their geometry are material3's `DropdownMenuItemContent`, verbatim:
+        //   leadingIcon  Box(defaultMinSize(minWidth = ListItemLeadingIconSize))     — 24dp
+        //   text         Box(weight(1f).padding(start = 12dp if leading, end = 12dp if trailing))
+        //   trailingIcon Box(defaultMinSize(minWidth = ListItemTrailingIconSize))    — 24dp
+        // each icon tinted with its own colour role through `with_content_color`, which is winia's
+        // equivalent of material3's `CompositionLocalProvider(LocalContentColor provides …)`.
+        //
+        // One difference, forced by a missing framework feature: material3's `weight(1f)` is meant to run
+        // inside the menu's `width(IntrinsicSize.Max)` column, which makes the menu as wide as its widest
+        // item and every item that wide. winia has no intrinsic measurement, and a weighted child fills the
+        // CONSTRAINT instead — measured: the menu jumped from 112 to the 280 max as soon as the text was
+        // weighted. So the weight is applied only when there IS a trailing icon, the case where material3's
+        // stretching is visible (a shortcut hint sits at the menu's right edge, not glued to its label).
+        // Without one, the label is content-sized: labels still start at the same offset when every item
+        // carries a leading icon, the menu is as wide as its widest item, and the only difference left is
+        // that items do not share one width. Both cases are recorded in `docs/dropdown-menu.md`.
+        let leading_icon = self.leading_icon;
+        let trailing_icon = self.trailing_icon;
+        let has_leading = leading_icon.is_some();
+        let has_trailing = trailing_icon.is_some();
+        let stretch_label = has_trailing;
+        let leading_color = colors.leading_icon_color(self.enabled);
+        let trailing_color = colors.trailing_icon_color(self.enabled);
+        let icon_box = |ctx: &mut crate::core::composer::ComposeCtx,
+                        color: crate::modifier::Color,
+                        content: Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>| {
+            crate::ui::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
+                crate::ui::Column::new()
+                    .modifier(crate::modifier::Modifier::new().min_width(24.0))
+                    .build(ctx, |ctx| content(ctx));
+            });
+        };
+        crate::ui::Row::new()
+            .alignment(crate::layout::node::Alignment::Center)
             .modifier(modifier)
             .build(ctx, |ctx| {
-                crate::ui::Text::new(text)
-                    .style(style)
-                    .color(text_color)
-                    .build(ctx);
+                if let Some(content) = leading_icon {
+                    icon_box(ctx, leading_color, content);
+                }
+                crate::ui::Column::new()
+                    .modifier({
+                        let mut m = crate::modifier::Modifier::new();
+                        if stretch_label {
+                            m = m.layout_weight(1.0);
+                        }
+                        m.padding_sides(
+                            if has_leading { 12.0 } else { 0.0 },
+                            0.0,
+                            if has_trailing { 12.0 } else { 0.0 },
+                            0.0,
+                        )
+                    })
+                    .build(ctx, |ctx| {
+                        crate::ui::Text::new(text)
+                            .style(style)
+                            .color(text_color)
+                            .build(ctx);
+                    });
+                if let Some(content) = trailing_icon {
+                    icon_box(ctx, trailing_color, content);
+                }
             });
     }
 }

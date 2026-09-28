@@ -2808,3 +2808,59 @@ fn dropdown_menu_highlights_the_focused_item() {
         "focus must HIGHLIGHT the item (the state layer, fully faded in): {unfocused:?} -> {middle_f:?}"
     );
 }
+
+/// What:  a menu whose first item has a `leadingIcon` and whose second has a `trailingIcon`.
+/// When:  the tree is read.
+/// Then:  material3's `DropdownMenuItemContent` geometry holds:
+///          leadingIcon   a box at least 24dp wide (`ListItemLeadingIconSize`)
+///          label         12dp after that box (and after the item's own 12dp content padding)
+///          trailingIcon  the same box mirrored, with 12dp before it
+///
+/// The label starts at the item's left + 12 + 24 + 12 = +48, which is what makes labels line up when every
+/// item carries an icon.
+#[test]
+fn dropdown_menu_item_icon_geometry_matches_material3() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-icons-toggle").expect("the icon-menu trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("带图标", Duration::from_secs(5));
+    app.refresh();
+
+    // Leading icon: 24dp box, label 12dp after it.
+    let (ix, _, iw, ih) = app.find_tag_in_overlay("dm-item-lead").expect("the leading-icon item");
+    let (lx, _, lw, _) = app.find_tag_in_overlay("dm-icon-lead").expect("the leading icon box");
+    let (tx, _, _, th) = app.overlay_text_rect("带图标").expect("the leading item's label");
+    eprintln!("前导图标: item.x={ix} icon.x={lx} w={lw} label.x={tx} item.w={iw} item.h={ih} label.h={th}");
+    assert!(lw >= 24.0, "the leading icon box must be at least 24dp wide, got {lw}");
+    assert!(
+        (lx - (ix + 12.0)).abs() <= 0.5,
+        "the icon box starts after the item's 12dp content padding: {lx} against {}",
+        ix + 12.0
+    );
+    assert!(
+        (tx - (lx + lw + 12.0)).abs() <= 0.5,
+        "the label follows the icon box by 12dp: {tx} against {}",
+        lx + lw + 12.0
+    );
+
+    // Trailing icon: the box ends 12dp before the item's content edge.
+    let (jx, _, jw, _) = app.find_tag_in_overlay("dm-item-trail").expect("the trailing-icon item");
+    let (kx, _, kw, _) = app.find_tag_in_overlay("dm-icon-trail").expect("the trailing icon box");
+    let (ux, _, uw, _) = app.overlay_text_rect("尾随").expect("the trailing item's label");
+    eprintln!("尾随图标: item.x={jx} label.x={ux} w={uw} icon.x={kx} w={kw} item.w={jw}");
+    assert!(kw >= 24.0, "the trailing icon box must be at least 24dp wide, got {kw}");
+    // material3 puts the 12dp between the icon and the TEXT BOX, and the text box is the weighted one: the
+    // label sits left-aligned inside it, so the gap measured from the LABEL is 12dp plus that slack.
+    assert!(
+        kx >= ux + uw + 12.0 - 0.5,
+        "the trailing icon follows the label by at least 12dp: {kx} against {}",
+        ux + uw + 12.0
+    );
+    assert!(
+        (kx + kw - (jx + jw - 12.0)).abs() <= 0.5,
+        "and it ends at the item's trailing content edge: {} against {}",
+        kx + kw,
+        jx + jw - 12.0
+    );
+}

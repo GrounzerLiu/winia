@@ -31,13 +31,14 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
     let long_open = ctx.remember(|| false);
     let bottom_open = ctx.remember(|| false);
     let styled_open = ctx.remember(|| false);
+    let icons_open = ctx.remember(|| false);
     let picked = ctx.remember(|| String::from("(none)"));
 
     Column::new()
         .spacing(16.0)
         .modifier(Modifier::new().padding(24.0))
         .build(ctx, {
-            clone!(simple_open, long_open, bottom_open, styled_open, picked);
+            clone!(simple_open, long_open, bottom_open, styled_open, icons_open, picked);
             let picked_text = picked.clone();
             move |ctx| {
                 Text::new(format!("上次选择: {}", picked_text.get()))
@@ -196,7 +197,66 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                         },
                     );
 
-                // ── 4. Near the bottom: the menu opens UPWARD ──
+                // ── 4. Icons: material3's leadingIcon / trailingIcon ──
+                // A text glyph stands in for the icon; a trailing label like "Ctrl+S" is material3's
+                // shortcut-hint case, where the item stretches so the hint lines up at the menu's edge.
+                Button::text()
+                    .modifier(Modifier::new().width(240.0))
+                    .on_click({
+                        clone!(icons_open);
+                        move || {
+                            let v = icons_open.get();
+                            icons_open.set(!v);
+                        }
+                    })
+                    .build(ctx, |ctx| Text::new("4. Icons (leading / trailing)").build(ctx));
+                DropdownMenu::new(icons_open.clone())
+                    .on_dismiss_request({
+                        clone!(icons_open);
+                        move || icons_open.set(false)
+                    })
+                    .build(
+                        ctx,
+                        |ctx| {
+                            Text::new("").font_size(1.0).build(ctx);
+                        },
+                        {
+                            clone!(icons_open, picked);
+                            move |ctx| {
+                                let i1 = icons_open.clone();
+                                let p1 = picked.clone();
+                                DropdownMenuItem::new("带图标")
+                                    .leading_icon(|ctx| Text::new("★").font_size(16.0).build(ctx))
+                                    .on_click(move || {
+                                        p1.set(String::from("带图标"));
+                                        i1.set(false);
+                                    })
+                                    .build(ctx);
+                                let i2 = icons_open.clone();
+                                let p2 = picked.clone();
+                                DropdownMenuItem::new("复制")
+                                    .leading_icon(|ctx| Text::new("⧉").font_size(16.0).build(ctx))
+                                    .trailing_icon(|ctx| Text::new("Ctrl+C").font_size(12.0).build(ctx))
+                                    .on_click(move || {
+                                        p2.set(String::from("复制"));
+                                        i2.set(false);
+                                    })
+                                    .build(ctx);
+                                let i3 = icons_open.clone();
+                                let p3 = picked.clone();
+                                DropdownMenuItem::new("粘贴")
+                                    .leading_icon(|ctx| Text::new("⧉").font_size(16.0).build(ctx))
+                                    .trailing_icon(|ctx| Text::new("Ctrl+V").font_size(12.0).build(ctx))
+                                    .on_click(move || {
+                                        p3.set(String::from("粘贴"));
+                                        i3.set(false);
+                                    })
+                                    .build(ctx);
+                            }
+                        },
+                    );
+
+                // ── 5. Near the bottom: the menu opens UPWARD ──
                 Spacer::vertical(220.0).build(ctx);
                 Text::new("↓ this one has no room below it")
                     .font_size(12.0)

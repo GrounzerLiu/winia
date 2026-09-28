@@ -124,6 +124,60 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                         }
                     },
                 );
+
+            // ── Icons: material3's `leadingIcon` / `trailingIcon`. ──
+            // The slot contents are 24dp-wide spacers: what is under test is the box the item wraps them
+            // in, and the 12dp it puts between the label and an icon on that side.
+            let icons_open = ctx.remember(|| false);
+            Button::text()
+                .on_click({
+                    let i = icons_open.clone();
+                    move || {
+                        let v = i.get();
+                        i.set(!v);
+                    }
+                })
+                .modifier(Modifier::new().test_tag("dm-icons-toggle"))
+                .build(ctx, |ctx| Text::new("Open icon menu").build(ctx));
+
+            DropdownMenu::new(icons_open.clone())
+                .on_dismiss_request({
+                    let i = icons_open.clone();
+                    move || i.set(false)
+                })
+                .build(
+                    ctx,
+                    |ctx| {
+                        Text::new("").font_size(1.0).build(ctx);
+                    },
+                    {
+                        let icons_open = icons_open.clone();
+                        move |ctx| {
+                            let i1 = icons_open.clone();
+                            DropdownMenuItem::new("带图标")
+                                .modifier(Modifier::new().test_tag("dm-item-lead"))
+                                .leading_icon(|ctx| {
+                                    Spacer::horizontal(24.0)
+                                        .modifier(Modifier::new().test_tag("dm-icon-lead"))
+                                        .build(ctx);
+                                })
+                                .on_click(move || i1.set(false))
+                                .build(ctx);
+                            DropdownMenuItem::new("尾随")
+                                .modifier(Modifier::new().test_tag("dm-item-trail"))
+                                .trailing_icon(|ctx| {
+                                    Spacer::horizontal(24.0)
+                                        .modifier(Modifier::new().test_tag("dm-icon-trail"))
+                                        .build(ctx);
+                                })
+                                .on_click({
+                                    let closer = icons_open.clone();
+                                    move || closer.set(false)
+                                })
+                                .build(ctx);
+                        }
+                    },
+                );
         });
 }
 
