@@ -77,6 +77,12 @@ DropdownMenuItem::new("删除")
 | `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` | 20 项菜单：容器完全落在窗口内（`cy+ch ≤ 窗口高`），滚轮把 offset 推到上限附近，末项渲染位置落在容器内 |
 | `dropdown_menu_animates_in_from_its_anchor` | 进出动画：同一帧内两个探针（pivot 侧顶边 vs 远端角）要求出现"既非页面也非稳定面板"的过渡帧 |
 | `dropdown_menu_item_ripples_while_pressed` | 按住菜单项时该处像素变化（实测 242,236,244 → 221,216,223）；去掉波纹即红 |
+| `dropdown_menu_takes_the_keyboard_while_open` | 打开期间 Tab 落在菜单项（而不是主树按钮），且页面元素不再持有焦点 |
+| `dropdown_menu_a_focused_item_activates_on_enter` | Tab 聚焦首项后 Enter：回调触发且菜单关闭 |
+| `dropdown_menu_esc_dismisses_it` | Esc 经 `on_dismiss_request` 关闭，且没有项被选中 |
+| `dropdown_menu_returns_focus_to_its_trigger_on_close` | Esc 关闭后焦点回到触发器 `dm-toggle` |
+| `dropdown_menu_highlights_the_focused_item` | 聚焦后项内变暗 25 个单位（状态层），且停止在"完全淡入"而不是第一次波动 |
+| `a_menu_item_carries_a_ripple_and_no_focus_ring`（lib 单测） | 项的节点上同时有 `Clickable`、`Ripple`、`NoFocusRing`——环是边界外 ~1px 的带（实测物理 x=23 为 `(197,193,199)`，内侧是 `(217,211,219)`），逻辑坐标探针踩不准，故用结构断言 |
 
 ## 4. 与 Compose M3 的差异（依据：本地 androidx 源码）
 
@@ -153,15 +159,32 @@ M3 真身（`Menu.kt` 的 `DropdownMenuContent`）：`updateTransition(expandedS
 - 动画开/关对照：**关掉 `enter_anim/exit_anim` 后** `dropdown_menu_animates_in_from_its_anchor` 必红（每一帧都是满尺寸面板），打开则绿——测试读的是**一次捕获内的两个点**（同一帧），断言存在"既非页面也非稳定面板"的过渡帧；
 - 缩放分量单独验证（临时把 `scale_from` 夸大到 0.2 再 revert）：点击后 60ms 时面板横向只覆盖到 ~110 物理像素（稳定后 192），说明确实按 pivot 从锚点侧长大。
 
-## 4.5 待对齐（本轮后续阶段）
+### 4.5 阶段 4b 对齐：键盘与关闭语义
+
+M3 的真身只有两条（`Menu.kt` 里**没有任何键处理**——没有 `onKeyEvent`、没有箭头键导航、没有 focusRequester）：
+
+1. `DefaultMenuProperties = PopupProperties(focusable = true)`（`androidMain/AndroidMenu.android.kt:194`）——菜单的 popup 在打开期间**占有键盘**；
+2. 项的激活来自 `clickable` 本身（聚焦时 Enter/Space 触发 onClick，Compose clickable 的既有语义）。
+
+| 行为 | M3 | winia |
+|---|---|---|
+| 打开期间键盘归谁 | popup `focusable = true` | `focus_scope: true`（原来 false——实测 Tab 会把焦点走到主树按钮 `dm-many-toggle`） |
+| Tab | 在菜单内移动 | 焦点落在首个可聚焦项 `dm-item-new`，页面元素不再持有焦点 |
+| 项激活 | `clickable` 的聚焦激活 | 复用框架既有的"聚焦节点 Enter/Space 触发 onClick"（`app.rs` 键分发）；实测 Tab→Enter 后 `dm-picked: new` 且菜单关闭 |
+| Esc 关闭 | 平台 popup 的 dismiss | 本就可用（本轮补测试钉住），且不依赖 `focus_scope` |
+| 关闭后焦点 | popup 还原 | 回到打开它的触发器（实测 Esc 后 `dm-toggle` 持有焦点） |
+| 焦点标记 | 状态层（无描边） | 状态层来自**波纹元素**本身（`render.rs:1601`：`hover_opacity + focus_opacity`）；同时用 `no_focus_ring()` 关掉 winia 默认的焦点环——环横跨菜单会像行分隔线。实测聚焦后项内为 `(217,211,219)`（未聚焦 `(242,236,244)`，差 25），环关闭后外侧像素不再变化 |
+
+**不做（因为 M3 里没有）**：箭头键在项间导航、Home/End、首字母跳转——这些在 Compose 属于应用层，`Menu.kt` 没有实现。不把"自造行为"当对齐。
+
+### 4.6 待对齐（本轮后续阶段）
 
 | 项 | M3 真身 | winia 现状 | 阶段 |
 |---|---|---|---|
-| 键盘 | Esc 关闭、上下键移动、Enter 激活 | 未测（`DropdownMenu` 未标 focus_scope） | 4 |
 | 输入框下拉 | `ExposedDropdownMenuBox` | 无 | 5 |
 | 前导/尾随图标槽 | `leadingIcon` / `trailingIcon`，最小 24dp（`ListTokens.ListItemLeading/TrailingIconSize`），文本区在有图标的一侧补 12dp | 无（`MenuItemColors` 已预留这两个颜色字段） | 2b |
+| 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档 | - |
 
-### 4.5 有意保留的偏差
+### 4.7 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
-- **项目前自带背景与固定尺寸**（§4.2 待改），所以现在三项叠在一起看起来像三个白块，而不是 Compose 的单块菜单面板。

@@ -2655,3 +2655,156 @@ fn dropdown_menu_item_ripples_while_pressed() {
         "a held press must paint the item's ripple (probe {probe:?}): {before:?} -> {pressed:?}"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 键盘与关闭语义（阶段 4，对齐 material3 的 DefaultMenuProperties）
+// ═══════════════════════════════════════════════════════════════
+
+/// Open the fixture's plain menu and leave it up.
+fn open_plain_menu(app: &mut UiTest) -> (f32, f32) {
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    (bx + bw / 2.0, by + bh / 2.0)
+}
+
+/// What:  an open menu, with the keyboard untouched until now.
+/// When:  Tab is pressed.
+/// Then:  the keyboard belongs to the MENU — an item ends up focused and no page element does.
+///        material3: `DefaultMenuProperties = PopupProperties(focusable = true)`
+///        (`androidMain/AndroidMenu.android.kt`).
+///
+/// Before the menu was a focus scope, Tab walked the page behind it (measured: focus landed on
+/// `dm-many-toggle`, a button in the main tree, while the menu was open).
+#[test]
+fn dropdown_menu_takes_the_keyboard_while_open() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_plain_menu(&mut app);
+    app.key("Tab");
+    let focused = app.focused_tags();
+    assert!(
+        app.overlay_tag_is_focused("dm-item-new"),
+        "Tab must focus the menu's first focusable item: {focused:?}"
+    );
+    assert!(
+        focused.iter().all(|t| t.starts_with("dm-item-")),
+        "nothing on the page may hold focus while the menu is up: {focused:?}"
+    );
+}
+
+/// What:  an open menu whose first item was focused with Tab.
+/// When:  Enter is pressed.
+/// Then:  the item fires and the menu closes — Compose's `clickable` activates on Enter/Space for the
+///        focused node, which winia's key dispatcher already does for any focused clickable.
+#[test]
+fn dropdown_menu_a_focused_item_activates_on_enter() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_plain_menu(&mut app);
+    app.key("Tab");
+    assert!(app.overlay_tag_is_focused("dm-item-new"), "Tab focuses the first item");
+    app.key("Enter");
+    app.expect_text_timeout("dm-picked: new", Duration::from_secs(5));
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+}
+
+/// What:  an open menu.
+/// When:  Esc is pressed.
+/// Then:  it dismisses through `on_dismiss_request` and nothing is picked — the platform popup's
+///        behaviour for a menu, which winia already had (this pins it) and which does not depend on the
+///        menu owning the keyboard.
+#[test]
+fn dropdown_menu_esc_dismisses_it() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_plain_menu(&mut app);
+    app.key("Escape");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("dm-picked: none")),
+        "Esc must not pick anything: {texts:?}"
+    );
+}
+
+/// What:  an open menu with focus inside it.
+/// When:  Esc closes it.
+/// Then:  focus is BACK on the trigger that opened it — the popup restore material3's focusable popup
+///        performs, so the keyboard does not stay stranded in a layer that is gone.
+#[test]
+fn dropdown_menu_returns_focus_to_its_trigger_on_close() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_plain_menu(&mut app);
+    app.key("Tab");
+    assert!(app.overlay_tag_is_focused("dm-item-new"), "focus is inside the menu");
+    app.key("Escape");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    std::thread::sleep(Duration::from_millis(150));
+    app.refresh();
+    assert!(
+        app.tag_is_focused("dm-toggle"),
+        "focus must return to the trigger (focused: {:?})",
+        app.focused_tags()
+    );
+}
+
+/// What:  the menu's first item, focused with Tab.
+/// When:  one capture is read at two points inside the item.
+/// Then:  both are tinted — the item marks focus with a state layer (a highlight).
+///
+/// The other half of this, "no focus RING", is a structural assertion in `overlay.rs`'s
+/// `a_menu_item_carries_a_ripple_and_no_focus_ring`, not a pixel one: the ring is a ~1px band just OUTSIDE
+/// the item's rect (measured: physical x=23 against the item's edge at 24 is `(197,193,199)`, everything
+/// inside is the `(217,211,219)` state layer), which a logical-coordinate probe cannot address reliably —
+/// a rounding step lands on either side of it.
+#[test]
+fn dropdown_menu_highlights_the_focused_item() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_plain_menu(&mut app);
+    app.refresh();
+    let (ix, iy, iw, ih) = app.find_tag_in_overlay("dm-item-new").expect("the first item");
+    let edge = (ix + 3.0, iy + ih / 2.0);
+    let middle = (ix + iw - 6.0, iy + ih / 2.0);
+    let (fw, fh) = app.frame_size().expect("a frame");
+    let (sx, sy) = (fw as f32 / 420.0, fh as f32 / 520.0);
+
+    let before = app.pixels_at_logical_scaled(&[edge, middle], sx, sy);
+    app.key("Tab");
+    assert!(app.overlay_tag_is_focused("dm-item-new"), "Tab focuses the first item");
+    let unfocused = before[1].expect("the item before focus");
+
+    let delta = |a: (u8, u8, u8, u8), b: (u8, u8, u8, u8)| {
+        [a.0, a.1, a.2]
+            .iter()
+            .zip([b.0, b.1, b.2].iter())
+            .map(|(x, y)| (*x as i32 - *y as i32).abs())
+            .max()
+            .unwrap_or(0)
+    };
+    // The state layer fades in, and a capture can arrive before the key is even processed — so poll until
+    // the highlight shows up. Both points come from ONE capture, which is what makes the comparison below
+    // a comparison within a single frame.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let (edge_f, middle_f) = loop {
+        let px = app.pixels_at_logical_scaled(&[edge, middle], sx, sy);
+        let (e, m) = (px[0].expect("edge"), px[1].expect("middle"));
+        // Wait for the SETTLED highlight, not merely "something changed": the state layer fades in, and
+        // stopping at the first wobble would make the assertion below true by construction. The settled
+        // tint measures 242,236,244 -> 217,211,219 (25 units), so 20 leaves room and still means "fully on".
+        if delta(m, unfocused) >= 20 || std::time::Instant::now() > deadline {
+            break (e, m);
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    eprintln!("菜单项焦点: 未聚焦={before:?} 聚焦后 edge={edge_f:?} middle={middle_f:?}");
+
+    assert!(
+        delta(edge_f, middle_f) <= 4,
+        "no focus ring: the item's edge must be the same colour as its middle, got {edge_f:?} vs \
+         {middle_f:?}"
+    );
+    assert!(
+        delta(middle_f, unfocused) >= 20,
+        "focus must HIGHLIGHT the item (the state layer, fully faded in): {unfocused:?} -> {middle_f:?}"
+    );
+}

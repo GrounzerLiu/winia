@@ -896,7 +896,13 @@ impl DropdownMenu {
                 offset: self.offset,
                 anchor_slide: None,
                 modal: false,
-                focus_scope: false,
+                // material3's `DefaultMenuProperties = PopupProperties(focusable = true)`
+                // (`androidMain/AndroidMenu.android.kt`): a menu's popup owns the keyboard while it is up,
+                // so Tab moves within the menu instead of walking the page behind it — and a focused item
+                // activates on Enter/Space through the key dispatcher's focused-node path
+                // (`app.rs`: "聚焦组件的键盘激活（对标 Compose clickable）"). Esc dismissal does not
+                // depend on this: it was already working, and is pinned by a test either way.
+                focus_scope: true,
                 dismiss_on_outside: true,
                 click_passthrough: false,
                 // material3's `DropdownMenuPositionProvider`: a menu fits itself around the anchor, so a
@@ -1059,12 +1065,18 @@ impl DropdownMenuItem {
                     (cb)();
                 }
             });
-            modifier.ripple_with_shape(
-                &interaction,
-                text_color,
-                true,
-                crate::modifier::Shape::Rectangle,
-            )
+            modifier
+                .ripple_with_shape(
+                    &interaction,
+                    text_color,
+                    true,
+                    crate::modifier::Shape::Rectangle,
+                )
+                // No focus RING: material3's menu items mark focus with a state layer, not an outline, and
+                // winia draws the ring around any focused node by default (`render.rs`). The highlight is
+                // still there — it comes from the same element as the ripple above, whose state layer
+                // paints `hover + focus` (`render.rs`: "状态层…hover_opacity + focus_opacity").
+                .no_focus_ring()
         } else {
             modifier
         };
@@ -1091,6 +1103,42 @@ impl DropdownMenuItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A menu item must carry the ripple AND the "no focus ring" marker.
+    ///
+    /// material3's item is `clickable(..., indication = ripple(true))` and marks focus with a state layer,
+    /// not with an outline. winia draws a focus ring around any focused node by default (`render.rs`, gated
+    /// on `ModifierElement::NoFocusRing`), which across a menu reads as a divider between rows — so the item
+    /// opts out, and the highlight it keeps comes from the ripple element's state layer (`hover + focus`).
+    ///
+    /// Teeth: dropping `no_focus_ring()` from the item fails the second assertion. That one is structural,
+    /// not pixel-based, on purpose: the ring is a ~1px band just OUTSIDE the item's rect (measured:
+    /// physical x=23 against the item's edge at 24 is `(197,193,199)` while everything inside is the
+    /// `(217,211,219)` state layer), so a pixel probe of it is a rounding artefact away from lying.
+    #[test]
+    fn a_menu_item_carries_a_ripple_and_no_focus_ring() {
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            DropdownMenuItem::new("A").build(ctx);
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let root = composer.layout_root_idx().expect("the item's node");
+        let nodes = composer.arena_nodes();
+        let els = nodes[root].modifier.elements();
+        assert!(
+            els.iter().any(|e| matches!(e, crate::modifier::ModifierElement::Clickable { .. })),
+            "the item is clickable: {:?}",
+            els.len()
+        );
+        assert!(
+            els.iter().any(|e| matches!(e, crate::modifier::ModifierElement::Ripple { .. })),
+            "the item carries a ripple (material3's indication)"
+        );
+        assert!(
+            els.iter().any(|e| matches!(e, crate::modifier::ModifierElement::NoFocusRing)),
+            "…and no focus ring: material3 marks menu-item focus with a state layer"
+        );
+    }
 
     /// The reveal clip height must keep "settled, no clip" distinct from "clipped to zero height".
     ///

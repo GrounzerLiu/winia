@@ -551,8 +551,19 @@ impl UiTest {
         sy: f32,
     ) -> Vec<Option<(u8, u8, u8, u8)>> {
         let phys: Vec<(u32, u32)> = points.iter().map(|(x, y)| ((x * sx) as u32, (y * sy) as u32)).collect();
+        // Ask for the capture, then WAIT for the frame it captures to have been rendered — the frame
+        // counters are the only synchronisation available. A fixed sleep here is what made a held-press
+        // ripple read the previous (unpressed) frame under parallel test load.
+        self.send("fpc");
         self.send("r");
-        std::thread::sleep(Duration::from_millis(20));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match self.frame_passes() {
+                Some(p) if p.frames >= 1 => break,
+                Some(_) => std::thread::sleep(Duration::from_millis(5)),
+                None => break,
+            }
+        }
         phys.iter()
             .map(|(x, y)| {
                 self.send(&format!("px {x} {y}"));
