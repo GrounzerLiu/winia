@@ -537,11 +537,11 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **为什么不是"layout 后只要还有 compose 待办就收敛"**：measure 还会写回派生值（锚点 `first_visible_index`/`_offset`），它们在**几乎每个滚动帧**都是待办。实测该粗粒度触发在逐帧滚动下 5 帧里 4 帧要 2 轮 compose+layout（等于滚动帧成本翻倍）；改为"窗口不足"这一精确触发后，滚动帧回到 1 轮。
 
-   **验证**：`the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`（每帧 compose+layout 轮数：首帧 1、稳态 1、resize 400→2500 **2**、新 composer 首帧 3、逐帧滚动 `[1,1,1,1,1]`）+ `the_frame_the_viewport_grows_on_already_covers_the_new_bottom`（只渲染 resize 帧，检查底部 60px 文本：无收敛 `covered=false`（对照，即旧缺陷）、有收敛 `covered=true`）。`cargo test -p winia --lib` 1101 项通过。
+   **验证**：`the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`（每帧 compose+layout 轮数：首帧 1、稳态 1、resize 400→2500 **2**、新 composer 首帧 3、逐帧滚动 `[1,1,1,1,1]`）+ `the_frame_the_viewport_grows_on_already_covers_the_new_bottom`（只渲染 resize 帧，检查底部 60px 文本：无收敛 `covered=false`（对照，即旧缺陷）、有收敛 `covered=true`）。**app 路径（真实窗口）**：新增 fixture 场景 `lazy_resize` + debug 命令 `fp`/`fpc`（逐帧记录该帧跑了多少轮 compose+layout），UI 测试 `a_resize_frame_covers_its_new_viewport_within_one_frame`——400×300 → 400×900 得 `frames: 2, multi: 1, passes: [2, 1]`（resize 后**第一帧自己跑了两轮**），滚动得 `frames: 3, multi: 0, passes: [1, 1, 1]`（滚动不加轮次）；把 app.rs 的收敛循环临时短路（`0..8` → `0..0`）复跑，得 `multi: 0, passes: [1, 1, 1]` 且测试变红——即"关掉修复会变红"的证据。`cargo test -p winia --lib` 1101 项通过；`cargo test -p winia --features debug-server --test ui_test` 50 项通过。
 
    **与 Compose 的差异（记录）**：本轮**没有**扩展 `subcompose`。实测设计核查的三条结构事实使其无法承载 `LazyLayout` 的"测量期组合"：①一次 measure 只能 park 一个槽且只有最后一个被采纳；②策略只拿到 `size()`，拿不到可自己 measure/place 的一组 placeable；③采纳发生在整棵树测完之后，策略在自己的 measure 里看不到也放不了它。另有语义代价：把 item 组合搬进 subcomposition 会让 item 的状态读取登记在内层 composer 上（历史一轮试过把内层读取改记到外层槽 key，结果打断长按测试后回退）。故 winia 走"本帧收敛"而不是"测量期组合"，结果一致、机制不同、代价明确（仅不足的帧多一轮）。
 
-   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛）、`winia/src/ui/lazy_column.rs`（窗口不足判定 + 2 条测试）
+   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛 + 逐帧轮数发布）、`winia/src/debug.rs`（`fp`/`fpc`）、`winia/src/ui/lazy_column.rs`（窗口不足判定 + 2 条测试）、`winia/tests/ui_fixtures/fixture_lazy_resize.rs`（新场景）、`winia/tests/ui_test.rs`（app 路径测试）
 
 ### Phase 4：窗口平台与 E2E
 

@@ -529,6 +529,73 @@ fn resize_updates_adaptive_window_size_content() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// fixture_lazy_resize：resize 那一帧自己就把新视口盖住（同帧收敛，app 路径）
+// ═══════════════════════════════════════════════════════════════
+
+/// What:  a `LazyColumn` filling the window, resized 300 -> 900 tall.
+/// When:  `fpc` (forget the recorded frames) -> `w 400 900` -> `fp` (the recorded frames).
+/// Then:  the FIRST frame rendered after the resize took TWO compose+layout rounds, and it is the only
+///        frame that took more than one.
+///
+/// Why the round count is the assertion: one frame of two rounds is a frame that caught up with its own
+/// measurement, while two frames of one round each is the one-frame lag this replaced. Both leave the
+/// same tree, so no tree assertion can tell them apart — and by the time a `t` query is answered those
+/// frames have passed. This is the real frame handler's path (`PerWindow::recompose_layout_render`), the
+/// one part the unit tests in `lazy_column.rs` cannot reach.
+#[test]
+fn a_resize_frame_covers_its_new_viewport_within_one_frame() {
+    let mut app = UiTest::launch("lazy_resize");
+    app.expect_text_timeout("Item 0", Duration::from_secs(5));
+
+    app.clear_frame_passes();
+    app.send("w 400 900");
+    std::thread::sleep(Duration::from_millis(400));
+    let resize = app.frame_passes().expect("fp answered");
+    eprintln!("resize 帧的 compose+layout 轮数: {resize:?}");
+    assert!(
+        resize.frames >= 1,
+        "the resize must have rendered at least one frame: {resize:?}"
+    );
+    assert_eq!(
+        resize.multi, 1,
+        "exactly one frame — the resize one — should need a second round: {resize:?}"
+    );
+    assert_eq!(
+        resize.passes.first().copied(),
+        Some(2),
+        "the FIRST frame after the resize must be the one that converged: {resize:?}"
+    );
+
+    // End to end in the real window: the new bottom is covered. 900px / 48px rows puts row 18 at the
+    // bottom edge, so it has to exist in the tree.
+    app.tree();
+    assert!(
+        app.find_tag("lr-row-18").is_some(),
+        "the grown viewport's bottom row must be composed (rows seen: {})",
+        app.all_texts().len()
+    );
+
+    // And the convergence must NOT cost a scrolling frame a second round — the same claim the unit test
+    // makes, through the real frame handler this time. Negative dy scrolls FORWARD: a positive wheel at
+    // the top of the list clamps to the same offset, changes nothing, and renders no frame at all (which
+    // is how this step first measured `frames: 0`). The screenshot request guarantees the frame.
+    app.clear_frame_passes();
+    app.scroll(-200.0);
+    app.send("r");
+    std::thread::sleep(Duration::from_millis(300));
+    let scroll = app.frame_passes().expect("fp answered");
+    eprintln!("滚动帧的 compose+layout 轮数: {scroll:?}");
+    assert!(
+        scroll.frames >= 1,
+        "the scroll must have rendered a frame: {scroll:?}"
+    );
+    assert_eq!(
+        scroll.multi, 0,
+        "a scrolling frame must stay at one compose+layout round: {scroll:?}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // fixture_overlay：Popup overlay 树条目随 visible 出现/消失（Phase 4.3 E2E）
 // ═══════════════════════════════════════════════════════════════
 

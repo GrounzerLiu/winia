@@ -142,15 +142,69 @@ struct DebugData {
     /// window_id → [(overlay_id, JSON)]，按 z 序（栈序）排列；
     /// 每帧整体替换（overlay 关闭后条目自动消失，无残留）
     overlay_trees: std::collections::HashMap<u64, Vec<(u64, (f32, f32), String)>>,
+    /// Compose+layout rounds per rendered frame, per window, oldest first — capped. `fp` reports it and
+    /// `fpc` clears it, which is how a test tells "one frame that converged in itself" (a frame with 2)
+    /// apart from "two frames, one round each" (the same visible result one frame later). That
+    /// distinction is the whole point of the same-frame convergence in `PerWindow::recompose_layout_render`:
+    /// no tree query can see it, because by the time a query is answered the frames have passed.
+    frame_passes: std::collections::HashMap<u64, Vec<u8>>,
+    /// Frames rendered per window since the last clear (pairs with `frame_passes`).
+    frame_count: std::collections::HashMap<u64, u64>,
+}
+
+/// How many frames of per-frame pass counts are kept per window.
+const FRAME_PASSES_KEPT: usize = 32;
+
+/// Record one rendered frame's compose+layout rounds. Called by the frame handler, once per frame.
+pub fn update_frame_passes(window_id: u64, passes: u8) {
+    let mut data = DEBUG_STATE.lock().unwrap();
+    let state = data.get_or_insert_with(DebugData::default);
+    let ring = state.frame_passes.entry(window_id).or_default();
+    if ring.len() == FRAME_PASSES_KEPT {
+        ring.remove(0);
+    }
+    ring.push(passes);
+    *state.frame_count.entry(window_id).or_insert(0) += 1;
+}
+
+/// Drop the recorded pass counts and frame count — a test clears them immediately before the input it
+/// wants to observe, so an earlier frame (startup converges too) cannot be mistaken for it.
+pub fn clear_frame_passes() {
+    if let Some(state) = DEBUG_STATE.lock().unwrap().as_mut() {
+        state.frame_passes.clear();
+        state.frame_count.clear();
+    }
+}
+
+/// `frames=<n> multi=<m> passes=<csv>` for the legacy target window. Frames are oldest-first, so the
+/// first entry is the first frame rendered after the clear.
+fn frame_passes_line() -> String {
+    let data = DEBUG_STATE.lock().unwrap();
+    let Some(state) = data.as_ref() else { return "frames=0 multi=0 passes=".to_string() };
+    let id = legacy_target().unwrap_or(0);
+    let empty = Vec::new();
+    let ring = state.frame_passes.get(&id).unwrap_or(&empty);
+    let multi = ring.iter().filter(|&&p| p > 1).count();
+    let frames = state.frame_count.get(&id).copied().unwrap_or(0);
+    let csv: Vec<String> = ring.iter().map(|p| p.to_string()).collect();
+    format!("frames={frames} multi={multi} passes={}", csv.join(","))
+}
+
+impl Default for DebugData {
+    fn default() -> Self {
+        Self {
+            pixel_frames: Default::default(),
+            trees: Default::default(),
+            overlay_trees: Default::default(),
+            frame_passes: Default::default(),
+            frame_count: Default::default(),
+        }
+    }
 }
 
 pub fn update_pixels(window_id: u64, pixels: &[u8], width: u32, height: u32) {
     let mut data = DEBUG_STATE.lock().unwrap();
-    let state = data.get_or_insert_with(|| DebugData {
-        pixel_frames: Default::default(),
-        trees: Default::default(),
-        overlay_trees: Default::default(),
-    });
+    let state = data.get_or_insert_with(DebugData::default);
     state.pixel_frames.insert(window_id, PixelFrame {
         pixels: pixels.to_vec(),
         width,
@@ -327,7 +381,7 @@ pub fn semantics_json(window_id: u64) -> String {
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
-        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData::default());
     }
     if let Some(ref mut d) = *data {
         d.trees.insert(window_id, json.to_string());
@@ -344,7 +398,7 @@ pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, (f32, f32), String)>) 
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
         if trees.is_empty() { return; }
-        *data = Some(DebugData { pixel_frames: Default::default(), trees: Default::default(), overlay_trees: Default::default() });
+        *data = Some(DebugData::default());
     }
     if let Some(ref mut d) = *data {
         if trees.is_empty() {
@@ -629,6 +683,13 @@ pub fn start_stdin_channel() {
                     let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
                     println!("TRACE:{}", crate::anim_trace::recent_lines(n).join("\n"));
                 }
+                // fp: compose+layout rounds for each rendered frame since the last clear, oldest first.
+                // This is the only way to see the same-frame convergence from a test: a frame that ran
+                // 2 rounds is one frame that caught up with its own measurement, while 2 frames of 1
+                // round each is the one-frame lag it replaced — a difference no tree query can show.
+                "fp" => println!("FRAME_PASSES:{}", frame_passes_line()),
+                // fpc: forget the recorded frames, so the next reading starts at the input under test.
+                "fpc" => clear_frame_passes(),
                 "swipe" if parts.len() >= 5 => {
                     // swipe x1 y1 x2 y2 [steps] [delay_ms] — stdin 同步版（无延迟，全部入队）
                     let x1: f32 = parts[1].parse().unwrap_or(0.0);

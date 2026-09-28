@@ -46,6 +46,37 @@ pub struct UiTest {
     pub height: f32,
 }
 
+/// What the `fp` command reports: how many frames the app rendered since the last `fpc`, how many of
+/// them needed more than one compose+layout round, and the rounds of each frame (oldest first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePasses {
+    pub frames: u64,
+    pub multi: u64,
+    pub passes: Vec<u8>,
+}
+
+impl FramePasses {
+    fn parse(s: &str) -> Option<Self> {
+        let mut frames = None;
+        let mut multi = None;
+        let mut passes = Vec::new();
+        for field in s.split_whitespace() {
+            if let Some(v) = field.strip_prefix("frames=") {
+                frames = v.parse().ok();
+            } else if let Some(v) = field.strip_prefix("multi=") {
+                multi = v.parse().ok();
+            } else if let Some(v) = field.strip_prefix("passes=") {
+                passes = v
+                    .split(',')
+                    .filter(|p| !p.is_empty())
+                    .map(|p| p.parse().ok())
+                    .collect::<Option<Vec<u8>>>()?;
+            }
+        }
+        Some(Self { frames: frames?, multi: multi?, passes })
+    }
+}
+
 impl Drop for UiTest {
     fn drop(&mut self) {
         // 优雅关闭：发 q（force_shutdown → 事件循环退出）→ 限时等待 → 超时 kill
@@ -292,9 +323,39 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(250));
     }
 
+    /// Compose+layout rounds of each frame the app rendered since the last [`Self::clear_frame_passes`],
+    /// oldest first (`fp`). This is the only observable that separates "one frame that caught up with its
+    /// own measurement" (a 2) from "two frames of one round each" (the one-frame lag): a tree query is
+    /// answered after those frames have passed, so it cannot tell the two apart.
+    pub fn frame_passes(&mut self) -> Option<FramePasses> {
+        if self.child_stdin.write_all(b"fp\n").is_err() || self.child_stdin.flush().is_err() {
+            return None;
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match self.stdout_rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    if let Some(rest) = line.strip_prefix("FRAME_PASSES:") {
+                        return FramePasses::parse(rest);
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// `fpc` — forget the recorded frames, so the next reading starts at the input under test (the first
+    /// frame renders too, and it converges as well).
+    pub fn clear_frame_passes(&mut self) {
+        self.send("fpc");
+    }
+
     /// 查询最新树 JSON（写 t → 读 TREE: 响应；超时/无窗口返回 None）
-    pub fn tree(&mut self) -> Option<Value> {
-        let (t, _) = query_tree(&mut self.child_stdin, &self.stdout_rx, Duration::from_secs(2));
+    pub fn tree(&mut self) -> Option<Value> {        let (t, _) = query_tree(&mut self.child_stdin, &self.stdout_rx, Duration::from_secs(2));
         if let Some(t) = t {
             // 至少一个窗口的树才视为有效（空数组 `[]` = 未渲染）
             let has_window = t

@@ -31,13 +31,24 @@ cargo test --features debug-server
 
 | 命令 | 作用 | 响应 |
 |------|------|------|
-| `c x y` | 点击（命中测试 + on_click） | `ok click` |
-| `d x y` / `m x y` / `u` | 按下 / 移动 / 释放（拖拽选择） | `ok …` |
-| `k <key>` | 键盘事件 | `ok key` |
-| `s <dy>` | 滚动 | `ok scroll` |
-| `t` | 树 JSON（**单行**，stdout 前缀 `TREE:`） | `TREE:[{window,root},…]` |
-| `r` | 截图（stderr 打印路径） | — |
-| `q` | 优雅退出（force_shutdown → 事件循环退出） | — |
+| `c x y` | Click (hit test + on_click) | `ok click` |
+| `d x y` / `m x y` / `u` | Press / move / release (drag selection) | `ok …` |
+| `k <key>` | Keyboard event | `ok key` |
+| `s <dy>` / `s <dx> <dy>` | Scroll | `ok scroll` |
+| `w <w> <h>` | Window resize in logical px (goes through the real `request_surface_size` → `SurfaceResized` path) | — |
+| `t` | Tree JSON (**single line**, stdout prefix `TREE:`) | `TREE:[{window,root},…]` |
+| `sem` | Semantics tree of the last rendered frame (stdout prefix `SEMANTICS:`) | `SEMANTICS:{…}` |
+| `px <x> <y>` | One pixel of the last captured frame (stdout prefix `PIXEL:`) | `PIXEL:x y rgba` |
+| `tr [n]` | Last n animation-trace records (NDJSON; empty without the `anim-trace` feature) | `TRACE:…` |
+| `fp` | Compose+layout rounds of each frame rendered since the last `fpc`, oldest first (stdout prefix `FRAME_PASSES:`) | `FRAME_PASSES:frames=2 multi=1 passes=2,1` |
+| `fpc` | Forget the recorded frames, so the next reading starts at the input under test | — |
+| `r` | Screenshot (path printed to stderr) | — |
+| `q` | Graceful exit (force_shutdown → event loop returns) | — |
+
+`fp` is what a test uses to see a change the tree cannot show: ONE frame that ran two compose+layout rounds
+is a frame that caught up with its own measurement, while two frames of one round each is a one-frame lag.
+`a_resize_frame_covers_its_new_viewport_within_one_frame` asserts exactly that difference (and reports the
+latter with the convergence disabled — see `docs/lazy-column.md` 2.9).
 
 - 命令走 **stdin 管道**（行分隔）；树响应走 **stdout 管道**（`TREE:` 前缀——测试按前缀过滤）。
 - 树 JSON 为**多窗口格式**：`[{"window":<id>,"root":[...]}, …]`——每个窗口独立存储

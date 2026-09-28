@@ -228,6 +228,14 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   (`the_frame_the_viewport_grows_on_already_covers_the_new_bottom`) renders the resize frame ALONE and
   checks the bottom 60px for text: `covered=false` without the convergence (control — the defect 2.4 used
   to have) and `covered=true` with it.
+- **Measured through a real window** (UI test `a_resize_frame_covers_its_new_viewport_within_one_frame`,
+  fixture `lazy_resize`, via the `fp` debug command = compose+layout rounds per rendered frame): resizing
+  a window-sized `LazyColumn` 400x300 -> 400x900 gives `frames: 2, multi: 1, passes: [2, 1]` — the FIRST
+  frame after the resize ran two rounds, i.e. it caught up with its own measurement. Scrolling gives
+  `frames: 3, multi: 0, passes: [1, 1, 1]`. This is the part the unit tests cannot reach (the frame
+  handler's own loop), and the round count is the only observable that separates "one frame, two rounds"
+  from "two frames, one round each": the second is what the same test reports with the convergence
+  disabled (`multi: 0, passes: [1, 1, 1]`) — the lag restored, and the test red.
 - **Not how Compose does it.** Compose's `LazyLayout` composes its items during measurement
   (`SubcomposeLayout`), so it never has this frame. winia's `subcompose` cannot carry that: it parks ONE
   composition per measure, the policy receives only the composed root's size, and adoption happens after

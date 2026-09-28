@@ -71,6 +71,8 @@ pub mod debug {
     pub fn force_shutdown() {}
     pub fn is_shutdown() -> bool { false }
     pub fn update_pixels(_window_id: u64, _pixels: &[u8], _width: u32, _height: u32) {}
+    pub fn update_frame_passes(_window_id: u64, _passes: u8) {}
+    pub fn clear_frame_passes() {}
     pub fn set_legacy_target(_window_id: u64) {}
     pub fn take_queued_events(_window_id: u64) -> Vec<DebugEvent> { Vec::new() }
     pub fn queued_event_targets() -> std::collections::HashSet<u64> { std::collections::HashSet::new() }

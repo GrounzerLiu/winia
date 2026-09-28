@@ -693,13 +693,19 @@ impl PerWindow {
         // values (the anchor), which are pending on nearly every scrolling frame, and converging on those
         // doubled the frame's compose+layout while scrolling (measured: 2 passes on 4 of 5 scroll
         // frames). The cap keeps a policy that asks on every pass from spinning the frame.
+        let mut frame_passes: u8 = 1;
         for _ in 0..8 {
             if !crate::core::composer::take_compose_after_layout() {
                 break;
             }
             any_composed |= self.recompose_until_stable();
             self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+            frame_passes += 1;
         }
+        // Publish how many compose+layout rounds THIS frame took: the difference between one frame that
+        // caught up with its own measurement (2) and the frame-by-frame lag it replaced (two frames of 1
+        // each) is invisible in the tree, and it is exactly the property the convergence exists for.
+        crate::debug::update_frame_passes(window_id.into_raw() as u64, frame_passes);
         // Shared-element flights (Phase 2): fill ends, start flights, rewrite
         // per-frame visual snapshots, reap completed flights. Render reads
         // plain f32 snapshots — never subscribes (zero-recomposition rule).

@@ -28,6 +28,8 @@ mod dialog_dismiss;
 mod nest;
 #[path = "fixture_nested_scroll.rs"]
 mod nested_scroll;
+#[path = "fixture_lazy_resize.rs"]
+mod lazy_resize;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -97,6 +99,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("popup_slide_tap", popup_slide_tap::main),
     ("popup_tap", popup_tap::main),
     ("range_slider", range_slider::main),
+    ("lazy_resize", lazy_resize::main),
     ("resize", resize::main),
     ("scaffold", scaffold::main),
     ("scroll", scroll::main),
