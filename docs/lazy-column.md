@@ -201,6 +201,40 @@ state.animate_scroll_to_item(50, 0.0);
   收敛 ~300-400ms，与 Compose scroll 动画同级别）；
 - 目标 clamp 到 `[0, max_offset]`（消费移到 clamp 之后）；动画与进行中的
   fling/动画互相替换（push_animatable 的 retarget 继承速度）。
+### 2.9 视口放大的同帧覆盖（same-frame window coverage）
+
+The window is chosen in `build` from the viewport the PREVIOUS measure wrote (2.4). On the frame the
+viewport GROWS that window is short — the items the new bottom needs were never composed, and no amount
+of measuring can add them. The frame is CONVERGED instead of showing an empty region until the next one.
+
+- **The measure asks.** After writing the height cache back, `LazyListPolicy::measure` computes the range
+  the REAL viewport needs (`visible_range` with the anchor it just resolved) and compares it against the
+  range it was handed (`globals`). When the window does not cover it, it calls
+  `composer::request_compose_after_layout()`.
+- **The frame handler converges.** `PerWindow::recompose_layout_render` runs compose + layout, and while a
+  request is outstanding composes and lays out again (capped at 8 passes). The request is cleared once at
+  the start of the frame, so a request raised on a frame that hit the cap cannot cost the next frame a
+  compose it did not need. Top-level overlays (dialogs, popups — their own composers) get the same
+  treatment inside `layout_overlays`, each consuming the request right after its OWN layout, which is what
+  scopes it to that composer: an overlay that asks nothing leaves the flag clear for the next one.
+- **Why a REQUEST and not "composition is pending".** A measure writes back derived values too
+  (`first_visible_index` / `_offset`), and those are pending on nearly every scrolling frame, so
+  converging on the pending-state query alone doubled the frame's compose + layout — measured on a 800-row
+  list scrolling one row per frame: 2 passes on 4 of 5 frames. With the request, a scrolling frame stays
+  at one pass.
+- **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
+  compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
+  composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test
+  (`the_frame_the_viewport_grows_on_already_covers_the_new_bottom`) renders the resize frame ALONE and
+  checks the bottom 60px for text: `covered=false` without the convergence (control — the defect 2.4 used
+  to have) and `covered=true` with it.
+- **Not how Compose does it.** Compose's `LazyLayout` composes its items during measurement
+  (`SubcomposeLayout`), so it never has this frame. winia's `subcompose` cannot carry that: it parks ONE
+  composition per measure, the policy receives only the composed root's size, and adoption happens after
+  the whole tree has been measured — so a policy cannot compose, measure and place a set of items itself.
+  Moving item composition into a subcomposition is also how item state reads would end up registered on the
+  inner composer. See "4. 与 Compose 的差异".
+
 ## 3. 框架扩展（本组件新增）
 
 | 项 | 位置 | 说明 |
@@ -219,11 +253,17 @@ state.animate_scroll_to_item(50, 0.0);
 | `push_fling` + Decay clamp | animation.rs | fling 专用：边界 clamp 撞停 |
 | 拖拽滚动 + fling 触发 | app.rs | DragScroll 会话 + 速度样本 → 松手 fling |
 | 非 lazy 内容高计算 | layout/node.rs | 子节点底部 → scroll_content_height + fling_limit |
+| `request_compose_after_layout` / `take_compose_after_layout` | core/composer.rs | A `MeasurePolicy` asks the frame to compose again after this layout (the window it was handed cannot fill the viewport it is measured in); thread-local, consumed and cleared by the frame handler |
+| same-frame convergence | app.rs | `PerWindow::recompose_layout_render` composes and lays out again while a request is outstanding (cap 8 passes) — see 2.9 |
 
 ## 4. 与 Compose 的差异
 
-- winia 组合为命令式（build 直接注册节点），无 Compose 的 LazyLayout 测量期
-  组合——用"组合期预估 + 测量期校正"两阶段模型（两帧收敛）；
+- winia's composition is imperative (`build` registers nodes outright), so there is no Compose
+  `LazyLayout` measure-time composition: the window is estimated in `build` and corrected in measurement.
+  When a viewport GROWS, the compose that would window the new size has already run for that frame, so the
+  measure asks for one more and the frame handler converges within the frame (2.9). Item heights that were
+  only ESTIMATED can still leave the window short after a measurement, and that shortfall takes the same
+  path — so the "empty region" case is covered on the frame it appears, not the frame after;
 - key 类型为 `u64`（Compose `Any`）；无 contentType/复用优化；
 - stickyHeader 已实现（2.5 节）；无动画项放置（后续扩展）；reverseLayout 已实现
   （2.7 节镜像模型）；animateScrollToItem 已实现（2.8 节 spring）；LazyRow 已实现（同一
@@ -231,7 +271,8 @@ state.animate_scroll_to_item(50, 0.0);
   Compose 同一套 LazyListMeasure 换轴）；
 - `index_of_key` 已 O(1) HashMap（rebuild 构建）；
 - fling 惯性滚动：拖拽 + 指数衰减 + 边界 clamp（垂直/水平均有）；
-- 首帧 viewport 未知用固定窗口 2000px（测量后收敛）；
+- the viewport starts at a remembered 600px before anything has been measured (2.9: the first frame is
+  then short and converges on that same frame);
 - 横向 scroll 容器实测尺寸 = 内容尺寸（非视口）——fixture 布局注意
   （滚动容器会把后续兄弟节点推出屏幕外，测试需把横向区放在前面）。
 

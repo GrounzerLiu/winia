@@ -587,41 +587,14 @@ impl PerWindow {
         false
     }
 
-    /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
-    /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
-    fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
-        let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
-        // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
-        self.frame_counter += 1;
-        debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
-        // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
-        // scene published this frame, and flushes the previous frame's records.
-        //
-        // With `anim-trace` off this is a no-op. With it ON it always runs — the ring that serves the
-        // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
-        // so a build with the feature and no env var records into memory and writes nothing.
-        crate::anim_trace::begin_frame(
-            self.frame_counter,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0),
-        );
-        // 临时：窗口节点数（诊断主窗口塌缩）
-        // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
-        // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
-        let density = crate::unit::Density::from_density(self.scale_factor as f32);
-        crate::unit::with_density(density, || {
-        // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
-        self.composer.set_adaptive_window_size(self.width, self.height);
-        // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
-        // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
-        // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
-        // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
-        // same call as the compose. Doing it from the render handler instead consumed the change on a
-        // frame whose compose had already happened, and the tree kept the old colors.
-        self.refresh_theme();
-        // 循环 compose 直到没有新的 pending state
+    /// Compose until nothing is left to compose, restoring focus across each pass. Returns whether any
+    /// pass actually composed.
+    ///
+    /// The loop exists because a notification can arrive DURING composition (a tokio task's state write,
+    /// an animation tick), and the frame has to consume those rather than lose them. Extracted from
+    /// `recompose_layout_render` so the same handler can run it again after `layout()` — see the
+    /// same-frame convergence there.
+    fn recompose_until_stable(&mut self) -> bool {
         let mut any_composed = false;
         loop {
             let did_compose = self.composer.recompose(|ctx| {
@@ -665,7 +638,68 @@ impl PerWindow {
                 break;
             }
         }
+        any_composed
+    }
+
+    /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
+    /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
+    fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+        let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
+        // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
+        self.frame_counter += 1;
+        debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
+        // scene published this frame, and flushes the previous frame's records.
+        //
+        // With `anim-trace` off this is a no-op. With it ON it always runs — the ring that serves the
+        // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
+        // so a build with the feature and no env var records into memory and writes nothing.
+        crate::anim_trace::begin_frame(
+            self.frame_counter,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+        );
+        // 临时：窗口节点数（诊断主窗口塌缩）
+        // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
+        // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
+        let density = crate::unit::Density::from_density(self.scale_factor as f32);
+        crate::unit::with_density(density, || {
+        // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
+        self.composer.set_adaptive_window_size(self.width, self.height);
+        // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
+        // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
+        // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
+        // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
+        // same call as the compose. Doing it from the render handler instead consumed the change on a
+        // frame whose compose had already happened, and the tree kept the old colors.
+        self.refresh_theme();
+        // Start the frame with no stale request: a request raised on a frame whose convergence hit its
+        // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
+        // compose the frame did not need.
+        let _ = crate::core::composer::take_compose_after_layout();
+        // 循环 compose 直到没有新的 pending state
+        let mut any_composed = self.recompose_until_stable();
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        // A layout pass can find that this frame's composition cannot fill the space it was measured in:
+        // `LazyColumn` composes its window in `build` from the viewport the PREVIOUS measure wrote, so on
+        // the frame the viewport grows the window is short and the new bottom is empty until the next
+        // frame. Only a compose can add the items, so the policy that noticed asks for one — measured on
+        // a viewport growing 400 -> 2500: the resize frame's bottom was empty, and covered once this loop
+        // consumes the request (`docs/lazy-column.md`).
+        //
+        // The trigger is the REQUEST, not "composition is pending": a measure also writes back derived
+        // values (the anchor), which are pending on nearly every scrolling frame, and converging on those
+        // doubled the frame's compose+layout while scrolling (measured: 2 passes on 4 of 5 scroll
+        // frames). The cap keeps a policy that asks on every pass from spinning the frame.
+        for _ in 0..8 {
+            if !crate::core::composer::take_compose_after_layout() {
+                break;
+            }
+            any_composed |= self.recompose_until_stable();
+            self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
+        }
         // Shared-element flights (Phase 2): fill ends, start flights, rewrite
         // per-frame visual snapshots, reap completed flights. Render reads
         // plain f32 snapshots — never subscribes (zero-recomposition rule).
@@ -3434,10 +3468,19 @@ fn layout_overlays(pw: &mut PerWindow) {
         // ⚠ 重放 CompositionLocal 快照（主树捕获时的主题/方向/排版）——
         // overlay 独立 Composer 在 provides 弹栈后 recompose，需快照继承。
         let snap = ov.local_snapshot.clone();
-        crate::core::composition_local::with_snapshot(&snap, || {
-            ov.composer.recompose(|ctx| (ov.content)(ctx));
-        });
-        ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
+        // Same same-frame contract as the main tree (a measure whose window cannot fill the viewport it
+        // is measured in asks for one more compose). Consuming the request HERE, right after this
+        // overlay's own layout, is what scopes it to this composer: an overlay that asks nothing leaves
+        // the flag clear for the next one, so nothing is consumed on another tree's behalf.
+        for _ in 0..8 {
+            crate::core::composition_local::with_snapshot(&snap, || {
+                ov.composer.recompose(|ctx| (ov.content)(ctx));
+            });
+            ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
+            if !crate::core::composer::take_compose_after_layout() {
+                break;
+            }
+        }
     }
     // 定位（需主树锚点位置——在 draw 前算）
     let nodes = pw.composer.arena_nodes();

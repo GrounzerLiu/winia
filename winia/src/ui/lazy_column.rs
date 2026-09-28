@@ -1010,6 +1010,27 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         self.state.first_visible_index.set(real_first);
         self.state.first_visible_offset.set(real_off);
 
+        // Same-frame window coverage. `build` picked the window from the viewport the PREVIOUS measure
+        // wrote, and THIS measure just learned the real one — on the frame the viewport grows, that
+        // window is short and the new bottom has nothing in it. No measurement can conjure the missing
+        // items (they were never composed), so ask the frame for one more compose instead of drawing an
+        // empty region and converging on the next frame (`docs/lazy-column.md`).
+        //
+        // The condition is "the window I was given does not cover what the real viewport needs", which
+        // is exactly the case that leaves a hole on screen. It is deliberately NOT "the viewport
+        // changed": a frame where the viewport is unchanged and the window still covers asks for
+        // nothing, so a scrolling frame stays at one compose+layout pass.
+        {
+            let (need_start, need_end) = visible_range(&cache, real_first, real_off, vh, self.spacing, self.total);
+            // `globals` is the composed window in registration order (sticky items are appended last,
+            // so min/max — not first/last — give the range).
+            let composed_start = self.globals.iter().copied().min().unwrap_or(usize::MAX);
+            let composed_end = self.globals.iter().copied().max().map_or(0, |m| m + 1);
+            if need_end > composed_end || need_start < composed_start {
+                crate::core::composer::request_compose_after_layout();
+            }
+        }
+
         // 锚点排布：**内容坐标**（主轴 = 项在内容中的累计位置，不含 offset）——
         // 滚动由框架 scroll translate(-offset) 处理。若 placement 也含 offset 会
         // 双重偏移（实测：滚动 3000 后内容完全滚出视口）。
@@ -2365,5 +2386,231 @@ mod tests {
         eprintln!("resize 到 2500 并收敛后视口底部是否被可见项覆盖: {covered}");
         // 方向一实现后：build 感知真实视口，跨帧收敛，底部项应被组合覆盖。
         assert!(covered, "方向一后放大视口应收敛覆盖底部可见项（covered={covered}）");
+    }
+
+    /// The trigger the frame handler's same-frame convergence consumes, and what makes it affordable:
+    /// a measure that finds its composed window too small for the viewport it is being measured in asks
+    /// for one more compose (only a compose can add the missing items), and a measure whose window
+    /// covers the viewport asks for nothing.
+    ///
+    /// Both halves are load-bearing. If the request were never raised the resize lag would come back
+    /// with no test turning red; if it were raised on every frame the handler would re-compose the whole
+    /// tree per frame, which is why the scrolling frames are asserted too — that is the interaction the
+    /// request exists to keep at one pass.
+    #[test]
+    fn the_window_that_misses_its_viewport_asks_for_a_same_frame_compose() {
+        use crate::core::composer::take_compose_after_layout;
+        let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
+        // A `Fn` (not the `FnOnce` `compose` takes) so the same content can run on both passes.
+        let build = |ctx: &mut ComposeCtx| {
+            LazyColumn::new()
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        };
+        let mut composer = Composer::new();
+        // The frame handler's loop, on the trigger the handler actually consumes.
+        let converge = |composer: &mut Composer, h: f32| -> usize {
+            let mut passes = 0;
+            loop {
+                composer.compose(&build);
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
+                passes += 1;
+                if !take_compose_after_layout() {
+                    return passes;
+                }
+                assert!(passes < 8, "a short window must converge, not spin");
+            }
+        };
+
+        // Frame 1 measures for the first time and learns the real viewport, so it is short too.
+        let first = converge(&mut composer, 400.0);
+        eprintln!("compose+layout passes: first frame {first}");
+
+        // STEADY STATE: a frame that changes nothing must ask for nothing. This is the property that
+        // keeps the convergence loop from re-composing the whole tree every frame.
+        let steady = converge(&mut composer, 400.0);
+        eprintln!("compose+layout passes: settled frame {steady}");
+        assert_eq!(
+            steady, 1,
+            "a settled frame must not ask for another pass, took {steady}"
+        );
+
+        // Resize: the window `build` composed was sized for 400 and 2500 needs more items, which only a
+        // compose can add. The measure must ASK for that compose — a silent request would leave the loop
+        // doing nothing and the resize lag would come back with no test turning red.
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 2500.0));
+        assert!(
+            take_compose_after_layout(),
+            "the resize measure found its window short and must ask for a same-frame compose"
+        );
+        let after = converge(&mut composer, 2500.0);
+        eprintln!("compose+layout passes: resize 400->2500 {after}");
+        assert!(
+            after <= 4,
+            "the resize must converge in a bounded number of passes, took {after}"
+        );
+        assert_eq!(
+            converge(&mut composer, 2500.0),
+            1,
+            "the frame after the resize must be a single pass again"
+        );
+
+        // SCROLL is what decides whether this is affordable: it happens every frame while the user
+        // drags, so a second pass there would double the frame's compose+layout. The window covers the
+        // viewport on those frames, so the measure must ask for nothing.
+        let scroll_state = LazyListState::new();
+        let items2: Arc<Vec<u64>> = Arc::new((0..200).collect());
+        let build_scroll = {
+            let scroll_state = scroll_state.clone();
+            move |ctx: &mut ComposeCtx| {
+                LazyColumn::new()
+                    .state(scroll_state.clone())
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items2.clone(), |v: &u64| *v, |ctx, _i, v| {
+                        crate::ui::text::Text::new(format!("Item {}", v))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().padding(12.0))
+                            .build(ctx);
+                    })
+                    .build(ctx);
+            }
+        };
+        let mut composer2 = Composer::new();
+        let mut converge_scroll = |composer: &mut Composer| {
+            let mut n = 0;
+            loop {
+                composer.compose(&build_scroll);
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 2500.0));
+                n += 1;
+                if !take_compose_after_layout() || n >= 8 {
+                    return n;
+                }
+            }
+        };
+        // A fresh composer starts from the state's default viewport (600) while the real one is 2500, so
+        // its FIRST frame is the "window is short" case again — measured separately, not part of the
+        // scrolling claim.
+        let prime = converge_scroll(&mut composer2);
+        eprintln!("compose+layout passes: fresh composer first frame {prime}");
+
+        let mut passes_per_frame = Vec::new();
+        for _ in 0..5 {
+            // One row's worth: 12 padding + 14 text + 12 padding + 10 default spacing.
+            let off = scroll_state.offset.get() + 48.0;
+            scroll_state.offset.set(off);
+            passes_per_frame.push(converge_scroll(&mut composer2));
+        }
+        eprintln!("compose+layout passes while scrolling one row per frame: {passes_per_frame:?}");
+        assert!(
+            passes_per_frame.iter().all(|&n| n == 1),
+            "a scrolling frame must stay at one compose+layout pass, got {passes_per_frame:?}"
+        );
+    }
+
+    /// The gap this round is about: the frame the viewport GROWS on must already cover what the new
+    /// viewport shows. Today `LazyList::build` reads the viewport the PREVIOUS frame's measure wrote, so
+    /// a resize to a taller viewport composes the old, smaller window and the bottom of the new one is
+    /// empty until the next frame (documented in `docs/architecture-audit.md` §Phase 3.2, "跨帧收敛").
+    ///
+    /// The harness renders the given frame heights and inspects the LAST one only, so passing a single
+    /// resize frame (`[400, 2500]`) measures exactly that frame — no convergence frame is allowed.
+    /// `stable` selects the frame handler's semantics: consume the measure's same-frame compose request
+    /// (`take_compose_after_layout`, the trigger `PerWindow::recompose_layout_render` loops on), which is
+    /// the fix.
+    fn resize_frame_bottom_covered(stable: bool) -> bool {
+        use skia_safe::{Color as SkColor, surfaces};
+        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
+        let build = move |ctx: &mut ComposeCtx, _s: &LazyListState| {
+            LazyColumn::new()
+                .modifier(Modifier::new().fill_max_width().fill_max_height())
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                    crate::ui::text::Text::new(format!("Item {}", v))
+                        .font_size(14.0)
+                        .modifier(Modifier::new().padding(12.0))
+                        .build(ctx);
+                })
+                .build(ctx);
+        };
+        let mut composer = Composer::new();
+        let heights = [400.0f32, 2500.0];
+        for (i, &h) in heights.iter().enumerate() {
+            let last = i + 1 == heights.len();
+            if last {
+                // The resize frame: first the compose+layout the handler does today...
+                composer.compose(|ctx| {
+                    crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                });
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
+                if stable {
+                    // ...then the same-frame convergence the fix adds: consume the measure's request and
+                    // compose again, exactly as the frame handler does. Bounded, and it stops as soon as
+                    // the measure stops asking.
+                    for _ in 0..8 {
+                        if !crate::core::composer::take_compose_after_layout() {
+                            break;
+                        }
+                        composer.compose(|ctx| {
+                            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                        });
+                        composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
+                    }
+                }
+            } else {
+                composer.compose(|ctx| {
+                    crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                });
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
+            }
+        }
+        let last_h = 2500.0f32;
+        let mut surface = surfaces::raster_n32_premul((400, last_h as i32)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let (w, h) = (400usize, last_h as usize);
+        let mut text_rows = 0;
+        for y in (h.saturating_sub(60))..h {
+            let mut has = false;
+            for x in (0..w).step_by(4) {
+                let p = px[y * w + x];
+                has |= p[0] < 120 && p[1] < 120 && p[2] < 120;
+            }
+            if has {
+                text_rows += 1;
+            }
+        }
+        text_rows > 5
+    }
+
+    #[test]
+    fn the_frame_the_viewport_grows_on_already_covers_the_new_bottom() {
+        // CONTROL first: without the same-frame convergence the resize frame is one window behind,
+        // which is the defect `docs/architecture-audit.md` §Phase 3.2 recorded. If this ever stops
+        // failing, the assertion below proves nothing.
+        let without = resize_frame_bottom_covered(false);
+        eprintln!("resize 帧（400 -> 2500，无同帧收敛）视口底部是否被覆盖: {without}");
+        assert!(
+            !without,
+            "control: without same-frame convergence the resize frame must miss the new bottom \
+             (covered={without})"
+        );
+        let covered = resize_frame_bottom_covered(true);
+        eprintln!("resize 帧（400 -> 2500，同帧收敛）视口底部是否被覆盖: {covered}");
+        assert!(
+            covered,
+            "the resize frame itself must cover the new viewport's bottom, not the frame after it \
+             (covered={covered})"
+        );
     }
 }

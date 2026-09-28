@@ -488,11 +488,11 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
    - build 读 `viewport` State（上一帧 measure 写回的真实视口）替代固定 2000：`let viewport_h = viewport.get().max(1.0)`。
    - measure 的 `viewport.set_silent(main_max)` 改为非 silent `set`——viewport 变化（resize）时通知 build 重组；值稳定时 `PartialEq` 去重不通知（无振荡）。
    - **约束振荡安全**：fill_max_height 时 viewport 由外部约束决定（稳定）；wrap-content 时 measure 用 `< f32::MAX` 判定回退缓存（不写 ∞），build 读缓存稳定。
-   - **收敛时序**：resize 帧 build 读旧视口（可能不足）→ measure 写回新视口（非 silent 通知 → pending）→ **下一帧** `recompose_layout_render` 的循环 compose 消费通知（app.rs:378-380 循环在 `layout()` 之前——measure 阶段的 set 通知不在同帧循环内处理，而是下一帧循环起点消费）→ build 用新视口补足。故收敛是**跨帧**（resize 帧 + 1 收敛帧），非同帧。较 Compose 的同帧测量期组合有至多 1 帧延迟，但优于"永不收敛"。
+   - **收敛时序（后续轮更新——现为同帧）**：resize 帧 build 读旧视口（可能不足）→ measure 写回新视口（非 silent 通知 → pending），并发现"交到手上的窗口盖不住真实视口"，于是发出 `request_compose_after_layout()`；帧处理循环消费该请求，**本帧**再跑一轮 compose + layout，故 resize 帧自身即被覆盖。实测每帧 compose+layout 轮数：稳态 1、resize 400→2500 **2**、逐帧滚动 1。若改为"只要 layout 留下 compose 待办就收敛"，滚动时 5 帧里有 4 帧要 2 轮（实测）——这正是要有请求机制的原因。详见 `docs/lazy-column.md` 2.9。
 
    **验证**：新增跨帧测试 `resize_to_larger_viewport_converges_to_cover_visible_items`（同一 Composer 视口 400→2500→2500，底部可见项应被组合覆盖）——方向一前 `covered=false`，方向一后 `covered=true`。完整 `cargo test -p winia --lib` 636 项通过。debug-server 实操 demo `winia/examples/hc_conv_demo.rs`：LazyColumn 视口从 400 切到 2500，build 组合覆盖 Item 0..57（58 项）填满整个 2500 视口（此前固定 2000 只组合 ~46 项，底部缺失）。
 
-   **局限**：跨帧收敛有至多 1 帧的可见项短暂不足（resize 放大瞬间）；build 读的是上一帧视口，无法同帧感知（命令式架构限制）。Compose 的测量期组合能同帧规避，winia 需更大架构改动（延迟组合/measure 期补注册）才能对标。
+   **局限（后续轮已收敛）**：跨帧收敛那至多 1 帧的可见项不足（resize 放大瞬间）已关闭——measure 发现窗口不足时请求本帧再组合，帧处理循环消费该请求（验证见下面第 5 项）。与 Compose 仍未对齐的是**机制**而非**结果**：Compose 在测量期组合窗口（`SubcomposeLayout`），从不组合错窗口；winia 按上一帧视口组合，测出不足时本帧收敛，代价是那些帧多一轮 compose+layout。
 
    **涉及文件**：`winia/src/ui/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
 
@@ -526,6 +526,22 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
    - 收益主要为架构清晰（当前双源同步实际工作正常，拖动/闪烁实测无 bug），非修 bug
 
    **涉及文件**：`winia/src/render.rs`、`winia/src/core/composer.rs`、`winia/src/core/materialize.rs`、`winia/src/layout/node.rs`
+
+5. [x] 关闭 LazyColumn 视口放大的同帧滞后（方向一遗留的 1 帧不足；已实施）
+
+   **目标**：第 2 项留下"resize 放大那一帧底部空、下一帧才补上"。本轮把这一帧关掉，并用测试锁死两个方向。
+
+   **根因（代码层面）**：`build` 用上一帧 measure 写回的视口算窗口（`lazy_column.rs` 组合期），而本帧 measure 才知道真实视口。窗口不足的项从未被组合，measure 只能放置已注册项、无法新增——所以唯一的出路是**本帧再组合一次**。
+
+   **方案**：measure 写回高度缓存后，用刚解析出的锚点与真实视口算"需要覆盖的范围"，与自己拿到的窗口（`globals` 的 min/max）比较；不足则 `composer::request_compose_after_layout()`。`PerWindow::recompose_layout_render` 在首轮 layout 后循环消费该请求（上限 8 轮），请求在每帧开头清一次（避免上限残留让下一帧白跑一轮）。顶层弹出层（dialog/popup，各自独立 Composer）在 `layout_overlays` 里按同一契约收敛——每个 overlay 在自己 layout 之后立刻消费请求，这正是把它限定在"自己这棵树"上的方式。
+
+   **为什么不是"layout 后只要还有 compose 待办就收敛"**：measure 还会写回派生值（锚点 `first_visible_index`/`_offset`），它们在**几乎每个滚动帧**都是待办。实测该粗粒度触发在逐帧滚动下 5 帧里 4 帧要 2 轮 compose+layout（等于滚动帧成本翻倍）；改为"窗口不足"这一精确触发后，滚动帧回到 1 轮。
+
+   **验证**：`the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`（每帧 compose+layout 轮数：首帧 1、稳态 1、resize 400→2500 **2**、新 composer 首帧 3、逐帧滚动 `[1,1,1,1,1]`）+ `the_frame_the_viewport_grows_on_already_covers_the_new_bottom`（只渲染 resize 帧，检查底部 60px 文本：无收敛 `covered=false`（对照，即旧缺陷）、有收敛 `covered=true`）。`cargo test -p winia --lib` 1101 项通过。
+
+   **与 Compose 的差异（记录）**：本轮**没有**扩展 `subcompose`。实测设计核查的三条结构事实使其无法承载 `LazyLayout` 的"测量期组合"：①一次 measure 只能 park 一个槽且只有最后一个被采纳；②策略只拿到 `size()`，拿不到可自己 measure/place 的一组 placeable；③采纳发生在整棵树测完之后，策略在自己的 measure 里看不到也放不了它。另有语义代价：把 item 组合搬进 subcomposition 会让 item 的状态读取登记在内层 composer 上（历史一轮试过把内层读取改记到外层槽 key，结果打断长按测试后回退）。故 winia 走"本帧收敛"而不是"测量期组合"，结果一致、机制不同、代价明确（仅不足的帧多一轮）。
+
+   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛）、`winia/src/ui/lazy_column.rs`（窗口不足判定 + 2 条测试）
 
 ### Phase 4：窗口平台与 E2E
 

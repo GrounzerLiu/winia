@@ -74,6 +74,31 @@ thread_local! {
     static RUNTIME_FRAME_STACK: RefCell<Vec<RuntimeFrame>> = const { RefCell::new(Vec::new()) };
     /// Set only while layout measurement is traversing nodes.
     static MEASURED_LAYOUT_KEYS: RefCell<Option<HashSet<u64>>> = const { RefCell::new(None) };
+    /// Set by a `MeasurePolicy` that needs the frame to compose again after this layout.
+    static COMPOSE_AFTER_LAYOUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A measure policy asks the frame to compose again after this layout pass.
+///
+/// A container can discover DURING measurement that the composition it was handed cannot satisfy the
+/// space it is being measured in: `LazyColumn` composes its window in `build` from the viewport the
+/// previous frame measured, so the frame the viewport grows on composes too few items and shows an empty
+/// bottom for one frame (`docs/lazy-column.md`). Only a compose can add them, and the only place that
+/// can ask for one is the policy that noticed.
+///
+/// **Precision is the point.** A frame handler could instead converge whenever composition work is
+/// pending after `layout`, which is simpler and costs double: a measure writes back derived values too
+/// (`LazyColumn`'s anchor), and those are pending nearly every scrolling frame. Measured on a 800-row
+/// list scrolling one row per frame, that loop took 2 passes on 4 of 5 frames; this request is raised
+/// only by the "I am short of content" case.
+pub fn request_compose_after_layout() {
+    COMPOSE_AFTER_LAYOUT.with(|c| c.set(true));
+}
+
+/// Whether a measure asked for a compose after this layout, clearing the request. The frame handler
+/// loops on this — see [`request_compose_after_layout`] for why it is not a pending-state query.
+pub fn take_compose_after_layout() -> bool {
+    COMPOSE_AFTER_LAYOUT.with(|c| c.replace(false))
 }
 
 fn begin_runtime_frame() -> RuntimeFrameGuard {
