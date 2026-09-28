@@ -9,7 +9,10 @@
 //! harness reads through `overlay_texts()` / `*_overlay_tag`.
 
 use winia::prelude::*;
-use winia::ui::overlay::{DropdownMenu, DropdownMenuItem};
+use winia::ui::overlay::{
+    DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
+    ExposedDropdownMenuDefaults,
+};
 
 #[composable]
 fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
@@ -173,6 +176,84 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                                 })
                                 .on_click({
                                     let closer = icons_open.clone();
+                                    move || closer.set(false)
+                                })
+                                .build(ctx);
+                        }
+                    },
+                );
+
+            // ── Exposed dropdown: material3's `ExposedDropdownMenuBox`. The anchor is a text field 200dp
+            // wide, so the menu's width is checkable against it (`matchAnchorWidth`).
+            let exposed_open = ctx.remember(|| false);
+            let exposed_value = ctx.remember(|| TextFieldValue::new("已选"));
+            ExposedDropdownMenuBox::new(exposed_open.clone())
+                .on_expanded_change({
+                    let e = exposed_open.clone();
+                    move |open| e.set(open)
+                })
+                .build(
+                    ctx,
+                    |ctx| {
+                        let expanded = exposed_open.get();
+                        TextField::new(exposed_value.clone())
+                            .outlined()
+                            .read_only(true)
+                            .label(|ctx| Text::new("选择").build(ctx))
+                            .modifier(Modifier::new().width(200.0).test_tag("dm-exposed-anchor"))
+                            .trailing_icon(move |ctx| {
+                                // A text glyph stands in for `ExposedDropdownMenuDefaults::trailing_icon`
+                                // here: that helper composes a real `Icon`, which the tree cannot locate by
+                                // text — and this slot's PLACEMENT is what is under test today (winia puts
+                                // it 32px below the field, see `docs/dropdown-menu.md` §4.8), so the
+                                // acceptance test needs to find it. The width matters too: 200 against the
+                                // items' 280 maximum is what makes "the menu matches its field" provable.
+                                Text::new("▼").font_size(14.0).build(ctx);
+                                let _ = expanded;
+                            })
+                            .build(ctx);
+                    },
+                    {
+                        let exposed_open = exposed_open.clone();
+                        move |ctx| {
+                            for (index, label) in ["选项 A", "选项 B"].into_iter().enumerate() {
+                                let closer = exposed_open.clone();
+                                DropdownMenuItem::new(label)
+                                    .modifier(Modifier::new().test_tag(format!("dm-exposed-item-{index}")))
+                                    .content_padding(ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING, 0.0)
+                                    .on_click(move || closer.set(false))
+                                    .build(ctx);
+                            }
+                        }
+                    },
+                );
+            Text::new(if exposed_open.get() {
+                "dm-exposed-open: yes"
+            } else {
+                "dm-exposed-open: no"
+            })
+            .build(ctx);
+
+            // A `PrimaryEditable` anchor: material3 gives the click to the text cursor, so it must NOT
+            // toggle the menu.
+            let editable_open = ctx.remember(|| false);
+            let editable_value = ctx.remember(|| TextFieldValue::new(""));
+            ExposedDropdownMenuBox::new(editable_open.clone())
+                .anchor_type(ExposedDropdownMenuAnchorType::PrimaryEditable)
+                .build(
+                    ctx,
+                    |ctx| {
+                        TextField::new(editable_value.clone())
+                            .outlined()
+                            .modifier(Modifier::new().width(200.0).test_tag("dm-editable-anchor"))
+                            .build(ctx);
+                    },
+                    {
+                        let editable_open = editable_open.clone();
+                        move |ctx| {
+                            DropdownMenuItem::new("不该打开")
+                                .on_click({
+                                    let closer = editable_open.clone();
                                     move || closer.set(false)
                                 })
                                 .build(ctx);

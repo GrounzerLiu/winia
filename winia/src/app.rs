@@ -196,6 +196,8 @@ struct OverlayWindow {
     click_passthrough: bool,
     /// Fit this overlay inside the window around its anchor (see `OverlayDesc::fit_around_anchor`).
     fit_around_anchor: bool,
+    /// Take exactly the anchor's width (see `OverlayDesc::match_anchor_width`).
+    match_anchor_width: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     content: Box<dyn Fn(&mut ComposeCtx)>,
     /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
@@ -3054,6 +3056,7 @@ impl OverlayWindow {
             dismiss_on_outside: desc.dismiss_on_outside,
             click_passthrough: desc.click_passthrough,
             fit_around_anchor: desc.fit_around_anchor,
+            match_anchor_width: desc.match_anchor_width,
             on_dismiss: desc.on_dismiss,
             content: desc.content,
             local_snapshot: desc.local_snapshot,
@@ -3118,6 +3121,7 @@ impl OverlayWindow {
         self.dismiss_on_outside = desc.dismiss_on_outside;
         self.click_passthrough = desc.click_passthrough;
         self.fit_around_anchor = desc.fit_around_anchor;
+        self.match_anchor_width = desc.match_anchor_width;
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
         self.local_snapshot = desc.local_snapshot;
@@ -3534,9 +3538,47 @@ fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
 /// the top and bottom window edges. Used by the overlays that opt into `fit_around_anchor`.
 const MENU_VERTICAL_MARGIN: f32 = 48.0;
 
+/// The window rect `(x, y, w, h)` of an overlay's anchor, resolved from the MAIN tree (already laid out).
+///
+/// Shared by the two passes that need it: the measure pass, for an overlay that matches its anchor's width
+/// (material3's `matchAnchorWidth`, which forces `minWidth = maxWidth = menuWidth`), and the positioning
+/// pass, which places the overlay against it. Takes the arena rather than the window so callers can hold
+/// their own borrows.
+fn overlay_anchor_rect(
+    nodes: &[crate::layout::node::LayoutNode],
+    root: usize,
+    slot: u64,
+) -> Option<(f32, f32, f32, f32)> {
+    let id = crate::layout::node::find_node_id_by_slot_key(nodes, root, slot)?;
+    let index = crate::layout::node::find_node_by_id(nodes, root, id)?;
+    let (x, y) = node_abs_position(nodes, root, id);
+    let size = nodes[index].measured_size;
+    Some((x, y, size.width, size.height))
+}
+
 /// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
 fn layout_overlays(pw: &mut PerWindow) {
-    for ov in &mut pw.overlays {
+    // material3's `matchAnchorWidth` FORCES a menu's width to its anchor's (`minWidth = maxWidth =
+    // menuWidth` in `exposedDropdownSize`), so those widths are needed at MEASURE time — before this pass
+    // reaches the positioning code. Resolved up front into owned values: the loop below holds
+    // `&mut pw.overlays` and mutates `pw.composer`, so no borrow of the arena can stay alive across it.
+    let anchor_widths: Vec<f32> = {
+        let nodes = pw.composer.arena_nodes();
+        let root = pw.composer.layout_root_idx();
+        pw.overlays
+            .iter()
+            .map(|ov| {
+                if !ov.match_anchor_width {
+                    return 0.0;
+                }
+                let rect = ov
+                    .anchor_slot
+                    .and_then(|slot| root.and_then(|r| overlay_anchor_rect(nodes, r, slot)));
+                rect.map(|(_, _, w, _)| w).unwrap_or(0.0)
+            })
+            .collect()
+    };
+    for (overlay_index, ov) in pw.overlays.iter_mut().enumerate() {
         // 关闭中：仍需 recompose/layout 以驱动 BottomSheet 的 slide（offset 动画）
         // —— Dialog 等静态内容重组无副作用；冻结仅针对交互（hit_overlay 已跳过 closing）
         // 之前 `if closing { continue; }` 导致 hide() 的 offset 动画不被布局，面板
@@ -3561,9 +3603,13 @@ fn layout_overlays(pw: &mut PerWindow) {
             // full-bleed column. The margin is a MEASURE constraint here and a placement clamp below:
             // without it a 30-item menu took the whole window height and sat flush against both edges.
             let constraints = if ov.fit_around_anchor {
+                // material3's `matchAnchorWidth` FORCES the width (`minWidth = maxWidth = menuWidth` in
+                // `exposedDropdownSize`), so the anchor's rect is needed at measure time — before the
+                // positioning pass — and the anchor lives in the main tree, already laid out.
+                let anchor_width = anchor_widths[overlay_index];
                 crate::layout::Constraints::new(
-                    0.0,
-                    pw.width,
+                    anchor_width,
+                    if ov.match_anchor_width { anchor_width } else { pw.width },
                     MENU_VERTICAL_MARGIN,
                     (pw.height - MENU_VERTICAL_MARGIN * 2.0).max(0.0),
                 )
@@ -5327,6 +5373,7 @@ mod overlay_close_tests {
             dismiss_on_outside: true,
             click_passthrough: false,
             fit_around_anchor: false,
+            match_anchor_width: false,
             on_dismiss: None,
             enter_anim: enter,
             exit_anim: exit,

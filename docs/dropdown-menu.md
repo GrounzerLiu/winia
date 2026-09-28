@@ -33,8 +33,32 @@ DropdownMenuItem::new("删除")
     .enabled(false)
     .colors(MenuItemColors::defaults())                    // M3 MenuItemColors（默认按主题角色）
     .content_padding(12.0, 0.0)                            // M3 contentPadding（默认水平 12、垂直 0）
+    .leading_icon(|ctx| { Icon::svg_path(…).build(ctx); }) // M3 leadingIcon（24dp 盒）
+    .trailing_icon(|ctx| { Text::new("Ctrl+C").build(ctx); }) // M3 trailingIcon
     .on_click(…)
     .build(ctx);
+```
+
+输入框下拉（`ExposedDropdownMenuBox`，M3 同名组件）：
+
+```rust
+let expanded = ctx.remember(|| false);
+ExposedDropdownMenuBox::new(expanded.clone())
+    .on_expanded_change(move |open| expanded.set(open))
+    .anchor_type(ExposedDropdownMenuAnchorType::PrimaryNotEditable) // 只读字段：点击切换
+    .match_anchor_width(true)                                       // 菜单宽度 = 输入框宽度（M3 默认）
+    .build(ctx,
+        |ctx| {  // 锚点：输入框（点击它即切换展开态）
+            let open = expanded.get();
+            TextField::new(value).outlined().read_only(true)
+                .trailing_icon(move |ctx| ExposedDropdownMenuDefaults::trailing_icon(ctx, open))
+                .build(ctx);
+        },
+        |ctx| {  // 项：用 16dp 水平内边距（M3 ExposedDropdownMenuItemHorizontalPadding）
+            DropdownMenuItem::new("选项 A")
+                .content_padding(ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING, 0.0)
+                .build(ctx);
+        });
 ```
 
 走顶层 overlay 机制（独立 Composer）：`anchor_slot` 定位、无进出动画（与 Compose 默认一致）、`modal: false`、`dismiss_on_outside: true`、每次组合记录 `active` 供 sync 删除（同 Popup/Dialog 的契约，见 `docs/key-system-design.md`）。
@@ -84,6 +108,10 @@ DropdownMenuItem::new("删除")
 | `dropdown_menu_item_icon_geometry_matches_material3` | 前导图标 24dp 盒在项内缩进 12dp、标签在其后 12dp（实测 16→28→64）；尾随图标收在项右内容边（实测 x=92 且项宽 112）；**所有项等宽且等于菜单宽**（实测 112/112/112），且菜单 < 280（取最宽项自然宽而非上限） |
 | `dropdown_menu_highlights_the_focused_item` | 聚焦后项内变暗 25 个单位（状态层），且停止在"完全淡入"而不是第一次波动 |
 | `a_menu_item_carries_a_ripple_and_no_focus_ring`（lib 单测） | 项的节点上同时有 `Clickable`、`Ripple`、`NoFocusRing`——环是边界外 ~1px 的带（实测物理 x=23 为 `(197,193,199)`，内侧是 `(217,211,219)`），逻辑坐标探针踩不准，故用结构断言 |
+| `exposed_dropdown_menu_matches_its_anchor_width` | 200dp 字段：项宽 = 字段宽（实测 `(16,367,200,48)` vs `(16,303,200,56)`）、菜单挂在字段下方、标签距项左 16dp |
+| `exposed_dropdown_dismisses_and_reports_it` | 外部点击关闭并回写 `onExpandedChange`，popup 条目随后消失（等退场动画） |
+| `exposed_dropdown_primary_editable_anchor_does_not_toggle` | `PrimaryEditable` 的锚点点击不打开菜单 |
+| `exposed_dropdown_trailing_slot_is_placed_inside_the_field` | **`#[ignore]`**：等 `TextField` 尾随槽定位 bug 修复（§4.8），当前槽在字段下方 32px |
 
 ## 4. 与 Compose M3 的差异（依据：本地 androidx 源码）
 
@@ -189,14 +217,48 @@ M3 的真身只有两条（`Menu.kt` 里**没有任何键处理**——没有 `o
 
 **不做（因为 M3 里没有）**：箭头键在项间导航、Home/End、首字母跳转——这些在 Compose 属于应用层，`Menu.kt` 没有实现。不把"自造行为"当对齐。
 
-### 4.6 待对齐（本轮后续阶段）
+### 4.6 本轮之前遗留的其他偏差（阶段 2b 一并处理）
 
-| 项 | M3 真身 | winia 现状 | 阶段 |
-|---|---|---|---|
-| 输入框下拉 | `ExposedDropdownMenuBox` | 无 | 5 |
-| 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档 | - |
-| 项等宽 / 菜单取最宽项自然宽 | 菜单列 `width(IntrinsicSize.Max)` | 已由 `MenuColumnPolicy` 在菜单内实现（§4.2）；**框架层**仍无 intrinsic 测量，其它组件需自行照此实现 | 框架 |
+| 项 | M3 真身 | winia 现状 |
+|---|---|---|
+| 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档（见 §4.9） |
+| 项等宽 / 菜单取最宽项自然宽 | 菜单列 `width(IntrinsicSize.Max)` | 已由 `MenuColumnPolicy` 在菜单内实现（§4.2） |
 
-### 4.7 有意保留的偏差
+### 4.7 阶段 5 对齐：ExposedDropdownMenuBox（输入框下拉）
+
+M3 的契约（`ExposedDropdownMenu.kt` + `androidMain/ExposedDropdownMenu.android.kt`）：
+
+| M3 | 内容 | winia |
+|---|---|---|
+| `ExposedDropdownMenuBox(expanded, onExpandedChange, modifier, content)` | 盒子持有展开态，`menuAnchor` 记录输入框 bounds | `ExposedDropdownMenuBox::new(expanded)` + `.on_expanded_change(cb)` + `.build(ctx, anchor, menu)`（锚点/菜单两个闭包，同 `DropdownMenu`） |
+| `Modifier.menuAnchor(type, enabled)` | 点击策略、焦点、键盘 | `.anchor_type(...)` / `.enabled(...)`：`PrimaryNotEditable`、`SecondaryEditable` 点击切换；`PrimaryEditable` **不切换**（点击归光标） |
+| `ExposedDropdownMenu(matchAnchorWidth = true, …)` | 菜单宽度**强制**等于输入框宽（`exposedDropdownSize`：`minWidth = maxWidth = menuWidth`） | `.match_anchor_width(true)`（默认 true）+ 框架侧 `OverlayDesc::match_anchor_width`：测量期解析锚点矩形，用 `min=max=锚点宽` 约束；内容侧 `fill_max_width`（因为 winia 的 flex 会在交叉轴把 min 归零，强制宽度到不了子节点，见 `layout/flex.rs`） |
+| `ExposedDropdownMenuItemHorizontalPadding = 16dp` | 输入框下拉的项水平内边距是 **16dp**（普通菜单 12dp） | `ExposedDropdownMenuDefaults::item_content_padding()`（= `(16, 0)`） |
+| `TrailingIcon(expanded)` = `Icons.Filled.ArrowDropDown` + `rotate(if (expanded) 180f else 0f)` | 静态旋转（这一版无动画） | `ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded)` |
+
+**实测**（fixture：200dp 宽的字段）：锚点 `(16,303,200,56)`、项 `(16,367,200,48)` —— 菜单与字段等宽 ✓、挂在字段下方 ✓、标签距项左 16dp ✓。注意这只有在 `fill_max_width` 之后才成立：没有它时策略收到的是 `min_w=0, max_w=200`（flex 抹掉了 min），算出 112 宽 ✗。
+
+另外修了一处框架语义：`DropdownMenu` 原先用 `composer_slot_key()` 取锚点，而那是**锚点闭包里最后组合的节点** ✗——对单节点闭包无害，但输入框的最后一个子节点是 24×24 的尾随图标 ✗（实测锚点被解析成 `(180,391.5,24,24)`）。现在用该 group 自己的 key（= 包装容器 ✓），与"popup 锚在父布局节点"的 M3 语义一致。
+
+### 4.8 未修：`TextField` 的尾随槽被放到字段外（阶段 5 的遗留）
+
+`ExposedDropdownMenuDefaults::trailing_icon` 组合出来的图标**画在了输入框下方 32px** ✗。实测（与 `read_only`、取值、调用方设定宽度、有无 label 都无关）：
+
+```
+字段 (16, 303, 280, 56)
+尾随槽 (260, 391, 13, 19)    ← x 在字段内，y 在字段底边之下 32px
+```
+
+隔离过程：槽**确实组合了**（把槽内容换成文本 `▼`，树里能看到 `text(▼)`），但扫字段自身那一行全是背景色 ✗；把槽内容换成纯文本也一样 ✗。所以问题在 `TextField` 的槽定位，不在盒子。验收测试 `exposed_dropdown_trailing_slot_is_placed_inside_the_field` 以 `#[ignore = "…"]` 保留（修复后取消忽略即生效）。
+
+### 4.9 待对齐（本轮之后）
+
+| 项 | M3 真身 | winia 现状 |
+|---|---|---|
+| 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档 |
+| 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | 无（菜单用 `MenuColumnPolicy` 自己实现，其它组件需照做） |
+| `PrimaryEditable` 的键盘打开 | 聚焦/键盘驱动展开、光标联动 | 只有"点击不切换"，键盘打开与光标联动未实现 |
+
+### 4.10 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。

@@ -2669,6 +2669,26 @@ fn open_plain_menu(app: &mut UiTest) -> (f32, f32) {
     (bx + bw / 2.0, by + bh / 2.0)
 }
 
+/// Press Tab until a tag inside the popup entry has focus, and report whether it ever did.
+///
+/// The retry is for the HARNESS, not for the menu: under the full suite's parallel load an injected key
+/// sometimes never reaches the app at all (`focused: []` with the menu open, while the same test passes
+/// alone three times in a row). A second press is only sent when NOTHING is focused — pressing Tab with an
+/// item already focused would move on to the next one — so this cannot pass unless Tab really landed on it.
+fn tab_into_overlay(app: &mut UiTest, tag: &str) -> bool {
+    for attempt in 0..2 {
+        app.key("Tab");
+        let wait = if attempt == 0 { 900 } else { 4000 };
+        if app.wait_until_overlay_focus(tag, Duration::from_millis(wait)) {
+            return true;
+        }
+        if !app.focused_tags().is_empty() {
+            return false;
+        }
+    }
+    false
+}
+
 /// What:  an open menu, with the keyboard untouched until now.
 /// When:  Tab is pressed.
 /// Then:  the keyboard belongs to the MENU — an item ends up focused and no page element does.
@@ -2681,9 +2701,8 @@ fn open_plain_menu(app: &mut UiTest) -> (f32, f32) {
 fn dropdown_menu_takes_the_keyboard_while_open() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
-    app.key("Tab");
     assert!(
-        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        tab_into_overlay(&mut app, "dm-item-new"),
         "Tab must focus the menu's first focusable item (focused: {:?})",
         app.focused_tags()
     );
@@ -2702,9 +2721,8 @@ fn dropdown_menu_takes_the_keyboard_while_open() {
 fn dropdown_menu_a_focused_item_activates_on_enter() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
-    app.key("Tab");
     assert!(
-        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        tab_into_overlay(&mut app, "dm-item-new"),
         "Tab focuses the first item (focused: {:?})",
         app.focused_tags()
     );
@@ -2740,11 +2758,7 @@ fn dropdown_menu_esc_dismisses_it() {
 fn dropdown_menu_returns_focus_to_its_trigger_on_close() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
-    app.key("Tab");
-    assert!(
-        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
-        "focus is inside the menu"
-    );
+    assert!(tab_into_overlay(&mut app, "dm-item-new"), "focus is inside the menu");
     app.key("Escape");
     app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
     assert!(
@@ -2775,11 +2789,7 @@ fn dropdown_menu_highlights_the_focused_item() {
     let (sx, sy) = (fw as f32 / 420.0, fh as f32 / 520.0);
 
     let before = app.pixels_at_logical_scaled(&[edge, middle], sx, sy);
-    app.key("Tab");
-    assert!(
-        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
-        "Tab focuses the first item"
-    );
+    assert!(tab_into_overlay(&mut app, "dm-item-new"), "Tab focuses the first item");
     let unfocused = before[1].expect("the item before focus");
 
     let delta = |a: (u8, u8, u8, u8), b: (u8, u8, u8, u8)| {
@@ -2894,4 +2904,133 @@ fn dropdown_menu_item_icon_geometry_matches_material3() {
         menu_w < 280.0,
         "the menu takes its widest item's natural width, not the 280dp maximum: {menu_w}"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ExposedDropdownMenuBox（阶段 5，对齐 material3 的输入框下拉）
+// ═══════════════════════════════════════════════════════════════
+
+/// Click the fixture's read-only exposed-dropdown field, which is 200dp wide.
+fn open_exposed_menu(app: &mut UiTest) -> (f32, f32, f32, f32) {
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    let rect = app.find_tag("dm-exposed-anchor").expect("the dropdown's text field");
+    app.click(rect.0 + rect.2 / 2.0, rect.1 + rect.3 / 2.0);
+    app.expect_text_timeout("dm-exposed-open: yes", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("选项 A", Duration::from_secs(5));
+    app.refresh();
+    rect
+}
+
+/// What:  an `ExposedDropdownMenuBox` whose text field is 200dp wide.
+/// When:  the field is clicked.
+/// Then:  the menu opens below it, as wide as the FIELD and with items that fill it — material3's
+///        `matchAnchorWidth` (`Modifier.exposedDropdownSize`, which forces `minWidth = maxWidth = the
+///        anchor's width`) and its 16dp item padding (`ExposedDropdownMenuItemHorizontalPadding`).
+#[test]
+fn exposed_dropdown_menu_matches_its_anchor_width() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let (ax, ay, aw, ah) = open_exposed_menu(&mut app);
+    // The menu's container is not tagged (the box owns it), but its ITEMS are — and an item is exactly as
+    // wide as the menu, so the item's width is what carries the width assertion.
+    let (ix, iy, iw, ih) = app
+        .find_tag_in_overlay("dm-exposed-item-0")
+        .expect("the first item");
+
+    eprintln!("暴露式下拉: anchor=({ax},{ay},{aw},{ah}) item=({ix},{iy},{iw},{ih})");
+    assert!(
+        (iw - aw).abs() <= 0.5,
+        "the menu must be exactly as wide as its field: item width {iw} against the field's {aw}"
+    );
+    assert!(
+        iy >= ay + ah - 0.5,
+        "and it hangs below it: item y {iy} against the field's bottom {}",
+        ay + ah
+    );
+
+    // The items pad 16dp horizontally — not the plain menu's 12dp.
+    let (tx, _, _, _) = app.overlay_text_rect("选项 A").expect("the first item's label");
+    assert!(
+        (tx - (ix + 16.0)).abs() <= 0.5,
+        "exposed-dropdown items pad 16dp horizontally: label x {tx} against {}",
+        ix + 16.0
+    );
+}
+
+/// What:  the same box.
+/// When:  the menu is open and the user clicks outside it.
+/// Then:  it closes and reports that through `onExpandedChange` — the box owns the dismissal, so the
+///        caller's state and the menu cannot drift apart.
+#[test]
+fn exposed_dropdown_dismisses_and_reports_it() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_exposed_menu(&mut app);
+    app.click(360.0, 480.0);
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    // The entry lingers while the exit animation plays, so wait for it rather than sampling once.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the popup entry must be removed once the menu closes"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// What:  a box whose anchor is `PrimaryEditable`.
+/// When:  its text field is clicked.
+/// Then:  the menu does NOT open: material3 gives that click to the text cursor.
+#[test]
+fn exposed_dropdown_primary_editable_anchor_does_not_toggle() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    let (x, y, w, h) = app.find_tag("dm-editable-anchor").expect("the editable field");
+    app.click(x + w / 2.0, y + h / 2.0);
+    std::thread::sleep(Duration::from_millis(250));
+    app.refresh();
+    assert_eq!(
+        app.overlay_count(),
+        0,
+        "a PrimaryEditable anchor must not open the menu on a click"
+    );
+}
+
+/// What:  the exposed-dropdown field, with and without its menu open.
+/// When:  a pixel inside the field's trailing area is read.
+/// Then:  material3's `TrailingIcon` would be there, rotated 180° while expanded — but winia's TextField
+///        places its trailing SLOT outside the field's box, so this stays unwritten.
+///
+/// Measured, and independent of `read_only`, the value, a caller-set width and a label:
+///
+///   field  `(16, 303, 280, 56)`
+///   slot   `(260, 391, 13, 19)`   — x inside the field, y 32px BELOW its bottom edge
+///
+/// The slot composes (a `Text::new("▼")` in that position shows up in the tree) and scans of the field's
+/// own row find nothing painted, so this is a placement bug in `TextField`, not in the box. Ignored rather
+/// than deleted so the fix has an acceptance test; the evidence is in `docs/dropdown-menu.md` §4.8.
+#[test]
+#[ignore = "blocked by the TextField trailing-slot placement bug (docs/dropdown-menu.md §4.8)"]
+fn exposed_dropdown_trailing_slot_is_placed_inside_the_field() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    app.refresh();
+    let (fx, fy, fw, fh) = app.find_tag("dm-exposed-anchor").expect("the field");
+    // The trailing slot is the node in the field's subtree that carries the icon; today it is found by its
+    // text probe standing in for it, which is what the fixture's trailing slot composes.
+    let slot = app.find("▼");
+    if let Some((sx, sy, _, _)) = slot {
+        assert!(
+            sy >= fy && sy <= fy + fh,
+            "the trailing slot must be inside the field's box: slot y {sy} against the field \
+             ({fy}..{}) — winia places it 32px below today",
+            fy + fh
+        );
+        assert!(sx >= fx && sx <= fx + fw, "and inside it horizontally: {sx} against {fx}..{}", fx + fw);
+    } else {
+        panic!("the fixture's trailing slot must compose (it is a text probe here)");
+    }
 }

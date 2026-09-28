@@ -361,6 +361,11 @@ pub struct OverlayDesc {
     /// its bottom rows unreachable (measured: container at y=238 and 520 tall in a 520px window, bottom
     /// at 758 — `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end`).
     pub(crate) fit_around_anchor: bool,
+    /// Give this overlay exactly its anchor's width, material3's
+    /// `Modifier.exposedDropdownSize(matchAnchorWidth = true)`: a dropdown menu hanging off a text field is
+    /// as wide as the field. M3 FORCES it (`minWidth = maxWidth = menuWidth`), so the content is squeezed
+    /// rather than the menu growing past the field.
+    pub(crate) match_anchor_width: bool,
     /// Enter animation spec (None = instant appear — Popup/DropdownMenu default;
     /// Some = container-layer frame-driven animation — Dialog default).
     pub(crate) enter_anim: Option<OverlayAnimSpec>,
@@ -515,6 +520,7 @@ impl Popup {
             click_passthrough: false,
             // A popup keeps winia's historic placement (below the anchor, no fitting).
             fit_around_anchor: false,
+            match_anchor_width: false,
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
@@ -652,6 +658,7 @@ impl Dialog {
             click_passthrough: false,
             // A dialog is centred (`PopupPosition::Center`), so there is nothing to fit around.
             fit_around_anchor: false,
+            match_anchor_width: false,
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
@@ -846,6 +853,8 @@ pub struct DropdownMenu {
     /// M3 `scrollState` — `rememberScrollState()` when unset. The container scrolls, so a menu longer
     /// than the space it was given stays reachable instead of hanging off the window edge.
     scroll_state: Option<crate::modifier::ScrollState>,
+    /// material3's `matchAnchorWidth` — see [`DropdownMenu::match_anchor_width`]. Off for a plain menu.
+    match_anchor_width: bool,
     offset: (f32, f32),
     shape: Option<crate::modifier::Shape>,
     container_color: Option<crate::modifier::Color>,
@@ -861,6 +870,7 @@ impl DropdownMenu {
             on_dismiss: None,
             modifier: crate::modifier::Modifier::new(),
             scroll_state: None,
+            match_anchor_width: false,
             // M3: `DpOffset(0.dp, 0.dp)`. The drop-down placement itself comes from the anchor
             // (`PopupPosition::BottomLeft`), which is the equivalent of the platform popup's anchoring.
             offset: (0.0, 0.0),
@@ -887,6 +897,14 @@ impl DropdownMenu {
     /// M3 `scrollState` — the menu's content scrolls through it (`rememberScrollState()` when unset).
     pub fn scroll_state(mut self, state: crate::modifier::ScrollState) -> Self {
         self.scroll_state = Some(state);
+        self
+    }
+
+    /// material3's `matchAnchorWidth` (on `ExposedDropdownMenu`, which is a `DropdownMenu` with
+    /// `exposedDropdownSize`): the menu takes exactly its anchor's width. `ExposedDropdownMenuBox` turns
+    /// this on; on its own a menu keeps taking its widest item's width.
+    pub fn match_anchor_width(mut self, v: bool) -> Self {
+        self.match_anchor_width = v;
         self
     }
 
@@ -948,7 +966,12 @@ impl DropdownMenu {
                 anchor(ctx);
             }
         }
-        let anchor_slot = ctx.composer_slot_key(); // Container slot key (anchor).
+        // The anchor is the GROUP's container node, not whatever the closure happened to compose last:
+        // material3 anchors a popup to the parent layout node it sits in, and that is the box this group
+        // creates. `composer_slot_key()` after the group reports the last child instead — harmless while
+        // an anchor closure ends in its one visible node, wrong as soon as it does not (measured: an
+        // `ExposedDropdownMenuBox` anchored to its text field's 24x24 trailing ICON).
+        let anchor_slot = anchor_key;
         ctx.end_restartable_group();
 
         // M3's default is `rememberScrollState()`, i.e. a state the menu owns across frames. Remembered
@@ -997,6 +1020,8 @@ impl DropdownMenu {
                 // menu taller than the space below it ends up above or against the window edge instead of
                 // hanging off the bottom.
                 fit_around_anchor: true,
+                // Whatever `ExposedDropdownMenuBox` asked for: material3's `matchAnchorWidth`.
+                match_anchor_width: self.match_anchor_width,
                 on_dismiss: self.on_dismiss,
                 // material3's menu open/close animation (`Menu.kt`'s `DropdownMenuContent`): a transition
                 // on `expandedState` driving `graphicsLayer { scaleX/scaleY/alpha }` from
@@ -1038,6 +1063,19 @@ impl DropdownMenu {
                         // container measures `min(its content, the viewport it was given)`.
                         let m = menu_modifier
                             .clone()
+                            // material3 applies `exposedDropdownSize(matchAnchorWidth)` to the menu's
+                            // CONTENT, and this is the same thing: `fill_max_width` turns the width the
+                            // framework forced (min = max = the anchor's width) into the content's own
+                            // inner constraint, which is what `MenuColumnPolicy` reads. Without it the
+                            // forced width would stop at the surface: winia's flex containers deliberately
+                            // relax the cross-axis minimum to zero for their children (`layout/flex.rs`),
+                            // so the column would fall back to its items' natural width and the rows'
+                            // ripples would again cover only part of the panel.
+                            .then(if self.match_anchor_width {
+                                crate::modifier::Modifier::new().fill_max_width()
+                            } else {
+                                crate::modifier::Modifier::new()
+                            })
                             .then(crate::modifier::Modifier::new().padding_vertical(8.0))
                             .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
                         // A `Column` would give every item its own width; material3's menu gives them all the
@@ -1053,6 +1091,179 @@ impl DropdownMenu {
                 local_snapshot: Vec::new(),
             });
         }
+    }
+}
+
+// ═══════════════ ExposedDropdownMenuBox ═══════════════
+
+/// material3 `ExposedDropdownMenuAnchorType` — what clicking the text field does.
+///
+/// The enum carries all three of material3's cases so call sites read the same; winia implements the click
+/// policy (which is all three differ by at the click itself) and records the rest as absent — see
+/// [`ExposedDropdownMenuBox::anchor_type`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExposedDropdownMenuAnchorType {
+    /// A read-only field: clicking it toggles the menu.
+    PrimaryNotEditable,
+    /// An editable field: clicking it positions the cursor and does NOT toggle; the menu opens from the
+    /// keyboard (material3's `PrimaryEditable`).
+    PrimaryEditable,
+    /// An editable field whose click does toggle (`SecondaryEditable`).
+    SecondaryEditable,
+}
+
+/// material3 `ExposedDropdownMenuDefaults`.
+pub struct ExposedDropdownMenuDefaults;
+
+impl ExposedDropdownMenuDefaults {
+    /// material3's `ExposedDropdownMenuItemHorizontalPadding` — exposed-dropdown items use 16dp of
+    /// horizontal padding where plain menu items use 12dp (`ExposedDropdownMenu.kt`).
+    pub const ITEM_HORIZONTAL_PADDING: f32 = 16.0;
+
+    /// The content padding such an item passes to
+    /// [`DropdownMenuItem::content_padding`] — material3's `MenuItemContentPadding`, which is
+    /// `PaddingValues(horizontal = 16dp, vertical = 0)`.
+    pub fn item_content_padding() -> (f32, f32) {
+        (Self::ITEM_HORIZONTAL_PADDING, 0.0)
+    }
+
+    /// material3's `TrailingIcon(expanded)`: `Icons.Filled.ArrowDropDown`, rotated 180° while the menu is
+    /// open — a static rotation, exactly as that composable writes it (`modifier.rotate(if (expanded) 180f
+    /// else 0f)`, with no animation in this version).
+    ///
+    /// Compose it into a text field's trailing slot:
+    ///
+    /// ```ignore
+    /// TextField::outlined(value).trailing_icon(move |ctx| {
+    ///     ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded.get())
+    /// })
+    /// ```
+    pub fn trailing_icon(ctx: &mut crate::core::composer::ComposeCtx, expanded: bool) {
+        crate::ui::icon::Icon::svg_path(Self::ARROW_DROP_DOWN_PATH)
+            .modifier(crate::modifier::Modifier::new().rotate(if expanded { 180.0 } else { 0.0 }))
+            .build(ctx);
+    }
+
+    /// Material Icons "arrow_drop_down" (24dp viewBox), the icon material3's `TrailingIcon` hard-codes —
+    /// written with ABSOLUTE commands (`M7 10l5 5 5-5z` is the published form, but this codebase's icon
+    /// paths are absolute throughout and winia's SVG path conversion does not carry relative ones).
+    const ARROW_DROP_DOWN_PATH: &'static str = "M7 10L12 15L17 10z";
+}
+
+/// material3 `ExposedDropdownMenuBox`: a menu hanging off a text field, with the field's width.
+///
+/// The two halves are the closures it composes — `anchor` is the text field (wrapped so a click toggles
+/// the menu, subject to [`ExposedDropdownMenuBox::anchor_type`]) and `menu` is the items, exactly as
+/// [`DropdownMenu`] takes them.
+///
+/// ```ignore
+/// let expanded = ctx.remember(|| false);
+/// ExposedDropdownMenuBox::new(expanded.clone())
+///     .on_expanded_change(move |open| expanded.set(open))
+///     .build(ctx,
+///         |ctx| { TextField::outlined(value).build(ctx); },
+///         |ctx| { DropdownMenuItem::new("选项 A").build(ctx); });
+/// ```
+pub struct ExposedDropdownMenuBox {
+    expanded: crate::core::state::State<bool>,
+    on_expanded_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
+    enabled: bool,
+    anchor_type: ExposedDropdownMenuAnchorType,
+    /// material3's `matchAnchorWidth` on `ExposedDropdownMenu`, default true: the menu is as wide as the
+    /// field. M3 forces it, so the content is squeezed rather than the menu outgrowing the field.
+    match_anchor_width: bool,
+}
+
+impl ExposedDropdownMenuBox {
+    pub fn new(expanded: crate::core::state::State<bool>) -> Self {
+        Self {
+            expanded,
+            on_expanded_change: None,
+            enabled: true,
+            anchor_type: ExposedDropdownMenuAnchorType::PrimaryNotEditable,
+            match_anchor_width: true,
+        }
+    }
+
+    /// material3's `onExpandedChange` — called with the new value whenever the box opens or closes.
+    pub fn on_expanded_change(mut self, cb: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.on_expanded_change = Some(Arc::new(cb));
+        self
+    }
+
+    /// material3's `enabled` on `menuAnchor`: a disabled anchor neither toggles nor opens.
+    pub fn enabled(mut self, v: bool) -> Self {
+        self.enabled = v;
+        self
+    }
+
+    /// material3's `menuAnchor(type = …)`.
+    ///
+    /// `PrimaryNotEditable` and `SecondaryEditable` both toggle on a click, which is the whole of their
+    /// difference here; `PrimaryEditable` deliberately does NOT, because its click belongs to the text
+    /// cursor. What material3 additionally does for the editable cases — opening from the keyboard and
+    /// keeping the cursor alive — is not implemented in winia, and is recorded as such in
+    /// `docs/dropdown-menu.md` rather than approximated.
+    pub fn anchor_type(mut self, t: ExposedDropdownMenuAnchorType) -> Self {
+        self.anchor_type = t;
+        self
+    }
+
+    /// material3's `matchAnchorWidth` (default `true`).
+    pub fn match_anchor_width(mut self, v: bool) -> Self {
+        self.match_anchor_width = v;
+        self
+    }
+
+    #[composable]
+    pub fn build(
+        self,
+        ctx: &mut crate::core::composer::ComposeCtx,
+        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx),
+        menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+    ) {
+        let expanded = self.expanded.clone();
+        let toggles_on_click = self.enabled
+            && !matches!(self.anchor_type, ExposedDropdownMenuAnchorType::PrimaryEditable);
+        let on_change = self.on_expanded_change.clone();
+        let toggler = {
+            let expanded = expanded.clone();
+            let on_change = on_change.clone();
+            move || {
+                let next = !expanded.get();
+                expanded.set(next);
+                if let Some(cb) = &on_change {
+                    (cb)(next);
+                }
+            }
+        };
+        DropdownMenu::new(expanded.clone())
+            .match_anchor_width(self.match_anchor_width)
+            .on_dismiss_request({
+                let expanded = expanded.clone();
+                let on_change = on_change.clone();
+                move || {
+                    expanded.set(false);
+                    if let Some(cb) = &on_change {
+                        (cb)(false);
+                    }
+                }
+            })
+            .build(
+                ctx,
+                move |ctx| {
+                    let toggler = toggler;
+                    let modifier = if toggles_on_click {
+                        crate::modifier::Modifier::new().clickable(toggler)
+                    } else {
+                        crate::modifier::Modifier::new()
+                    };
+                    crate::ui::Column::new()
+                        .modifier(modifier)
+                        .build(ctx, |ctx| anchor(ctx));
+                },
+                menu,
+            );
     }
 }
 
@@ -1225,7 +1436,6 @@ impl DropdownMenuItem {
         let trailing_icon = self.trailing_icon;
         let has_leading = leading_icon.is_some();
         let has_trailing = trailing_icon.is_some();
-        let stretch_label = has_trailing;
         let leading_color = colors.leading_icon_color(self.enabled);
         let trailing_color = colors.trailing_icon_color(self.enabled);
         let icon_box = |ctx: &mut crate::core::composer::ComposeCtx,

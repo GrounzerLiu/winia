@@ -153,6 +153,7 @@ impl Tooltip {
                 click_passthrough: true,
                 // A tooltip keeps its historic placement (above/below the anchor as asked, no fitting).
                 fit_around_anchor: false,
+                match_anchor_width: false,
                 on_dismiss: self.external_visible.as_ref().map(|s| {
                     let s = s.clone();
                     std::sync::Arc::new(move || s.set(false)) as std::sync::Arc<dyn Fn() + Send + Sync>

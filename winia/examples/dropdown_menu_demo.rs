@@ -22,7 +22,10 @@ use winia::prelude::*;
 mod settings;
 use winia::core::composer::ComposeCtx;
 use winia::modifier::Shape;
-use winia::ui::overlay::{DropdownMenu, DropdownMenuItem, MenuItemColors};
+use winia::ui::overlay::{
+    DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults,
+    MenuItemColors,
+};
 use winia::composable;
 
 #[composable]
@@ -32,13 +35,24 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
     let bottom_open = ctx.remember(|| false);
     let styled_open = ctx.remember(|| false);
     let icons_open = ctx.remember(|| false);
+    let exposed_open = ctx.remember(|| false);
+    let exposed_value = ctx.remember(|| TextFieldValue::new(""));
     let picked = ctx.remember(|| String::from("(none)"));
 
     Column::new()
         .spacing(16.0)
         .modifier(Modifier::new().padding(24.0))
         .build(ctx, {
-            clone!(simple_open, long_open, bottom_open, styled_open, icons_open, picked);
+            clone!(
+                simple_open,
+                long_open,
+                bottom_open,
+                styled_open,
+                icons_open,
+                exposed_open,
+                exposed_value,
+                picked
+            );
             let picked_text = picked.clone();
             move |ctx| {
                 Text::new(format!("上次选择: {}", picked_text.get()))
@@ -256,6 +270,55 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                         },
                     );
 
+                // ── 6. Exposed dropdown: material3's `ExposedDropdownMenuBox` ──
+                // The field is the anchor and the menu takes its width (`matchAnchorWidth`), with 16dp
+                // item padding and the trailing arrow that material3's `TrailingIcon` rotates 180°.
+                Text::new("6. Exposed dropdown (click the field)")
+                    .font_size(12.0)
+                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .build(ctx);
+                Text::new(format!("已选: {}", picked.get()))
+                    .font_size(12.0)
+                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .build(ctx);
+                ExposedDropdownMenuBox::new(exposed_open.clone())
+                    .on_expanded_change({
+                        clone!(exposed_open);
+                        move |open| exposed_open.set(open)
+                    })
+                    .build(
+                        ctx,
+                        |ctx| {
+                            let expanded = exposed_open.get();
+                            TextField::new(exposed_value.clone())
+                                .outlined()
+                                .read_only(true)
+                                .modifier(Modifier::new().width(240.0))
+                                .trailing_icon(move |ctx| {
+                                    ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded)
+                                })
+                                .build(ctx);
+                        },
+                        {
+                            clone!(exposed_open, picked);
+                            move |ctx| {
+                                for label in ["选项 A", "选项 B", "选项 C"] {
+                                    clone!(exposed_open, picked);
+                                    DropdownMenuItem::new(label)
+                                        .content_padding(
+                                            ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING,
+                                            0.0,
+                                        )
+                                        .on_click(move || {
+                                            picked.set(String::from(label));
+                                            exposed_open.set(false);
+                                        })
+                                        .build(ctx);
+                                }
+                            }
+                        },
+                    );
+
                 // ── 5. Near the bottom: the menu opens UPWARD ──
                 Spacer::vertical(220.0).build(ctx);
                 Text::new("↓ this one has no room below it")
@@ -307,7 +370,7 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(560.0, 720.0)
+                .size(560.0, 900.0)
                 .title("DropdownMenu Demo")
                 .build(ctx, |ctx| {
                     settings::shell("DropdownMenu Demo", ctx, dropdown_menu_demo);
