@@ -164,22 +164,28 @@ Tab::new(selected, || on_click())
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
 - **The `ScrollableTabRow` startup burst — and a correction to what this section first claimed
   (measured 2026-09-28).** Any mode that builds a `ScrollableTabRow` (`scroll`, `both`, and `plain`,
-  which keeps both rows' own indicators) renders **~140–155 frames inside the first ~0.6 s** of the
-  window's life and then goes idle; `fixed` (the fixed row with a caller-supplied indicator) renders
-  **ONE** frame. This was first written up here as "never goes idle", and that was a MEASUREMENT ERROR:
-  the counts came from fixed-length runs with no timestamps, and stamping the `[fps]` line with wall
-  time shows the whole burst inside half a second — the last line of a **22-second** run reads
-  `render#140 compose#140 pending=1 t=0.54s`, and the count is the same in an 8 s and a 22 s run (the
-  same demo on the tree before this round's fixes: `render#154 … t=0.59s`).
+  which keeps both rows' own indicators) renders a burst of frames at startup and then goes idle;
+  `fixed` (the fixed row with a caller-supplied indicator) renders **ONE** frame. The burst's frame COUNT
+  is a property of the panel, not of the row: frames are paced at the display's refresh rate, so this
+  machine's 300 Hz panel gives ~150 frames over ~0.5 s, while a 60 Hz panel would give ~1/5 of that for
+  the same 0.6 s animation. This was first written up here as "never goes idle", and that was a
+  MEASUREMENT ERROR: the counts came from fixed-length runs without timestamps, and stamping the `[fps]`
+  line with wall time shows the whole burst inside ~0.6 s — the last line of a **22-second** run reads
+  `render#140 compose#140 pending=1 t=0.54s`, and the count is the same in an 8 s and a 22 s run
+  (`render#154 …` and the same shape on the tree before this round's invalidation fixes).
   Nothing renders forever. What the row actually costs is a ~0.6 s start-up animation: the spring that
   centres the selected tab (`tab_row.rs:1412 scroll_selected_into_view` →
   `modifier.rs:2821 ScrollState::animate_scroll_to` → `animation::push_animatable_with_done`, one f32
   state, pushed once), and 0.6 s is what its own physics gives — damping 0.6 / stiffness 700 from 123 px
   takes `ln(123 / 0.01) / (0.6 · sqrt(700)) ≈ 0.59 s` to come within the 0.01 px threshold. Two things
   did come out of the burst:
-  - It runs **un-throttled**: ~140 frames in 0.54 s (~260 fps) while the animation is alive. Not
-    something the tab row can fix (there is no frame pacing in this path), recorded because it is what
-    the frame counts were showing.
+  - It is paced by the DISPLAY, not by a fixed 60 Hz: ~154 frames in 0.51 s is this machine's 300 Hz
+    panel (and that is where the "~260 fps" in an earlier version of this note came from — a number that
+    was WRONG to call un-throttled). `app.rs` reads `refresh_rate_millihertz` at window creation and
+    derives the frame interval every pacing decision uses; on this monitor it prints
+    `[refresh] create: monitor=300000mHz interval=3.333333ms` (the line was added because the value was
+    never observable, and every "how many frames did this animation cost" number depends on it). On a
+    60 Hz panel the same 0.6 s burst is ~36 frames, not ~154.
   - The spring's **rest test compares incomparable units, and it stays that way on purpose.** The
     displacement is in the threshold's unit, the velocity in that unit per SECOND, and both
     `animation::spring_at_rest`'s halves test against the same 0.01. It looks like a bug — and the
