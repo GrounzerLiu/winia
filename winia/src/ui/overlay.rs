@@ -609,8 +609,80 @@ impl Default for Dialog { fn default() -> Self { Self::new(false) } }
 
 // ═══════════════ DropdownMenu ═══════════════
 
-/// Dropdown menu (mirrors Compose `DropdownMenu`) — anchored to a trigger
-/// container; clicking outside dismisses it.
+/// M3 `MenuItemColors`: the foreground roles a menu item resolves by enabled state.
+///
+/// Mirrors `androidx.compose.material3.MenuItemColors` field for field, and the defaults mirror
+/// `ColorScheme.defaultMenuItemColors`: text `onSurface`, icons `onSurfaceVariant`, and the disabled
+/// variants are the same roles at `ListItemDisabled*Opacity` (0.38).
+#[derive(Clone, PartialEq)]
+pub struct MenuItemColors {
+    pub text: crate::modifier::Color,
+    pub leading_icon: crate::modifier::Color,
+    pub trailing_icon: crate::modifier::Color,
+    pub disabled_text: crate::modifier::Color,
+    pub disabled_leading_icon: crate::modifier::Color,
+    pub disabled_trailing_icon: crate::modifier::Color,
+}
+
+impl MenuItemColors {
+    /// `MenuDefaults.itemColors()` — from the current theme's roles.
+    pub fn defaults() -> Self {
+        let c = crate::ui::theme::WiniaTheme::colors();
+        Self {
+            text: c.on_surface,
+            leading_icon: c.on_surface_variant,
+            trailing_icon: c.on_surface_variant,
+            disabled_text: with_alpha_factor(c.on_surface, DISABLED_ALPHA),
+            disabled_leading_icon: with_alpha_factor(c.on_surface, DISABLED_ALPHA),
+            disabled_trailing_icon: with_alpha_factor(c.on_surface, DISABLED_ALPHA),
+        }
+    }
+
+    pub fn text_color(&self, enabled: bool) -> crate::modifier::Color {
+        if enabled { self.text } else { self.disabled_text }
+    }
+
+    pub fn leading_icon_color(&self, enabled: bool) -> crate::modifier::Color {
+        if enabled { self.leading_icon } else { self.disabled_leading_icon }
+    }
+
+    pub fn trailing_icon_color(&self, enabled: bool) -> crate::modifier::Color {
+        if enabled { self.trailing_icon } else { self.disabled_trailing_icon }
+    }
+}
+
+impl std::fmt::Debug for MenuItemColors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MenuItemColors")
+    }
+}
+
+/// `ListTokens.ListItemDisabled*Opacity` — the disabled foreground alpha, shared with the navigation
+/// components (which keep their own copy of this constant; this is the menu's).
+const DISABLED_ALPHA: f32 = 0.38;
+
+fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modifier::Color {
+    crate::modifier::Color::from_argb(
+        ((color.a as f32 * factor).round().min(255.0)) as u8,
+        color.r,
+        color.g,
+        color.b,
+    )
+}
+
+/// Dropdown menu (mirrors Compose material3 `DropdownMenu`) — anchored to a trigger container;
+/// clicking outside dismisses it.
+///
+/// Every knob mirrors the material3 signature, and so does its default:
+///
+/// | M3 | winia | default |
+/// |---|---|---|
+/// | `offset: DpOffset` | [`Self::offset`] | `(0, 0)` |
+/// | `shape` | [`Self::shape`] | `MenuTokens.ContainerShape` — CornerExtraSmall (4dp) |
+/// | `containerColor` | [`Self::container_color`] | `MenuTokens.ContainerColor` — `surfaceContainer` |
+/// | `tonalElevation` | [`Self::tonal_elevation`] | `ElevationTokens.Level0` |
+/// | `shadowElevation` | [`Self::shadow_elevation`] | `MenuTokens.ContainerElevation` — Level2 (3dp) |
+/// | `border` | [`Self::border`] | `null` |
 ///
 /// ```ignore
 /// let expanded = ctx.remember(|| false);
@@ -624,6 +696,15 @@ impl Default for Dialog { fn default() -> Self { Self::new(false) } }
 pub struct DropdownMenu {
     expanded: crate::core::state::State<bool>,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// M3 `modifier` — applied to the menu's own container (the surface), so a caller can tag it or
+    /// adjust it. Appended outside the internal modifier, like every other component here.
+    modifier: crate::modifier::Modifier,
+    offset: (f32, f32),
+    shape: Option<crate::modifier::Shape>,
+    container_color: Option<crate::modifier::Color>,
+    tonal_elevation: f32,
+    shadow_elevation: Option<f32>,
+    border: Option<crate::ui::surface::SurfaceBorder>,
 }
 
 impl DropdownMenu {
@@ -631,11 +712,64 @@ impl DropdownMenu {
         Self {
             expanded,
             on_dismiss: None,
+            modifier: crate::modifier::Modifier::new(),
+            // M3: `DpOffset(0.dp, 0.dp)`. The drop-down placement itself comes from the anchor
+            // (`PopupPosition::BottomLeft`), which is the equivalent of the platform popup's anchoring.
+            offset: (0.0, 0.0),
+            shape: None,
+            container_color: None,
+            tonal_elevation: 0.0,
+            shadow_elevation: None,
+            border: None,
         }
     }
 
     pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_dismiss = Some(Arc::new(cb));
+        self
+    }
+
+    /// M3 `modifier` — applied to the menu's container (its surface). Appended outside the internal
+    /// modifier, like every other component here.
+    pub fn modifier(mut self, modifier: crate::modifier::Modifier) -> Self {
+        self.modifier = modifier;
+        self
+    }
+
+    /// M3 `offset: DpOffset` — added to the anchored position (x follows the layout direction there;
+    /// winia's anchor is explicit, so x is applied as given).
+    pub fn offset(mut self, x: f32, y: f32) -> Self {
+        self.offset = (x, y);
+        self
+    }
+
+    /// M3 `shape` — `MenuDefaults.shape` (CornerExtraSmall, 4dp) when unset.
+    pub fn shape(mut self, shape: impl Into<crate::modifier::Shape>) -> Self {
+        self.shape = Some(shape.into());
+        self
+    }
+
+    /// M3 `containerColor` — `MenuDefaults.containerColor` (`surfaceContainer`) when unset.
+    pub fn container_color(mut self, color: crate::modifier::Color) -> Self {
+        self.container_color = Some(color);
+        self
+    }
+
+    /// M3 `tonalElevation` — `ElevationTokens.Level0` by default.
+    pub fn tonal_elevation(mut self, elevation: f32) -> Self {
+        self.tonal_elevation = elevation;
+        self
+    }
+
+    /// M3 `shadowElevation` — `MenuTokens.ContainerElevation` (Level2, 3dp) when unset.
+    pub fn shadow_elevation(mut self, elevation: f32) -> Self {
+        self.shadow_elevation = Some(elevation);
+        self
+    }
+
+    /// M3 `border` — no border by default.
+    pub fn border(mut self, border: crate::ui::surface::SurfaceBorder) -> Self {
+        self.border = Some(border);
         self
     }
 
@@ -668,11 +802,19 @@ impl DropdownMenu {
         // `expanded=false` records `false` -> delete).
         ctx.record_overlay_active(id.get(), expanded);
         if expanded {
+            let shape = self.shape.unwrap_or(crate::modifier::Shape::RoundedRect { corner_radius: 4.0 });
+            let container_color = self
+                .container_color
+                .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().surface_container);
+            let shadow_elevation = self.shadow_elevation.unwrap_or(3.0); // ElevationTokens.Level2
+            let tonal_elevation = self.tonal_elevation;
+            let border = self.border;
+            let menu_modifier = self.modifier;
             ctx.open_overlay(crate::ui::overlay::OverlayDesc {
                 id: id.get(),
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomLeft,
-                offset: (0.0, 4.0),
+                offset: self.offset,
                 anchor_slide: None,
                 modal: false,
                 focus_scope: false,
@@ -682,15 +824,29 @@ impl DropdownMenu {
                 enter_anim: None, // DropdownMenu 默认无进入动画
                 exit_anim: None, // DropdownMenu 默认无退出动画
                 // M3's content is `@Composable ColumnScope.() -> Unit`: the items live in a COLUMN that
-                // the menu owns. winia has no `ColumnScope` receiver, so the menu wraps the content in a
-                // `Column` itself — and it is load-bearing, not cosmetic: composed as top-level siblings
-                // the items collapse to the last one, because a composition's root is a single node
-                // (`materialize`: "wrap in a container, or keep emitting siblings, which is its own
-                // round"). Measured with three items in a bare composer: arena_len=6, and the root was the
-                // LAST item (size 9x12) — the first two were gone, and the same thing showed up in
-                // `overlay_demo` and in the UI fixture's tree.
+                // the menu owns, inside the menu's own surface (shape/container/elevation), with
+                // `DropdownMenuVerticalPadding` (8dp) above and below. winia has no `ColumnScope`
+                // receiver, so the menu wraps the content itself — and the wrapper is load-bearing, not
+                // cosmetic: composed as top-level siblings the items collapse to the last one, because a
+                // composition's root is a single node (`materialize`: "wrap in a container, or keep
+                // emitting siblings, which is its own round"). Measured with three items in a bare
+                // composer: arena_len=6 and the root was the LAST item (9x12) — the first two were gone,
+                // and the same thing showed up in `overlay_demo` and in the UI fixture's tree.
                 content: Box::new(move |ctx| {
-                    crate::ui::Column::new().build(ctx, |ctx| menu(ctx));
+                    let mut surface = crate::ui::surface::Surface::new()
+                        .shape(shape)
+                        .color(container_color)
+                        .tonal_elevation(tonal_elevation)
+                        .shadow_elevation(shadow_elevation)
+                        .modifier(menu_modifier.clone());
+                    if let Some(b) = border {
+                        surface = surface.border(b);
+                    }
+                    surface.build(ctx, |ctx| {
+                        crate::ui::Column::new()
+                            .modifier(crate::modifier::Modifier::new().padding_vertical(8.0))
+                            .build(ctx, |ctx| menu(ctx));
+                    });
                 }),
                 local_snapshot: Vec::new(),
             });
@@ -708,6 +864,10 @@ pub struct DropdownMenuItem {
     /// 调用方 modifier，追加在内部样式**外层**（同 `Button` 约定：可覆盖默认样式；也是测试挂
     /// `test_tag` 的入口）——对齐 M3 `DropdownMenuItem(text, onClick, modifier, …)` 的 modifier。
     modifier: crate::modifier::Modifier,
+    /// M3 `colors: MenuItemColors`（未设 = `MenuDefaults.itemColors()`）。
+    colors: Option<MenuItemColors>,
+    /// M3 `contentPadding`（未设 = 水平 12、垂直 0）。
+    content_padding: Option<(f32, f32)>,
 }
 
 impl DropdownMenuItem {
@@ -717,6 +877,8 @@ impl DropdownMenuItem {
             on_click: None,
             enabled: true,
             modifier: crate::modifier::Modifier::new(),
+            colors: None,
+            content_padding: None,
         }
     }
 
@@ -735,16 +897,33 @@ impl DropdownMenuItem {
         self
     }
 
+    /// M3 `colors: MenuItemColors` — `MenuDefaults.itemColors()` when unset.
+    pub fn colors(mut self, colors: MenuItemColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+
+    /// M3 `contentPadding` — `MenuDefaults.DropdownMenuItemContentPadding` (horizontal 12dp, vertical 0)
+    /// when unset. Pass `PaddingValues`-style `(horizontal, vertical)`.
+    pub fn content_padding(mut self, horizontal: f32, vertical: f32) -> Self {
+        self.content_padding = Some((horizontal, vertical));
+        self
+    }
+
     /// `#[composable]`: same contract as Popup/Dialog (marks a composition unit).
     #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx) {
+        // M3 geometry (`Menu.kt`): `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)` with
+        // `padding(contentPadding)` (horizontal 12dp, vertical 0 by default). No per-item background and
+        // no per-item corner radius: the MENU's surface paints the container, and the item is a
+        // full-width row on top of it.
+        let (pad_h, pad_v) = self.content_padding.unwrap_or((12.0, 0.0));
         let modifier = crate::modifier::Modifier::new()
-            .size(160.0, 36.0)
-            .padding(crate::modifier::SizeValue::Static(crate::modifier::Dimension::Fixed(12.0)))
-            .background(
-                crate::modifier::Color::from_argb(255, 250, 250, 250),
-                crate::modifier::Shape::RoundedRect { corner_radius: 4.0 },
-            );
+            .min_width(112.0)
+            .max_width(280.0)
+            .min_height(48.0)
+            .padding_horizontal(pad_h)
+            .padding_vertical(pad_v);
         let on_click = self.on_click;
         let modifier = if self.enabled {
             modifier.clickable(move || {
@@ -757,16 +936,16 @@ impl DropdownMenuItem {
         };
         let modifier = modifier.then(self.modifier);
         let text = self.text;
+        let colors = self.colors.unwrap_or_else(MenuItemColors::defaults);
+        let text_color = colors.text_color(self.enabled);
+        // M3 typography: `ProvideTextStyle(MaterialTheme.typography.labelLarge)`.
+        let style = crate::ui::theme::WiniaTheme::typography().label_large;
         crate::ui::Column::new()
             .modifier(modifier)
             .build(ctx, |ctx| {
                 crate::ui::Text::new(text)
-                    .font_size(13.0)
-                    .color(if self.enabled {
-                        crate::modifier::Color::from_argb(255, 60, 60, 60)
-                    } else {
-                        crate::modifier::Color::from_argb(120, 160, 160, 160)
-                    })
+                    .style(style)
+                    .color(text_color)
                     .build(ctx);
             });
     }

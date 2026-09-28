@@ -2294,3 +2294,85 @@ fn dropdown_menu_dismisses_on_an_outside_click() {
         "an outside click must not pick anything: {texts:?}"
     );
 }
+
+/// What:  an open `DropdownMenu` with three items.
+/// When:  the tree is read.
+/// Then:  the geometry matches material3's menu metrics, read off the androidx sources
+///        (`material3/Menu.kt`: item `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)`,
+///        `DropdownMenuVerticalPadding = 8dp` around the column).
+///
+/// The item numbers are the reason this test exists: the component used to hard-code `size(160, 36)`,
+/// so every one of these assertions fails on the old geometry.
+#[test]
+fn dropdown_menu_geometry_matches_the_material3_metrics() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    app.refresh();
+
+    for tag in ["dm-item-new", "dm-item-rename", "dm-item-delete"] {
+        let (_, _, w, h) = app.find_tag_in_overlay(tag).unwrap_or_else(|| {
+            panic!("{tag} should be in the popup entry (sizes: {:?})", app.overlay_texts())
+        });
+        assert!(
+            (112.0..=280.0).contains(&w),
+            "{tag} width must be inside material3's sizeIn(112dp, 280dp), got {w}"
+        );
+        assert!(
+            h >= 48.0,
+            "{tag} height must be at least MenuListItemContainerHeight (48dp), got {h}"
+        );
+    }
+
+    // One surface around the column, with 8dp above and below: 3 items × ≥48 + 16.
+    let (_, _, cw, ch) = app.find_tag_in_overlay("dm-container").expect("the menu container");
+    assert!(
+        (112.0..=280.0).contains(&cw),
+        "the container is as wide as its widest item (no extra padding in M3), got {cw}"
+    );
+    assert!(
+        ch >= 3.0 * 48.0 + 16.0,
+        "the container must carry the 8dp vertical padding around three 48dp items (≥160), got {ch}"
+    );
+    assert!(
+        ch < 3.0 * 48.0 + 16.0 + 40.0,
+        "and it must not add more than that (rows are 48dp, not the old 36), got {ch}"
+    );
+}
+
+/// What:  an open `DropdownMenu`.
+/// When:  a pixel inside the menu's 8dp vertical padding is read, and the same read is taken far from
+///        the menu.
+/// Then:  the two differ — the container's surface is PAINTED (m3 `surfaceContainer`), not left
+///        transparent over the page. Nothing in the layout tree can show this: the surface colour is
+///        resolved when the node is built and `bg(...)` prints as `<dynamic>`.
+#[test]
+fn dropdown_menu_paints_its_surface() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+
+    let (cx, cy, _, _) = app.find_tag_in_overlay("dm-container").expect("the menu container");
+    // The container's own 8dp vertical padding: no item and no text there, so the pixel is the surface.
+    let inside = app
+        .pixel_at_logical(cx + 4.0, cy + 4.0)
+        .expect("a pixel inside the menu container");
+    let page = app
+        .pixel_at_logical(360.0, 480.0)
+        .expect("a pixel on the page, far from the menu");
+
+    let delta = [inside.0, inside.1, inside.2]
+        .iter()
+        .zip([page.0, page.1, page.2].iter())
+        .map(|(a, b)| (*a as i32 - *b as i32).abs())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        delta >= 6,
+        "the menu's surface must paint over the page (got inside={inside:?} page={page:?}, max delta {delta})"
+    );
+}

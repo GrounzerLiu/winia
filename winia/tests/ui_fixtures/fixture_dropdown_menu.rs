@@ -37,6 +37,7 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
             // Anchor: the menu opens below this row (the trigger sits above it, so the popup lands in
             // the empty space under the header where a click cannot hit anything else).
             DropdownMenu::new(expanded.clone())
+                .modifier(Modifier::new().test_tag("dm-container"))
                 .on_dismiss_request({
                     let e = expanded.clone();
                     move || e.set(false)
