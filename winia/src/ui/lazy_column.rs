@@ -125,9 +125,11 @@ pub struct LazyListState {
     /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
     /// 首次测量消费后清空。animate = 动画滚动（spring，对齐 animateScrollToItem）。
     pub(crate) jump_request: crate::core::state::State<Option<(usize, f32, bool)>>,
-    /// fling 滚动极限（测量期回写 = 内容高 - 视口高；0 = 未知 → 只拦下限。
-    /// scrollbar 侧读（content = limit + viewport），故 pub(crate) 不够——
-    /// 同 crate 的 scrollbar.rs 可见）。
+    /// How far a fling may travel: written back during measure as `content height - viewport height`,
+    /// or `f32::MAX` while that is still unknown. A REAL `0` means the content fits and the list cannot
+    /// move — see `ScrollState::fling_limit`, which had the same "0 means unknown" conflation.
+    ///
+    /// 同 crate 的 scrollbar.rs 可见（scrollbar 侧读，content = limit + viewport）。
     pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
@@ -147,7 +149,7 @@ impl LazyListState {
             last_known_first_key: crate::core::state::State::new(None),
             known_total: crate::core::state::State::new(usize::MAX),
             jump_request: crate::core::state::State::new(None),
-            fling_limit: crate::core::state::Backchannel::new(0.0),
+            fling_limit: crate::core::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::core::state::State::new(0),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
@@ -192,9 +194,9 @@ impl LazyListState {
             velocity,
             crate::animation::exponential_decay(4.2),
             move |o| {
-                let max = limit.peek();
-                let max = if max > 0.0 { max } else { f32::MAX };
-                o.clamp(0.0, max)
+                // The limit IS the truth: `f32::MAX` before the measure has run, `0` when the content
+                // fits (see `LazyListState::fling_limit`).
+                o.clamp(0.0, limit.peek())
             },
             || {},
         );
@@ -725,7 +727,7 @@ impl<A: LazyAxis> LazyList<A> {
         let viewport = ctx.remember(|| crate::core::state::State::new(600.0f32)).get();
         let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
         let content_height = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
-        let fling_limit = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
+        let fling_limit = ctx.remember(|| crate::core::state::Backchannel::new(f32::MAX)).get();
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
@@ -785,7 +787,9 @@ impl<A: LazyAxis> LazyList<A> {
                 // actually moved the target, which is what preserves the documented round-trip precision
                 // (a jump to 500 lands at 500, not at whatever the estimate-based conversion returns).
                 let last_max_off = fling_limit.get();
-                if last_max_off <= 0.0 {
+                // `0` (the content fits, nothing to clamp) and the not-yet-measured sentinel both take the
+                // unclamped branch.
+                if !(last_max_off > 0.0 && last_max_off < f32::MAX) {
                     (idx.min(total), off)
                 } else {
                     let target = pad_before + prefix_height(&cache_ref, idx.min(total), self.spacing) + off;

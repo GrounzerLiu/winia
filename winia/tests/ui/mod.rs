@@ -298,6 +298,23 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    /// A fast vertical drag: pointer down at `(x, y_from)`, steps of a few px with a 2ms pause each, then
+    /// release — a gesture that ends with real velocity, so the app follows it with a FLING.
+    ///
+    /// [`Self::drag`] sleeps 20ms per step, which can be slow enough that the release flings nothing at
+    /// all; a test about momentum has to use this one or it passes without exercising anything.
+    pub fn fling_inside(&mut self, x: f32, y_from: f32, y_to: f32) {
+        let steps = 16;
+        self.send(&format!("d {} {}", x as i32, y_from as i32));
+        for i in 1..=steps {
+            let t = i as f32 / steps as f32;
+            let y = y_from + (y_to - y_from) * t;
+            self.send(&format!("m {} {}", x as i32, y as i32));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        self.send(&format!("u {} {}", x as i32, y_to as i32));
+    }
+
     /// 键盘输入（Key 名称——winit 命名）
     pub fn key(&mut self, key: &str) {
         self.send(&format!("k {key}"));

@@ -3515,6 +3515,10 @@ fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
     }
 }
 
+/// material3's `MenuVerticalMargin` (`material/Menu.kt`), the clearance a pinned dropdown menu keeps from
+/// the top and bottom window edges. Used by the overlays that opt into `fit_around_anchor`.
+const MENU_VERTICAL_MARGIN: f32 = 48.0;
+
 /// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
 fn layout_overlays(pw: &mut PerWindow) {
     for ov in &mut pw.overlays {
@@ -3536,7 +3540,22 @@ fn layout_overlays(pw: &mut PerWindow) {
             crate::core::composition_local::with_snapshot(&snap, || {
                 ov.composer.recompose(|ctx| (ov.content)(ctx));
             });
-            ov.composer.layout(crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height));
+            // An overlay that fits itself around its anchor also keeps material3's
+            // `MenuVerticalMargin` (48dp) clear of the top and bottom window edges, so a menu that ends
+            // up as tall as the space allows still reads as a panel floating over the page instead of a
+            // full-bleed column. The margin is a MEASURE constraint here and a placement clamp below:
+            // without it a 30-item menu took the whole window height and sat flush against both edges.
+            let constraints = if ov.fit_around_anchor {
+                crate::layout::Constraints::new(
+                    0.0,
+                    pw.width,
+                    MENU_VERTICAL_MARGIN,
+                    (pw.height - MENU_VERTICAL_MARGIN * 2.0).max(0.0),
+                )
+            } else {
+                crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height)
+            };
+            ov.composer.layout(constraints);
             if !crate::core::composer::take_compose_after_layout() {
                 break;
             }
@@ -3586,15 +3605,20 @@ fn layout_overlays(pw: &mut PerWindow) {
             // same three for x (start-aligned, end-aligned, pinned to the near edge). winia's overlay
             // placement only ever did the first, which is why a long menu used to hang off the bottom
             // edge with its last rows unreachable.
-            let fits = |y: f32, h: f32| y >= 0.0 && y + size.1 <= h;
+            //
+            // "Fits" is measured against `MenuVerticalMargin` (48dp), material3's `verticalMargin`, so a
+            // pinned menu keeps that much clear of each window edge. M3's HORIZONTAL margin is 0
+            // (`leftToWindowLeft(margin = 0)`), so x keeps none — recorded, not guessed.
+            let v = MENU_VERTICAL_MARGIN;
+            let fits = |y: f32, h: f32| y >= v && y + size.1 <= h - v;
             let y = if fits(ay + ah, h) {
                 ay + ah
             } else if fits(ay - size.1, h) {
                 ay - size.1
             } else {
-                // Pinned: as close to the anchor as the window allows (a menu taller than the window is
-                // capped by its scroll container, so this always lands inside).
-                (ay + ah).clamp(0.0, (h - size.1).max(0.0))
+                // Pinned: as close to the anchor as the margin allows (the measure constraint above
+                // guarantees the menu is at most `window - 2 * margin` tall, so this always lands).
+                (ay + ah).clamp(v, (h - v - size.1).max(v))
             };
             let x_in = |x: f32, w: f32| x >= 0.0 && x + size.0 <= w;
             let x = if x_in(ax, w) {

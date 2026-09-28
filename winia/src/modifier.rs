@@ -2784,7 +2784,14 @@ pub struct ScrollState {
     pub offset: crate::core::state::State<f32>,
     /// 是否正在滚动
     pub is_scroll_in_progress: crate::core::state::State<bool>,
-    /// fling 滚动极限（布局期回写 = 内容高 - 视口高；0 = 未知 → fling 只拦下限）
+    /// How far a fling may travel: written back by the layout as `content height - viewport height`, or
+    /// `f32::MAX` while that is still unknown.
+    ///
+    /// A REAL `0` therefore means the content fits and the container cannot move at all. It used to be
+    /// read as "unknown" too (`if limit > 0.0 { limit } else { f32::MAX }`), so a container whose content
+    /// exactly fitted still flinged: a drag was correctly clamped by the node's own `content - viewport`,
+    /// but the momentum after the release was not (measured on a three-item menu: a drag that moved
+    /// nothing left the offset at 74).
     pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
@@ -2797,7 +2804,7 @@ impl ScrollState {
         ScrollState {
             offset: crate::core::state::State::new(0.0),
             is_scroll_in_progress: crate::core::state::State::new(false),
-            fling_limit: crate::core::state::Backchannel::new(0.0),
+            fling_limit: crate::core::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::core::state::State::new(0),
         }
     }
@@ -2851,9 +2858,9 @@ impl ScrollState {
             velocity,
             crate::animation::exponential_decay(4.2),
             move |o| {
-                let max = limit.peek();
-                let max = if max > 0.0 { max } else { f32::MAX };
-                o.clamp(0.0, max)
+                // The limit IS the truth here: `f32::MAX` while the layout has not measured the content
+                // yet, `0` when the content fits and this container cannot move.
+                o.clamp(0.0, limit.peek())
             },
             on_boundary,
             move || {

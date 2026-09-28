@@ -141,6 +141,12 @@ state.animate_scroll_to_item(50, 0.0);
   measure_node 用子节点底部计算内容高）；拖拽滚动（按下滚动容器内容跟随
   指针，松手按最小二乘速度 fling，对齐 Compose scrollable 拖拽 + fling）；
   滚轮保持离散（不 fling）；手动输入自动取消进行中的 fling。
+  ⚠ 极限的 `0` 是**真值**（内容刚好放下 = 滚不动），"未测量"用哨兵 `f32::MAX`。
+  两者曾经混在一起（clamp 写成 `if limit > 0.0 { limit } else { f32::MAX }`），
+  于是内容刚好放下的容器**拖拽不动、松手后惯性却滚起来**（实测：三项菜单
+  offset 0 → 887）。普通容器与 lazy 两处同修，回归测试
+  `dropdown_menu_does_not_fling_when_the_content_fits`（含"能滚的菜单仍然会 fling"
+  的正对照，避免测试空转）。
 
 ### 2.5 吸顶 header（stickyHeader，对齐 Compose LazyListMeasure 的 pinned 处理）
 

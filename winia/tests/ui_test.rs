@@ -2419,14 +2419,22 @@ fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
     let (_, wh) = app.frame_size().map(|(w, h)| (w, h)).unwrap_or((0, 0));
     let window_h = wh as f32 / 1.5; // the capture is at the window's scale (1.5 on this machine)
     eprintln!("长菜单: container=({cx},{cy},{cw},{ch}) window_h≈{window_h}");
+    // material3's `MenuVerticalMargin` is 48dp and the provider requires a candidate to sit within
+    // `[margin, window - margin]` — so a menu that fills the space it was given still floats clear of
+    // both window edges instead of bleeding into them.
+    let margin = 48.0;
     assert!(
-        cy + ch <= window_h + 1.0,
-        "the menu must stay inside the window: bottom {} > window {window_h}",
+        cy >= margin - 1.0,
+        "the menu must keep MenuVerticalMargin (48dp) from the top edge, got y={cy}"
+    );
+    assert!(
+        cy + ch <= window_h - margin + 1.0,
+        "and from the bottom edge: bottom {} > window {window_h} - {margin}",
         cy + ch
     );
     assert!(
-        ch <= window_h + 1.0,
-        "and its height must be capped by the window, got {ch}"
+        ch <= window_h - 2.0 * margin + 1.0,
+        "so its height is capped at window - 2*margin, got {ch}"
     );
 
     // The menu scrolls. The wheel goes over the menu (a wheel is routed by what is under it — an overlay
@@ -2472,5 +2480,58 @@ fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
         "the last item must be inside the container once scrolled: rendered y {rendered_y} h {item19_h} \
          against container ({cy}..{})",
         cy + ch
+    );
+}
+
+/// What:  a menu whose content FITS the space it was given (three items, 160 against 160), and then a
+///        menu that does not fit (30 items).
+/// When:  the same gesture runs inside each — pointer down, a fast upward drag, release.
+/// Then:  the fitted menu does not move at all, and the long one does.
+///
+/// The fitted case is the reported bug: the drag itself was already clamped by the node's
+/// `content - viewport`, so it moved nothing, but the MOMENTUM after the release was clamped against
+/// `fling_limit` — and a limit of 0 was read as "unknown, do not clamp above" (`if limit > 0.0 { limit }
+/// else { f32::MAX }`), so the content slid out of its container. Measured before the fix: offset 0 -> 74.
+/// The long menu is the control: if the gesture stopped being a fling at all, this test would pass
+/// vacuously.
+#[test]
+fn dropdown_menu_does_not_fling_when_the_content_fits() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    app.refresh();
+    let (_, cy, _, ch) = app.find_tag_in_overlay("dm-container").expect("the short menu");
+
+    // Fast steps: the harness's `drag` sleeps 20ms per step, which is slow enough that the release may
+    // not fling at all — and then this test would pass without exercising anything.
+    app.fling_inside(70.0, cy + ch - 20.0, 130.0);
+    std::thread::sleep(Duration::from_millis(600));
+    app.refresh();
+    let short_offset = app.overlay_scroll_offset("dm-container");
+    assert_eq!(
+        short_offset,
+        Some(0.0),
+        "a menu whose content fits must not move, fling included (offset {short_offset:?})"
+    );
+
+    // Control: same gesture, a menu that really is scrollable.
+    app.click(bx + bw / 2.0, by + bh / 2.0); // close the short one
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (lx, ly, lw, lh) = app.find_tag("dm-many-toggle").expect("the long-menu trigger");
+    app.click(lx + lw / 2.0, ly + lh / 2.0);
+    app.expect_overlay_text_timeout("长项 0", Duration::from_secs(5));
+    app.refresh();
+    let (_, mcy, _, mch) = app.find_tag_in_overlay("dm-many-container").expect("the long menu");
+    app.fling_inside(70.0, mcy + mch - 20.0, 130.0);
+    std::thread::sleep(Duration::from_millis(600));
+    app.refresh();
+    let long_offset = app
+        .overlay_scroll_offset("dm-many-container")
+        .expect("the long menu is a scroll container");
+    assert!(
+        long_offset > 0.0,
+        "the control gesture must still fling a menu that CAN scroll (offset {long_offset})"
     );
 }
