@@ -446,29 +446,49 @@ the flat estimate. Same script, after:
 same change retired the fast-scroll passes measured on the lib side (24px rows: 10 rows/frame 2 → 1, 25
 rows/frame 3 → 1).
 
-**What is left in the tail.** Jump 2 (to index 999, the end of the list) still takes two passes rather than
-one. Part of it was the clamp, and that part is now fixed: a jump past the end is clamped by the MEASURE
-(only it knows `max_off` from real heights), and `build` used to open its window at the un-clamped anchor
-the measure then moved away from. `build` now clamps the request itself with the `max_off` the last measure
-wrote, and only converts the anchor when the clamp actually moved the target — so an in-range jump keeps the
-documented round-trip precision (jump to 500 still lands at 500). Measured pass counts for a jump past the
-end, 2 runs each:
+**What is left in the tail: nothing structural.** Getting a jump past the end down to one pass took two
+steps, both measured on the same script.
+
+*Step 1 — the clamp (commit `2e3cb9b`).* A jump past the end is clamped by the MEASURE, which is the only
+side that knows `max_off` from real heights, so `build` opened its window at the un-clamped anchor the
+measure then moved away from. `build` now clamps the request itself with the `max_off` the last measure
+wrote (`fling_limit`, O(1)) and converts the anchor only when the clamp actually moved the target, which
+keeps the documented round-trip precision (a jump to 500 still lands at 500).
 
 | shape | passes | compose µs (2 runs) |
 |---|---|---|
 | `lazy_column_demo`, jump to the end after other jumps | 2 (was 3) | 1109 / 1111 (was 1203 / 1312) |
 | `lazy_column_demo`, cold: jump to the end as the FIRST action | 2 (was 3) | 1186 / 1287 (was 1468 / 1359) |
-| lib (`the_coverage_estimate_keeps_every_scroll_frame_at_one_pass`) | 3 (was 4) | — |
+| lib test | 3 (was 4) | — |
 
-That is the whole justification: one compose+layout round removed, consistently. The frame's µs move by
-~100-200, which is inside this demo's run-to-run spread, so the pass count is the metric, not the
-microseconds.
+*Step 2 — one pricing for every walk.* The pass that was left came from an inconsistency inside the walk
+functions: the window walk priced an unmeasured item with the median of the measured ones
+(`coverage_height`), while `anchor_from_offset` and `prefix_height` — the two functions that convert between
+an index and a pixel offset — still priced it with the flat 48px estimate. A jump resolves its anchor through
+those, so `build` opened the window at one position and the measure resolved another. All of them use
+`coverage_height` now, along with the measure's content-height sum and the sticky-header walks.
 
-One pass is still left over, and its cause is different: `anchor_from_offset` converts the clamped offset
-with the FLAT estimate for unmeasured items while the window walk converts with the median, so a measurement
-still moves the anchor once. Making those two agree is a consistency question for both (the round-trip
-precision between `prefix_height` and `anchor_from_offset` is what the jump documentation leans on), so it is
-recorded rather than changed in passing.
+| shape | passes before | passes after |
+|---|---|---|
+| lib, jump past the end | 3 | **1** |
+| `lazy_column_demo`, jump to the end, 2 runs | 2 / 2 | **1 / 1** |
+| `lazy_column_demo`, jump to 500 (in range), 2 runs | 1 / 1 | 1 / 1 |
+
+The pass count is the metric throughout: the frame's µs move by ~100-200, inside this demo's run-to-run
+spread.
+
+Two things step 2 exposed, both recorded rather than hidden:
+
+- **The test harness was rendering a frame no user sees.** `render_lazy` ran ONE compose+layout, while the
+  app converges the frame when the measure asks (`take_compose_after_layout`). On a frame whose window comes
+  up short the single-pass render is a frame that never reaches a screen — which is how two reverse-layout
+  pixel tests caught this change. The harness now runs the app's loop, so a lazy pixel test asserts on the
+  frame that would actually be drawn.
+- **`scroll_to_item_clamps_to_end`'s offset bound moved from `>45000` to `>41000`**, and that is the change
+  working: 1000 rows of ~43px end at ~42400 with a 600px viewport, where the old bound came from the flat
+  estimate's 47400. The pixels the user sees are pinned by `jump_to_end_shows_last_item_with_real_viewport`.
+
+
 
 ## 5. Reproducing
 

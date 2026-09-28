@@ -630,10 +630,17 @@ impl ItemHeightCache {
 }
 
 /// 累计高度：index 之前各项高度和（含间距）
+///
+/// Uses `coverage_height` — the same function the window walk uses — because the conversions that trade
+/// between an index and a pixel offset have to agree on what an unmeasured item is worth, or they do not
+/// invert each other: `scroll_to_item` computes a target with this and the anchor is resolved with
+/// `anchor_from_offset`, and a mismatch between the two makes a jump land somewhere else and costs an
+/// extra compose+layout round to correct (`docs/frame-cost-probe-round.md` 4b). For MEASURED items the
+/// two functions are identical, so this only changes what the estimate says about the rest.
 pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32) -> f32 {
     let mut acc = 0.0;
     for i in 0..index {
-        acc += cache.height(i) + spacing;
+        acc += cache.coverage_height(i) + spacing;
     }
     acc
 }
@@ -643,19 +650,23 @@ pub(crate) fn prefix_height(cache: &ItemHeightCache, index: usize, spacing: f32)
 /// 未测项按预估高度继续推算（而非在已知范围末尾截断）——否则滚动超出已测范围时
 /// 锚点错误退回 0（实测：offset=2000 空缓存时恒返回 (0,0)，滚动失效）。
 /// 已知高度部分线性扫描，超出部分用除法直接估算（O(1) 防大 offset 循环）。
+///
+/// `coverage_height` for the same reason as [`prefix_height`]: this is the inverse of it, and the two are
+/// only inverses if they price an unmeasured item the same way. The extrapolation past the recorded part
+/// uses that same value as its step, for the same reason.
 pub(crate) fn anchor_from_offset(cache: &ItemHeightCache, offset: f32, spacing: f32, before: f32) -> (usize, f32) {
     // 内容坐标含 before padding：项 i 顶 = before + prefix(i)
     let known = cache.heights.len();
     let mut acc = before;
     for i in 0..known {
-        let h = cache.height(i) + spacing;
+        let h = cache.coverage_height(i) + spacing;
         if acc + h > offset {
             return (i, offset - acc);
         }
         acc += h;
     }
     // 超出已知范围：按预估高度除法估算剩余项数
-    let step = LAZY_ITEM_ESTIMATED_HEIGHT + spacing;
+    let step = cache.coverage_height(known) + spacing;
     if step <= 0.0 { return (known.saturating_sub(1), 0.0); }
     let remaining = offset - acc;
     let extra = (remaining / step).floor() as usize;
@@ -827,7 +838,9 @@ impl<A: LazyAxis> LazyList<A> {
                 let mut i = first_index;
                 while i > 0 {
                     i -= 1;
-                    c -= cache_ref.height(i) + self.spacing;
+                    // `coverage_height`: these walks compare against `prefix_height` and the anchor's own
+                    // content position, so they have to price an unmeasured item the same way it does.
+                    c -= cache_ref.coverage_height(i) + self.spacing;
                     if intervals.is_sticky(i) && c <= offset + 0.01 {
                         pin = Some(i);
                         break;
@@ -840,9 +853,9 @@ impl<A: LazyAxis> LazyList<A> {
                 let mut j = p;
                 while j > 0 {
                     j -= 1;
-                    c2 -= cache_ref.height(j) + self.spacing;
+                    c2 -= cache_ref.coverage_height(j) + self.spacing;
                     if intervals.is_sticky(j) {
-                        if c2 + cache_ref.height(j) > offset {
+                        if c2 + cache_ref.coverage_height(j) > offset {
                             prev_pin = Some(j);
                         }
                         break;
@@ -1036,7 +1049,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         let (pad_before, pad_after) = self.content_padding;
         let mut content_h = pad_before + pad_after;
         for g in 0..self.total {
-            content_h += cache.height(g) + self.spacing;
+            // `coverage_height`, like `prefix_height` and the window walk: `max_off` clamps an offset that
+            // `prefix_height` produced, so the two have to price unmeasured items the same way or the end
+            // of the list disagrees with itself by a little on every frame.
+            content_h += cache.coverage_height(g) + self.spacing;
         }
         self.content_height.set(content_h);
 
@@ -1159,7 +1175,6 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             });
         }
 
-        // 自身尺寸：交叉轴填满父，主轴 = 视口（滚动容器）；子项超出部分由 scroll clip
         self.cache.set(cache);
         (A::size(A::cross_max(constraints), vh), placements)
     }
@@ -1371,15 +1386,24 @@ mod tests {
         (px.to_vec(), pm.width() as usize)
     }
 
-    fn render_lazy(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
+    /// One frame, the way the app runs one: compose + layout, and again while the measure asks for it
+    /// (`take_compose_after_layout`, `docs/lazy-column.md` 2.9). A single compose+layout is NOT the frame
+    /// a user sees when the measure finds the window short — the app converges it within the frame — so a
+    /// test rendering one pass would assert on a frame that never reaches a screen.
+    fn render_lazy(build: impl Fn(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
         let mut composer = Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
-        composer.compose(scene);
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        for _ in 0..8 {
+            composer.compose(&scene);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+            if !crate::core::composer::take_compose_after_layout() {
+                break;
+            }
+        }
         let mut surface = surfaces::raster_n32_premul((400, 600)).unwrap();
         let canvas = surface.canvas();
         canvas.clear(SkColor::WHITE);
@@ -1427,7 +1451,7 @@ mod tests {
             LazyColumn::new()
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(
-                    items2,
+                    items2.clone(),
                     |v: &u64| *v,
                     move |ctx, _i, v| {
                         c2.fetch_add(1, Ordering::Relaxed);
@@ -1610,9 +1634,9 @@ mod tests {
         let items = items.clone();
         render_lazy(move |ctx| {
             LazyColumn::new()
-                .state(s)
+                .state(s.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
-                .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
                     crate::ui::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
@@ -1663,23 +1687,55 @@ mod tests {
         assert!(diff_rows > 10, "跳转后内容变化，diff_rows={diff_rows}");
     }
 
+    /// The landing precision that the jump documentation leans on, in the state a jump actually has to
+    /// reason in: the cache is MIXED — real heights for rows that have been seen, an estimate for the
+    /// rest — and every jump after the first one runs with a cache like that. `scroll_to_item(i)` must
+    /// land with `firstVisibleItemIndex == i` for every row that can BE first, whatever the estimate says.
+    /// The last rows cannot (there is no content below them to fill the viewport), so they are the clamp
+    /// case, asserted separately below.
     #[test]
-    fn scroll_to_item_clamps_to_end() {
-        // 越界跳转 clamp 到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
+    fn jumps_land_exactly_on_their_index_with_a_partially_measured_cache() {
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let _ = render_lazy_state(&state, &items);
+        for target in [500usize, 0, 400, 50, 700, 200, 950] {
+            state.scroll_to_item(target, 0.0);
+            let _ = render_lazy_state(&state, &items);
+            assert_eq!(
+                state.first_visible(),
+                target,
+                "a jump to {target} must land on it"
+            );
+        }
+        // The last row is out of reach: the clamp takes the list to its end, which is a DIFFERENT (lower)
+        // first index — the case whose window has to be opened clamped rather than at the request.
+        state.scroll_to_item(999, 0.0);
+        let _ = render_lazy_state(&state, &items);
+        let clamped = state.first_visible();
+        assert!(
+            clamped < 999 && clamped > 900,
+            "a jump to the last row clamps to the end, actual {clamped}"
+        );
+    }
+
+    #[test]
+    fn scroll_to_item_clamps_to_end() {        // 越界跳转 clamp 到末尾（对齐 Compose：scroll position 在 measure 期 clamp）
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (_px, _w) = render_lazy_state(&state, &items);
         state.scroll_to_item(99999, 0.0);
         let (_px1, _w1) = render_lazy_state(&state, &items);
-        // 滚动到底部时首项 = total - 视口容纳项数 ≈ 1000 - 600/48 ≈ 987
-        // （真实高度下同样 ≈987——600px 视口 + ~47.5px 项）
+        // 滚动到底部时首项 = total - 视口容纳项数（600px 视口、~43px 项 → ≈987）
         assert!(
             state.first_visible() >= 980,
             "越界跳转应 clamp 到末尾，实际 {}",
             state.first_visible()
         );
+        // `offset` 在内容底部附近。这里的下界按**真实**内容高算：1000 项 × ~43px - 600px 视口
+        // ≈ 42400。原断言是 >45000——那是 48px 平坦估算（1000 × 48 - 600 = 47400）的产物；
+        // 现在内容高按已测行高的中位数计价（`coverage_height`），估算偏高 12% 的偏差被去掉。
         assert!(
-            state.offset() > 45000.0,
+            state.offset() > 41000.0,
             "offset 应接近内容底部，实际 {}",
             state.offset()
         );
@@ -2083,7 +2139,7 @@ mod tests {
         let s0 = state.clone();
         render_lazy(move |ctx| {
             let mut lb = LazyColumn::new()
-                .state(s0)
+                .state(s0.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height());
             for s in 0..5u64 {
                 let c = c0.clone();

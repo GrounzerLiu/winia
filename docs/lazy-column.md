@@ -238,21 +238,26 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   | before | 6986 µs | 4682 µs |
   | after | **1885 µs** | **963 µs** (= first compose 425 + layout 537) |
 
-  The window walk now uses `ItemHeightCache::coverage_height`: for an unmeasured item, the MEDIAN of the
-  measured ones, clamped to `[estimate/2, estimate]` (never above the flat estimate — being wrong upward is
-  what shrinks a window — and never below half of it, so stray 1px items cannot blow a window up by an
-  unbounded factor). The anchor math and the placements keep reading `height`, the flat estimate: guessing
-  differently there would move scroll positions. This only changes behaviour where the walk reaches
-  unmeasured items — a warm frame walks over measured ones, and an empty cache has no median.
-  `the_coverage_estimate_keeps_every_scroll_frame_at_one_pass` and
-  `the_coverage_height_follows_the_measured_rows_within_bounds` pin it. A jump PAST the end used to pay one
-  more pass than it had to: the measure owns the clamp, so `build` opened its window at the un-clamped
-  position the measure then moved away from — it now clamps the request itself with the `max_off` the last
-  measure wrote, and converts the anchor only when the clamp actually moved the target (so an in-range jump
-  keeps the round-trip precision). Measured compose+layout passes for a jump to the end of a 1000-row list:
-  3 -> 2, cold or warm, and 4 -> 3 on the lib side. What is still left is a mismatch inside the anchor
-  conversion (it reads the flat estimate where the window walk reads the median) — see
-  `docs/frame-cost-probe-round.md` §4b.
+  The window walk uses `ItemHeightCache::coverage_height`: for an unmeasured item, the MEDIAN of the measured
+  ones, clamped to `[estimate/2, estimate]` (never above the flat estimate — being wrong upward is what
+  shrinks a window — and never below half of it, so stray 1px items cannot blow a window up by an unbounded
+  factor). **Every coordinate walk uses it**, not just the window: `prefix_height` and `anchor_from_offset`
+  (the two functions that convert between an index and a pixel offset), the measure's content-height sum and
+  the sticky-header walks. They have to agree — a mismatch makes the two conversions stop inverting each
+  other, so `build` opens a window at one position and the measure resolves another, which costs a compose
+  round to repair. `height` keeps its own meaning (the flat estimate) and is what the cache's tests pin.
+  This only changes behaviour where a walk reaches unmeasured items — a warm frame walks over measured ones,
+  and an empty cache has no median.
+  `the_coverage_estimate_keeps_every_scroll_frame_at_one_pass` (every scroll shape AND every jump, in range
+  or past the end, at one pass), `the_coverage_height_follows_the_measured_rows_within_bounds` and
+  `jumps_land_exactly_on_their_index_with_a_partially_measured_cache` pin it. A jump past the end also
+  clamps its request in `build` with the `max_off` the last measure wrote, instead of leaving the measure to
+  move an anchor the window was opened at (`docs/frame-cost-probe-round.md` §4b has the pass counts for both
+  steps: 3 -> 2 by the clamp, 2 -> 1 by the shared pricing).
+- **The tests render the frame the app draws.** `render_lazy`/`render_lazy_state` run compose + layout and
+  then again while the measure asks (`take_compose_after_layout`), because a single pass is not what a user
+  sees when the measure finds the window short — the app converges it within the frame (`docs/
+  frame-cost-probe-round.md` §4b).
 - **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
   compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
   composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test
