@@ -308,17 +308,21 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                                 .build(ctx);
                         },
                         {
-                            clone!(exposed_open, picked);
+                            clone!(exposed_open, exposed_value, picked);
                             move |ctx| {
                                 for label in ["选项 A", "选项 B", "选项 C"] {
-                                    clone!(exposed_open, picked);
+                                    clone!(exposed_open, exposed_value, picked);
                                     DropdownMenuItem::new(label)
                                         .content_padding(
                                             ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING,
                                             0.0,
                                         )
                                         .on_click(move || {
+                                            // What an exposed dropdown's caller does in material3 too: the
+                                            // field shows what was picked. `TextFieldValue::new` puts the
+                                            // caret at the end and drops any composition range.
                                             picked.set(String::from(label));
+                                            exposed_value.set(TextFieldValue::new(label));
                                             exposed_open.set(false);
                                         })
                                         .build(ctx);

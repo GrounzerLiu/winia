@@ -3076,3 +3076,39 @@ fn exposed_dropdown_trailing_icon_is_inside_the_field_and_rotates() {
     );
 }
 
+
+/// What:  an exposed dropdown whose caller writes the picked label back into the field.
+/// When:  an item is clicked.
+/// Then:  the field SHOWS it: the label appears in the main tree and the field's previous text is gone.
+///
+/// The box cannot do this itself — in material3 too the caller owns the text field's value, and its samples
+/// write it from the item's `onClick`. What this pins is the pattern `ExposedDropdownMenuDefaults` is meant
+/// to be used with, and the reason the fixture's field starts out showing something else.
+#[test]
+fn exposed_dropdown_shows_the_picked_item_in_its_field() {
+    let mut app = UiTest::launch("dropdown_menu");
+    let _ = open_exposed_menu(&mut app);
+    assert!(
+        app.all_texts().iter().any(|t| t.contains("已选")),
+        "the field starts with its own value"
+    );
+
+    app.click_overlay_tag("dm-exposed-item-1");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    // The label it shows is the taller one, so it cannot be confused with the item's own text in the popup:
+    // the popup entry is gone and `all_texts` reads the main tree only.
+    let texts = {
+        std::thread::sleep(Duration::from_millis(200));
+        app.refresh();
+        app.all_texts()
+    };
+    eprintln!("暴露式下拉: 选中后主树文本={:?}", texts.iter().filter(|t| t.contains("选项") || t.contains("已选")).collect::<Vec<_>>());
+    assert!(
+        texts.iter().any(|t| t.contains("选项 B")),
+        "the field must show the picked label: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("已选")),
+        "and the value it had before must be gone: {texts:?}"
+    );
+}

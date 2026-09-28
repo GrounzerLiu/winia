@@ -214,13 +214,20 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                     },
                     {
                         let exposed_open = exposed_open.clone();
+                        let exposed_value = exposed_value.clone();
                         move |ctx| {
                             for (index, label) in ["选项 A", "选项 B"].into_iter().enumerate() {
                                 let closer = exposed_open.clone();
+                                let field = exposed_value.clone();
                                 DropdownMenuItem::new(label)
                                     .modifier(Modifier::new().test_tag(format!("dm-exposed-item-{index}")))
                                     .content_padding(ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING, 0.0)
-                                    .on_click(move || closer.set(false))
+                                    .on_click(move || {
+                                        // The caller's half of an exposed dropdown: the field shows what was
+                                        // picked (material3's own samples do this in `onClick`).
+                                        field.set(TextFieldValue::new(label));
+                                        closer.set(false);
+                                    })
                                     .build(ctx);
                             }
                         }

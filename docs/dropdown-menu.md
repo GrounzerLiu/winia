@@ -43,23 +43,40 @@ DropdownMenuItem::new("删除")
 
 ```rust
 let expanded = ctx.remember(|| false);
+let value = ctx.remember(|| TextFieldValue::new(""));
 ExposedDropdownMenuBox::new(expanded.clone())
-    .on_expanded_change(move |open| expanded.set(open))
+    .on_expanded_change({
+        let expanded = expanded.clone();
+        move |open| expanded.set(open)
+    })
     .anchor_type(ExposedDropdownMenuAnchorType::PrimaryNotEditable) // 只读字段：点击切换
     .match_anchor_width(true)                                       // 菜单宽度 = 输入框宽度（M3 默认）
     .build(ctx,
         |ctx| {  // 锚点：输入框（点击它即切换展开态）
-            let open = expanded.get();
+            let value = value.clone();
+            let arrow = expanded.clone();
             TextField::new(value).outlined().read_only(true)
-                .trailing_icon(move |ctx| ExposedDropdownMenuDefaults::trailing_icon(ctx, open))
+                .trailing_icon(move |ctx| {
+                    ExposedDropdownMenuDefaults::trailing_icon(ctx, arrow.clone(), Modifier::new())
+                })
                 .build(ctx);
         },
         |ctx| {  // 项：用 16dp 水平内边距（M3 ExposedDropdownMenuItemHorizontalPadding）
+            let field = value.clone();
+            let closer = expanded.clone();
             DropdownMenuItem::new("选项 A")
                 .content_padding(ExposedDropdownMenuDefaults::ITEM_HORIZONTAL_PADDING, 0.0)
+                .on_click(move || {
+                    // The caller's half of an exposed dropdown — material3's samples write the field's
+                    // value here too, because the box does not own it: the field shows what was picked.
+                    field.set(TextFieldValue::new("选项 A"));
+                    closer.set(false);
+                })
                 .build(ctx);
         });
 ```
+
+注意两处**调用方职责**（M3 同样如此）：选中项后把标签写回输入框的值（`TextFieldValue::new` 会把光标放到末尾并清掉 IME 组合范围）；`trailing_icon` 收的是 `State<bool>` 而非 bool（原因见 §4.8）。
 
 走顶层 overlay 机制（独立 Composer）：`anchor_slot` 定位、无进出动画（与 Compose 默认一致）、`modal: false`、`dismiss_on_outside: true`、每次组合记录 `active` 供 sync 删除（同 Popup/Dialog 的契约，见 `docs/key-system-design.md`）。
 
