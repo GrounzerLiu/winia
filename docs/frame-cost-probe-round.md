@@ -446,11 +446,29 @@ the flat estimate. Same script, after:
 same change retired the fast-scroll passes measured on the lib side (24px rows: 10 rows/frame 2 → 1, 25
 rows/frame 3 → 1).
 
-**What is left in the tail.** Jump 2 (to index 999, the end of the list) still takes two passes, for a
-different reason: a jump past the end has its offset CLAMPED during measurement (`max_off`), the clamped
-offset changes the anchor, and the composed window was opened at the un-clamped one. `build` has the cache
-and the viewport, so it could clamp the request itself; that is recorded rather than done, because the
-frame is correct either way and these numbers are about the estimate.
+**What is left in the tail.** Jump 2 (to index 999, the end of the list) still takes two passes rather than
+one. Part of it was the clamp, and that part is now fixed: a jump past the end is clamped by the MEASURE
+(only it knows `max_off` from real heights), and `build` used to open its window at the un-clamped anchor
+the measure then moved away from. `build` now clamps the request itself with the `max_off` the last measure
+wrote, and only converts the anchor when the clamp actually moved the target — so an in-range jump keeps the
+documented round-trip precision (jump to 500 still lands at 500). Measured pass counts for a jump past the
+end, 2 runs each:
+
+| shape | passes | compose µs (2 runs) |
+|---|---|---|
+| `lazy_column_demo`, jump to the end after other jumps | 2 (was 3) | 1109 / 1111 (was 1203 / 1312) |
+| `lazy_column_demo`, cold: jump to the end as the FIRST action | 2 (was 3) | 1186 / 1287 (was 1468 / 1359) |
+| lib (`the_coverage_estimate_keeps_every_scroll_frame_at_one_pass`) | 3 (was 4) | — |
+
+That is the whole justification: one compose+layout round removed, consistently. The frame's µs move by
+~100-200, which is inside this demo's run-to-run spread, so the pass count is the metric, not the
+microseconds.
+
+One pass is still left over, and its cause is different: `anchor_from_offset` converts the clamped offset
+with the FLAT estimate for unmeasured items while the window walk converts with the median, so a measurement
+still moves the anchor once. Making those two agree is a consistency question for both (the round-trip
+precision between `prefix_height` and `anchor_from_offset` is what the jump documentation leans on), so it is
+recorded rather than changed in passing.
 
 ## 5. Reproducing
 

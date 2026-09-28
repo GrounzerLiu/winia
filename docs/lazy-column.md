@@ -245,9 +245,14 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   differently there would move scroll positions. This only changes behaviour where the walk reaches
   unmeasured items — a warm frame walks over measured ones, and an empty cache has no median.
   `the_coverage_estimate_keeps_every_scroll_frame_at_one_pass` and
-  `the_coverage_height_follows_the_measured_rows_within_bounds` pin it. What still takes a second pass on a
-  jump is the offset CLAMP (a jump past the end is clamped during measurement, so the window was opened at
-  an offset that measurement changed) — recorded in `docs/frame-cost-probe-round.md` §4b.
+  `the_coverage_height_follows_the_measured_rows_within_bounds` pin it. A jump PAST the end used to pay one
+  more pass than it had to: the measure owns the clamp, so `build` opened its window at the un-clamped
+  position the measure then moved away from — it now clamps the request itself with the `max_off` the last
+  measure wrote, and converts the anchor only when the clamp actually moved the target (so an in-range jump
+  keeps the round-trip precision). Measured compose+layout passes for a jump to the end of a 1000-row list:
+  3 -> 2, cold or warm, and 4 -> 3 on the lib side. What is still left is a mismatch inside the anchor
+  conversion (it reads the flat estimate where the window walk reads the median) — see
+  `docs/frame-cost-probe-round.md` §4b.
 - **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
   compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
   composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test

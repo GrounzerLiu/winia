@@ -760,7 +760,32 @@ impl<A: LazyAxis> LazyList<A> {
         // index 开始组合，不经过像素反推）；否则由像素 offset 反推
         let pad_before = self.content_padding.0;
         let (first_index, first_item_offset) = match state.jump_request.get() {
-            Some((idx, off, _)) => (idx.min(total), off),
+            Some((idx, off, _)) => {
+                // A jump whose target lies PAST the end of the content is clamped by the measure, which is
+                // the only side that knows `max_off` from real heights. A window composed at the
+                // un-clamped position is then a window the measure moves out from under itself, and that
+                // mismatch is what makes the frame of such a jump take a second compose+layout pass —
+                // measured in `docs/frame-cost-probe-round.md` 4b (a jump to the end of a 1000-row list:
+                // 2203 µs against 1000 for the same jump inside the range). Clamp here first, with the
+                // `max_off` the last measure wrote, so the window opens where the measure will leave the
+                // list.
+                //
+                // In-range jumps keep the exact requested anchor: the conversion only runs when the clamp
+                // actually moved the target, which is what preserves the documented round-trip precision
+                // (a jump to 500 lands at 500, not at whatever the estimate-based conversion returns).
+                let last_max_off = fling_limit.get();
+                if last_max_off <= 0.0 {
+                    (idx.min(total), off)
+                } else {
+                    let target = pad_before + prefix_height(&cache_ref, idx.min(total), self.spacing) + off;
+                    let clamped = target.clamp(0.0, last_max_off);
+                    if clamped == target {
+                        (idx.min(total), off)
+                    } else {
+                        anchor_from_offset(&cache_ref, clamped, self.spacing, pad_before)
+                    }
+                }
+            }
             None => {
                 // ⚠ 锚点 index 必须 clamp 到 total 内：offset 超界时 anchor 按预估
                 // 高度外推（可远超 total）→ visible_range 的 end<start → 组合窗溢出
@@ -2637,6 +2662,26 @@ mod tests {
             assert_eq!(
                 passes, 1,
                 "a jump to {jump_to} must compose what it needs in one pass, took {passes}"
+            );
+        }
+
+        // A jump PAST the end is the case the measure clamps: `build` now clamps the request first, with
+        // the `max_off` the last measure wrote, so the window opens where the measure will leave the list
+        // instead of at a position the measure moves it away from. Measured pass counts for this shape:
+        // 3 here (and 4 with the clamp disabled), 2 in `lazy_column_demo` across runs (3 without it,
+        // including a cold jump straight to the end) — one full compose+layout round removed, which is
+        // the whole justification; the frame's µs move by ~100-200, i.e. within this demo's run-to-run
+        // spread (`docs/frame-cost-probe-round.md` 4b). It is not down to one pass: what is left over is
+        // the anchor conversion below using the FLAT estimate where the window walk uses the median's,
+        // so measuring still moves the anchor once. That is a consistency question for both, not another
+        // clamp, and it is recorded rather than guessed at.
+        for jump_to in [399usize, 5000, 399] {
+            state.scroll_to_item(jump_to, 0.0);
+            let passes = converge(&mut composer);
+            eprintln!("compose+layout passes jumping past the end to {jump_to}: {passes}");
+            assert!(
+                passes <= 4,
+                "a jump past the end ({jump_to}) must converge in a bounded number of passes, took {passes}"
             );
         }
     }
