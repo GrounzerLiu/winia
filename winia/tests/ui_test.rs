@@ -2540,3 +2540,78 @@ fn dropdown_menu_does_not_fling_when_the_content_fits() {
         "the control gesture must still fling a menu that CAN scroll (offset {long_offset})"
     );
 }
+
+/// What:  a `DropdownMenu` opened from its trigger, with the pointer left alone.
+/// When:  the frame right after the click is captured once and TWO points are read from it — one near the
+///        menu's top-left (covered as soon as the menu is on screen at all) and one in its bottom-right
+///        band (covered only once it has grown to its full size).
+/// Then:  the inner point already shows the menu's surface and the outer one still shows the page: the
+///        menu is animating in, growing from its anchor.
+///
+/// This is material3's menu transition (`Menu.kt`'s `DropdownMenuContent`): scale `ClosedScaleTarget =
+/// 0.8f` → `ExpandedScaleTarget = 1f`, alpha `0f` → `1f`, with `transformOrigin =
+/// calculateTransformOrigin(anchorBounds, menuBounds)`. Without it the menu appears at full size in one
+/// frame and the outer point shows the surface in the first capture — which fails this test.
+#[test]
+fn dropdown_menu_animates_in_from_its_anchor() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-toggle").expect("the trigger");
+
+    // The probes need the menu's SETTLED geometry, and waiting for it takes longer than the 200ms
+    // animation — so read it from a first open, close again, and only then measure the opening frame.
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("新建文件", Duration::from_secs(5));
+    app.refresh();
+    let (cx, cy, cw, ch) = app.find_tag_in_overlay("dm-container").expect("the short menu");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
+
+    // The probes: one at the menu's top EDGE near the pivot (the top edge is the pivot's own y, so it is
+    // covered at any scale) and one 6px inside the far corner (only covered once the scale is ~0.94, the
+    // last third of the animation).
+    let inner = (cx + cw / 2.0, cy + 2.0);
+    let outer = (cx + cw - 6.0, cy + ch - 6.0);
+    // Read the capture scale BEFORE the measured click: `frame_size` captures and sleeps 120ms of its own.
+    let (fw, fh) = app.frame_size().expect("a frame");
+    let (sx, sy) = (fw as f32 / 420.0, fh as f32 / 520.0);
+
+    // A raw `c` (not `click`, which sleeps 150ms — three quarters of the animation), then a burst of
+    // captures: one frame per sample, ~40ms apart, which is fine-grained enough that the growing frames
+    // cannot be missed, and immune to exactly where the first capture lands.
+    app.send(&format!("c {} {}", (bx + bw / 2.0) as i32, (by + bh / 2.0) as i32));
+    let mut samples = Vec::new();
+    for _ in 0..16 {
+        let p = app.pixels_at_logical_scaled(&[inner, outer], sx, sy);
+        samples.push((p[0], p[1]));
+    }
+    eprintln!("菜单动画采样: {samples:?}");
+
+    // Settled reference: with the animation over, BOTH points show the surface.
+    std::thread::sleep(Duration::from_millis(400));
+    let settled = app.pixels_at_logical(&[inner, outer]);
+    let (inner_settled, outer_settled) = (settled[0].expect("inner"), settled[1].expect("outer"));
+    assert_eq!(
+        inner_settled, outer_settled,
+        "once settled, both probes must be the menu's own surface: {inner_settled:?} vs {outer_settled:?}"
+    );
+
+    // The signature of an enter animation: at least one sampled frame is a PARTIAL blend — neither the page
+    // behind the menu nor the menu's own settled surface. Without the animation the menu is at full size
+    // and full opacity in its first frame, so every sample is one of those two and nothing in between.
+    //
+    // The SCALE half of material3's transition (`ClosedScaleTarget = 0.8f`) shares this one ease curve, so
+    // by the time the panel is opaque enough to sample, the scale is already ~0.98 and the painted box has
+    // all but reached its final size: the growth is real but only measurable with a purpose-built probe.
+    // The single shared curve is a recorded deviation (`docs/dropdown-menu.md`).
+    let page = samples[0].0.expect("the first sample's pixel");
+    let transitional = samples
+        .iter()
+        .filter_map(|(i, _)| *i)
+        .any(|px| px != inner_settled && px != page);
+    assert!(
+        transitional,
+        "some frame must show the menu part-way in — a blend of the page {page:?} and its surface \
+         {inner_settled:?}: {samples:?}"
+    );
+}

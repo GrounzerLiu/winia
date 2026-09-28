@@ -132,7 +132,25 @@ winia 对照实现：
 
 观察到的既有偏差（记录，不在本轮修）：偏移上限 472 vs M3 的 456（内容高含 8dp×2、视口不含，差 16px）。这是**所有带 padding 的滚动容器**共有的 off-by-padding，不是菜单特有。
 
-### 4.4 待对齐（本轮后续阶段）
+### 4.4 阶段 4a 对齐：进出动画
+
+M3 真身（`Menu.kt` 的 `DropdownMenuContent`）：`updateTransition(expandedState)` 驱动 `graphicsLayer` 的 `scaleX/scaleY/alpha`，目标值为 `ClosedScaleTarget = 0.8f` → `ExpandedScaleTarget = 1f`、`ClosedAlphaTarget = 0f` → `ExpandedAlphaTarget = 1f`，pivot 用 `transformOrigin = calculateTransformOrigin(anchorBounds, menuBounds)`。
+
+| 项 | M3 | winia |
+|---|---|---|
+| scale | 0.8 → 1.0 | `OverlayAnimSpec::default_enter/exit`（`scale_from = 0.8`）——同一组目标值 |
+| alpha | 0 → 1 | 同 spec 的 `fade` |
+| pivot | 锚点交点（`calculateTransformOrigin`） | `OverlayAnimSpec::anchor_pivot` + `overlay_transform_origin()`（逐分支照搬 M3），仅菜单打开；其余 overlay 仍是内容中心 |
+| 退出动画 | 反向播放同一 transition | `exit_anim`（`default_exit`，`clamp` 反向） |
+| 时长/曲线 | `FastSpatial`（缩放）/ `FastEffects`（淡入），数值在 motion scheme 里 | winia 200ms 单一 ease 曲线（与 Dialog 同规格） |
+
+**偏差（记录，不猜）**：M3 用**两条不同**的运动规格（缩放走 spatial、alpha 走 effects），而 winia 的 `OverlayAnimSpec` 只有一条曲线、scale 与 alpha 共用。后果是实测可见窗口很窄：alpha 达到 0.9 时 scale 已 ≈0.98，因此"肉眼可见的长大"很短暂（淡入明显、放大含蓄）。`FastSpatial`/`FastEffects` 的具体数值不在本地抽取的源码里，所以没有编数值。
+
+**验证**（都是客观测量，不靠眼睛）：
+- 动画开/关对照：**关掉 `enter_anim/exit_anim` 后** `dropdown_menu_animates_in_from_its_anchor` 必红（每一帧都是满尺寸面板），打开则绿——测试读的是**一次捕获内的两个点**（同一帧），断言存在"既非页面也非稳定面板"的过渡帧；
+- 缩放分量单独验证（临时把 `scale_from` 夸大到 0.2 再 revert）：点击后 60ms 时面板横向只覆盖到 ~110 物理像素（稳定后 192），说明确实按 pivot 从锚点侧长大。
+
+## 4.5 待对齐（本轮后续阶段）
 
 | 项 | M3 真身 | winia 现状 | 阶段 |
 |---|---|---|---|

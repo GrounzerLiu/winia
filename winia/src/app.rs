@@ -203,6 +203,10 @@ struct OverlayWindow {
     local_snapshot: crate::core::composition_local::LocalSnapshot,
     /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
     screen_pos: (f32, f32),
+    /// The anchor's window rect `(x, y, w, h)`, resolved each layout pass (the only pass that knows it).
+    /// Kept for the render: an animation that grows out of the anchor needs both rects, and material3's
+    /// menus compute their transform origin from exactly these two (`calculateTransformOrigin`).
+    anchor_rect: Option<(f32, f32, f32, f32)>,
     /// 该 overlay 内当前 hover 的 hoverable slot 集合（独立于主树——
     /// overlay 是独立 composer，slot 与主树可能重复）
     hovered_slots: std::collections::HashSet<u64>,
@@ -3054,6 +3058,7 @@ impl OverlayWindow {
             content: desc.content,
             local_snapshot: desc.local_snapshot,
             screen_pos: (0.0, 0.0),
+            anchor_rect: None,
             hovered_slots: std::collections::HashSet::new(),
             pressed_interaction: None,
             // progress is driven only when an enter or exit spec exists (0->1
@@ -3664,6 +3669,8 @@ fn layout_overlays(pw: &mut PerWindow) {
             pos
         };
         ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
+        // The anchor rect, for the render's transform origin (see `OverlayWindow::anchor_rect`).
+        ov.anchor_rect = anchored.then_some((ax, ay, aw, ah));
         // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
         // translated by screen_pos — visuals store window-minus-origin.
         ov.composer.screen_origin = ov.screen_pos;
@@ -3812,9 +3819,33 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
             );
         }
         if anim_scale != 1.0 {
-            canvas.translate(((size.0 / 2.0) * scale, (size.1 / 2.0) * scale));
+            // Scale around the pivot the animation asks for: material3's menus grow out of their anchor
+            // (`anchor_pivot`, the origin `calculateTransformOrigin` picks), everything else keeps the
+            // content centre it has always used.
+            let (px_frac, py_frac) = match (ov.closing, &ov.enter_anim, &ov.exit_anim) {
+                (false, Some(spec), _) if spec.anchor_pivot => ov
+                    .anchor_rect
+                    .map(|anchor| {
+                        crate::ui::overlay::overlay_transform_origin(
+                            anchor,
+                            (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
+                        )
+                    })
+                    .unwrap_or((0.5, 0.5)),
+                (true, _, Some(spec)) if spec.anchor_pivot => ov
+                    .anchor_rect
+                    .map(|anchor| {
+                        crate::ui::overlay::overlay_transform_origin(
+                            anchor,
+                            (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
+                        )
+                    })
+                    .unwrap_or((0.5, 0.5)),
+                _ => (0.5, 0.5),
+            };
+            canvas.translate(((px_frac * size.0) * scale, (py_frac * size.1) * scale));
             canvas.scale((anim_scale, anim_scale));
-            canvas.translate((-(size.0 / 2.0) * scale, -(size.1 / 2.0) * scale));
+            canvas.translate((-(px_frac * size.0) * scale, -(py_frac * size.1) * scale));
         }
         if anim_dy != 0.0 {
             canvas.translate((0.0, anim_dy * size.1 * scale));

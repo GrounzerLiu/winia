@@ -46,6 +46,43 @@ pub fn anchor_slide_lerp(anchor_axis: f32, progress: f32) -> f32 {
     anchor_axis * (1.0 - progress.clamp(0.0, 1.0))
 }
 
+/// The point an anchored overlay scales out of, as fractions of its own box — material3's
+/// `calculateTransformOrigin(anchorBounds, menuBounds)` (`material3/Menu.kt`), which is what makes a
+/// dropdown menu look like it grows out of the control that opened it instead of out of its centre.
+///
+/// M3's branches, verbatim: a menu entirely beside the anchor pins that axis to its near edge (`0` when
+/// the menu starts past the anchor's end, `1` when it ends before the anchor starts); a menu that
+/// overlaps the anchor on an axis uses the middle of the two boxes' intersection; a zero-sized menu
+/// falls back to `0`.
+pub fn overlay_transform_origin(
+    anchor: (f32, f32, f32, f32),
+    menu: (f32, f32, f32, f32),
+) -> (f32, f32) {
+    let (ax, ay, aw, ah) = anchor;
+    let (mx, my, mw, mh) = menu;
+    let pivot_x = if mx >= ax + aw {
+        0.0
+    } else if mx + mw <= ax {
+        1.0
+    } else if mw == 0.0 {
+        0.0
+    } else {
+        let intersection_center = (ax.max(mx) + (ax + aw).min(mx + mw)) / 2.0;
+        (intersection_center - mx) / mw
+    };
+    let pivot_y = if my >= ay + ah {
+        0.0
+    } else if my + mh <= ay {
+        1.0
+    } else if mh == 0.0 {
+        0.0
+    } else {
+        let intersection_center = (ay.max(my) + (ay + ah).min(my + mh)) / 2.0;
+        (intersection_center - my) / mh
+    };
+    (pivot_x, pivot_y)
+}
+
 /// The height an entering/closing overlay is clipped to, or `None` for "no clip".
 ///
 /// Two render-time rules, both easy to get wrong:
@@ -112,6 +149,10 @@ pub struct OverlayAnimSpec {
     /// means by `delayMillis`.
     pub(crate) delay: std::time::Duration,
     pub(crate) interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
+    /// Scale around the menu's own centre (what every overlay did before this existed) or around the
+    /// point material3's menus grow from — see [`overlay_transform_origin`], which is
+    /// `calculateTransformOrigin(anchorBounds, menuBounds)` from `material3/Menu.kt`.
+    pub(crate) anchor_pivot: bool,
 }
 
 impl OverlayAnimSpec {
@@ -154,6 +195,7 @@ impl OverlayAnimSpec {
             duration: std::time::Duration::from_millis(200),
             delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()),
+            anchor_pivot: false,
         }
     }
 
@@ -168,23 +210,24 @@ impl OverlayAnimSpec {
             duration: std::time::Duration::from_millis(200),
             delay: std::time::Duration::ZERO,
             interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseInCubic::new()),
+            anchor_pivot: false,
         }
     }
 
     /// Scale only (no fade).
     pub fn scale_only(from: f32, duration: std::time::Duration) -> Self {
-        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: from, fade: false, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
     }
 
     /// Fade only.
     pub fn fade_only(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
     }
 
     /// Dropdown slide + fade (slide_in y=-height/2 with fade — mirrors docked
     /// dropdown `slideIn(-height/2) + fadeIn`).
     pub fn slide_down(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: -0.5, reveal_top: false, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
     }
 
     /// Hold the start value for `delay` before the animation runs (Compose's `delayMillis`). See the field
@@ -236,7 +279,7 @@ impl OverlayAnimSpec {
     /// expand — true shared-element morph needs anchor geometry; 300-400ms
     /// with EaseOutCubic lands crisply).
     pub fn expand_fade(duration: std::time::Duration) -> Self {
-        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()) }
+        Self { scale_from: 1.0, fade: true, slide_from_y: 0.0, reveal_top: true, duration, delay: std::time::Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::EaseOutCubic::new()), anchor_pivot: false }
     }
 
     /// Animation progress (0..=1) -> (scale, alpha, dy, reveal) — called per
@@ -841,6 +884,11 @@ impl DropdownMenu {
             let tonal_elevation = self.tonal_elevation;
             let border = self.border;
             let menu_modifier = self.modifier;
+            // material3's menu animation targets: scale 0.8 -> 1 with a fade, growing out of the anchor.
+            let mut enter_anim = OverlayAnimSpec::default_enter();
+            enter_anim.anchor_pivot = true;
+            let mut exit_anim = OverlayAnimSpec::default_exit();
+            exit_anim.anchor_pivot = true;
             ctx.open_overlay(crate::ui::overlay::OverlayDesc {
                 id: id.get(),
                 anchor_slot: Some(anchor_slot),
@@ -856,8 +904,20 @@ impl DropdownMenu {
                 // hanging off the bottom.
                 fit_around_anchor: true,
                 on_dismiss: self.on_dismiss,
-                enter_anim: None, // DropdownMenu 默认无进入动画
-                exit_anim: None, // DropdownMenu 默认无退出动画
+                // material3's menu open/close animation (`Menu.kt`'s `DropdownMenuContent`): a transition
+                // on `expandedState` driving `graphicsLayer { scaleX/scaleY/alpha }` from
+                // `ClosedScaleTarget = 0.8f` / `ClosedAlphaTarget = 0f` to `ExpandedScaleTarget = 1f` /
+                // `ExpandedAlphaTarget = 1f`, with `transformOrigin =
+                // calculateTransformOrigin(anchorBounds, menuBounds)` — so the menu grows out of its
+                // anchor. `OverlayAnimSpec::default_enter/exit` already carries 0.8 + fade, which is
+                // exactly those targets; `anchor_pivot` is the transform origin.
+                //
+                // Not material3's: the duration and curve. M3 reads them from `MotionSchemeKeyTokens.
+                // FastSpatial` (scale) and `FastEffects` (alpha), whose values live in the motion scheme
+                // and are NOT in the extracted sources here, so this keeps winia's 200ms
+                // ease-out-in (Dialog's enters with the same spec) rather than guessing at numbers.
+                enter_anim: Some(enter_anim),
+                exit_anim: Some(exit_anim),
                 // M3's content is `@Composable ColumnScope.() -> Unit`: the items live in a COLUMN that
                 // the menu owns, inside the menu's own surface (shape/container/elevation), with
                 // `DropdownMenuVerticalPadding` (8dp) above and below. winia has no `ColumnScope`

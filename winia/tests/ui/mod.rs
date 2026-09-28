@@ -524,7 +524,47 @@ impl UiTest {
         self.pixel((x * sx) as u32, (y * sy) as u32).map(|(_, _, r, g, b, a)| (r, g, b, a))
     }
 
-    /// Like [`UiTest::wait_centre_luma`], at a logical point: `None` means no pixel could be read at all,
+    /// Several logical points from ONE captured frame: `r` once, then one `px` read per point, which
+    /// returns pixels of the SAME frame (a capture is only replaced by the next `r`).
+    ///
+    /// That is what makes an animation observable: [`Self::pixel_at_logical`] — and `pixel` under it —
+    /// captures and sleeps 120ms PER CALL, so two points read through it land in different frames, and a
+    /// 200ms scale animation is over by the second read.
+    pub fn pixels_at_logical(&mut self, points: &[(f32, f32)]) -> Vec<Option<(u8, u8, u8, u8)>> {
+        let Some((fw, fh)) = self.frame_size() else {
+            return vec![None; points.len()];
+        };
+        if self.width <= 0.0 || self.height <= 0.0 {
+            return vec![None; points.len()];
+        }
+        self.pixels_at_logical_scaled(points, fw as f32 / self.width, fh as f32 / self.height)
+    }
+
+    /// [`Self::pixels_at_logical`] with the frame scale supplied by the caller.
+    ///
+    /// A capture that has to land in a specific moment needs this: `frame_size` captures and sleeps 120ms
+    /// of its own, which for a 200ms animation is most of it. Read the scale once, then measure.
+    pub fn pixels_at_logical_scaled(
+        &mut self,
+        points: &[(f32, f32)],
+        sx: f32,
+        sy: f32,
+    ) -> Vec<Option<(u8, u8, u8, u8)>> {
+        let phys: Vec<(u32, u32)> = points.iter().map(|(x, y)| ((x * sx) as u32, (y * sy) as u32)).collect();
+        self.send("r");
+        std::thread::sleep(Duration::from_millis(20));
+        phys.iter()
+            .map(|(x, y)| {
+                self.send(&format!("px {x} {y}"));
+                self.read_prefixed_line("PIXEL:", Duration::from_millis(800))
+                    .and_then(|line| line.strip_prefix("PIXEL:").and_then(parse_pixel_line))
+                    .filter(|(_, _, rx, ry, _)| (*rx, *ry) == (*x, *y))
+                    .map(|(_, _, _, _, (r, g, b, a))| (r, g, b, a))
+            })
+            .collect()
+    }
+
+    /// Like [`UiTest::pixel_at_logical`], at a logical point: `None` means no pixel could be read at all,
     /// `Some` carries the luma that satisfied `pred` or the last one seen.
     pub fn wait_pixel_luma(
         &mut self,
