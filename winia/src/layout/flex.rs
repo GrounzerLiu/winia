@@ -230,11 +230,27 @@ pub(crate) fn measure_flex<A: FlexAxis>(
         .sum::<f32>()
         + total_spacing;
 
-    let remaining_main = if A::main_max(constraints).is_finite() {
-        (A::main_max(constraints) - total_content_main).max(0.0)
-    } else {
-        0.0
+    // The arrangement spreads the space the container ACTUALLY ends up with, so the container's main size
+    // is resolved first and the leftover is derived from it. Two things make that subtle:
+    //
+    //  - The unbounded sentinel is `f32::MAX`, which IS finite: the old `main_max().is_finite()` guard let
+    //    it through, so `remaining` came out as `f32::MAX` and `Arrangement::Center` placed the child at
+    //    1.7e38. Measured on a menu item's label (`pos:[12,170141173319264429905852091742258462720]`).
+    //  - A container that carries a MINIMUM (a 48dp menu item whose label is 20px) really does have space
+    //    to distribute, which only shows up once the constrained size is used instead of the content size.
+    //
+    // SpaceBetween/SpaceAround/SpaceEvenly are defined against the AVAILABLE space, so they keep using the
+    // maximum whenever there is a real one — that is how the demos spread a bar across its container.
+    let main_max = A::main_max(constraints);
+    let measured_main = match arrangement {
+        Arrangement::SpaceBetween | Arrangement::SpaceAround | Arrangement::SpaceEvenly
+            if main_max < f32::MAX =>
+        {
+            A::constrain_main(constraints, total_content_main + (main_max - total_content_main).max(0.0))
+        }
+        _ => A::constrain_main(constraints, total_content_main),
     };
+    let remaining_main = (measured_main - total_content_main).max(0.0);
     let gap_count = if n > 1 { n - 1 } else { 0 };
     let (spacing_extra, leading_space) = compute_spacing(arrangement, remaining_main, gap_count);
     let effective_spacing = spacing + spacing_extra;
@@ -269,12 +285,6 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     }
 
     // ── RTL 镜像 ──
-    let measured_main = match arrangement {
-        Arrangement::SpaceBetween | Arrangement::SpaceAround | Arrangement::SpaceEvenly => {
-            A::constrain_main(constraints, total_content_main + remaining_main)
-        }
-        _ => A::constrain_main(constraints, total_content_main),
-    };
     if direction == LayoutDirection::Rtl {
         let container_x = A::rtl_container_width(measured_main, cross_size);
         for p in &mut placements {

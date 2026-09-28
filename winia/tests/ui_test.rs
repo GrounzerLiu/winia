@@ -2340,6 +2340,25 @@ fn dropdown_menu_geometry_matches_the_material3_metrics() {
         ch < 3.0 * 48.0 + 16.0 + 40.0,
         "and it must not add more than that (rows are 48dp, not the old 36), got {ch}"
     );
+
+    // The label is centred in its 48dp item — material3's `Row(verticalAlignment = CenterVertically)`.
+    // Without it the label sits at the item's top and the menu reads as asymmetric padding even though
+    // the container's own 8dp is symmetric (the tree showed `pos:[12,0]` in a 48-tall row before).
+    let (ix, iy, _, ih) = app.find_tag_in_overlay("dm-item-new").expect("the first item");
+    let (tx, ty, _, th) = app
+        .overlay_text_rect("新建文件")
+        .expect("the first item's label");
+    assert!(
+        (tx - ix - 12.0).abs() < 0.5,
+        "the label keeps the item's 12dp horizontal padding: label x {tx} against item x {ix}"
+    );
+    let gap_top = ty - iy;
+    let gap_bottom = (iy + ih) - (ty + th);
+    eprintln!("菜单项: item=({ix},{iy},{ih}) label=({tx},{ty},{th}) 上={gap_top} 下={gap_bottom}");
+    assert!(
+        (gap_top - gap_bottom).abs() <= 1.0,
+        "the label must be vertically centred in the item: {gap_top} above it, {gap_bottom} below"
+    );
 }
 
 /// What:  an open `DropdownMenu`.

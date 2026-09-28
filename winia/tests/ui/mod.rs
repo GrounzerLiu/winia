@@ -677,6 +677,12 @@ impl UiTest {
         overlay_scroll_offset(&self.tree, tag)
     }
 
+    /// The rect of a node in a popup entry by its text (see [`overlay_text_rect`]). Callers must
+    /// `refresh()`/`tree()` first.
+    pub fn overlay_text_rect(&self, text: &str) -> Option<(f32, f32, f32, f32)> {
+        overlay_text_rect(&self.tree, text)
+    }
+
     /// Click a tag inside the popup entries.
     pub fn click_overlay_tag(&mut self, tag: &str) {
         let (x, y, w, h) = self
@@ -1257,6 +1263,48 @@ fn overlay_scroll_offset(tree: &Value, tag: &str) -> Option<f32> {
     for_each_window_scoped(tree, true, |_, _, _, root| {
         if found.is_none() {
             found = walk(root, tag);
+        }
+    });
+    found
+}
+
+/// The rect (absolute, layer-local + the entry's screen origin) of the first node in a popup entry whose
+/// modifier is `text(<text>)`.
+///
+/// Menu labels carry no `test_tag` — they are content, not chrome — so this is how a test reaches one,
+/// e.g. to check that a 48dp item centres its 20px label (`Arrangement::Center`, material3's
+/// `verticalAlignment = CenterVertically`).
+fn overlay_text_rect(tree: &Value, text: &str) -> Option<(f32, f32, f32, f32)> {
+    let want = format!("text({text})");
+    fn walk(n: &Value, ax: f32, ay: f32, want: &str) -> Option<(f32, f32, f32, f32)> {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().find_map(|child| walk(child, ax, ay, want));
+        }
+        let (x, y) = match n.get("pos").and_then(|value| value.as_array()) {
+            Some(p) if p.len() >= 2 => (
+                ax + p[0].as_f64().unwrap_or(0.0) as f32,
+                ay + p[1].as_f64().unwrap_or(0.0) as f32,
+            ),
+            _ => (ax, ay),
+        };
+        if n.get("mod").and_then(|value| value.as_str()) == Some(want) {
+            let (w, h) = match n.get("size").and_then(|value| value.as_array()) {
+                Some(s) if s.len() >= 2 => (
+                    s[0].as_f64().unwrap_or(0.0) as f32,
+                    s[1].as_f64().unwrap_or(0.0) as f32,
+                ),
+                _ => (0.0, 0.0),
+            };
+            return Some((x, y, w, h));
+        }
+        n.get("children")
+            .and_then(|value| value.as_array())
+            .and_then(|children| children.iter().find_map(|child| walk(child, x, y, want)))
+    }
+    let mut found = None;
+    for_each_window_scoped(tree, true, |_, ox, oy, root| {
+        if found.is_none() {
+            found = walk(root, ox, oy, &want);
         }
     });
     found

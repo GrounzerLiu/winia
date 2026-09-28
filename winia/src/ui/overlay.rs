@@ -983,7 +983,12 @@ impl DropdownMenuItem {
         let text_color = colors.text_color(self.enabled);
         // M3 typography: `ProvideTextStyle(MaterialTheme.typography.labelLarge)`.
         let style = crate::ui::theme::WiniaTheme::typography().label_large;
+        // `Arrangement::Center` is material3's `Row(verticalAlignment = Alignment.CenterVertically)`: the
+        // item is at least 48dp tall while its label is ~20px, and without the centring the label sits at
+        // the item's TOP — which reads as asymmetric padding around the menu (measured before this:
+        // text `pos:[12,0]` in a 48-tall item, i.e. 28px below the text and 0 above it).
         crate::ui::Column::new()
+            .arrangement(crate::layout::node::Arrangement::Center)
             .modifier(modifier)
             .build(ctx, |ctx| {
                 crate::ui::Text::new(text)

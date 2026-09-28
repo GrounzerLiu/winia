@@ -51,6 +51,20 @@ DropdownMenuItem::new("删除")
 
 **证据**：修复前 fixture 树里 `新建文件` 0 次 / `重命名` 0 次 / `删除` 1 次；修复后三者各 1 次。
 
+## 2b. 已修：项内容没有垂直居中（并暴露一个 flex 布局 bug）
+
+**症状**（用户看 demo 截图指出："上下的padding不对称"）：容器自身的 8dp 上下内边距是对的，但**项里的文字贴在项顶部**——项 48 高、文字 20，于是文字下方空 28、上方空 0，整块看起来下方更空。实测树：文字节点 `pos:[12,0]`。
+
+**M3 真身**：`DropdownMenuItemContent` 的最外层是 `Row(..., verticalAlignment = Alignment.CenterVertically)`——项内容垂直居中。
+
+**直接修法**：项容器加 `Arrangement::Center`（winia 的等价物）。
+
+**但这一改暴露出框架级 bug**（`layout/flex.rs`）：主轴剩余空间的判定写成 `A::main_max(constraints).is_finite()`，而 winia 的"无界"哨兵是 `f32::MAX`，**它 `is_finite()` 为真** → 剩余空间 = `f32::MAX` → `Arrangement::Center` 把子节点放到 `170141173319264429905852091742258462720`（实测值），也就是 1.7e38。
+
+**修法**：先解出容器最终的主轴尺寸，再由它算剩余——既让"带 min 的容器"（48dp 项 + 20px 文字）真正有空间可分配，也把哨兵挡在算术之外；SpaceBetween/SpaceAround/SpaceEvenly 语义不变（它们定义在"可用空间"上，仍用有限 max）。
+
+**证据**：修后文字 `pos:[12,14]` = (48−20)/2 ✓；测试里断言 `上 = 下`，实测 `item=(16,162,48) label=(28,176,20) 上=14 下=14`。
+
 ## 3. 测试（`fixture_dropdown_menu` + `ui_test.rs`）
 
 | 测试 | 钉住的行为 |
@@ -91,6 +105,7 @@ DropdownMenuItem::new("删除")
 | 项几何 | `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)` + `padding(horizontal 12dp, vertical 0)` | `min_width(112).max_width(280).min_height(48).padding_horizontal(12).padding_vertical(0)` |
 | 项背景/圆角 | 无（由容器绘制） | 已去掉原来的写死白底 + 4dp 圆角 |
 | 项文本 | `ProvideTextStyle(typography.labelLarge)` | `WiniaTheme::typography().label_large`（14/20/0.1/Medium，与 M3 同值） |
+| 项内容垂直居中 | `Row(verticalAlignment = Alignment.CenterVertically)` | `Column::new().arrangement(Arrangement::Center)`（见 §2b） |
 | 项颜色 | `MenuItemColors`：文本 `OnSurface`、图标 `OnSurfaceVariant`、禁用 = 同角色 @38%（`ListItemDisabled*Opacity`） | `MenuItemColors` 六个字段同名同义 + `defaults()`；禁用走 `0.38` alpha（与 navigation 组件同一常量值） |
 | `contentPadding` | `PaddingValues(horizontal = 12dp, vertical = 0)` | `content_padding(h, v)`，默认 `(12, 0)` |
 
