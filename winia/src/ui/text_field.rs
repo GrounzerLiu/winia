@@ -447,14 +447,18 @@ pub(crate) struct TextFieldLayout {
 ///   否则 label/图标居中锚点恒为单行高，容器长高后图标/展开 label 不
 ///   跟随中心下移
 /// - 兜底输入区高
-fn text_field_content_height(constraints: &crate::layout::Constraints, pad_top: f32, pad_bottom: f32, supporting_h: f32, input_height: f32) -> f32 {
-    if constraints.max_height < 1.0e9 {
-        constraints.max_height
-    } else if constraints.min_height > 0.0 && constraints.min_height < 1.0e9 {
-        (constraints.min_height - supporting_h).max(input_height).max(0.0)
-    } else {
-        input_height
-    }
+/// The content height the field's slots centre in: the field's OWN box, not the room its parent happens to
+/// have.
+///
+/// It used to return `constraints.max_height` whenever that was finite, which centres a slot in the SPACE
+/// ABOVE the field instead of in the field — a trailing icon landed 88px into a 56px-tall field (measured:
+/// slot `(260, 391, 13, 19)` against field `(16, 303, 280, 56)`), and only looked right where the parent
+/// handed out an unbounded height (a scrolling column, which is every demo).
+///
+/// `constrain_height` honours a tight parent as well, so a fixed-height field (a 40dp pill) still centres
+/// its slots in 40.
+fn text_field_content_height(constraints: &crate::layout::Constraints, supporting_h: f32, input_height: f32) -> f32 {
+    constraints.constrain_height(input_height + supporting_h)
 }
 
 impl TextFieldLayout {
@@ -589,7 +593,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // - Outlined：label 中心跨边框线（顶对齐容器 -8 → 偏移 -24）
                     // ⚠ policy 收到的是扣除 padding 后的约束——内容区顶部即
                     // 容器 padding 边界
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     let expanded_y = container_center - s.height / 2.0;
                     let float_y = -(s.height / 2.0)
@@ -629,7 +633,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // 坐标）= (内容区高 + pad_bottom - pad_top)/2；允许负 y
                     //（Filled 图标跨 16..40 区）。⚠ 滚动容器内约束高 =
                     // f32::MAX（有限但巨大）——降级见 text_field_content_height
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         0.0,
@@ -645,7 +649,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                         );
                         continue;
                     }
-                    let content_h = text_field_content_height(&constraints, self.pad_top, self.pad_bottom, self.supporting_h, input_size.height);
+                    let content_h = text_field_content_height(&constraints, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
                     placements[i].position = crate::layout::Point::new(
                         (width - placements[i].size.width).max(0.0),

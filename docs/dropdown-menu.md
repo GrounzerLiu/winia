@@ -111,7 +111,7 @@ ExposedDropdownMenuBox::new(expanded.clone())
 | `exposed_dropdown_menu_matches_its_anchor_width` | 200dp 字段：项宽 = 字段宽（实测 `(16,367,200,48)` vs `(16,303,200,56)`）、菜单挂在字段下方、标签距项左 16dp |
 | `exposed_dropdown_dismisses_and_reports_it` | 外部点击关闭并回写 `onExpandedChange`，popup 条目随后消失（等退场动画） |
 | `exposed_dropdown_primary_editable_anchor_does_not_toggle` | `PrimaryEditable` 的锚点点击不打开菜单 |
-| `exposed_dropdown_trailing_slot_is_placed_inside_the_field` | **`#[ignore]`**：等 `TextField` 尾随槽定位 bug 修复（§4.8），当前槽在字段下方 32px |
+| `exposed_dropdown_trailing_icon_is_inside_the_field_and_rotates` | 尾随箭头画在字段内（扫描 5/25 点着色），且展开时翻转（扫描 3/25 点变化）——修复前分别是 0/25 与 0/25 |
 
 ## 4. 与 Compose M3 的差异（依据：本地 androidx 源码）
 
@@ -240,16 +240,23 @@ M3 的契约（`ExposedDropdownMenu.kt` + `androidMain/ExposedDropdownMenu.andro
 
 另外修了一处框架语义：`DropdownMenu` 原先用 `composer_slot_key()` 取锚点，而那是**锚点闭包里最后组合的节点** ✗——对单节点闭包无害，但输入框的最后一个子节点是 24×24 的尾随图标 ✗（实测锚点被解析成 `(180,391.5,24,24)`）。现在用该 group 自己的 key（= 包装容器 ✓），与"popup 锚在父布局节点"的 M3 语义一致。
 
-### 4.8 未修：`TextField` 的尾随槽被放到字段外（阶段 5 的遗留）
+### 4.8 已修：`TextField` 的尾随槽被放到字段外（阶段 5 的遗留）
 
-`ExposedDropdownMenuDefaults::trailing_icon` 组合出来的图标**画在了输入框下方 32px** ✗。实测（与 `read_only`、取值、调用方设定宽度、有无 label 都无关）：
+**症状**：输入框下拉的尾随箭头画在了**字段下方 32px** ✗（实测槽 `(260, 391, 13, 19)`、字段 `(16, 303, 280, 56)`）。与 `read_only`、取值、调用方设定宽度、有无 label 都无关；槽确实组合了（换成文本 `▼` 树里能看到 ✓），但扫字段自身那一行全是背景 ✗ —— 所以问题在 `TextField`，不在盒子。
 
+**根因**（读代码 + 数字吻合）：`text_field_content_height` 在父容器给出有限高度时**直接返回该高度** ✗：
+
+```rust
+if constraints.max_height < 1.0e9 { constraints.max_height }   // 父给多少就用多少
 ```
-字段 (16, 303, 280, 56)
-尾随槽 (260, 391, 13, 19)    ← x 在字段内，y 在字段底边之下 32px
-```
 
-隔离过程：槽**确实组合了**（把槽内容换成文本 `▼`，树里能看到 `text(▼)`），但扫字段自身那一行全是背景色 ✗；把槽内容换成纯文本也一样 ✗。所以问题在 `TextField` 的槽定位，不在盒子。验收测试 `exposed_dropdown_trailing_slot_is_placed_inside_the_field` 以 `#[ignore = "…"]` 保留（修复后取消忽略即生效）。
+槽的 y = `container_center - slot_h/2`，于是它在"父容器给的可用高度"里居中 ✗，而不是在**字段自己的盒子**里 ✓。实测自洽：`content_h = 195 → container_center = 97.5 → y = 88` ✓（= 实测槽的偏移 ✓）。这也解释了为什么 demo 里看不出来：那些字段在**滚动列**内，父给的是无界高度 ✓ 走的是正确分支 ✓。
+
+**修法**：让它返回字段自身的盒子高 `constraints.constrain_height(input_height + supporting_h)` ✓——`constrain_height` 本身会尊重紧约束，所以固定高字段（40dp pill）依旧在自己的 40 里居中 ✓。
+
+**验证**：`exposed_dropdown_trailing_icon_is_inside_the_field_and_rotates` 从 `#[ignore]` 转为通过 ✓，数字：槽内着色扫描点 **5/25**（修复前 0/25 ✗）、展开后变化 **3/25**（箭头翻转 ✓）。
+
+**顺带修的一条 API 语义**：`ExposedDropdownMenuDefaults::trailing_icon` 收 **`State<bool>`** 而不是 `bool`（M3 收 bool）。原因：Compose 会比较参数、参数变了就重跑，而 winia 的组不比较参数 ✗ —— 用 bool 时图标只组合一次、之后被 skip ✗，箭头永远停在同一朝向（实测：展开前后 16 个探测点全无变化 ✗）。在图标**自己的组合里**读状态才会注册依赖 ✓，这是 winia 表达"变了要重画"的方式。签名按 M3 保留 `modifier` 参数（`TrailingIcon(expanded, modifier)`）✓，调用方可以挂 tag 或调尺寸。
 
 ### 4.9 待对齐（本轮之后）
 

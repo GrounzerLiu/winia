@@ -3000,37 +3000,79 @@ fn exposed_dropdown_primary_editable_anchor_does_not_toggle() {
 }
 
 /// What:  the exposed-dropdown field, with and without its menu open.
-/// When:  a pixel inside the field's trailing area is read.
-/// Then:  material3's `TrailingIcon` would be there, rotated 180° while expanded — but winia's TextField
-///        places its trailing SLOT outside the field's box, so this stays unwritten.
+/// When:  a vertical scan through the trailing icon's column is read, plus one point on the field's far
+///        side as the background reference.
+/// Then:  the icon is painted inside the field, and the scan changes when the menu opens — material3's
+///        `TrailingIcon`, an `ArrowDropDown` rotated 180° while expanded.
 ///
-/// Measured, and independent of `read_only`, the value, a caller-set width and a label:
+/// A scan rather than a grid, for a measured reason: the glyph is ~10x5 inside a 24dp box, so a coarse grid
+/// misses it entirely (a 3x3 grid read only the box's centre, `(73,69,78)` and background elsewhere), and the
+/// centre itself is covered in BOTH orientations — the flip only moves the covered rows (y 10..15 closed
+/// against 9..14 open).
 ///
-///   field  `(16, 303, 280, 56)`
-///   slot   `(260, 391, 13, 19)`   — x inside the field, y 32px BELOW its bottom edge
-///
-/// The slot composes (a `Text::new("▼")` in that position shows up in the tree) and scans of the field's
-/// own row find nothing painted, so this is a placement bug in `TextField`, not in the box. Ignored rather
-/// than deleted so the fix has an acceptance test; the evidence is in `docs/dropdown-menu.md` §4.8.
+/// The placement half guards a TextField bug fixed on 2026-09-28: the slot was centred in the AVAILABLE
+/// height instead of the field's box, which put it 32px below a 56px-tall field (measured slot
+/// `(260, 391, 13, 19)` against field `(16, 303, 280, 56)`), and only ever looked right where a scrolling
+/// parent handed out an unbounded height.
 #[test]
-#[ignore = "blocked by the TextField trailing-slot placement bug (docs/dropdown-menu.md §4.8)"]
-fn exposed_dropdown_trailing_slot_is_placed_inside_the_field() {
+fn exposed_dropdown_trailing_icon_is_inside_the_field_and_rotates() {
     let mut app = UiTest::launch("dropdown_menu");
     app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
     app.refresh();
     let (fx, fy, fw, fh) = app.find_tag("dm-exposed-anchor").expect("the field");
-    // The trailing slot is the node in the field's subtree that carries the icon; today it is found by its
-    // text probe standing in for it, which is what the fixture's trailing slot composes.
-    let slot = app.find("▼");
-    if let Some((sx, sy, _, _)) = slot {
-        assert!(
-            sy >= fy && sy <= fy + fh,
-            "the trailing slot must be inside the field's box: slot y {sy} against the field \
-             ({fy}..{}) — winia places it 32px below today",
-            fy + fh
-        );
-        assert!(sx >= fx && sx <= fx + fw, "and inside it horizontally: {sx} against {fx}..{}", fx + fw);
-    } else {
-        panic!("the fixture's trailing slot must compose (it is a text probe here)");
+    let (ax, ay, aw, ah) = app.find_tag("dm-exposed-arrow").expect("the trailing slot");
+    assert!(
+        ay >= fy - 0.5 && ay + ah <= fy + fh + 0.5 && ax >= fx - 0.5 && ax + aw <= fx + fw + 0.5,
+        "the trailing slot must sit inside the field: slot ({ax},{ay},{aw},{ah}) against field \
+         ({fx},{fy},{fw},{fh})"
+    );
+
+    let centre_x = ax + aw / 2.0;
+    let mut scan = Vec::new();
+    for step in 0..=24 {
+        scan.push((centre_x, ay + ah * step as f32 / 24.0));
     }
+    let background = (fx + 16.0, fy + fh - 6.0);
+    let (fw_px, fh_px) = app.frame_size().expect("a frame");
+    let (sx, sy) = (fw_px as f32 / 420.0, fh_px as f32 / 520.0);
+
+    let mut probes = scan.clone();
+    probes.push(background);
+    let closed = app.pixels_at_logical_scaled(&probes, sx, sy);
+    let bg = closed[scan.len()].expect("the field's background");
+    let painted = closed[..scan.len()]
+        .iter()
+        .filter(|p| p.is_some_and(|px| px != bg))
+        .count();
+    eprintln!("暴露式下拉: 背景={bg:?} 槽内着色的扫描点={painted}/25");
+    assert!(
+        painted > 0,
+        "the trailing icon must be painted inside the field ({} points read, all the background {bg:?})",
+        scan.len()
+    );
+
+    let closed_scan: Vec<_> = closed[..scan.len()].to_vec();
+    app.click(fx + fw / 2.0, fy + fh / 2.0);
+    app.expect_text_timeout("dm-exposed-open: yes", Duration::from_secs(5));
+    // Poll: the field repaints its own frame, which can trail the state change.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let changed = loop {
+        let open = app.pixels_at_logical_scaled(&scan, sx, sy);
+        let changed = open
+            .iter()
+            .zip(closed_scan.iter())
+            .filter(|(a, b)| a.is_some() && a != b)
+            .count();
+        if changed > 0 || std::time::Instant::now() > deadline {
+            break changed;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    eprintln!("暴露式下拉: 展开后扫描中变化的点={changed}/25");
+    assert!(
+        changed > 0,
+        "the trailing icon must rotate when the menu opens (no point of {} changed)",
+        scan.len()
+    );
 }
+

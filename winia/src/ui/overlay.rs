@@ -1131,16 +1131,33 @@ impl ExposedDropdownMenuDefaults {
     /// open — a static rotation, exactly as that composable writes it (`modifier.rotate(if (expanded) 180f
     /// else 0f)`, with no animation in this version).
     ///
+    /// It takes the STATE rather than the boolean material3 takes. Compose re-runs a composable whose
+    /// parameters changed, so `TrailingIcon(expanded)` redraws on its own; winia's groups do not compare
+    /// their arguments, so an icon built from a plain bool is composed once and skipped afterwards — the
+    /// arrow would stay pointing the way the field first drew it (measured: 16 probe points across the slot,
+    /// none of them changed when the menu opened). Reading the state INSIDE the icon's own composition is
+    /// what registers the dependency, which is the winia way of saying "redraw me when this changes".
+    ///
     /// Compose it into a text field's trailing slot:
     ///
     /// ```ignore
-    /// TextField::outlined(value).trailing_icon(move |ctx| {
-    ///     ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded.get())
+    /// TextField::outlined(value).trailing_icon({
+    ///     let expanded = expanded.clone();
+    ///     move |ctx| ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded)
     /// })
     /// ```
-    pub fn trailing_icon(ctx: &mut crate::core::composer::ComposeCtx, expanded: bool) {
+    pub fn trailing_icon(
+        ctx: &mut crate::core::composer::ComposeCtx,
+        expanded: crate::core::state::State<bool>,
+        modifier: crate::modifier::Modifier,
+    ) {
+        let open = expanded.get();
         crate::ui::icon::Icon::svg_path(Self::ARROW_DROP_DOWN_PATH)
-            .modifier(crate::modifier::Modifier::new().rotate(if expanded { 180.0 } else { 0.0 }))
+            .modifier(
+                crate::modifier::Modifier::new()
+                    .rotate(if open { 180.0 } else { 0.0 })
+                    .then(modifier),
+            )
             .build(ctx);
     }
 

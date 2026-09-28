@@ -195,21 +195,20 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                 .build(
                     ctx,
                     |ctx| {
-                        let expanded = exposed_open.get();
                         TextField::new(exposed_value.clone())
                             .outlined()
                             .read_only(true)
                             .label(|ctx| Text::new("选择").build(ctx))
                             .modifier(Modifier::new().width(200.0).test_tag("dm-exposed-anchor"))
-                            .trailing_icon(move |ctx| {
-                                // A text glyph stands in for `ExposedDropdownMenuDefaults::trailing_icon`
-                                // here: that helper composes a real `Icon`, which the tree cannot locate by
-                                // text — and this slot's PLACEMENT is what is under test today (winia puts
-                                // it 32px below the field, see `docs/dropdown-menu.md` §4.8), so the
-                                // acceptance test needs to find it. The width matters too: 200 against the
-                                // items' 280 maximum is what makes "the menu matches its field" provable.
-                                Text::new("▼").font_size(14.0).build(ctx);
-                                let _ = expanded;
+                            .trailing_icon({
+                                let arrow_state = exposed_open.clone();
+                                move |ctx| {
+                                    ExposedDropdownMenuDefaults::trailing_icon(
+                                        ctx,
+                                        arrow_state.clone(),
+                                        Modifier::new().test_tag("dm-exposed-arrow"),
+                                    );
+                                }
                             })
                             .build(ctx);
                     },
