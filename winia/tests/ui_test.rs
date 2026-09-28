@@ -2682,11 +2682,12 @@ fn dropdown_menu_takes_the_keyboard_while_open() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
     app.key("Tab");
-    let focused = app.focused_tags();
     assert!(
-        app.overlay_tag_is_focused("dm-item-new"),
-        "Tab must focus the menu's first focusable item: {focused:?}"
+        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        "Tab must focus the menu's first focusable item (focused: {:?})",
+        app.focused_tags()
     );
+    let focused = app.focused_tags();
     assert!(
         focused.iter().all(|t| t.starts_with("dm-item-")),
         "nothing on the page may hold focus while the menu is up: {focused:?}"
@@ -2702,7 +2703,11 @@ fn dropdown_menu_a_focused_item_activates_on_enter() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
     app.key("Tab");
-    assert!(app.overlay_tag_is_focused("dm-item-new"), "Tab focuses the first item");
+    assert!(
+        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        "Tab focuses the first item (focused: {:?})",
+        app.focused_tags()
+    );
     app.key("Enter");
     app.expect_text_timeout("dm-picked: new", Duration::from_secs(5));
     app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
@@ -2736,13 +2741,14 @@ fn dropdown_menu_returns_focus_to_its_trigger_on_close() {
     let mut app = UiTest::launch("dropdown_menu");
     let _ = open_plain_menu(&mut app);
     app.key("Tab");
-    assert!(app.overlay_tag_is_focused("dm-item-new"), "focus is inside the menu");
+    assert!(
+        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        "focus is inside the menu"
+    );
     app.key("Escape");
     app.expect_text_timeout("dm-open: no", Duration::from_secs(5));
-    std::thread::sleep(Duration::from_millis(150));
-    app.refresh();
     assert!(
-        app.tag_is_focused("dm-toggle"),
+        app.wait_until_focus("dm-toggle", Duration::from_secs(2)),
         "focus must return to the trigger (focused: {:?})",
         app.focused_tags()
     );
@@ -2770,7 +2776,10 @@ fn dropdown_menu_highlights_the_focused_item() {
 
     let before = app.pixels_at_logical_scaled(&[edge, middle], sx, sy);
     app.key("Tab");
-    assert!(app.overlay_tag_is_focused("dm-item-new"), "Tab focuses the first item");
+    assert!(
+        app.wait_until_overlay_focus("dm-item-new", Duration::from_secs(2)),
+        "Tab focuses the first item"
+    );
     let unfocused = before[1].expect("the item before focus");
 
     let delta = |a: (u8, u8, u8, u8), b: (u8, u8, u8, u8)| {
@@ -2862,5 +2871,27 @@ fn dropdown_menu_item_icon_geometry_matches_material3() {
         "and it ends at the item's trailing content edge: {} against {}",
         kx + kw,
         jx + jw - 12.0
+    );
+
+    // Every item is the SAME width, and that width is the menu's — material3 gets this from the column's
+    // `width(IntrinsicSize.Max)`, winia's `MenuColumnPolicy` does the two passes by hand. It is not just
+    // tidiness: an item narrower than the panel paints its ripple and hover state over part of the row
+    // only, which is exactly what a screenshot showed before this (a highlight stopping short of the
+    // trailing hint while the panel ran on).
+    let (_, _, lead_w, _) = app.find_tag_in_overlay("dm-item-lead").expect("the first item");
+    let (_, _, trail_w, _) = app.find_tag_in_overlay("dm-item-trail").expect("the second item");
+    let (_, _, menu_w, _) = app.find_tag_in_overlay("dm-icons-container").expect("the menu");
+    eprintln!("等宽检查: lead={lead_w} trail={trail_w} menu={menu_w}");
+    assert!(
+        (lead_w - trail_w).abs() <= 0.5,
+        "items share one width: {lead_w} vs {trail_w}"
+    );
+    assert!(
+        (menu_w - lead_w).abs() <= 0.5,
+        "and the menu is exactly as wide as its items: {menu_w} vs {lead_w}"
+    );
+    assert!(
+        menu_w < 280.0,
+        "the menu takes its widest item's natural width, not the 280dp maximum: {menu_w}"
     );
 }

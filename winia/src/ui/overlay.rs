@@ -726,6 +726,94 @@ fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modif
     )
 }
 
+/// material3's `DropdownMenuItemDefaultMinWidth` / `_MaxWidth` (`Menu.kt`), used both by the item and by
+/// [`MenuColumnPolicy`] — they must agree, so they live in one place.
+const DROPDOWN_ITEM_MIN_WIDTH: f32 = 112.0;
+const DROPDOWN_ITEM_MAX_WIDTH: f32 = 280.0;
+
+/// The menu's item column, reproducing material3's `Column(width(IntrinsicSize.Max))` by hand.
+///
+/// In material3 the menu is as wide as its WIDEST item's natural width and every item is stretched to that
+/// width — which is what makes the rows' state layers, ripples and trailing icons line up with the panel,
+/// and what keeps a menu with icons from being padded out to the 280dp maximum. winia has no intrinsic
+/// measurement, so the two passes happen here:
+///
+///  1. the intrinsic width: measure each item's CONTENT unbounded and add the item's own padding.
+///     Measuring the item itself would not do — its label is `weight(1f)`, material3's own structure, and a
+///     weighted child fills whatever maximum it is handed, so an unbounded pass reports the constraint back
+///     instead of the content (measured: the menu went from 112 to the 280 maximum the moment the label was
+///     weighted);
+///  2. impose that width tightly on every item, after which the weighted label distributes the leftover
+///     inside its row exactly as material3 does.
+#[derive(Debug)]
+struct MenuColumnPolicy;
+
+impl crate::layout::node::MeasurePolicy for MenuColumnPolicy {    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn crate::layout::node::MeasurePolicy>],
+        children: &[usize],
+        constraints: crate::layout::constraints::Constraints,
+    ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+        use crate::layout::node::{measure_node, Placement, Point, Size};
+        if children.is_empty() {
+            return (Size::new(0.0, 0.0), Vec::new());
+        }
+        let mut natural = 0.0f32;
+        for &item in children {
+            let (pad_l, pad_r) = nodes[item].modifier.get_padding_horizontal();
+            let content: Vec<usize> = nodes[item].children.clone();
+            let mut inner = 0.0f32;
+            for child in content {
+                let (size, _) = measure_node(
+                    nodes,
+                    policies,
+                    child,
+                    crate::layout::constraints::Constraints::new(0.0, f32::MAX, 0.0, f32::MAX),
+                );
+                inner += size.width;
+            }
+            natural = natural.max(
+                (inner + pad_l + pad_r).clamp(DROPDOWN_ITEM_MIN_WIDTH, DROPDOWN_ITEM_MAX_WIDTH),
+            );
+        }
+        let width = natural.clamp(
+            constraints.min_width,
+            constraints.max_width.min(DROPDOWN_ITEM_MAX_WIDTH),
+        );
+        let mut y = 0.0f32;
+        let mut placements = Vec::with_capacity(children.len());
+        for &item in children {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                item,
+                crate::layout::constraints::Constraints::new(width, width, 0.0, f32::MAX),
+            );
+            placements.push(Placement {
+                size: Size::new(size.width, size.height),
+                position: Point::new(0.0, y),
+            });
+            y += size.height;
+        }
+        (Size::new(width, y), placements)
+    }
+
+    fn place(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        children: &[usize],
+        placements: &[crate::layout::node::Placement],
+    ) {
+        for (index, &child) in children.iter().enumerate() {
+            if let Some(p) = placements.get(index) {
+                nodes[child].position = p.position;
+                nodes[child].measured_size = p.size;
+            }
+        }
+    }
+}
+
 /// Dropdown menu (mirrors Compose material3 `DropdownMenu`) — anchored to a trigger container;
 /// clicking outside dismisses it.
 ///
@@ -952,9 +1040,14 @@ impl DropdownMenu {
                             .clone()
                             .then(crate::modifier::Modifier::new().padding_vertical(8.0))
                             .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
-                        crate::ui::Column::new()
-                            .modifier(m)
-                            .build(ctx, |ctx| menu(ctx));
+                        // A `Column` would give every item its own width; material3's menu gives them all the
+                        // intrinsic width of the widest one (see `MenuColumnPolicy`).
+                        let key = ctx.next_key();
+                        match ctx.start_restartable_group(key, m, MenuColumnPolicy) {
+                            crate::core::composer::GroupStatus::Skip => {}
+                            crate::core::composer::GroupStatus::Enter => menu(ctx),
+                        }
+                        ctx.end_restartable_group();
                     });
                 }),
                 local_snapshot: Vec::new(),
@@ -1123,15 +1216,11 @@ impl DropdownMenuItem {
         // each icon tinted with its own colour role through `with_content_color`, which is winia's
         // equivalent of material3's `CompositionLocalProvider(LocalContentColor provides …)`.
         //
-        // One difference, forced by a missing framework feature: material3's `weight(1f)` is meant to run
-        // inside the menu's `width(IntrinsicSize.Max)` column, which makes the menu as wide as its widest
-        // item and every item that wide. winia has no intrinsic measurement, and a weighted child fills the
-        // CONSTRAINT instead — measured: the menu jumped from 112 to the 280 max as soon as the text was
-        // weighted. So the weight is applied only when there IS a trailing icon, the case where material3's
-        // stretching is visible (a shortcut hint sits at the menu's right edge, not glued to its label).
-        // Without one, the label is content-sized: labels still start at the same offset when every item
-        // carries a leading icon, the menu is as wide as its widest item, and the only difference left is
-        // that items do not share one width. Both cases are recorded in `docs/dropdown-menu.md`.
+        // The label keeps material3's `weight(1f)` unconditionally, and it behaves as material3 intends only
+        // because the menu's column gives every item the same width — `MenuColumnPolicy` computes the
+        // widest item's intrinsic width and imposes it (winia has no intrinsic measurement of its own; a weighted
+        // child handed an unbounded maximum reports the constraint back, which is what that policy works
+        // around).
         let leading_icon = self.leading_icon;
         let trailing_icon = self.trailing_icon;
         let has_leading = leading_icon.is_some();
@@ -1156,18 +1245,16 @@ impl DropdownMenuItem {
                     icon_box(ctx, leading_color, content);
                 }
                 crate::ui::Column::new()
-                    .modifier({
-                        let mut m = crate::modifier::Modifier::new();
-                        if stretch_label {
-                            m = m.layout_weight(1.0);
-                        }
-                        m.padding_sides(
-                            if has_leading { 12.0 } else { 0.0 },
-                            0.0,
-                            if has_trailing { 12.0 } else { 0.0 },
-                            0.0,
-                        )
-                    })
+                    .modifier(
+                        crate::modifier::Modifier::new()
+                            .layout_weight(1.0)
+                            .padding_sides(
+                                if has_leading { 12.0 } else { 0.0 },
+                                0.0,
+                                if has_trailing { 12.0 } else { 0.0 },
+                                0.0,
+                            ),
+                    )
                     .build(ctx, |ctx| {
                         crate::ui::Text::new(text)
                             .style(style)

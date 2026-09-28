@@ -81,7 +81,7 @@ DropdownMenuItem::new("删除")
 | `dropdown_menu_a_focused_item_activates_on_enter` | Tab 聚焦首项后 Enter：回调触发且菜单关闭 |
 | `dropdown_menu_esc_dismisses_it` | Esc 经 `on_dismiss_request` 关闭，且没有项被选中 |
 | `dropdown_menu_returns_focus_to_its_trigger_on_close` | Esc 关闭后焦点回到触发器 `dm-toggle` |
-| `dropdown_menu_item_icon_geometry_matches_material3` | 前导图标 24dp 盒在项内缩进 12dp、标签在其后 12dp（实测 16→28→64）；尾随图标收在项右内容边（实测右缘 284 = 项右缘−12） |
+| `dropdown_menu_item_icon_geometry_matches_material3` | 前导图标 24dp 盒在项内缩进 12dp、标签在其后 12dp（实测 16→28→64）；尾随图标收在项右内容边（实测 x=92 且项宽 112）；**所有项等宽且等于菜单宽**（实测 112/112/112），且菜单 < 280（取最宽项自然宽而非上限） |
 | `dropdown_menu_highlights_the_focused_item` | 聚焦后项内变暗 25 个单位（状态层），且停止在"完全淡入"而不是第一次波动 |
 | `a_menu_item_carries_a_ripple_and_no_focus_ring`（lib 单测） | 项的节点上同时有 `Clickable`、`Ripple`、`NoFocusRing`——环是边界外 ~1px 的带（实测物理 x=23 为 `(197,193,199)`，内侧是 `(217,211,219)`），逻辑坐标探针踩不准，故用结构断言 |
 
@@ -124,7 +124,13 @@ DropdownMenuItem::new("删除")
 
 几何有测试钉住（树断言，不是像素）：`dropdown_menu_geometry_matches_the_material3_metrics` —— 项宽必须落在 `[112, 280]`（对 4 个汉字的标签即证明 minWidth 钳制生效：内容只有 ~80px）、项高 ≥48、容器高 = 3 项 + 上下 8dp（≥160 且 <200）。旧几何（写死 160×36）会因项高 36 与容器高 108 两条断言失败。
 
-**偏差（阶段 2b 暴露，记录不猜）**：M3 把文本盒写成 `weight(1f)`，配合菜单列的 `width(IntrinsicSize.Max)` —— 菜单取**最宽项的自然宽**，所有项再撑满它（等宽）。winia **没有 intrinsic 测量**（框架缺失；`segmented_button` 为此手写了 MeasurePolicy），而加权子节点会填满**约束**：实测一加权，菜单宽度立刻从 112 顶到 280 上限。故按情况处理——**有尾随图标时**加权（M3 的拉伸在这里可见：快捷键提示要对齐到菜单右边，而不是贴在文字后；实测尾随图标右缘 = 项右缘 − 12 ✓），**只有前导图标时**不加权（每个项的标签起点仍一致，菜单 = 最宽项宽，差别仅是项之间不等宽）。等宽本身是框架能力，列在 §4.6。
+**等宽与 intrinsic 宽度（阶段 2b 的补充）**：M3 把文本盒写成 `weight(1f)`，配合菜单列的 `width(IntrinsicSize.Max)` —— 菜单取**最宽项的自然宽**，所有项再撑满它。winia 框架层**没有 intrinsic 测量**（`segmented_button` 为此手写了 MeasurePolicy），而加权子节点会填满**约束**：实测直接加权，菜单宽度立刻从 112 顶到 280 上限 ✗；更糟的是当时我按"有尾随图标才加权"权宜，导致**同一菜单内的项宽度不一致**（112 与 280 并存 ✗），于是**状态层/波纹只覆盖行的一部分**（用户截图就是这条）。
+
+现在由 `MenuColumnPolicy`（菜单列自己的 MeasurePolicy）补齐两遍测量：
+1. **自然宽**：测每个项的**内容**（不含其 own padding 后再加回），因为项自身的标签是加权的——给加权子节点无界约束只会把约束原样报回来；
+2. 把该宽度**紧约束**施加给每个项，此后加权标签在行内的余量分配就与 M3 完全一致。
+
+实测（fixture 图标菜单）：`lead=112 trail=112 menu=112` ✓ 等宽、菜单 = 项宽、且 < 280（最宽项自然宽）✓；尾随图标 x=92 = 项右缘 − 12 ✓。demo 里"复制 / Ctrl+C"那种菜单宽度为 **136**（此前是 280 ✗）。框架层的 intrinsic 测量仍缺失（列在 §4.6）。
 
 ### 4.3 阶段 3 对齐：长菜单（滚动 + 按锚点选位）
 
@@ -189,7 +195,7 @@ M3 的真身只有两条（`Menu.kt` 里**没有任何键处理**——没有 `o
 |---|---|---|---|
 | 输入框下拉 | `ExposedDropdownMenuBox` | 无 | 5 |
 | 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档 | - |
-| 项等宽 | 菜单列 `width(IntrinsicSize.Max)` → 所有项等宽 | 无 intrinsic 测量；见 §4.2 的偏差说明 | 框架 |
+| 项等宽 / 菜单取最宽项自然宽 | 菜单列 `width(IntrinsicSize.Max)` | 已由 `MenuColumnPolicy` 在菜单内实现（§4.2）；**框架层**仍无 intrinsic 测量，其它组件需自行照此实现 | 框架 |
 
 ### 4.7 有意保留的偏差
 

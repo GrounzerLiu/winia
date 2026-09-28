@@ -751,6 +751,37 @@ impl UiTest {
         overlay_text_rect(&self.tree, text)
     }
 
+    /// Wait until a tag in the MAIN tree holds focus, refreshing until it does or the timeout runs out.
+    ///
+    /// A key event is processed on the app's next frame, so checking immediately after `key(...)` races it —
+    /// which is how a focus test passed alone and failed under the full suite's parallel load.
+    pub fn wait_until_focus(&mut self, tag: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.tag_is_focused(tag) {
+                return true;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// [`Self::wait_until_focus`] for a tag inside the popup entries.
+    pub fn wait_until_overlay_focus(&mut self, tag: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.overlay_tag_is_focused(tag) {
+                return true;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Click a tag inside the popup entries.
     pub fn click_overlay_tag(&mut self, tag: &str) {
         let (x, y, w, h) = self

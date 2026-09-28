@@ -141,6 +141,7 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| Text::new("Open icon menu").build(ctx));
 
             DropdownMenu::new(icons_open.clone())
+                .modifier(Modifier::new().test_tag("dm-icons-container"))
                 .on_dismiss_request({
                     let i = icons_open.clone();
                     move || i.set(false)
