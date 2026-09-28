@@ -50,6 +50,12 @@ is a frame that caught up with its own measurement, while two frames of one roun
 `a_resize_frame_covers_its_new_viewport_within_one_frame` asserts exactly that difference (and reports the
 latter with the convergence disabled — see `docs/lazy-column.md` 2.9).
 
+The recording runs once per rendered frame and was measured at **370 ns/frame** (`debug::request_tests::
+recording_a_frame_s_passes_is_cheap_enough_for_the_frame_path`), i.e. ~0.03% of the 1253 µs release frame
+in `docs/frame-cost-probe-round.md`. That is why it is always on in `debug-server` builds rather than behind
+a switch: a gate would add a state machine to save three hundred nanoseconds. Builds WITHOUT the feature
+carry none of it — `crate::debug` is a set of no-op stubs there.
+
 - 命令走 **stdin 管道**（行分隔）；树响应走 **stdout 管道**（`TREE:` 前缀——测试按前缀过滤）。
 - 树 JSON 为**多窗口格式**：`[{"window":<id>,"root":[...]}, …]`——每个窗口独立存储
   （`update_tree(window_id, json)`），互不覆盖；窗口关闭时 `remove_tree` 清理条目。

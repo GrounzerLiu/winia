@@ -273,6 +273,28 @@ mod request_tests {
         REQUEST_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// What `update_frame_passes` costs on the frame path, since it runs once per rendered frame in every
+    /// `debug-server` build — including the builds the frame-cost probes use, which is why the cost had to
+    /// be a number rather than an assumption. The bound is a smoke limit with ~two orders of magnitude of
+    /// headroom over the measured cost (and no relation to a frame budget): this test is here to catch a
+    /// future edit that makes recording allocate per frame or take a lock per state, not to police nanoseconds.
+    #[test]
+    fn recording_a_frame_s_passes_is_cheap_enough_for_the_frame_path() {
+        let _serial = serial();
+        let n = 20_000u32;
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            update_frame_passes(1, 1);
+        }
+        let per_call = start.elapsed().as_nanos() as f64 / n as f64;
+        eprintln!("update_frame_passes: {per_call:.0} ns/frame");
+        clear_frame_passes();
+        assert!(
+            per_call < 5_000.0,
+            "recording a frame's pass count must stay cheap on the frame path: {per_call:.0} ns"
+        );
+    }
+
     #[test]
     fn debug_session_resets_shutdown_and_requests() {
         let _serial = serial();
