@@ -289,13 +289,21 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                     .build(
                         ctx,
                         |ctx| {
-                            let expanded = exposed_open.get();
                             TextField::new(exposed_value.clone())
                                 .outlined()
                                 .read_only(true)
                                 .modifier(Modifier::new().width(240.0))
-                                .trailing_icon(move |ctx| {
-                                    ExposedDropdownMenuDefaults::trailing_icon(ctx, expanded)
+                                .trailing_icon({
+                                    // The helper takes the state (winia's way of saying "redraw me when
+                                    // this changes") rather than material3's boolean.
+                                    let arrow_state = exposed_open.clone();
+                                    move |ctx| {
+                                        ExposedDropdownMenuDefaults::trailing_icon(
+                                            ctx,
+                                            arrow_state.clone(),
+                                            Modifier::new(),
+                                        )
+                                    }
                                 })
                                 .build(ctx);
                         },
