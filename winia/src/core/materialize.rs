@@ -256,6 +256,9 @@ fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
 /// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
 pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
     let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    // Detached across this node's descriptor-driven child rebuild and re-attached at the end: the
+    // subcomposed child has no descriptor (see `LayoutNode::subcomposed_child`).
+    let mut adopted_child: Option<usize> = None;
     let index = if let Some(idx) = claimed {
         // Claimed in place while the slot tree was walked: the node AND its subtree are already this
         // frame's materialization (verified node for node by `try_claim_skipped_subtree`), so there is
@@ -278,8 +281,15 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         // 否则旧节点成为 arena 孤儿（泄漏）。所以这里的 `remove` 成功与否要先看签名，
         // 不匹配时把 key 放回去（罕见路径，代价是一次 insert）。
         match composer.prev_node_by_key.remove(&key) {
-            Some(idx) if children.len() == composer.arena.nodes[idx].children.len() => {
+            Some(idx)
+                if children.len()
+                    == composer.arena.nodes[idx].children.len()
+                        - usize::from(composer.arena.nodes[idx].subcomposed_child.is_some()) =>
+            {
                 composer.reused_nodes.insert(idx);
+                // The subcomposed child is not in the descriptor list, so it is detached across the
+                // rebuild and re-attached after it. See `LayoutNode::subcomposed_child`.
+                adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
                 let n = &mut composer.arena.nodes[idx];
                 n.children.clear();
                 // 应用本帧组合产物 modifier（容器自身 Skip——外层构造的 modifier
@@ -389,6 +399,10 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
         };
         let idx = if let Some(idx) = reused_idx {
             composer.reused_nodes.insert(idx);
+            // Detach the subcomposed child before the descriptor-driven rebuild, re-attach after
+            // (see `LayoutNode::subcomposed_child`). Its index stays valid: no arena slot is reused
+            // between here and the re-attach.
+            adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
             let n = &mut composer.arena.nodes[idx];
             n.children.clear();
             // 按新 modifier 重新判定内容类型（复用路径不重建节点——必须同步
@@ -422,6 +436,13 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.on_remove = on_remove;
             n.slot_key = key;
             n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
+            // A subcomposing node is re-measured when the COMPOSITION changed, not every frame: the
+            // descriptor's `dirty` (a slot that re-ran, or a node that was rebuilt) is what says its
+            // content may differ, and `n.dirty = dirty` above already carries it. The unconditional
+            // version of this rule is what re-composed every subcomposition on every frame — measured on
+            // the bench's `subcompose` scene as 63233 µs for an idle 800-row frame against 621 µs for the
+            // same tree with plain containers, ≈78 µs per node (docs/benchmarks.md, "What a
+            // measure-time subcomposition costs a frame").
             // 重置 scroll metadata：按轴分别判断（垂直/水平轴 viewport 独立）——
             // vertical↔horizontal 单轴切换时，被移除轴的值也须清零
             // （场景：节点从垂直 scroll 切为水平 scroll，旧垂直 viewport 残留）
@@ -537,6 +558,25 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
     }
     for child in children {
         materialize_node(composer, child, Some(index));
+    }
+    // Re-attach the subcomposed child last, and keep the field in step so the next frame's rebuild
+    // can detach it again — and so the Skip arm's shape check can subtract it.
+    if let Some(child) = adopted_child {
+        composer.arena.add_child(index, child);
+        composer.arena.nodes[index].subcomposed_child = Some(child);
+        composer.reused_nodes.insert(child);
+        // Replay the subtree's measurements: they were taken when the subcomposition laid itself out,
+        // and this node has no policy to measure the adopted child with (see
+        // `LayoutNode::subcomposed_measurements`).
+        let cached = std::mem::take(&mut composer.arena.nodes[index].subcomposed_measurements);
+        for (offset, size) in &cached {
+            let target = child + offset;
+            if target < composer.arena.nodes.len() {
+                composer.arena.nodes[target].measured_size = *size;
+                composer.reused_nodes.insert(target);
+            }
+        }
+        composer.arena.nodes[index].subcomposed_measurements = cached;
     }
     Some(index)
 }

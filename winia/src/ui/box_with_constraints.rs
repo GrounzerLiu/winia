@@ -18,38 +18,37 @@
 //! `constraints`, `maxDimension`, `minDimension`), so a layout can branch on the space actually
 //! available instead of on the window's. Composition sees those values through a subcomposition.
 //!
-//! winia has no subcomposition, so the constraints travel on the framework's measure-to-compose
-//! channel: the box's measure policy records the constraints it was measured with, and the content
-//! reads them on its next run. The channel is a `Reactive<Constraints>` — a `Backchannel` does not
-//! work here, because its write never moves the signal's revision and so never wakes the content
-//! (measured: the component stayed on its first value forever). See `build` for the full reasoning.
+//! winia now HAS the measure-time subcomposition this needs (`ui::subcompose`), so the content runs
+//! inside measurement with the constraints that measurement just computed — the same relation Compose
+//! has, and the "one composition behind" deviation this module used to document is gone.
 //!
-//! # Deliberate deviation: the constraints are one composition behind
+//! `BoxWithConstraintsScope` reports the constraints the box was measured with, and the content
+//! composes under them on the first frame like every later one.
 //!
-//! Compose's scope is current **within** the frame: a `SubcomposeLayout` measure-time subcomposition
-//! runs with the constraints that measure pass just computed. winia composes first and measures
-//! after, so the value the content reads is the one the **previous** measure wrote:
+//! # When the box re-measures
 //!
-//! - The **first** composition reads the initial value (unbounded — `min 0`, `max +∞`). A caller that
-//!   must not take the unbounded branch on that run asks [`BoxWithConstraintsScope::is_measured`].
-//! - After that, a change of constraints **does** re-run the content: the write goes through
-//!   `State::set`, so the content's read is a composition dependency and the change wakes it. The
-//!   write also dedups on equality, which is what keeps the cycle finite.
-//! - The box does not poll: if neither its constraints nor anything else changes, it stays idle.
+//! The box's node is marked `subcomposed` (it composes during measurement), which is what puts its slot
+//! key into the frame's layout invalidation set; its composed subtree lives in the arena and is only
+//! re-attached by a measurement, so a box that never measured again would lose it.
 //!
-//! This is the same trail the architecture already documents for writers that run after layout (see
-//! the layout-override note in `app.rs` and `docs/shared-element-transition.md` §3.1). Closing it
-//! needs a real lookahead/subcomposition pass, which is a framework-level change, not a component.
+//! It does NOT mean "measure every frame". The box folds like any other node when nothing about it
+//! changed, and it re-measures when one of these moved:
 //!
-//! # Deliberate difference: the scope speaks the layout coordinate system, not `Dp`
+//! - the composition that builds the box ran and its `Modifier` differs from last frame's — including a
+//!   `max_width` computed from a state read in a PARENT's scope, which is the case the `bwc` UI fixture
+//!   drives (`Composer::node_modifier_changed`);
+//! - the box's node slot was dirtied (a declared parameter or a state read inside the box itself
+//!   changed), which also seeds the key from the compose end;
+//! - a state read DURING the measurement changed (a layout-only dependency, `layout_dirty_keys`).
 //!
-//! winia HAS `Dp` (`crate::unit::Dp`, exported by the prelude, accepted by `Modifier::size` and
-//! friends). What the scope hands back is the layout coordinate system — `f32` logical pixels, what
-//! `Constraints` carries — because that is what the box was measured in, and mixing the two is the trap
-//! `Dp::to_px`'s own docs warn about (it returns physical pixels). The four `*_dp()` accessors spell
-//! the same numbers on the type for a caller that wants to feed a bound straight into a `Modifier`;
-//! `constraints()` is exposed as the framework's `Constraints` so a custom `MeasurePolicy` can take it
-//! unchanged.
+//! Folding an unchanged box is what keeps a screen with many of them cheap; `docs/benchmarks.md` has the
+//! per-frame numbers (`one row updated, 800 rows`: 74915 µs before, ≈1700 µs after).
+//!
+//! # What this is not
+//!
+//! The content is re-composed on every measurement, and a measurement is what the three cases above ask
+//! for — the box has no way to tell "the content would compose the same" and skip the work, where
+//! Compose's subcomposition is skipped when nothing it depends on changed.
 
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
@@ -163,31 +162,28 @@ impl BoxWithConstraints {
     }
 
     /// Compose signature: `BoxWithConstraints(modifier) { /* BoxWithConstraintsScope + content */ }`.
+    ///
+    /// The content is `Fn`, not `FnOnce`: a subcomposition composes again on a LATER frame (its
+    /// parameters are a function of the constraints, which change), so the closure has to be
+    /// re-runnable. Taking it by value made the second frame compose NOTHING — measured in a window:
+    /// `[sub] ... cache=miss nodes=0 root=None size=0x0`, and that `0x0` then overwrote the size the
+    /// adoption pass had written, so the box read `[0,0]` while its adopted child read `[192,19]`.
     pub fn build(
         self,
         ctx: &mut ComposeCtx,
-        content: impl FnOnce(&mut ComposeCtx, BoxWithConstraintsScope),
+        content: impl Fn(&mut ComposeCtx, BoxWithConstraintsScope) + Send + 'static,
     ) {
-        // The channel: a `Reactive` state, NOT a `Backchannel`. The content has to be woken when the
-        // constraints change, and a `Backchannel` write does not move the signal's revision at all
-        // (`set_backchannel` only overwrites the value), so nothing would ever re-read it — measured
-        // while writing this component: the tree kept printing "not measured yet (frame 1)" forever.
-        // `State::set` dedups on `PartialEq`, so an unchanged constraint notifies nobody and the
-        // measure-write → recompose → measure cycle terminates.
-        let observed: State<Constraints> = ctx.remember(|| State::new(Constraints::UNBOUNDED)).get();
-        let scope = BoxWithConstraintsScope::new(observed.get());
+        // The content is handed to the policy and run INSIDE measurement, with the real constraints
+        // (Compose's `SubcomposeLayout` relation). `Fn` shared behind an `Arc` because the policy takes
+        // it by shared reference and every frame's subcomposition runs it once.
         let key = ctx.next_key();
-        let policy = ConstraintsReporter {
-            observed: observed.clone(),
+        let policy = ConstraintsSubcomposePolicy {
             alignment: self.alignment,
+            first_measure: std::cell::Cell::new(None),
+            content: std::sync::Arc::new(content),
         };
-        match ctx.start_restartable_group(key, self.modifier, policy) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
-                content(ctx, scope);
-            }
-        }
-        ctx.end_restartable_group();
+        ctx.start_container(key, self.modifier, policy);
+        ctx.end_node();
     }
 }
 
@@ -197,38 +193,78 @@ impl Default for BoxWithConstraints {
     }
 }
 
-/// A `BoxLayout` that also records the constraints it was measured with.
-///
-/// The recording is a `Backchannel` write: it lands silently (no notify, no wake), which is what
-/// keeps a per-frame write from turning into a per-frame recomposition. The measure itself is
-/// delegated to [`BoxLayout`] so the layout semantics stay the same as a plain `Stack`.
-#[derive(Debug)]
-struct ConstraintsReporter {
-    observed: State<Constraints>,
+/// The policy behind [`BoxWithConstraints`]: it subcomposes the content with the constraints it was
+/// measured with, and reports what that content measured.
+struct ConstraintsSubcomposePolicy {
     alignment: Alignment,
+    /// What this frame's first measurement produced, together with the compose generation it belongs
+    /// to. A second `layout()` in the SAME frame (the frame handler runs one when a shared flight
+    /// attaches a layout override) measures this node again; composing a second time would discard the
+    /// first composition — which the adoption pass has already attached — and report a size derived
+    /// from a tree nobody will see (measured while wiring this: the box read [0,0] while its child read
+    /// [98,48]). A measurement in a LATER frame must compose again, because the content in the
+    /// subcomposition is generally a function of parameters that may have changed — measured as the
+    /// opposite failure: with the guard keyed on nothing, a cap change moved the state but the box
+    /// kept reporting the old one, since the subcomposition never re-composed.
+    first_measure: std::cell::Cell<Option<(u64, Size)>>,
+    /// The content, re-runnable: a later frame's measurement composes it again (see `build`).
+    content: std::sync::Arc<dyn Fn(&mut ComposeCtx, BoxWithConstraintsScope) + Send>,
 }
 
-impl MeasurePolicy for ConstraintsReporter {
+impl std::fmt::Debug for ConstraintsSubcomposePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConstraintsSubcomposePolicy")
+    }
+}
+
+impl MeasurePolicy for ConstraintsSubcomposePolicy {
+    /// The framework's only subcomposing policy: its content is composed inside `measure`, so its
+    /// node must be re-measured rather than folded (see the trait method's contract).
+    fn subcomposes(&self) -> bool {
+        true
+    }
+
     fn measure(
         &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        policies: &[Box<dyn MeasurePolicy>],
-        children: &[usize],
+        _nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        _policies: &[Box<dyn MeasurePolicy>],
+        _children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        // Record what this box was measured with, for the content's next composition. The write is
-        // deduped by `State::set`, so it only notifies when the constraint actually moved.
-        self.observed.set(constraints);
-        BoxLayout::new().alignment(self.alignment).measure(nodes, policies, children, constraints)
+        // Already measured in THIS frame: report the same answer instead of composing again (see the
+        // `first_measure` field).
+        let generation = crate::ui::subcompose::compose_generation().unwrap_or(0);
+        if let Some((cached_generation, size)) = self.first_measure.get() {
+            if cached_generation == generation {
+                return (size, Vec::new());
+            }
+        }
+        let scope = BoxWithConstraintsScope::new(constraints);
+        let content = &self.content;
+        // The subcomposed content is adopted as this node's child, so its measurement IS this node's
+        // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
+        // Reporting anything else would leave the box at 0 while holding a sized child — measured
+        // while wiring this: the box read [0,0] with a [98,48] child under it.
+        let size = crate::ui::subcompose::subcompose(constraints, |ctx| {
+            content(ctx, scope);
+        });
+        let _ = self.alignment;
+        self.first_measure.set(Some((generation, size)));
+        // Report the content's size AS MEASURED: the engine applies the box's own constraints to a
+        // policy's result, and clamping here as well double-clamps — the subcomposition laid itself
+        // out under `constraints`, while the engine clamps against the constraints the box's modifier
+        // produced (a different, usually tighter, set). Measured while wiring this: clamping both ways
+        // made the reported width depend on which layer ran last, and the box read 0 on one frame and
+        // 98 on the next.
+        (size, Vec::new())
     }
 
     fn place(
         &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        children: &[usize],
-        placements: &[Placement],
+        _nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        _children: &[usize],
+        _placements: &[Placement],
     ) {
-        BoxLayout::new().alignment(self.alignment).place(nodes, children, placements);
     }
 }
 
@@ -238,8 +274,8 @@ mod tests {
     use crate::core::composer::Composer;
     use crate::layout::node::MeasurePolicy;
 
-    /// The scope's own semantics. `is_measured()` is the escape hatch the module docs promise for the
-    /// first-frame case, so its boundary is pinned here: unbounded means "not measured yet".
+    /// The scope's own semantics: the four bounds, the dimension helpers, `is_measured`, and the `_dp`
+    /// forms carrying the logical numbers (`Dp::to_logical` is the identity here).
     #[test]
     fn scope_reports_the_constraints_it_was_handed() {
         let unbounded = BoxWithConstraintsScope::new(Constraints::UNBOUNDED);
@@ -254,9 +290,6 @@ mod tests {
         );
         assert_eq!(measured.max_dimension(), 400.0, "the larger maximum");
         assert_eq!(measured.min_dimension(), 50.0, "the smaller minimum");
-
-        // The Dp accessors carry the same numbers: layout coordinates ARE logical pixels
-        // (`Dp::to_logical` is the identity), which is why `to_px` must not be used here.
         assert_eq!(
             (
                 measured.min_width_dp().to_logical(),
@@ -269,35 +302,11 @@ mod tests {
         );
     }
 
-    /// The mechanism behind the component: the measure policy writes the constraints it was given,
-    /// and the value is readable afterwards (through the same `Backchannel` the component uses). This
-    /// is the half that has to hold for the content to ever see a real constraint, and it is checked
-    /// by measuring the policy directly with a known constraint rather than by inspecting types.
+    /// The point of the rewrite, as a test: the content sees the REAL constraints **on the first
+    /// frame**, which is what the `Reactive<Constraints>` version could not do (it read its initial
+    /// unbounded value and only got the real one a composition later).
     #[test]
-    fn policy_records_the_incoming_constraints() {
-        let observed: State<Constraints> = State::new(Constraints::UNBOUNDED);
-        let policy = ConstraintsReporter { observed: observed.clone(), alignment: Alignment::Start };
-        let mut nodes = Vec::new();
-        let (_size, _placements) = policy.measure(
-            &mut nodes,
-            &[],
-            &[],
-            Constraints::new(10.0, 250.0, 20.0, 125.0),
-        );
-        assert_eq!(
-            observed.peek(),
-            Constraints::new(10.0, 250.0, 20.0, 125.0),
-            "the policy must record exactly the constraints it was measured with"
-        );
-        MeasurePolicy::place(&policy, &mut nodes, &[], &[]);
-    }
-
-    /// End to end through the public component: the box composes, its content runs inside the same
-    /// group, and the content closure receives a scope (the unmeasured value on the first run — the
-    /// documented one-frame trail). The assertion is that the component builds and lays out at the
-    /// size its modifier gives it, i.e. it is a `Stack` with a channel, not a different layout.
-    #[test]
-    fn box_with_constraints_lays_out_like_a_stack_and_hands_its_content_a_scope() {
+    fn the_content_sees_the_real_constraints_on_the_first_frame() {
         let mut composer = Composer::new();
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen_in = seen.clone();
@@ -305,18 +314,205 @@ mod tests {
             BoxWithConstraints::new()
                 .modifier(Modifier::new().size(120.0, 60.0))
                 .build(ctx, move |ctx, scope| {
-                    seen_in.lock().unwrap().push((scope.min_width(), scope.max_width(), scope.is_measured()));
+                    seen_in.lock().unwrap().push((
+                        scope.min_width(),
+                        scope.max_width(),
+                        scope.is_measured(),
+                    ));
                     crate::ui::Text::new("inside").build(ctx);
                 });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
-        let root = composer.layout_root_idx().expect("root");
+        let runs = seen.lock().unwrap().clone();
+        assert_eq!(runs.len(), 1, "the content ran once (in the measure pass): {runs:?}");
+        assert!(
+            runs[0].2,
+            "the scope was measured on the first run — no unbounded first frame: {runs:?}"
+        );
+        assert!(runs[0].1.is_finite(), "and it carries a real maximum: {runs:?}");
+
+        // The box lays out at its modifier's size, and its composed content is a child of it.
+        let root = composer.arena.root.expect("root");
         let size = composer.arena_nodes()[root].measured_size;
         assert_eq!((size.width, size.height), (120.0, 60.0), "the box takes its modifier's size");
-        let runs = seen.lock().unwrap().clone();
-        assert!(!runs.is_empty(), "the content ran");
-        // First run necessarily reads the backchannel's initial value.
-        assert_eq!(runs[0].0, 0.0);
-        assert!(!runs[0].2, "unmeasured on the first run — the documented trail");
+        assert_eq!(
+            composer.arena.nodes[root].children.len(),
+            1,
+            "the subcomposed content was adopted under the box"
+        );
     }
+
+    /// The box's size IS its content's size, and that has to hold on the frame the content was
+    /// composed on AND on the next one — a reused parent detaches and re-attaches the adopted child,
+    /// and the size has to travel with it (the frame path measured [0,48] here while the child read
+    /// [98,48]).
+    #[test]
+    fn the_box_sizes_to_its_content_on_the_first_frame_and_the_next() {
+        let build = |ctx: &mut ComposeCtx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().max_width(200.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::ui::Text::new("content").build(ctx);
+                });
+        };
+        let mut composer = Composer::new();
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
+        let root = composer.arena.root.expect("root");
+        let size = composer.arena_nodes()[root].measured_size;
+        assert!(size.width > 0.0, "frame 1: the box is as wide as its content, got {size:?}");
+
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 420.0, 0.0, 160.0));
+        let size2 = composer.arena_nodes()[root].measured_size;
+        assert!(size2.width > 0.0, "frame 2: still sized (the reused parent re-attaches the child), got {size2:?}");
+    }
+
+    /// An UNCHANGED box does not re-compose its content — the idle contract, and the reason a screen can
+    /// carry many of these.
+    ///
+    /// The box folds when nothing about it moved (`dirty`, `layout_dirty` and its constraints all
+    /// unchanged), and a folded box composes nothing: the content closure's run count is the observable.
+    /// It is pinned because the invalidation rules around it are easy to widen by accident — the flag the
+    /// compose end seeds from, the layout-invalidation walk, and the modifier comparison added for
+    /// `a_cap_change_in_the_composition_reaches_the_content_the_box_composes` all run on this path, and
+    /// any of them firing on an unchanged frame turns every box on the screen into per-frame work
+    /// (measured at 800 boxes: 63233 µs a frame against 1038; `docs/benchmarks.md`).
+    #[test]
+    fn an_unchanged_box_does_not_recompose_its_content() {
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let build = {
+            let runs = runs.clone();
+            move |ctx: &mut ComposeCtx| {
+                let runs = runs.clone();
+                BoxWithConstraints::new()
+                    .modifier(Modifier::new().size(80.0, 40.0))
+                    .build(ctx, move |ctx, _scope| {
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        crate::ui::Text::new("content").build(ctx);
+                    });
+            }
+        };
+        let mut composer = Composer::new();
+        composer.compose(build.clone());
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!(
+            runs.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "frame 1 composes the content once"
+        );
+
+        for frame in 2..=3 {
+            composer.compose(build.clone());
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            assert_eq!(
+                runs.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "frame {frame}: nothing changed, so the box folded and composed no content"
+            );
+        }
+    }
+
+    /// The adopted subtree survives the frames the box does NOT measure.
+    ///
+    /// A subcomposing node's subtree lives in the arena and is re-attached by a measurement, so the one
+    /// thing that must never happen is materialize dropping it while the node folds. This is the failure
+    /// that was measured while building the facility (the adopted child disappeared on the second
+    /// frame), pinned here — now on a frame where the box legitimately folds (nothing about it changed).
+    #[test]
+    fn the_box_keeps_its_adopted_child_across_a_frame_it_did_not_measure() {
+        let mut composer = Composer::new();
+        let build = |ctx: &mut ComposeCtx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().size(80.0, 40.0))
+                .build(ctx, |ctx, _scope| {
+                    crate::ui::Text::new("content").build(ctx);
+                });
+        };
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let root = composer.arena.root.expect("root");
+        assert_eq!(composer.arena.nodes[root].children.len(), 1, "adopted on frame 1");
+        assert!(composer.arena.nodes[root].subcomposed, "the node is marked as subcomposing");
+
+        // Frame 2: nothing dirty, same constraints — the box folds, and the child must still be there.
+        composer.compose(build);
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!(
+            composer.arena.nodes[root].children.len(),
+            1,
+            "still exactly one adopted child after a second frame — no detach, no accumulation"
+        );
+    }
+
+    /// A state read in the COMPOSITION, feeding the box's own `max_width`, has to reach the content the
+    /// box composes at measure time — on the frame the state changes, not eventually.
+    ///
+    /// This is the shape the `bwc` UI fixture drives (`box_with_constraints_composes_its_content_at_measure_time`),
+    /// reduced to one composer, so the failure is a two-second reproduction instead of a window test. It
+    /// is the test that was written BECAUSE the reduced form failed while the layout-invalidation cascade
+    /// was being fixed: the box is a descendant of the node that read the state, so nothing about that
+    /// cascade may be what re-measures it — its own modifier changed, and that has to carry the change
+    /// down. (Before the fix the UI test timed out on a click that had landed, because the content kept
+    /// its first frame's text.)
+    #[test]
+    fn a_cap_change_in_the_composition_reaches_the_content_the_box_composes() {
+        fn texts(composer: &Composer) -> Vec<String> {
+            fn rec(nodes: &[crate::layout::node::LayoutNode], root: usize, out: &mut Vec<String>) {
+                for el in nodes[root].modifier.elements() {
+                    if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
+                        out.push(content.clone());
+                    }
+                }
+                for &c in &nodes[root].children {
+                    rec(nodes, c, out);
+                }
+            }
+            let mut out = Vec::new();
+            if let Some(root) = composer.arena.root {
+                rec(composer.arena_nodes(), root, &mut out);
+            }
+            out
+        }
+
+        let cap = crate::core::state::State::new(200.0f32);
+        let setter = cap.clone();
+        let build = || {
+            let cap = cap.clone();
+            move |ctx: &mut ComposeCtx| {
+                crate::ui::Column::new().build(ctx, |ctx| {
+                    BoxWithConstraints::new()
+                        .modifier(Modifier::new().max_width(cap.get()))
+                        .build(ctx, |ctx, scope| {
+                            crate::ui::Text::new(format!("BWC max {}", scope.max_width() as i32))
+                                .build(ctx);
+                        });
+                });
+            }
+        };
+
+        let mut composer = Composer::new();
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(texts(&composer), ["BWC max 200"], "frame 1: the box caps the content");
+
+        setter.set(120.0);
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(
+            texts(&composer),
+            ["BWC max 120"],
+            "the narrowed cap reached the subcomposed content on the frame the state changed"
+        );
+
+        setter.set(200.0);
+        composer.compose(build());
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert_eq!(texts(&composer), ["BWC max 200"], "and back — both directions");
+    }
+
+    // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is
+    // covered by `ui::subcompose_probe`'s direct tests. It cannot be tested here through
+    // `measure_node` alone, because `subcompose()` requires the composer's layout pass to be armed
+    // (`LayoutHostGuard`) — which is exactly the contract the facility documents.
 }

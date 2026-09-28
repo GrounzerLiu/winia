@@ -44,6 +44,7 @@ use winia::core::composer::{ComposeCtx, Composer, GroupStatus};
 use winia::layout::BoxLayout;
 use winia::layout::constraints::Constraints;
 use winia::modifier::{Color, Modifier, Shape};
+use winia::ui::box_with_constraints::BoxWithConstraints;
 use winia::ui::layout_components::{Column, Row};
 use winia::ui::text::Text;
 use winia::State;
@@ -111,6 +112,11 @@ fn measure(
 enum Kind {
     Boxes,
     Text,
+    /// The same row with a SUBCOMPOSING component in it: `BoxWithConstraints` composes its content
+    /// during measurement, so its node is re-measured (and its content re-composed) whenever the tree
+    /// is measured. Compared against `Boxes`, which is the same shape WITHOUT that, the difference per
+    /// row is what a measure-time subcomposition costs a frame.
+    SubBox,
 }
 
 /// A row that READS ITS OWN state, instead of being handed the value.
@@ -149,6 +155,19 @@ fn row_scoped(ctx: &mut ComposeCtx, state: State<i64>, kind: Kind) {
                         Column::new().build(ctx, |ctx| {
                             Text::new("detail").build(ctx);
                         });
+                    }
+                    Kind::SubBox => {
+                        // The ONLY difference from `Kind::Boxes`: the first child composes its content
+                        // during measurement. Same size, same count, same tree shape otherwise — so a
+                        // difference in the frame's time is the subcomposition's cost per node.
+                        BoxWithConstraints::new()
+                            .modifier(Modifier::new().size(60.0, 18.0))
+                            .build(ctx, |ctx, _scope| {
+                                Text::new("sub").build(ctx);
+                            });
+                        Column::new()
+                            .modifier(Modifier::new().size(40.0, 18.0))
+                            .build(ctx, |_| {});
                     }
                 }
             });
@@ -205,6 +224,16 @@ fn row(ctx: &mut ComposeCtx, value: i64, kind: Kind) {
                         Column::new().build(ctx, |ctx| {
                             Text::new("detail").build(ctx);
                         });
+                    }
+                    Kind::SubBox => {
+                        BoxWithConstraints::new()
+                            .modifier(Modifier::new().size(60.0, 18.0))
+                            .build(ctx, |ctx, _scope| {
+                                Text::new("sub").build(ctx);
+                            });
+                        Column::new()
+                            .modifier(Modifier::new().size(40.0, 18.0))
+                            .build(ctx, |_| {});
                     }
                 }
             });
@@ -425,6 +454,7 @@ fn breakdown(kind: Kind, scoped: bool, rows: usize) {
     let label = match kind {
         Kind::Boxes => "boxes",
         Kind::Text => "text",
+        Kind::SubBox => "subcompose",
     };
     println!("\n--- where the time goes ({label}, {rows} rows) ---");
 
@@ -646,9 +676,27 @@ fn main() {
         container_dirty();
         return;
     }
+    // The subcomposition cost, alone: `cargo bench -p winia -- subcompose`.
+    if args.iter().any(|a| a == "subcompose") {
+        scaling(
+            Kind::SubBox,
+            false,
+            "subcompose: one BoxWithConstraints per row (read against `boxes`, same shape)",
+        );
+        layout_reality(Kind::SubBox, "subcompose");
+        return;
+    }
     scaling(Kind::Boxes, false, "boxes: the framework's own machinery (no text shaping)");
     println!();
     scaling(Kind::Text, false, "text: a realistic row (text shaping dominates)");
+    println!();
+    // The same row shape as `boxes` with ONE measure-time subcomposition per row, so the difference
+    // between the two tables is what the subcomposition costs a frame.
+    scaling(
+        Kind::SubBox,
+        false,
+        "subcompose: one BoxWithConstraints per row (compare with `boxes`)",
+    );
 
     dirty_position(800);
 

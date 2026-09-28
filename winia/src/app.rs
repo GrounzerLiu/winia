@@ -2109,6 +2109,15 @@ impl AppState {
         let frame_interval = mhz_opt
             .map(|mhz| std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
             .unwrap_or(std::time::Duration::from_millis(16));
+        // Which refresh rate the window was actually created under, and the interval derived from it:
+        // the number every pacing decision below uses, and until now it was never printed (a 300 Hz
+        // panel and a 60 Hz one differ by 5x here, so "how many frames did that animation cost" cannot
+        // be read without it).
+        debug_log!(
+            "[refresh] create: monitor={}mHz interval={:?}",
+            mhz_opt.map(|m| m.to_string()).unwrap_or_else(|| "unknown".into()),
+            frame_interval
+        );
         let skia_window = SkiaWindow::new(event_loop, w);
         // Publish this window to the OS accessibility layer (feature `accessibility`; a no-op
         // otherwise, and unconditional at the call site so nothing here needs feature gates).

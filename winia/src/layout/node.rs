@@ -297,6 +297,36 @@ pub struct LayoutNode {
     /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
+    /// Whether this node's OWN measure policy subcomposed content (`ui::subcompose`), recorded by
+    /// [`crate::core::composer::Composer::park_subcomposition`] at the moment it parked the composition.
+    ///
+    /// It is one of the two ways `Composer::compose`'s compose-end seeding recognizes a node that has to
+    /// be re-measured (the other asks the policy, which covers a node that was just REBUILT and has not
+    /// measured since). `layout()` clears `dirty` and `layout_dirty` on every node and re-derives them
+    /// from `layout_dirty_keys`, and a node whose slot was Clean arrives with `dirty = false`, so a
+    /// subcomposing node has no other way to say "measure me" — and a folded frame would let
+    /// `materialize` clear the parent's `children` and leave the adopted subtree detached (measured
+    /// while writing the facility: the adopted child disappeared on the second frame).
+    ///
+    /// It is set by the node that parked, never by counting: "how many subcompositions were parked while
+    /// this node measured" is also true for every ANCESTOR of a subcomposing node, and seeding those put
+    /// the frame's whole tree into `layout_dirty_keys` (measured: an 800-row tree's root carried this
+    /// flag, and one row's update re-measured — and re-subcomposed — all 800).
+    pub(crate) subcomposed: bool,
+    /// The arena index of this node's subcomposed child, if its policy composed one
+    /// (`ui::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
+    /// adopted subtree has NO descriptor, so materialize's "clear and rebuild from descriptors" would
+    /// drop it, and the shape check ("does the cached child count match the descriptors?") would
+    /// refuse the reuse path every frame. Both arms therefore treat this index as separate: the child
+    /// is detached before the rebuild and re-attached after it.
+    pub(crate) subcomposed_child: Option<usize>,
+    /// The measurements of the adopted subtree, relative to its root, in pre-order. The
+    /// subcomposition measures itself in its own `layout()`; when materialize reuses the parent and
+    /// detaches/re-attaches the child, those measurements would be lost (the adopted child has no
+    /// policy of its own to re-measure with), so they are cached here and replayed on re-attach.
+    /// Measured while building this: without it the adopted subtree comes back at 0x0 and paints
+    /// nothing.
+    pub(crate) subcomposed_measurements: Vec<(usize, Size)>,
 }
 
 impl LayoutNode {
@@ -376,6 +406,9 @@ impl LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            subcomposed: false,
+            subcomposed_child: None,
+            subcomposed_measurements: Vec::new(),
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
@@ -460,6 +493,9 @@ impl Default for LayoutNode {
             dirty: true,
             layout_dirty: false,
             cached_constraints: None,
+            subcomposed: false,
+            subcomposed_child: None,
+            subcomposed_measurements: Vec::new(),
             layout_direction: LayoutDirection::Ltr,
             children_have_z: false,
             slot_key: 0,
@@ -743,6 +779,16 @@ pub trait MeasurePolicy: std::fmt::Debug {
 
     /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
+
+    /// Whether this policy composes content DURING measurement (`ui::subcompose`).
+    ///
+    /// Such a node must be re-measured whenever it is materialized: its content is composed inside
+    /// the measurement, so a folded size freezes the content at the previous frame's parameters. The
+    /// node's own `subcomposed` flag is only set BY a real measurement, so it cannot answer this for a
+    /// node that was just rebuilt — asking the policy is what covers that case.
+    fn subcomposes(&self) -> bool {
+        false
+    }
 }
 
 // ── 命中测试 ──
@@ -2194,12 +2240,24 @@ fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
 ///
 /// arena 版：`nodes` 为节点池、`policies` 为策略池、`idx` 为当前节点索引。
 /// 子节点通过 `nodes[idx].children`（索引列表）递归测量。
-/// 应用布局失效：DFS 树，命中 layout_dirty_keys 的节点标 layout_dirty=true 并沿祖先链传播。
-/// 保守超集：祖先全链标脏（布局动画场景父必然依赖子尺寸；Compose 精确传播留待优化）。
+/// Applies layout invalidation: a DFS over the tree marks the nodes whose slot key is in
+/// `dirty_keys`, and marks every ANCESTOR of those nodes.
+///
+/// The ancestor half is the conservative part the framework wants: a parent's placement depends on a
+/// child's size, so a child that must re-measure drags its whole ancestor chain with it. The
+/// DESCENDANT half is deliberately NOT here — a hit node re-measures, and that re-measure reaches its
+/// children through the ordinary fold check (`cached_constraints != constraints`), so marking the
+/// subtree as well only re-measures unchanged nodes.
+///
+/// That is not hypothetical. The walk used to pass `hit || ancestor_dirty` down to the children, which
+/// marks a hit node's ENTIRE subtree, and it cost a factor of 50 on a single update: one row's change
+/// in an 800-row tree whose ROOT was among the hits produced 800 subcompositions and a one-row frame
+/// of 74915 µs, against ≈1600 µs with the subtree marking removed and no hit on the root
+/// (`docs/benchmarks.md` has the tables).
 pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirty_keys: &std::collections::HashSet<u64>) {
-    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>, ancestor_dirty: bool) -> bool {
+    fn walk(nodes: &mut [LayoutNode], idx: usize, dirty_keys: &std::collections::HashSet<u64>) -> bool {
         let hit = dirty_keys.contains(&nodes[idx].slot_key);
-        if hit || ancestor_dirty {
+        if hit {
             nodes[idx].layout_dirty = true;
         }
         // 索引读避免 clone（layout 是热路径）；每次索引读是临时借用，不阻塞递归写
@@ -2207,7 +2265,7 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
         let n = nodes[idx].children.len();
         for i in 0..n {
             let child = nodes[idx].children[i];
-            if walk(nodes, child, dirty_keys, hit || ancestor_dirty) {
+            if walk(nodes, child, dirty_keys) {
                 child_hit = true;
             }
         }
@@ -2216,7 +2274,7 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
         }
         hit || child_hit
     }
-    walk(nodes, root_idx, dirty_keys, false);
+    walk(nodes, root_idx, dirty_keys);
 }
 
 /// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
@@ -2281,7 +2339,25 @@ pub(crate) fn measure_node(
     idx: usize,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
-    measure_node_inner(nodes, policies, idx, constraints)
+    // The fold check lives in `measure_node_inner` (it must also arm the node's slot key etc.); this
+    // wrapper only adds the "which node is measuring" marker that a subcomposing policy needs, and
+    // leaves folded calls with no marker at all — a policy that folds did not run, so a stale marker
+    // would invite a subcomposition nobody asked for.
+    //
+    // A subcomposing node folds like any other here: its composition is re-run when the COMPOSITION
+    // changed (`dirty` from the descriptor), and that is what re-measures it — folding an unchanged one
+    // is what keeps an idle frame cheap. `layout_dirty` still forces it, which is how a state read
+    // during the measurement (`first_measure`, the flight override) reaches it.
+    if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
+        return (nodes[idx].measured_size, Vec::new());
+    }
+    let displaced = crate::ui::subcompose::swap_measuring_node(Some(idx));
+    let sub_before = crate::ui::subcompose::subcomposition_count();
+    let out = measure_node_inner(nodes, policies, idx, constraints);
+    crate::ui::subcompose::swap_measuring_node(displaced);
+    // Remember whether this node's policy composed anything, so the next frame does not fold it.
+    nodes[idx].subcomposed = crate::ui::subcompose::subcomposition_count() > sub_before;
+    out
 }
 
 fn measure_node_inner(
@@ -2295,6 +2371,7 @@ fn measure_node_inner(
     // stub 只在 slot 真正 clean（无状态变化）时出现；约束若变化，下帧该 slot dirty → Enter 正常重建。
     // 常量折叠：若节点未变脏、无布局失效且约束相同，直接复用上次结果
     //（layout_dirty：两段式依赖——布局动画值变化只重测不重组）
+    // A subcomposing node is not special-cased here either — see the wrapper's note.
     if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
@@ -2509,7 +2586,16 @@ fn measure_node_inner(
 
     let mut result = if let Some(pidx) = nodes[idx].measure_policy {
         // 先拷贝子节点索引（policy.measure 会可变借用整个 nodes，不能持有 nodes[idx] 借用）
-        let children = nodes[idx].children.clone();
+        //
+        // The ADOPTED subcomposition child is left out: this policy did not create it (a subcomposing
+        // component appends it during adoption), and a policy that counts its children read one too
+        // many. Measured on `TabRow`: `tab_count = children.len() - 2` became 4 for a three-tab row, so
+        // each tab measured 488/4 = 122 instead of 488/3 ≈ 162.7, and the indicator was placed with the
+        // four-tab geometry (`node_pos=(287.5,44)` where the three-tab one wants 389.2).
+        let mut children = nodes[idx].children.clone();
+        if let Some(sub) = nodes[idx].subcomposed_child {
+            children.retain(|&c| c != sub);
+        }
         let (size, placements) = policies[pidx].measure(nodes, policies, &children, inner_constraints);
         // 测量后同步 lazy 内容总高/宽到节点字段（render 的 reverse translate 与
         // apply_scroll_delta 依赖；measure_node 顶部读的是上一帧值——首帧为 0

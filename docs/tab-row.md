@@ -30,6 +30,17 @@ TabRow::new(selected_index, |ctx| { /* Tab ×N */ })
     .modifier(m)
     .build(ctx);
 
+// 自定义指示器（Compose 的 indicator 槽）：闭包在测量期运行，scope 带本帧实测的 tab 位置。
+// 供应它之后，行自身那条动画指示条不再绘制。
+TabRow::new(selected_index, |ctx| { /* Tab ×N */ })
+    .indicator(|ctx, scope| {
+        let pos = scope.selected_position().unwrap();
+        // 在行坐标系里画：pos.left / pos.width / pos.content_width 都是实测值
+        MyIndicator::new(pos.content_width).offset(pos.left + (pos.width - pos.content_width) / 2.0, 0.0)
+            .build(ctx);
+    })
+    .build(ctx);
+
 // 可滚动 TabRow（超出视口横向滚动，选中自动居中）
 ScrollableTabRow::new(selected_index, |ctx| { /* Tab ×N */ })
     .scroll_state(scroll_state)           // 缺省内部 remember 创建
@@ -137,20 +148,74 @@ Tab::new(selected, || on_click())
 
 ## 7. 已知差距（与 Compose 对照）
 
-- **TabIndicatorScope 自定义指示器 API 未做**：Compose 的 indicator 槽依赖
-  SubcomposeLayout（组合期注入用户槽、measure 期喂 tabPositions）。winia 无
-  subcompose 设施——positions 是 measure 期数据，组合期无法注入用户闭包，
-  需先造新机制（布局期写 State + 用户槽 peek 读）或换轻方案（indicator 用户
-  content 槽 + `tab_positions: State<Vec<TabPosition>>` 暴露）。
+- **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`，两个变体都有）：
+  `TabRow::indicator(|ctx, scope| ...)` 与 `ScrollableTabRow::indicator(...)` 的闭包在**测量期**运行，
+  `scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，与 Compose 的 indicator
+  槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `ui::subcompose`）；供应自定义指示器时行自身的
+  指示条不再绘制，与 Compose 的 `indicator` 参数一致。
+  可滚动版的位置在**滚动内容坐标系**里，因此调用方画出的指示器随 tab 一起滚（与 Compose 同）。
+  四条落地才暴露、且已修的框架级问题（详见 `docs/lookahead-probe-handover.md`）：
+  ① 采纳会把父节点尺寸覆盖成"内容尺寸"，叠加型槽必须用 `subcompose_overlay()`；
+  ② 采纳发生在测量之后，根节点自己的 `Modifier.offset` 无人施加——现在在采纳处施加，且必须在记录几何
+  之前（否则只活一帧，下一帧重放几何又把它放回原点）；
+  ③ 策略看到的 `children` 里混进了被采纳的子树，使 `tab_count` 多 1（三 tab 行按四等分算）；
+  ④ 行自身的指示条动画在自定义槽路径下每帧重推、永不收敛，窗口因此 60fps 空转——提前返回必须放在那段记账之前。
+  另：`DrawScope` 的图元走**画布坐标**（`rect()` 即节点在该空间的矩形），在 `(0,0)` 画等于画到窗口原点。
 - 无 TabBaselineLayout 基线精确数学（竖排 text+icon 居中，无 first/lastBaseline 修正）。
+- **The `ScrollableTabRow` startup burst — and a correction to what this section first claimed
+  (measured 2026-09-28).** Any mode that builds a `ScrollableTabRow` (`scroll`, `both`, and `plain`,
+  which keeps both rows' own indicators) renders a burst of frames at startup and then goes idle;
+  `fixed` (the fixed row with a caller-supplied indicator) renders **ONE** frame. The burst's frame COUNT
+  is a property of the panel, not of the row: frames are paced at the display's refresh rate, so this
+  machine's 300 Hz panel gives ~150 frames over ~0.5 s, while a 60 Hz panel would give ~1/5 of that for
+  the same 0.6 s animation. This was first written up here as "never goes idle", and that was a
+  MEASUREMENT ERROR: the counts came from fixed-length runs without timestamps, and stamping the `[fps]`
+  line with wall time shows the whole burst inside ~0.6 s — the last line of a **22-second** run reads
+  `render#140 compose#140 pending=1 t=0.54s`, and the count is the same in an 8 s and a 22 s run
+  (`render#154 …` and the same shape on the tree before this round's invalidation fixes).
+  Nothing renders forever. What the row actually costs is a ~0.6 s start-up animation: the spring that
+  centres the selected tab (`tab_row.rs:1412 scroll_selected_into_view` →
+  `modifier.rs:2821 ScrollState::animate_scroll_to` → `animation::push_animatable_with_done`, one f32
+  state, pushed once), and 0.6 s is what its own physics gives — damping 0.6 / stiffness 700 from 123 px
+  takes `ln(123 / 0.01) / (0.6 · sqrt(700)) ≈ 0.59 s` to come within the 0.01 px threshold. Two things
+  did come out of the burst:
+  - It is paced by the DISPLAY, not by a fixed 60 Hz: ~154 frames in 0.51 s is this machine's 300 Hz
+    panel (and that is where the "~260 fps" in an earlier version of this note came from — a number that
+    was WRONG to call un-throttled). `app.rs` reads `refresh_rate_millihertz` at window creation and
+    derives the frame interval every pacing decision uses; on this monitor it prints
+    `[refresh] create: monitor=300000mHz interval=3.333333ms` (the line was added because the value was
+    never observable, and every "how many frames did this animation cost" number depends on it). On a
+    60 Hz panel the same 0.6 s burst is ~36 frames, not ~154.
+  - The spring's **rest test compares incomparable units, and it stays that way on purpose.** The
+    displacement is in the threshold's unit, the velocity in that unit per SECOND, and both
+    `animation::spring_at_rest`'s halves test against the same 0.01. It looks like a bug — and the
+    probe sample that made this look like a permanent state is exactly the shape that suggests one
+    (`disp=-0.0057`, under the threshold, with `vel=-0.2115`, 20x over it) — but the second half is what
+    makes the animation end at a TURNING POINT of the oscillation, the first moment the amplitude has
+    decayed under the threshold. That is what lets a bouncy spring overshoot before it settles, and it
+    was verified the hard way: scaling the velocity into frames (`velocity * FRAME < threshold`) cut the
+    bounce, and `ui::shared_transition`'s `tier0_bouncy_spring_overshoot_renders_then_settles`
+    (damping 0.6, threshold 0.1 on a 0..1 progress) went from overshooting past 1.0 to settling at
+    0.886 — a flight ending 11 % short of its target. Reverted, and now pinned by
+    `animation::tests::a_spring_crossing_its_target_is_not_at_rest` plus that same transition test, so
+    the next person to read the unit mismatch finds out why it is there. Compose behaves the same way by
+    a different route: a spring there runs for `estimateAnimationDurationMillis` — the time to come
+    within one `visibilityThreshold` of the target — and then reports the exact target
+    (`FloatSpringSpec::getDurationNanos`, androidx `animation-core`). The one thing added for it is
+    `animation::tests::a_spring_finishes_without_waiting_for_the_extreme_parameter_protection`, which
+    pins that a spring ends on its own criterion (≈0.59 s for this one) rather than at the 5 s
+    extreme-parameter protection.
 - 无 icon-only 独立 API（icon-only 用 `.icon()` 即可，与 text-only 同 48dp）。
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
-## 8. 测试（`ui::tab_row::tests`，21 个）
+## 8. 测试（`ui::tab_row::tests`，24 个；外加 UI fixture 测试 1 个）
 
 | 测试 | 覆盖 |
 |---|---|
+| `a_custom_indicator_is_composed_with_the_measured_positions` | 自定义指示器槽：测量期运行、拿到全部位置、选中项对齐实测值 |
+| `a_custom_indicator_replaces_the_default_bar` / `a_scrollable_row_composes_a_custom_indicator_with_its_positions` | 槽顶掉默认条（默认条归零）；可滚动版位置与 tab 一致 |
+| `ui_test::a_caller_supplied_tab_indicator_is_composed_at_measure_time`（UI fixture，真窗口） | 槽在 `#[composable]` 真实帧里组合真组件、几何真实、切换选中后位移 ≈ 两个 tab 宽——前三条框架级缺陷只有这条路能抓 |
 | `tab_row_tabs_equal_width` / `tab_row_primary_indicator_position` / `tab_row_secondary_indicator_width` | 固定等分 + 指示条几何 |
 | `tab_row_rtl_mirror` / `tab_row_rtl_indicator_mirrors` | 固定 RTL 镜像 |
 | `tab_row_0_tabs_does_not_panic` / `tab_row_selected_out_of_range_falls_back_to_origin` | 边界 |

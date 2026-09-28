@@ -11,6 +11,11 @@
 > lookahead or layer-shift"), `docs/tab-row.md` §7 (no SubcomposeLayout, so a custom indicator slot
 > cannot be injected from the measure-time positions), `docs/shared-element-gaps.md`
 > (`skipToLookaheadSize`, "no lookahead system exists").
+>
+> **This note now sits next to the code it describes: the experiment was merged, so there is no
+> "branch copy" and no "mainline copy" any more. §5b, §5c and §5d are the prototype's trail in the
+> order it happened, and §6/§7 record where every piece ended up. Reading order for a newcomer: the
+> status note in `docs/lookahead-probe-handover.md`, then §5b → §5c → §5d, then §7.**
 
 ## 1. What Compose's two mechanisms actually do
 
@@ -131,85 +136,254 @@ The honest next step is a probe round, not an implementation:
    prev-drain without being marked reused (that is the mechanism that decides it, and the probe in
    point 2 either confirms the "prebuilt descriptor" route or shows it needs the other one), and
    whether a panic inside the inner compose rolls back the outer `LayoutTransaction` correctly.
+>
+> (Both steps were then run: see §5b for the numbers and §5c onwards for where they stopped.)
 
-## 5b. The experiment that was run — and its result (branch-only)
+## 5b. What the experiment found (2026-09-26)
 
-> **This section describes work that lives on the branch `exp/lookahead-probe` only.** The code it
-> talks about (`ui::subcompose`, the `BoxWithConstraints` rewrite, the materialize-contract change) is
-> NOT in this branch's tree. What follows is the finding, kept here so nobody repeats it; the code is
-> on that branch for whoever picks it up.
+> **Written while the work lived on `exp/lookahead-probe`; its findings are kept as recorded. The code it
+> talks about (`ui::subcompose`, the `BoxWithConstraints` rewrite, the materialize-contract change) is in
+> this tree now — §6 records where each piece ended up.**
 
-The design-2 direction was prototyped end to end on that branch. It works far enough to be worth
-recording, and it stops at one structural place:
+Both steps of §5 were run on an experiment branch. Every claim below is a test in
+`winia/src/ui/subcompose_probe.rs`, which is still in the tree: the probe tests are kept, because they
+are what define the facility's guarantees.
 
-1. **A measure-time subcomposition can be built and adopted.** A policy composes its content into its
-   own `Composer` during `measure`, parks it, and an adoption pass in `Composer::layout` moves the tree
-   into the outer arena — re-basing child indices AND policy indices, attaching under the component's
-   node, marking the subtree reused. The branch's tests cover composing inside a measure call, its TLS
-   isolation, a panic inside it, and adoption's index re-basing.
-2. **The extra layout a lookahead would need is affordable.** Timed on a real window's flight-start
-   frames (the frame handler already runs a second `layout()` there): first pass ~405 µs, the extra
-   pass ~191 µs on a 56-node tree — 1.1 % of a 60 Hz budget, once per flight start.
-3. **Re-composing the same tree in one frame (the lookahead shape) is blocked by the slot table.**
-   `SlotTable::start_slot` is a destructive visitor — it clears `dirty` on a match, truncates on a
-   mismatch, and `collect_live_keys` keeps only visited slots — so a second pass over the same tree
-   re-runs nothing, and forcing it changes the flags the whole Skip/materialize/drain pipeline reads.
-   That is a visit-semantics change whose failure mode is the corruption the `[dup-key]` guard exists
-   to catch.
-4. **The subcomposition path stops at a structural defect, observed rather than guessed.** On a later
-   compose generation the subcomposition composes NOTHING (measured: `nodes=0`, `root=None`), so the
-   policy reports `0x0` and overwrites the size the adoption pass wrote — the box reads `[0,0]` while
-   its adopted child reads `[192,19]`. The cause: adoption MOVES the composition's tree into the outer
-   arena, so nothing carries the subcomposition across generations. Fixing it needs cross-frame reuse
-   (keep the composition alive between frames and re-arrange it) — a structural piece of work, not
-   another write at the adoption site: two such writes were tried and measured false.
-5. **What it would buy, and what is already solved without it.** `BoxWithConstraints`' scope and
-   `TabRow`'s indicator slot genuinely need measure-time composition; `LazyColumn`'s visible items and
-   the shared-element bounds discovery do NOT — both have documented, tested workarounds
-   (`docs/shared-element-transition.md` §3.1).
+**Step 1 — the extra `layout()` is cheap.** Driving 16 flights through `shared_transition_demo` and
+timing the pass the frame handler already runs when a flight first attaches its override:
+first layout ~405 µs (349–537), the extra pass **~191 µs (178–245)** on a 56-node tree — ~47 % of the
+first pass, **1.1 % of a 60 Hz budget**, and once per flight start rather than per animating frame.
+So "measure the same tree again under different inputs" is affordable; it is bounds discovery that
+would be paid for this way, not the lookahead composition.
 
-So: feasible and prototyped, the cheap half of the lookahead idea is priced, and the remaining work is
-named (cross-frame reuse of a composition) with a reproduction on that branch
-(`winia/tests/ui_test.rs`'s `#[ignore]`d `box_with_constraints_composes_its_content_at_measure_time`
-plus the `bwc` fixture).
+**Step 2 — a measure-time subcomposition works, and the blocker is somewhere other than predicted:**
+
+| question | answer |
+|---|---|
+| does composing inside `measure` run? | yes — a fresh `Composer` composes + lays out inside a policy's `measure` and returns a real size |
+| does it survive the TLS guards? | yes — the frame's context is intact afterwards (the test composes again on the same thread), and a **panic inside the subcomposition** leaves the outer arena untouched and the next subcomposition working |
+| can its tree be adopted into the outer arena? | yes — nodes moved, child indices re-based, **policy pool appended and every `measure_policy` index re-based** (checked behaviourally against a decoy policy at the colliding index), root stamped with a synthetic key |
+| can adoption happen inside `measure`? | **no** — `MeasurePolicy::measure` receives `&mut Vec<LayoutNode>`, not the arena, so it cannot reach `NodeArena::policies`. Adoption therefore has to be called from a site that has the arena: `Composer::layout` or `materialize` |
+| does the adopted subtree survive the next frame? | **yes** — parented under its component's node and marked reused (the exact predicate the compose tail's prev-drain reads: `reused_nodes.contains(idx)` → `continue`), it is still in the arena after a second full compose + layout, and the frame still renders |
+
+So the feasibility note's worry was misdirected: **design 2 is not blocked by the slot table — the
+inner composition's own table is exactly what makes it safe. It is blocked by the measure trait's
+signature**, and lifting that is a contained change (hand the policy the arena, or route adoption
+through `layout`/`materialize` for components that declare a subcomposition), far smaller than the
+visit-semantics change design 1 needs.
+
+The admission cost the table identifies was paid by parking candidates in
+`Composer::park_subcomposition` (the policy does not need the arena; the composer it is running inside
+does) and adopting them from `Composer::layout`. Design 1 was left alone: its blocker is named, and its
+failure mode is the corruption the `[dup-key]` guard exists to catch.
+
+**What was not done in the experiment, and would have been the next step:** a
+subcomposition adopted into a LIVE frame (the probe adopted into a local arena and measured there,
+which is what proves the re-basing; a real component also has to parent the root under its own node
+and survive the frame's prev-drain, which is the "reachability" half of §4). Cost also remained
+unmeasured for a subcomposition on a real frame — the probe's tests are correctness tests, not
+timings. Both were picked up later: the live-frame half is what the `bwc` / `tab_indicator` fixture
+tests cover now, and the cost is in `docs/benchmarks.md` (idle ~1038 µs against 559 µs for the same tree
+without it, at 800 rows).
+
+## 5c. The facility, and the one structural conflict left
+
+The follow-up round built the facility for real — `winia/src/ui/subcompose.rs`, with:
+
+- a thread-local marker (`measure_node` arms the node index while a measurement runs),
+- a registry on the composer that a policy parks its composition in (reached through a
+  `LayoutHostGuard`, the same shape as `ACTIVE_SLOT_KEY`/`GROUP_STACK`),
+- an adoption pass in `Composer::layout` (move, re-base children AND policy indices, parent under the
+  component's node, mark reused),
+- and `BoxWithConstraints` rewritten on top of it, so its content now composes **in the measurement,
+  with the real constraints, on the first frame** — the "one composition behind" deviation is gone,
+  and its tests assert the first run already sees a finite maximum.
+
+Two defects were measured on the way, both now pinned by tests:
+
+1. **A subcomposing node must never fold.** Its subtree lives in the arena, so a folded frame lets
+   materialize clear the parent's `children` and detach it. The node now carries a `subcomposed` flag
+   that refuses the constant-fold arm (`the_box_is_measured_every_frame_so_its_content_is_not_detached`).
+2. **The real-frame path has one structural conflict left, and it is where this stops being a
+   wiring job.** The adopted subtree lives in `parent.children` but has **no descriptor** — it is not
+   in the slot table. A reused parent therefore hits both sides of the problem at once:
+   - materialize's reuse path does `children.clear()` and rebuilds them from descriptors, which drops
+     the adopted child (it is then unreachable from `arena.root`, so `prune_stale_child_links` treats
+     its listing as stale and the node leaks: measured on a real window, the arena held the adopted
+     text node while the box's `children` was empty and the frame printed 3 nodes instead of 4);
+   - keeping it instead and re-adopting a second copy trips `collect_layout_index`'s `[dup-key]` guard,
+     because both copies carry the same key.
+
+   Closing it needs the adopted subtree to **survive materialize**: either the parent records its
+   subcomposed child (a node field, restored when the descriptor-driven children are re-attached), or
+   the subcomposition stops writing into `parent.children` and the materialize walk learns to descend
+   into it. Either way it is a change to the materialize/node contract — not the one-line wiring the
+   probe suggested, and the last thing between this facility and a component that can ship.
+
+### 5d. What the materialize-contract round added, and where it stopped
+
+The next round did the materialize work, and the subcomposed subtree now lives through a reused parent:
+
+- `LayoutNode` gained `subcomposed_child` (the adopted child, kept OUT of the descriptor-driven child
+  bookkeeping) and `subcomposed_measurements` (the subtree's measured geometry, relative to its root,
+  replayed when the child is re-attached — without it the subtree comes back 0x0).
+- `materialize`'s **both** reuse arms detach that child across the descriptor-driven rebuild and
+  re-attach it after; the Skip arm's shape check subtracts it, or every reuse would look like a
+  structure change and fall back to a rebuild.
+- Adoption now releases the parent's PREVIOUS adopted subtree before inserting the new one: synthetic
+  keys are derived from the parent key and the node's offset, so every frame's composition produces the
+  same keys — correct for identity, but two live copies claim one key and trip `collect_node_keys`
+  (measured: `[dup-key] … 覆盖了已有节点`, both carrying the adopted Text's key).
+- `BoxWithConstraints` reports the subcomposed size as measured (clamping in both the policy and the
+  engine made the reported width depend on which layer ran last).
+
+Measured result: `cargo test -p winia --lib` 1090 passed, including tests that the content sees real
+constraints on the FIRST frame and that the box stays sized on the second; and in a real window the
+subcomposed text is in the tree at 98x48 with `BWC max 200`, and paints (9384 dark pixels inside the
+box region of a 630x240 frame).
+
+### The defect's root cause, observed (not inferred)
+
+A round of *targeted observation* — logging every write to a node's measured size with the site that
+made it, plus what each `subcompose()` call produced — settled it:
+
+```
+[bwc] policy: gen=1 -> composed, size=86x19            (frame 1: correct)
+[bwc] policy: gen=2 -> cached from gen 1, refused as stale -> re-composed
+[sub] composer: nodes=1 root=Some(0) size=86x19        (frame 1: the content composed)
+[sub] composer: nodes=0 root=None size=0x0             (frame 2: the content composed NOTHING)
+[size] measure_node:result: idx=9 -> 0x0               (and the policy overwrote the adopted 86x19)
+```
+
+So on a later compose generation the subcomposition comes out **empty**, the policy reports `0x0`, and
+that overwrites the size the adoption pass had written. The cause is structural, not a missing line:
+**adoption MOVES the composition's tree into the outer arena**, so there is nothing left to carry the
+subcomposition into the next generation — a fresh `Composer` re-composes the content, and that content
+lays out to nothing. Making the box's size correct across frames therefore needs the cross-frame reuse
+this document already records as deferred ("the subcomposition is re-composed whenever its node
+measures"), not another write at the adoption site. Two earlier attempts at that write were measured
+and refuted before this observation was made; both are still in the code and neither moves the reading.
+
+The reproduction is the `#[ignore]`d UI test in `winia/tests/ui_test.rs`, whose reason now carries this
+root cause, and the fixture `bwc` in `tests/ui_fixtures/`.
+
+**Correction to the paragraph that used to be here.** An earlier version of this section said the
+window reading was resolved. It was not: the reading came from the `exp/lookahead-probe` verification
+example (where the box's own width is driven by its content through a slightly different path), and
+when the same thing was put into the UI suite as a fixture — the honest test of "does the app show
+it" — the box's own node read `[0,0]` while its adopted child read `[192,19]`.
+
+What is measured, in the app's frame path:
+
+| reading | value |
+|---|---|
+| the subcomposed content's text | `BWC max 200` — the real cap, on the FIRST frame (asserted by the fixture's passing assertions) |
+| the adopted child's size | `[192,19]` — real |
+| the box's OWN measured size | `[0,0]` — **wrong**, and the unit tests that assert it pass |
+
+So the subcomposition works, the content is composed with the real constraints at measure time, and
+the parent's own size is the open defect. Fixing it started from two hypotheses, both of which the
+measurements refuted (the policy's per-frame cache, and adoption's write of the parent size are both
+already in place and neither moves the reading), and several wrong turns were made on the way — one of
+them reading output from a **stale binary** because `cargo build --example` had failed and the failure
+was not read. The reproduction is committed as an `#[ignore]`d UI test with its reason, so a green run
+of that test is the acceptance criterion for the fix, and `docs/ui-testing.md`'s guidance about
+`click_until` applies to it (the fixture's cap buttons are clicked through it).
+
+**What the earlier paragraph described, for the record:** the box read `[0, 0]` while its child read `[98, 48]` because
+the policy composed a FRESH subcomposition on every measurement, and the frame handler measures such a
+node more than once per frame (the flight-override pass). The first composition is the one the adoption
+pass attaches; the second replaced it and reported a size from a tree nobody would see. The policy now
+reports its first measurement of the frame instead of composing again
+(`first_measure`), and the window is stable across runs:
+
+```
+tree: [420,160] root -> [420,160] pad -> [98,31] box -> [98,31] BWC max 200
+screenshot 630x240: 14400 dark pixels inside the box region
+```
+
+So `BoxWithConstraints` now does what Compose's does — content composed in the measurement, with the
+real constraints, on the first frame, sized to that content — and the facility is exercised by a real
+component rather than only by tests.
+
+**What is still not there** (and would be the next round's work if the facility is to be used more
+widely): the subcomposition is re-composed whenever its node measures, so a settled subtree is still
+re-built each frame; the arrangement cache (`Composer::subcomposition_cache`) is stubbed with its
+reason; and nothing else in the framework uses the facility yet — `LazyColumn` still runs on its anchor
+model, and `TabRow`'s indicator slot is untouched.
+
+### The cross-frame round: two causes fixed, and the defect moved (`24f2f06`)
+
+Starting from the observed root cause above, this round found and fixed two of its causes, and the
+measurement moved the defect to a different layer:
+
+1. **The content closure was consumed.** `BoxWithConstraints::build` took `FnOnce` and the policy took
+   the closure out of its `Mutex<Option<..>>`, so the SECOND frame's composition ran an EMPTY content.
+   Traced in a window (`WINIA_SUBCOMPOSE_TRACE`), before and after:
+
+   ```
+   before:  [sub] policy-node=Some(9) cache=miss nodes=0 root=None   size=0x0
+   after:   [sub] policy-node=Some(9) cache=miss nodes=1 root=Some(0) size=86x19
+   ```
+
+   The `0x0` is what overwrote the size the adoption pass had written — the reading the frozen branch
+   was blamed for. `build` now takes `Fn` (the shape Compose's content lambdas have), locked by the
+   library test `a_later_frame_runs_the_content_again_and_the_parent_size_follows_it`, which asserts
+   the content RAN again on a forced second measurement and that the parent's size is the content's.
+2. **A subcomposing node was folded.** `measure_node` already refuses to fold one, but the materialize
+   half was missing: a reused node took its `dirty` flag straight from the descriptor, so a
+   subcomposing node could be materialized clean and fold its measurement. The reuse arm now marks it
+   dirty — its composition has no cross-frame identity yet, so it is re-measured every frame.
+
+**What is still broken, and it is a different layer.** On a frame where the component's body recomposes
+but the node arrives at `measure_node` with `dirty=false`, the fold returns the stale size and the
+component is never re-measured. Traced in a window: after the cap changed, the body ran (`BUILD`), the
+new modifier arrived (`maxWidth = Fixed(200.0)`), and no measurement followed. The remaining gap is
+therefore **the composition→measure link**, not the arena: a recomposition has to reach the node as
+"re-measure".
+
+**And one candidate was measured, refuted and reverted.** Re-recording the inner composition's state
+reads on the outer node's slot key (`state::record_deps_for`) fixed the box's own reading, but it broke
+`a_long_press_fires_while_the_pointer_is_still_down` — the extra re-measures shifted the long-press
+timing — and it did not turn the acceptance test green either. The mechanism is sound; its attachment
+point is not. The gap was closed by the other route instead (`Composer::node_modifier_changed`, §6).
+
+**How that gap was closed.** The "composition→measure link" above is exactly what this branch's later
+round fixed: a node whose own modifier changed now re-measures even when its slot stayed Clean, which is
+the case a state read in a PARENT's scope produces. The acceptance test this section treats as the
+criterion is green and no longer `#[ignore]`d.
+
+## From experiment to the tree
+
+Everything above was an experiment on `exp/lookahead-probe`, and it was then finished on
+`exp/tab-indicator` and merged: the facility, the materialize/node contract the adopted subtree needed,
+the cross-frame reuse that was the named prerequisite, its two users (`BoxWithConstraints` and
+`TabRow`'s indicator slot) and the tests that define the guarantees are all in this tree now. Every
+defect this note recorded on the way — the empty later generation (§5c/§5d), the composition→measure
+link, and the invalidation-path defects the second user exposed — is fixed and pinned by a test; §6
+lists them with what they cost.
+
+What the trail is still good for: the priced alternative (a second `layout()`, §5b), the things already
+ruled out by measurement, and the record of WHY the shape is what it is —
+`docs/lookahead-probe-handover.md` is the entry point for that, and this note is the reasoning behind it.
 
 ## 6. Recommendation
 
-What the experiment (§5b) leaves behind:
+Both parts of §5 were run, so this is no longer a plan but a reading of the results:
 
-- **Design 1 (re-composing the same tree in one frame) should not be attempted first.** Its blocker is
-  a named function with named invariants (`start_slot`'s visit semantics plus `visited`-based orphan
+- **Do not attempt design 1 (re-composing the same tree in one frame) first.** The blocker is a named
+  function with named invariants (`start_slot`'s visit semantics plus `visited`-based orphan
   collection) and its failure mode is tree corruption.
 - **The cheap half is priced and worth using on its own:** a second `layout()` under different inputs
   costs ~191 µs on a 56-node tree (1.1 % of a 60 Hz budget) and re-enters no slot. Anything that needs
   "where would this be if the animation were not running" can start there.
-- **Design 2 is feasible but has one prerequisite, now named: `cross-frame reuse of a composition`.**
-  The prototype composed at measure time, adopted the tree into the arena, and survived a frame — until
-  a later compose generation (the observed root cause in §5b.4). That prerequisite is structural: the
-  composition has to stay alive between frames and be re-arranged, instead of being re-created and
-  moved. Once it exists, `BoxWithConstraints`' scope and `TabRow`'s indicator slot follow.
+- **Design 2 is feasible but has one prerequisite, now named: cross-frame reuse of a composition.**
+  The prototype composed at measure time, adopted the tree into the arena, and survived a frame —
+  until a later compose generation came out empty (§5d). The prerequisite is structural: keep the
+  composition alive between frames and re-arrange it, instead of re-creating it and moving it. Once it
+  exists, `BoxWithConstraints`' scope and `TabRow`'s indicator slot follow.
 - **Keep the frame-lagged approximation where it already works** (`LazyColumn`, the shared-element
   bounds): both have documented, tested workarounds, and the trail costs them little.
 
-The prototype, its tests and its reproduction are on `exp/lookahead-probe`, **frozen at `6551334`** and
-deliberately not merged; this branch's tree does not contain them.
-
-## 7. If this work is picked up
-
-Start at `docs/lookahead-probe-handover.md` — but note that it sits **on that branch**, not here (this
-branch has no code to point at, so the file would dangle until a fix lands). It carries what a restart
-needs, and what one would not want to rediscover:
-
-- **The acceptance criterion**, already written as a test: the `#[ignore]`d UI test
-  `box_with_constraints_composes_its_content_at_measure_time` with the `bwc` fixture, plus the exact
-  commands for the one fixture binary and the UI suite.
-- **The restart order**, starting from `Composer::subcomposition_cache` — the branch's stub for exactly
-  the missing piece, cross-frame reuse of a composition.
-- **The baselines** measured on that branch: `cargo test -p winia --lib` 1090 passed; the UI suite 47
-  passed with the 1 ignored reproduction.
-- **The four things already ruled out** by measurement — including the two writes at the adoption site
-  that were tried and refuted, and the reason design 1 is not a cheap experiment.
-
-The branch is a prototype plus a reproduction, not shippable code: on it `BoxWithConstraints` reads
-`[0,0]` for its own size in a real window while its adopted child reads `[192,19]`. That is why it is
-frozen rather than merged, and why the reproduction is the acceptance criterion rather than a caveat.
+The prototype, its tests and its reproduction are on this branch; the mainline's tree does not contain
+them.

@@ -2031,6 +2031,13 @@ pub struct Composer {
     pub(crate) prev_node_by_key: crate::layout::node::SlotKeyMap<usize>,
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
+    /// Subcompositions parked during the current layout pass, waiting for adoption
+    /// (`ui::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
+    pub(crate) subcompositions: Vec<(usize, crate::ui::subcompose::Subcomposition)>,
+    /// A subcomposition this composer can re-arrange instead of re-composing (`ui::subcompose`).
+    /// Taken by the next `subcompose()` call in the same frame and put back by `layout()`'s adoption
+    /// pass, so a second layout pass in one frame reuses the first pass's composition.
+    subcomposition_cache: Option<Box<Composer>>,
     /// How many skipped subtrees the last `materialize` claimed in place, instead of re-encoding them
     /// into descriptors (`SlotTable::try_claim_skipped_subtree`). Test-visible so the tests can tell
     /// "the fast path ran" from "it bailed" — the two are deliberately indistinguishable in the tree.
@@ -2149,6 +2156,8 @@ impl Composer {
             pending_next: 0,
             prev_node_by_key: crate::layout::node::SlotKeyMap::default(),
             reused_nodes: crate::layout::node::NodeMarks::default(),
+            subcompositions: Vec::new(),
+            subcomposition_cache: None,
             #[cfg(test)]
             skip_claims: 0,
             #[cfg(test)]
@@ -2384,12 +2393,17 @@ impl Composer {
         // WiniaTheme::direction() 已退出作用域读不到（RTL 全局切换失效根因）
         let direction = modifier.get_layout_direction()
             .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        // A Clean slot still has to re-measure when this node's own modifier changed: the modifier is
+        // where a container's or leaf's layout inputs live (`max_width`, `size`, `padding`), and a value
+        // computed from a state read in an ANCESTOR's scope changes them without dirtying this slot.
+        // See `node_modifier_changed`.
+        let dirty = slot_status != SlotStatus::Clean || self.node_modifier_changed(key, &modifier);
         self.slot_table.set_current_desc(Some(NodeDesc {
             key,
             modifier,
             policy,
             on_remove,
-            dirty: slot_status != SlotStatus::Clean, // 重测标记（slot.dirty 已消费）
+            dirty, // 重测标记（slot.dirty 已消费）
             registrar: None,
             focus_color: None,
             composing_color: None,
@@ -2546,6 +2560,27 @@ impl Composer {
     fn container_modifier_unchanged(&self, key: u64, modifier: &Modifier) -> bool {
         match self.prev_node_by_key.get(&key) {
             Some(&idx) => modifier.param_eq(&self.arena.nodes[idx].modifier),
+            None => false,
+        }
+    }
+
+    /// Whether this frame's `modifier` differs from the one the node at `key` was last materialized with
+    /// — i.e. the node's own LAYOUT INPUTS changed, so its measurement cannot be reused.
+    ///
+    /// A container or leaf created by `start_node` has no parameter list of its own; its modifier IS its
+    /// parameter list. A value computed from a state read in an ANCESTOR's scope (`max_width(cap.get())`
+    /// inside a parent's content closure) dirties that ancestor's slot and leaves this node's slot Clean,
+    /// so `slot_status != SlotStatus::Clean` alone answers "nothing changed here" while this node's own
+    /// constraints did change — and a folded measurement then keeps the old size and, for a subcomposing
+    /// node, the content it composed with the old constraints (measured: the `bwc` UI fixture's click
+    /// stopped reaching its `BoxWithConstraints` content). Compose compares the modifier chain for the
+    /// same reason.
+    ///
+    /// `false` when there is no node to compare against: that is not "changed", it is "no basis" —
+    /// materialize rebuilds a node it cannot find and starts it dirty on its own.
+    fn node_modifier_changed(&self, key: u64, modifier: &Modifier) -> bool {
+        match self.prev_node_by_key.get(&key) {
+            Some(&idx) => !modifier.param_eq(&self.arena.nodes[idx].modifier),
             None => false,
         }
     }
@@ -2859,6 +2894,42 @@ impl Composer {
 
         // 完整分离：组合完成后物化布局树（测试/调用方可直接 layout_root_idx）
         self.materialize();
+        // A subcomposing node the composition touched has to be re-measured, and the LAYOUT path is
+        // what does that: `layout()` clears every node's `dirty`/`layout_dirty` and re-derives them
+        // from `layout_dirty_keys`, then uses that set to decide which parents descend at all. A node
+        // whose slot status was Clean (its parent entered, so its body re-ran without its slot being
+        // marked) arrives here with `dirty=false`, so the only place left to say "measure me" is this
+        // set. Asked of the POLICY as well as of the node's `subcomposed` flag, because the flag is set
+        // by a parking measurement and is therefore false on a node that was just rebuilt.
+        //
+        // The `dirty` guard is load-bearing and the flag has to be precise, or this seeding is what
+        // makes a subcomposing tree re-measure everything: `subcomposed` used to be inferred from a
+        // "how many subcompositions were parked while this node measured" counter, which is true for
+        // every ANCESTOR of a subcomposing node, so the root of an 800-row tree was seeded on every
+        // frame that changed anything and the whole tree re-measured — 800 subcompositions for one
+        // row's update (74915 µs against ≈1600 µs; `docs/benchmarks.md`).
+        for idx in 0..self.arena.nodes.len() {
+            let declares = self.arena.nodes[idx].dirty
+                && (self.arena.nodes[idx]
+                    .measure_policy
+                    .and_then(|p| self.arena.policies.get(p))
+                    .map(|p| p.subcomposes())
+                    .unwrap_or(false)
+                    || self.arena.nodes[idx].subcomposed);
+            #[cfg(debug_assertions)]
+            if declares && std::env::var("WINIA_SUBCOMPOSE_TRACE").is_ok() {
+                eprintln!(
+                    "[compose-end] idx={idx} key={} sub={} dirty={} declares={}",
+                    self.arena.nodes[idx].slot_key,
+                    self.arena.nodes[idx].subcomposed,
+                    self.arena.nodes[idx].dirty,
+                    declares
+                );
+            }
+            if declares {
+                self.layout_dirty_keys.insert(self.arena.nodes[idx].slot_key);
+            }
+        }
         // Shared-element flights (Phase 2): detect switches + retain/detach
         // sources BEFORE the prev drain below frees them.
         self.retain_shared_sources();
@@ -2912,6 +2983,68 @@ impl Composer {
     }
 
     /// 返回 LayoutNode 树的根节点引用
+    /// How many times this composer has composed. A subcomposing policy compares it to tell "the same
+    /// frame measured me twice" (report the first result) from "a later frame measured me again"
+    /// (compose the content again, because its parameters may have changed).
+    pub fn compose_generation(&self) -> u64 {
+        self.compose_count
+    }
+
+    /// The constraints this composer's last `layout()` ran under, if any.
+    pub(crate) fn cached_root_constraints(&self) -> Option<Constraints> {
+        self.arena
+            .root
+            .and_then(|root| self.arena.nodes.get(root))
+            .and_then(|node| node.cached_constraints)
+    }
+
+    /// Re-run this composer's layout under new constraints — used for a CACHED subcomposition, whose
+    /// content is already composed and only its arrangement can change.
+    pub(crate) fn relayout_subcomposition(&mut self, constraints: Constraints) {
+        self.layout(constraints);
+    }
+
+    /// Make a KEPT subcomposition ready for the next frame's composition.
+    ///
+    /// Adoption moves a subcomposition's arena into the outer one, which leaves this composer with an
+    /// empty arena and the per-node bookkeeping `layout()` built from the OLD one. `prev_node_by_key` is
+    /// the reuse index materialize consults before building nodes (`Some(idx)` into an arena that no
+    /// longer has that index — measured as `index out of bounds: the len is 0 but the index is 0`); the
+    /// per-frame reuse marks belong to the same dead frame. The SLOT TABLE is deliberately untouched:
+    /// that is the half this reuse exists for.
+    pub(crate) fn prepare_subcomposition_for_recompose(&mut self) {
+        self.prev_node_by_key.clear();
+        self.reused_nodes.clear();
+        // The arena index the drained tree used. It is read by `layout()` to decide where to start the
+        // reuse walk, and it names a node that is no longer in this arena — the second crash this
+        // preparation had to clear (`index out of bounds` in `insert_reuse_key`, reached from
+        // `collect_layout_index`).
+        self.arena.root = None;
+    }
+
+    /// Take the cached subcomposition (see the field), if this frame's next `subcompose()` can    /// re-arrange it instead of composing again.
+    pub(crate) fn take_cached_subcomposition(&mut self) -> Option<Box<Composer>> {
+        self.subcomposition_cache.take()
+    }
+
+    /// Park a subcomposition against the node that composed it, for the adoption pass at the end of
+    /// `layout` (`ui::subcompose`). The registry is cleared at the start of every layout pass.
+    pub(crate) fn park_subcomposition(
+        &mut self,
+        node: usize,
+        entry: crate::ui::subcompose::Subcomposition,
+    ) {
+        // The node's OWN policy composed content — recorded here, at the moment it happens, because this
+        // is the only place that knows WHICH node subcomposed. `Composer::compose`'s compose-end seeding
+        // reads the flag to decide whether the node has to be re-measured; inferring it from a
+        // "subcompositions parked so far" counter (which is what the flag used to be) made it true for
+        // every ancestor of a subcomposing node as well — see `LayoutNode::subcomposed`.
+        if node < self.arena.nodes.len() {
+            self.arena.nodes[node].subcomposed = true;
+        }
+        self.subcompositions.push((node, entry));
+    }
+
     pub fn layout_root(&self) -> Option<&LayoutNode> {
         self.arena.root()
     }
@@ -2971,10 +3104,23 @@ impl Composer {
             Arc::downgrade(&self.pending_states),
         );
         begin_layout_measure_tracking();
+        // Subcomposing policies park their compositions while measuring; adopt them right after the
+        // tree is measured and BEFORE the reuse index is rebuilt — an adopted subtree has to be in
+        // that index, or the next frame's reuse path never sees it.
+        self.subcompositions.clear();
+        let _layout_host = crate::ui::subcompose::LayoutHostGuard::arm(self as *mut Composer);
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
             self.arena.nodes[root_idx].measured_size = _size;
+            let parked = std::mem::take(&mut self.subcompositions);
+            // `adopt_parked` hands back the last composition it moved, which becomes the cache a
+            // second layout pass in this same frame can re-arrange instead of re-composing.
+            self.subcomposition_cache = crate::ui::subcompose::adopt_parked(
+                &mut self.arena,
+                &mut self.reused_nodes,
+                parked,
+            );
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）+ dirty 冒泡
             self.prev_node_by_key.clear();
             crate::core::materialize::collect_layout_index(
@@ -2983,6 +3129,7 @@ impl Composer {
                 &mut self.prev_node_by_key,
             );
         } else {
+            self.subcompositions.clear();
             // No root means every old layout dependency is stale.
             self.prev_node_by_key.clear();
         }

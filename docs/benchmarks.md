@@ -1406,6 +1406,154 @@ side: the figure was a bucket label rather than a measurement of the thing it na
 panicked with `[dup-key]` on the first idle frame, which is how the walk's second job (marking the
 subtree as reused) came to be documented in the code instead of being rediscovered.
 
+## What a measure-time subcomposition costs a frame
+
+`cargo bench -p winia -- subcompose` runs one added scene (`Kind::SubBox`): the SAME row shape as
+`boxes`, with a `BoxWithConstraints` (content: a short `Text`) as each row's first child. The two tables
+differ by exactly that, so the difference is the subcomposition's price. 800 rows:
+
+| scene (800 rows) | `boxes` — no subcomposition | one `BoxWithConstraints` per row |
+|---|---|---|
+| cold frame | 5332 | 12448 |
+| **idle frame** | **621** | **63233** |
+| one row updated | 1247 | 61767 |
+| layout, idle (no compose) | 174 | 176 |
+
+**~78 µs per subcomposing node per frame** on an idle frame: `(63233 − 621) / 800`. An idle compose
+re-composes every subcomposition, while pure layout of the same tree is free (176 µs — unchanged from
+the `boxes` tree of that size).
+
+Where it came from, measured rather than inferred, in the code as it stood then: two rules kept such a
+node from folding. `materialize` marked a subcomposing node dirty each time it was materialized, and
+`measure_node` refused to fold a node carrying `subcomposed`, so every frame's measurement re-ran the
+policy, which re-composed the content and re-adopted it. It was NOT the compose-end seeding that also put
+those nodes into `layout_dirty_keys`: disabling that seeding took the idle frame from 63233 to
+**60389 µs** (−4.5 %). Both rules are gone (see the fix below); the figures in this paragraph are the
+"before" column of the table further down.
+
+What followed from the number: the facility pays about two orders of magnitude over a plain container
+per frame when nothing is done about it, so it belongs where a screen has FEW subcompositions — a
+`BoxWithConstraints` per section, a `TabRow` indicator — and not in a list where every row carries one.
+The rest of this section is what that bought back: first idle frames, then the one-row frame.
+
+One more figure from the same round: the `children` filter a policy now receives (the adopted
+subcomposition child is excluded, which is what makes `TabRow`'s `tab_count` right) costs nothing even
+on this 800-subcomposition tree — idle 63233 with it, 63830 without it.
+
+**The fix, in two halves (2026-09-27).** The discriminator is now in place: a
+subcomposing node folds like any other when its composition did not change (`materialize` no longer
+force-marks it dirty; `measure_node`'s two fold checks no longer special-case `subcomposed`), and the
+compose-end seeding carries the `dirty` guard it needs (`dirty && declares`). Neither half works alone —
+the guard turned the acceptance test red when it was tried without the fold — and together they move the
+idle frame by two orders of magnitude:
+
+| scene (800 rows) | before | after |
+|---|---|---|
+| idle frame | 63233 | **1045–1089** (−98 %, ≈60x) |
+| cold frame | 12448 | 14555 |
+| one row updated | 61767 | 62076–65707 |
+
+A counter run explains the idle row and narrows the other one. Temporarily instrumented (removed again):
+an **idle** frame runs **0** subcompositions and, on the one-row frame, **2** nodes are seeded and **2**
+come out of `materialize` dirty — while **800** subcompositions still run. So the remaining cost is not
+the seeding and not materialize; the other ~798 nodes re-measure for a reason neither of those set, and
+the next instrument has to separate the OUTER tree from the inner composers' trees while counting (an
+earlier version of this count did not, and reported "2401 subcomposing nodes measured" when that number
+was mostly the inner trees' own nodes — 800 subcompositions × ~3 nodes each).
+
+A counter run explains the idle row and narrows the other one. Temporarily instrumented (removed again):
+an **idle** frame runs **0** subcompositions and, on the one-row frame, **2** nodes are seeded and **2**
+come out of `materialize` dirty — while **800** subcompositions still run. So the remaining cost is not
+the seeding and not materialize; the other ~798 nodes re-measure for a reason neither of those set, and
+the next instrument has to separate the OUTER tree from the inner composers' trees while counting (an
+earlier version of this count did not, and reported "2401 subcomposing nodes measured" when that number
+was mostly the inner trees' own nodes — 800 subcompositions × ~3 nodes each).
+
+**And here is where it went (2026-09-28): two defects, both in the invalidation path, plus a third that
+the first two were hiding.** The counter the paragraph above asks for did separate the two trees (the
+layout nesting depth: depth 1 is the outer tree, a subcomposition's own `layout()` runs at depth 2), and
+the one-row frame answers as follows: **2 keys hit, 4001 nodes marked `layout_dirty`, 800 subcompositions
+run, 3201 outer nodes re-measured.**
+
+1. **`subcomposed` was not a per-node fact.** `measure_node` set it by comparing a "subcompositions parked
+   so far" counter before and after a measurement, so it was also true for every ANCESTOR of a
+   subcomposing node. The compose-end seeding asks `dirty && (policy.subcomposes() || subcomposed)`, so
+   the frame's root was seeded on every frame that changed anything — the seeded key list for a one-row
+   frame was `[root, updated row]`. The flag is now recorded by `Composer::park_subcomposition` on the
+   node that actually parked, and is never inferred from a count.
+2. **`apply_layout_dirty` marked the hit node's whole SUBTREE,** not just its ancestors: the walk passed
+   `hit || ancestor_dirty` down to the children, so a hit on the root marked all 4001 nodes. Its own doc
+   comment said "hit node + ancestor chain". Marking the subtree is redundant — a hit node re-measures
+   and that re-measure reaches children through the ordinary fold check. The walk now marks the hit and
+   its ancestors only.
+3. **Fixing 1 and 2 exposed the real gap they had been masking:** a node whose own `MODIFIER` changed does
+   not re-measure when its slot stayed Clean. A container or leaf built by `start_node` has no parameter
+   list of its own — its modifier IS its parameter list — and a value computed from a state read in a
+   PARENT's scope (`max_width(cap.get())`) dirties the parent's slot, not this node's. Before, the
+   ancestor seeding plus the subtree cascade re-measured such a node by accident; with 1 and 2 fixed, the
+   `bwc` UI fixture's click stopped reaching its `BoxWithConstraints` content (its text kept the old
+   cap) and the test timed out on a click that HAD landed. Compose compares the modifier chain for the
+   same reason; `Composer::node_modifier_changed` now does too, and the descriptor's `dirty` is
+   `slot_status != Clean || node_modifier_changed(..)`. A `BoxWithConstraints` unit test pins it
+   (`ui::box_with_constraints::tests::a_cap_change_in_the_composition_reaches_the_content_the_box_composes`),
+   and it is the only one of the three fixes with a measurable cost on the scenes that do not subcompose
+   at all — one `param_eq` per node whose creator ran (a skipped subtree never reaches `start_node`, so
+   an idle frame pays nothing). `boxes` at 800 rows: idle 558 µs, one row updated 1063 µs, against 621 /
+   1247 before it.
+
+| scene (800 rows) | before any fix | two fixes | all three |
+|---|---|---|---|
+| idle frame | 63233 | 1045–1089 | **1038** |
+| cold frame | 12448 | 14555 | 14984 |
+| one row updated | 61767 | 62076–65707 | **1696** |
+| frame (compose+layout), one row updated | — | 146770 | **1528** |
+| compose, one row updated | — | — | 1351 |
+| layout, idle (no compose) | 176 | — | 183 |
+
+The one-row frame is the headline: **61767 µs → 1696 µs (−97 %, ≈36x)**, and it is now the same order as
+the `boxes` scene's one-row frame (1063 µs) plus the one row's actual subcomposition. The two defects
+were invisible to every previous measurement because a one-row update is the only shape that shows them
+together: it needs a hit whose subtree is the whole tree (1 seeds the root), and a seeding whose effect
+only shows when the hit's descendants are marked (2 is what marks them).
+
+Each half is verified by reverting it behind an env-gated switch, one at a time: restoring either one
+alone does NOT bring the old cost back (`one row updated` measured 1571 µs with the old flag and the new
+marking, ~1700 µs with the new flag and the old marking), and restoring BOTH brings the 87788 µs row
+back. For the `bwc` UI fixture it is the mirror image: it passes only with both old behaviors, which is
+what makes it a case that had been relying on the accident — with the modifier fix in place it passes on
+the fixed tree too.
+
+### What the branch costs the scenes that PREDATE it (the drop-it-or-keep-it question)
+
+Every change on this branch (the fold rule for a subcomposing node, the compose-end seeding, the
+`apply_layout_dirty` walk, `node_modifier_changed`) sits in the SHARED invalidation path, so the scenes
+that existed before the branch are the ones that would show a regression. They do not:
+
+| scene (800 rows) | v2, from the rounds recorded above | this branch |
+|---|---|---|
+| `boxes`, idle frame | 546–621 | 559 |
+| `boxes`, one row updated | 1142–1247 | **1084** |
+| `boxes`, cold frame | 4732–5332 | 4844 |
+| `text`, idle frame | 715 | 749 |
+| `text`, one row updated | 1297 | 1332 |
+| `text`, cold frame | 24460 | 26445 |
+| `text`, frame (compose+layout), one row updated | 1350 | 1350 |
+| `boxes`, `layout` alone, idle | 154 | 160 |
+| `text`, `layout` alone, idle | 181 | 179 |
+
+Every row is inside the ~15 % run-to-run drift this document warns about at the top of its rounds, and
+the two arms that drifted least across those rounds (the `layout`-alone pair) are equal. The pre-branch
+column is v2's own last recorded state (`8e7dd7c` + its two docs commits; v2 differs from the branch
+point in nothing but those two files), the branch column is `cargo bench -p winia` on `804eae0`, fastest
+of 9 samples.
+
+So the branch costs the scenes it inherited **nothing measurable**. What it costs is the NEW scene: the
+same 800-row tree with one measure-time subcomposition per row runs an idle frame in 1040 µs (against
+559 for `boxes`) and a one-row frame in 1554 µs (against 1084), i.e. **≈0.6 µs per subcomposing node per
+idle frame** — and that is the price of a feature that did not exist before this branch
+(`BoxWithConstraints` composing its content with the constraints measurement just computed, and
+`TabRow`'s caller-supplied indicator slot). A screen that uses neither pays nothing.
+
 ## Re-running any of this
 
 The benchmark's own traps are documented in the file where they bit, and the phase splits used for the

@@ -207,18 +207,20 @@ struct RuntimeFrameGuard { /* restores outer slot/group/statement TLS */ }
 7. 多次 set 在一个消费周期只产生一个 pending StateId，但读到最新值。
 8. StateSignal 通知不在 signal 锁内执行 wake callback；队列去重入队在 signal lock 内线性化，且不执行用户代码。
 
-## Related open item (not part of this file's phase plan)
+## Related item: cross-frame reuse of a composition — DONE, and merged
 
 - **Cross-frame reuse of a composition — the prerequisite for measure-time subcomposition.** A
   prototype of "compose during measure + adopt the tree into the arena" was verified feasible
   (composing inside a measure call, adoption with index re-basing, surviving the compose tail, and
-  panic safety all have tests), and it stops at one structural defect: on a later compose generation
-  the subcomposition comes out EMPTY, the policy reports `0x0`, and that overwrites the size adoption
-  wrote. The root cause is observed, not inferred. See `docs/lookahead-subcompose-feasibility.md`
-  §5b and §6; the prototype, its tests and its reproduction are on the branch `exp/lookahead-probe`
-  — this branch's tree does not contain them. That branch is frozen at `6551334` (deliberately not
-  merged: its `BoxWithConstraints` reads `[0,0]` for its own size in a real window), and the restart
-  entry point is `docs/lookahead-probe-handover.md` on that branch.
+  panic safety all have tests). It then stopped at one structural defect: on a later compose generation
+  the subcomposition came out EMPTY, the policy reported `0x0`, and that overwrote the size adoption
+  wrote. The root cause was observed, not inferred.
+  **That prerequisite is now built and in this tree:** the per-node composition survives across frames
+  (`SUBCOMPOSITION_CACHE` plus `Composer::prepare_subcomposition_for_recompose`), the adopted subtree is
+  re-attached by materialize across both reuse arms, and its two users (`BoxWithConstraints` and
+  `TabRow`'s indicator slot) pass their acceptance tests through real `#[composable]` frames. See
+  `docs/lookahead-subcompose-feasibility.md` §5b → §5d for the trail and §6/§7 for where every piece
+  lives, and `docs/lookahead-probe-handover.md` for the rounds and the attempts ruled out.
 
 ## 变更记录
 

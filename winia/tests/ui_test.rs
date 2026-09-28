@@ -2026,3 +2026,109 @@ fn a_long_press_fires_while_the_pointer_is_still_down() {
     std::thread::sleep(Duration::from_millis(250));
     assert_eq!(counter(&mut app, "popup-holds"), Some(1), "and only once there either");
 }
+
+
+/// `BoxWithConstraints` composes its content DURING measurement, with the constraints that
+/// measurement computed — Compose's `SubcomposeLayout` relation.
+///
+/// The regression this pins is the difference between the subcomposition and the frame-lagged
+/// approximation that preceded it: the content must print the parent's cap on the FIRST frame the
+/// window publishes (the old implementation printed its unbounded initial value and only learned the
+/// real one a composition later), the box must take its size from that content, and a change of the
+/// parent's cap must re-arrange the content rather than wait for the next frame. The content fills
+/// the width it is given, so the box's measured width IS the cap the scope reported.
+#[test]
+fn box_with_constraints_composes_its_content_at_measure_time() {
+    let mut app = UiTest::launch("bwc");
+
+    // Frame one: the scope already carries the real cap (200), not the unbounded placeholder, and the
+    // box is sized to the content it composed (the text fills the box, so both are 200 wide).
+    app.expect_text("BWC max 200");
+    let (w, h) = app.find_tag_size("bwc-box").expect("the box is in the tree");
+    assert!(w > 0.0, "the box has a real width, got {w}");
+    assert!(h > 0.0, "and a real height, got {h}");
+    assert!(
+        !app.all_texts().iter().any(|t| t.contains("BWC-not-measured")),
+        "the first frame must not report the unmeasured placeholder: {:?}",
+        app.all_texts()
+    );
+
+    // Narrowing the parent re-arranges the content in the same measure pass. `click_until`, not
+    // `click_tag`: the debug click path loses the occasional click (`docs/ui-testing.md`), and this
+    // one is asserted by its effect rather than retried by hand.
+    let (bx, by, bw, bh) = app.find_tag("bwc-narrow").expect("the narrow button");
+    app.click_until(bx + bw / 2.0, by + bh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("BWC max 120"))
+    });
+    app.expect_text_timeout("BWC max 120", Duration::from_secs(5));
+    let (w2, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
+    assert!(w2 > 0.0, "the box is still sized after the cap changed, got {w2}");
+
+    // And back — the width has to follow in both directions. `click_until` here for the same reason
+    // as the narrow click: the debug click path loses the occasional click (`docs/ui-testing.md`),
+    // and this direction is asserted by its effect rather than retried by hand.
+    let (wx, wy, ww, wh) = app.find_tag("bwc-wide").expect("the wide button");
+    app.click_until(wx + ww / 2.0, wy + wh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("BWC max 200"))
+    });
+    app.expect_text_timeout("BWC max 200", Duration::from_secs(5));
+    let (w3, _) = app.find_tag_size("bwc-box").expect("the box is still in the tree");
+    assert!(w3 > 0.0, "and still sized after the cap returned, got {w3}");
+
+    // One adopted child, not an accumulation of them: a subcomposed subtree is replaced, never
+    // stacked (two live copies would claim one synthetic key and trip the arena's dup-key guard).
+    let tree = app.tree().expect("a tree");
+    assert_eq!(
+        ui::UiTest::tree_texts(&tree)
+            .iter()
+            .filter(|t| t.contains("BWC max"))
+            .count(),
+        1,
+        "exactly one subcomposed content node after three frames: {:?}",
+        ui::UiTest::tree_texts(&tree)
+    );
+}
+
+/// A caller-supplied `TabRow` indicator composes DURING measurement, with the positions the row just
+/// computed, and what it draws lands on the selected tab.
+///
+/// This runs through a real `#[composable]` frame on purpose — every defect this slot had was
+/// invisible to a unit test: the macro refused to inject statement keys into a TWO-parameter content
+/// closure (the fixture PANICKED on startup until that was fixed), the adopted subtree's node was
+/// painted at the window origin, and the row counted the adopted child as one of its own (so a
+/// three-tab row measured its tabs for a four-tab one, 488/4 = 122 instead of 488/3 ≈ 162.7). The
+/// geometric assertion below is what catches the last one.
+#[test]
+fn a_caller_supplied_tab_indicator_is_composed_at_measure_time() {
+    let mut app = UiTest::launch("tab_indicator");
+    app.expect_text("sel 0");
+
+    let (x0, y0, w0, h0) = app
+        .find_tag("custom-indicator")
+        .expect("the caller's indicator is in the tree");
+    assert!(w0 > 0.0 && h0 > 0.0, "the indicator has a real box: {w0}x{h0}");
+    assert!(y0 > 0.0, "and a real position: y={y0}");
+    assert!(
+        x0 > 0.0 && x0 + w0 < 420.0,
+        "inside the window: x={x0} w={w0}"
+    );
+
+    // Switching to the third tab has to move it by two tab widths. The row is 420 wide with 16 of
+    // padding on both sides, so 388/3 ≈ 129.3 per tab: the delta is ≈ 258.7 minus the difference in
+    // content widths, and ±10 still fails a four-tab row (2 × 122 = 244).
+    let (bx, by, bw, bh) = app.find_tag("pick-third").expect("the third-tab button");
+    app.click_until(bx + bw / 2.0, by + bh / 2.0, Duration::from_secs(2), |tree| {
+        ui::UiTest::tree_texts(tree).iter().any(|t| t.contains("sel 2"))
+    });
+    app.expect_text_timeout("sel 2", Duration::from_secs(5));
+
+    let (x2, _, w2, _) = app
+        .find_tag("custom-indicator")
+        .expect("the indicator is still in the tree");
+    assert!(w2 > 0.0, "still sized after the selection changed: {w2}");
+    assert!(
+        (x2 - x0 - 258.7).abs() < 10.0,
+        "the indicator followed the selection by two tab widths: x {x0} -> {x2} (expected ≈ {})",
+        x0 + 258.7
+    );
+}

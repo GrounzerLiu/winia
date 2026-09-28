@@ -279,12 +279,16 @@ fn inject_expr_blocks(expr: syn::Expr, ctx: &syn::Ident, counter: &mut u32) -> s
             }
             syn::Expr::MethodCall(e)
         }
-        // 闭包：单参数且名为 ctx_ident → content 闭包（约定），注入其体
+        // 闭包：**首参**为 ctx_ident → content 闭包（约定），注入其体。
+        // 多余的参数是允许的：框架本就提供双参内容 API（`BoxWithConstraints::build(ctx, |ctx, scope| ..)`、
+        // `TabRow::indicator(|ctx, scope| ..)`），而"恰好一个参数"的旧判定让这些闭包体**没有**
+        // 注入语句 key——里面放组件会在 next_key 里 panic（"无稳定 key 源"）。
+        // 实测：tab-indicator demo 在放宽前直接 panic。
         syn::Expr::Closure(mut e) => {
             let is_content = match e.inputs.first() {
-                Some(syn::Pat::Ident(pi)) if e.inputs.len() == 1 && pi.ident == *ctx => true,
+                Some(syn::Pat::Ident(pi)) if pi.ident == *ctx => true,
                 // 带类型标注的写法 `|ctx: &mut ComposeCtx|`（Pat::Type 内层是 Pat::Ident）
-                Some(syn::Pat::Type(pt)) if e.inputs.len() == 1 => {
+                Some(syn::Pat::Type(pt)) => {
                     matches!(&*pt.pat, syn::Pat::Ident(pi) if pi.ident == *ctx)
                 }
                 _ => false,
