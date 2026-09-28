@@ -52,6 +52,7 @@ DropdownMenuItem::new("删除")
 | `dropdown_menu_dismisses_on_an_outside_click` | 点击菜单外 → 经 `on_dismiss_request` 关闭，且没有任何项被选中 |
 | `dropdown_menu_geometry_matches_the_material3_metrics` | 项宽 ∈ [112, 280]（对 4 个汉字的标签即证明 minWidth 钳制生效）、项高 ≥ 48、容器高 = 3 项 + 上下各 8dp |
 | `dropdown_menu_paints_its_surface` | 容器**确实绘制**：菜单内 8dp 内边距处的像素与页面背景不同（树里看不出颜色，故读帧） |
+| `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` | 20 项菜单：容器完全落在窗口内（`cy+ch ≤ 窗口高`），滚轮把 offset 推到上限附近，末项渲染位置落在容器内 |
 
 ## 4. 与 Compose M3 的差异（依据：本地 androidx 源码）
 
@@ -87,16 +88,36 @@ DropdownMenuItem::new("删除")
 
 几何有测试钉住（树断言，不是像素）：`dropdown_menu_geometry_matches_the_material3_metrics` —— 项宽必须落在 `[112, 280]`（对 4 个汉字的标签即证明 minWidth 钳制生效：内容只有 ~80px）、项高 ≥48、容器高 = 3 项 + 上下 8dp（≥160 且 <200）。旧几何（写死 160×36）会因项高 36 与容器高 108 两条断言失败。
 
-### 4.3 待对齐（本轮后续阶段）
+### 4.3 阶段 3 对齐：长菜单（滚动 + 按锚点选位）
+
+M3 的机制由三件事组成（`Menu.kt` 的 `DropdownMenuContent` + `internal/MenuPosition.kt` 的 `DropdownMenuPositionProvider`）：
+
+1. 内容在 `Column` 里，链为 `modifier.padding(vertical = DropdownMenuVerticalPadding).width(IntrinsicSize.Max).verticalScroll(scrollState)` → **8dp 内边距在滚动之外**（内容滚动时它不动），滚动容器由菜单提供；
+2. 内容按窗口约束测量，故高度封顶在窗口；
+3. **定位**在候选位置里挑：锚点下方 → 锚点上方 → 贴窗口边（横向同理：起始对齐 → 末端对齐 → 贴边）。
+
+winia 对照实现：
+
+| 项 | M3 | winia |
+|---|---|---|
+| 滚动 | `verticalScroll(scrollState)` | `Modifier::new().padding_vertical(8.0).vertical_scroll(scroll_state)`，`scroll_state(...)` 参数，默认 `ctx.remember(ScrollState::new())` |
+| 高度封顶 | 平台 popup 按窗口测量 | winia 滚动容器自身尺寸 = `min(内容, 视口+padding)`（`layout/node.rs`）——天然封顶 |
+| 定位 | 候选序列 | `OverlayDesc::fit_around_anchor`（**opt-in**，只有 DropdownMenu 打开）：下方→上方→贴边，x 同样三候选；其余 overlay（Popup/Dialog/BottomSheet/Tooltip）保持原有定位 |
+| 滚轮投递 | 平台 popup 自己收 | **winia 的滚轮原先只看主树**——overlay 有独立 arena，菜单的滚动容器收不到滚轮。已修：滚轮先看指针下的 overlay（`hit_overlay`），debug 注入的 `s` 同优先级 |
+
+**改前实测**（20 项菜单、520px 窗口）：容器 `(16,238,112,520)`，底边 758 > 窗口 520——底部 238px 的项够不到。**改后**：容器 `(16,0,112,520)`（贴窗口顶边、完全在窗口内），滚轮后 offset 0 → 472，末项渲染在 y=448 落入容器；测试 `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` 用**滚动偏移**断言（滚动改变渲染平移，节点布局坐标不变，故矩形永远看不出滚动）。
+
+观察到的既有偏差（记录，不在本轮修）：偏移上限 472 vs M3 的 456（内容高含 8dp×2、视口不含，差 16px）。这是**所有带 padding 的滚动容器**共有的 off-by-padding，不是菜单特有。
+
+### 4.4 待对齐（本轮后续阶段）
 
 | 项 | M3 真身 | winia 现状 | 阶段 |
 |---|---|---|---|
-| 长菜单滚动 | 平台 popup 把 `scrollState` 接给 `verticalScroll` | **不可滚动**（overlay 按窗口约束测量，内容超出即够不到） | 3 |
 | 键盘 | Esc 关闭、上下键移动、Enter 激活 | 未测（`DropdownMenu` 未标 focus_scope） | 4 |
 | 输入框下拉 | `ExposedDropdownMenuBox` | 无 | 5 |
 | 前导/尾随图标槽 | `leadingIcon` / `trailingIcon`，最小 24dp（`ListTokens.ListItemLeading/TrailingIconSize`），文本区在有图标的一侧补 12dp | 无（`MenuItemColors` 已预留这两个颜色字段） | 2b |
 
-### 4.4 有意保留的偏差
+### 4.5 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
 - **项目前自带背景与固定尺寸**（§4.2 待改），所以现在三项叠在一起看起来像三个白块，而不是 Compose 的单块菜单面板。

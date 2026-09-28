@@ -151,6 +151,8 @@ impl Tooltip {
                 // tooltip 与锚点重叠）时点击锚点仍生效（否则 tooltip 挡住
                 // 锚点按钮 → 外部 visible 控制关不了）
                 click_passthrough: true,
+                // A tooltip keeps its historic placement (above/below the anchor as asked, no fitting).
+                fit_around_anchor: false,
                 on_dismiss: self.external_visible.as_ref().map(|s| {
                     let s = s.clone();
                     std::sync::Arc::new(move || s.set(false)) as std::sync::Arc<dyn Fn() + Send + Sync>

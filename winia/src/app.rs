@@ -194,6 +194,8 @@ struct OverlayWindow {
     modal: bool,
     dismiss_on_outside: bool,
     click_passthrough: bool,
+    /// Fit this overlay inside the window around its anchor (see `OverlayDesc::fit_around_anchor`).
+    fit_around_anchor: bool,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     content: Box<dyn Fn(&mut ComposeCtx)>,
     /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
@@ -1063,7 +1065,38 @@ impl ApplicationHandler for AppState {
                 // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
                 let (dx, dy) = scroll_delta_with_shift(dx, dy, pw.modifiers.shift_key());
                 if dx != 0.0 || dy != 0.0 {
-                    if let Some(root_idx) = pw.composer.layout_root_idx() {
+                    // Overlays float ABOVE the main tree and own separate arenas, so a wheel over one has
+                    // to scroll ITS container — a menu's list — rather than whatever the main tree has
+                    // under the same point. This is the routing pointer events already use (`hit_overlay`),
+                    // and without it a scrollable menu could not be scrolled at all: the main-tree search
+                    // below cannot see into another arena (measured: the last item stayed at y=920 in a
+                    // 520px window no matter how much the wheel moved).
+                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                        let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
+                        let ov = &pw.overlays[i];
+                        let r = ov.composer.layout_root_idx()?;
+                        let nodes = ov.composer.arena_nodes();
+                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
+                        path.iter().rev().find(|&&idx| {
+                            (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
+                                || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                        }).copied().map(|t| (i, t, r))
+                    });
+                    if let Some((i, target, r)) = overlay_target {
+                        let ov = &mut pw.overlays[i];
+                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        let nodes = ov.composer.arena_nodes();
+                        if dy != 0.0 && consumed.y == 0.0 {
+                            if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
+                                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+                            }
+                        }
+                        if dx != 0.0 && consumed.x == 0.0 {
+                            if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
+                                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+                            }
+                        }
+                    } else if let Some(root_idx) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
                         // §3.7 修复：优先按鼠标位置 hit-test，在命中路径上找滚动
                         // 目标——两个并排滚动区域只滚鼠标悬停的那一个（旧实现
@@ -2078,7 +2111,26 @@ impl AppState {
                     handled = true;
                 }
                 debug::DebugEvent::Scroll { dx, dy } => {
-                    if let Some(r) = pw.composer.layout_root_idx() {
+                    // An injected wheel follows the same precedence as a real one: an overlay under the
+                    // pointer first (a test moves the pointer with `m x y`), then the main tree's blind
+                    // search — which is what makes a scrollable menu testable at all, since the blind
+                    // search only ever sees the main tree's arena.
+                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                        let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
+                        let ov = &pw.overlays[i];
+                        let r = ov.composer.layout_root_idx()?;
+                        let nodes = ov.composer.arena_nodes();
+                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
+                        path.iter().rev().find(|&&idx| {
+                            (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
+                                || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                        }).copied().map(|t| (i, t, r))
+                    });
+                    if let Some((i, target, r)) = overlay_target {
+                        let ov = &mut pw.overlays[i];
+                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
+                        handled = consumed.x != 0.0 || consumed.y != 0.0;
+                    } else if let Some(r) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(target) = find_scroll_target(nodes, r, dx, dy) {
                             let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
@@ -2987,6 +3039,7 @@ impl OverlayWindow {
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
             click_passthrough: desc.click_passthrough,
+            fit_around_anchor: desc.fit_around_anchor,
             on_dismiss: desc.on_dismiss,
             content: desc.content,
             local_snapshot: desc.local_snapshot,
@@ -3049,6 +3102,7 @@ impl OverlayWindow {
         self.focus_scope = desc.focus_scope;
         self.dismiss_on_outside = desc.dismiss_on_outside;
         self.click_passthrough = desc.click_passthrough;
+        self.fit_around_anchor = desc.fit_around_anchor;
         self.on_dismiss = desc.on_dismiss;
         self.content = desc.content;
         self.local_snapshot = desc.local_snapshot;
@@ -3525,7 +3579,33 @@ fn layout_overlays(pw: &mut PerWindow) {
         };
         // 有锚点（且在主树中找到）时：按位置相对锚点（Bottom* = 锚点下方，
         // Top* = 锚点上方）；锚点缺失/未物化（scope）回退窗口对齐——避免 (0,0)
-        let pos = if anchored {
+        let pos = if anchored && ov.fit_around_anchor {
+            // material3's `DropdownMenuPositionProvider` (androidx
+            // `material3/internal/MenuPosition.kt`): the menu is placed among CANDIDATES — below the
+            // anchor if the whole menu fits, else above it, else pinned against the window edge — and the
+            // same three for x (start-aligned, end-aligned, pinned to the near edge). winia's overlay
+            // placement only ever did the first, which is why a long menu used to hang off the bottom
+            // edge with its last rows unreachable.
+            let fits = |y: f32, h: f32| y >= 0.0 && y + size.1 <= h;
+            let y = if fits(ay + ah, h) {
+                ay + ah
+            } else if fits(ay - size.1, h) {
+                ay - size.1
+            } else {
+                // Pinned: as close to the anchor as the window allows (a menu taller than the window is
+                // capped by its scroll container, so this always lands inside).
+                (ay + ah).clamp(0.0, (h - size.1).max(0.0))
+            };
+            let x_in = |x: f32, w: f32| x >= 0.0 && x + size.0 <= w;
+            let x = if x_in(ax, w) {
+                ax
+            } else if x_in(ax + aw - size.0, w) {
+                ax + aw - size.0
+            } else {
+                ax.clamp(0.0, (w - size.0).max(0.0))
+            };
+            (x, y)
+        } else if anchored {
             match ov.position {
                 P::BottomLeft => (ax, ay + ah),
                 P::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),
@@ -5181,6 +5261,7 @@ mod overlay_close_tests {
             focus_scope: true,
             dismiss_on_outside: true,
             click_passthrough: false,
+            fit_around_anchor: false,
             on_dismiss: None,
             enter_anim: enter,
             exit_anim: exit,

@@ -202,6 +202,8 @@ impl BasicAlertDialog {
             focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
+            // An alert dialog is centred, so there is nothing to fit around the anchor.
+            fit_around_anchor: false,
             on_dismiss,
             enter_anim: Some(OverlayAnimSpec::default_enter()),
             exit_anim: Some(OverlayAnimSpec::default_exit()),

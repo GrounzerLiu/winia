@@ -15,6 +15,7 @@ use winia::ui::overlay::{DropdownMenu, DropdownMenuItem};
 fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
     let expanded = ctx.remember(|| false);
     let picked = ctx.remember(|| String::from("none"));
+    let many_open = ctx.remember(|| false);
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(16.0))
@@ -78,6 +79,48 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                                 .enabled(false)
                                 .on_click(move || p_delete.set(String::from("deleted")))
                                 .build(ctx);
+                        }
+                    },
+                );
+
+            // ── A menu longer than the window: material3 caps it and scrolls it. ──
+            let m = many_open.clone();
+            Button::text()
+                .on_click(move || {
+                    let v = m.get();
+                    m.set(!v);
+                })
+                .modifier(Modifier::new().test_tag("dm-many-toggle"))
+                .build(ctx, |ctx| Text::new("Open long menu").build(ctx));
+            Text::new(if many_open.get() { "dm-many-open: yes" } else { "dm-many-open: no" }).build(ctx);
+
+            DropdownMenu::new(many_open.clone())
+                .modifier(Modifier::new().test_tag("dm-many-container"))
+                .on_dismiss_request({
+                    let m = many_open.clone();
+                    move || m.set(false)
+                })
+                .build(
+                    ctx,
+                    |ctx| {
+                        Text::new("").font_size(1.0).build(ctx);
+                    },
+                    {
+                        let m = many_open.clone();
+                        move |ctx| {
+                            // 20 items × 48dp = 960dp, far taller than the 520px window: material3's
+                            // menu caps at the available space and scrolls (`verticalScroll`). Composed
+                            // in a loop, so each item needs its own key — the call site is the same line
+                            // for all of them.
+                            for i in 0..20usize {
+                                let m = m.clone();
+                                ctx.key(("dm-many-item", i), |ctx| {
+                                    DropdownMenuItem::new(format!("长项 {i}"))
+                                        .modifier(Modifier::new().test_tag(format!("dm-many-{i}")))
+                                        .on_click(move || m.set(false))
+                                        .build(ctx);
+                                });
+                            }
                         }
                     },
                 );

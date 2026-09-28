@@ -193,6 +193,8 @@ impl ModalBottomSheet {
             focus_scope: true,
             dismiss_on_outside: true,
             click_passthrough: false,
+            // A modal sheet is anchored to the window edge by its own layout, not fitted around an anchor.
+            fit_around_anchor: false,
             on_dismiss: on_dismiss_req.map(|cb| {
                 let st = sheet_state.clone();
                 let f: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {

@@ -42,6 +42,7 @@ cargo test --features debug-server
 | `tr [n]` | Last n animation-trace records (NDJSON; empty without the `anim-trace` feature) | `TRACE:…` |
 | `fp` | Compose+layout rounds of each frame rendered since the last `fpc`, oldest first (stdout prefix `FRAME_PASSES:`) | `FRAME_PASSES:frames=2 multi=1 passes=2,1` |
 | `fpc` | Forget the recorded frames, so the next reading starts at the input under test | — |
+| `save <path>` | Write the last captured frame (send `r` first) to a PNG | `SAVED:<path> 630x780` |
 | `r` | Screenshot (path printed to stderr) | — |
 | `q` | Graceful exit (force_shutdown → event loop returns) | — |
 

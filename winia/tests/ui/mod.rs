@@ -671,6 +671,12 @@ impl UiTest {
         find_node_tag_in_overlay(&self.tree, tag)
     }
 
+    /// The vertical scroll offset of a tagged scroll container in a popup entry (see
+    /// [`overlay_scroll_offset`]). Callers must `refresh()`/`tree()` first.
+    pub fn overlay_scroll_offset(&self, tag: &str) -> Option<f32> {
+        overlay_scroll_offset(&self.tree, tag)
+    }
+
     /// Click a tag inside the popup entries.
     pub fn click_overlay_tag(&mut self, tag: &str) {
         let (x, y, w, h) = self
@@ -1224,4 +1230,34 @@ mod pixel_line_parsing {
         assert_eq!(parse_frame_size("480x330:240 165 20 18 24 255"), Some((480, 330)));
         assert_eq!(parse_frame_size("none"), None);
     }
+}
+
+/// `vscroll(<offset>)` of the tagged node (its `mod` string), for a tagged SCROLL CONTAINER in a popup
+/// entry.
+///
+/// Scrolling moves the render translation, not the children's layout rects, so a node's reported
+/// position never changes when a container scrolls — the offset is the only observable, and the debug
+/// tree prints it (`debug::describe_modifier`).
+fn overlay_scroll_offset(tree: &Value, tag: &str) -> Option<f32> {
+    fn walk(n: &Value, tag: &str) -> Option<f32> {
+        if let Some(arr) = n.as_array() {
+            return arr.iter().find_map(|child| walk(child, tag));
+        }
+        if n.get("tag").and_then(|value| value.as_str()) == Some(tag) {
+            let mods = n.get("mod").and_then(|value| value.as_str()).unwrap_or("");
+            let start = mods.find("vscroll(")? + "vscroll(".len();
+            let end = mods[start..].find(')')? + start;
+            return mods[start..end].parse::<f32>().ok();
+        }
+        n.get("children")
+            .and_then(|value| value.as_array())
+            .and_then(|children| children.iter().find_map(|child| walk(child, tag)))
+    }
+    let mut found = None;
+    for_each_window_scoped(tree, true, |_, _, _, root| {
+        if found.is_none() {
+            found = walk(root, tag);
+        }
+    });
+    found
 }

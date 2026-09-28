@@ -309,6 +309,15 @@ pub struct OverlayDesc {
     pub(crate) click_passthrough: bool,
     /// Outside-click callback.
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Fit this overlay INSIDE the window around its anchor, the way material3's
+    /// `DropdownMenuPositionProvider` places a menu: below the anchor if it fits, else above it, else
+    /// pinned against the window edge (and the same three candidates horizontally).
+    ///
+    /// Off by default, so every overlay that predates it keeps its exact placement; a long menu opts in,
+    /// because without it a menu taller than the space below its anchor hangs off the window edge with
+    /// its bottom rows unreachable (measured: container at y=238 and 520 tall in a 520px window, bottom
+    /// at 758 — `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end`).
+    pub(crate) fit_around_anchor: bool,
     /// Enter animation spec (None = instant appear — Popup/DropdownMenu default;
     /// Some = container-layer frame-driven animation — Dialog default).
     pub(crate) enter_anim: Option<OverlayAnimSpec>,
@@ -461,6 +470,8 @@ impl Popup {
             focus_scope: false,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
+            // A popup keeps winia's historic placement (below the anchor, no fitting).
+            fit_around_anchor: false,
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
@@ -596,6 +607,8 @@ impl Dialog {
             focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
             click_passthrough: false,
+            // A dialog is centred (`PopupPosition::Center`), so there is nothing to fit around.
+            fit_around_anchor: false,
             on_dismiss: self.on_dismiss,
             enter_anim: self.enter_anim,
             exit_anim: self.exit_anim,
@@ -699,6 +712,9 @@ pub struct DropdownMenu {
     /// M3 `modifier` — applied to the menu's own container (the surface), so a caller can tag it or
     /// adjust it. Appended outside the internal modifier, like every other component here.
     modifier: crate::modifier::Modifier,
+    /// M3 `scrollState` — `rememberScrollState()` when unset. The container scrolls, so a menu longer
+    /// than the space it was given stays reachable instead of hanging off the window edge.
+    scroll_state: Option<crate::modifier::ScrollState>,
     offset: (f32, f32),
     shape: Option<crate::modifier::Shape>,
     container_color: Option<crate::modifier::Color>,
@@ -713,6 +729,7 @@ impl DropdownMenu {
             expanded,
             on_dismiss: None,
             modifier: crate::modifier::Modifier::new(),
+            scroll_state: None,
             // M3: `DpOffset(0.dp, 0.dp)`. The drop-down placement itself comes from the anchor
             // (`PopupPosition::BottomLeft`), which is the equivalent of the platform popup's anchoring.
             offset: (0.0, 0.0),
@@ -733,6 +750,12 @@ impl DropdownMenu {
     /// modifier, like every other component here.
     pub fn modifier(mut self, modifier: crate::modifier::Modifier) -> Self {
         self.modifier = modifier;
+        self
+    }
+
+    /// M3 `scrollState` — the menu's content scrolls through it (`rememberScrollState()` when unset).
+    pub fn scroll_state(mut self, state: crate::modifier::ScrollState) -> Self {
+        self.scroll_state = Some(state);
         self
     }
 
@@ -797,6 +820,14 @@ impl DropdownMenu {
         let anchor_slot = ctx.composer_slot_key(); // Container slot key (anchor).
         ctx.end_restartable_group();
 
+        // M3's default is `rememberScrollState()`, i.e. a state the menu owns across frames. Remembered
+        // HERE (not inside the menu's content closure) so it keeps one composition position whether or
+        // not the menu is open — a conditional `remember` is what shifts the slots after it.
+        let scroll_state = match self.scroll_state.clone() {
+            Some(s) => s,
+            None => ctx.remember(|| crate::modifier::ScrollState::new()).get(),
+        };
+
         // `build` always executes (parameterized by `expanded`) — records active
         // for `sync` to delete (mirrors Popup/Dialog's `visible` parameterization:
         // `expanded=false` records `false` -> delete).
@@ -820,6 +851,10 @@ impl DropdownMenu {
                 focus_scope: false,
                 dismiss_on_outside: true,
                 click_passthrough: false,
+                // material3's `DropdownMenuPositionProvider`: a menu fits itself around the anchor, so a
+                // menu taller than the space below it ends up above or against the window edge instead of
+                // hanging off the bottom.
+                fit_around_anchor: true,
                 on_dismiss: self.on_dismiss,
                 enter_anim: None, // DropdownMenu 默认无进入动画
                 exit_anim: None, // DropdownMenu 默认无退出动画
@@ -837,14 +872,22 @@ impl DropdownMenu {
                         .shape(shape)
                         .color(container_color)
                         .tonal_elevation(tonal_elevation)
-                        .shadow_elevation(shadow_elevation)
-                        .modifier(menu_modifier.clone());
+                        .shadow_elevation(shadow_elevation);
                     if let Some(b) = border {
                         surface = surface.border(b);
                     }
                     surface.build(ctx, |ctx| {
+                        // M3's chain, in its order: the caller's modifier, then
+                        // `padding(vertical = DropdownMenuVerticalPadding)` (8dp, and OUTSIDE the scroll,
+                        // so it stays put while the content moves), then `verticalScroll(scrollState)`.
+                        // The scroll is what keeps a menu taller than its space reachable: a winia scroll
+                        // container measures `min(its content, the viewport it was given)`.
+                        let m = menu_modifier
+                            .clone()
+                            .then(crate::modifier::Modifier::new().padding_vertical(8.0))
+                            .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
                         crate::ui::Column::new()
-                            .modifier(crate::modifier::Modifier::new().padding_vertical(8.0))
+                            .modifier(m)
                             .build(ctx, |ctx| menu(ctx));
                     });
                 }),

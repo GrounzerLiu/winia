@@ -2376,3 +2376,82 @@ fn dropdown_menu_paints_its_surface() {
         "the menu's surface must paint over the page (got inside={inside:?} page={page:?}, max delta {delta})"
     );
 }
+
+/// What:  a menu with more items than the window can show (20 × 48dp against a 520px window).
+/// When:  it is opened from a trigger near the top.
+/// Then:  material3's two properties hold — the menu stays INSIDE the window, and its remaining items
+///        are reachable (the content scrolls) instead of hanging off the bottom edge.
+///
+/// The bounds are the point: before this round nothing capped or scrolled the menu, so its container
+/// was as tall as its content (960+16) and started below the anchor — everything past the window edge
+/// was unreachable.
+#[test]
+fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-many-open: no", Duration::from_secs(5));
+    let (bx, by, bw, bh) = app.find_tag("dm-many-toggle").expect("the long-menu trigger");
+    app.click(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_overlay_text_timeout("长项 0", Duration::from_secs(5));
+    app.refresh();
+
+    let (cx, cy, cw, ch) = app
+        .find_tag_in_overlay("dm-many-container")
+        .expect("the long menu container");
+    let (_, wh) = app.frame_size().map(|(w, h)| (w, h)).unwrap_or((0, 0));
+    let window_h = wh as f32 / 1.5; // the capture is at the window's scale (1.5 on this machine)
+    eprintln!("长菜单: container=({cx},{cy},{cw},{ch}) window_h≈{window_h}");
+    assert!(
+        cy + ch <= window_h + 1.0,
+        "the menu must stay inside the window: bottom {} > window {window_h}",
+        cy + ch
+    );
+    assert!(
+        ch <= window_h + 1.0,
+        "and its height must be capped by the window, got {ch}"
+    );
+
+    // The menu scrolls. The wheel goes over the menu (a wheel is routed by what is under it — an overlay
+    // has its own arena — and an injected `s` follows the same precedence), and what is asserted is the
+    // scroll OFFSET: scrolling moves the render translation, so the items' reported rects never change.
+    assert!(
+        app.find_tag_in_overlay("dm-many-19").is_some(),
+        "the last item must be composed (it is inside the scroll container)"
+    );
+    assert_eq!(
+        app.overlay_scroll_offset("dm-many-container"),
+        Some(0.0),
+        "a freshly opened menu is at the top"
+    );
+    let (item19_y, item19_h) = app
+        .find_tag_in_overlay("dm-many-19")
+        .map(|(_, y, _, h)| (y, h))
+        .expect("the last item");
+
+    app.send(&format!("m {} {}", (cx + cw / 2.0) as i32, (cy + ch / 2.0) as i32));
+    std::thread::sleep(Duration::from_millis(150));
+    for _ in 0..12 {
+        app.scroll_delta(0.0, -120.0);
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    app.refresh();
+    let offset = app
+        .overlay_scroll_offset("dm-many-container")
+        .expect("the menu is still a scroll container");
+    // 20 items × 48dp + the 8dp padding above and below, against the 520px it was given.
+    let content_h = 20.0 * 48.0 + 16.0;
+    let range = content_h - ch;
+    eprintln!("长菜单 offset={offset} (range≈{range}, container h={ch})");
+    assert!(
+        (offset - range).abs() <= 16.0,
+        "the wheel must take the menu to its end: offset {offset} against a range of {range}"
+    );
+    // …and the last item is then inside the container (its layout y minus the scroll translation).
+    let rendered_y = item19_y - offset;
+    eprintln!("长项 19: layout y={item19_y} h={item19_h} → rendered y={rendered_y}");
+    assert!(
+        rendered_y >= cy - 1.0 && rendered_y + item19_h <= cy + ch + 1.0,
+        "the last item must be inside the container once scrolled: rendered y {rendered_y} h {item19_h} \
+         against container ({cy}..{})",
+        cy + ch
+    );
+}

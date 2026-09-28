@@ -218,6 +218,30 @@ fn pixel_frame(window_id: u64) -> Option<(u32, u32, Vec<u8>)> {
     Some((frame.width, frame.height, frame.pixels.clone()))
 }
 
+/// Write the captured frame to a PNG. `Err` carries a message for the caller to print: a fixture has no
+/// other way to report a failure here.
+fn save_frame_png(path: &str) -> Result<(u32, u32), String> {
+    let id = legacy_target().unwrap_or(0);
+    let (w, h, pixels) = pixel_frame(id).ok_or_else(|| String::from("no captured frame (send `r` first)"))?;
+    let info = skia_safe::ImageInfo::new(
+        (w as i32, h as i32),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let image = skia_safe::images::raster_from_data(
+        &info,
+        skia_safe::Data::new_copy(&pixels),
+        (w as usize) * 4,
+    )
+    .ok_or_else(|| String::from("could not wrap the frame as a skia image"))?;
+    let png = image
+        .encode_to_data(skia_safe::EncodedImageFormat::PNG)
+        .ok_or_else(|| String::from("PNG encoding failed"))?;
+    std::fs::write(path, png.as_bytes()).map_err(|e| format!("writing {path}: {e}"))?;
+    Ok((w, h))
+}
+
 /// One pixel of the last captured frame, as a line the stdin channel can carry: `WxH:x y r g b a`, or
 /// `out`-of-frame / `none`.
 ///
@@ -606,6 +630,12 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
                 sv(start), sv(top), sv(end), sv(bottom)
             ))
         }
+        // The offset is what a test can assert on a scroll container: scrolling moves the RENDER
+        // translation, not the children's layout positions, so a node's reported rect never changes.
+        ModifierElement::VerticalScroll { state } => Some(format!("vscroll({:.0})", state.offset.get())),
+        ModifierElement::HorizontalScroll { state, .. } => {
+            Some(format!("hscroll({:.0})", state.offset.get()))
+        }
         _ => None,
     }).collect();
     // 开放节点（exp/modifier-node）：node_key 进树，调试时可见第三方行为。
@@ -705,6 +735,14 @@ pub fn start_stdin_channel() {
                     let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
                     println!("TRACE:{}", crate::anim_trace::recent_lines(n).join("\n"));
                 }
+                // save <path>: write the last CAPTURED frame (see `r`) to a PNG. The other pixel routes
+                // hand colour values to a client (`px` one at a time, `p` over the WebSocket); this is the
+                // in-process way to get an image file out of a fixture or demo run — what looking at a
+                // component's own rendering needs.
+                "save" if parts.len() >= 2 => match save_frame_png(parts[1]) {
+                    Ok((w, h)) => println!("SAVED:{} {}x{}", parts[1], w, h),
+                    Err(e) => println!("SAVED:error {e}"),
+                },
                 // fp: compose+layout rounds for each rendered frame since the last clear, oldest first.
                 // This is the only way to see the same-frame convergence from a test: a frame that ran
                 // 2 rounds is one frame that caught up with its own measurement, while 2 frames of 1
