@@ -222,6 +222,23 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   converging on the pending-state query alone doubled the frame's compose + layout — measured on a 800-row
   list scrolling one row per frame: 2 passes on 4 of 5 frames. With the request, a scrolling frame stays
   at one pass.
+- **Cost shape against the height ESTIMATE.** `build` sizes its window from `LAZY_ITEM_ESTIMATED_HEIGHT`
+  (48px) for items it has never measured, so rows SHORTER than the estimate make the composed window come
+  up short and the frame asks for the extra pass. Measured with 24px rows (half the estimate),
+  compose+layout passes per frame:
+
+  | rows per frame | 1 | 4 (= one wheel notch) | 10 (240px) | 25 (600px) |
+  |---|---|---|---|---|
+  | passes | 1 | 1 | 2 | 3 |
+
+  The beyond-bounds prefetch (4 items) absorbs the estimate's error whenever the window's tail was measured
+  by the previous frame — which is every slow frame — so the extra pass needs a frame that jumps many items
+  and leaves the whole tail unmeasured. There it is doing necessary work: without it that frame shows a hole
+  instead of content. Sustained scrolling does not reach that density at this project's 300 Hz pacing
+  (240px and 600px per frame are 72000 and 180000 px/s; a fling tops out around 10-20k px/s).
+  `the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames` pins the free end (1 and 4
+  rows/frame at one pass) and bounds the fast end, so a change to the estimate or to the window walk that
+  makes ordinary scrolling pay shows up as a red test.
 - **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
   compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
   composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test

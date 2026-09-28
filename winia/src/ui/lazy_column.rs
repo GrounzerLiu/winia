@@ -2513,6 +2513,96 @@ mod tests {
         );
     }
 
+    /// The affordability claim above only holds for the case it was measured on. A never-measured item is
+    /// estimated at a constant `LAZY_ITEM_ESTIMATED_HEIGHT` (48px) and `build` sizes its window from that,
+    /// so rows SHORTER than the estimate are the ones that can make the composed window come up short on an
+    /// ordinary scroll frame — and a short window is exactly what asks for a second compose. The test above
+    /// used rows the estimate happens to match, which is the one case that cannot fire.
+    ///
+    /// Measured here (24px rows, i.e. half the estimate), compose+layout passes per frame:
+    ///
+    /// | rows per frame | 1 | 4 (= one wheel notch) | 10 (240px) | 25 (600px) |
+    /// |---|---|---|---|---|
+    /// | passes | 1 | 1 | 2 | 3 |
+    ///
+    /// The shape is the finding, and it is why nothing was changed for it. The tail of a window advances
+    /// by one item per frame in the slow cases, so it was MEASURED by the previous frame and the 4-item
+    /// beyond-bounds prefetch absorbs what is left of the estimate's error; only a frame that jumps many
+    /// items leaves the whole tail unmeasured, and then the extra pass is what puts content in the viewport
+    /// instead of a hole. Sustained scrolling cannot reach that density: the cases measured here are 240px
+    /// and 600px per frame, i.e. 72000 and 180000 px/s at the 300Hz pacing this project runs at (a fling
+    /// tops out around 10-20k px/s). What the test pins is the end that must stay free.
+    #[test]
+    fn the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames() {
+        use crate::core::composer::take_compose_after_layout;
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..400).collect());
+        let build = {
+            let state = state.clone();
+            move |ctx: &mut ComposeCtx| {
+                LazyColumn::new()
+                    .state(state.clone())
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
+                        crate::ui::text::Text::new(format!("Item {}", v))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().fill_max_width().height(24.0))
+                            .build(ctx);
+                    })
+                    .build(ctx);
+            }
+        };
+        let mut composer = Composer::new();
+        let mut converge = |composer: &mut Composer| {
+            let mut n = 0;
+            loop {
+                composer.compose(&build);
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+                n += 1;
+                if !take_compose_after_layout() || n >= 8 {
+                    return n;
+                }
+            }
+        };
+        // The first frame composes from the state's default viewport and converges like any other.
+        let first = converge(&mut composer);
+        eprintln!("compose+layout passes: 24px rows, first frame {first}");
+
+        // Slow scrolling and wheel-sized steps: one pass, which is what "an ordinary frame stays free" means.
+        for step_rows in [1.0f32, 4.0] {
+            let mut passes = Vec::new();
+            for _ in 0..6 {
+                let off = state.offset.get() + 24.0 * step_rows;
+                state.offset.set(off);
+                passes.push(converge(&mut composer));
+            }
+            eprintln!("compose+layout passes at {step_rows} rows/frame (24px rows): {passes:?}");
+            assert!(
+                passes.iter().all(|&n| n == 1),
+                "scrolling {step_rows} rows/frame must stay at one compose+layout pass, got {passes:?}"
+            );
+        }
+
+        // The extreme end is recorded, not pinned to an exact count: what a regression would have to break
+        // is the bound (a policy that asks on every pass) or the compensation (a pass that does not actually
+        // extend the window). Both would show up here as 8s.
+        for step_rows in [10.0f32, 25.0] {
+            let mut passes = Vec::new();
+            for _ in 0..4 {
+                let off = state.offset.get() + 24.0 * step_rows;
+                state.offset.set(off);
+                passes.push(converge(&mut composer));
+            }
+            eprintln!(
+                "compose+layout passes at {step_rows} rows/frame (24px rows): {passes:?} (240/600 px per frame)"
+            );
+            assert!(
+                passes.iter().all(|&n| n <= 4),
+                "a fast frame must converge in a bounded number of passes, got {passes:?}"
+            );
+        }
+    }
+
     /// The gap this round is about: the frame the viewport GROWS on must already cover what the new
     /// viewport shows. Today `LazyList::build` reads the viewport the PREVIOUS frame's measure wrote, so
     /// a resize to a taller viewport composes the old, smaller window and the bottom of the new one is
