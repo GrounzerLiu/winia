@@ -521,10 +521,13 @@ pub struct ItemHeightCache {
     /// 数据增删/重排后，同一 key 的项高度不因 index 平移而丢失。私有，
     /// 由 `record_keyed` 写入、`rebase` 读回迁移到 index 视图。
     keyed: std::collections::HashMap<u64, f32>,
+    /// The last few measured heights, a ring — the sample behind [`ItemHeightCache::coverage_height`]'s
+    /// median. Not the `keyed` view: this is about the rows being shown NOW, not about identity.
+    recent: Vec<f32>,
 }
 
 impl ItemHeightCache {
-    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new() } }
+    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new(), recent: Vec::new() } }
 }
 
 impl ItemHeightCache {
@@ -533,9 +536,58 @@ impl ItemHeightCache {
         self.heights.get(index).copied().filter(|&h| h > 0.0).unwrap_or(LAZY_ITEM_ESTIMATED_HEIGHT)
     }
 
+    /// The height to assume for an item that has NOT been measured, when deciding how much to COMPOSE
+    /// (`visible_range`). `height` above is the flat estimate and stays as it is — the anchor math and
+    /// the placements read it, and those must not start guessing differently.
+    ///
+    /// Coverage needs the error in the SAFE direction. A window sized on a height larger than the real
+    /// items comes up short of the viewport, and a short window is what asks for a second compose+layout
+    /// pass: measured on a cold jump (`lazy_column_demo`, jump to index 500, release) at ~1.5 ms of the
+    /// frame's 7.0 ms. So an unmeasured item is assumed to be as tall as the MEDIAN of the heights around
+    /// it, which is what it is for a list whose rows are uniform — the case that pays. Clamped to
+    /// `[estimate/2, estimate]`: never taller than the flat estimate (that would only make windows longer
+    /// than they need to be, since being wrong upward shrinks them) and never below half of it, so a list
+    /// of stray 1px separators cannot blow a window up by an unbounded factor.
+    ///
+    /// This only changes behaviour where the window walk reaches unmeasured items: a warm scroll frame
+    /// walks entirely over measured ones, and an empty cache has no median to use.
+    pub fn coverage_height(&self, index: usize) -> f32 {
+        if let Some(h) = self.heights.get(index).copied().filter(|&h| h > 0.0) {
+            return h;
+        }
+        match self.recent_median() {
+            Some(m) => m.clamp(LAZY_ITEM_ESTIMATED_HEIGHT * 0.5, LAZY_ITEM_ESTIMATED_HEIGHT),
+            None => LAZY_ITEM_ESTIMATED_HEIGHT,
+        }
+    }
+
+    /// Median of the last few measured heights, or `None` when nothing has been measured.
+    fn recent_median(&self) -> Option<f32> {
+        if self.recent.is_empty() {
+            return None;
+        }
+        let mut v = self.recent.clone();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(v[v.len() / 2])
+    }
+
+    /// Note a height for [`Self::coverage_height`]'s median. A ring, so the estimate follows the rows the
+    /// list is actually showing instead of everything it has ever measured.
+    fn note_recent(&mut self, h: f32) {
+        const RECENT_KEPT: usize = 32;
+        if !(h > 0.0) {
+            return;
+        }
+        if self.recent.len() == RECENT_KEPT {
+            self.recent.remove(0);
+        }
+        self.recent.push(h);
+    }
+
     pub fn record(&mut self, index: usize, h: f32) {
         if self.heights.len() <= index { self.heights.resize(index + 1, 0.0); }
         self.heights[index] = h;
+        self.note_recent(h);
     }
 
     /// 按 item key 记录高度（写入 key 视图）。测量侧在写 index 视图的同时
@@ -624,7 +676,10 @@ pub(crate) fn visible_range(
     let mut end = first_index;
     let mut acc = first_offset;
     while end < total && acc < viewport_h {
-        acc += cache.height(end) + spacing;
+        // `coverage_height`, not `height`: this walk decides WHICH items get composed, and over-stating an
+        // unmeasured item makes the window come up short (see `ItemHeightCache::coverage_height`). The
+        // anchor math (`prefix_height`, the offset conversion) keeps the plain estimate.
+        acc += cache.coverage_height(end) + spacing;
         end += 1;
     }
     let end = (end + LAZY_BEYOND_BOUNDS).min(total);
@@ -2513,30 +2568,17 @@ mod tests {
         );
     }
 
-    /// The affordability claim above only holds for the case it was measured on. A never-measured item is
-    /// estimated at a constant `LAZY_ITEM_ESTIMATED_HEIGHT` (48px) and `build` sizes its window from that,
-    /// so rows SHORTER than the estimate are the ones that can make the composed window come up short on an
-    /// ordinary scroll frame — and a short window is exactly what asks for a second compose. The test above
-    /// used rows the estimate happens to match, which is the one case that cannot fire.
+    /// The affordability of the same-frame convergence rests on the window `build` composes being the
+    /// window the viewport needs. A never-measured item used to be assumed 48px (`LAZY_ITEM_ESTIMATED_HEIGHT`),
+    /// so rows shorter than that made the window come up short and the frame asked for a second compose —
+    /// measured on 24px rows (half the estimate) at 2 passes per frame for 10 rows/frame and 3 for 25,
+    /// and ~1.5 ms of extra passes on a cold jump in `lazy_column_demo`. `coverage_height` now walks on the
+    /// median of the measured heights, and every one of those cases is a single pass again.
     ///
-    /// Measured here (24px rows, i.e. half the estimate), compose+layout passes per frame:
-    ///
-    /// | rows per frame | 1 | 4 (= one wheel notch) | 10 (240px) | 25 (600px) |
-    /// |---|---|---|---|---|
-    /// | passes | 1 | 1 | 2 | 3 |
-    ///
-    /// The shape is the finding. The tail of a window advances by one item per frame in the slow cases, so
-    /// it was MEASURED by the previous frame and the 4-item beyond-bounds prefetch absorbs what is left of
-    /// the estimate's error; only a frame that jumps many items leaves the whole tail unmeasured, and then
-    /// the extra pass is what puts content in the viewport instead of a hole. Reaching it takes 240px or
-    /// more per frame: at this project's 300Hz pacing that is 72000 px/s (a fling tops out around 10-20k
-    /// px/s, so unreachable), while on a 60Hz display the same 240px/frame is 14400 px/s — a hard fling's
-    /// first frames CAN reach that, so a 60Hz display scrolling rows shorter than the estimate pays a second
-    /// pass on those frames. That is a real cost with a known direction (make the coverage walk pessimistic
-    /// for unmeasured items, or feed the measured shortfall back as a window margin) and no measured user
-    /// for it yet, so it is recorded rather than fixed.
+    /// What the test pins is that NO scrolling shape pays for the estimate: the old figures are in the
+    /// comment because a regression would come back as exactly those numbers.
     #[test]
-    fn the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames() {
+    fn the_coverage_estimate_keeps_every_scroll_frame_at_one_pass() {
         use crate::core::composer::take_compose_after_layout;
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..400).collect());
@@ -2571,8 +2613,8 @@ mod tests {
         let first = converge(&mut composer);
         eprintln!("compose+layout passes: 24px rows, first frame {first}");
 
-        // Slow scrolling and wheel-sized steps: one pass, which is what "an ordinary frame stays free" means.
-        for step_rows in [1.0f32, 4.0] {
+        // Slow scrolling, wheel-sized steps, and the fast ends that used to cost 2 and 3 passes.
+        for step_rows in [1.0f32, 4.0, 10.0, 25.0] {
             let mut passes = Vec::new();
             for _ in 0..6 {
                 let off = state.offset.get() + 24.0 * step_rows;
@@ -2586,24 +2628,48 @@ mod tests {
             );
         }
 
-        // The extreme end is recorded, not pinned to an exact count: what a regression would have to break
-        // is the bound (a policy that asks on every pass) or the compensation (a pass that does not actually
-        // extend the window). Both would show up here as 8s.
-        for step_rows in [10.0f32, 25.0] {
-            let mut passes = Vec::new();
-            for _ in 0..4 {
-                let off = state.offset.get() + 24.0 * step_rows;
-                state.offset.set(off);
-                passes.push(converge(&mut composer));
-            }
-            eprintln!(
-                "compose+layout passes at {step_rows} rows/frame (24px rows): {passes:?} (240/600 px per frame)"
-            );
-            assert!(
-                passes.iter().all(|&n| n <= 4),
-                "a fast frame must converge in a bounded number of passes, got {passes:?}"
+        // A JUMP into rows nothing has measured yet is the other shape that used to pay: the whole window
+        // is unmeasured, so the estimate governed all of it.
+        for jump_to in [200usize, 0, 350, 120] {
+            state.scroll_to_item(jump_to, 0.0);
+            let passes = converge(&mut composer);
+            eprintln!("compose+layout passes jumping to {jump_to}: {passes}");
+            assert_eq!(
+                passes, 1,
+                "a jump to {jump_to} must compose what it needs in one pass, took {passes}"
             );
         }
+    }
+
+    /// `coverage_height` is what the window walk uses for items nothing has measured: the median of the
+    /// measured ones, clamped to `[estimate/2, estimate]`. `height` (the anchor math and the placements)
+    /// must NOT move with it — those two read the flat estimate and their tests below pin that.
+    #[test]
+    fn the_coverage_height_follows_the_measured_rows_within_bounds() {
+        let mut c = ItemHeightCache::default();
+        // Nothing measured: the flat estimate, as before.
+        assert_eq!(c.coverage_height(0), LAZY_ITEM_ESTIMATED_HEIGHT);
+
+        // Rows shorter than the estimate: coverage follows them, so windows stop coming up short.
+        for i in 0..8 {
+            c.record(i, 24.0);
+        }
+        assert_eq!(c.coverage_height(50), 24.0, "an unmeasured item is assumed as tall as its neighbours");
+        assert_eq!(c.height(50), LAZY_ITEM_ESTIMATED_HEIGHT, "the anchor math keeps the flat estimate");
+
+        // Rows TALLER than the estimate: coverage stays on the estimate — a taller assumption would only
+        // make windows shorter than they already are, which is the direction that costs a second pass.
+        for i in 8..16 {
+            c.record(i, 96.0);
+        }
+        assert_eq!(c.coverage_height(80), LAZY_ITEM_ESTIMATED_HEIGHT);
+
+        // Stray tiny items cannot blow a window up by an unbounded factor: the median is clamped at half
+        // the estimate, so the window can at most double.
+        for i in 16..32 {
+            c.record(i, 1.0);
+        }
+        assert_eq!(c.coverage_height(200), LAZY_ITEM_ESTIMATED_HEIGHT * 0.5);
     }
 
     /// The gap this round is about: the frame the viewport GROWS on must already cover what the new

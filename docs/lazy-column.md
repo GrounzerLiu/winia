@@ -222,27 +222,32 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   converging on the pending-state query alone doubled the frame's compose + layout — measured on a 800-row
   list scrolling one row per frame: 2 passes on 4 of 5 frames. With the request, a scrolling frame stays
   at one pass.
-- **Cost shape against the height ESTIMATE.** `build` sizes its window from `LAZY_ITEM_ESTIMATED_HEIGHT`
-  (48px) for items it has never measured, so rows SHORTER than the estimate make the composed window come
-  up short and the frame asks for the extra pass. Measured with 24px rows (half the estimate),
-  compose+layout passes per frame:
+- **Cost shape against the height ESTIMATE (fixed).** The window walk used to assume a flat
+  `LAZY_ITEM_ESTIMATED_HEIGHT` (48px) for every item it had never measured, so rows SHORTER than that made
+  the composed window come up short and the frame asked for the extra pass. Measured with 24px rows (half
+  the estimate), compose+layout passes per frame, and on a cold jump in `lazy_column_demo` where every row
+  in the window is unmeasured:
 
-  | rows per frame | 1 | 4 (= one wheel notch) | 10 (240px) | 25 (600px) |
+  | rows per frame (24px rows) | 1 | 4 | 10 (240px) | 25 (600px) |
   |---|---|---|---|---|
-  | passes | 1 | 1 | 2 | 3 |
+  | before | 1 | 1 | 2 | 3 |
+  | after | 1 | 1 | 1 | 1 |
 
-  The beyond-bounds prefetch (4 items) absorbs the estimate's error whenever the window's tail was measured
-  by the previous frame — which is every slow frame — so the extra pass needs a frame that jumps many items
-  and leaves the whole tail unmeasured. There it is doing necessary work: without it that frame shows a hole
-  instead of content. Reaching that needs 240px or more per frame: at this project's 300 Hz pacing that is
-  72000 px/s (a fling tops out around 10-20k px/s, so unreachable), while on a 60 Hz display the same
-  240px/frame is 14400 px/s, which a hard fling's first frames can reach — so a 60 Hz display scrolling rows
-  shorter than the estimate pays a second pass on its fastest frames. That cost has a known direction (make
-  the coverage walk pessimistic for unmeasured items, or feed the measured shortfall back as a window margin)
-  and no measured case of it mattering yet, so it is recorded rather than fixed.
-  `the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames` pins the free end (1 and 4
-  rows/frame at one pass) and bounds the fast end, so a change to the estimate or to the window walk that
-  makes ordinary scrolling pay shows up as a red test.
+  | cold jump (`lazy_column_demo`, release) | frame total | compose (all passes) |
+  |---|---|---|
+  | before | 6986 µs | 4682 µs |
+  | after | **1885 µs** | **963 µs** (= first compose 425 + layout 537) |
+
+  The window walk now uses `ItemHeightCache::coverage_height`: for an unmeasured item, the MEDIAN of the
+  measured ones, clamped to `[estimate/2, estimate]` (never above the flat estimate — being wrong upward is
+  what shrinks a window — and never below half of it, so stray 1px items cannot blow a window up by an
+  unbounded factor). The anchor math and the placements keep reading `height`, the flat estimate: guessing
+  differently there would move scroll positions. This only changes behaviour where the walk reaches
+  unmeasured items — a warm frame walks over measured ones, and an empty cache has no median.
+  `the_coverage_estimate_keeps_every_scroll_frame_at_one_pass` and
+  `the_coverage_height_follows_the_measured_rows_within_bounds` pin it. What still takes a second pass on a
+  jump is the offset CLAMP (a jump past the end is clamped during measurement, so the window was opened at
+  an offset that measurement changed) — recorded in `docs/frame-cost-probe-round.md` §4b.
 - **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
   compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
   composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test

@@ -399,7 +399,58 @@ Readings:
    22 ms for 800 text rows. It is the last target in this frame whose cost is milliseconds rather than
    microseconds.
 
+## 4b. Postscript: the tail, split — and the one framework-side cost in it
 
+The tail is no longer unsplit. Measured on the current `v2` with a phase probe (app: compose+layout /
+overlays / draw, per frame) and a draw-interior probe in the Vulkan backend (acquire / surface / record /
+flush / present), on `lazy_column_demo` in a **release** build with `debug-server`, driven over the debug
+stdin channel (no Python: `c x y` clicks at the jump buttons' semantics bounds, which is also how the jump
+frames get attributed). The probe is `target/probe/frame_phase_probe_v2.patch` — throwaway, reverted.
+
+A jump frame (clicking "跳转 500" on a 1000-row list), before anything was changed:
+
+| phase | µs |
+|---|---|
+| compose (all passes) | 4682 |
+| … of which the FIRST pass's compose | 890 |
+| … of which the FIRST pass's layout | 2222 |
+| overlays | 634 |
+| draw (record 509 / flush 723 / present 292) | 1669 |
+| **total** | **6986** |
+
+The frame AFTER it: total 6811 with `flush = 5272` — Vulkan compiling pipelines for the content that just
+appeared. That one is the platform's, it happens once, and nothing in the framework can move it.
+
+So on a COLD jump the frame is **compose-dominated, not draw-dominated** — Phase 4's "draw 69 %" is a
+median over all frames of a run in which the list was already warm, where every jump mostly Skips. What the
+cold jump pays is composing rows that have never existed: 890 µs of composition plus 2222 µs of layout for
+~90 rows, i.e. the cold path the bench prices.
+
+**1570 µs of that 4682 was a defect this document can now name — and it was mine.** `compose` exceeding
+`compose_only + first_layout` is the same-frame convergence added after this round (`docs/lazy-column.md`
+2.9) asking for a second compose+layout pass: `build` sizes its window from a flat 48px estimate per
+never-measured item, so a window opened on unmeasured rows comes up short, and a short window is exactly
+what raises the request. On a cold jump EVERY row in the window is unmeasured, so the error is at its
+worst. Fixed by `ItemHeightCache::coverage_height`: the window walk now assumes an unmeasured item is as
+tall as the MEDIAN of the measured ones (clamped to `[estimate/2, estimate]`), while the anchor math keeps
+the flat estimate. Same script, after:
+
+| jump (index) | total before | total after | compose (all passes) before → after |
+|---|---|---|---|
+| 1 (500, cold) | 6986 | **1885** | 4682 → 963 |
+| 2 (999) | 2758 | 2203 | 1848 → 1362 |
+| 3 (0) | 3140 | 1560 | 908 → 505 |
+| 4 (500) | 2095 | 1308 | 605 → 621 |
+
+`compose = 963` against `compose_only 425 + layout 537` is the whole story: the extra passes are gone. The
+same change retired the fast-scroll passes measured on the lib side (24px rows: 10 rows/frame 2 → 1, 25
+rows/frame 3 → 1).
+
+**What is left in the tail.** Jump 2 (to index 999, the end of the list) still takes two passes, for a
+different reason: a jump past the end has its offset CLAMPED during measurement (`max_off`), the clamped
+offset changes the anchor, and the composed window was opened at the un-clamped one. `build` has the cache
+and the viewport, so it could clamp the request itself; that is recorded rather than done, because the
+frame is correct either way and these numbers are about the estimate.
 
 ## 5. Reproducing
 
