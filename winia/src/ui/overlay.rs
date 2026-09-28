@@ -46,6 +46,62 @@ pub fn anchor_slide_lerp(anchor_axis: f32, progress: f32) -> f32 {
     anchor_axis * (1.0 - progress.clamp(0.0, 1.0))
 }
 
+/// material3's `MenuVerticalMargin` (`material/Menu.kt`): the clearance a dropdown menu keeps from the top
+/// and bottom window edges, used both as the measure cap and as the fit test for every candidate below.
+pub(crate) const MENU_VERTICAL_MARGIN: f32 = 48.0;
+
+/// Where material3 puts a dropdown menu, candidate by candidate —
+/// `DropdownMenuPositionProvider.calculatePosition` and the `MenuPosition` factories it builds.
+///
+/// Vertical, in order: below the anchor (`topToAnchorBottom`) → above it (`bottomToAnchorTop`) → centred on
+/// the anchor's TOP edge (`centerToAnchorTop`) → pinned to whichever window edge the anchor is nearer
+/// (`topToWindowTop` / `bottomToWindowBottom`). Each is taken if the menu fits INSIDE the window's vertical
+/// margin, `MenuVerticalMargin`; the window-alignment candidate never fails, so there is always an answer.
+///
+/// Horizontal, in order: start-aligned with the anchor → end-aligned → whichever window edge the anchor is
+/// nearer (`leftToWindowLeft` / `rightToWindowRight`, whose margin is 0 in M3).
+///
+/// An overlay bigger than the window it must fit in is centred on that axis instead of being pinned out of
+/// view, which is what `WindowAlignmentMarginPosition` does (`MenuPosition.kt`).
+pub(crate) fn dropdown_menu_position(
+    anchor: (f32, f32, f32, f32),
+    size: (f32, f32),
+    window: (f32, f32),
+) -> (f32, f32) {
+    let (ax, ay, aw, ah) = anchor;
+    let (w, h) = window;
+    let v = MENU_VERTICAL_MARGIN;
+
+    let fits = |y: f32| y >= v && y + size.1 <= h - v;
+    let y = if fits(ay + ah) {
+        ay + ah
+    } else if fits(ay - size.1) {
+        ay - size.1
+    } else if fits(ay - size.1 / 2.0) {
+        ay - size.1 / 2.0
+    } else if size.1 >= h - 2.0 * v {
+        (h - size.1) / 2.0
+    } else if ay + ah / 2.0 < h / 2.0 {
+        v
+    } else {
+        h - v - size.1
+    };
+
+    let fits_x = |x: f32| x >= 0.0 && x + size.0 <= w;
+    let x = if fits_x(ax) {
+        ax
+    } else if fits_x(ax + aw - size.0) {
+        ax + aw - size.0
+    } else if size.0 >= w {
+        (w - size.0) / 2.0
+    } else if ax + aw / 2.0 < w / 2.0 {
+        0.0
+    } else {
+        w - size.0
+    };
+    (x, y)
+}
+
 /// The point an anchored overlay scales out of, as fractions of its own box — material3's
 /// `calculateTransformOrigin(anchorBounds, menuBounds)` (`material3/Menu.kt`), which is what makes a
 /// dropdown menu look like it grows out of the control that opened it instead of out of its centre.
@@ -1599,5 +1655,53 @@ mod tests {
         assert_eq!(under.progress(), 0.0);
         let mid = AnchorSlide::new(std::sync::Arc::new(|| 0.25));
         assert_eq!(mid.progress(), 0.25);
+    }
+
+    /// Every candidate material3's `DropdownMenuPositionProvider` tries, in its order.
+    ///
+    /// The window is 420x520 and the margin 48, so the usable band is y 48..472. Teeth: each case fails if the
+    /// candidate it stands for is dropped, or if the order is changed — a menu that fits below the anchor must
+    /// not end up centred on it.
+    #[test]
+    fn dropdown_menu_position_follows_the_material3_candidates() {
+        let window = (420.0, 520.0);
+        let size = (120.0, 100.0);
+        // 1. Below the anchor, when the whole menu fits under it.
+        let below = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), size, window);
+        assert_eq!(below, (16.0, 132.0), "below the anchor, start-aligned");
+        // 2. Above it, when below would overflow: the anchor sits low, the menu is too tall for the room left.
+        let above = dropdown_menu_position((16.0, 400.0, 80.0, 32.0), (120.0, 200.0), window);
+        assert_eq!(above, (16.0, 200.0), "above the anchor");
+        // 3. Centred on the anchor's TOP edge — both of the first two fail, this one fits.
+        let centred = dropdown_menu_position((16.0, 260.0, 80.0, 32.0), (120.0, 400.0), window);
+        assert_eq!(centred.1, 60.0, "centred on the anchor's top edge: 260 - 400/2");
+        // 4. Pinned to the nearer window edge: nothing fits, so the anchor's half decides which edge. The
+        //    menu has to be no taller than the margin band (520 - 96), or the case below takes over.
+        let pinned_top = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 400.0), window);
+        assert_eq!(pinned_top.1, MENU_VERTICAL_MARGIN, "anchor in the top half pins to the top margin");
+        let pinned_bottom = dropdown_menu_position((16.0, 420.0, 80.0, 32.0), (120.0, 400.0), window);
+        assert_eq!(
+            pinned_bottom.1,
+            520.0 - MENU_VERTICAL_MARGIN - 400.0,
+            "anchor in the bottom half pins to the bottom margin"
+        );
+        // 5. Taller than the margin band: centred, not pushed out of the window.
+        let too_tall = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 520.0), window);
+        assert_eq!(too_tall.1, 0.0, "a window-sized menu is centred: (520 - 520) / 2");
+
+        // Horizontal candidates, with M3's zero margin.
+        assert_eq!(
+            dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 100.0), window).0,
+            16.0,
+            "start-aligned when it fits"
+        );
+        let end = dropdown_menu_position((380.0, 100.0, 40.0, 32.0), (120.0, 100.0), window);
+        assert_eq!(end.0, 380.0 + 40.0 - 120.0, "end-aligned: right edges meet");
+        // Neither alignment fits, so the anchor's half decides the edge. The menu has to be wide enough that
+        // both start- and end-alignment overflow, or one of them takes the case.
+        let pinned_left = dropdown_menu_position((30.0, 100.0, 40.0, 32.0), (400.0, 100.0), window);
+        assert_eq!(pinned_left.0, 0.0, "neither alignment fits: the anchor's half picks the edge");
+        let pinned_right = dropdown_menu_position((300.0, 100.0, 40.0, 32.0), (400.0, 100.0), window);
+        assert_eq!(pinned_right.0, 420.0 - 400.0, "and the other half picks the other edge");
     }
 }

@@ -289,14 +289,25 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 
 **验证**：单测 `a_read_only_field_draws_no_caret`（去掉 `read_only` 项即红 ✓，且第二个用例要求可编辑字段仍画光标 ✓，防止"永远返回 false"式的假通过 ✓）；demo 截图里聚焦的只读字段已无光标 ✓。
 
-### 4.10 待对齐（本轮之后）
+### 4.10 定位候选补全（本轮）
+
+原先只实现了 M3 候选序列的前两档（下→上）+ 一个 `clamp` 兜底 ✗。现在按 `MenuPosition.kt` 的工厂逐个照搬，抽成纯函数 `overlay::dropdown_menu_position`（便于逐个候选做确定性单测 ✓）：
+
+| 轴 | 候选（按顺序取第一个"放得进窗口边距"的） | M3 出处 |
+|---|---|---|
+| 纵向 | 锚点下方 → 锚点上方 → **居中于锚点顶边**（`ay - menuH/2`） → **按锚点中心所在半窗贴顶/贴底**（`topToWindowTop`/`bottomToWindowBottom`，margin 48） | `MenuPosition.centerToAnchorTop` / `WindowAlignmentMarginPosition.Vertical` |
+| 横向 | 起始对齐 → 末端对齐 → **按锚点中心所在半窗贴左/贴右**（margin 0） | `WindowAlignmentMarginPosition.Horizontal`（M3 的 `leftToWindowLeft(margin = 0)`） |
+| 超出窗口时 | 菜单比边距带还高/还宽 → **在该轴居中**，而不是被推出窗口 | `WindowAlignmentMarginPosition`："If this is not possible, i.e. the menu is too tall, then it is centered" |
+
+**验证**：单测 `dropdown_menu_position_follows_the_material3_candidates` 覆盖全部 5 个纵向候选（含"过高→居中"）+ 3 个横向候选（含两侧贴边）✓；现有 UI 测试的取值不变 ✓（长菜单仍是 424 高、`(520-424)/2 = 48` 正好等于 48dp 边距 ✓）。
+
+### 4.11 待对齐（后续）
 
 | 项 | M3 真身 | winia 现状 |
 |---|---|---|
-| 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档 |
 | 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | 无（菜单用 `MenuColumnPolicy` 自己实现，其它组件需照做） |
 | `PrimaryEditable` 的键盘打开 | 聚焦/键盘驱动展开、光标联动 | 只有"点击不切换"，键盘打开与光标联动未实现 |
 
-### 4.11 有意保留的偏差
+### 4.12 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。

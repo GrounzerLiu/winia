@@ -3534,10 +3534,6 @@ fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
     }
 }
 
-/// material3's `MenuVerticalMargin` (`material/Menu.kt`), the clearance a pinned dropdown menu keeps from
-/// the top and bottom window edges. Used by the overlays that opt into `fit_around_anchor`.
-const MENU_VERTICAL_MARGIN: f32 = 48.0;
-
 /// The window rect `(x, y, w, h)` of an overlay's anchor, resolved from the MAIN tree (already laid out).
 ///
 /// Shared by the two passes that need it: the measure pass, for an overlay that matches its anchor's width
@@ -3607,11 +3603,12 @@ fn layout_overlays(pw: &mut PerWindow) {
                 // `exposedDropdownSize`), so the anchor's rect is needed at measure time — before the
                 // positioning pass — and the anchor lives in the main tree, already laid out.
                 let anchor_width = anchor_widths[overlay_index];
+                let margin = crate::ui::overlay::MENU_VERTICAL_MARGIN;
                 crate::layout::Constraints::new(
                     anchor_width,
                     if ov.match_anchor_width { anchor_width } else { pw.width },
-                    MENU_VERTICAL_MARGIN,
-                    (pw.height - MENU_VERTICAL_MARGIN * 2.0).max(0.0),
+                    margin,
+                    (pw.height - margin * 2.0).max(0.0),
                 )
             } else {
                 crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height)
@@ -3660,36 +3657,11 @@ fn layout_overlays(pw: &mut PerWindow) {
         // 有锚点（且在主树中找到）时：按位置相对锚点（Bottom* = 锚点下方，
         // Top* = 锚点上方）；锚点缺失/未物化（scope）回退窗口对齐——避免 (0,0)
         let pos = if anchored && ov.fit_around_anchor {
-            // material3's `DropdownMenuPositionProvider` (androidx
-            // `material3/internal/MenuPosition.kt`): the menu is placed among CANDIDATES — below the
-            // anchor if the whole menu fits, else above it, else pinned against the window edge — and the
-            // same three for x (start-aligned, end-aligned, pinned to the near edge). winia's overlay
-            // placement only ever did the first, which is why a long menu used to hang off the bottom
-            // edge with its last rows unreachable.
-            //
-            // "Fits" is measured against `MenuVerticalMargin` (48dp), material3's `verticalMargin`, so a
-            // pinned menu keeps that much clear of each window edge. M3's HORIZONTAL margin is 0
-            // (`leftToWindowLeft(margin = 0)`), so x keeps none — recorded, not guessed.
-            let v = MENU_VERTICAL_MARGIN;
-            let fits = |y: f32, h: f32| y >= v && y + size.1 <= h - v;
-            let y = if fits(ay + ah, h) {
-                ay + ah
-            } else if fits(ay - size.1, h) {
-                ay - size.1
-            } else {
-                // Pinned: as close to the anchor as the margin allows (the measure constraint above
-                // guarantees the menu is at most `window - 2 * margin` tall, so this always lands).
-                (ay + ah).clamp(v, (h - v - size.1).max(v))
-            };
-            let x_in = |x: f32, w: f32| x >= 0.0 && x + size.0 <= w;
-            let x = if x_in(ax, w) {
-                ax
-            } else if x_in(ax + aw - size.0, w) {
-                ax + aw - size.0
-            } else {
-                ax.clamp(0.0, (w - size.0).max(0.0))
-            };
-            (x, y)
+            // material3's candidate lists, in `overlay::dropdown_menu_position`: below the anchor, above it,
+            // centred on its top edge, then pinned to the nearer window edge — each taken only if the menu
+            // fits inside `MenuVerticalMargin` (48dp). winia's placement used to do the first alone, which is
+            // why a long menu hung off the bottom edge with its last rows unreachable.
+            crate::ui::overlay::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
         } else if anchored {
             match ov.position {
                 P::BottomLeft => (ax, ay + ah),
