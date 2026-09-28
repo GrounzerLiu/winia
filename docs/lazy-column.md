@@ -234,8 +234,12 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   The beyond-bounds prefetch (4 items) absorbs the estimate's error whenever the window's tail was measured
   by the previous frame — which is every slow frame — so the extra pass needs a frame that jumps many items
   and leaves the whole tail unmeasured. There it is doing necessary work: without it that frame shows a hole
-  instead of content. Sustained scrolling does not reach that density at this project's 300 Hz pacing
-  (240px and 600px per frame are 72000 and 180000 px/s; a fling tops out around 10-20k px/s).
+  instead of content. Reaching that needs 240px or more per frame: at this project's 300 Hz pacing that is
+  72000 px/s (a fling tops out around 10-20k px/s, so unreachable), while on a 60 Hz display the same
+  240px/frame is 14400 px/s, which a hard fling's first frames can reach — so a 60 Hz display scrolling rows
+  shorter than the estimate pays a second pass on its fastest frames. That cost has a known direction (make
+  the coverage walk pessimistic for unmeasured items, or feed the measured shortfall back as a window margin)
+  and no measured case of it mattering yet, so it is recorded rather than fixed.
   `the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames` pins the free end (1 and 4
   rows/frame at one pass) and bounds the fast end, so a change to the estimate or to the window walk that
   makes ordinary scrolling pay shows up as a red test.

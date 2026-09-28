@@ -2525,13 +2525,16 @@ mod tests {
     /// |---|---|---|---|---|
     /// | passes | 1 | 1 | 2 | 3 |
     ///
-    /// The shape is the finding, and it is why nothing was changed for it. The tail of a window advances
-    /// by one item per frame in the slow cases, so it was MEASURED by the previous frame and the 4-item
-    /// beyond-bounds prefetch absorbs what is left of the estimate's error; only a frame that jumps many
-    /// items leaves the whole tail unmeasured, and then the extra pass is what puts content in the viewport
-    /// instead of a hole. Sustained scrolling cannot reach that density: the cases measured here are 240px
-    /// and 600px per frame, i.e. 72000 and 180000 px/s at the 300Hz pacing this project runs at (a fling
-    /// tops out around 10-20k px/s). What the test pins is the end that must stay free.
+    /// The shape is the finding. The tail of a window advances by one item per frame in the slow cases, so
+    /// it was MEASURED by the previous frame and the 4-item beyond-bounds prefetch absorbs what is left of
+    /// the estimate's error; only a frame that jumps many items leaves the whole tail unmeasured, and then
+    /// the extra pass is what puts content in the viewport instead of a hole. Reaching it takes 240px or
+    /// more per frame: at this project's 300Hz pacing that is 72000 px/s (a fling tops out around 10-20k
+    /// px/s, so unreachable), while on a 60Hz display the same 240px/frame is 14400 px/s — a hard fling's
+    /// first frames CAN reach that, so a 60Hz display scrolling rows shorter than the estimate pays a second
+    /// pass on those frames. That is a real cost with a known direction (make the coverage walk pessimistic
+    /// for unmeasured items, or feed the measured shortfall back as a window margin) and no measured user
+    /// for it yet, so it is recorded rather than fixed.
     #[test]
     fn the_estimate_over_stating_row_heights_only_costs_fast_scroll_frames() {
         use crate::core::composer::take_compose_after_layout;
