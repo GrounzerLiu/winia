@@ -1,8 +1,9 @@
 # Intrinsic measurement: Compose's contract, winia's gap, and the cost of closing it
 
-Research note. It establishes what Compose's intrinsic-measurement contract actually requires, what
-winia has and lacks today, and the options for closing the gap. No framework change is made here; §6
-is the proposed plan and §7 lists what is still unverified.
+Research note, now also the implementation record. §1-§4 establish what Compose's
+intrinsic-measurement contract actually requires and what winia had and lacked when the work started;
+§5-§6 are the options and the recommendation as they were written before the decision; §7 lists what
+stayed unverified; §8 records option A as it landed (the framework change is there, not here).
 
 The trigger is concrete: two winia components (`DropdownMenu`, `SegmentedButton`) already hand-roll
 the same two-pass measurement that `Modifier.width(IntrinsicSize.Max)` expresses in one modifier, and a
@@ -283,3 +284,105 @@ Option A's public modifier can be layered on later on top of B without changing 
   `androidx.compose.ui.layout` source while implementing.
 - **Test isolation:** intrinsic probes must not leave nodes dirty or caches warm; a regression test for
   that belongs in step 1 (measure twice, compare tree/layout results).
+
+## 8. What was implemented (option A)
+
+Chosen by the user: option A, on branch `intrinsic-size`. This section is the record of the port as it
+landed; §1-§4 stay the specification it was written against.
+
+### 8.1 The public modifier API (`winia/src/modifier.rs`)
+
+- `pub enum IntrinsicSize { Min, Max }` — Compose's `Intrinsic.kt:143`.
+- `SizeValue::Intrinsic(IntrinsicSize)`, so `Modifier::width(IntrinsicSize::Max)` /
+  `height(..)` / `required_width(..)` / `required_height(..)` all take `impl Into<SizeValue>` and stay
+  source-compatible with the `f32`/`Dp`/`State<f32>` forms they already accepted.
+- `ModifierElement::RequiredSize` now stores `Option<SizeValue>` (it was `Option<f32>`), and
+  `required_size_constraint()` resolves numbers only: an intrinsic request carries no number and is
+  answered by the measure pipeline instead.
+- New queries `Modifier::intrinsic_width_request()` / `intrinsic_height_request() ->
+  Option<(IntrinsicSize, bool)>`, where the flag is Compose's `enforceIncoming`: `true` for the
+  `size`/`width`/`height` forms (`Intrinsic.kt:51/80`), `false` for `requiredWidth`/`requiredHeight`
+  (`:105/:130`).
+
+### 8.2 The protocol (`winia/src/layout/node.rs`)
+
+- Four defaulted methods on `MeasurePolicy` — `min_intrinsic_width`, `max_intrinsic_width`,
+  `min_intrinsic_height`, `max_intrinsic_height` — defaulting to Compose's documented approximation:
+  measure with the queried axis unbounded and report that axis. `MeasurePolicy` stays object-safe and
+  every existing `impl` compiles unchanged.
+- `IntrinsicCtx<'a> { nodes, policies, policy_idx }` is the probe's own receiver: `approx_measure` runs
+  the policy's own `measure` for the defaults, and `child_intrinsic(child, query, other)` recurses.
+  `child_weight(child)` reads `Modifier::get_layout_weight()`, which is where winia stores what Compose
+  keeps as `LayoutWeightNode` parent data.
+- `intrinsic_size_of(nodes, policies, idx, query, other)` is the entry point. It never calls
+  `measure_node`, so it cannot write `dirty` / `layout_dirty` / `cached_constraints` /
+  `subcomposed` (`node.rs` write-back sites) and cannot invalidate the frame's measure results.
+- `IntrinsicQuery { MinWidth, MaxWidth, MinHeight, MaxHeight }` keeps the two axes explicit; Compose's
+  `IntrinsicMinMax`/`IntrinsicWidthHeight` pair is folded into one enum.
+
+### 8.3 The modifier chain is inverted, not read
+
+The pipeline order in `measure_node_inner` is the specification, and the probe replays it on the
+modifier chain instead of the node: `resolved_size` → `min_size_constraint` → `max_size_constraint`
+("min wins", winia's documented deviation) → `required_size_constraint` → padding. Consequences that
+the tests pin:
+
+- A fixed axis short-circuits: a node whose axis is fixed returns that value **without** padding,
+  because the pipeline tightens the node's own box before the padding offset is pushed inward.
+- Otherwise the answer is `content.clamp(lo, hi) + padding`, mirroring "measure the content, then add
+  padding back".
+- `fill_max` is deliberately ignored when answering intrinsics, matching Compose's `FillNode`
+  (`Size.kt:689`), which does not override the intrinsic methods either.
+- A scroll modifier on the queried axis forwards with `other = f32::MAX`, mirroring
+  `foundation/Scroll.kt:478-500`.
+- `size`/`width`/`height(IntrinsicSize)` clamp the answer to the incoming constraint
+  (`enforceIncoming = true`, `Intrinsic.kt:34-49`); the `required*` forms do not.
+
+### 8.4 Containers share the flex arithmetic
+
+`winia/src/layout/flex.rs` gained `flex_intrinsic_main` / `flex_intrinsic_cross`, ports of
+`RowColumnImpl.kt:371-394` and `:396-452` — including `weightUnitSpace = max(size / weight)`, which is
+the reason Compose's Row/Column report finite intrinsics for weighted children at all. `RowLayout` and
+`ColumnLayout` map their four queries onto them exactly as `IntrinsicMeasureBlocks` does
+(`RowColumnImpl.kt:261-369`): a main-axis query prices the weighted children by weight unit, a
+cross-axis query first resolves the main-axis room each child gets (`mainAxisSize` is always the MAXX
+query there) and then asks the children's cross size at that room. One deviation is stated in a
+comment: `remaining` is floored at 0.0 where Compose can go negative on ints.
+
+Box and every other container keep the default approximation, which is also what Compose does for Box.
+
+### 8.5 Leaves
+
+- Text answers `MinWidth`/`MaxWidth` from the skia paragraph
+  (`Paragraph::min_intrinsic_width` / `max_intrinsic_width`) and a height query by measuring at the
+  given width — winia has no height-parameterised text path, so the query is answered at the width the
+  parent offers rather than by a height-keyed cache (§7). The probe builds the paragraph through
+  `build_text_paragraph` and does **not** touch the render paragraph cache; a test pins that.
+- Rich text measures through `measure_and_cache_richtext` at the queried width, images report their
+  intrinsic size (min = max), and a plain leaf answers 0 — the fixed-axis case short-circuits before it
+  matters.
+- A policy whose `subcomposes()` is true is never probed: it reports its last measured size on that
+  axis. Compose has no intrinsic scope that could compose, and winia's probes run outside the frame's
+  compose step.
+
+### 8.6 The two hand-rolled passes are gone
+
+- `MenuColumnPolicy` (`winia/src/ui/overlay.rs`): pass 1 is now one
+  `intrinsic_size_of(item, IntrinsicQuery::MaxWidth, f32::MAX)` per item, clamped to 112/280 dp. The
+  item is a `Row` whose label is `weight(1f)`, and it is the Row's intrinsic block that prices it by its
+  own width — the exact trap the old hand-written pass documented.
+- `SegmentedRowPolicy` (`winia/src/ui/segmented_button.rs`): the natural width is the widest item's max
+  intrinsic width, and the height is the tallest item's min intrinsic height **at the width they all end
+  up with**, which is the order `IntrinsicMeasureBlocks` asks in.
+
+### 8.7 Tests
+
+`winia/src/layout/node.rs` ends with `#[cfg(test)] mod intrinsic_tests`: one test per pipeline step and
+per protocol rule, including the default approximation, the fixed-axis short-circuit, the padding
+addition, the probe's cache hygiene, the weighted-label trap, Row/Column main- and cross-axis answers,
+`width`/`height(IntrinsicSize)` vs the `required` forms, the scroll forwarding, and the subcomposing
+refusal. Both "turn it off" checks were run and are recorded below.
+
+Acceptance is by the existing suite: menu width 112 dp (icon menu) / 136 dp ("Copy / Ctrl+C"), equal
+item widths, and the segmented geometry all had to stay put — they did.
+

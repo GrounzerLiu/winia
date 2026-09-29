@@ -794,24 +794,26 @@ fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modif
 const DROPDOWN_ITEM_MIN_WIDTH: f32 = 112.0;
 const DROPDOWN_ITEM_MAX_WIDTH: f32 = 280.0;
 
-/// The menu's item column, reproducing material3's `Column(width(IntrinsicSize.Max))` by hand.
+/// The menu's item column, reproducing material3's `Column(width(IntrinsicSize.Max))`.
 ///
 /// In material3 the menu is as wide as its WIDEST item's natural width and every item is stretched to that
 /// width — which is what makes the rows' state layers, ripples and trailing icons line up with the panel,
-/// and what keeps a menu with icons from being padded out to the 280dp maximum. winia has no intrinsic
-/// measurement, so the two passes happen here:
+/// and what keeps a menu with icons from being padded out to the 280dp maximum. The width comes from the
+/// intrinsic protocol here:
 ///
-///  1. the intrinsic width: measure each item's CONTENT unbounded and add the item's own padding.
-///     Measuring the item itself would not do — its label is `weight(1f)`, material3's own structure, and a
-///     weighted child fills whatever maximum it is handed, so an unbounded pass reports the constraint back
-///     instead of the content (measured: the menu went from 112 to the 280 maximum the moment the label was
-///     weighted);
+///  1. the intrinsic width: ask each item for its max intrinsic width. The item is a `Row` whose label is
+///     `weight(1f)` — material3's own structure — and it is the Row's intrinsic block (`layout/flex.rs`)
+///     that prices that weighted child by its own width, so an unbounded point of view reports the label's
+///     width instead of the constraint back. Before the protocol existed this pass had to measure the item's
+///     CONTENT unbounded and add the item's padding by hand (measured then: the menu jumped from 112 to the
+///     280 maximum the moment the label was weighted);
 ///  2. impose that width tightly on every item, after which the weighted label distributes the leftover
 ///     inside its row exactly as material3 does.
 #[derive(Debug)]
 struct MenuColumnPolicy;
 
-impl crate::layout::node::MeasurePolicy for MenuColumnPolicy {    fn measure(
+impl crate::layout::node::MeasurePolicy for MenuColumnPolicy {
+    fn measure(
         &self,
         nodes: &mut Vec<crate::layout::node::LayoutNode>,
         policies: &[Box<dyn crate::layout::node::MeasurePolicy>],
@@ -824,21 +826,14 @@ impl crate::layout::node::MeasurePolicy for MenuColumnPolicy {    fn measure(
         }
         let mut natural = 0.0f32;
         for &item in children {
-            let (pad_l, pad_r) = nodes[item].modifier.get_padding_horizontal();
-            let content: Vec<usize> = nodes[item].children.clone();
-            let mut inner = 0.0f32;
-            for child in content {
-                let (size, _) = measure_node(
-                    nodes,
-                    policies,
-                    child,
-                    crate::layout::constraints::Constraints::new(0.0, f32::MAX, 0.0, f32::MAX),
-                );
-                inner += size.width;
-            }
-            natural = natural.max(
-                (inner + pad_l + pad_r).clamp(DROPDOWN_ITEM_MIN_WIDTH, DROPDOWN_ITEM_MAX_WIDTH),
+            let intrinsic = crate::layout::node::intrinsic_size_of(
+                nodes,
+                policies,
+                item,
+                crate::layout::node::IntrinsicQuery::MaxWidth,
+                f32::MAX,
             );
+            natural = natural.max(intrinsic.clamp(DROPDOWN_ITEM_MIN_WIDTH, DROPDOWN_ITEM_MAX_WIDTH));
         }
         let width = natural.clamp(
             constraints.min_width,
