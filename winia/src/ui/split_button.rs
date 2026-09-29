@@ -743,16 +743,21 @@ impl SplitButtonPart {
         if let Some(elevation) = self.elevation {
             button = button.elevation(elevation);
         }
-        // The checked state layer: material3 draws the shape's outline in the content colour at
-        // `PressedStateLayerOpacity` over the container, under the content.
+        // The checked state layer: material3 paints it with `drawWithContent { drawContent(); drawOutline(
+        // shape, contentColor, PressedStateLayerOpacity) }` — OVER the content, not behind it under the
+        // container. The after-content slot is what `DrawWrapNode::draw_after` runs in.
+        let layer_alpha = SplitButtonDefaults::CHECKED_STATE_LAYER_ALPHA;
         if checked {
             let layer = Color::from_argb(
-                (255.0 * SplitButtonDefaults::CHECKED_STATE_LAYER_ALPHA).round() as u8,
+                (255.0 * layer_alpha).round() as u8,
                 content_color.r,
                 content_color.g,
                 content_color.b,
             );
-            button = button.modifier(Modifier::new().background(layer, shape));
+            button = button.modifier(Modifier::new().draw_wrap_node(StateLayer {
+                color: layer,
+                shape: shape.clone(),
+            }));
         }
         let click = self.click_action();
         button = button.modifier(self.modifier);
@@ -800,6 +805,26 @@ impl SplitButtonPart {
             }));
         }
         self.on_click.clone()
+    }
+}
+
+/// The checked half's state layer, painted in the wrap node's after-content slot: material3's
+/// `drawWithContent { drawContent(); drawOutline(shape, contentColor, PressedStateLayerOpacity) }`.
+/// The shape is the one the container draws in the same frame, so the layer follows the morph.
+#[derive(Debug)]
+struct StateLayer {
+    color: Color,
+    shape: Shape,
+}
+
+impl crate::modifier::DrawWrapNode for StateLayer {
+    fn draw_after(
+        &self,
+        canvas: &skia_safe::Canvas,
+        rect: skia_safe::Rect,
+        _modifier: &Modifier,
+    ) {
+        crate::render::draw_background_for_node(canvas, rect, &self.color, &self.shape);
     }
 }
 
@@ -1223,17 +1248,41 @@ mod tests {
         );
     }
 
+    /// material3 paints the checked state layer with `drawWithContent { drawContent(); drawOutline(...) }`
+    /// — over the content, not behind it under the container. The order is checked structurally rather
+    /// than by pixels, because the layer's colour IS the content colour and the content paints in that
+    /// same colour: blending a colour over itself leaves every glyph pixel unchanged, so no pixel reading
+    /// can separate the two orders. What can be measured is where the node asks for the layer.
     #[test]
-    fn a_checked_menu_button_draws_a_stadium_over_a_state_layer() {
-        let interaction = MutableInteractionSource::new();
-        let expanded = State::new(true);
-        let mut composer =
-            compose_split_with_source(&interaction, Some(expanded), LayoutDirection::Ltr);
-        let children = split_children(&mut composer);
+    fn the_checked_state_layer_paints_after_the_content() {
+        let read = |checked: bool| {
+            let interaction = MutableInteractionSource::new();
+            let state = if checked { Some(State::new(true)) } else { None };
+            let mut composer = compose_split_with_source(&interaction, state, LayoutDirection::Ltr);
+            let children = split_children(&mut composer);
+            let backgrounds = drawn_backgrounds(&composer, children[1]);
+            let layers = composer.arena_nodes()[children[1]].modifier.draw_wrap_nodes().count();
+            (backgrounds, layers)
+        };
+        let (resting_backgrounds, resting_layers) = read(false);
+        let (checked_backgrounds, checked_layers) = read(true);
+        eprintln!(
+            "state layer: resting {resting_backgrounds:?}/{resting_layers} checked {checked_backgrounds:?}/{checked_layers}"
+        );
         assert_eq!(
-            drawn_backgrounds(&composer, children[1]),
-            vec![Shape::Pill, Shape::Pill],
-            "checked: the container morphs to the stadium and a state layer is painted in the same shape"
+            checked_layers,
+            resting_layers + 1,
+            "the checked half asks for one more after-content layer"
+        );
+        assert_eq!(
+            checked_backgrounds.len(),
+            resting_backgrounds.len(),
+            "and not for one more background under the content ({checked_backgrounds:?} vs {resting_backgrounds:?})"
+        );
+        assert_eq!(
+            checked_backgrounds.first(),
+            Some(&Shape::Pill),
+            "the checked container is still the token's stadium"
         );
     }
 
