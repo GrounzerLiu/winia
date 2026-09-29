@@ -749,13 +749,13 @@ impl SplitButtonPart {
         }
 
         button.build(ctx, |ctx| {
-            if shift == 0.0 {
-                content(ctx);
-            } else {
-                crate::ui::Row::new()
-                    .modifier(Modifier::new().offset(shift, 0.0))
-                    .build(ctx, |ctx| content(ctx));
-            }
+            // The offset wrapper is unconditional, even when the offset is zero. A conditional wrapper
+            // changes the shape of the composition the moment the morph settles on its target, and a
+            // rebuilt content subtree is not the same node as the one the layout had — the icon stays
+            // where it was instead of sliding to the position the new offset asks for.
+            crate::ui::Row::new()
+                .modifier(Modifier::new().offset(shift, 0.0))
+                .build(ctx, |ctx| content(ctx));
         });
     }
 
@@ -1490,6 +1490,33 @@ mod tests {
         assert_ne!(
             resting_shapes, pressed_shapes,
             "the press must still morph the shape, or this test proves nothing"
+        );
+    }
+
+    /// The trailing half's content is optically offset while it is unselected and centred once the menu
+    /// is open: material3's per-size "menu icon offset when unselected" and "the icon becomes centered
+    /// when selected". This is the layout half of the checked transition — the painted shape is guarded
+    /// by `a_checked_trailing_paints_the_stadium`.
+    #[test]
+    fn a_checked_trailing_centres_its_content() {
+        let content_offset = |checked: bool| {
+            let interaction = MutableInteractionSource::new();
+            let state = if checked { Some(State::new(true)) } else { None };
+            let mut composer = compose_split_with_source(&interaction, state, LayoutDirection::Ltr);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let trailing = nodes[root].children[1];
+            let wrapper = nodes[trailing].children.first().copied().expect("the content wrapper");
+            nodes[wrapper].children.first().copied().map_or(0.0, |c| nodes[c].position.x)
+        };
+        let unselected = content_offset(false);
+        let selected = content_offset(true);
+        eprintln!("trailing content offset: unselected {unselected} selected {selected}");
+        assert_eq!(selected, 0.0, "an open menu centres the trailing half's content");
+        assert!(
+            unselected < -1.0,
+            "and an unselected one sits offset toward the gap, measured {unselected}"
         );
     }
 }
