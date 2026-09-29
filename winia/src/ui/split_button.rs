@@ -1175,4 +1175,112 @@ mod tests {
             "checked: the container morphs to the stadium and a state layer is painted in the same shape"
         );
     }
+
+    // ── What the pair actually paints ──
+
+    /// The inset of the top row of a rounded rectangle IS that corner's radius (for `RoundedCornerShape`
+    /// the row spans `left + topStart .. right - topEnd`), so measuring the painted pixels gives the four
+    /// radii of each button, not just the shape the modifier chain asked for.
+    ///
+    /// Measured, because "the two parts' corners look different" is exactly the kind of claim a modifier
+    /// chain cannot settle: the pair must mirror — the leading button rounds its LEFT corners fully and
+    /// its right ones by the inner-corner token, the trailing button the other way round.
+    #[test]
+    fn the_pair_paints_the_token_radii_on_every_corner() {
+        let interaction = MutableInteractionSource::new();
+        let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let rects: Vec<(f32, f32, f32, f32)> = nodes[root]
+            .children
+            .iter()
+            .map(|i| {
+                let node = &nodes[*i];
+                (
+                    node.position.x,
+                    node.position.y,
+                    node.measured_size.width,
+                    node.measured_size.height,
+                )
+            })
+            .collect();
+
+        let (w, h) = (400, 200);
+        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pixels = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
+        let painted = |x: usize, y: usize| px[y * w as usize + x][0] < 200;
+
+        let mut measured = Vec::new();
+        for (bx, by, bw, bh) in &rects {
+            let x0 = bx.round() as usize;
+            let y0 = by.round() as usize;
+            let x1 = (bx + bw).round() as usize - 1;
+            let y1 = (by + bh).round() as usize - 1;
+            // The corner arc spans exactly `radius` rows/columns: the first row whose leftmost painted
+            // pixel reaches the button's left edge sits at `top + top_left`. Measuring the EXTENT of the
+            // arc, not the inset of one antialiased row, is what makes this readable off a raster.
+            let first = |y: usize| (x0..=x1).find(|x| painted(*x, y));
+            let last = |y: usize| (x0..=x1).rev().find(|x| painted(*x, y));
+            let left_edge = (y0..=y1).filter_map(first).min().expect("a painted button");
+            let right_edge = (y0..=y1).filter_map(last).max().expect("a painted button");
+            let top_edge = (y0..=y1).find(|y| painted(x0 + (x1 - x0) / 2, *y)).expect("painted");
+            let bottom_edge =
+                (y0..=y1).rev().find(|y| painted(x0 + (x1 - x0) / 2, *y)).expect("painted");
+            let row_left = |y: usize| first(y).expect("painted row");
+            let row_right = |y: usize| last(y).expect("painted row");
+            let col_top = |x: usize| (y0..=y1).find(|y| painted(x, *y)).expect("painted column");
+            let col_bottom = |x: usize| (y0..=y1).rev().find(|y| painted(x, *y)).expect("painted");
+            let tl = (top_edge..=bottom_edge).find(|y| row_left(*y) <= left_edge + 1).unwrap()
+                - top_edge;
+            let tr = (top_edge..=bottom_edge)
+                .find(|y| row_right(*y) >= right_edge.saturating_sub(1))
+                .unwrap()
+                - top_edge;
+            let bl = bottom_edge
+                - (top_edge..=bottom_edge)
+                    .rev()
+                    .find(|y| row_left(*y) <= left_edge + 1)
+                    .unwrap();
+            let br = bottom_edge
+                - (top_edge..=bottom_edge)
+                    .rev()
+                    .find(|y| row_right(*y) >= right_edge.saturating_sub(1))
+                    .unwrap();
+            let _ = (col_top, col_bottom);
+            measured.push((tl, tr, bl, br));
+        }
+        eprintln!("split button corners (top-left, top-right, bottom-left, bottom-right): {measured:?}");
+
+        let inner = SplitButtonDefaults::inner_corner_size(ButtonSize::Small);
+        let outer = rects[0].3 / 2.0;
+        // Measured through a coverage threshold, so the arc reads a few pixels short of its real radius
+        // (a true 20 dp corner measures ~12 here and a true 4 dp one ~1). What must hold exactly is the MIRROR — the same two radii,
+        // swapped — and that the outer corner is the round one.
+        for (i, corners) in measured.iter().enumerate() {
+            let (far, near) = if i == 0 { (corners.0, corners.1) } else { (corners.3, corners.2) };
+            assert!(
+                far > near + 4,
+                "button {i} must round its outer corner more than its inner one, measured {corners:?}"
+            );
+            let (other_far, other_near) =
+                if i == 0 { (measured[1].3, measured[1].2) } else { (measured[0].0, measured[0].1) };
+            assert!(
+                far.abs_diff(other_far) <= 2 && near.abs_diff(other_near) <= 2,
+                "button {i} must mirror the other half: {corners:?} against the other's two radii"
+            );
+            assert!(
+                (outer * 0.5..=outer + 1.0).contains(&(far as f32)),
+                "button {i}'s outer corner is CornerFull ({outer}), measured {far}"
+            );
+            assert!(
+                (near as f32) <= inner + 1.5,
+                "button {i}'s inner corner is the tier's {inner}, measured {near}"
+            );
+        }
+    }
 }

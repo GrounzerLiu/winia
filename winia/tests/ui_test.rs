@@ -3472,3 +3472,71 @@ fn split_button_buttons_run_their_own_actions() {
         app.all_texts()
     );
 }
+
+/// What:  the corner radii the two halves actually paint.
+/// When:  the pair is laid out at rest.
+/// Then:  they are material3's and they MIRROR: the outer (far) corner is `CornerFull`, i.e. half the
+///        button's height, and the inner (gap-side) corner is the size tier's `InnerCornerSize` — the
+///        leading button rounds its left corners fully and its right ones by the token, the trailing
+///        button the other way round.
+///
+/// material3 builds them as `RoundedCornerShape(OuterCornerSize, endCornerSize, endCornerSize,
+/// OuterCornerSize)` and `RoundedCornerShape(startCornerSize, OuterCornerSize, OuterCornerSize,
+/// startCornerSize)` (`SplitButton.kt:424-467`), so the two halves are the same two radii swapped.
+///
+/// The inset of the top row is the corner radius, measured with the bias antialiasing gives a raster:
+/// a coverage threshold cuts the arc a few pixels early (the library-side probe prints the whole curve;
+/// a true 20 dp corner reads ~16, a true 4 dp corner ~2 here). The mirror is exact, the magnitudes
+/// tolerate that bias — which is what makes this a guard on the SHAPE, not on the rasterizer.
+#[test]
+fn split_button_paints_the_token_corners_mirrored() {
+    let mut app = UiTest::launch("split_button");
+    app.expect_text_timeout("open: no", Duration::from_secs(5));
+    let (lx, ly, lw, _) = app.find_tag("sb-leading").expect("the leading button");
+    let (tx, ty, tw, _) = app.find_tag("sb-trailing").expect("the trailing button");
+
+    let insets = |app: &mut UiTest, x: f32, y: f32, w: f32| {
+        // The background is whatever the theme paints just above the pair, not an absolute colour: the
+        // fixture follows the OS theme, so a fixed threshold would call a dark surface "painted".
+        let background = app.pixel_at_logical(x, y - 6.0).expect("a background pixel");
+        let points: Vec<(f32, f32)> = (0..w.round() as i32).map(|i| (x + i as f32, y + 1.0)).collect();
+        let pixels = app.pixels_at_logical(&points);
+        let painted: Vec<bool> = pixels
+            .iter()
+            .map(|p| {
+                p.is_some_and(|(r, g, b, _)| {
+                    let d = |a: u8, c: u8| (a as i32 - c as i32).abs();
+                    d(r, background.0) + d(g, background.1) + d(b, background.2) > 40
+                })
+            })
+            .collect();
+        let first = painted.iter().position(|on| *on).expect("a painted button");
+        let last = painted.iter().rposition(|on| *on).expect("a painted button");
+        (first as i32, (w.round() as i32 - 1) - last as i32)
+    };
+    let (leading_left, leading_right) = insets(&mut app, lx, ly, lw);
+    let (trailing_left, trailing_right) = insets(&mut app, tx, ty, tw);
+    eprintln!(
+        "split button painted corners: leading (left {leading_left}, right {leading_right}) \
+         trailing (left {trailing_left}, right {trailing_right})"
+    );
+
+    assert!(
+        leading_left > leading_right + 4 && trailing_right > trailing_left + 4,
+        "the outer corners are the round ones: leading ({leading_left}, {leading_right}), \
+         trailing ({trailing_left}, {trailing_right})"
+    );
+    assert!(
+        (leading_left - trailing_right).abs() <= 2 && (leading_right - trailing_left).abs() <= 2,
+        "the halves mirror each other: leading ({leading_left}, {leading_right}) against \
+         trailing ({trailing_left}, {trailing_right})"
+    );
+    assert!(
+        (10..=21).contains(&leading_left),
+        "the outer corner is CornerFull (half of 40 dp, so 20) within the raster's bias, got {leading_left}"
+    );
+    assert!(
+        (0..=5).contains(&leading_right),
+        "the inner corner is the Small tier's 4 dp within the raster's bias, got {leading_right}"
+    );
+}
