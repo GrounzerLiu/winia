@@ -674,7 +674,6 @@ impl SplitButtonPart {
         // `docs/split-button.md`.
         let settled_radius =
             ctx.animate_float_as_state(if checked { outer } else { resting_radius }, shape_morph_spec());
-        let settled_radius = settled_radius.get();
 
         // material3's `shapeByInteraction`, then the animation on top: a caller's own shape set is
         // drawn as given, while the default set is rebuilt from the animated radius — the same rule
@@ -703,15 +702,26 @@ impl SplitButtonPart {
             SplitButtonRole::Leading => end_pad,
             SplitButtonRole::Trailing => start_pad,
         };
-        let shift = if self.optical_shift {
-            SplitButtonDefaults::optical_shift(outer, settled_radius, gap_padding)
-        } else {
-            0.0
+        // A DYNAMIC value, not a number. `Modifier::offset` is a layout input, and winia's contract for an
+        // animated layout value is a closure the LAYOUT phase evaluates (`SizeValue::Dynamic`,
+        // `modifier.rs:3548-3557`: "动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖"): the read
+        // inside it registers a layout dependency, so the node is re-measured on every animation tick
+        // without being recomposed. Handing over a static number reads the animation during COMPOSITION,
+        // which only a recomposition refreshes — and the animation's own ticks bring none here, so the
+        // content kept whatever offset it had until some unrelated event forced a frame. Measured on the
+        // live fixture: -2 while unselected, -2 four hundred milliseconds after the menu opened, 0 only
+        // after a pointer move (the report "the icon only moves when the mouse moves over it").
+        let sign = match (self.role, rtl) {
+            (SplitButtonRole::Leading, false) | (SplitButtonRole::Trailing, true) => 1.0,
+            (SplitButtonRole::Leading, true) | (SplitButtonRole::Trailing, false) => -1.0,
         };
-        let shift = match (self.role, rtl) {
-            (SplitButtonRole::Leading, false) | (SplitButtonRole::Trailing, true) => shift,
-            (SplitButtonRole::Leading, true) | (SplitButtonRole::Trailing, false) => -shift,
-        };
+        let optical_shift = self.optical_shift;
+        let shift_value = crate::modifier::SizeValue::Dynamic(Arc::new(move || {
+            if !optical_shift {
+                return 0.0;
+            }
+            sign * SplitButtonDefaults::optical_shift(outer, settled_radius.get(), gap_padding)
+        }));
 
         let colors = self
             .colors
@@ -754,7 +764,7 @@ impl SplitButtonPart {
             // rebuilt content subtree is not the same node as the one the layout had — the icon stays
             // where it was instead of sliding to the position the new offset asks for.
             crate::ui::Row::new()
-                .modifier(Modifier::new().offset(shift, 0.0))
+                .modifier(Modifier::new().offset(shift_value, 0.0))
                 .build(ctx, |ctx| content(ctx));
         });
     }

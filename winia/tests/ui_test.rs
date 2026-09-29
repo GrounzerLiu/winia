@@ -3545,3 +3545,52 @@ fn split_button_paints_the_token_corners_mirrored() {
     );
 }
 
+
+/// What:  the trailing half's content moves to its centred position when the menu opens.
+/// When:  the trailing button has been tapped and the morph has settled.
+/// Then:  the icon has slid toward the centre of the button: material3 centres the content of an
+///        asymmetric shape optically, and an open menu turns that half into a symmetric stadium — the
+///        per-size "menu icon offset when unselected" against "the icon becomes centered when
+///        selected" (`SplitButton.kt:807-813`).
+///
+/// Read from the debug tree, not from pixels: the slide is 1.76 dp of a rounded glyph, and the tree
+/// reads the layout the offset produced. The offset is the icon box's centre against the button's, so
+/// rounding of either rect cannot fake it.
+#[test]
+fn split_button_centres_its_trailing_icon_when_its_menu_opens() {
+    let mut app = UiTest::launch("split_button");
+    app.expect_text_timeout("open: no", Duration::from_secs(5));
+    let offset = |app: &mut UiTest| {
+        app.tree();
+        let button = app.find_tag("sb-trailing").expect("the trailing button");
+        let icon = app.find_tag("sb-trailing-icon").expect("the trailing icon");
+        icon.0 - (button.0 + (button.2 - icon.2) / 2.0)
+    };
+    let unselected = offset(&mut app);
+
+    app.click_tag("sb-trailing");
+    app.expect_text_timeout("open: yes", Duration::from_secs(5));
+    // The morph is a 180 ms tween, so the settled state needs a frame past it.
+    std::thread::sleep(Duration::from_millis(400));
+    let open = offset(&mut app);
+    // A pointer move is what forces a frame that re-runs the layout, so an offset the animation had
+    // already reached gets applied there and then (the reported "the icon only moves when the mouse
+    // moves over it"). Measuring both tells apart "the animation never ran" from "the layout never
+    // took the animated value".
+    let (bx, by, bw, bh) = app.find_tag("sb-trailing").expect("the trailing button");
+    app.send(&format!("m {} {}", (bx + bw / 2.0) as i32, (by + bh / 2.0) as i32));
+    std::thread::sleep(Duration::from_millis(200));
+    let after_move = offset(&mut app);
+    eprintln!(
+        "trailing icon offset: unselected {unselected} open {open} after a pointer move {after_move}"
+    );
+
+    assert!(
+        unselected < -1.0,
+        "an unselected trailing half offsets its icon toward the gap, measured {unselected}"
+    );
+    assert!(
+        open.abs() <= 1.0,
+        "and an open menu centres it, measured {open}"
+    );
+}
