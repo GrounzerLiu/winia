@@ -220,6 +220,8 @@ Measured, each by turning the rule off and watching the specific test fail:
 | the month offset wraps behind the locale's first day | dropped the `+ 7` wrap | exactly 1 test red: `the_month_offset_counts_from_the_locales_first_day` |
 | both millisecond setters test the year range | filter and guard removed | exactly 2 tests red: `a_selection_outside_the_year_range_is_dropped`, `showing_a_month_outside_the_year_range_is_ignored` |
 | switching mode snaps the calendar to the selection's month | snap removed | exactly 1 test red: `switching_mode_pulls_the_calendar_to_the_selected_month` |
+| the cells outside a month are empty, and an unselectable year disables all of its dates | both guards removed together | exactly their 2 tests red: `the_cells_outside_a_month_are_empty`, `an_unselectable_day_or_year_disables_cells` (4 failed in that run, the other 2 from the row-count probe below) |
+| the grid is six rows tall | `MAX_CALENDAR_ROWS` set to 5 | 2 tests red: `a_month_grid_is_always_six_rows_of_seven`, and `today_and_the_selection_are_flagged_on_their_own_cells` because a five-row grid cuts a 30-day month short |
 
 `DatePickerState` (`with`/`new` over a `DatePickerStateInit`, `remember_date_picker_state` for composition) then
 carries the hoisted values material3's pickers read and drive: `selected_date_millis`,
@@ -227,5 +229,11 @@ carries the hoisted values material3's pickers read and drive: `selected_date_mi
 with, and the caller's `SelectableDates` (the default `AllDates` allows everything). The coercion rules above
 are the state's, and `today_millis` on the model is the system clock so tests can inject a fixed date.
 
-Next: the container/header of the picker, the 6 × 7 day grid, the month list with its snap fling and
-displayed-month derivation, the year picker, then `DatePickerDialog` and the input mode.
+`MonthGrid` then lays a month out the way the picker draws it: `MAX_CALENDAR_ROWS` (6) rows of `DAYS_IN_WEEK`
+(7) cells, the cells before the 1st and after the last day empty, each day cell carrying its millis (month
+start + day − 1 days), and the `is_today` / `is_selected` / `is_enabled` flags — the last one consulting
+`SelectableDates` for the day *and* its year, because material3 disables every date of an unselectable year.
+`day_content_description` assembles what a cell announces, today's word first.
+
+Next: the container and header, the day cells as `Surface`s, the month navigation and year picker, then
+`DatePickerDialog` and the input mode.

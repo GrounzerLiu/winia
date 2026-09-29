@@ -520,6 +520,107 @@ pub fn remember_date_picker_state(
     ctx.remember(|| DatePickerState::new(locale)).get()
 }
 
+/// The rows a month grid always draws, whether or not the month needs them (`MaxCalendarRows`,
+/// `DatePicker.kt:2303`).
+pub const MAX_CALENDAR_ROWS: u32 = 6;
+
+/// The word a today cell announces (`DatePickerTodayDescription`).
+pub const TODAY_DESCRIPTION: &str = "Today";
+
+/// One day in a month grid, with the flags the cell paints from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DayCell {
+    /// The day of the month, `1..=31`.
+    pub day: u32,
+    /// The start of that day in UTC millis — material3 adds `dayNumber · 24 h` to the month start
+    /// (`DatePicker.kt:1893-1894`).
+    pub utc_time_millis: i64,
+    /// Whether this is the day the caller calls today.
+    pub is_today: bool,
+    /// Whether this is the selected day.
+    pub is_selected: bool,
+    /// Whether it may be chosen: `SelectableDates::is_selectable_date`, and its year must be selectable too
+    /// (`DatePicker.kt:294-298`).
+    pub is_enabled: bool,
+}
+
+/// A month laid out the way the picker draws it: [`MAX_CALENDAR_ROWS`] rows of [`DAYS_IN_WEEK`] cells, with the
+/// cells before the 1st and after the last day empty (`Month`, `DatePicker.kt:1856-1890`).
+#[derive(Clone, Debug)]
+pub struct MonthGrid {
+    month: CalendarMonth,
+    cells: Vec<Option<DayCell>>,
+}
+
+impl MonthGrid {
+    /// Lays `month` out for `selection` and `today_millis`, asking `selectable_dates` about every day.
+    pub fn of(
+        month: CalendarMonth,
+        selection: Option<i64>,
+        today_millis: i64,
+        selectable_dates: &dyn SelectableDates,
+    ) -> Self {
+        let offset = month.days_from_start_of_week_to_first_of_month as usize;
+        let end = offset + month.number_of_days as usize;
+        let year_selectable = selectable_dates.is_selectable_year(month.year);
+        let mut cells = Vec::with_capacity((MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as usize);
+        for index in 0..(MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as usize {
+            if index < offset || index >= end {
+                cells.push(None);
+                continue;
+            }
+            let day = (index - offset) as u32 + 1;
+            let utc_time_millis =
+                month.start_utc_time_millis + (index - offset) as i64 * MILLIS_IN_24_HOURS;
+            cells.push(Some(DayCell {
+                day,
+                utc_time_millis,
+                is_today: utc_time_millis == today_millis,
+                is_selected: selection == Some(utc_time_millis),
+                is_enabled: year_selectable
+                    && selectable_dates.is_selectable_date(utc_time_millis),
+            }));
+        }
+        Self { month, cells }
+    }
+
+    /// The month this grid lays out.
+    pub fn month(&self) -> CalendarMonth {
+        self.month
+    }
+
+    /// Every cell, row by row.
+    pub fn cells(&self) -> &[Option<DayCell>] {
+        &self.cells
+    }
+
+    /// The grid row by row, [`DAYS_IN_WEEK`] cells each.
+    pub fn rows(&self) -> impl Iterator<Item = &[Option<DayCell>]> {
+        self.cells.chunks(DAYS_IN_WEEK as usize)
+    }
+
+    /// The cell at `row` and `column`, counting from zero.
+    pub fn cell(&self, row: u32, column: u32) -> Option<&Option<DayCell>> {
+        self.cells.get((row * DAYS_IN_WEEK + column) as usize)
+    }
+}
+
+/// What a day cell announces: the today word, then the date itself
+/// (`DatePicker.kt:1946-1951`, `:1967-1990`).
+///
+/// The range words material3 adds for the range pickers (`DateRangePickerStartHeadline`,
+/// `DateRangePickerEndHeadline`, `DateRangePickerDayInRange`) arrive with those pickers. material3's wording
+/// comes from resources this checkout does not carry, so winia supplies its own — see
+/// `docs/date-picker.md`.
+pub fn day_content_description(model: &CalendarModel, cell: &DayCell) -> String {
+    let formatted = model.format_date(cell.utc_time_millis, true);
+    if cell.is_today {
+        format!("{TODAY_DESCRIPTION}, {formatted}")
+    } else {
+        formatted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,5 +925,126 @@ mod tests {
             (2024, 9, 1),
         );
         assert!(!state.selectable_dates().is_selectable_date(millis(2024, 9, 1)));
+    }
+
+    #[test]
+    fn a_month_grid_is_always_six_rows_of_seven() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        // February 2021 fits in four rows and August 2020 needs six, but the grid is the same shape either
+        // way, because the picker reserves the height (`DatePicker.kt:1859`).
+        for (year, month) in [(2021, 2), (2020, 8), (2024, 9)] {
+            let grid = MonthGrid::of(model.month_of(year, month), None, 0, &AllDates);
+            assert_eq!(grid.cells().len(), 42, "{year}-{month} is six rows of seven");
+            assert_eq!(grid.rows().count(), 6);
+            assert!(grid.rows().all(|row| row.len() == 7));
+        }
+    }
+
+    #[test]
+    fn the_cells_outside_a_month_are_empty() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let mut monday_first_locale = CalendarLocale::default();
+        monday_first_locale.first_day_of_week = 1;
+        let monday_first = CalendarModel::new(monday_first_locale);
+
+        // Sunday-first, 2024-09-01 is a Sunday: no leading cells, and four empty cells after the 30th.
+        let grid = MonthGrid::of(model.month_of(2024, 9), None, 0, &AllDates);
+        assert_eq!(grid.cells()[0].unwrap().day, 1, "no leading cells");
+        assert_eq!(grid.cells()[29].unwrap().day, 30);
+        assert!(grid.cells()[30].is_none(), "the cells after the 30th are empty");
+        assert!(grid.cells()[41].is_none(), "the last cell is empty too");
+
+        // Monday-first, the same month starts six cells in.
+        let grid = MonthGrid::of(monday_first.month_of(2024, 9), None, 0, &AllDates);
+        assert!(grid.cells()[..6].iter().all(|cell| cell.is_none()));
+        assert_eq!(grid.cells()[6].unwrap().day, 1);
+        assert_eq!(grid.cells()[35].unwrap().day, 30);
+    }
+
+    #[test]
+    fn a_cell_carries_its_day_and_the_start_of_that_day() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let month = model.month_of(2024, 9);
+        let grid = MonthGrid::of(month, None, 0, &AllDates);
+        let fifteenth = grid.cells()[14].unwrap();
+        assert_eq!(fifteenth.day, 15);
+        assert_eq!(
+            fifteenth.utc_time_millis,
+            month.start_utc_time_millis + 14 * MILLIS_IN_24_HOURS
+        );
+        assert_eq!(date_of_millis(fifteenth.utc_time_millis).day, 15);
+        assert_eq!(grid.cell(2, 0).unwrap().unwrap().day, 15, "row two, column zero");
+    }
+
+    #[test]
+    fn today_and_the_selection_are_flagged_on_their_own_cells() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let month = model.month_of(2024, 9);
+        let today = month.start_utc_time_millis + 9 * MILLIS_IN_24_HOURS;
+        let selected = month.start_utc_time_millis + 24 * MILLIS_IN_24_HOURS;
+        let grid = MonthGrid::of(month, Some(selected), today, &AllDates);
+
+        let flagged = |pick: fn(&DayCell) -> bool| {
+            grid.cells()
+                .iter()
+                .flatten()
+                .filter(|day| pick(day))
+                .map(|day| day.day)
+                .collect::<Vec<u32>>()
+        };
+        assert_eq!(flagged(|cell| cell.is_today), vec![10]);
+        assert_eq!(flagged(|cell| cell.is_selected), vec![25]);
+        assert_eq!(flagged(|cell| cell.is_enabled).len(), 30);
+    }
+
+    #[test]
+    fn an_unselectable_day_or_year_disables_cells() {
+        struct FirstWeekOnly;
+
+        impl SelectableDates for FirstWeekOnly {
+            fn is_selectable_date(&self, utc_time_millis: i64) -> bool {
+                date_of_millis(utc_time_millis).day <= 7
+            }
+        }
+
+        struct No2025;
+
+        impl SelectableDates for No2025 {
+            fn is_selectable_year(&self, year: i32) -> bool {
+                year != 2025
+            }
+        }
+
+        let model = CalendarModel::new(CalendarLocale::default());
+        let grid = MonthGrid::of(model.month_of(2024, 9), None, 0, &FirstWeekOnly);
+        let enabled = grid
+            .cells()
+            .iter()
+            .flatten()
+            .filter(|cell| cell.is_enabled)
+            .map(|cell| cell.day)
+            .collect::<Vec<u32>>();
+        assert_eq!(enabled, (1..=7).collect::<Vec<u32>>());
+
+        // material3: a year that cannot be selected makes every date in it unselectable
+        // (`DatePicker.kt:296-297`).
+        let grid = MonthGrid::of(model.month_of(2025, 3), None, 0, &No2025);
+        assert!(grid.cells().iter().flatten().all(|cell| !cell.is_enabled));
+    }
+
+    #[test]
+    fn a_day_description_names_today_and_the_date() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let month = model.month_of(2024, 9);
+        let grid = MonthGrid::of(month, None, month.start_utc_time_millis, &AllDates);
+
+        assert_eq!(
+            day_content_description(&model, &grid.cells()[0].unwrap()),
+            "Today, Sunday, September 1, 2024"
+        );
+        assert_eq!(
+            day_content_description(&model, &grid.cells()[1].unwrap()),
+            "Monday, September 2, 2024"
+        );
     }
 }
