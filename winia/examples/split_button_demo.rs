@@ -7,17 +7,29 @@
 //!   a state layer while its menu is open;
 //! - the same component at every size tier and emphasis, because the geometry comes from the tokens.
 //!
-//! Run it with `cargo run --example split_button_demo`.
+//! Run it with `cargo run --example split_button_demo --features material-symbols-outlined`.
+//!
+//! The icons are material3's own: Material Symbols from <https://fonts.google.com/icons>, which winia
+//! bundles as variable fonts behind that feature (`Outlined::ADD`, `Outlined::ARROW_DROP_DOWN` — the
+//! glyphs material3's samples pass as `Icons.Filled.Add` and `Icons.Filled.ArrowDropDown`). Nothing
+//! here is a hand-copied path.
+
 
 use letclone::clone;
 use winia::prelude::*;
 // The menu the trailing button opens (the same component the dropdown demo shows on its own).
 use winia::ui::{DropdownMenu, DropdownMenuItem};
 
-/// Material Icons "arrow_drop_down" (24 dp viewBox) — the menu trigger glyph.
-const ARROW_DROP_DOWN_PATH: &str = "M7 10L12 15L17 10z";
-/// Material Icons "add" (24 dp viewBox) — the leading button's icon in the sizes below.
-const ADD_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+/// Material Symbols, the icon set material3 draws with (`fonts.google.com/icons`): the leading button's
+/// action icon and the trailing button's menu trigger.
+fn add_icon() -> Icon {
+    Icon::symbol(winia::icon::Outlined::ADD)
+}
+
+fn menu_icon(size: f32) -> Icon {
+    Icon::symbol(winia::icon::Outlined::ARROW_DROP_DOWN).size(size)
+}
+
 
 /// A trailing menu button, shared by every split button on this screen.
 fn trailing(
@@ -62,15 +74,18 @@ fn split_demo(ctx: &mut ComposeCtx) {
                                     Row::new()
                                         .spacing(ButtonSize::Small.icon_label_space())
                                         .build(ctx, |ctx| {
-                                            Icon::svg_path(ADD_PATH).size(20.0).build(ctx);
+                                            add_icon()
+                                                .size(SplitButtonDefaults::leading_icon_size(
+                                                    ButtonSize::Small,
+                                                ))
+                                                .build(ctx);
                                             Text::new("Add").build(ctx);
                                         });
                                 });
                             },
                             |ctx| {
                                 trailing(menu_open.clone(), ButtonSize::Small).build(ctx, |ctx| {
-                                    Icon::svg_path(ARROW_DROP_DOWN_PATH)
-                                        .size(SplitButtonDefaults::trailing_icon_size(ButtonSize::Small))
+                                    menu_icon(SplitButtonDefaults::trailing_icon_size(ButtonSize::Small))
                                         .build(ctx);
                                 });
                             },
@@ -119,8 +134,7 @@ fn split_demo(ctx: &mut ComposeCtx) {
                                 .style(style)
                                 .on_click(|| {})
                                 .build(ctx, |ctx| {
-                                    Icon::svg_path(ARROW_DROP_DOWN_PATH)
-                                        .size(SplitButtonDefaults::trailing_icon_size(ButtonSize::Small))
+                                    menu_icon(SplitButtonDefaults::trailing_icon_size(ButtonSize::Small))
                                         .build(ctx);
                                 });
                         },
@@ -152,9 +166,7 @@ fn split_demo(ctx: &mut ComposeCtx) {
                             .size(size)
                             .on_click(|| {})
                             .build(ctx, |ctx| {
-                                Icon::svg_path(ARROW_DROP_DOWN_PATH)
-                                    .size(SplitButtonDefaults::trailing_icon_size(size))
-                                    .build(ctx);
+                                menu_icon(SplitButtonDefaults::trailing_icon_size(size)).build(ctx);
                             });
                     },
                 );

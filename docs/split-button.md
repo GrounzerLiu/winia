@@ -94,8 +94,14 @@ matched on `Shape` exhaustively and now handle the new variant.
 - **The leading button's icon size is the plain button's.** `leadingButtonIconSizeFor` forwards
   `ButtonDefaults.iconSizeFor`, which is `ButtonSize::icon_size` in winia.
 - **`SplitButtonDefaults.trailing_icon`** does not exist: material3 leaves the trigger glyph to the caller
-  (its samples pass `Icons.Filled.ArrowDropDown`), so winia does too — the demo and the fixture carry the
-  path.
+  (its samples pass `Icons.Filled.ArrowDropDown`), so winia does too. The demo takes its glyphs from
+  material3's own icon set — Material Symbols, <https://fonts.google.com/icons>, which winia bundles as
+  variable fonts: `Outlined::ADD` (U+E145) and `Outlined::ARROW_DROP_DOWN` (U+E5C5), the codepoints the
+  official `google/material-design-icons` tables (`font/MaterialIcons-Regular.codepoints`) map to those
+  names. Nothing in the demo is a hand-copied path, which is why it sits behind the
+  `material-symbols-outlined` feature (`[[example]] required-features` in `winia/Cargo.toml`, and the
+  command in the demo's header). The UI fixture keeps an SVG path instead: the UI suite runs without the
+  symbols feature, and `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH` stays private.
 
 ## API mapping
 
