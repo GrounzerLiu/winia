@@ -171,11 +171,11 @@ ExposedDropdownMenuBox::new(expanded.clone())
 
 **等宽与 intrinsic 宽度（阶段 2b 的补充）**：M3 把文本盒写成 `weight(1f)`，配合菜单列的 `width(IntrinsicSize.Max)` —— 菜单取**最宽项的自然宽**，所有项再撑满它。winia 框架层**没有 intrinsic 测量**（`segmented_button` 为此手写了 MeasurePolicy），而加权子节点会填满**约束**：实测直接加权，菜单宽度立刻从 112 顶到 280 上限 ✗；更糟的是当时我按"有尾随图标才加权"权宜，导致**同一菜单内的项宽度不一致**（112 与 280 并存 ✗），于是**状态层/波纹只覆盖行的一部分**（用户截图就是这条）。
 
-现在由 `MenuColumnPolicy`（菜单列自己的 MeasurePolicy）补齐两遍测量：
-1. **自然宽**：测每个项的**内容**（不含其 own padding 后再加回），因为项自身的标签是加权的——给加权子节点无界约束只会把约束原样报回来；
-2. 把该宽度**紧约束**施加给每个项，此后加权标签在行内的余量分配就与 M3 完全一致。
+阶段 2b 当时用手写的 `MenuColumnPolicy` 补了两遍测量（自然宽 → 紧约束重测）。**该策略已删除**：框架层现在有了 intrinsic 协议（`IntrinsicSize` + `MeasurePolicy` 四个默认方法 + 修饰符链反演，见 `docs/intrinsic-size.md` §8），菜单于是就是 M3 的原文——`Column(modifier.padding(vertical = 8.0).width(IntrinsicSize.Max).vertical_scroll(...))`：
+1. **自然宽**由列自己的 `width(IntrinsicSize.Max)` 得出：每项的固有宽 = 其内容夹在项自身的 `sizeIn(112, 280)` 里（项的 `fillMaxWidth()` 刻意不计入固有宽，与 Compose 的 `FillNode` 保持默认近似一致）；
+2. 列把该宽度**紧约束**传给子节点（管线第 1.5 步），项再靠自己的 `fillMaxWidth()` 撑满，加权标签在行内的余量分配于是与 M3 完全一致。
 
-实测（fixture 图标菜单）：`lead=112 trail=112 menu=112` ✓ 等宽、菜单 = 项宽、且 < 280（最宽项自然宽）✓；尾随图标 x=92 = 项右缘 − 12 ✓。demo 里"复制 / Ctrl+C"那种菜单宽度为 **136**（此前是 280 ✗）。框架层的 intrinsic 测量仍缺失（列在 §4.6）。
+实测（fixture 图标菜单）：`lead=112 trail=112 menu=112` ✓ 等宽、菜单 = 项宽、且 < 280（最宽项自然宽）✓；尾随图标 x=92 = 项右缘 − 12 ✓。demo 里"复制 / Ctrl+C"那种菜单宽度为 **136**（此前是 280 ✗）。
 
 ### 4.3 阶段 3 对齐：长菜单（滚动 + 按锚点选位）
 
@@ -239,7 +239,7 @@ M3 的真身只有两条（`Menu.kt` 里**没有任何键处理**——没有 `o
 | 项 | M3 真身 | winia 现状 |
 |---|---|---|
 | 定位候选的后两档 | `centerToAnchorTop` + 按锚点半边选贴顶/贴底边 | 只有 下→上→贴边 三档（见 §4.9） |
-| 项等宽 / 菜单取最宽项自然宽 | 菜单列 `width(IntrinsicSize.Max)` | 已由 `MenuColumnPolicy` 在菜单内实现（§4.2） |
+| 项等宽 / 菜单取最宽项自然宽 | 菜单列 `width(IntrinsicSize.Max)` | 同（框架 intrinsic 协议，§4.2；手写的 `MenuColumnPolicy` 已删除） |
 
 ### 4.7 阶段 5 对齐：ExposedDropdownMenuBox（输入框下拉）
 
@@ -305,7 +305,7 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 
 | 项 | M3 真身 | winia 现状 |
 |---|---|---|
-| 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | 无（菜单用 `MenuColumnPolicy` 自己实现，其它组件需照做） |
+| 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | **已实现**（公开 `IntrinsicSize` + `MeasurePolicy` 四默认方法 + 管线第 1.5 步，见 `docs/intrinsic-size.md` §8；菜单已改用 M3 原文链，`MenuColumnPolicy` 已删除） |
 | `PrimaryEditable` 的键盘打开 | 聚焦/键盘驱动展开、光标联动 | 只有"点击不切换"，键盘打开与光标联动未实现 |
 
 ### 4.12 有意保留的偏差

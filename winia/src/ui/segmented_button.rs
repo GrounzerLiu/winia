@@ -276,8 +276,11 @@ segmented_row!(
 /// `overlap` so their 1 dp borders coincide.
 ///
 /// Compose reaches the same geometry with `Arrangement.spacedBy(-space)` and `weight(1f)` inside a row
-/// sized to `IntrinsicSize.Min` plus `Alignment.CenterVertically`. One deliberate difference: when the
-/// parent is narrower than the strip wants to be, winia shrinks the items instead of overflowing.
+/// sized to `IntrinsicSize.Min`, and the two questions that decide the strip come from the intrinsic
+/// protocol here: the widest item's MAX intrinsic width, then the tallest item's MIN intrinsic height at
+/// the width they all end up with (`RowColumnImpl.kt:289` pairs the cross-axis query with the main axis's
+/// MAX query in exactly that order). One deliberate difference: when the parent is narrower than the
+/// strip wants to be, winia shrinks the items instead of overflowing.
 ///
 /// Under RTL the strip is MIRRORED — item 0 sits at the right edge — which is what Compose's own `Row`
 /// does for it. The shapes depend on it: [`SegmentedButtonDefaults::item_shape`] rounds the first
@@ -303,24 +306,38 @@ impl MeasurePolicy for SegmentedRowPolicy {
         let n = children.len() as f32;
         let avail = constraints.max_width;
 
-        // Natural pass: the widest item's width and the tallest item's height.
+        // Natural pass: the widest item's max intrinsic width. An item's label is not weighted here,
+        // but its own padding and any fixed size are — `intrinsic_size_of` walks the item's modifier
+        // chain in the order the measurement pipeline applies it.
         let mut natural = SegmentedButtonDefaults::MIN_WIDTH;
-        let mut height = SegmentedButtonDefaults::HEIGHT;
         for &child in children {
-            let (size, _) = measure_node(
+            let w = crate::layout::node::intrinsic_size_of(
                 nodes,
                 policies,
                 child,
-                Constraints::new(SegmentedButtonDefaults::MIN_WIDTH, avail, 0.0, f32::MAX),
+                crate::layout::node::IntrinsicQuery::MaxWidth,
+                f32::MAX,
             );
-            natural = natural.max(size.width);
-            height = height.max(size.height);
+            natural = natural.max(w);
         }
         // All of them equally wide, shrunk to what the parent can hold when it is too narrow. The
         // placement uses the TIGHT size rather than whatever the item's own policy reported: an item
         // whose label is narrower than the row stretches, and it is this size the renderer applies.
         let fit = ((avail + (n - 1.0) * self.overlap) / n).max(0.0);
         let item_w = natural.min(fit);
+        // The height is only knowable once the shared width is: an item whose label wraps, or that
+        // grows a stroke at its final width, answers a different min intrinsic height.
+        let mut height = SegmentedButtonDefaults::HEIGHT;
+        for &child in children {
+            let h = crate::layout::node::intrinsic_size_of(
+                nodes,
+                policies,
+                child,
+                crate::layout::node::IntrinsicQuery::MinHeight,
+                item_w,
+            );
+            height = height.max(h);
+        }
         let step = item_w - self.overlap;
         let total = n * item_w - (n - 1.0) * self.overlap;
         let mut placements = Vec::with_capacity(children.len());

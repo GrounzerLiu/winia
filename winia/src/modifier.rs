@@ -33,6 +33,26 @@ pub enum Dimension {
     Auto,
 }
 
+/// Which of the content's intrinsic measurements a size modifier asks for — Compose's
+/// `androidx.compose.foundation.layout.IntrinsicSize`.
+///
+/// An intrinsic measurement is what the content would be with NO incoming space to fill: `Min` is
+/// the smallest it can be laid out at (for text, the longest unbreakable run), `Max` is the size it
+/// takes with nothing wrapped. `Modifier::width(IntrinsicSize::Max)` therefore sizes a node to its
+/// own content instead of to its parent, which is how Compose makes a menu exactly as wide as its
+/// widest item (`material3/Menu.kt` uses `Column(width(IntrinsicSize.Max))`).
+///
+/// The incoming constraints still win afterwards: Compose documents the modifier as "the incoming
+/// measurement constraints may override this value", and `requiredWidth/requiredHeight` are the
+/// variant that ignores them (`enforceIncoming = false`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicSize {
+    /// The smallest size the content can be laid out at (Compose `IntrinsicSize.Min`).
+    Min,
+    /// The size the content takes when nothing is wrapped or compressed (Compose `IntrinsicSize.Max`).
+    Max,
+}
+
 /// 尺寸值：静态 `Dimension` 或动态求值（布局属性动画用）。
 ///
 /// `size()` 统一入口——传 `f32`/`Dimension`（静态）或 `State<f32>`/闭包（动态）：
@@ -42,6 +62,9 @@ pub enum Dimension {
 pub enum SizeValue {
     Static(Dimension),
     Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
+    /// Size this axis to one of the content's own intrinsic measurements instead of to the
+    /// incoming space — Compose's `Modifier.width/height(IntrinsicSize)`.
+    Intrinsic(IntrinsicSize),
 }
 
 impl From<Dimension> for SizeValue {
@@ -122,6 +145,7 @@ impl Clone for SizeValue {
         match self {
             SizeValue::Static(d) => SizeValue::Static(*d),
             SizeValue::Dynamic(f) => SizeValue::Dynamic(f.clone()),
+            SizeValue::Intrinsic(s) => SizeValue::Intrinsic(*s),
         }
     }
 }
@@ -131,8 +155,13 @@ impl std::fmt::Debug for SizeValue {
         match self {
             SizeValue::Static(d) => write!(f, "{:?}", d),
             SizeValue::Dynamic(_) => write!(f, "<dynamic>"),
+            SizeValue::Intrinsic(s) => write!(f, "intrinsic({:?})", s),
         }
     }
+}
+
+impl From<IntrinsicSize> for SizeValue {
+    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
 }
 
 impl Dimension {
@@ -639,7 +668,7 @@ pub(crate) enum ModifierElement {
     AspectRatio { ratio: f32, match_height_first: bool },
     /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
     /// constraints 的收缩，允许溢出父约束）
-    RequiredSize { width: Option<f32>, height: Option<f32> },
+    RequiredSize { width: Option<SizeValue>, height: Option<SizeValue> },
     /// 尺寸上报（对标 Compose `Modifier.onSizeChanged`）——节点测量完成后
     /// 以逻辑像素回调 (width, height)；元素内部去重，尺寸未变化不重复回调
     OnSizeChanged { callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync> },
@@ -1251,18 +1280,18 @@ impl Modifier {
     /// 强制本节点为该尺寸，**忽略 incoming constraints 的收缩**（允许
     /// 溢出父约束——enforceIncoming=false 语义）。单轴用
     /// `required_width` / `required_height`。
-    pub fn required_size(self, width: f32, height: f32) -> Self {
-        self.push(ModifierElement::RequiredSize { width: Some(width), height: Some(height) })
+    pub fn required_size(self, width: impl Into<SizeValue>, height: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::RequiredSize { width: Some(width.into()), height: Some(height.into()) })
     }
 
     /// 仅强制宽度
-    pub fn required_width(self, width: f32) -> Self {
-        self.push(ModifierElement::RequiredSize { width: Some(width), height: None })
+    pub fn required_width(self, width: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::RequiredSize { width: Some(width.into()), height: None })
     }
 
     /// 仅强制高度
-    pub fn required_height(self, height: f32) -> Self {
-        self.push(ModifierElement::RequiredSize { width: None, height: Some(height) })
+    pub fn required_height(self, height: impl Into<SizeValue>) -> Self {
+        self.push(ModifierElement::RequiredSize { width: None, height: Some(height.into()) })
     }
 
     /// `test_tag(tag)`（对标 Compose `Modifier.testTag`）——给节点打测试
@@ -2015,6 +2044,7 @@ impl Modifier {
                 SizeValue::Static(Dimension::Px(p)) => p.to_logical(current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
+                SizeValue::Intrinsic(_) => 0.0,
             }
         };
         let (mut s, mut t, mut e, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
@@ -2073,6 +2103,10 @@ impl Modifier {
                         SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
                         SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
                         SizeValue::Dynamic(f) => Some(f()),
+                        // An intrinsic request carries no number: it is resolved by the measure
+                        // pipeline (`layout::node`), which fixes the axis to the content's
+                        // measurement. Numeric consumers see it as "this axis says nothing".
+                        SizeValue::Intrinsic(_) => None,
                     }
                 };
                 let (w, h) = (resolve(width), resolve(height));
@@ -2096,6 +2130,7 @@ impl Modifier {
                 SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
                 SizeValue::Dynamic(f) => Some(f()),
+                SizeValue::Intrinsic(_) => None,
             }
         };
         let mut out = (None, None);
@@ -2124,6 +2159,7 @@ impl Modifier {
                 SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
                 SizeValue::Dynamic(f) => Some(f()),
+                SizeValue::Intrinsic(_) => None,
             }
         };
         let mut out = (None, None);
@@ -2237,14 +2273,69 @@ impl Modifier {
     }
 
     /// 强制尺寸（单轴 None = 未约束）
+    ///
+    /// Only numeric axes are reported here; an intrinsic request
+    /// (`requiredWidth(IntrinsicSize::Max)`) carries no number and is handled by the measure
+    /// pipeline together with `Modifier::width/height(IntrinsicSize)` — see
+    /// [`Modifier::intrinsic_width_request`].
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
+        use crate::unit::{current_density, Dp, Px};
+        let resolve = |sv: &SizeValue| -> Option<f32> {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                SizeValue::Dynamic(f) => Some(f()),
+                SizeValue::Intrinsic(_) => None,
+            }
+        };
         self.elements.iter().find_map(|el| {
             if let ModifierElement::RequiredSize { width, height } = el {
-                Some((*width, *height))
+                Some((width.as_ref().and_then(resolve), height.as_ref().and_then(resolve)))
             } else {
                 None
             }
         })
+    }
+
+    /// The width axis's intrinsic request, if this chain has one — Compose's
+    /// `Modifier.width(IntrinsicSize)` / `requiredWidth(IntrinsicSize)`.
+    ///
+    /// Returns `(which measurement, enforce_incoming)`. `enforce_incoming` is `true` for the
+    /// `width`/`height` form (the incoming constraints may override the result, Compose's
+    /// `SizeNode(enforceIncoming = true)`) and `false` for the `required*` form, which ignores
+    /// them. Numeric `size`/`sizeIn` modifiers win over it: the measure pipeline applies them
+    /// first, and a fixed axis needs no intrinsic measurement.
+    pub fn intrinsic_width_request(&self) -> Option<(IntrinsicSize, bool)> {
+        self.intrinsic_request(true)
+    }
+
+    /// The height axis's intrinsic request — see [`Modifier::intrinsic_width_request`].
+    pub fn intrinsic_height_request(&self) -> Option<(IntrinsicSize, bool)> {
+        self.intrinsic_request(false)
+    }
+
+    fn intrinsic_request(&self, horizontal: bool) -> Option<(IntrinsicSize, bool)> {
+        let pick = |sv: &SizeValue| match sv {
+            SizeValue::Intrinsic(s) => Some(*s),
+            _ => None,
+        };
+        for el in &self.elements {
+            let found = match el {
+                ModifierElement::Size { width, height } => {
+                    pick(if horizontal { width } else { height }).map(|s| (s, true))
+                }
+                ModifierElement::RequiredSize { width, height } => {
+                    let axis = if horizontal { width } else { height };
+                    axis.as_ref().and_then(pick).map(|s| (s, false))
+                }
+                _ => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
     }
 
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
@@ -2435,6 +2526,7 @@ impl Modifier {
                 SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
+                SizeValue::Intrinsic(_) => 0.0,
             }
         };
         for el in &self.elements {
@@ -2453,6 +2545,7 @@ impl Modifier {
                 SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
+                SizeValue::Intrinsic(_) => 0.0,
             }
         };
         for el in &self.elements {
@@ -3295,7 +3388,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             ar == br && am == bm
         }
         (RequiredSize { width: aw, height: ah }, RequiredSize { width: bw, height: bh }) => {
-            aw == bw && ah == bh
+            opt_size_value_eq(aw, bw) && opt_size_value_eq(ah, bh)
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
         // As with `Background`, the closure is not comparable — but the shape is, and a shape change
@@ -3419,11 +3512,22 @@ fn merge_graphics_params(current: &mut GraphicsLayerParams, next: GraphicsLayerP
     }
 }
 
+/// Compare two optional size specs: both absent, or both present and equal by [`size_value_eq`].
+fn opt_size_value_eq(a: &Option<SizeValue>, b: &Option<SizeValue>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => size_value_eq(a, b),
+        _ => false,
+    }
+}
+
 fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
     match (a, b) {
         (SizeValue::Static(ad), SizeValue::Static(bd)) => ad == bd,
         // 动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖
         (SizeValue::Dynamic(_), SizeValue::Dynamic(_)) => true,
+        // An intrinsic request is a parameter, not a value: compare which measurement is asked for.
+        (SizeValue::Intrinsic(as_), SizeValue::Intrinsic(bs)) => as_ == bs,
         _ => false,
     }
 }

@@ -789,93 +789,13 @@ fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modif
     )
 }
 
-/// material3's `DropdownMenuItemDefaultMinWidth` / `_MaxWidth` (`Menu.kt`), used both by the item and by
-/// [`MenuColumnPolicy`] — they must agree, so they live in one place.
+/// material3's `DropdownMenuItemDefaultMinWidth` / `_MaxWidth` (`Menu.kt:527-528`), applied by
+/// [`DropdownMenuItem`] as the item's `sizeIn` range — the same place and the same order material3
+/// applies them (`Row(modifier.fillMaxWidth().sizeIn(...))`), and the reason the range reaches the menu's
+/// width: `sizeIn` sits in the ITEM's own chain, so the menu's `width(IntrinsicSize.Max)` sees the clamped
+/// width of each item instead of its raw label.
 const DROPDOWN_ITEM_MIN_WIDTH: f32 = 112.0;
 const DROPDOWN_ITEM_MAX_WIDTH: f32 = 280.0;
-
-/// The menu's item column, reproducing material3's `Column(width(IntrinsicSize.Max))` by hand.
-///
-/// In material3 the menu is as wide as its WIDEST item's natural width and every item is stretched to that
-/// width — which is what makes the rows' state layers, ripples and trailing icons line up with the panel,
-/// and what keeps a menu with icons from being padded out to the 280dp maximum. winia has no intrinsic
-/// measurement, so the two passes happen here:
-///
-///  1. the intrinsic width: measure each item's CONTENT unbounded and add the item's own padding.
-///     Measuring the item itself would not do — its label is `weight(1f)`, material3's own structure, and a
-///     weighted child fills whatever maximum it is handed, so an unbounded pass reports the constraint back
-///     instead of the content (measured: the menu went from 112 to the 280 maximum the moment the label was
-///     weighted);
-///  2. impose that width tightly on every item, after which the weighted label distributes the leftover
-///     inside its row exactly as material3 does.
-#[derive(Debug)]
-struct MenuColumnPolicy;
-
-impl crate::layout::node::MeasurePolicy for MenuColumnPolicy {    fn measure(
-        &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        policies: &[Box<dyn crate::layout::node::MeasurePolicy>],
-        children: &[usize],
-        constraints: crate::layout::constraints::Constraints,
-    ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
-        use crate::layout::node::{measure_node, Placement, Point, Size};
-        if children.is_empty() {
-            return (Size::new(0.0, 0.0), Vec::new());
-        }
-        let mut natural = 0.0f32;
-        for &item in children {
-            let (pad_l, pad_r) = nodes[item].modifier.get_padding_horizontal();
-            let content: Vec<usize> = nodes[item].children.clone();
-            let mut inner = 0.0f32;
-            for child in content {
-                let (size, _) = measure_node(
-                    nodes,
-                    policies,
-                    child,
-                    crate::layout::constraints::Constraints::new(0.0, f32::MAX, 0.0, f32::MAX),
-                );
-                inner += size.width;
-            }
-            natural = natural.max(
-                (inner + pad_l + pad_r).clamp(DROPDOWN_ITEM_MIN_WIDTH, DROPDOWN_ITEM_MAX_WIDTH),
-            );
-        }
-        let width = natural.clamp(
-            constraints.min_width,
-            constraints.max_width.min(DROPDOWN_ITEM_MAX_WIDTH),
-        );
-        let mut y = 0.0f32;
-        let mut placements = Vec::with_capacity(children.len());
-        for &item in children {
-            let (size, _) = measure_node(
-                nodes,
-                policies,
-                item,
-                crate::layout::constraints::Constraints::new(width, width, 0.0, f32::MAX),
-            );
-            placements.push(Placement {
-                size: Size::new(size.width, size.height),
-                position: Point::new(0.0, y),
-            });
-            y += size.height;
-        }
-        (Size::new(width, y), placements)
-    }
-
-    fn place(
-        &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        children: &[usize],
-        placements: &[crate::layout::node::Placement],
-    ) {
-        for (index, &child) in children.iter().enumerate() {
-            if let Some(p) = placements.get(index) {
-                nodes[child].position = p.position;
-                nodes[child].measured_size = p.size;
-            }
-        }
-    }
-}
 
 /// Dropdown menu (mirrors Compose material3 `DropdownMenu`) — anchored to a trigger container;
 /// clicking outside dismisses it.
@@ -1112,36 +1032,38 @@ impl DropdownMenu {
                         surface = surface.border(b);
                     }
                     surface.build(ctx, |ctx| {
-                        // M3's chain, in its order: the caller's modifier, then
+                        // material3's chain, in its order (`Menu.kt:410`): the caller's modifier, then
                         // `padding(vertical = DropdownMenuVerticalPadding)` (8dp, and OUTSIDE the scroll,
-                        // so it stays put while the content moves), then `verticalScroll(scrollState)`.
-                        // The scroll is what keeps a menu taller than its space reachable: a winia scroll
-                        // container measures `min(its content, the viewport it was given)`.
+                        // so it stays put while the content moves), then `width(IntrinsicSize.Max)`, then
+                        // `verticalScroll(scrollState)`. The intrinsic width is what makes the menu as wide
+                        // as its widest item; the scroll is what keeps a menu taller than its space
+                        // reachable (a winia scroll container measures `min(its content, the viewport it
+                        // was given)`).
                         let m = menu_modifier
                             .clone()
                             // material3 applies `exposedDropdownSize(matchAnchorWidth)` to the menu's
                             // CONTENT, and this is the same thing: `fill_max_width` turns the width the
                             // framework forced (min = max = the anchor's width) into the content's own
-                            // inner constraint, which is what `MenuColumnPolicy` reads. Without it the
-                            // forced width would stop at the surface: winia's flex containers deliberately
-                            // relax the cross-axis minimum to zero for their children (`layout/flex.rs`),
-                            // so the column would fall back to its items' natural width and the rows'
-                            // ripples would again cover only part of the panel.
+                            // inner constraint, which is what the intrinsic step of the pipeline reads.
+                            // Without it the forced width would stop at the surface: winia's flex
+                            // containers deliberately relax the cross-axis minimum to zero for their
+                            // children (`layout/flex.rs`), so the column would fall back to its items'
+                            // natural width and the rows' ripples would again cover only part of the panel.
+                            // It also overrides the intrinsic width on that axis, which is Compose's own
+                            // outcome when the incoming constraints are already fixed (`ExposedDropdownMenu`
+                            // forces `minWidth = maxWidth = menuWidth`, and `IntrinsicWidthNode` then
+                            // constrains the intrinsic value back into that range).
                             .then(if self.match_anchor_width {
                                 crate::modifier::Modifier::new().fill_max_width()
                             } else {
                                 crate::modifier::Modifier::new()
                             })
                             .then(crate::modifier::Modifier::new().padding_vertical(8.0))
+                            .then(crate::modifier::Modifier::new().width(
+                                crate::modifier::IntrinsicSize::Max,
+                            ))
                             .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
-                        // A `Column` would give every item its own width; material3's menu gives them all the
-                        // intrinsic width of the widest one (see `MenuColumnPolicy`).
-                        let key = ctx.next_key();
-                        match ctx.start_restartable_group(key, m, MenuColumnPolicy) {
-                            crate::core::composer::GroupStatus::Skip => {}
-                            crate::core::composer::GroupStatus::Enter => menu(ctx),
-                        }
-                        ctx.end_restartable_group();
+                        crate::ui::Column::new().modifier(m).build(ctx, |ctx| menu(ctx));
                     });
                 }),
                 local_snapshot: Vec::new(),
@@ -1440,14 +1362,20 @@ impl DropdownMenuItem {
     /// `#[composable]`: same contract as Popup/Dialog (marks a composition unit).
     #[composable]
     pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx) {
-        // M3 geometry (`Menu.kt`): `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)` with
-        // `padding(contentPadding)` (horizontal 12dp, vertical 0 by default). No per-item background and
-        // no per-item corner radius: the MENU's surface paints the container, and the item is a
-        // full-width row on top of it.
+        // M3 geometry (`Menu.kt:439-447`): `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)` with
+        // `padding(contentPadding)` (horizontal 12dp, vertical 0 by default), and `fillMaxWidth()` so every
+        // row spans the menu's width. No per-item background and no per-item corner radius: the MENU's
+        // surface paints the container, and the item is a full-width row on top of it.
+        //
+        // The order is material3's (`modifier.clickable(...).fillMaxWidth().sizeIn(...).padding(...)`).
+        // `fillMaxWidth` is NOT part of the item's intrinsic width on purpose: Compose's `FillNode` keeps the
+        // default intrinsic approximation (`Size.kt:689`), so the menu's `width(IntrinsicSize.Max)` reads the
+        // item's content clamped by this `sizeIn` range — 112dp at the narrow end, 280dp at the wide one.
         let (pad_h, pad_v) = self.content_padding.unwrap_or((12.0, 0.0));
         let modifier = crate::modifier::Modifier::new()
-            .min_width(112.0)
-            .max_width(280.0)
+            .fill_max_width()
+            .min_width(DROPDOWN_ITEM_MIN_WIDTH)
+            .max_width(DROPDOWN_ITEM_MAX_WIDTH)
             .min_height(48.0)
             .padding_horizontal(pad_h)
             .padding_vertical(pad_v);
@@ -1501,10 +1429,10 @@ impl DropdownMenuItem {
         // equivalent of material3's `CompositionLocalProvider(LocalContentColor provides …)`.
         //
         // The label keeps material3's `weight(1f)` unconditionally, and it behaves as material3 intends only
-        // because the menu's column gives every item the same width — `MenuColumnPolicy` computes the
-        // widest item's intrinsic width and imposes it (winia has no intrinsic measurement of its own; a weighted
-        // child handed an unbounded maximum reports the constraint back, which is what that policy works
-        // around).
+        // because of the menu's own chain: the column is `width(IntrinsicSize.Max)`, so it is as wide as its
+        // widest item's intrinsic width, both items are then measured against that fixed width, and the row's
+        // `fillMaxWidth` stretches each of them to it. The weight is what pushes the trailing icon to the far
+        // end of the row.
         let leading_icon = self.leading_icon;
         let trailing_icon = self.trailing_icon;
         let has_leading = leading_icon.is_some();
