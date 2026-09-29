@@ -19,7 +19,9 @@
 //! - RTL：Fixed TabRow 与 ScrollableTabRow 均支持 RTL——tab 布局镜像（物理 left 对齐），
 //!   ScrollableTabRow 的滚动容器标记 scroll_reverse（render 平移镜像：offset 0 = 内容
 //!   末端），居中滚动 target 绕 available 镜像（offset_rtl = available - offset_ltr）
-//! - contentWidth = max(tab 自然宽 - 32dp, 24dp)（无 maxIntrinsicWidth 调用，用 1st pass 测量近似）
+//! - contentWidth = max(intrinsic tab width - 32dp, 24dp)（`maxIntrinsicWidth` 走框架的固有尺寸
+//!   协议：固定版先按 slot 宽问 max intrinsic height、再按该高问 max intrinsic width，TabRow.kt:450-459；
+//!   可滚动版按 `Constraints.Infinity` 问两者，TabRow.kt:582-603）
 //! - 动画 spec = spring(damping_ratio=0.6, stiffness=700)（对齐 M3 Expressive DefaultSpatial）
 //! - 指示条高固定 3dp（ActiveIndicatorHeight）
 //! - 无 TabIndicatorScope 自定义指示器 API（当前内部固定）
@@ -28,7 +30,9 @@ use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::core::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{
+    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point, Size,
+};
 use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::text::TextAlign;
@@ -437,16 +441,23 @@ impl MeasurePolicy for TabRowLayoutPolicy {
 
         let tab_width = row_width / tab_count as f32;
 
-        // 1st pass: 自然高（loose 约束）
+        // 1st pass: Compose's intrinsic fold (TabRow.kt:450-459). The row is as tall as the tallest
+        // tab's MAX intrinsic height AT the width every tab gets, and a tab's content width is its
+        // MAX intrinsic width AT that height — then clamped back into the slot. No tab is measured
+        // here: `intrinsic_size_of` inverts each tab's own modifier chain, so a tab whose content
+        // prices itself (a weighted child, a fixed-size slot) answers without a measurement pass.
         let mut tab_row_height = 0.0f32;
         let mut natural_widths = Vec::with_capacity(tab_count);
         for i in 0..tab_count {
-            let (size, _) = measure_node(
-                nodes, policies, children[i],
-                Constraints::new(0.0, tab_width, 0.0, f32::MAX),
+            let h = intrinsic_size_of(
+                nodes, policies, children[i], IntrinsicQuery::MaxHeight, tab_width,
             );
-            if size.height > tab_row_height { tab_row_height = size.height; }
-            natural_widths.push(size.width);
+            if h > tab_row_height { tab_row_height = h; }
+        }
+        for i in 0..tab_count {
+            natural_widths.push(intrinsic_size_of(
+                nodes, policies, children[i], IntrinsicQuery::MaxWidth, tab_row_height,
+            ));
         }
 
         // 2nd pass: tight 约束
@@ -460,7 +471,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             } else {
                 i as f32 * tab_width
             };
-            let content_width = (natural_widths[i] - HORIZONTAL_TEXT_PADDING * 2.0)
+            let content_width = (natural_widths[i].min(tab_width) - HORIZONTAL_TEXT_PADDING * 2.0)
                 .max(MIN_INDICATOR_WIDTH);
             positions.push(TabPosition::new(x, tab_width, content_width));
             placements.push(Placement { size, position: Point::new(x, 0.0) });
@@ -1254,17 +1265,24 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             return (Size::new(0.0, 0.0), Vec::new());
         }
 
-        // 1st pass：自然高（loose 约束——scroll 容器子内容无限宽）
+        // 1st pass: Compose's intrinsic fold for the scrollable variant (TabRow.kt:582-600). The
+        // content sits in a horizontal scroll out there, so both axes are unbounded at the query:
+        // `maxIntrinsicHeight(Constraints.Infinity)` for the height and `maxIntrinsicWidth(
+        // Constraints.Infinity)` for a tab's natural width — the latter is also what the indicator's
+        // contentWidth is measured from, "based on incoming content size, not on forced minimum
+        // width" (TabRow.kt:596-600). No tab is measured in this pass.
         let mut layout_height = 0.0f32;
         let mut natural_widths = Vec::with_capacity(tab_count);
         for i in 0..tab_count {
-            let (size, _) = measure_node(
-                nodes, policies, children[i],
-                Constraints::new(0.0, f32::MAX, 0.0, f32::MAX),
+            let h = intrinsic_size_of(
+                nodes, policies, children[i], IntrinsicQuery::MaxHeight, f32::MAX,
             );
-            if size.height > layout_height { layout_height = size.height; }
-            // 自然宽（不 clamp——contentWidth 用 min(intrinsic, placedWidth)）
-            natural_widths.push(size.width);
+            if h > layout_height { layout_height = h; }
+        }
+        for i in 0..tab_count {
+            natural_widths.push(intrinsic_size_of(
+                nodes, policies, children[i], IntrinsicQuery::MaxWidth, f32::MAX,
+            ));
         }
 
         // 2nd pass：tight 高度（minHeight=maxHeight=layoutHeight）、自然宽 ≥ minTabWidth
@@ -1274,7 +1292,11 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             let c = Constraints::new(self.min_tab_width, f32::MAX, layout_height, layout_height);
             let (size, _) = measure_node(nodes, policies, children[i], c);
             let width = size.width.max(self.min_tab_width);
-            let content_width = (natural_widths[i].min(width) - HORIZONTAL_TEXT_PADDING * 2.0)
+            // Compose subtracts the horizontal padding from the RAW intrinsic width and floors it at
+            // the 24dp touch target (TabRow.kt:601-603) — the minimum width a tab is forced to does
+            // NOT shrink the indicator's content box, so this is the one place that does not clamp to
+            // the placed width.
+            let content_width = (natural_widths[i] - HORIZONTAL_TEXT_PADDING * 2.0)
                 .max(MIN_INDICATOR_WIDTH);
             tab_measurements.push((width, size, content_width));
         }
@@ -1422,6 +1444,7 @@ mod tests {
     use super::*;
     use crate::core::composer::Composer;
     use crate::layout::constraints::Constraints;
+    use crate::ui::layout_components::Row;
     use crate::ui::text::Text;
 
     fn tab_row_layout(
@@ -1656,6 +1679,79 @@ mod tests {
         // selected=2, tabWidth=90.0, target_width=tabWidth (full)
         assert_eq!(ind.position.x, 180.0, "indicator offset for tab 2");
         assert_eq!(ind.measured_size.width, 90.0, "secondary indicator full width");
+    }
+
+    /// A fixed row prices its tabs through the intrinsic protocol rather than by measuring them. A
+    /// tab whose label is `weight(1f)` MEASURES as wide as its whole slot (the weight eats the
+    /// bounded space) but ANSWERS the intrinsic query with the label's own width, because Row's
+    /// intrinsic block prices a weighted child by itself (`RowColumnImpl.kt:371-394`). Compose's fixed
+    /// row asks `maxIntrinsicWidth(tabRowHeight)` for the indicator's content width
+    /// (`TabRow.kt:456-459`), so a short weighted label floors the indicator at its 24dp touch target
+    /// while a measurement-derived width would be 120 - 32 = 88.
+    #[test]
+    fn a_tab_row_prices_a_weighted_label_through_the_intrinsics() {
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                TabRow::new(0, |ctx| {
+                    for _ in 0..3 {
+                        Row::new().build(ctx, |ctx| {
+                            Text::new("Tab")
+                                .modifier(Modifier::new().layout_weight(1.0))
+                                .build(ctx);
+                        });
+                    }
+                })
+                .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[4]];
+        assert!(
+            (ind.measured_size.width - MIN_INDICATOR_WIDTH).abs() < 0.5,
+            "indicator width {} should come from the label's own intrinsic width (floored at {}), \
+             not from the slot the weighted label measures into",
+            ind.measured_size.width,
+            MIN_INDICATOR_WIDTH
+        );
+    }
+
+    /// Compose clamps a tab's content width into its slot: `min(maxIntrinsicWidth(tabRowHeight),
+    /// tabWidth)` (`TabRow.kt:456-458`). A tab that refuses the incoming width (`required_width`) must
+    /// therefore not widen the indicator past the slot it sits in — with tabWidth 120 the content box
+    /// is 120 - 32 = 88.
+    #[test]
+    fn a_tab_row_clamps_a_wide_tabs_content_width_into_its_slot() {
+        let mut c = Composer::new();
+        let colors = crate::ui::theme::ThemeColors::default_light();
+        c.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                TabRow::new(0, |ctx| {
+                    for _ in 0..3 {
+                        Row::new()
+                            .modifier(Modifier::new().required_width(200.0))
+                            .build(ctx, |ctx| {
+                                Text::new("Tab").build(ctx);
+                            });
+                    }
+                })
+                .build(ctx);
+            });
+        });
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let children = &nodes[root].children;
+        let ind = &nodes[children[4]];
+        assert!(
+            (ind.measured_size.width - 88.0).abs() < 0.5,
+            "indicator width {} should be the slot width minus the horizontal padding (88)",
+            ind.measured_size.width
+        );
     }
 
     #[test]

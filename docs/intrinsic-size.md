@@ -366,7 +366,7 @@ Box and every other container keep the default approximation, which is also what
   axis. Compose has no intrinsic scope that could compose, and winia's probes run outside the frame's
   compose step.
 
-### 8.6 The two hand-rolled passes are gone
+### 8.6 The hand-rolled passes are gone
 
 - `MenuColumnPolicy` (`winia/src/ui/overlay.rs`): pass 1 is now one
   `intrinsic_size_of(item, IntrinsicQuery::MaxWidth, f32::MAX)` per item, clamped to 112/280 dp. The
@@ -375,6 +375,14 @@ Box and every other container keep the default approximation, which is also what
 - `SegmentedRowPolicy` (`winia/src/ui/segmented_button.rs`): the natural width is the widest item's max
   intrinsic width, and the height is the tallest item's min intrinsic height **at the width they all end
   up with**, which is the order `IntrinsicMeasureBlocks` asks in.
+- `TabRowLayoutPolicy` / `ScrollableTabRowLayoutPolicy` (`winia/src/ui/tab_row.rs`): the fixed row folds
+  `maxIntrinsicHeight(tabWidth)` into its height and `min(maxIntrinsicWidth(tabRowHeight), tabWidth)` into
+  the indicator's content width (`TabRow.kt:450-459`); the scrollable row does the same with both axes
+  unbounded and no slot clamp (`TabRow.kt:582-603`). The old passes measured each tab at a loose constraint
+  and subtracted the horizontal padding, which reports the SLOT width for a tab that prices itself (a
+  `weight(1f)` label, a `required_width` child): measured 88 and 168 through the old path against 24 and 88
+  now. The scrollable half was already querying with unbounded axes, so there it is a behaviour-preserving
+  rewrite; the difference lives in the fixed row's bounded main axis.
 
 ### 8.7 Tests
 
@@ -385,5 +393,6 @@ addition, the probe's cache hygiene, the weighted-label trap, Row/Column main- a
 refusal. Both "turn it off" checks were run and are recorded below.
 
 Acceptance is by the existing suite: menu width 112 dp (icon menu) / 136 dp ("Copy / Ctrl+C"), equal
-item widths, and the segmented geometry all had to stay put — they did.
+item widths, the segmented geometry and the tab row's own geometry (equal tab widths, indicator
+positions, RTL mirroring, scrollable natural widths) all had to stay put — they did.
 

@@ -148,6 +148,18 @@ Tab::new(selected, || on_click())
 
 ## 7. 已知差距（与 Compose 对照）
 
+- **The content width now comes from the framework's intrinsic protocol (the old measurement
+  approximation is gone).** The fixed row's `tabRowHeight` is the tallest tab's `maxIntrinsicHeight` at
+  `tabWidth`, and the indicator's content width is `min(maxIntrinsicWidth(tabRowHeight), tabWidth) - 32dp`
+  floored at 24dp; the scrollable row asks `maxIntrinsicHeight(Constraints.Infinity)` and
+  `maxIntrinsicWidth(Constraints.Infinity)` and does **not** clamp by `tabWidth` (material3's own comment:
+  size based on incoming content, not on the forced minimum width). Sources: `TabRow.kt:450-459` and
+  `:582-603`. The old pass measured each tab at a loose constraint and subtracted 32dp, which reports the
+  SLOT width whenever a tab prices itself (a `weight(1f)` label, a `required_width` slot); two tests pin
+  the difference (the old path measured 88 / 168 against 24 / 88 now). The protocol itself is documented in
+  `docs/intrinsic-size.md` §8. The scrollable row already queried unbounded axes, so that half is a
+  behaviour-preserving rewrite — the difference lives in the fixed row's bounded main axis.
+
 - **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`，两个变体都有）：
   `TabRow::indicator(|ctx, scope| ...)` 与 `ScrollableTabRow::indicator(...)` 的闭包在**测量期**运行，
   `scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，与 Compose 的 indicator
@@ -209,7 +221,7 @@ Tab::new(selected, || on_click())
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
-## 8. 测试（`ui::tab_row::tests`，24 个；外加 UI fixture 测试 1 个）
+## 8. 测试（`ui::tab_row::tests`，26 个；外加 UI fixture 测试 1 个）
 
 | 测试 | 覆盖 |
 |---|---|
@@ -217,6 +229,8 @@ Tab::new(selected, || on_click())
 | `a_custom_indicator_replaces_the_default_bar` / `a_scrollable_row_composes_a_custom_indicator_with_its_positions` | 槽顶掉默认条（默认条归零）；可滚动版位置与 tab 一致 |
 | `ui_test::a_caller_supplied_tab_indicator_is_composed_at_measure_time`（UI fixture，真窗口） | 槽在 `#[composable]` 真实帧里组合真组件、几何真实、切换选中后位移 ≈ 两个 tab 宽——前三条框架级缺陷只有这条路能抓 |
 | `tab_row_tabs_equal_width` / `tab_row_primary_indicator_position` / `tab_row_secondary_indicator_width` | 固定等分 + 指示条几何 |
+| `a_tab_row_prices_a_weighted_label_through_the_intrinsics` | a weighted label is priced by its own width (the old measurement pass reported the 88-wide slot; now 24) |
+| `a_tab_row_clamps_a_wide_tabs_content_width_into_its_slot` | `min(maxIntrinsicWidth, tabWidth)` clamp (an oversized tab yields 88, not 168) |
 | `tab_row_rtl_mirror` / `tab_row_rtl_indicator_mirrors` | 固定 RTL 镜像 |
 | `tab_row_0_tabs_does_not_panic` / `tab_row_selected_out_of_range_falls_back_to_origin` | 边界 |
 | `tab_row_indicator_animates_on_selected_change` | 指示条动画推进 + 收敛 |
