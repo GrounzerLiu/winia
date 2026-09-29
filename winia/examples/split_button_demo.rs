@@ -1,6 +1,6 @@
 //! Split button demo — material3's `SplitButtonLayout`, an M3 Expressive component.
 //!
-//! Run: `cargo run -p winia --example split_button_demo --features material-symbols-outlined`
+//! Run: `cargo run -p winia --example split_button_demo --features debug-server`
 //!
 //! What to look at, in order:
 //!
@@ -17,27 +17,30 @@
 //! 5. **Direction.** The settings sheet in the top bar flips the layout: the halves mirror around the one
 //!    gap between them, and the content's optical offset follows the gap in either direction.
 //!
-//! The icons are material3's own: Material Symbols from <https://fonts.google.com/icons>, which winia
-//! bundles as variable fonts behind the `material-symbols-outlined` feature (`Outlined::ADD`,
-//! `Outlined::ARROW_DROP_DOWN` — the glyphs material3's samples pass as `Icons.Filled.Add` and
-//! `Icons.Filled.ArrowDropDown`). Nothing here is a hand-copied path.
+//! The glyphs are SVG path data from <https://fonts.google.com/icons> — `add` below, and the trailing
+//! trigger through `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH`, the same 24 dp asset material3
+//! passes as `Icons.Filled.ArrowDropDown`, so the arrow exists once in the tree instead of as a copy here.
 
 use letclone::clone;
 use winia::prelude::*;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
 mod settings;
-// The menu the trailing button opens (the same component the dropdown demo shows on its own).
+// The menu the trailing button opens (the same component the dropdown demo shows on its own), and the
+// published path data of the trigger glyph.
+use winia::ui::overlay::ExposedDropdownMenuDefaults;
 use winia::ui::{DropdownMenu, DropdownMenuItem};
 
-/// Material Symbols, the icon set material3 draws with (`fonts.google.com/icons`): the leading button's
-/// action icon and the trailing button's menu trigger.
+/// Material Icons `add` (24 dp, filled), from <https://fonts.google.com/icons>: the leading button's
+/// action glyph, at the size `ButtonSmallTokens.IconSize` names for the leading icon.
+const ADD_ICON: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+
 fn add_icon() -> Icon {
-    Icon::symbol(winia::icon::Outlined::ADD)
+    Icon::svg_path(ADD_ICON)
 }
 
 fn menu_icon(size: f32) -> Icon {
-    Icon::symbol(winia::icon::Outlined::ARROW_DROP_DOWN).size(size)
+    Icon::svg_path(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH).size(size)
 }
 
 /// A trailing menu button, shared by every split button on this screen.
@@ -56,7 +59,6 @@ fn split_button_demo(ctx: &mut ComposeCtx) {
         .modifier(Modifier::new().fill_max_size().padding(24.0).vertical_scroll(scroll_y))
         .spacing(20.0)
         .build(ctx, |ctx| {
-            Text::new("Split button").font_size(22.0).build(ctx);
             Text::new(format!("primary action ran {} times", clicks.get())).build(ctx);
             Text::new(format!("menu picked: {}", picked.get())).build(ctx);
 

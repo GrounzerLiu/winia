@@ -69,15 +69,6 @@ windows = { version = "0.62", optional = true, features = [
 [dev-dependencies]
 serde_json = "1"
 
-# ── Examples that need an opt-in feature ──
-# The split button demo draws material3's own icons (Material Symbols, fonts.google.com/icons), and
-# winia embeds those fonts only behind `material-symbols-outlined`. Cargo skips this example unless the
-# feature is on, which is why the demo's header names the full command:
-#   cargo run --example split_button_demo --features material-symbols-outlined
-[[example]]
-name = "split_button_demo"
-required-features = ["material-symbols-outlined"]
-
 # ── UI-test fixtures: ONE bin target (cargo test does not run it; path is target/debug/fixture_all.exe) ──
 # tests/ui_test.rs drives it over the stdin/stdout pipe (independent of examples — test assets).
 # Every scenario lives in this one binary and is selected by argv[1]. A scenario used to be its own
