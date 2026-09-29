@@ -319,6 +319,18 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
             ]);
             canvas.draw_rrect(rr, &paint);
         }
+        Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            // A contained indicator takes its container shape from the caller, so the per-corner
+            // shape has to paint too — falling through to a rectangle would be a silent lie about
+            // which shapes this component supports.
+            let rr = skia_safe::RRect::new_rect_radii(rect, &[
+                skia_safe::Vector::new(top_left, top_left),
+                skia_safe::Vector::new(top_right, top_right),
+                skia_safe::Vector::new(bottom_right, bottom_right),
+                skia_safe::Vector::new(bottom_left, bottom_left),
+            ]);
+            canvas.draw_rrect(rr, &paint);
+        }
         Shape::LeftRoundedRect { radius } => {
             let rr = skia_safe::RRect::new_rect_radii(rect, &[
                 skia_safe::Vector::new(radius, radius),

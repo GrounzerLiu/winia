@@ -3387,3 +3387,88 @@ fn exposed_dropdown_shows_the_picked_item_in_its_field() {
         "and the value it had before must be gone: {texts:?}"
     );
 }
+
+/// What:  a split button laid out by the real renderer.
+/// When:  it is composed.
+/// Then:  it is a leading button, material3's 2 dp gap, and a trailing button — both the same height,
+///        the trailing one keeping its 48 dp minimum.
+///
+/// The unit tests pin the measure POLICY (trailing measured first, the leading one given the rest);
+/// this pins the pair as it comes out of the pipeline that also applies the buttons' own minimums.
+#[test]
+fn split_button_is_two_buttons_and_a_two_dp_gap() {
+    let mut app = UiTest::launch("split_button");
+    app.expect_text_timeout("open: no", Duration::from_secs(5));
+    let (lx, ly, lw, lh) = app.find_tag("sb-leading").expect("the leading button");
+    let (tx, ty, tw, th) = app.find_tag("sb-trailing").expect("the trailing button");
+    eprintln!("split button: leading ({lx},{ly},{lw},{lh}) trailing ({tx},{ty},{tw},{th})");
+    assert!(
+        (tx - (lx + lw + 2.0)).abs() < 0.6,
+        "the gap is material3's 2 dp: the leading button ends at {} and the trailing starts at {tx}",
+        lx + lw
+    );
+    assert!(
+        (lh - th).abs() < 0.6,
+        "both buttons share one height (leading {lh}, trailing {th})"
+    );
+    assert!((lh - 40.0).abs() < 0.6, "the default size tier is 40 dp tall (got {lh})");
+    assert!(tw >= 48.0, "the trailing button keeps its 48 dp minimum (got {tw})");
+    assert!(
+        ty >= ly - 0.6 && ty + th <= ly + lh + 0.6,
+        "the trailing button is centred against the leading one ({ty}..{} vs {ly}..{})",
+        ty + th,
+        ly + lh
+    );
+}
+
+/// What:  the trailing button's content in an asymmetric shape.
+/// When:  it is laid out at rest.
+/// Then:  it sits slightly toward the GAP — material3's optical centring, the rule the M3 spec prints
+///        as "menu icon offset when unselected: S -1dp".
+///
+/// The number is `CenterOpticallyCoefficient * (outer - inner)` = 0.11 * (20 - 4) for the default size,
+/// computed from the radii the button actually draws (`HorizontalCenterOptically.kt:61`).
+#[test]
+fn split_button_nudges_its_menu_icon_toward_the_gap() {
+    let mut app = UiTest::launch("split_button");
+    let (tx, _, tw, _) = app.find_tag("sb-trailing").expect("the trailing button");
+    let (ix, _, iw, _) = app.find_tag("sb-trailing-icon").expect("the menu icon");
+    let shift = (tx + tw / 2.0) - (ix + iw / 2.0);
+    let expected = 0.11 * (20.0 - 4.0);
+    eprintln!("split button: icon shift={shift} expected≈{expected}");
+    assert!(
+        shift > 0.0,
+        "the icon moves toward the gap, not away from it (shift {shift})"
+    );
+    assert!(
+        (shift - expected).abs() < 1.0,
+        "the shift should be the optical correction {expected} (got {shift})"
+    );
+}
+
+/// What:  the two halves of a split button.
+/// When:  each is clicked.
+/// Then:  each runs its OWN action: the leading button counts, the trailing one owns the menu state
+///        (the checked form toggles it with no callback), and neither fires the other's.
+#[test]
+fn split_button_buttons_run_their_own_actions() {
+    let mut app = UiTest::launch("split_button");
+    app.expect_text_timeout("clicks: 0", Duration::from_secs(5));
+
+    let (lx, ly, lw, lh) = app.find_tag("sb-leading").expect("the leading button");
+    app.click(lx + lw / 2.0, ly + lh / 2.0);
+    app.expect_text_timeout("clicks: 1", Duration::from_secs(5));
+
+    let (tx, ty, tw, th) = app.find_tag("sb-trailing").expect("the trailing button");
+    app.click(tx + tw / 2.0, ty + th / 2.0);
+    app.expect_text_timeout("open: yes", Duration::from_secs(5));
+    app.click(tx + tw / 2.0, ty + th / 2.0);
+    app.expect_text_timeout("open: no", Duration::from_secs(5));
+
+    // The leading action ran exactly once: the trailing button must not have fired it too.
+    assert!(
+        app.all_texts().iter().any(|t| t.contains("clicks: 1")),
+        "one leading click is one action: {:?}",
+        app.all_texts()
+    );
+}

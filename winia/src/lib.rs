@@ -115,6 +115,9 @@ pub mod prelude {
     pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
     pub use crate::ui::snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
     pub use crate::ui::bottom_sheet::ModalBottomSheet;
+    pub use crate::ui::split_button::{
+        LeadingButton, SplitButtonDefaults, SplitButtonLayout, SplitButtonShapes, TrailingButton,
+    };
     pub use crate::ui::bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
     pub use crate::ui::sheet_state::{SheetState, SheetValue};
     pub use crate::ui::animated_visibility::{

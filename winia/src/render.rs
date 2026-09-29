@@ -215,6 +215,17 @@ fn rrect_left_rounded(rect: Rect, r: f32) -> RRect {
     ])
 }
 
+/// `RRect` with an independent radius per corner, in Skia's order (upper-left, upper-right,
+/// lower-right, lower-left) — the render half of [`crate::modifier::Shape::Corners`].
+fn rrect_corners(rect: Rect, top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> RRect {
+    RRect::new_rect_radii(rect, &[
+        skia_safe::Vector::new(top_left, top_left),
+        skia_safe::Vector::new(top_right, top_right),
+        skia_safe::Vector::new(bottom_right, bottom_right),
+        skia_safe::Vector::new(bottom_left, bottom_left),
+    ])
+}
+
 fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
     match shape {
         crate::modifier::Shape::Rectangle => skia_safe::Path::rect(rect, None),
@@ -235,6 +246,12 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
         }
         crate::modifier::Shape::LeftRoundedRect { radius } => {
             skia_safe::Path::rrect(rrect_left_rounded(rect, *radius), None)
+        }
+        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            skia_safe::Path::rrect(
+                rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
+                None,
+            )
         }
         crate::modifier::Shape::Pill => {
             let radius = rect.width().min(rect.height()) / 2.0;
@@ -311,6 +328,12 @@ fn draw_shadow_layer(
         crate::modifier::Shape::LeftRoundedRect { radius } => {
             sc.draw_rrect(rrect_left_rounded(local, *radius), &mask);
         }
+        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            sc.draw_rrect(
+                rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
+                &mask,
+            );
+        }
         crate::modifier::Shape::Pill => {
             let r = local.width().min(local.height()) / 2.0;
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
@@ -346,6 +369,12 @@ fn draw_shadow_layer(
             }
             crate::modifier::Shape::LeftRoundedRect { radius } => {
                 sc.draw_rrect(rrect_left_rounded(local, *radius), &stroke);
+            }
+            crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+                sc.draw_rrect(
+                    rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
+                    &stroke,
+                );
             }
             crate::modifier::Shape::Pill => {
                 let r = local.width().min(local.height()) / 2.0;
@@ -1262,6 +1291,13 @@ fn render_pass1(
             crate::modifier::Shape::LeftRoundedRect { radius } => {
                 canvas.clip_rrect(rrect_left_rounded(rect, *radius), None, Some(false));
             }
+            crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+                canvas.clip_rrect(
+                    rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
+                    None,
+                    Some(false),
+                );
+            }
             crate::modifier::Shape::Pill => {
                 let r = rect.width().min(rect.height()) / 2.0;
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
@@ -1579,6 +1615,13 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 Some(crate::modifier::Shape::LeftRoundedRect { radius }) => {
                     canvas.clip_rrect(rrect_left_rounded(rect, radius), None, Some(false));
                 }
+                Some(crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
+                    canvas.clip_rrect(
+                        rrect_corners(rect, top_left, top_right, bottom_right, bottom_left),
+                        None,
+                        Some(false),
+                    );
+                }
                 _ => {
                     canvas.clip_rect(rect, None, Some(false));
                 }
@@ -1831,6 +1874,12 @@ fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::modifi
         }
         crate::modifier::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(rect, *radius), paint);
+        }
+        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            canvas.draw_rrect(
+                rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
+                paint,
+            );
         }
         crate::modifier::Shape::Pill => {
             let r = rect.width().min(rect.height()) / 2.0;
@@ -2124,6 +2173,21 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
         crate::modifier::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(sr, (*radius - inset).max(0.0)), &paint);
         }
+        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            // Same inset rule as the other radii: the border is drawn on the inset rect, so its
+            // corners shrink by the stroke's half width (a 1 dp border on a 4 dp inner corner must
+            // not paint outside the fill it wraps).
+            canvas.draw_rrect(
+                rrect_corners(
+                    sr,
+                    (*top_left - inset).max(0.0),
+                    (*top_right - inset).max(0.0),
+                    (*bottom_right - inset).max(0.0),
+                    (*bottom_left - inset).max(0.0),
+                ),
+                &paint,
+            );
+        }
         crate::modifier::Shape::Pill => {
             // 路径圆角 = 节点 pill 半径 - inset（不要对 sr 再减一次——
             // 否则外缘在圆角处比背景内缩 1px，边框不像内边框）
@@ -2228,6 +2292,19 @@ pub(crate) fn draw_focus(
         crate::modifier::Shape::LeftRoundedRect { radius } => {
             let r = (*radius + inset).max(0.0) * scale;
             canvas.draw_rrect(rrect_left_rounded(sr, r), &paint);
+        }
+        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            let grow = |value: f32| (value + inset).max(0.0) * scale;
+            canvas.draw_rrect(
+                rrect_corners(
+                    sr,
+                    grow(*top_left),
+                    grow(*top_right),
+                    grow(*bottom_right),
+                    grow(*bottom_left),
+                ),
+                &paint,
+            );
         }
         crate::modifier::Shape::Pill => {
             let r = sr.width().min(sr.height()) / 2.0;

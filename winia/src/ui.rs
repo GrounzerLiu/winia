@@ -55,6 +55,7 @@ pub mod navigation_rail;
 pub mod navigation_drawer;
 pub mod swipe_to_dismiss;
 pub mod tab_row;
+pub mod split_button;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
 pub mod search_bar;
@@ -91,6 +92,9 @@ pub use button::ButtonDefaults;
 pub use button::ButtonElevation;
 pub use button::ButtonSize;
 pub use button::ButtonStyle;
+pub use split_button::{
+    LeadingButton, SplitButtonDefaults, SplitButtonLayout, SplitButtonShapes, TrailingButton,
+};
 pub use card::{Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle};
 pub use surface::{Surface, SurfaceBorder};
 pub use layout_components::{Column, Row, Stack, Spacer, FlowRow, FlowColumn};

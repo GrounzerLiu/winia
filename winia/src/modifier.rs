@@ -228,6 +228,23 @@ pub enum Shape {
     /// box (identical to `Pill`). A true inscribed circle was the old behaviour and was
     /// wrong against Compose.
     Circle,
+    /// A rectangle with an independent radius per corner, Compose's
+    /// `RoundedCornerShape(topStart, topEnd, bottomEnd, bottomStart)`. Geometric rather than
+    /// direction-resolved, like [`Shape::RightRoundedRect`] and [`Shape::LeftRoundedRect`]: a
+    /// caller that wants start/end semantics resolves the direction itself (material3's split
+    /// button does; `SplitButtonDefaults` reads it from `WiniaTheme::direction`).
+    ///
+    /// The radii are pixels of *this* box, so a caller that needs Compose's `CornerFull` — a
+    /// percent-50 corner, which is half the SHORT side — computes `height / 2` for a button that
+    /// is wider than it is tall. Feeding a percent-shaped corner as a fixed radius keeps
+    /// `Shape::Pill`'s behaviour only while that holds, which is why the split button derives it
+    /// from its own container height.
+    Corners {
+        top_left: f32,
+        top_right: f32,
+        bottom_right: f32,
+        bottom_left: f32,
+    },
     /// 直角矩形
     Rectangle,
 }
@@ -254,6 +271,13 @@ impl Shape {
     /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）
     pub fn pill() -> Self {
         Shape::Pill
+    }
+
+    /// Per-corner radii, in the order Compose's `RoundedCornerShape` takes them
+    /// (top-start, top-end, bottom-end, bottom-start) but in GEOMETRIC corners — see
+    /// [`Shape::Corners`].
+    pub fn corners(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
+        Shape::Corners { top_left, top_right, bottom_right, bottom_left }
     }
 }
 
