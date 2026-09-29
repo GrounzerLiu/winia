@@ -56,8 +56,29 @@ writes could not be expressed at all.
   content colour at `PressedStateLayerOpacity` — over the container.
 - The morph animates the INNER corner radius; the outer corners are constant, so one animated value is
   the whole difference.
-- The content's optical offset is computed from the ANIMATED radius, exactly as material3 reads it off
-  the animated shape.
+- The content's optical offset follows the SETTLED radius (`if checked { outer } else { resting_radius }`),
+  not the pressed one. material3 reads it off the animated shape (`SplitButton.kt:807-813`), which slides
+  the content about 1 dp along the press morph and back out on release; the spec only ever tabulates the
+  offset for the two settled states, and that slide reads as jitter, so a press does not move the content
+  here (recorded as a deviation below).
+
+## How the animation reaches each property
+
+Both the morph and the offset are driven by the app's animation frames, but they arrive by different
+routes, and the route decides whether the value is read once or every frame:
+
+- The SHAPE is rebuilt in composition from the animated radius, so the ordinary recompose each tick
+  brings is enough. Measured with the morph stretched to 2000 ms (a pixel read costs about 120 ms, more
+  than the real 180 ms morph): the trailing half's painted top-row insets read `(1, 12)` at rest, `(1, 3)`
+  on the frame after the tap, then `(3, 3)` as it settles — the intermediate values are visible, so the
+  shape travels toward the checked one instead of snapping to it.
+- The OFFSET is a LAYOUT input, and an animated layout value has to be handed over as
+  `SizeValue::Dynamic` — winia evaluates that during layout and registers a layout dependency
+  (`modifier.rs:62-68`; `composer.rs:2862-2870`, layout deps re-measure without recomposing). A static
+  number is read during composition instead, so the layout keeps the offset it had until some unrelated
+  event forces a frame. Measured on the live fixture, trailing half, menu opening: `-2 dp` while
+  unselected, still `-2 dp` four hundred milliseconds after the tap, and `0 dp` only once the pointer
+  moved — the reported "the icon only moves when the mouse moves over it".
 
 ## Optical centring (the spec's "menu icon offset")
 
@@ -157,3 +178,12 @@ Two turn-it-off measurements, both restored afterwards:
 
 Baselines after this round: `cargo test -p winia --lib` 1148 passed, UI suite 77 passed, both
 `cargo check` variants clean.
+
+Later rounds added the checking side of the same story: library guards for the checked trailing half (its
+content centres, and the painted shape reaches the stadium through the morph rather than in one step) and
+a live UI test that reads the trailing icon's offset out of the debug tree after the tap and before any
+further input. Its numbers are the measurement quoted above, and turning the layout value back into a
+static number makes it fail at `-2 dp` again — the same test, so the fix is what it measures. In that
+same round the morph's own frames were measured with the shape's duration stretched to 2000 ms, because a
+single painted-pixel read costs about 120 ms and the real morph is 180 ms: the insets travel through
+intermediate values, which a snap could not produce.

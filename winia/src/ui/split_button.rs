@@ -633,7 +633,8 @@ impl SplitButtonPart {
     }
 
     fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        let rtl = WiniaTheme::direction() == LayoutDirection::Rtl;        let height = SplitButtonDefaults::container_height(self.size);
+        let rtl = WiniaTheme::direction() == LayoutDirection::Rtl;
+        let height = SplitButtonDefaults::container_height(self.size);
         let interaction = self
             .interaction_source
             .clone()
