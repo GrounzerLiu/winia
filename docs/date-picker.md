@@ -222,6 +222,8 @@ Measured, each by turning the rule off and watching the specific test fail:
 | switching mode snaps the calendar to the selection's month | snap removed | exactly 1 test red: `switching_mode_pulls_the_calendar_to_the_selected_month` |
 | the cells outside a month are empty, and an unselectable year disables all of its dates | both guards removed together | exactly their 2 tests red: `the_cells_outside_a_month_are_empty`, `an_unselectable_day_or_year_disables_cells` (4 failed in that run, the other 2 from the row-count probe below) |
 | the grid is six rows tall | `MAX_CALENDAR_ROWS` set to 5 | 2 tests red: `a_month_grid_is_always_six_rows_of_seven`, and `today_and_the_selection_are_flagged_on_their_own_cells` because a five-row grid cuts a 30-day month short |
+| a disabled day that is also today | today's role kept instead of the disabled day role | exactly 1 test red: `a_day_label_follows_material3s_precedence` |
+| the two month arrows | the chevron constants swapped | exactly 1 test red: `the_month_arrows_draw_mirrored_chevrons` |
 
 `DatePickerState` (`with`/`new` over a `DatePickerStateInit`, `remember_date_picker_state` for composition) then
 carries the hoisted values material3's pickers read and drive: `selected_date_millis`,
@@ -235,5 +237,24 @@ start + day − 1 days), and the `is_today` / `is_selected` / `is_enabled` flags
 `SelectableDates` for the day *and* its year, because material3 disables every date of an unselectable year.
 `day_content_description` assembles what a cell announces, today's word first.
 
-Next: the container and header, the day cells as `Surface`s, the month navigation and year picker, then
-`DatePickerDialog` and the input mode.
+`DatePicker` draws the docked variant: a `Column` at least `CONTAINER_WIDTH` (360) wide on
+`surface_container_high`, a header of the title (`LabelLarge`, `OnSurfaceVariant`) over the headline
+(`HeadlineLarge`, `OnSurfaceVariant`, one line) with the divider below them, and a body of the month
+navigation (56 high, a chevron either side, each arrow enabled while the month has a neighbour inside the year
+range), the weekday row (48 high, 48-wide cells, narrow names) and the 6 × 7 grid of 40 dp circular day
+`Surface`s — today outlined 1 dp in `Primary` unless it is selected, a selected day filled with `Primary`.
+`DatePickerDefaults` carries every measurement with its token anchor, and `DatePickerColors` resolves the roles
+from the theme, including the one material3 hardcodes for navigation (`DatePicker.kt:559`).
+
+Deliberate deviations: the picker composes one month at a time (winia has no lazy row, so material3's
+`LazyRow` of 2412 months with its snap fling is out, and the arrows step a month); the mode toggle and the
+input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads the
+theme. The chevron path data is the Material Icons 24 dp artwork, which this sandbox cannot byte-verify
+against Google's assets — the same limitation the split button demo's `add` glyph carries (`web_fetch` refuses
+non-public hosts and the Tavily extracts of the raw and jsdelivr SVGs came back empty) — so
+`the_month_arrows_draw_mirrored_chevrons` measures the published data instead: each glyph inks 26–31 of the
+576 pixels in its 24 dp box, the left one's ink centre sits left of the right one's, and the pair is a near
+mirror (17 of 576 pixels differ).
+
+Next: the UI fixture and geometry guards for the docked picker, the year picker panel (3 columns, 72 × 36
+cells), then `DatePickerDialog` and the input mode.

@@ -16,7 +16,17 @@
 //! of the week explicitly, and [`CalendarLocale::default`] is an English, Sunday-first locale. A caller that
 //! needs another language supplies its own; the picker never reads a global.
 
+use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
+use crate::layout::{Alignment, Arrangement};
+use crate::modifier::{Color, Modifier, Shape};
+use crate::ui::divider::Divider;
+use crate::ui::icon::Icon;
+use crate::ui::icon_button::IconButton;
+use crate::ui::layout_components::{Column, Row, Stack};
+use crate::ui::surface::{Surface, SurfaceBorder};
+use crate::ui::text::{ProvideTextStyle, Text};
+use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
@@ -621,6 +631,480 @@ pub fn day_content_description(model: &CalendarModel, cell: &DayCell) -> String 
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Defaults, colours and the docked picker
+// ─────────────────────────────────────────────────────────────────────────
+
+/// The material3 measurements the date pickers are built from, named after `DatePickerModalTokens` and the
+/// constants beside `DatePicker` (`DatePicker.kt:2293-2304`). `docs/date-picker.md` carries every value and its
+/// anchor.
+pub struct DatePickerDefaults;
+
+impl DatePickerDefaults {
+    /// `DatePickerDefaults.YearRange` (`DatePicker.kt:764`).
+    pub fn year_range() -> RangeInclusive<i32> {
+        DEFAULT_YEAR_RANGE
+    }
+
+    /// The default title (`DatePicker.kt:654`). material3's wording comes from resources this checkout does not
+    /// carry, so winia supplies its own English.
+    pub const TITLE: &'static str = "Select date";
+
+    /// The headline while nothing is selected (`DatePicker.kt:704`).
+    pub const HEADLINE: &'static str = "No date selected";
+
+    /// `DatePickerModalTokens.ContainerWidth`: the container's minimum width.
+    pub const CONTAINER_WIDTH: f32 = 360.0;
+
+    /// `DatePickerModalTokens.ContainerHeight`: the modal dialog's maximum height.
+    pub const CONTAINER_HEIGHT: f32 = 568.0;
+
+    /// `DatePickerModalTokens.ContainerShape`, `CornerExtraLarge`.
+    pub const CONTAINER_CORNER: f32 = 28.0;
+
+    /// `DatePickerModalTokens.HeaderContainerHeight`, applied only when a title is present
+    /// (`DatePicker.kt:1680-1685`).
+    pub const HEADER_MIN_HEIGHT: f32 = 120.0;
+
+    /// `DatePickerModalTokens.DateContainerWidth` and `…Height`: the painted day.
+    pub const DAY_CELL: f32 = 40.0;
+
+    /// `RecommendedSizeForAccessibility` (`DatePicker.kt:2293`): a grid row, a grid column and a weekday
+    /// label.
+    pub const ACCESSIBLE_SIZE: f32 = 48.0;
+
+    /// `MonthYearHeight` (`DatePicker.kt:2294`): the month navigation row.
+    pub const MONTH_YEAR_HEIGHT: f32 = 56.0;
+
+    /// `DatePickerHorizontalPadding` (`DatePicker.kt:2295`).
+    pub const HORIZONTAL_PADDING: f32 = 12.0;
+
+    /// `DatePickerTitlePadding`'s start (`DatePicker.kt:2298`).
+    pub const TITLE_START_PADDING: f32 = 24.0;
+
+    /// `DatePickerTitlePadding`'s end.
+    pub const TITLE_END_PADDING: f32 = 12.0;
+
+    /// `DatePickerTitlePadding`'s top.
+    pub const TITLE_TOP_PADDING: f32 = 16.0;
+
+    /// `DatePickerHeadlinePadding`'s bottom (`DatePicker.kt:2299`).
+    pub const HEADLINE_BOTTOM_PADDING: f32 = 12.0;
+
+    /// `DatePickerModeTogglePadding` (`DatePicker.kt:2296`).
+    pub const MODE_TOGGLE_PADDING: f32 = 12.0;
+
+    /// `DatePickerModalTokens.DateTodayContainerOutlineWidth`.
+    pub const TODAY_OUTLINE_WIDTH: f32 = 1.0;
+
+    /// `DisabledAlpha` (`ColorScheme.kt:1518`): every disabled colour role carries it.
+    pub const DISABLED_ALPHA: f32 = 0.38;
+
+    /// The height a month reserves, `RecommendedSizeForAccessibility * MaxCalendarRows`
+    /// (`DatePicker.kt:1859`).
+    pub const MONTH_HEIGHT: f32 = Self::ACCESSIBLE_SIZE * MAX_CALENDAR_ROWS as f32;
+}
+
+/// The colour roles a date picker paints with (`DatePickerColors`, `DatePicker.kt:835-1103`).
+///
+/// The defaults come from the theme the way `DatePickerDefaults.defaultDatePickerColors` derives them
+/// (`DatePicker.kt:545-608`), including the one role material3 hardcodes instead of reading a token
+/// (`navigation_content`, `DatePicker.kt:559`).
+#[derive(Clone, Debug)]
+pub struct DatePickerColors {
+    /// The container behind every part.
+    pub container: Color,
+    /// The title's text.
+    pub title_content: Color,
+    /// The headline's text, and the mode toggle's icon.
+    pub headline_content: Color,
+    /// The weekday letters.
+    pub weekday_content: Color,
+    /// The month navigation: its arrows and its year text.
+    pub navigation_content: Color,
+    /// A day's label when it is neither selected nor today.
+    pub day_content: Color,
+    /// The label of a selected day or year.
+    pub selected_content: Color,
+    /// The container of a selected day or year.
+    pub selected_container: Color,
+    /// Today's label while today is not selected.
+    pub today_content: Color,
+    /// The 1 dp outline around today.
+    pub today_border: Color,
+    /// The divider under the header.
+    pub divider: Color,
+}
+
+impl DatePickerColors {
+    /// The defaults for `theme`.
+    pub fn from_theme(theme: &ThemeColors) -> Self {
+        Self {
+            container: theme.surface_container_high,
+            title_content: theme.on_surface_variant,
+            headline_content: theme.on_surface_variant,
+            weekday_content: theme.on_surface,
+            navigation_content: theme.on_surface_variant,
+            day_content: theme.on_surface,
+            selected_content: theme.on_primary,
+            selected_container: theme.primary,
+            today_content: theme.primary,
+            today_border: theme.primary,
+            divider: theme.outline_variant,
+        }
+    }
+
+    /// A role at `DisabledAlpha` (`ColorScheme.kt:1518`). Compose's `copy(alpha = 0.38f)` *replaces* the alpha
+    /// rather than scaling it, so this replaces the channel too.
+    fn disabled(role: Color) -> Color {
+        Color {
+            a: (DatePickerDefaults::DISABLED_ALPHA * 255.0).round() as u8,
+            ..role
+        }
+    }
+
+    /// The container behind one day cell (`dayContainerColor`, `DatePicker.kt:973-993`): `Primary` when the day
+    /// is selected, transparent when it is not.
+    pub fn day_container(&self, selected: bool, enabled: bool) -> Color {
+        if !selected {
+            return Color::TRANSPARENT;
+        }
+        if enabled {
+            self.selected_container
+        } else {
+            Self::disabled(self.selected_container)
+        }
+    }
+
+    /// One day cell's label (`dayContentColor`, `DatePicker.kt:936-963`): selected takes `OnPrimary`, today
+    /// takes `Primary`, anything else takes the plain day role — and a disabled cell takes the plain role at
+    /// `DisabledAlpha` even when it is today.
+    pub fn day_label(&self, selected: bool, enabled: bool, is_today: bool) -> Color {
+        match (selected, enabled) {
+            (true, true) => self.selected_content,
+            (true, false) => Self::disabled(self.selected_content),
+            (false, true) if is_today => self.today_content,
+            (false, true) => self.day_content,
+            (false, false) => Self::disabled(self.day_content),
+        }
+    }
+}
+
+/// Material Icons `keyboard_arrow_left` (24 dp), the glyph material3 auto-mirrors for its month arrows
+/// (`internal/Icons.kt:34`). Provenance and the measured guard: `docs/date-picker.md`.
+pub const CHEVRON_LEFT_PATH: &str = "M15.41 16.09l-4.58-4.59 4.58-4.59L14 5.5l-6 6 6 6z";
+
+/// Material Icons `keyboard_arrow_right` (24 dp, `internal/Icons.kt:60`).
+pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z";
+
+/// The docked date picker: a title and a headline over a month calendar
+/// (`DatePicker`, `DatePicker.kt:168-237`; the M3 spec's docked date picker).
+///
+/// ```ignore
+/// let state = remember_date_picker_state(ctx, CalendarLocale::default());
+/// DatePicker::new(state).build(ctx);
+/// ```
+///
+/// Deliberate deviations: material3 pages months in a `LazyRow` with a snap fling, while winia has no lazy row,
+/// so the picker composes the displayed month and its arrows step it one month at a time; and the mode toggle
+/// arrives with the input mode.
+pub struct DatePicker {
+    state: DatePickerState,
+    title: Option<String>,
+    modifier: Modifier,
+}
+
+impl DatePicker {
+    /// A picker over `state`, with material3's default title.
+    pub fn new(state: DatePickerState) -> Self {
+        Self {
+            state,
+            title: Some(DatePickerDefaults::TITLE.to_string()),
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The title above the headline. `None` drops the title slot, and with it the header's minimum height and
+    /// the divider (`DatePicker.kt:1680-1685`, `:1392-1394`).
+    pub fn title(mut self, title: Option<impl Into<String>>) -> Self {
+        self.title = title.map(Into::into);
+        self
+    }
+
+    /// A modifier for the container (`modifier`).
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = modifier;
+        self
+    }
+
+    /// Composes the picker.
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let colors = DatePickerColors::from_theme(&WiniaTheme::colors());
+        let model = self.state.calendar_model().clone();
+        let month = model.month_of_millis(self.state.displayed_month_millis());
+        let grid = MonthGrid::of(
+            month,
+            self.state.selected_date_millis(),
+            model.today_millis(),
+            self.state.selectable_dates(),
+        );
+        let state = self.state.clone();
+        let title = self.title.clone();
+        let container = self
+            .modifier
+            .then(Modifier::new().min_width(DatePickerDefaults::CONTAINER_WIDTH))
+            .background(colors.container, Shape::Rectangle);
+
+        Column::new()
+            .modifier(container)
+            .build(ctx, |ctx| {
+                header(ctx, &state, title.as_deref(), &colors);
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .padding_horizontal(DatePickerDefaults::HORIZONTAL_PADDING),
+                    )
+                    .build(ctx, |ctx| {
+                        months_navigation(ctx, &state, &month, &colors);
+                        weekday_row(ctx, &model, &colors);
+                        month_grid(ctx, &state, &model, &grid, &colors);
+                    });
+            });
+    }
+}
+
+/// The header: the title over the headline, with the divider below them
+/// (`DateEntryContainer` and `DatePickerHeader`, `DatePicker.kt:1365-1396`, `:1671-1698`).
+fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, colors: &DatePickerColors) {
+    let model = state.calendar_model();
+    let headline = state
+        .selected_date_millis()
+        .map(|millis| model.format_date(millis, false))
+        .unwrap_or_else(|| DatePickerDefaults::HEADLINE.to_string());
+    let min_height = if title.is_some() { DatePickerDefaults::HEADER_MIN_HEIGHT } else { 0.0 };
+    let title = title.map(str::to_string);
+    let title_color = colors.title_content;
+    let headline_color = colors.headline_content;
+
+    Column::new()
+        .modifier(Modifier::new().fill_max_width().min_height(min_height))
+        .arrangement(Arrangement::SpaceBetween)
+        .build(ctx, |ctx| {
+            if let Some(text) = title.as_deref() {
+                ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                    Text::new(text.to_string())
+                        .color(title_color)
+                        .modifier(
+                            Modifier::new()
+                                .fill_max_width()
+                                .padding_start(DatePickerDefaults::TITLE_START_PADDING)
+                                .padding_end(DatePickerDefaults::TITLE_END_PADDING)
+                                .padding_top(DatePickerDefaults::TITLE_TOP_PADDING),
+                        )
+                        .build(ctx);
+                });
+            }
+            Row::new()
+                .modifier(Modifier::new().fill_max_width())
+                .arrangement(Arrangement::SpaceBetween)
+                .alignment(Alignment::Center)
+                .build(ctx, |ctx| {
+                    ProvideTextStyle(WiniaTheme::typography().headline_large.clone(), ctx, |ctx| {
+                        Text::new(headline)
+                            .color(headline_color)
+                            .max_lines(1)
+                            .modifier(
+                                Modifier::new()
+                                    .padding_start(DatePickerDefaults::TITLE_START_PADDING)
+                                    .padding_end(DatePickerDefaults::TITLE_END_PADDING)
+                                    .padding_bottom(DatePickerDefaults::HEADLINE_BOTTOM_PADDING),
+                            )
+                            .build(ctx);
+                    });
+                });
+            // material3 draws the divider when a title, a headline or a mode toggle is present
+            // (`DatePicker.kt:1392-1394`); a headline is always composed here.
+            Divider::horizontal().build(ctx);
+        });
+}
+
+/// The month navigation row: the month and year text between the two arrows (`MonthsNavigation`,
+/// `DatePicker.kt:2182-2239`). The year menu button arrives with the year picker.
+fn months_navigation(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    month: &CalendarMonth,
+    colors: &DatePickerColors,
+) {
+    let year_range = state.year_range();
+    let index = month.index_in(&year_range);
+    let last = CalendarModel::number_of_months_in_range(&year_range) - 1;
+    let text = state.calendar_model().format_month_year(month.start_utc_time_millis);
+    let navigation_color = colors.navigation_content;
+
+    Row::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::MONTH_YEAR_HEIGHT),
+        )
+        .arrangement(Arrangement::SpaceBetween)
+        .alignment(Alignment::Center)
+        .build(ctx, |ctx| {
+            month_arrow(ctx, state, month, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
+            ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                Text::new(text)
+                    .color(navigation_color)
+                    .max_lines(1)
+                    .build(ctx);
+            });
+            month_arrow(ctx, state, month, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
+        });
+}
+
+/// One month arrow. material3 enables them from the month list's scroll state
+/// (`monthsListState.canScrollBackward/Forward`, `DatePicker.kt:1561-1562`); with one month composed at a time
+/// they are enabled while the month has a neighbour inside the year range.
+fn month_arrow(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    month: &CalendarMonth,
+    step: i64,
+    enabled: bool,
+    path: &'static str,
+    color: Color,
+) {
+    let state = state.clone();
+    let start = month.start_utc_time_millis;
+    IconButton::new()
+        .enabled(enabled)
+        .on_click(move || {
+            let month = state.calendar_model().plus_months(start, step);
+            state.set_displayed_month_millis(month.start_utc_time_millis);
+        })
+        .build(ctx, |ctx| {
+            Icon::svg_path(path).tint(color).build(ctx);
+        });
+}
+
+/// The weekday header: the locale's names in row order, one cell per column (`WeekDays`,
+/// `DatePicker.kt:1783-1830`).
+fn weekday_row(ctx: &mut ComposeCtx, model: &CalendarModel, colors: &DatePickerColors) {
+    let names = model.weekday_names();
+    Row::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .min_height(DatePickerDefaults::ACCESSIBLE_SIZE),
+        )
+        .arrangement(Arrangement::SpaceEvenly)
+        .alignment(Alignment::Center)
+        .build(ctx, |ctx| {
+            ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
+                for (full, narrow) in names {
+                    Stack::new()
+                        .alignment(Alignment::Center)
+                        .modifier(Modifier::new().size(
+                            DatePickerDefaults::ACCESSIBLE_SIZE,
+                            DatePickerDefaults::ACCESSIBLE_SIZE,
+                        ))
+                        .build(ctx, |ctx| {
+                            Text::new(narrow)
+                                .color(colors.weekday_content)
+                                .modifier(Modifier::new().semantics(
+                                    crate::semantics::SemanticsConfig::new()
+                                        .content_description(full),
+                                ))
+                                .build(ctx);
+                        });
+                }
+            });
+        });
+}
+
+/// The month grid: six rows of seven slots, each slot a day or empty (`Month`,
+/// `DatePicker.kt:1856-1890`).
+fn month_grid(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    grid: &MonthGrid,
+    colors: &DatePickerColors,
+) {
+    let rows = grid.rows().map(<[Option<DayCell>]>::to_vec).collect::<Vec<_>>();
+    Column::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::MONTH_HEIGHT),
+        )
+        .arrangement(Arrangement::SpaceEvenly)
+        .build(ctx, |ctx| {
+            ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
+                for row in &rows {
+                    Row::new()
+                        .modifier(Modifier::new().fill_max_width())
+                        .arrangement(Arrangement::SpaceEvenly)
+                        .alignment(Alignment::Center)
+                        .build(ctx, |ctx| {
+                            for cell in row {
+                                Stack::new()
+                                    .alignment(Alignment::Center)
+                                    .modifier(Modifier::new().size(
+                                        DatePickerDefaults::ACCESSIBLE_SIZE,
+                                        DatePickerDefaults::ACCESSIBLE_SIZE,
+                                    ))
+                                    .build(ctx, |ctx| {
+                                        if let Some(cell) = cell {
+                                            day_cell(ctx, state, model, cell, colors);
+                                        }
+                                    });
+                            }
+                        });
+                }
+            });
+        });
+}
+
+/// One day of the grid: a 40 dp circle, outlined when it is today and not selected, filled when it is selected
+/// (`Day`, `DatePicker.kt:1993-2058`).
+fn day_cell(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    cell: &DayCell,
+    colors: &DatePickerColors,
+) {
+    let state_for_click = state.clone();
+    let millis = cell.utc_time_millis;
+    let description = day_content_description(model, cell);
+    let mut surface = Surface::new()
+        .shape(Shape::Circle)
+        .color(colors.day_container(cell.is_selected, cell.is_enabled))
+        .content_color(colors.day_label(cell.is_selected, cell.is_enabled, cell.is_today))
+        .enabled(cell.is_enabled)
+        .selectable(cell.is_selected, move || {
+            state_for_click.set_selected_date_millis(Some(millis));
+        })
+        .modifier(
+            Modifier::new()
+                .size(DatePickerDefaults::DAY_CELL, DatePickerDefaults::DAY_CELL)
+                .semantics(
+                    crate::semantics::SemanticsConfig::new().content_description(description),
+                ),
+        );
+    if cell.is_today && !cell.is_selected {
+        surface = surface.border(SurfaceBorder::new(
+            DatePickerDefaults::TODAY_OUTLINE_WIDTH,
+            colors.today_border,
+        ));
+    }
+    surface.build(ctx, |ctx| {
+        Text::new(cell.day.to_string()).build(ctx);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1046,5 +1530,142 @@ mod tests {
             day_content_description(&model, &grid.cells()[1].unwrap()),
             "Monday, September 2, 2024"
         );
+    }
+
+    #[test]
+    fn a_day_container_is_primary_only_when_the_day_is_selected() {
+        let colors = DatePickerColors::from_theme(&ThemeColors::default_light());
+        assert_eq!(colors.day_container(true, true), colors.selected_container);
+        assert_eq!(
+            colors.day_container(true, false),
+            Color {
+                a: 97,
+                ..colors.selected_container
+            },
+            "a disabled selected day is Primary at DisabledAlpha"
+        );
+        assert_eq!(colors.day_container(false, true), Color::TRANSPARENT);
+        assert_eq!(colors.day_container(false, false), Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_day_label_follows_material3s_precedence() {
+        let colors = DatePickerColors::from_theme(&ThemeColors::default_light());
+        assert_eq!(colors.day_label(true, true, false), colors.selected_content);
+        assert_eq!(colors.day_label(false, true, true), colors.today_content);
+        assert_eq!(colors.day_label(false, true, false), colors.day_content);
+        assert_eq!(
+            colors.day_label(true, false, true),
+            Color {
+                a: 97,
+                ..colors.selected_content
+            }
+        );
+        // material3 falls through to the disabled branch for a day that is both disabled and today
+        // (`DatePicker.kt:936-963`), so today's colour does not survive the disable.
+        assert_eq!(
+            colors.day_label(false, false, true),
+            Color {
+                a: 97,
+                ..colors.day_content
+            }
+        );
+    }
+
+    #[test]
+    fn the_month_arrows_draw_mirrored_chevrons() {
+        let left = render_glyph(CHEVRON_LEFT_PATH);
+        let right = render_glyph(CHEVRON_RIGHT_PATH);
+        let ink = |mask: &[bool]| mask.iter().filter(|on| **on).count();
+        let left_ink = ink(&left);
+        let right_ink = ink(&right);
+        assert!(
+            (20..=140).contains(&left_ink),
+            "the chevron covers {left_ink} of the 576 pixels in its 24 dp box"
+        );
+        assert!(
+            (left_ink as i32 - right_ink as i32).abs() <= 8,
+            "the two chevrons are the same shape ({left_ink} and {right_ink} inked pixels)"
+        );
+
+        // The two glyphs are the same shape pointing opposite ways, so the left arrow's ink centre sits left of
+        // the right arrow's.
+        let centroid_x = |mask: &[bool]| {
+            let (sum, count) = mask
+                .iter()
+                .enumerate()
+                .filter(|(_, on)| **on)
+                .fold((0usize, 0usize), |(sum, count), (index, _)| {
+                    (sum + index % 24, count + 1)
+                });
+            sum as f32 / count.max(1) as f32
+        };
+        assert!(
+            centroid_x(&left) < centroid_x(&right),
+            "the left chevron leans left of the right one ({} vs {})",
+            centroid_x(&left),
+            centroid_x(&right)
+        );
+
+        // And the two are near mirror images of each other (measured: 17 of the 576 pixels differ, so the pair
+        // is the same chevron drawn the other way rather than two unrelated glyphs).
+        let mirrored_diff = (0..576)
+            .filter(|index| {
+                let (x, y) = (index % 24, index / 24);
+                left[y * 24 + x] != right[y * 24 + 23 - x]
+            })
+            .count();
+        assert!(
+            mirrored_diff <= 24,
+            "the two chevrons are mirrors ({mirrored_diff} pixels differ)"
+        );
+        let (_, left_top, _, left_bottom) = glyph_bounds(&left);
+        let (_, right_top, _, right_bottom) = glyph_bounds(&right);
+        assert!(
+            left_top.abs_diff(right_top) <= 1 && left_bottom.abs_diff(right_bottom) <= 1,
+            "both chevrons span the same rows ({left_top}..{left_bottom} vs {right_top}..{right_bottom})"
+        );
+    }
+
+    /// The 24x24 ink mask of a glyph drawn through the real `Icon` pipeline (node, then render, then pixels),
+    /// the measurement `the_published_arrow_data_draws_the_same_arrow` makes for the dropdown arrow
+    /// (`winia/src/ui/overlay.rs:1970`).
+    fn render_glyph(data: &str) -> Vec<bool> {
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Icon::svg_path(data)
+                .tint(Color::BLACK)
+                .size(24.0)
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 24.0, 0.0, 24.0));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((24, 24)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pixels = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
+        px.iter().map(|p| p[0] < 128).collect()
+    }
+
+    /// The half-open pixel box an ink mask covers, `(left, top, right, bottom)`, or `(0, 0, 0, 0)` when nothing
+    /// was drawn.
+    fn glyph_bounds(mask: &[bool]) -> (usize, usize, usize, usize) {
+        let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (index, on) in mask.iter().enumerate() {
+            if !on {
+                continue;
+            }
+            let (x, y) = (index % 24, index / 24);
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+        if left == usize::MAX {
+            return (0, 0, 0, 0);
+        }
+        (left, top, right, bottom)
     }
 }
