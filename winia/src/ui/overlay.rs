@@ -1218,10 +1218,18 @@ impl ExposedDropdownMenuDefaults {
             .build(ctx);
     }
 
-    /// Material Icons "arrow_drop_down" (24dp viewBox), the icon material3's `TrailingIcon` hard-codes —
-    /// written with ABSOLUTE commands (`M7 10l5 5 5-5z` is the published form, but this codebase's icon
-    /// paths are absolute throughout and winia's SVG path conversion does not carry relative ones).
-    const ARROW_DROP_DOWN_PATH: &'static str = "M7 10L12 15L17 10z";
+    /// Material Icons `arrow_drop_down` (24dp viewBox) — the icon material3 hard-codes for this field's
+    /// trailing icon (`ExposedDropdownMenuDefaults.TrailingIcon` draws `Icons.Filled.ArrowDropDown`).
+    ///
+    /// The data is the icon's OWN: the published 24dp asset from <https://fonts.google.com/icons>
+    /// (`google/material-design-icons`, Apache-2.0) is `M7 10l5 5 5-5z`, and winia hands exactly that
+    /// string to Skia's SVG parser, which carries the relative commands. Measured, not assumed —
+    /// `the_published_arrow_data_draws_the_same_arrow` draws this data and the absolute form of the
+    /// same triangle through a real `Icon` and compares the pixels.
+    ///
+    /// Public because the glyph is material3's, not this component's: a split button's menu trigger is
+    /// the same arrow, and its fixture draws it from here instead of copying the path.
+    pub const ARROW_DROP_DOWN_PATH: &'static str = "M7 10l5 5 5-5z";
 }
 
 /// material3 `ExposedDropdownMenuBox`: a menu hanging off a text field, with the field's width.
@@ -1930,5 +1938,68 @@ mod tests {
             colors.text,
             "MenuItemColors::defaults (what an item resolves to) must equal the published default"
         );
+    }
+
+    /// The published `arrow_drop_down` data must draw the arrow, at the icon's own coordinates, and draw
+    /// the SAME arrow as the absolute form of the same triangle (what this constant used to carry).
+    ///
+    /// Skia's SVG parser is what carries the relative commands, so this is the measurement that makes it
+    /// safe to keep the icon's own data here instead of a re-derived form; the bounds assertion is what
+    /// says the triangle is the real one (it spans x 7..17, y 10..15 in the 24 dp box).
+    #[test]
+    fn the_published_arrow_data_draws_the_same_arrow() {
+        let published = render_arrow(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH);
+        let absolute = render_arrow("M7 10L12 15L17 10z");
+        let ink = published.iter().filter(|on| **on).count();
+        // Measured: 30 of the 576 pixels in the box. The triangle's area is 25 (½ · 10 · 5) and its
+        // bounding box is 50, so the coverage has to land in between, and near the area.
+        assert!(
+            (20..=45).contains(&ink),
+            "the arrow covers {ink} of the 576 pixels in its 24 dp box, not the 25 dp² triangle"
+        );
+        let diff = published.iter().zip(absolute.iter()).filter(|(a, b)| a != b).count();
+        assert!(diff <= 2, "the published data draws the same arrow ({diff} pixels differ)");
+        assert_eq!(
+            ink_bounds(&published),
+            (7, 10, 17, 15),
+            "the triangle sits where the official asset puts it"
+        );
+    }
+
+    /// The 24x24 ink mask of an arrow drawn through the real `Icon` pipeline (node -> render -> pixels).
+    fn render_arrow(data: &str) -> Vec<bool> {
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            crate::ui::icon::Icon::svg_path(data)
+                .tint(crate::modifier::Color::BLACK)
+                .size(24.0)
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 24.0, 0.0, 24.0));
+        let mut surface = skia_safe::surfaces::raster_n32_premul((24, 24)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pixels = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
+        px.iter().map(|p| p[0] < 128).collect()
+    }
+
+    /// The half-open pixel box the mask covers, `(left, top, right, bottom)`, or `(0, 0, 0, 0)` when
+    /// nothing was drawn.
+    fn ink_bounds(mask: &[bool]) -> (usize, usize, usize, usize) {
+        let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (i, on) in mask.iter().enumerate() {
+            if !on {
+                continue;
+            }
+            let (x, y) = (i % 24, i / 24);
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+        if left == usize::MAX { (0, 0, 0, 0) } else { (left, top, right, bottom) }
     }
 }

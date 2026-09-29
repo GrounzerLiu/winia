@@ -100,8 +100,10 @@ matched on `Shape` exhaustively and now handle the new variant.
   official `google/material-design-icons` tables (`font/MaterialIcons-Regular.codepoints`) map to those
   names. Nothing in the demo is a hand-copied path, which is why it sits behind the
   `material-symbols-outlined` feature (`[[example]] required-features` in `winia/Cargo.toml`, and the
-  command in the demo's header). The UI fixture keeps an SVG path instead: the UI suite runs without the
-  symbols feature, and `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH` stays private.
+  command in the demo's header). The UI fixture draws the same glyph through
+  `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH` — the published 24dp asset's own path data, now a
+  public constant, so the arrow exists once in the tree instead of as a copy per fixture; the UI suite
+  runs without the symbols feature, which is why the fixture uses the asset rather than the font.
 
 ## API mapping
 

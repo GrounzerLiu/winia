@@ -7,10 +7,8 @@
 
 use letclone::clone;
 use winia::prelude::*;
-
-/// Material Icons "arrow_drop_down" (24 dp viewBox) — the glyph material3 puts on a split button's
-/// menu trigger. Declared here because `ExposedDropdownMenuDefaults` keeps its copy private.
-const ARROW_DROP_DOWN_PATH: &str = "M7 10L12 15L17 10z";
+// material3's own `arrow_drop_down` asset (from the icon set), not a copy: see the constant's docs.
+use winia::ui::overlay::ExposedDropdownMenuDefaults;
 
 #[composable]
 fn split_fixture(ctx: &mut ComposeCtx) {
@@ -43,7 +41,7 @@ fn split_fixture(ctx: &mut ComposeCtx) {
                     TrailingButton::checked(open.clone())
                         .modifier(Modifier::new().test_tag("sb-trailing"))
                         .build(ctx, |ctx| {
-                            Icon::svg_path(ARROW_DROP_DOWN_PATH)
+                            Icon::svg_path(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH)
                                 .size(SplitButtonDefaults::trailing_icon_size(ButtonSize::Small))
                                 .modifier(Modifier::new().test_tag("sb-trailing-icon"))
                                 .build(ctx);
