@@ -56,6 +56,7 @@ pub mod navigation_drawer;
 pub mod swipe_to_dismiss;
 pub mod tab_row;
 pub mod split_button;
+pub mod date_picker;
 pub mod navigation_suite;
 pub mod short_navigation_bar;
 pub mod search_bar;
