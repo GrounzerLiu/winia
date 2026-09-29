@@ -127,7 +127,8 @@ the constraints at measure time, so it never appears in the intrinsic layer.
 
 ### 2.3 Three components work around it by hand
 
-1. **`DropdownMenu`** — `MenuColumnPolicy`, `winia/src/ui/overlay.rs:812-878`:
+1. **`DropdownMenu`** — the menu column's own policy (deleted in §8.6; the menu now wears material3's
+   `Column(width(IntrinsicSize.Max))` directly), `winia/src/ui/overlay.rs`:
    - pass 1 measures each item's **content** (not the item) with
      `Constraints::new(0.0, f32::MAX, 0.0, f32::MAX)` (`overlay.rs:831-838`), adds the item's own
      horizontal padding and clamps to `DROPDOWN_ITEM_MIN_WIDTH = 112.0` /

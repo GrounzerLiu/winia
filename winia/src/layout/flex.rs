@@ -308,7 +308,7 @@ pub(crate) fn measure_flex<A: FlexAxis>(
 /// 分配一份空间——所以容器改为给"加权集合"定价：最大的 weight 单位（该子节点主轴尺寸 / 它的
 /// weight）乘以总 weight。这正是 `weight(1f)` 的标签在 Column 里仍能报出有限固有高度的原因：
 /// 少了这段算术，标签会把约束原样报回，容器于是报最大值而不是内容宽度
-/// （`MenuColumnPolicy` 当年正是踩了这个坑，见 winia/src/ui/overlay.rs）。
+/// （菜单的两遍测量当年正是踩了这个坑，见 `docs/dropdown-menu.md` §4.2）。
 pub(crate) fn flex_intrinsic_main(
     ctx: &mut IntrinsicCtx<'_>,
     children: &[usize],

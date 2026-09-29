@@ -2940,9 +2940,10 @@ fn dropdown_menu_item_icon_geometry_matches_material3() {
     );
 
     // Every item is the SAME width, and that width is the menu's — material3 gets this from the column's
-    // `width(IntrinsicSize.Max)`, winia's `MenuColumnPolicy` does the two passes by hand. It is not just
-    // tidiness: an item narrower than the panel paints its ripple and hover state over part of the row
-    // only, which is exactly what a screenshot showed before this (a highlight stopping short of the
+    // `width(IntrinsicSize.Max)`, and winia's own intrinsic protocol now does the same thing: the column is
+    // tightened to its widest item's intrinsic width, and each item's `fillMaxWidth` stretches the row to it.
+    // It is not just tidiness: an item narrower than the panel paints its ripple and hover state over part of
+    // the row only, which is exactly what a screenshot showed before this (a highlight stopping short of the
     // trailing hint while the panel ran on).
     let (_, _, lead_w, _) = app.find_tag_in_overlay("dm-item-lead").expect("the first item");
     let (_, _, trail_w, _) = app.find_tag_in_overlay("dm-item-trail").expect("the second item");
