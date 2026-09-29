@@ -109,9 +109,19 @@ matched on `Shape` exhaustively and now handle the new variant.
 - **No minimum interactive size.** material3 wraps the layout in `Modifier.minimumInteractiveComponentSize()`
   and provides `0.dp` for the two buttons, because the buttons' own minimum would double up. winia has no
   touch-target concept, so nothing is implemented and nothing is faked.
-- **RTL is our own rule.** Compose's layout modifier writes an unmirrored `place()` offset; winia resolves
-  the direction geometrically so the content always moves toward the gap. The LTR result is the spec's; the
-  RTL side has not been checked against a running Compose render.
+- **RTL is our own rule.** winia resolves the direction geometrically and hands the correction over as an
+  `absolute_offset`, because a plain `offset` mirrors its x a second time under the parent's direction and
+  would push both halves away from the gap there. material3 1.5.0-alpha29 does the same thing through
+  `placeRelative` (`HorizontalCenterOptically.kt:65`); the copy under `target/compose-src` still shows the
+  older `place()`, so the two sources disagree about where the mirror happens and winia follows the newer
+  one. `the_optical_shift_points_at_the_gap_in_both_directions` measures both directions.
+- **The leading half gets the same optical correction.** material3 centres the trailing half only
+  (`SplitButton.kt:804-828` and `:930-954` call `horizontalCenterOptically`; the leading one at `:717-726`
+  does not), while winia applies it to either role, since both have a gap side. `without_optical_shift()`
+  opts a half out.
+- **A plain `on_click` on the checked form runs after the toggle.** material3's checked button takes only
+  `onCheckedChange`; winia accepts both, and the action used to be dropped without a word when a checked
+  state was present.
 - **The leading button's icon size is the plain button's.** `leadingButtonIconSizeFor` forwards
   `ButtonDefaults.iconSizeFor`, which is `ButtonSize::icon_size` in winia.
 - **`SplitButtonDefaults.trailing_icon`** does not exist: material3 leaves the trigger glyph to the caller
@@ -155,7 +165,7 @@ matched on `Shape` exhaustively and now handle the new variant.
 
 ## Tests, and what was measured by turning things off
 
-Library (15): the token numbers per size (heights, inner corners and their pressed values, paddings, icon
+Library (22): the token numbers per size (heights, inner corners and their pressed values, paddings, icon
 sizes, the 2 dp gap, `CornerFull` = height/2), the shape sets, `shape_for_state`'s ordering, the optical
 shift against the spec's offsets and its clamp, and four measure-policy rules read off a real composition
 (the pair is leading + gap + trailing and hugs its content, the trailing button keeps its width while the
@@ -164,7 +174,7 @@ shape each button actually paints off its modifier chain: resting, pressed (stat
 first composition — the interaction read is a composition dependency), and checked (stadium container plus
 a state layer).
 
-UI (`--features debug-server`, scenario `split_button`, 3 tests): the pair's rects (2 dp gap, one shared
+UI (`--features debug-server`, scenario `split_button`, 5 tests): the pair's rects (2 dp gap, one shared
 40 dp height, the trailing button's 48 dp minimum), the trailing icon's position (nudged toward the gap by
 the optical correction, measured as `0.11 * (20 - 4)` ≈ 1.76 px), and the two actions (the leading button
 counts exactly once, the trailing button's checked form toggles the menu state).

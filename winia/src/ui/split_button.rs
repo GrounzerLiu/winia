@@ -510,9 +510,11 @@ impl TrailingButton {
         }
     }
 
-    /// The action to run (the plain-action form), or — on the checked form — what to do with the
-    /// new value when the menu opens and closes. On the checked form without a callback winia
-    /// writes the toggled value into the state itself.
+    /// The action to run (the plain-action form). On the checked form it runs AFTER the toggle, and the
+    /// sibling `on_checked_change` callback receives the new value first; with no such callback winia
+    /// writes the toggled value into the state itself. material3's checked button only takes
+    /// `onCheckedChange`, so a plain action there is a winia extension — and one that now runs rather
+    /// than being dropped in silence.
     pub fn on_click(mut self, on_click: impl Fn() + Send + Sync + 'static) -> Self {
         self.part.on_click = Some(Arc::new(on_click));
         self
@@ -764,17 +766,26 @@ impl SplitButtonPart {
             // changes the shape of the composition the moment the morph settles on its target, and a
             // rebuilt content subtree is not the same node as the one the layout had — the icon stays
             // where it was instead of sliding to the position the new offset asks for.
+            // `absolute_offset`, not `offset`: the sign above is already the geometric direction, and a
+            // plain `offset` has its x mirrored a second time by the parent's direction in RTL — which
+            // turned the correction away from the gap in both halves there. The absolute form is the one
+            // the layout does not mirror (`layout/node.rs`, the two branches side by side).
             crate::ui::Row::new()
-                .modifier(Modifier::new().offset(shift_value, 0.0))
+                .modifier(Modifier::new().absolute_offset(shift_value, 0.0))
                 .build(ctx, |ctx| content(ctx));
         });
     }
 
     /// The click handler, resolving material3's two overloads: a plain action, or a menu trigger
     /// that flips the checked state (`onCheckedChange(!checked)`).
+    ///
+    /// On the checked form the toggle runs first, and a plain action the caller set runs after it.
+    /// material3's checked button takes only `onCheckedChange`, so an action here is winia's extension —
+    /// and running it late beats the alternative this used to do, which was dropping it with no error.
     fn click_action(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
         if let Some(checked) = self.checked.clone() {
             let callback = self.on_checked_change.clone();
+            let action = self.on_click.clone();
             return Some(Arc::new(move || {
                 let next = !checked.get();
                 match &callback {
@@ -782,6 +793,9 @@ impl SplitButtonPart {
                     // winia's convenience: the state is already the caller's, so a checked trailing
                     // button works without a callback at all (material3 requires `onCheckedChange`).
                     None => checked.set(next),
+                }
+                if let Some(action) = &action {
+                    action();
                 }
             }));
         }
@@ -1481,8 +1495,14 @@ mod tests {
             let offsets: Vec<f32> = buttons
                 .iter()
                 .map(|b| {
-                    let content = nodes[*b].children.first().expect("the button's content");
-                    nodes[*content].position.x - nodes[*b].position.x
+                    // Two levels down: the Button holds its content in a centring box, and the offset
+                    // lives on the Row inside it. Reading the box itself measures the centring, which
+                    // does not move with the offset — that is how this test kept passing while the
+                    // content did move (measured: swapping the offset back to the pressed-aware radius
+                    // left every library test green).
+                    let panel = nodes[*b].children.first().expect("the button's content box");
+                    let wrapper = nodes[*panel].children.first().expect("the offset wrapper");
+                    nodes[*wrapper].position.x
                 })
                 .collect();
             let shapes: Vec<Option<Shape>> = buttons
@@ -1518,8 +1538,9 @@ mod tests {
             let root = composer.layout_root_idx().expect("root");
             let nodes = composer.arena_nodes();
             let trailing = nodes[root].children[1];
-            let wrapper = nodes[trailing].children.first().copied().expect("the content wrapper");
-            nodes[wrapper].children.first().copied().map_or(0.0, |c| nodes[c].position.x)
+            let panel = nodes[trailing].children.first().copied().expect("the content box");
+            let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
+            nodes[wrapper].position.x
         };
         let unselected = content_offset(false);
         let selected = content_offset(true);
@@ -1528,6 +1549,65 @@ mod tests {
         assert!(
             unselected < -1.0,
             "and an unselected one sits offset toward the gap, measured {unselected}"
+        );
+    }
+
+    /// The optical shift is a geometric direction, and RTL does not mirror the answer: the trailing half
+    /// sits on the LEFT there with the gap to its right, so the correction has to come out positive where
+    /// LTR wants it negative. `Modifier::absolute_offset` is what carries it, because a plain `offset`
+    /// has its x mirrored a second time by the parent's direction and sent both halves AWAY from the gap.
+    ///
+    /// Measured against the same composition with the correction switched off, so the reading needs no
+    /// assumption about where the content would otherwise sit.
+    #[test]
+    fn the_optical_shift_points_at_the_gap_in_both_directions() {
+        let wrapper_x = |dir: LayoutDirection, optical: bool| -> f32 {
+            let theme = ThemeColors::light_from_seed(0x6750A4);
+            let interaction = MutableInteractionSource::new();
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme_and_direction(theme.clone(), dir, ctx, |ctx| {
+                    SplitButtonLayout::new().build(
+                        ctx,
+                        |ctx| {
+                            SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
+                                Text::new("Add").build(ctx);
+                            });
+                        },
+                        |ctx| {
+                            let trailing = SplitButtonDefaults::trailing_button()
+                                .on_click(|| {})
+                                .interaction_source(interaction.clone());
+                            let trailing = if optical {
+                                trailing
+                            } else {
+                                trailing.without_optical_shift()
+                            };
+                            trailing.build(ctx, |ctx| {
+                                Text::new("v").build(ctx);
+                            });
+                        },
+                    );
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let trailing = nodes[root].children[1];
+            let panel = nodes[trailing].children.first().copied().expect("the content box");
+            let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
+            nodes[wrapper].position.x
+        };
+        let ltr = wrapper_x(LayoutDirection::Ltr, false) - wrapper_x(LayoutDirection::Ltr, true);
+        let rtl = wrapper_x(LayoutDirection::Rtl, false) - wrapper_x(LayoutDirection::Rtl, true);
+        eprintln!("trailing content correction (unshifted minus shifted): ltr {ltr} rtl {rtl}");
+        assert!(
+            ltr > 1.0,
+            "LTR: the gap is on the content's left, so it moves that way (measured {ltr})"
+        );
+        assert!(
+            rtl < -1.0,
+            "RTL: the gap is on its right, so the correction points the other way (measured {rtl})"
         );
     }
 }
