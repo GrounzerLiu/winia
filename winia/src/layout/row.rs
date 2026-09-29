@@ -68,6 +68,66 @@ impl MeasurePolicy for RowLayout {
             nodes[c].measured_size = placements[i].size;
         }
     }
+
+    // ── Intrinsic measurement ──
+    //
+    // Row is the horizontal half of Compose's `IntrinsicMeasureBlocks` (RowColumnImpl.kt:261-369):
+    // a WIDTH query is the main axis and prices weighted children by weight unit, a HEIGHT query is
+    // the cross axis and first resolves how much main-axis room each child gets.
+
+    /// `HorizontalMinWidth`: `intrinsicMainAxisSize(measurables, minIntrinsicWidth(h), availableHeight)`
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MinWidth, height, self.spacing)
+    }
+
+    /// `HorizontalMaxWidth`
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        flex::flex_intrinsic_main(ctx, children, IntrinsicQuery::MaxWidth, height, self.spacing)
+    }
+
+    /// `HorizontalMinHeight`: `intrinsicCrossAxisSize(measurables, maxIntrinsicWidth, minIntrinsicHeight, availableWidth)`
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        flex::flex_intrinsic_cross(
+            ctx,
+            children,
+            IntrinsicQuery::MaxWidth,
+            IntrinsicQuery::MinHeight,
+            width,
+            self.spacing,
+        )
+    }
+
+    /// `HorizontalMaxHeight`
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        flex::flex_intrinsic_cross(
+            ctx,
+            children,
+            IntrinsicQuery::MaxWidth,
+            IntrinsicQuery::MaxHeight,
+            width,
+            self.spacing,
+        )
+    }
 }
 
 // ── 测试 ──

@@ -294,3 +294,110 @@ pub(crate) fn measure_flex<A: FlexAxis>(
 
     (A::size(measured_main, cross_size), placements)
 }
+
+// ── 固有尺寸（Compose 的 IntrinsicMeasureBlocks）──
+//
+// Row/Column 是 Compose 里唯一不用 `MeasurePolicy` 默认近似、而是四个查询全覆写的容器：
+// `weight` 需要与测量相位同一套算术（RowColumnImpl.kt:371-452）。下面两个函数就是那段的移植，
+// 查询面由 row.rs / column.rs 按 IntrinsicMeasureBlocks 的对应表传入
+// （RowColumnImpl.kt:261-369）。
+
+/// Compose 的 `intrinsicMainAxisSize`（RowColumnImpl.kt:371-394）。
+///
+/// 无 weight 的子节点贡献自己的主轴固有尺寸；有 weight 的子节点**没有**固有尺寸——它由父节点
+/// 分配一份空间——所以容器改为给"加权集合"定价：最大的 weight 单位（该子节点主轴尺寸 / 它的
+/// weight）乘以总 weight。这正是 `weight(1f)` 的标签在 Column 里仍能报出有限固有高度的原因：
+/// 少了这段算术，标签会把约束原样报回，容器于是报最大值而不是内容宽度
+/// （`MenuColumnPolicy` 当年正是踩了这个坑，见 winia/src/ui/overlay.rs）。
+pub(crate) fn flex_intrinsic_main(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    main_query: IntrinsicQuery,
+    cross_axis_available: f32,
+    spacing: f32,
+) -> f32 {
+    if children.is_empty() {
+        return 0.0;
+    }
+    let mut fixed_space = 0.0f32;
+    let mut weight_unit_space = 0.0f32;
+    let mut total_weight = 0.0f32;
+    for &c in children {
+        let weight = ctx.child_weight(c);
+        let size = ctx.child_intrinsic(c, main_query, cross_axis_available);
+        if weight > 0.0 {
+            total_weight += weight;
+            weight_unit_space = weight_unit_space.max(size / weight);
+        } else {
+            fixed_space += size;
+        }
+    }
+    weight_unit_space * total_weight + fixed_space + spacing * (children.len() as f32 - 1.0).max(0.0)
+}
+
+/// Compose 的 `intrinsicCrossAxisSize`（RowColumnImpl.kt:396-452）。
+///
+/// 交叉轴答案必须先知道每个子节点的**主轴**空间：子节点的交叉尺寸是按它将占用的主轴空间定价的。
+/// 无 weight 的子节点取"无界主轴固有尺寸"与容器剩余空间的较小者；有 weight 的子节点各占一个
+/// weight 单位。这里的 `main_query` 是主轴的 **Max** 查询——Compose 的每个交叉轴块都拿主轴
+/// `maxIntrinsic*` 配对（RowColumnImpl.kt:281-355），因为拿到更多空间的子节点也可能在交叉轴上变大。
+pub(crate) fn flex_intrinsic_cross(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    main_query: IntrinsicQuery,
+    cross_query: IntrinsicQuery,
+    main_axis_available: f32,
+    spacing: f32,
+) -> f32 {
+    if children.is_empty() {
+        return 0.0;
+    }
+    let unbounded = main_axis_available >= f32::MAX;
+    let spacing_total = spacing * (children.len() as f32 - 1.0).max(0.0);
+    // Compose: `fixedSpace = min((n - 1) * mainAxisSpacing, mainAxisAvailable)`。
+    let mut fixed_space = if unbounded {
+        spacing_total
+    } else {
+        spacing_total.min(main_axis_available)
+    };
+    let mut cross_axis_max = 0.0f32;
+    let mut total_weight = 0.0f32;
+
+    for &c in children {
+        let weight = ctx.child_weight(c);
+        if weight > 0.0 {
+            total_weight += weight;
+            continue;
+        }
+        // 问子节点想要多少主轴空间——但绝不会超过剩余可用空间。
+        let remaining = if unbounded {
+            f32::MAX
+        } else {
+            (main_axis_available - fixed_space).max(0.0)
+        };
+        let main_axis_space = ctx.child_intrinsic(c, main_query, f32::MAX).min(remaining);
+        fixed_space += main_axis_space;
+        cross_axis_max = cross_axis_max.max(ctx.child_intrinsic(c, cross_query, main_axis_space));
+    }
+
+    // weight=1 代表多少主轴空间（无界时 Compose 用 Infinity → 交叉轴按无界问）。
+    let weight_unit_space = if total_weight == 0.0 {
+        0.0
+    } else if unbounded {
+        f32::MAX
+    } else {
+        (main_axis_available - fixed_space).max(0.0) / total_weight
+    };
+    for &c in children {
+        let weight = ctx.child_weight(c);
+        if weight > 0.0 {
+            let main_space = if weight_unit_space >= f32::MAX {
+                f32::MAX
+            } else {
+                weight_unit_space * weight
+            };
+            cross_axis_max = cross_axis_max.max(ctx.child_intrinsic(c, cross_query, main_space));
+        }
+    }
+    cross_axis_max
+}

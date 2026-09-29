@@ -1,6 +1,6 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
-use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
 use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::ui::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
@@ -789,6 +789,280 @@ pub trait MeasurePolicy: std::fmt::Debug {
     fn subcomposes(&self) -> bool {
         false
     }
+
+    // ── Intrinsic measurement (Compose's four `MeasurePolicy` intrinsic functions) ──
+    //
+    // Every method has a DEFAULT, exactly like Compose, and the default is Compose's own: "have
+    // default implementations that make a best effort attempt to calculate the intrinsic
+    // measurements by reusing the measure method". Concretely: measure the children with the
+    // queried axis unbounded and the other axis fixed to the value the parent asked about, and
+    // report the resulting size. That is an approximation for layouts whose geometry depends on
+    // the space they are given; a policy that knows better (Row/Column, whose `weight` handling
+    // needs the same arithmetic as its measure phases) overrides these.
+
+    /// The smallest width this content can be laid out at, given it will be `height` tall.
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        ctx.approx_measure(children, Constraints::new(0.0, f32::MAX, 0.0, height)).width
+    }
+
+    /// The width this content takes with nothing wrapped, given it will be `height` tall.
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        ctx.approx_measure(children, Constraints::new(0.0, f32::MAX, 0.0, height)).width
+    }
+
+    /// The smallest height this content can be laid out at, given it will be `width` wide.
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        ctx.approx_measure(children, Constraints::new(0.0, width, 0.0, f32::MAX)).height
+    }
+
+    /// The height this content takes with nothing wrapped, given it will be `width` wide.
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        ctx.approx_measure(children, Constraints::new(0.0, width, 0.0, f32::MAX)).height
+    }
+}
+
+// ── Intrinsic measurement (Compose's intrinsic protocol) ──
+
+/// One of Compose's four intrinsic queries: which extreme, on which axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntrinsicQuery {
+    MinWidth,
+    MaxWidth,
+    MinHeight,
+    MaxHeight,
+}
+
+impl IntrinsicQuery {
+    /// The query a `Modifier.width(IntrinsicSize)` request asks for.
+    pub(crate) fn for_width(size: IntrinsicSize) -> Self {
+        match size {
+            IntrinsicSize::Min => IntrinsicQuery::MinWidth,
+            IntrinsicSize::Max => IntrinsicQuery::MaxWidth,
+        }
+    }
+
+    /// The query a `Modifier.height(IntrinsicSize)` request asks for.
+    pub(crate) fn for_height(size: IntrinsicSize) -> Self {
+        match size {
+            IntrinsicSize::Min => IntrinsicQuery::MinHeight,
+            IntrinsicSize::Max => IntrinsicQuery::MaxHeight,
+        }
+    }
+
+    /// Whether the query is about the horizontal axis.
+    pub fn is_width(self) -> bool {
+        matches!(self, IntrinsicQuery::MinWidth | IntrinsicQuery::MaxWidth)
+    }
+}
+
+/// The scope a policy answers an intrinsic query in — Compose's `IntrinsicMeasureScope`.
+///
+/// A policy either approximates ([`IntrinsicCtx::approx_measure`], the same "reuse `measure`"
+/// approximation Compose's defaults use) or asks a child directly
+/// ([`IntrinsicCtx::child_intrinsic`], which inverts that child's own modifier chain).
+///
+/// An intrinsic query must NOT go through [`measure_node`]; that is the frame's folding path and
+/// it writes `measured_size` / `cached_constraints` / `dirty` into the node. Nodes reached through
+/// `approx_measure` ARE measured (that is what the approximation does) but the fold stays
+/// consistent: a node measured by a probe records the probe's constraints, so the frame's own pass
+/// re-measures it as soon as its constraints differ, and folds only when they are identical — in
+/// which case the result is the same by definition.
+pub struct IntrinsicCtx<'a> {
+    nodes: &'a mut Vec<LayoutNode>,
+    policies: &'a [Box<dyn MeasurePolicy>],
+    policy_idx: usize,
+}
+
+impl<'a> IntrinsicCtx<'a> {
+    /// Compose's `IntrinsicMeasureScope.measure`: run the policy's own `measure` with the probe
+    /// constraints and report the size it produces.
+    pub fn approx_measure(&mut self, children: &[usize], constraints: Constraints) -> Size {
+        let policy: &dyn MeasurePolicy = &*self.policies[self.policy_idx];
+        policy.measure(self.nodes, self.policies, children, constraints).0
+    }
+
+    /// Ask a CHILD node for one of its intrinsic measurements, through its own modifier chain.
+    /// `other` is the value of the axis that is not being queried (the height for a width query).
+    pub fn child_intrinsic(&mut self, child: usize, query: IntrinsicQuery, other: f32) -> f32 {
+        intrinsic_size_of(self.nodes, self.policies, child, query, other)
+    }
+
+    /// The child's `layoutWeight`. Read-only: a container whose intrinsic size needs the weight
+    /// arithmetic (Row/Column) prices weighted children itself, because a weighted child has no
+    /// intrinsic size of its own — the parent hands it a share of the available space.
+    pub fn child_weight(&self, child: usize) -> f32 {
+        self.nodes[child].modifier.get_layout_weight().unwrap_or(0.0)
+    }
+}
+
+/// Intrinsic measurement OF a node — the answer a parent gets when it asks this node for one of its
+/// intrinsic sizes.
+///
+/// Inverts this node's own modifier chain in the order [`measure_node_inner`] applies it, then asks
+/// the content. `other` is the value on the axis that is NOT queried; some leaves (text) need it in
+/// order to answer at all.
+pub(crate) fn intrinsic_size_of(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
+    query: IntrinsicQuery,
+    other: f32,
+) -> f32 {
+    let horizontal = query.is_width();
+    // Read the whole chain in one borrow and let it go: the content query needs `nodes` mutably.
+    let (fixed, min_axis, max_axis, required, pad_axis, intrinsic_request, scrolled) = {
+        let m = &nodes[idx].modifier;
+        let (pad_x, pad_y) = m.get_padding_values();
+        let (min_w, min_h) = m.min_size_constraint();
+        let (max_w, max_h) = m.max_size_constraint();
+        (
+            m.resolved_size().map(|(w, h)| if horizontal { w } else { h }).flatten(),
+            if horizontal { min_w } else { min_h },
+            if horizontal { max_w } else { max_h },
+            m.required_size_constraint().and_then(|(w, h)| if horizontal { w } else { h }),
+            if horizontal { pad_x } else { pad_y },
+            if horizontal { m.intrinsic_width_request() } else { m.intrinsic_height_request() },
+            if horizontal {
+                m.horizontal_scroll_state().is_some()
+            } else {
+                m.vertical_scroll_state().is_some()
+            },
+        )
+    };
+
+    // The queried axis's own numeric range, in the pipeline's order: size → sizeIn(min) →
+    // sizeIn(max) → requiredSize (a hard override that may leave the incoming range on purpose).
+    let (mut lo, mut hi) = (0.0f32, f32::MAX);
+    if let Some(v) = fixed {
+        lo = v;
+        hi = v;
+    }
+    if let Some(v) = min_axis {
+        lo = lo.max(v).min(hi);
+    }
+    if let Some(v) = max_axis {
+        hi = hi.min(v).max(lo);
+    }
+    if let Some(v) = required {
+        lo = v;
+        hi = v;
+    }
+
+    // A fixed axis needs no measurement, and it is also the node's own size: the pipeline tightens
+    // the node to it BEFORE padding is offset, so `size(100).padding(8)` measures 100, not 116.
+    if lo == hi && lo < f32::MAX {
+        return lo;
+    }
+
+    let content = if intrinsic_request.is_some() {
+        // `Modifier.width/height(IntrinsicSize)`: this axis IS the content's measurement.
+        content_intrinsic(nodes, policies, idx, query, other)
+    } else if scrolled {
+        // A scroller reports its content's intrinsic size along the scrolled axis: the content is
+        // asked with the cross axis unbounded (Compose's `Scroll` intrinsic block does the same).
+        content_intrinsic(nodes, policies, idx, query, f32::MAX)
+    } else {
+        content_intrinsic(nodes, policies, idx, query, other)
+    };
+
+    // `fillMax*` is deliberately not honoured here: Compose's `FillNode` keeps the DEFAULT
+    // intrinsic behavior (only its size node and its `defaultMinSize` node override it), and
+    // filling is a measure-time act that needs incoming space. Recorded in docs/intrinsic-size.md.
+    content.clamp(lo, hi) + pad_axis
+}
+
+/// The CONTENT's answer to an intrinsic query: the node's policy, or the node itself as a leaf.
+fn content_intrinsic(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
+    query: IntrinsicQuery,
+    other: f32,
+) -> f32 {
+    let mut children = nodes[idx].children.clone();
+    if let Some(sub) = nodes[idx].subcomposed_child {
+        children.retain(|&c| c != sub);
+    }
+    if let Some(pidx) = nodes[idx].measure_policy {
+        if policies[pidx].subcomposes() {
+            // A policy that composes its content DURING measurement cannot answer an intrinsic
+            // query without composing, and Compose has no intrinsic scope for `SubcomposeLayout`
+            // either. Report the last measured size on that axis instead of composing inside a
+            // probe, which runs outside the frame's compose step.
+            return if query.is_width() {
+                nodes[idx].measured_size.width
+            } else {
+                nodes[idx].measured_size.height
+            };
+        }
+        let mut ctx = IntrinsicCtx { nodes, policies, policy_idx: pidx };
+        return match query {
+            IntrinsicQuery::MinWidth => policies[pidx].min_intrinsic_width(&mut ctx, &children, other),
+            IntrinsicQuery::MaxWidth => policies[pidx].max_intrinsic_width(&mut ctx, &children, other),
+            IntrinsicQuery::MinHeight => policies[pidx].min_intrinsic_height(&mut ctx, &children, other),
+            IntrinsicQuery::MaxHeight => policies[pidx].max_intrinsic_height(&mut ctx, &children, other),
+        };
+    }
+    leaf_intrinsic(nodes, idx, query, other)
+}
+
+/// Leaf answers — mirrors the leaf branch of [`measure_node_inner`], but WITHOUT the incoming
+/// constraints (`intrinsic_size_of` clamps the answer itself) and without writing the render cache.
+///
+/// - text: a width query is the paragraph's own intrinsic width, a height query is the height the
+///   paragraph takes at the asked width (plus the supporting-text reserve the measure branch adds);
+/// - an image reports its intrinsic size on both axes;
+/// - anything else measures nothing, so it is 0 (the pipeline gives it its fixed axis, if any).
+fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: IntrinsicQuery, other: f32) -> f32 {
+    if nodes[idx].has_text_content {
+        let Some(para) = build_text_paragraph(&nodes[idx], other) else {
+            return 0.0;
+        };
+        return match query {
+            IntrinsicQuery::MinWidth => para.min_intrinsic_width(),
+            IntrinsicQuery::MaxWidth => para.max_intrinsic_width(),
+            // The paragraph was laid out at `other` (the width the parent asked about), so its
+            // height is the answer. `measure_and_cache_text` would round the same way.
+            IntrinsicQuery::MinHeight | IntrinsicQuery::MaxHeight => {
+                para.height().ceil() + supporting_text_height(&nodes[idx])
+            }
+        };
+    }
+    if nodes[idx].has_richtext_content {
+        // Rich text has no intrinsic accessor (inline drawables need the layout pass); answer with
+        // the height it takes at the asked width, which is what its own measure would produce.
+        let layout_width = if query.is_width() { f32::MAX } else { other };
+        let size = measure_and_cache_richtext(&nodes[idx], layout_width);
+        return if query.is_width() { size.width } else { size.height };
+    }
+    if nodes[idx].has_image_content {
+        let (iw, ih) = nodes[idx].modifier.image_intrinsic_size().unwrap_or((0.0, 0.0));
+        // An image has one size; min and max agree, which is what the pipeline does for images.
+        return if query.is_width() { iw } else { ih };
+    }
+    // A plain leaf: only a fixed axis gives it a size, and that case never reaches this far
+    // (`intrinsic_size_of` returns the fixed value without asking the content).
+    0.0
 }
 
 // ── 命中测试 ──
@@ -2496,6 +2770,29 @@ fn measure_node_inner(
         }
     }
 
+    // 1.5 固有尺寸请求（`Modifier.width/height(IntrinsicSize)`）——该轴取内容自己的固有测量。
+    // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的
+    // 固有尺寸，把约束收紧到它；`enforceIncoming`（`size/width/height` 形式）为真时 incoming 仍
+    // 是最终夹取者，`requiredWidth/Height(IntrinsicSize)` 为假（忽略 incoming，同 requiredSize）。
+    // 位置必须在 padding offset **之前**：管线是"先定节点尺寸，再把 padding 偏移进内层"，
+    // 所以这里收紧的是节点自身（含 padding）的尺寸。
+    if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_width_request() {
+        let other = inner_constraints.max_height;
+        let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
+        if enforce_incoming {
+            w = inner_constraints.constrain_width(w);
+        }
+        inner_constraints = inner_constraints.tighten_width(w);
+    }
+    if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
+        let other = inner_constraints.max_width;
+        let mut h = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
+        if enforce_incoming {
+            h = inner_constraints.constrain_height(h);
+        }
+        inner_constraints = inner_constraints.tighten_height(h);
+    }
+
     // 2. 应用 padding
     let (pad_start, pad_end) = nodes[idx].modifier.get_padding_horizontal();
     let (pad_top, pad_bottom) = nodes[idx].modifier.get_padding_vertical();
@@ -2711,9 +3008,7 @@ fn measure_node_inner(
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
             // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
             // 高度 +20 预留，防与下方元素重叠）
-            let supporting_h = if nodes[idx].modifier.elements().iter().any(|el| {
-                matches!(el, crate::modifier::ModifierElement::TextFieldVisual { supporting: Some(_), .. })
-            }) { 4.0 + 16.0 } else { 0.0 };
+            let supporting_h = supporting_text_height(&nodes[idx]);
             // 用约束 clamping 最终尺寸（fill_max_width 时约束收紧，文本应填满可用宽度）。
             // ⚠ 高度 = paragraph 实际高度（含自动折行）+ supporting——不得按
             // 显式换行数近似（折行文本高度会裁剪）；min_height 提升兜底占位
@@ -2894,18 +3189,18 @@ pub(crate) fn build_plain_paragraph(
     para
 }
 
-/// 合并的文本测量 + Paragraph 缓存。
+/// Text leaf: build the paragraph laid out at `max_width`, WITHOUT touching the render cache.
 ///
-/// 从 TextContent modifier 中提取所有参数（font_size、max_lines、overflow、align），
-/// 在 ParagraphStyle 上正确设置后一次创建 Paragraph，测量尺寸并缓存供渲染复用。
-/// 消除旧代码中 `measurer.measure()` + `cache_text_paragraph()` 重复创建的开销。
-fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
+/// `measure_and_cache_text` and the intrinsic probes both go through this. A probe must not leave
+/// a paragraph laid out at its own width in `cached_paragraph` — the renderer reads that cache,
+/// and a probe runs with the intrinsic query's width, not the frame's.
+fn build_text_paragraph(node: &LayoutNode, max_width: f32) -> Option<crate::text::Paragraph> {
     for el in node.modifier.elements() {
         if let ModifierElement::TextContent {
             content, font_size, color, font_weight, font_style, max_lines, align, overflow, soft_wrap,
             letter_spacing, line_height,
         } = el {
-            let para = build_plain_paragraph(
+            return Some(build_plain_paragraph(
                 content.as_str(),
                 *font_size,
                 color,
@@ -2918,18 +3213,45 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
                 *letter_spacing,
                 *line_height,
                 max_width,
-            );
-
-            let size = Size::new(
-                para.max_intrinsic_width().ceil().min(max_width),
-                para.height().ceil(),
-            );
-
-            *node.cached_paragraph.borrow_mut() = Some(para);
-            return size;
+            ));
         }
     }
-    Size::ZERO
+    None
+}
+
+/// Height reserved below a text leaf that carries TextField supporting text (the supporting line
+/// is drawn 4dp below the container and is 16dp tall). Shared by the measure pass and the
+/// intrinsic probes so both reserve the same box.
+fn supporting_text_height(node: &LayoutNode) -> f32 {
+    if node
+        .modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(el, ModifierElement::TextFieldVisual { supporting: Some(_), .. }))
+    {
+        4.0 + 16.0
+    } else {
+        0.0
+    }
+}
+
+/// 合并的文本测量 + Paragraph 缓存。
+///
+/// 从 TextContent modifier 中提取所有参数（font_size、max_lines、overflow、align），
+/// 在 ParagraphStyle 上正确设置后一次创建 Paragraph，测量尺寸并缓存供渲染复用。
+/// 消除旧代码中 `measurer.measure()` + `cache_text_paragraph()` 重复创建的开销。
+fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
+    let Some(para) = build_text_paragraph(node, max_width) else {
+        return Size::ZERO;
+    };
+
+    let size = Size::new(
+        para.max_intrinsic_width().ceil().min(max_width),
+        para.height().ceil(),
+    );
+
+    *node.cached_paragraph.borrow_mut() = Some(para);
+    size
 }
 
 /// 富文本测量 + 缓存（含内联 drawable）。
@@ -3142,5 +3464,395 @@ pub fn compute_spacing(
                 (0.0, remaining / 2.0)
             }
         }
+    }
+}
+
+// ── 固有尺寸测试（每一步都配一条"关掉即变红"的断言）──
+
+#[cfg(test)]
+mod intrinsic_tests {
+    use super::*;
+    use crate::layout::column::ColumnLayout;
+    use crate::layout::row::RowLayout;
+    use crate::modifier::{IntrinsicSize, Modifier, ModifierElement};
+
+    fn text_modifier(content: &str) -> Modifier {
+        Modifier::new().push(ModifierElement::TextContent {
+            content: content.to_string(),
+            font_size: 14.0,
+            color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+            font_weight: crate::ui::text::FontWeight::NORMAL,
+            font_style: crate::ui::text::FontSlant::Upright,
+            max_lines: usize::MAX,
+            align: crate::ui::TextAlign::Left,
+            overflow: crate::ui::TextOverflow::Clip,
+            soft_wrap: true,
+            letter_spacing: 0.0,
+            line_height: None,
+        })
+    }
+
+    fn text_leaf(content: &str) -> LayoutNode {
+        LayoutNode::new(text_modifier(content), None)
+    }
+
+    fn leaf_max_width(nodes: &mut Vec<LayoutNode>, idx: usize, other: f32) -> f32 {
+        let policies: Vec<Box<dyn MeasurePolicy>> = Vec::new();
+        intrinsic_size_of(nodes, &policies, idx, IntrinsicQuery::MaxWidth, other)
+    }
+
+    /// A policy that only implements `measure` — the default intrinsic methods must reuse it
+    /// (Compose: "make a best effort attempt … by reusing the measure method").
+    #[derive(Debug)]
+    struct FixedPolicy(f32, f32);
+
+    impl MeasurePolicy for FixedPolicy {
+        fn measure(
+            &self,
+            _nodes: &mut Vec<LayoutNode>,
+            _policies: &[Box<dyn MeasurePolicy>],
+            _children: &[usize],
+            _constraints: Constraints,
+        ) -> (Size, Vec<Placement>) {
+            (Size::new(self.0, self.1), Vec::new())
+        }
+
+        fn place(&self, _nodes: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+    }
+
+    #[test]
+    fn the_default_intrinsic_query_reuses_measure() {
+        let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FixedPolicy(40.0, 25.0))];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            40.0,
+            "width query = measure with an unbounded width"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            40.0
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
+            25.0
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinHeight, 100.0),
+            25.0
+        );
+    }
+
+    #[test]
+    fn a_text_leaf_answers_all_four_queries() {
+        let mut nodes = vec![text_leaf("New file")];
+        let max_w = leaf_max_width(&mut nodes, 0, f32::MAX);
+        let min_w = intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MinWidth, f32::MAX);
+        assert!(max_w > 0.0, "the paragraph has a width (measured {max_w})");
+        assert!(
+            min_w > 0.0 && min_w < max_w,
+            "the longest word is narrower than the line: min {min_w} < max {max_w}"
+        );
+
+        let height = intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MaxHeight, 200.0);
+        assert!(height > 0.0, "one line tall (measured {height})");
+        assert_eq!(
+            height,
+            intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MinHeight, 200.0),
+            "a single line has the same min and max height"
+        );
+    }
+
+    #[test]
+    fn padding_is_added_to_a_content_measurement() {
+        let bare = leaf_max_width(&mut vec![text_leaf("New file")], 0, f32::MAX);
+        let mut padded = vec![LayoutNode::new(text_modifier("New file").padding_horizontal(12.0), None)];
+        assert_eq!(
+            leaf_max_width(&mut padded, 0, f32::MAX),
+            bare + 24.0,
+            "the node is as wide as its content plus its own padding"
+        );
+    }
+
+    #[test]
+    fn a_fixed_axis_short_circuits_before_padding() {
+        // The pipeline tightens a node to its `size` BEFORE padding is offset into the inner
+        // constraints, so the node measures `size` — not `size + padding`.
+        let mut nodes = vec![LayoutNode::new(
+            Modifier::new().size(100.0, 40.0).padding_horizontal(8.0),
+            None,
+        )];
+        assert_eq!(leaf_max_width(&mut nodes, 0, f32::MAX), 100.0);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MaxHeight, f32::MAX),
+            40.0
+        );
+    }
+
+    #[test]
+    fn an_intrinsic_probe_does_not_write_the_text_render_cache() {
+        let mut nodes = vec![text_leaf("New file")];
+        let _ = leaf_max_width(&mut nodes, 0, f32::MAX);
+        assert!(
+            nodes[0].cached_paragraph.borrow().is_none(),
+            "a probe runs at the query's width, so its paragraph must not become the render cache"
+        );
+        let _ = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 500.0, 0.0, 500.0));
+        assert!(
+            nodes[0].cached_paragraph.borrow().is_some(),
+            "the measure pass is what caches the paragraph"
+        );
+    }
+
+    /// The trap `MenuColumnPolicy` had to work around: a label carrying `weight(1f)` has no width of
+    /// its own, so a container that just measures it with an unbounded axis gets the CONSTRAINT back
+    /// (measured at the time: an icon menu's items jumped from 112 to the 280 maximum). Row/Column
+    /// price weighted children by weight unit instead.
+    #[test]
+    fn a_weighted_label_reports_its_own_width_not_the_constraint() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::new(text_modifier("New file").layout_weight(1.0), None),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let row_width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 600.0);
+        let label = leaf_max_width(&mut vec![text_leaf("New file")], 0, 600.0);
+        assert_eq!(
+            row_width, label,
+            "the weighted label's weight unit is its own width, so the row is one label wide"
+        );
+        assert!(row_width < 600.0, "and NOT the constraint it was offered");
+    }
+
+    #[test]
+    fn a_row_answers_min_and_max_width_from_its_children() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            text_leaf("New"),
+            text_leaf("file"),
+        ];
+        nodes[0].children = vec![1, 2];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let a = leaf_max_width(&mut vec![text_leaf("New")], 0, f32::MAX);
+        let b = leaf_max_width(&mut vec![text_leaf("file")], 0, f32::MAX);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 600.0),
+            a + b
+        );
+    }
+
+    #[test]
+    fn a_row_with_spacing_reserves_the_gaps() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            text_leaf("New"),
+            text_leaf("file"),
+        ];
+        nodes[0].children = vec![1, 2];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new().spacing(10.0))];
+        let a = leaf_max_width(&mut vec![text_leaf("New")], 0, f32::MAX);
+        let b = leaf_max_width(&mut vec![text_leaf("file")], 0, f32::MAX);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 600.0),
+            a + b + 10.0
+        );
+    }
+
+    #[test]
+    fn a_column_answers_height_as_the_sum_of_its_children() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            text_leaf("Alpha"),
+            text_leaf("Beta"),
+        ];
+        nodes[0].children = vec![1, 2];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(ColumnLayout::new())];
+        let mut a_nodes = vec![text_leaf("Alpha")];
+        let a = intrinsic_size_of(&mut a_nodes, &[], 0, IntrinsicQuery::MaxHeight, 200.0);
+        let mut b_nodes = vec![text_leaf("Beta")];
+        let b = intrinsic_size_of(&mut b_nodes, &[], 0, IntrinsicQuery::MaxHeight, 200.0);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 200.0),
+            a + b
+        );
+    }
+
+    #[test]
+    fn a_column_answers_width_as_its_widest_child() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            text_leaf("Alpha"),
+            text_leaf("Beta and more"),
+        ];
+        nodes[0].children = vec![1, 2];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(ColumnLayout::new())];
+        let narrow = leaf_max_width(&mut vec![text_leaf("Alpha")], 0, f32::MAX);
+        let wide = leaf_max_width(&mut vec![text_leaf("Beta and more")], 0, f32::MAX);
+        assert!(wide > narrow);
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 200.0),
+            wide,
+            "the column is as wide as its widest child"
+        );
+    }
+
+    /// `Modifier.width(IntrinsicSize.Max)` — the pipeline's half of the contract: the node is
+    /// tightened to the CONTENT's own measurement.
+    #[test]
+    fn width_intrinsic_size_max_tightens_the_node_to_its_content() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width(IntrinsicSize::Max), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        // `SpaceBetween` stretches to the incoming main axis when the main axis is bounded, so this
+        // test can tell "as wide as the parent allows" (500) from "as wide as the content is".
+        let policies: Vec<Box<dyn MeasurePolicy>> =
+            vec![Box::new(RowLayout::new().arrangement(Arrangement::SpaceBetween))];
+        let (size, _) =
+            measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 500.0, 0.0, 500.0));
+        let label = leaf_max_width(&mut vec![text_leaf("New file")], 0, 500.0);
+        assert_eq!(size.width, label, "measured width is the content's own width");
+    }
+
+    #[test]
+    fn width_intrinsic_size_min_answers_the_longest_word() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width(IntrinsicSize::Min), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) =
+            measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 500.0, 0.0, 500.0));
+        let longest_word = intrinsic_size_of(
+            &mut vec![text_leaf("New file")],
+            &[],
+            0,
+            IntrinsicQuery::MinWidth,
+            f32::MAX,
+        );
+        assert_eq!(size.width, longest_word);
+        assert!(longest_word < leaf_max_width(&mut vec![text_leaf("New file")], 0, f32::MAX));
+    }
+
+    #[test]
+    fn height_intrinsic_size_max_tightens_the_node_to_its_content() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().height(IntrinsicSize::Max), Some(0)),
+            text_leaf("Alpha"),
+            text_leaf("Beta"),
+        ];
+        nodes[0].children = vec![1, 2];
+        // Same trick as the width case: `SpaceBetween` would otherwise stretch the column to the
+        // incoming 500, so the assertion below can only hold if the height was tightened first.
+        let policies: Vec<Box<dyn MeasurePolicy>> =
+            vec![Box::new(ColumnLayout::new().arrangement(Arrangement::SpaceBetween))];
+        let (size, _) =
+            measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 200.0, 0.0, 500.0));
+        let mut a_nodes = vec![text_leaf("Alpha")];
+        let a = intrinsic_size_of(&mut a_nodes, &[], 0, IntrinsicQuery::MaxHeight, 200.0);
+        let mut b_nodes = vec![text_leaf("Beta")];
+        let b = intrinsic_size_of(&mut b_nodes, &[], 0, IntrinsicQuery::MaxHeight, 200.0);
+        assert_eq!(size.height, a + b, "the column is exactly two lines tall");
+    }
+
+    #[test]
+    fn an_incoming_maximum_still_overrides_an_intrinsic_width() {
+        // The `size`/`width` forms keep Compose's `enforceIncoming = true`: the parent's maximum
+        // gets the last word (Intrinsic.kt:34-49 "may override this value").
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width(IntrinsicSize::Max), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) =
+            measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 20.0, 0.0, 500.0));
+        assert_eq!(size.width, 20.0, "clamped to the incoming maximum");
+    }
+
+    #[test]
+    fn required_width_intrinsic_size_ignores_the_incoming_maximum() {
+        // `requiredWidth(IntrinsicSize)` is `enforceIncoming = false` (Intrinsic.kt:105/130).
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().required_width(IntrinsicSize::Max), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) =
+            measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 20.0, 0.0, 500.0));
+        let label = leaf_max_width(&mut vec![text_leaf("New file")], 0, 500.0);
+        assert_eq!(
+            size.width, label,
+            "the required form overflows the incoming maximum on purpose"
+        );
+        assert!(size.width > 20.0);
+    }
+
+    #[test]
+    fn a_scrolled_axis_asks_its_content_with_the_cross_axis_unbounded() {
+        // Compose's `Scroll` intrinsic block answers with the content's own measurement
+        // (`foundation/Scroll.kt:478-500`), so a scroller keeps reporting a content-sized box.
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new().vertical_scroll(crate::modifier::ScrollState::new()),
+                Some(0),
+            ),
+            text_leaf("Alpha"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(ColumnLayout::new())];
+        let content_height = intrinsic_size_of(
+            &mut vec![text_leaf("Alpha")],
+            &[],
+            0,
+            IntrinsicQuery::MaxHeight,
+            f32::MAX,
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 120.0),
+            content_height,
+            "the scrolled axis reports the content, not the viewport"
+        );
+    }
+
+    #[test]
+    fn a_subcomposing_policy_reports_its_last_measured_size_instead_of_composing() {
+        // Compose has no intrinsic scope for a policy that composes during measurement, and a probe
+        // runs outside the frame's compose step — so this one must not compose.
+        #[derive(Debug)]
+        struct SubcomposingPolicy;
+
+        impl MeasurePolicy for SubcomposingPolicy {
+            fn measure(
+                &self,
+                _nodes: &mut Vec<LayoutNode>,
+                _policies: &[Box<dyn MeasurePolicy>],
+                _children: &[usize],
+                _constraints: Constraints,
+            ) -> (Size, Vec<Placement>) {
+                (Size::new(33.0, 44.0), Vec::new())
+            }
+            fn place(&self, _nodes: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+            fn subcomposes(&self) -> bool {
+                true
+            }
+        }
+
+        let mut nodes = vec![LayoutNode::new(Modifier::new(), Some(0))];
+        nodes[0].measured_size = Size::new(11.0, 22.0);
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(SubcomposingPolicy)];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            11.0,
+            "the last measured width, not a fresh composition"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
+            22.0
+        );
     }
 }
