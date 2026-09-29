@@ -302,6 +302,48 @@ struct SplitButtonPolicy {
     direction: LayoutDirection,
 }
 
+impl SplitButtonPolicy {
+    /// The fallback for a composition that is not the pair material3 describes — reachable in release
+    /// builds only, because the count is asserted in debug ones. Every child is measured at the incoming
+    /// constraints and placed in a row `spacing` apart, the leading edge following the direction, so a
+    /// mis-composed pair is visible instead of being skipped in silence.
+    fn measure_row(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let mut sizes = Vec::with_capacity(children.len());
+        let mut tallest: f32 = 0.0;
+        for &child in children {
+            let (size, _) = measure_node(nodes, policies, child, constraints);
+            tallest = tallest.max(size.height);
+            sizes.push(size);
+        }
+        let height = constraints.constrain_height(tallest);
+        let width = constraints.constrain_width(
+            sizes.iter().map(|size| size.width).sum::<f32>()
+                + self.spacing * children.len().saturating_sub(1) as f32,
+        );
+        let mut placements = Vec::with_capacity(children.len());
+        let mut cursor = 0.0;
+        for size in &sizes {
+            let x = if self.direction == LayoutDirection::Rtl {
+                width - cursor - size.width
+            } else {
+                cursor
+            };
+            placements.push(Placement {
+                size: Size::new(size.width, height),
+                position: Point::new(x, (height - size.height) / 2.0),
+            });
+            cursor += size.width + self.spacing;
+        }
+        (Size::new(width, height), placements)
+    }
+}
+
 impl MeasurePolicy for SplitButtonPolicy {
     fn measure(
         &self,
@@ -310,10 +352,17 @@ impl MeasurePolicy for SplitButtonPolicy {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        if children.len() < 2 {
-            // A layout with half a split button has nothing to arrange; material3 would fail its
-            // `fastFirst` lookups, winia lays out whatever is there at its own size.
-            return (Size::new(0.0, 0.0), Vec::new());
+        // material3's `SplitButtonLayout` takes exactly two composables (leading, then trailing) and
+        // indexes them, and `SplitButtonLayout::build` composes exactly those two — so the count is an
+        // invariant rather than a case to handle: assert it, and if a caller breaks it anyway lay the
+        // children out as a row (measured and placed) instead of collapsing into an empty layout.
+        debug_assert_eq!(
+            children.len(),
+            2,
+            "a split button arranges exactly two buttons (leading, then trailing)"
+        );
+        if children.len() != 2 {
+            return self.measure_row(nodes, policies, children, constraints);
         }
         let leading = children[0];
         let trailing = children[1];
@@ -826,9 +875,11 @@ impl crate::modifier::DrawWrapNode for StateLayer {
 
 /// The four corner radii a shape draws with, in the order `Shape::corners` takes them (top-left,
 /// top-right, bottom-right, bottom-left). `Pill` and `Circle` are percent corners — half the SHORT side,
-/// which Compose resolves in `createOutline` against the box it paints into — and a split button's half is
-/// wider than it is tall (the minimum width is 48 dp), so its container height resolves them, the same way
-/// `SplitButtonDefaults::outer_corner_size` does.
+/// which Compose resolves in `createOutline` against the box it paints into — and a composition does not
+/// know the box it will be measured into, so the container height resolves them, exactly as
+/// `SplitButtonDefaults::outer_corner_size` does. That is exact while the half is at least as wide as it is
+/// tall, and the settled checked shape is the token's `Pill`, which the renderer resolves against the real
+/// box instead.
 pub(crate) fn corner_radii(shape: &Shape, height: f32) -> (f32, f32, f32, f32) {
     let full = height / 2.0;
     match shape {
@@ -1792,6 +1843,78 @@ mod tests {
             pinned_rtl,
             vec![Shape::corners(outer, inner, inner, outer)],
             "RTL: the same set, mirrored by the pinned direction"
+        );
+    }
+
+    /// The pair is an invariant, not a case to handle: material3's `SplitButtonLayout` takes exactly two
+    /// composables and indexes them, and this layout composes exactly those two. Composing anything else
+    /// into it is a caller bug, and it is asserted rather than degraded in silence.
+    #[test]
+    #[should_panic(expected = "a split button arranges exactly two buttons")]
+    fn a_composition_that_is_not_the_pair_is_rejected() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(theme.clone(), LayoutDirection::Ltr, ctx, |ctx| {
+                let key = ctx.next_key();
+                let policy = SplitButtonPolicy { spacing: 2.0, direction: LayoutDirection::Ltr };
+                match ctx.start_restartable_group(key, Modifier::new(), policy) {
+                    crate::core::composer::GroupStatus::Skip => {}
+                    crate::core::composer::GroupStatus::Enter => {
+                        SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
+                            Text::new("Add").build(ctx);
+                        });
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+        });
+        // Laying it out is what runs the policy, and the count check with it.
+        let _ = split_children(&mut composer);
+    }
+
+    /// material3's split halves compose the caller's content straight into their own `Row` with
+    /// `Arrangement.Center` and NO spacing (`SplitButton.kt:715-728`) — unlike its `Button`, which wraps
+    /// content in `Row(spacedBy(ButtonDefaults.IconSpacing))`. winia matches the split button: the caller's
+    /// children touch, and a caller who wants the button's gap passes that spacing in its own content. The
+    /// optical offset's wrapper Row is what would quietly change that, so this pins it.
+    #[test]
+    fn the_halves_do_not_space_the_callers_content() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme_and_direction(theme.clone(), LayoutDirection::Ltr, ctx, |ctx| {
+                SplitButtonLayout::new().build(
+                    ctx,
+                    |ctx| {
+                        SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
+                            Text::new("Add").build(ctx);
+                            Text::new("v").build(ctx);
+                        });
+                    },
+                    |ctx| {
+                        SplitButtonDefaults::trailing_button().on_click(|| {}).build(ctx, |ctx| {
+                            Text::new("x").build(ctx);
+                        });
+                    },
+                );
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let leading = nodes[root].children[0];
+        let panel = nodes[leading].children.first().copied().expect("the content box");
+        let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
+        let kids = nodes[wrapper].children.clone();
+        assert_eq!(kids.len(), 2, "the caller's two children are the wrapper's two children");
+        let first = &nodes[kids[0]];
+        let second = &nodes[kids[1]];
+        let gap = second.position.x - (first.position.x + first.measured_size.width);
+        eprintln!("caller content gap: {gap}");
+        assert!(
+            gap.abs() < 0.01,
+            "no spacing is added between the caller's children (measured {gap})"
         );
     }
 }

@@ -14,7 +14,7 @@ what winia deliberately does differently.
 | Checked state layer alpha | `tokens/StateTokens.kt` (`PressedStateLayerOpacity = 0.1f`) |
 | Optical centring | `androidx/compose/material3/HorizontalCenterOptically.kt` (`CenterOpticallyCoefficient = 0.11f`, the correction, its clamp) |
 | The morph | `androidx/compose/material3/internal/AnimatedShape.kt` (each corner radius is its own `Animatable`; the optical offset reads the ANIMATED radii) |
-| Measure policy, defaults surface, shapes | `SplitButton.kt` from `androidx-main`, fetched over the network relay because the local extraction has the tokens and the internals but not this file |
+| Measure policy, defaults surface, shapes | `SplitButton.kt` — material3 1.5.0-alpha29 sources, extracted from `tmp/m3sources.jar` into `tmp/m3src/commonMain/androidx/compose/material3/SplitButton.kt` |
 
 ## Geometry (the token table)
 
@@ -30,10 +30,14 @@ table (32/40/56/96/136 dp for XS/S/M/L/XL).
 | Trailing padding (start, end) | 13, 13 | 13, 13 | 15, 15 | 29, 29 | 43, 43 |
 | Trailing icon | 22 | 22 | 26 | 38 | 50 |
 
-The outer corners are `CornerFull` (percent 50, `OuterCornerCornerSizePercent = 50.0f`). A percent corner
-is half the SHORT side, so for a button — always wider than it is tall, with a 48 dp minimum width — the
-outer radius is `container_height / 2`. That is what `SplitButtonDefaults::outer_corner_size` returns, and
-it is why the shape does not need a percent-capable corner type.
+The outer corners are `CornerFull` (percent 50, `OuterCornerCornerSizePercent = 50.0f`). A percent corner is
+half the SHORT side, and Compose resolves it in `createOutline` against the box the shape actually paints
+into — which a winia composition does not know yet, so `SplitButtonDefaults::outer_corner_size` returns
+`container_height / 2` and `corner_radii` resolves `Pill`/`Circle` the same way. That is exact while the half
+is at least as wide as it is tall; the tiers' heights are 32/40/56/96/136 dp against a 48 dp minimum width, so
+it holds for XSmall and Small and can be off for the taller tiers with minimal content. The settled checked
+shape is the token's own `Shape::Pill`, which the renderer resolves against the real box, so the end of that
+morph needs no approximation.
 
 ## The measure policy
 
@@ -160,6 +164,12 @@ matched on `Shape` exhaustively and now handle the new variant.
   resolve their shape from the theme while the policy mirrors the placement from the modifier — a
   node-level direction used to place the pair one way and shape it the other.
   `a_node_level_direction_steers_the_placement_and_the_shapes` measures both.
+- **The halves do not space the caller's content.** material3 composes the content straight into the
+  halves' own `Row` with `Arrangement.Center` and no spacing (`SplitButton.kt:715-728`), unlike its
+  `Button`, which wraps content in `Row(spacedBy(ButtonDefaults.IconSpacing))`. winia matches the split
+  button, so a caller who wants the button's 8 dp between an icon and its label passes that spacing inside
+  its own content. `the_halves_do_not_space_the_callers_content` pins it, because the optical offset's
+  wrapper Row is what would quietly eat such a gap.
 
 ## API mapping
 

@@ -3566,21 +3566,34 @@ fn split_button_centres_its_trailing_icon_when_its_menu_opens() {
         let icon = app.find_tag("sb-trailing-icon").expect("the trailing icon");
         icon.0 - (button.0 + (button.2 - icon.2) / 2.0)
     };
-    let unselected = offset(&mut app);
+    // Wait for a reading to settle instead of sleeping a fixed 400 ms: the morph is a 180 ms tween, and a
+    // duration picked to be "long enough" is slow and flaky at once. The floor below only gives the
+    // animation a chance to start; the criterion is the reading holding still.
+    let settled = |app: &mut UiTest, read: &dyn Fn(&mut UiTest) -> f32| -> f32 {
+        std::thread::sleep(Duration::from_millis(250));
+        let mut last = read(app);
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(16));
+            let next = read(app);
+            if (next - last).abs() < 0.01 {
+                return next;
+            }
+            last = next;
+        }
+        last
+    };
+    let unselected = settled(&mut app, &offset);
 
     app.click_tag("sb-trailing");
     app.expect_text_timeout("open: yes", Duration::from_secs(5));
-    // The morph is a 180 ms tween, so the settled state needs a frame past it.
-    std::thread::sleep(Duration::from_millis(400));
-    let open = offset(&mut app);
+    let open = settled(&mut app, &offset);
     // A pointer move is what forces a frame that re-runs the layout, so an offset the animation had
     // already reached gets applied there and then (the reported "the icon only moves when the mouse
     // moves over it"). Measuring both tells apart "the animation never ran" from "the layout never
     // took the animated value".
     let (bx, by, bw, bh) = app.find_tag("sb-trailing").expect("the trailing button");
     app.send(&format!("m {} {}", (bx + bw / 2.0) as i32, (by + bh / 2.0) as i32));
-    std::thread::sleep(Duration::from_millis(200));
-    let after_move = offset(&mut app);
+    let after_move = settled(&mut app, &offset);
     eprintln!(
         "trailing icon offset: unselected {unselected} open {open} after a pointer move {after_move}"
     );
@@ -3592,5 +3605,9 @@ fn split_button_centres_its_trailing_icon_when_its_menu_opens() {
     assert!(
         open.abs() <= 1.0,
         "and an open menu centres it, measured {open}"
+    );
+    assert!(
+        after_move.abs() <= 1.0,
+        "and a pointer move does not move it again, measured {after_move}"
     );
 }
