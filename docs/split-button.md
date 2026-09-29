@@ -135,21 +135,31 @@ matched on `Shape` exhaustively and now handle the new variant.
   `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH` — the published 24dp asset's own path data, now a
   public constant, so the arrow exists once in the tree instead of as a copy per fixture; the UI suite
   runs without the symbols feature, which is why the fixture uses the asset rather than the font.
-- **The content's optical offset follows the settled shape, not the morph.** material3 computes it from
-  the animated shape (`SplitButton.kt:807-813` passes what `shapeByInteraction` returns, and that wraps
-  `rememberAnimatedShape`), so pressing a half slides its label and icon about a dp along the morph and
-  back out on release. The spec only tabulates the offset for the two settled states — the per-size
-  "menu icon offset when unselected" and "the icon becomes centered when selected" — so winia animates
-  the offset on its own, from the resting radius to the stadium: both spec numbers are unchanged, the
-  press no longer moves anything, and the checked transition still slides the icon to its centred
-  position. `a_press_does_not_move_the_content` pins it (the content must not move while the painted
-  shape must change).
-- **The morph is a function of the animated radius, so the checked stadium is approached, not snapped
-  to.** material3 rebuilds the shape from each corner radius the animation holds while the state change
-  itself is instantaneous (`AnimatedShape.kt`); winia's shape is therefore derived from the animated
-  radius too, which is what makes the press morph AND the checked stadium animate. Only once the radius
-  has reached `outer` is the token's own shape drawn, so the settled chain reads exactly like
-  material3's. `the_checked_stadium_is_reached_through_the_morph` pins the mid-morph frame.
+- **The content's optical offset follows the settled shape's own corners — not the morph, and not the
+  tokens.** material3 computes it from the shape it paints (`SplitButton.kt:807-813` passes what
+  `shapeByInteraction` returns, and that wraps `rememberAnimatedShape`), so pressing a half slides its
+  label and icon about a dp along the morph and back out on release. The spec only tabulates the offset for
+  the two settled states — the per-size "menu icon offset when unselected" and "the icon becomes centered
+  when selected" — so winia animates the offset on its own, toward the settled radii: both spec numbers are
+  unchanged, the press no longer moves anything, and the checked transition still slides the icon to its
+  centred position. The radii come out of the shape the half DRAWS, so a caller's own `SplitButtonShapes`
+  steers the painted corners and the correction together:
+  `the_offset_follows_a_custom_shape_set` measures a symmetric set leaving nothing to compensate and an
+  asymmetric one moving by its own corners, `a_press_does_not_move_the_content` pins the press half of it,
+  and `the_optical_shift_points_at_the_gap_in_both_directions` pins both directions.
+- **The morph rebuilds the shape from all four animated corner radii, so a caller's own set morphs too and
+  the checked stadium is approached rather than snapped to.** material3 rebuilds the shape from each corner
+  radius the animation holds while the state change itself is instantaneous (`AnimatedShape.kt`); winia
+  derives the shape from the four radii the RESOLVED shape's corners feed, which is what makes the press
+  morph and the checked stadium animate — it used to run the default set through that path only, so a
+  caller's own set was drawn at its resolved state throughout and snapped. Once every corner has reached
+  its target the resolved shape itself is drawn, so the settled chain reads exactly like material3's.
+  `the_checked_stadium_is_reached_through_the_morph` pins the mid-morph frame.
+- **One source of direction.** The layout resolves it (`Modifier::layout_direction` on the pair, else
+  `WiniaTheme::direction`) and pins it for the two halves through the theme scope, because the halves
+  resolve their shape from the theme while the policy mirrors the placement from the modifier — a
+  node-level direction used to place the pair one way and shape it the other.
+  `a_node_level_direction_steers_the_placement_and_the_shapes` measures both.
 
 ## API mapping
 
@@ -165,7 +175,7 @@ matched on `Shape` exhaustively and now handle the new variant.
 
 ## Tests, and what was measured by turning things off
 
-Library (22): the token numbers per size (heights, inner corners and their pressed values, paddings, icon
+Library (24): the token numbers per size (heights, inner corners and their pressed values, paddings, icon
 sizes, the 2 dp gap, `CornerFull` = height/2), the shape sets, `shape_for_state`'s ordering, the optical
 shift against the spec's offsets and its clamp, and four measure-policy rules read off a real composition
 (the pair is leading + gap + trailing and hugs its content, the trailing button keeps its width while the

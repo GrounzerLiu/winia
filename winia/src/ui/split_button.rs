@@ -77,9 +77,6 @@ impl SplitButtonDefaults {
     /// Minimum width of either button (`SplitButtonDefaults.LeadingButtonMinWidth`).
     pub const MIN_BUTTON_WIDTH: f32 = 48.0;
 
-    /// Default icon size for the leading button (`ButtonSmallTokens.IconSize`).
-    pub const LEADING_ICON_SIZE: f32 = 20.0;
-
     /// State-layer alpha the trailing button paints while checked
     /// (`StateTokens.PressedStateLayerOpacity`).
     pub const CHECKED_STATE_LAYER_ALPHA: f32 = 0.1;
@@ -260,10 +257,11 @@ impl SplitButtonLayout {
         leading: impl FnOnce(&mut ComposeCtx),
         trailing: impl FnOnce(&mut ComposeCtx),
     ) {
-        // The direction is resolved and declared the way `Row`/`SegmentedRow` do it: the policy has
-        // to mirror the two buttons under RTL, and a policy left over from the other direction lays
-        // them the wrong way round (the shapes follow the same direction, resolved by the caller's
-        // `SplitButtonDefaults::*_shapes`).
+        // ONE source of direction for the whole component. The policy needs it to mirror the two buttons,
+        // and each half needs the same one to resolve its shape (`SplitButtonDefaults::*_shapes` reads the
+        // theme) — so the resolution made here is handed down through the theme scope instead of letting the
+        // halves resolve a second, possibly different, one. A node-level `layout_direction` on this layout
+        // used to place the pair one way and shape it the other.
         let direction = self
             .modifier
             .get_layout_direction()
@@ -274,8 +272,17 @@ impl SplitButtonLayout {
         match ctx.start_restartable_group(key, self.modifier, policy) {
             crate::core::composer::GroupStatus::Skip => {}
             crate::core::composer::GroupStatus::Enter => {
-                leading(ctx);
-                trailing(ctx);
+                // Colors and typography are passed through untouched: only the direction is pinned.
+                WiniaTheme::with_theme_typography_and_direction(
+                    WiniaTheme::colors(),
+                    WiniaTheme::typography(),
+                    direction,
+                    ctx,
+                    |ctx| {
+                        leading(ctx);
+                        trailing(ctx);
+                    },
+                );
             }
         }
         ctx.end_restartable_group();
@@ -647,52 +654,41 @@ impl SplitButtonPart {
         let state = interaction.state(self.enabled);
         let checked = self.checked.as_ref().is_some_and(|state| state.get());
 
-        let outer = SplitButtonDefaults::outer_corner_size(height);
         let shapes = self.shapes.unwrap_or(match self.role {
             SplitButtonRole::Leading => SplitButtonDefaults::leading_shapes(self.size),
             SplitButtonRole::Trailing => SplitButtonDefaults::trailing_shapes(self.size),
         });
-        let pressed_radius = SplitButtonDefaults::inner_corner_size_pressed(self.size);
-        let resting_radius = SplitButtonDefaults::inner_corner_size(self.size);
         // material3's `shapeByInteraction`: pressed wins over checked, then the resting shape.
-        let target_radius = if state.pressed {
-            pressed_radius
-        } else if checked {
-            outer
-        } else {
-            resting_radius
-        };
-        // The morph animates every corner radius (`AnimatedShape.kt`); the outer corners are constant,
-        // so one animated number is the whole difference.
-        let radius = ctx
-            .animate_float_as_state(target_radius, shape_morph_spec())
-            .get();
-        // The content's optical offset follows the SETTLED radius — where the button rests, or the
-        // stadium it becomes when checked — on an animation of its own, not the one the pressed radius
-        // feeds. material3 derives the offset from the animated shape (`SplitButton.kt:807-813`), which
-        // slides the content ~1 dp along the press morph and back out again on release; the spec only
-        // ever tabulates the offset for the two SETTLED states ("menu icon offset when unselected", "the
-        // icon becomes centered when selected"). This keeps both of those, drops the press slide, and
-        // still slides the icon to its centred position while the menu opens. Recorded in
-        // `docs/split-button.md`.
-        let settled_radius =
-            ctx.animate_float_as_state(if checked { outer } else { resting_radius }, shape_morph_spec());
-
-        // material3's `shapeByInteraction`, then the animation on top: a caller's own shape set is
-        // drawn as given, while the default set is rebuilt from the animated radius — the same rule
-        // re-evaluated at the value the animation currently holds, which is what `AnimatedShape.kt`
-        // does when it animates each corner radius and rebuilds the shape.
         let target_shape = SplitButtonDefaults::shape_for_state(&shapes, state.pressed, checked);
-        // The default set is rebuilt from the ANIMATED radius: that is what makes the morph into the
-        // checked stadium animate rather than snap — when checked the radius animates up to `outer`, and
-        // four equal radii are the stadium. Once it has settled there the token's own shape is drawn, so
-        // the chain reads exactly as material3's `TrailingCheckedShape`. A caller's own set is drawn at
-        // its resolved state throughout.
-        let shape = if self.shapes.is_some() {
-            target_shape
-        } else {
-            morph_or_token(self.role, outer, radius, rtl, checked, target_shape)
-        };
+        // `AnimatedShape.kt` animates each of the four corner radii and rebuilds the shape from what the
+        // animation currently holds. Taking the radii out of the shape `shapeByInteraction` resolved — a
+        // caller's own set included, not only the tokens — is what makes a custom set morph too: it used
+        // to be drawn at its resolved state throughout, so it snapped.
+        let target_radii = corner_radii(&target_shape, height);
+        let radii = [
+            ctx.animate_float_as_state(target_radii.0, shape_morph_spec()),
+            ctx.animate_float_as_state(target_radii.1, shape_morph_spec()),
+            ctx.animate_float_as_state(target_radii.2, shape_morph_spec()),
+            ctx.animate_float_as_state(target_radii.3, shape_morph_spec()),
+        ];
+        let drawn_radii = (radii[0].get(), radii[1].get(), radii[2].get(), radii[3].get());
+        let shape = drawn_shape(&target_shape, target_radii, drawn_radii);
+
+        // The content's optical offset follows the SETTLED radii — where the button rests, or the stadium
+        // it becomes when checked — on an animation of its own, not the one the pressed radii feed.
+        // material3 derives the offset from the animated shape (`SplitButton.kt:807-813`), which slides the
+        // content ~1 dp along the press morph and back out again on release; the spec only ever tabulates
+        // the offset for the two SETTLED states ("menu icon offset when unselected", "the icon becomes
+        // centered when selected"). This keeps both of those, drops the press slide, and still slides the
+        // icon to its centred position while the menu opens. Recorded in `docs/split-button.md`.
+        let settled_radii =
+            corner_radii(&SplitButtonDefaults::shape_for_state(&shapes, false, checked), height);
+        let settled = [
+            ctx.animate_float_as_state(settled_radii.0, shape_morph_spec()),
+            ctx.animate_float_as_state(settled_radii.1, shape_morph_spec()),
+            ctx.animate_float_as_state(settled_radii.2, shape_morph_spec()),
+            ctx.animate_float_as_state(settled_radii.3, shape_morph_spec()),
+        ];
 
         let (start_pad, end_pad) = self.content_padding.unwrap_or(match self.role {
             SplitButtonRole::Leading => SplitButtonDefaults::leading_content_padding(self.size),
@@ -714,16 +710,16 @@ impl SplitButtonPart {
         // content kept whatever offset it had until some unrelated event forced a frame. Measured on the
         // live fixture: -2 while unselected, -2 four hundred milliseconds after the menu opened, 0 only
         // after a pointer move (the report "the icon only moves when the mouse moves over it").
-        let sign = match (self.role, rtl) {
-            (SplitButtonRole::Leading, false) | (SplitButtonRole::Trailing, true) => 1.0,
-            (SplitButtonRole::Leading, true) | (SplitButtonRole::Trailing, false) => -1.0,
-        };
         let optical_shift = self.optical_shift;
         let shift_value = crate::modifier::SizeValue::Dynamic(Arc::new(move || {
             if !optical_shift {
                 return 0.0;
             }
-            sign * SplitButtonDefaults::optical_shift(outer, settled_radius.get(), gap_padding)
+            optical_shift_of(
+                (settled[0].get(), settled[1].get(), settled[2].get(), settled[3].get()),
+                rtl,
+                gap_padding,
+            )
         }));
 
         let colors = self
@@ -828,37 +824,64 @@ impl crate::modifier::DrawWrapNode for StateLayer {
     }
 }
 
-/// The default shape set for a role, rebuilt from live radii so the morph is visible: the outer
-/// corners are full, the two corners facing the gap carry `inner`.
-fn animated_shape(role: SplitButtonRole, outer: f32, inner: f32, rtl: bool) -> Shape {
-    let inner = inner.min(outer);
-    match (role, rtl) {
-        (SplitButtonRole::Leading, false) => Shape::corners(outer, inner, inner, outer),
-        (SplitButtonRole::Leading, true) => Shape::corners(inner, outer, outer, inner),
-        (SplitButtonRole::Trailing, false) => Shape::corners(inner, outer, outer, inner),
-        (SplitButtonRole::Trailing, true) => Shape::corners(outer, inner, inner, outer),
+/// The four corner radii a shape draws with, in the order `Shape::corners` takes them (top-left,
+/// top-right, bottom-right, bottom-left). `Pill` and `Circle` are percent corners — half the SHORT side,
+/// which Compose resolves in `createOutline` against the box it paints into — and a split button's half is
+/// wider than it is tall (the minimum width is 48 dp), so its container height resolves them, the same way
+/// `SplitButtonDefaults::outer_corner_size` does.
+pub(crate) fn corner_radii(shape: &Shape, height: f32) -> (f32, f32, f32, f32) {
+    let full = height / 2.0;
+    match shape {
+        Shape::RoundedRect { corner_radius } => {
+            (*corner_radius, *corner_radius, *corner_radius, *corner_radius)
+        }
+        Shape::TopRoundedRect { radius } => (*radius, *radius, 0.0, 0.0),
+        Shape::RightRoundedRect { radius } => (0.0, *radius, *radius, 0.0),
+        Shape::LeftRoundedRect { radius } => (*radius, 0.0, 0.0, *radius),
+        Shape::Pill | Shape::Circle => (full, full, full, full),
+        Shape::Corners {
+            top_left,
+            top_right,
+            bottom_right,
+            bottom_left,
+        } => (*top_left, *top_right, *bottom_right, *bottom_left),
+        Shape::Rectangle => (0.0, 0.0, 0.0, 0.0),
     }
 }
 
-/// The shape a default-styled half draws at the morph's CURRENT radius: while the morph is running that
-/// is the animated corners, and once it has settled on the checked stadium it is the token's own shape,
-/// so the settled chain reads exactly as material3's `TrailingCheckedShape` does.
-///
-/// Keeping this a function of the RADIUS rather than of the state is what makes the checked transition
-/// animate: the half approaches the stadium as the radius grows instead of snapping to it.
-fn morph_or_token(
-    role: SplitButtonRole,
-    outer: f32,
-    radius: f32,
-    rtl: bool,
-    checked: bool,
-    token: Shape,
-) -> Shape {
-    if checked && radius >= outer - 0.01 {
-        token
+/// The shape a half draws in this frame: the animated corners while the morph runs, and the resolved shape
+/// itself once every corner has reached its target — so a settled chain reads exactly like material3's
+/// `shapeByInteraction` result (the checked stadium included) while the transition approaches it instead of
+/// snapping to it.
+fn drawn_shape(target: &Shape, target_radii: (f32, f32, f32, f32), radii: (f32, f32, f32, f32)) -> Shape {
+    let reached = |target: f32, current: f32| (target - current).abs() <= 0.01;
+    let settled = reached(target_radii.0, radii.0)
+        && reached(target_radii.1, radii.1)
+        && reached(target_radii.2, radii.2)
+        && reached(target_radii.3, radii.3);
+    if settled {
+        target.clone()
     } else {
-        animated_shape(role, outer, radius, rtl)
+        Shape::corners(radii.0, radii.1, radii.2, radii.3)
     }
+}
+
+/// material3's `HorizontalCenterOptically`: `0.11 * (average radius on the start side - average radius on
+/// the end side)`, limited by the padding the content has on the gap side. Start and end follow the layout
+/// direction, and material3 places the result with `placeRelative`, which mirrors x under RTL — winia hands
+/// the layout an `absolute_offset`, so that mirror is applied here instead. The result is therefore a
+/// geometric x delta: negative moves the content left.
+pub(crate) fn optical_shift_of(radii: (f32, f32, f32, f32), rtl: bool, gap_padding: f32) -> f32 {
+    let (tl, tr, br, bl) = radii;
+    let (start, end) = if rtl {
+        ((tr + br) / 2.0, (tl + bl) / 2.0)
+    } else {
+        ((tl + bl) / 2.0, (tr + br) / 2.0)
+    };
+    let offset = SplitButtonDefaults::OPTICAL_COEFFICIENT * (start - end);
+    let physical = if rtl { -offset } else { offset };
+    let limit = gap_padding.abs();
+    physical.clamp(-limit, limit)
 }
 
 /// The corner morph's spec. material3 animates it with the motion scheme's `DefaultEffects`
@@ -870,19 +893,6 @@ fn shape_morph_spec() -> crate::animation::AnimationSpec {
         std::time::Duration::from_millis(180),
         crate::animation::interpolator::EaseOutCubic::new(),
     ))
-}
-
-/// Where the trailing button's content should sit, for a caller that wants to place the menu icon
-/// itself. Kept for the same reason material3 exposes `trailingButtonIconSizeFor`.
-pub fn trailing_icon_offset(size: ButtonSize, outer_radius: f32, inner_radius: f32) -> f32 {
-    let (start, _) = SplitButtonDefaults::trailing_content_padding(size);
-    SplitButtonDefaults::optical_shift(outer_radius, inner_radius, start)
-}
-
-/// The states a split button reports per button, exposed for tests and for a caller that hoists the
-/// interaction source (material3's `interactionSource` parameter does the same job).
-pub fn split_button_state(interaction: &MutableInteractionSource, enabled: bool) -> ComponentState {
-    interaction.state(enabled)
 }
 
 #[cfg(test)]
@@ -926,7 +936,11 @@ mod tests {
         assert_eq!(SplitButtonDefaults::trailing_icon_size(ButtonSize::Medium), 26.0);
         assert_eq!(SplitButtonDefaults::trailing_icon_size(ButtonSize::Large), 38.0);
         assert_eq!(SplitButtonDefaults::trailing_icon_size(ButtonSize::XLarge), 50.0);
-        assert_eq!(SplitButtonDefaults::LEADING_ICON_SIZE, 20.0);
+        assert_eq!(
+            SplitButtonDefaults::leading_icon_size(ButtonSize::Small),
+            20.0,
+            "the leading glyph is `ButtonSmallTokens.IconSize`"
+        );
     }
 
     #[test]
@@ -1394,38 +1408,34 @@ mod tests {
         }
     }
 
-    /// The checked stadium is APPROACHED, not jumped to: while the morph is still running the half
-    /// draws the animated corners, and only a radius that has reached `outer` is the stadium.
+    /// The checked stadium is APPROACHED, not jumped to: while the morph is still running the half draws
+    /// the animated corners, and only a shape whose four radii have reached their targets is the resolved
+    /// shape material3's `shapeByInteraction` names (the stadium, for the checked trailing half).
     ///
-    /// This is the regression guard for the transition itself — reading the shape straight off the
-    /// state (as it used to) makes the `mid` case below return the stadium immediately, i.e. a snap.
+    /// This is the regression guard for the transition itself — reading the shape straight off the state
+    /// (as it used to) makes the `mid` case below return the stadium immediately, i.e. a snap.
     #[test]
     fn the_checked_stadium_is_reached_through_the_morph() {
         let outer = SplitButtonDefaults::outer_corner_size(SplitButtonDefaults::container_height(
             ButtonSize::Small,
         ));
         let inner = SplitButtonDefaults::inner_corner_size(ButtonSize::Small);
+        let stadium = (outer, outer, outer, outer);
         assert_eq!(
-            morph_or_token(SplitButtonRole::Trailing, outer, outer, false, true, Shape::Pill),
+            drawn_shape(&Shape::Pill, stadium, stadium),
             Shape::Pill,
             "a settled trailing half draws material3's own checked shape"
         );
         assert_eq!(
-            morph_or_token(SplitButtonRole::Trailing, outer, inner, false, true, Shape::Pill),
+            drawn_shape(&Shape::Pill, stadium, (inner, outer, outer, inner)),
             Shape::corners(inner, outer, outer, inner),
             "mid-morph the half draws the animated corners, so the stadium is approached"
         );
-        let nearly = morph_or_token(
-            SplitButtonRole::Trailing,
-            outer,
-            outer - 1.0,
-            false,
-            true,
-            Shape::Pill,
-        );
+        let nearly = drawn_shape(&Shape::Pill, stadium, (outer - 1.0, outer, outer, outer));
         assert_ne!(
-            nearly, Shape::Pill,
-            "a radius one dp short of `outer` is not the stadium yet: {nearly:?}"
+            nearly,
+            Shape::Pill,
+            "a corner one dp short of `outer` is not the stadium yet: {nearly:?}"
         );
     }
 
@@ -1657,6 +1667,131 @@ mod tests {
         assert!(
             rtl < -1.0,
             "RTL: the gap is on its right, so the correction points the other way (measured {rtl})"
+        );
+    }
+
+    /// The optical offset follows the radii of the shape the half DRAWS, not the token defaults: material3
+    /// computes it from the shape it paints (`SplitButton.kt:807-813`). A caller's own set therefore steers
+    /// it — a symmetric one has nothing to compensate, and an asymmetric one moves by ITS corners rather
+    /// than by the token's 4 dp / 20 dp pair.
+    #[test]
+    fn the_offset_follows_a_custom_shape_set() {
+        let correction = |shapes: SplitButtonShapes| -> f32 {
+            let wrapper_x = |optical: bool| -> f32 {
+                let theme = ThemeColors::light_from_seed(0x6750A4);
+                let interaction = MutableInteractionSource::new();
+                let mut composer = Composer::new();
+                composer.compose(|ctx| {
+                    WiniaTheme::with_theme_and_direction(
+                        theme.clone(),
+                        LayoutDirection::Ltr,
+                        ctx,
+                        |ctx| {
+                            SplitButtonLayout::new().build(
+                                ctx,
+                                |ctx| {
+                                    SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
+                                        Text::new("Add").build(ctx);
+                                    });
+                                },
+                                |ctx| {
+                                    let trailing = SplitButtonDefaults::trailing_button()
+                                        .on_click(|| {})
+                                        .interaction_source(interaction.clone())
+                                        .shapes(shapes.clone());
+                                    let trailing = if optical {
+                                        trailing
+                                    } else {
+                                        trailing.without_optical_shift()
+                                    };
+                                    trailing.build(ctx, |ctx| {
+                                        Text::new("v").build(ctx);
+                                    });
+                                },
+                            );
+                        },
+                    );
+                });
+                composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+                let root = composer.layout_root_idx().expect("root");
+                let nodes = composer.arena_nodes();
+                let trailing = nodes[root].children[1];
+                let panel = nodes[trailing].children.first().copied().expect("the content box");
+                let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
+                nodes[wrapper].position.x
+            };
+            wrapper_x(false) - wrapper_x(true)
+        };
+        let symmetric = correction(SplitButtonShapes::flat(Shape::rounded(8.0)));
+        let asymmetric = correction(SplitButtonShapes::flat(Shape::corners(0.0, 12.0, 12.0, 0.0)));
+        eprintln!("custom shape corrections: symmetric {symmetric} asymmetric {asymmetric}");
+        assert!(
+            symmetric.abs() < 0.01,
+            "a symmetric set leaves nothing to compensate (measured {symmetric})"
+        );
+        assert!(
+            (asymmetric - 1.32).abs() < 0.01,
+            "an asymmetric set moves by its own corners, 0.11 * 12 dp (measured {asymmetric})"
+        );
+    }
+
+    /// One source of direction: a node-level `layout_direction` pinned on the pair used to place it one way
+    /// and shape it the other, because the policy read the modifier while the halves read the theme. The
+    /// layout now hands its resolution down, so pinning the direction turns both.
+    #[test]
+    fn a_node_level_direction_steers_the_placement_and_the_shapes() {
+        let trailing_backgrounds = |pinned: Option<LayoutDirection>| -> Vec<Shape> {
+            let theme = ThemeColors::light_from_seed(0x6750A4);
+            let interaction = MutableInteractionSource::new();
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme_and_direction(
+                    theme.clone(),
+                    LayoutDirection::Ltr,
+                    ctx,
+                    |ctx| {
+                        let mut modifier = Modifier::new();
+                        if let Some(direction) = pinned {
+                            modifier = modifier.layout_direction(direction);
+                        }
+                        SplitButtonLayout::new().modifier(modifier).build(
+                            ctx,
+                            |ctx| {
+                                SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
+                                    Text::new("Add").build(ctx);
+                                });
+                            },
+                            |ctx| {
+                                SplitButtonDefaults::trailing_button()
+                                    .interaction_source(interaction.clone())
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        Text::new("v").build(ctx);
+                                    });
+                            },
+                        );
+                    },
+                );
+            });
+            let children = split_children(&mut composer);
+            drawn_backgrounds(&composer, children[1])
+        };
+        let inner = SplitButtonDefaults::inner_corner_size(ButtonSize::Small);
+        let outer = SplitButtonDefaults::outer_corner_size(SplitButtonDefaults::container_height(
+            ButtonSize::Small,
+        ));
+        let theme_ltr = trailing_backgrounds(None);
+        let pinned_rtl = trailing_backgrounds(Some(LayoutDirection::Rtl));
+        eprintln!("trailing shape: theme LTR {theme_ltr:?} pinned RTL {pinned_rtl:?}");
+        assert_eq!(
+            theme_ltr,
+            vec![Shape::corners(inner, outer, outer, inner)],
+            "LTR: the inner corners face the gap on the left"
+        );
+        assert_eq!(
+            pinned_rtl,
+            vec![Shape::corners(outer, inner, inner, outer)],
+            "RTL: the same set, mirrored by the pinned direction"
         );
     }
 }
