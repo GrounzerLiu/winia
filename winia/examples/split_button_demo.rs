@@ -1,22 +1,32 @@
-//! Split button demo (material3 `SplitButtonLayout`, an M3 Expressive component).
+//! Split button demo — material3's `SplitButtonLayout`, an M3 Expressive component.
 //!
-//! Shows the three things the component is about:
-//! - the two halves act independently — the leading button runs the primary action, the trailing one
-//!   owns a menu (here a real `DropdownMenu` anchored to the pair);
-//! - the shape morphs: the inner corners grow on press, and the trailing button becomes a stadium with
-//!   a state layer while its menu is open;
-//! - the same component at every size tier and emphasis, because the geometry comes from the tokens.
+//! Run: `cargo run -p winia --example split_button_demo --features material-symbols-outlined`
 //!
-//! Run it with `cargo run --example split_button_demo --features material-symbols-outlined`.
+//! What to look at, in order:
+//!
+//! 1. **The two halves act independently.** The leading button runs the primary action and counts its
+//!    clicks; the trailing one owns a real `DropdownMenu` anchored to the pair and reports the item it
+//!    picked. Neither half needs the other's state.
+//! 2. **The shape morphs.** Press either half and its inner corners grow (4 → 12 dp on the small tier);
+//!    open the menu and the trailing half becomes a stadium with a 10 % state layer painted over its
+//!    glyph, and its icon slides to the centre.
+//! 3. **Emphasis levels.** Filled (default), tonal, elevated and outlined — material3 passes its Button
+//!    defaults in, and so does winia.
+//! 4. **Every size tier** material3 defines: heights, paddings, inner corners and the trailing icon all
+//!    come from `SplitButton*Tokens`.
+//! 5. **Direction.** The settings sheet in the top bar flips the layout: the halves mirror around the one
+//!    gap between them, and the content's optical offset follows the gap in either direction.
 //!
 //! The icons are material3's own: Material Symbols from <https://fonts.google.com/icons>, which winia
-//! bundles as variable fonts behind that feature (`Outlined::ADD`, `Outlined::ARROW_DROP_DOWN` — the
-//! glyphs material3's samples pass as `Icons.Filled.Add` and `Icons.Filled.ArrowDropDown`). Nothing
-//! here is a hand-copied path.
-
+//! bundles as variable fonts behind the `material-symbols-outlined` feature (`Outlined::ADD`,
+//! `Outlined::ARROW_DROP_DOWN` — the glyphs material3's samples pass as `Icons.Filled.Add` and
+//! `Icons.Filled.ArrowDropDown`). Nothing here is a hand-copied path.
 
 use letclone::clone;
 use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
 // The menu the trailing button opens (the same component the dropdown demo shows on its own).
 use winia::ui::{DropdownMenu, DropdownMenuItem};
 
@@ -30,17 +40,13 @@ fn menu_icon(size: f32) -> Icon {
     Icon::symbol(winia::icon::Outlined::ARROW_DROP_DOWN).size(size)
 }
 
-
 /// A trailing menu button, shared by every split button on this screen.
-fn trailing(
-    open: State<bool>,
-    size: ButtonSize,
-) -> TrailingButton {
+fn trailing(open: State<bool>, size: ButtonSize) -> TrailingButton {
     TrailingButton::checked(open).size(size)
 }
 
 #[composable]
-fn split_demo(ctx: &mut ComposeCtx) {
+fn split_button_demo(ctx: &mut ComposeCtx) {
     let clicks = ctx.remember(|| 0usize);
     let picked = ctx.remember(|| String::from("nothing yet"));
     let menu_open = ctx.remember(|| false);
@@ -175,14 +181,14 @@ fn split_demo(ctx: &mut ComposeCtx) {
 }
 
 fn main() {
-    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _guard = rt.enter();
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(560.0, 720.0)
+                .size(560.0, 860.0)
                 .title("Split Button Demo")
-                .build(ctx, |ctx| split_demo(ctx));
+                .build(ctx, |ctx| {
+                    settings::shell("Split Button Demo", ctx, split_button_demo);
+                });
         });
     });
 }
