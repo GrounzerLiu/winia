@@ -240,8 +240,10 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
             })
             .build(ctx);
 
-            // A `PrimaryEditable` anchor: material3 gives the click to the text cursor, so it must NOT
-            // toggle the menu.
+            // A `PrimaryEditable` anchor: material3's pointer path toggles for every anchor type
+            // (`ExposedDropdownMenu.kt:1430-1433`), and the type only decides whether the POPUP takes
+            // focus — this one opens WITHOUT it, so the caret (and, on a device, the IME) stays in the
+            // field while the items are showing.
             let editable_open = ctx.remember(|| false);
             let editable_value = ctx.remember(|| TextFieldValue::new(""));
             ExposedDropdownMenuBox::new(editable_open.clone())
@@ -257,7 +259,8 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                     {
                         let editable_open = editable_open.clone();
                         move |ctx| {
-                            DropdownMenuItem::new("不该打开")
+                            DropdownMenuItem::new("可编辑项")
+                                .modifier(Modifier::new().test_tag("dm-editable-item-0"))
                                 .on_click({
                                     let closer = editable_open.clone();
                                     move || closer.set(false)

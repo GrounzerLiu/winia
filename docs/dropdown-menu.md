@@ -196,7 +196,7 @@ winia 对照实现：
 
 **改前实测**（20 项菜单、520px 窗口）：容器 `(16,238,112,520)`，底边 758 > 窗口 520——底部 238px 的项够不到。**改后**：容器 `(16,0,112,520)`（贴窗口顶边、完全在窗口内），滚轮后 offset 0 → 472，末项渲染在 y=448 落入容器；测试 `dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` 用**滚动偏移**断言（滚动改变渲染平移，节点布局坐标不变，故矩形永远看不出滚动）。
 
-观察到的既有偏差（记录，不在本轮修）：偏移上限 472 vs M3 的 456（内容高含 8dp×2、视口不含，差 16px）。这是**所有带 padding 的滚动容器**共有的 off-by-padding，不是菜单特有。
+**已修**（本轮核对时确认）：这一行记录的 off-by-padding 已被后续的滚动末端夹取修复消除——`winia/src/layout/node.rs` 的 `fling_limit` 与 `winia/src/app.rs` 的 `apply_scroll_delta_inner` 现在都用容器**自身的** `measured_size`（而非 padding 扣减后的视口）算上限，16px 的差没有了；`dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end` 断言 `offset == 20*48 + 16 - 容器高`，注释里写着 "used to work from the padding-DEDUCTED viewport instead, which let the content scroll 16px too far"。所以这一条不再是偏差，原记录保留作历史。
 
 ### 4.4 阶段 4a 对齐：进出动画
 
@@ -301,13 +301,83 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 
 **验证**：单测 `dropdown_menu_position_follows_the_material3_candidates` 覆盖全部 5 个纵向候选（含"过高→居中"）+ 3 个横向候选（含两侧贴边）✓；现有 UI 测试的取值不变 ✓（长菜单仍是 424 高、`(520-424)/2 = 48` 正好等于 48dp 边距 ✓）。
 
-### 4.11 待对齐（后续）
+### 4.11 原待对齐项（现已实现）
 
 | 项 | M3 真身 | winia 现状 |
 |---|---|---|
 | 框架层 intrinsic 测量 | `IntrinsicSize.Max/Min` | **已实现**（公开 `IntrinsicSize` + `MeasurePolicy` 四默认方法 + 管线第 1.5 步，见 `docs/intrinsic-size.md` §8；菜单已改用 M3 原文链，`MenuColumnPolicy` 已删除） |
-| `PrimaryEditable` 的键盘打开 | 聚焦/键盘驱动展开、光标联动 | 只有"点击不切换"，键盘打开与光标联动未实现 |
+| `PrimaryEditable` 的可编辑锚点语义 | 指针三种锚点类型**都切换**；`PrimaryEditable` 的弹层**不带焦点**打开（保住光标与 IME），Tab/ArrowUp/ArrowDown 才把键盘交出去；空格不展开；Enter 视为点击 | **已实现**，见 §4.13。唯一保留的近似是 `SecondaryEditable`（winia 没有逐元素 `menuAnchor`，见 §4.13 与 §4.12） |
 
 ### 4.12 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
+- **`SecondaryEditable` 等同 `PrimaryNotEditable`**，且锚点的语义角色（`role = DropdownList` / `Button` + stateDescription）未发布。原因与出处见 §4.13 末两条。
+
+### 4.13 Editable anchors (`PrimaryEditable`): what was implemented
+
+material3's anchor type decides whether the POPUP takes focus, not whether a click counts:
+`Modifier.expandable` observes the pointer in the Initial pass and calls `onExpandedChange` on the up
+event for every type (`ExposedDropdownMenu.kt:1430-1433`), while the type selects the popup's focus
+behaviour through `popupPropertiesForAnchorType(anchorType, alwaysFocusable)` (`:354`). winia previously
+read `PrimaryEditable` as "the click belongs to the text cursor", so its menu could not be opened with a
+pointer at all, and the keyboard path did not exist.
+
+| rule | material3 | winia |
+|---|---|---|
+| the pointer toggles, for every type | `:1430-1433` | `ExposedDropdownMenuBox` puts `.clickable(toggler)` on the wrapper for every type |
+| the popup's focus follows the type | `:354`, plus `DefaultMenuProperties = PopupProperties(focusable = true)` (`androidMain/AndroidMenu.android.kt:194`) | `DropdownMenu::focus_scope(bool)` (new; default `true`); the box passes `false` for an editable anchor |
+| Enter is a click | `isEnterMinusSpacebar` (`:1479-1489`) | the box's `.on_pre_key_event` toggles on Enter and consumes it |
+| the spacebar must not expand an editable anchor | `:1444` "Primary editable shouldn't expand menu via spacebar" | the handler returns `false` for it, so the space belongs to the field |
+| Tab / ArrowUp / ArrowDown hand the keyboard over while expanded | `alwaysFocusable = true` (`:1449-1457`) | the handler sets the remembered `keyboard` state, the popup becomes a focus scope again, and the framework claims the keyboard (`app.rs::claim_keyboard_for_overlay`) |
+| Escape closes it | `BackHandler(enabled = expanded)` (`:247`), which exists because a NON-focusable popup sees no back events | already covered: `PerWindow::escape_key` closes the topmost overlay regardless of who owns the keyboard |
+
+Mechanism notes worth keeping:
+
+- The hand-over lives in a `State` created with `ctx.remember`, not a fresh `State::new`. A state built in
+  the composable body is recreated on every recomposition, so the hand-over never outlived the frame that
+  made it — measured: `exposed_dropdown_editable_anchor_hands_the_keyboard_over_on_a_reach_key` stayed red
+  until this was fixed.
+- The handler runs in the PREVIEW pass (`on_pre_key_event`) so it sees the key before the focused field
+  does. winia's focused-node activation path (`app.rs`, "聚焦组件的键盘激活（对标 Compose clickable）")
+  only fires the FOCUSED node's own `clickable`, which a text field has none of — a wrapper-level
+  clickable alone could not have implemented the material3 rule.
+- material3's `isClick` is the key UP event while winia activates on key DOWN, so the toggle is written
+  against `KeyDown` + `!repeat`. A debug `k` command only produces key downs anyway.
+- The spacebar arrives as `Key::Character(" ")` (winit 0.31 has no `NamedKey::Space`), the spelling
+  winia's own activation path checks (`app.rs:4552`). `parse_debug_key` learned the name `Space` so the
+  rule is testable.
+
+Deviations kept, and why:
+
+- `SecondaryEditable` behaves like `PrimaryNotEditable` (material3's accessible branch). In material3 that
+  anchor lives on a separate element INSIDE the field (`Modifier.menuAnchor(...)` per element, which is
+  also what consumes the pointer down so a click does not move the caret, `:1427-1429`). winia's
+  `build(ctx, anchor, menu)` takes the anchor as one closure and has no per-element anchor modifier, so
+  neither the down-consume nor the accessibility branch has a place to live.
+- The anchor semantics (`role = DropdownList`, or `Button` + `stateDescription`/`contentDescription` for
+  `SecondaryEditable`, `:1462-1477`) is not published by the box. The state is visible in the tree; the
+  role mapping belongs to the semantics work.
+
+API surface published with this round (all reachable as `winia::ui::…` now, previously only by full path):
+`MenuDefaults`, `MenuItemColors`, `ExposedDropdownMenuBox`, `ExposedDropdownMenuAnchorType`,
+`ExposedDropdownMenuDefaults`. `MenuDefaults` mirrors `Menu.kt:181-260` — TonalElevation, ShadowElevation,
+shape, containerColor, itemColors, DropdownMenuItemContentPadding — and both components resolve their
+unset fields THROUGH it, so the published value and the drawn one cannot drift.
+
+Tests: `exposed_dropdown_editable_anchor_opens_without_taking_the_caret` (click opens, the caret stays,
+the field keeps receiving characters, the spacebar does not toggle, Enter closes),
+`exposed_dropdown_non_editable_anchor_opens_with_focus` (Tab lands on the first item immediately, no
+hand-over step), `exposed_dropdown_editable_anchor_hands_the_keyboard_over_on_a_reach_key` (ArrowDown
+hands the keyboard over, then Tab reaches the first item) in `winia/tests/ui_test.rs`;
+`menu_defaults_are_material3s_tokens` and `menu_defaults_are_what_the_components_resolve_to` in
+`winia/src/ui/overlay.rs`.
+
+"Turn it off" proofs, each measured by reverting one term and re-running
+`exposed_dropdown_editable_anchor_opens_without_taking_the_caret`:
+
+- clickable excluded for an editable anchor → the menu never opened ("popup entries never showed
+  `可编辑项`");
+- `focus_scope(true)` for every anchor type → "an editable anchor's menu opens WITHOUT taking focus, so
+  the field must still hold the caret";
+- the spacebar guard removed → "the spacebar belongs to the text: material3's editable anchor must not
+  toggle on it" (`left == right` failed).

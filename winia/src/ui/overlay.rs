@@ -776,6 +776,45 @@ impl std::fmt::Debug for MenuItemColors {
     }
 }
 
+/// material3's `MenuDefaults` (`Menu.kt:181-260`): the values `DropdownMenu` and `DropdownMenuItem` fall
+/// back to, published so a caller can name them instead of repeating numbers.
+///
+/// These ARE the menu's own defaults — `DropdownMenu::build` and `DropdownMenuItem::build` resolve their
+/// unset fields through this type, so the published value and the drawn one cannot drift apart.
+pub struct MenuDefaults;
+
+impl MenuDefaults {
+    /// `MenuDefaults.TonalElevation` — `ElevationTokens.Level0`.
+    pub fn tonal_elevation() -> f32 {
+        0.0
+    }
+
+    /// `MenuDefaults.ShadowElevation` — `MenuTokens.ContainerElevation` (`ElevationTokens.Level2`).
+    pub fn shadow_elevation() -> f32 {
+        3.0
+    }
+
+    /// `MenuDefaults.shape` — `MenuTokens.ContainerShape` (`CornerExtraSmall`, 4dp).
+    pub fn shape() -> crate::modifier::Shape {
+        crate::modifier::Shape::RoundedRect { corner_radius: 4.0 }
+    }
+
+    /// `MenuDefaults.containerColor` — `MenuTokens.ContainerColor` (`surfaceContainer`).
+    pub fn container_color() -> crate::modifier::Color {
+        crate::ui::theme::WiniaTheme::colors().surface_container
+    }
+
+    /// `MenuDefaults.itemColors()` — the theme's menu item roles.
+    pub fn item_colors() -> MenuItemColors {
+        MenuItemColors::defaults()
+    }
+
+    /// `MenuDefaults.DropdownMenuItemContentPadding` — `PaddingValues(horizontal = 12.dp, vertical = 0)`.
+    pub fn dropdown_menu_item_content_padding() -> (f32, f32) {
+        (DROPDOWN_ITEM_HORIZONTAL_PADDING, 0.0)
+    }
+}
+
 /// `ListTokens.ListItemDisabled*Opacity` — the disabled foreground alpha, shared with the navigation
 /// components (which keep their own copy of this constant; this is the menu's).
 const DISABLED_ALPHA: f32 = 0.38;
@@ -796,6 +835,10 @@ fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modif
 /// width of each item instead of its raw label.
 const DROPDOWN_ITEM_MIN_WIDTH: f32 = 112.0;
 const DROPDOWN_ITEM_MAX_WIDTH: f32 = 280.0;
+
+/// material3's `DropdownMenuItemHorizontalPadding` (`Menu.kt:526`) — the horizontal half of
+/// `MenuDefaults.DropdownMenuItemContentPadding` (`PaddingValues(horizontal = 12.dp, vertical = 0)`).
+const DROPDOWN_ITEM_HORIZONTAL_PADDING: f32 = 12.0;
 
 /// Dropdown menu (mirrors Compose material3 `DropdownMenu`) — anchored to a trigger container;
 /// clicking outside dismisses it.
@@ -831,6 +874,12 @@ pub struct DropdownMenu {
     scroll_state: Option<crate::modifier::ScrollState>,
     /// material3's `matchAnchorWidth` — see [`DropdownMenu::match_anchor_width`]. Off for a plain menu.
     match_anchor_width: bool,
+    /// material3's `PopupProperties(focusable = …)`, decided by the anchor type the menu hangs off
+    /// (`ExposedDropdownMenu.kt:354` `popupPropertiesForAnchorType(anchorType, alwaysFocusable)`; the
+    /// default `DefaultMenuProperties` is `PopupProperties(focusable = true)`,
+    /// `androidMain/AndroidMenu.android.kt`). Off for an editable anchor, whose menu must open WITHOUT
+    /// taking the keyboard so the text field keeps the caret and the IME.
+    focus_scope: bool,
     offset: (f32, f32),
     shape: Option<crate::modifier::Shape>,
     container_color: Option<crate::modifier::Color>,
@@ -847,6 +896,7 @@ impl DropdownMenu {
             modifier: crate::modifier::Modifier::new(),
             scroll_state: None,
             match_anchor_width: false,
+            focus_scope: true,
             // M3: `DpOffset(0.dp, 0.dp)`. The drop-down placement itself comes from the anchor
             // (`PopupPosition::BottomLeft`), which is the equivalent of the platform popup's anchoring.
             offset: (0.0, 0.0),
@@ -881,6 +931,16 @@ impl DropdownMenu {
     /// this on; on its own a menu keeps taking its widest item's width.
     pub fn match_anchor_width(mut self, v: bool) -> Self {
         self.match_anchor_width = v;
+        self
+    }
+
+    /// material3's `PopupProperties(focusable = …)`: whether the menu takes the keyboard while it is up.
+    ///
+    /// Default `true`, which is material3's `DefaultMenuProperties`. [`ExposedDropdownMenuBox`] passes
+    /// `false` for an editable anchor: material3 opens that menu WITHOUT focus on purpose, so the text
+    /// field keeps the caret (and, on a device, the IME) while the list is showing.
+    pub fn focus_scope(mut self, v: bool) -> Self {
+        self.focus_scope = v;
         self
     }
 
@@ -963,11 +1023,11 @@ impl DropdownMenu {
         // `expanded=false` records `false` -> delete).
         ctx.record_overlay_active(id.get(), expanded);
         if expanded {
-            let shape = self.shape.unwrap_or(crate::modifier::Shape::RoundedRect { corner_radius: 4.0 });
+            let shape = self.shape.unwrap_or_else(MenuDefaults::shape);
             let container_color = self
                 .container_color
-                .unwrap_or_else(|| crate::ui::theme::WiniaTheme::colors().surface_container);
-            let shadow_elevation = self.shadow_elevation.unwrap_or(3.0); // ElevationTokens.Level2
+                .unwrap_or_else(MenuDefaults::container_color);
+            let shadow_elevation = self.shadow_elevation.unwrap_or_else(MenuDefaults::shadow_elevation);
             let tonal_elevation = self.tonal_elevation;
             let border = self.border;
             let menu_modifier = self.modifier;
@@ -989,7 +1049,10 @@ impl DropdownMenu {
                 // activates on Enter/Space through the key dispatcher's focused-node path
                 // (`app.rs`: "聚焦组件的键盘激活（对标 Compose clickable）"). Esc dismissal does not
                 // depend on this: it was already working, and is pinned by a test either way.
-                focus_scope: true,
+                //
+                // `ExposedDropdownMenuBox` overrides it per anchor type, which is material3's
+                // `popupPropertiesForAnchorType`: an editable anchor's menu must NOT take the keyboard.
+                focus_scope: self.focus_scope,
                 dismiss_on_outside: true,
                 click_passthrough: false,
                 // material3's `DropdownMenuPositionProvider`: a menu fits itself around the anchor, so a
@@ -1081,12 +1144,28 @@ impl DropdownMenu {
 /// [`ExposedDropdownMenuBox::anchor_type`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExposedDropdownMenuAnchorType {
-    /// A read-only field: clicking it toggles the menu.
+    /// A non-editable field, such as a read-only text field. material3: "An anchor of this type will
+    /// open the menu with focus" (`ExposedDropdownMenu.kt:459`) — the menu takes the keyboard, so Tab
+    /// walks its items and a focused item activates on Enter/Space.
     PrimaryNotEditable,
-    /// An editable field: clicking it positions the cursor and does NOT toggle; the menu opens from the
-    /// keyboard (material3's `PrimaryEditable`).
+    /// An editable field, such as a text field the user types into. material3: "An anchor of this type
+    /// will open the menu without focus in order to preserve focus on the soft keyboard (IME)"
+    /// (`ExposedDropdownMenu.kt:468`) — the menu opens, the field keeps the caret, and typing carries on.
+    ///
+    /// The pointer still toggles: material3's anchor observes the pointer in the Initial pass and calls
+    /// `onExpandedChange` on the up event for every anchor type (`:1430-1433`); the anchor type decides
+    /// whether the POPUP takes focus, not whether a click counts. On the keyboard the editable anchor
+    /// differs in two ways (`:1436-1457`): the spacebar must not expand the menu (it belongs to the
+    /// text), and Tab/ArrowDown/ArrowUp hand the keyboard to the menu instead
+    /// (`alwaysFocusable = true` → the popup becomes focusable).
     PrimaryEditable,
-    /// An editable field whose click does toggle (`SecondaryEditable`).
+    /// An icon that lives inside an editable field and shares the IME with it. material3 opens with
+    /// focus only when accessibility services are enabled, and consumes the pointer DOWN so the click
+    /// does not move the caret into the field (`ExposedDropdownMenu.kt:1427-1429`).
+    ///
+    /// winia knows no per-element `menuAnchor` modifier — the anchor here is a whole closure — so this
+    /// behaves like [`PrimaryNotEditable`](ExposedDropdownMenuAnchorType::PrimaryNotEditable) (the
+    /// accessible branch) and the down-consume is not implemented; recorded in `docs/dropdown-menu.md`.
     SecondaryEditable,
 }
 
@@ -1194,11 +1273,12 @@ impl ExposedDropdownMenuBox {
 
     /// material3's `menuAnchor(type = …)`.
     ///
-    /// `PrimaryNotEditable` and `SecondaryEditable` both toggle on a click, which is the whole of their
-    /// difference here; `PrimaryEditable` deliberately does NOT, because its click belongs to the text
-    /// cursor. What material3 additionally does for the editable cases — opening from the keyboard and
-    /// keeping the cursor alive — is not implemented in winia, and is recorded as such in
-    /// `docs/dropdown-menu.md` rather than approximated.
+    /// Every type toggles on a click — material3's anchor observes the pointer in the Initial pass and
+    /// calls `onExpandedChange` on the up event whatever the type is (`ExposedDropdownMenu.kt:1430-1433`).
+    /// What the type decides is whether the menu takes the keyboard: `PrimaryNotEditable` opens with focus,
+    /// `PrimaryEditable` opens without it so the caret and the IME survive, and Tab/ArrowUp/ArrowDown then
+    /// hand the keyboard over. `SecondaryEditable` behaves like `PrimaryNotEditable` here (material3's
+    /// accessible branch); see [`ExposedDropdownMenuAnchorType`].
     pub fn anchor_type(mut self, t: ExposedDropdownMenuAnchorType) -> Self {
         self.anchor_type = t;
         self
@@ -1218,8 +1298,21 @@ impl ExposedDropdownMenuBox {
         menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
     ) {
         let expanded = self.expanded.clone();
-        let toggles_on_click = self.enabled
-            && !matches!(self.anchor_type, ExposedDropdownMenuAnchorType::PrimaryEditable);
+        let editable = matches!(
+            self.anchor_type,
+            ExposedDropdownMenuAnchorType::PrimaryEditable
+        );
+        let enabled = self.enabled;
+        // material3's `alwaysFocusable` (`ExposedDropdownMenu.kt:1436-1457`), which feeds
+        // `popupPropertiesForAnchorType(anchorType, alwaysFocusable)` (:354): an EDITABLE anchor's menu
+        // opens WITHOUT focus — that is the point of `PrimaryEditable`, whose caret and IME must survive —
+        // and Tab/ArrowUp/ArrowDown then hand the keyboard over so a keyboard user can reach the list. A
+        // non-editable anchor starts with it on, matching `DefaultMenuProperties`.
+        //
+        // `remember`, not a fresh `State::new`: a plain state built in the composable body would be
+        // recreated on every recomposition, so the hand-over below could never outlive the frame that
+        // made it (measured: the field kept the keyboard and the escalation test stayed red).
+        let keyboard = ctx.remember(|| !editable);
         let on_change = self.on_expanded_change.clone();
         let toggler = {
             let expanded = expanded.clone();
@@ -1232,8 +1325,59 @@ impl ExposedDropdownMenuBox {
                 }
             }
         };
+        // material3's `onPreviewKeyEvent` on the anchor (`ExposedDropdownMenu.kt:1436-1461`), installed on
+        // the box so it sees the key before the field's own handling: the anchor owns the activation keys
+        // and the "reach for the menu" keys, the field owns everything else — every printable key,
+        // including the spacebar.
+        //
+        // material3's `isClick` is the key UP event, while winia's activation path fires on key DOWN
+        // (`app.rs`, "聚焦组件的键盘激活"), so the toggle happens on the way down and the same guard is
+        // written in terms of `KeyDown` + `!repeat`.
+        let keys = {
+            let toggler = toggler.clone();
+            let keyboard = keyboard.clone();
+            let expanded = expanded.clone();
+            move |ke: &crate::modifier::KbEvent| -> bool {
+                use winit::keyboard::{Key, NamedKey};
+                if ke.event_type != crate::modifier::KbEventType::KeyDown || ke.repeat {
+                    return false;
+                }
+                let space = matches!(&ke.key, Key::Character(c) if c.as_str() == " ");
+                if space || matches!(&ke.key, Key::Named(NamedKey::Enter)) {
+                    // material3: "Primary editable shouldn't expand menu via spacebar" — the space belongs
+                    // to the text being typed, so it is left to the field.
+                    if editable && space {
+                        return false;
+                    }
+                    if enabled {
+                        toggler();
+                        return true;
+                    }
+                    return false;
+                }
+                if editable
+                    && expanded.get()
+                    && matches!(
+                        &ke.key,
+                        Key::Named(NamedKey::Tab)
+                            | Key::Named(NamedKey::ArrowDown)
+                            | Key::Named(NamedKey::ArrowUp)
+                    )
+                {
+                    // material3's `alwaysFocusable = true`: the menu becomes focusable so the keyboard can
+                    // reach it. winia hands the keyboard over instead, by letting the popup become a focus
+                    // scope again (`app.rs::claim_keyboard_for_overlay` claims it on the next frame).
+                    keyboard.set(true);
+                    return true;
+                }
+                false
+            }
+        };
         DropdownMenu::new(expanded.clone())
             .match_anchor_width(self.match_anchor_width)
+            // material3's `popupPropertiesForAnchorType(anchorType, alwaysFocusable)`: the menu owns the
+            // keyboard unless the anchor is editable and it has not been handed over yet.
+            .focus_scope(keyboard.get() || !editable)
             .on_dismiss_request({
                 let expanded = expanded.clone();
                 let on_change = on_change.clone();
@@ -1247,9 +1391,12 @@ impl ExposedDropdownMenuBox {
             .build(
                 ctx,
                 move |ctx| {
-                    let toggler = toggler;
-                    let modifier = if toggles_on_click {
-                        crate::modifier::Modifier::new().clickable(toggler)
+                    // material3's `menuAnchor(type, enabled)`: a disabled anchor neither toggles nor takes
+                    // the activation keys.
+                    let modifier = if enabled {
+                        crate::modifier::Modifier::new()
+                            .clickable(toggler)
+                            .on_pre_key_event(keys)
                     } else {
                         crate::modifier::Modifier::new()
                     };
@@ -1371,7 +1518,9 @@ impl DropdownMenuItem {
         // `fillMaxWidth` is NOT part of the item's intrinsic width on purpose: Compose's `FillNode` keeps the
         // default intrinsic approximation (`Size.kt:689`), so the menu's `width(IntrinsicSize.Max)` reads the
         // item's content clamped by this `sizeIn` range — 112dp at the narrow end, 280dp at the wide one.
-        let (pad_h, pad_v) = self.content_padding.unwrap_or((12.0, 0.0));
+        let (pad_h, pad_v) = self
+            .content_padding
+            .unwrap_or(MenuDefaults::dropdown_menu_item_content_padding());
         let modifier = crate::modifier::Modifier::new()
             .fill_max_width()
             .min_width(DROPDOWN_ITEM_MIN_WIDTH)
@@ -1380,7 +1529,7 @@ impl DropdownMenuItem {
             .padding_horizontal(pad_h)
             .padding_vertical(pad_v);
         let on_click = self.on_click;
-        let colors = self.colors.clone().unwrap_or_else(MenuItemColors::defaults);
+        let colors = self.colors.clone().unwrap_or_else(MenuDefaults::item_colors);
         let text_color = colors.text_color(self.enabled);
         // M3's item is `clickable(enabled, onClick, interactionSource, indication = ripple(true))`: a
         // ripple bounded to the item, in the content colour, on an interaction source the item owns unless
@@ -1631,5 +1780,68 @@ mod tests {
         assert_eq!(pinned_left.0, 0.0, "neither alignment fits: the anchor's half picks the edge");
         let pinned_right = dropdown_menu_position((300.0, 100.0, 40.0, 32.0), (400.0, 100.0), window);
         assert_eq!(pinned_right.0, 420.0 - 400.0, "and the other half picks the other edge");
+    }
+
+    /// material3's `MenuDefaults` values (`Menu.kt:181-260`), by the token they come from.
+    #[test]
+    fn menu_defaults_are_material3s_tokens() {
+        assert_eq!(
+            MenuDefaults::tonal_elevation(),
+            0.0,
+            "MenuDefaults.TonalElevation = ElevationTokens.Level0"
+        );
+        assert_eq!(
+            MenuDefaults::shadow_elevation(),
+            3.0,
+            "MenuDefaults.ShadowElevation = MenuTokens.ContainerElevation = ElevationTokens.Level2"
+        );
+        assert!(
+            matches!(
+                MenuDefaults::shape(),
+                crate::modifier::Shape::RoundedRect { corner_radius } if corner_radius == 4.0
+            ),
+            "MenuDefaults.shape = MenuTokens.ContainerShape = CornerExtraSmall (4dp), got {:?}",
+            MenuDefaults::shape()
+        );
+        assert_eq!(
+            MenuDefaults::dropdown_menu_item_content_padding(),
+            (12.0, 0.0),
+            "MenuDefaults.DropdownMenuItemContentPadding = PaddingValues(horizontal = 12.dp, vertical = 0)"
+        );
+        assert_eq!(
+            MenuDefaults::dropdown_menu_item_content_padding(),
+            (DROPDOWN_ITEM_HORIZONTAL_PADDING, 0.0),
+            "the published padding and the constant the item applies must be the same value"
+        );
+    }
+
+    /// The published defaults must be the ones the menu and its items actually use, or a caller copying
+    /// `MenuDefaults` would draw something else than an unset field does.
+    #[test]
+    fn menu_defaults_are_what_the_components_resolve_to() {
+        let theme = crate::ui::theme::WiniaTheme::colors();
+        assert_eq!(
+            MenuDefaults::container_color(),
+            theme.surface_container,
+            "MenuDefaults.containerColor = MenuTokens.ContainerColor = surfaceContainer"
+        );
+        let colors = MenuDefaults::item_colors();
+        assert_eq!(colors.text, theme.on_surface, "MenuDefaults.itemColors() text = onSurface");
+        assert_eq!(
+            colors.leading_icon, theme.on_surface_variant,
+            "MenuDefaults.itemColors() leading icon = onSurfaceVariant"
+        );
+        assert_eq!(
+            colors.disabled_text,
+            with_alpha_factor(theme.on_surface, DISABLED_ALPHA),
+            "MenuDefaults.itemColors() disabled text = onSurface at the disabled opacity"
+        );
+        // The item's own fallback goes through the same accessor, so an unset `colors` and
+        // `MenuDefaults.itemColors()` cannot drift.
+        assert_eq!(
+            crate::ui::overlay::MenuItemColors::defaults().text,
+            colors.text,
+            "MenuItemColors::defaults (what an item resolves to) must equal the published default"
+        );
     }
 }

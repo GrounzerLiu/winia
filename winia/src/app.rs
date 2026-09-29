@@ -4579,6 +4579,11 @@ fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
         "ArrowRight" => Some(Key::Named(NamedKey::ArrowRight)),
         "ArrowUp" => Some(Key::Named(NamedKey::ArrowUp)),
         "ArrowDown" => Some(Key::Named(NamedKey::ArrowDown)),
+        // The spacebar. winit 0.31 (the version in Cargo.lock) has no `NamedKey::Space`, so a spacebar
+        // arrives as `Key::Character(" ")` — the same spelling winia's own activation path checks
+        // (`app.rs:4552`), and the one components reading it as activation accept (`overlay.rs`, an
+        // editable menu anchor). This name exists so a test can press it at all.
+        "Space" => Some(Key::Character(" ".into())),
         "Home" => Some(Key::Named(NamedKey::Home)),
         "End" => Some(Key::Named(NamedKey::End)),
         _ if s.chars().count() == 1 => Some(Key::Character(s.to_string().into())),

@@ -72,7 +72,10 @@ pub use animated_visibility::{
 pub use animated_size::AnimatedSize;
 pub use animated_content::AnimatedContent;
 pub use crossfade::Crossfade;
-pub use overlay::{Popup, Dialog, DropdownMenu, DropdownMenuItem, PopupPosition, OverlayAnimSpec};
+pub use overlay::{
+    Dialog, DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
+    ExposedDropdownMenuDefaults, MenuDefaults, MenuItemColors, OverlayAnimSpec, Popup, PopupPosition,
+};
 
 pub use text::Text;
 pub use text::TextAlign;

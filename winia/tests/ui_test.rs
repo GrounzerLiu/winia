@@ -3038,21 +3038,110 @@ fn exposed_dropdown_dismisses_and_reports_it() {
     }
 }
 
-/// What:  a box whose anchor is `PrimaryEditable`.
-/// When:  its text field is clicked.
-/// Then:  the menu does NOT open: material3 gives that click to the text cursor.
+/// What:  a box whose anchor is `PrimaryEditable`, with its menu opened by clicking the field.
+/// When:  a letter and the spacebar are typed into the field while the menu is up, then Enter is pressed.
+/// Then:  the click opens the menu but leaves the caret in the field — material3's `PrimaryEditable`
+///        "will open the menu without focus in order to preserve focus on the soft keyboard (IME)"
+///        (`ExposedDropdownMenu.kt:468`); the anchor type decides whether the POPUP takes focus, not
+///        whether a click counts, because the pointer path calls `onExpandedChange` on the up event for
+///        every type (`:1430-1433`) — the field goes on receiving characters, the spacebar does not
+///        toggle the menu ("Primary editable shouldn't expand menu via spacebar", `:1444`), and Enter —
+///        which material3 counts as a click — closes it again.
 #[test]
-fn exposed_dropdown_primary_editable_anchor_does_not_toggle() {
+fn exposed_dropdown_editable_anchor_opens_without_taking_the_caret() {
     let mut app = UiTest::launch("dropdown_menu");
     app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
     let (x, y, w, h) = app.find_tag("dm-editable-anchor").expect("the editable field");
+
     app.click(x + w / 2.0, y + h / 2.0);
+    app.expect_overlay_text_timeout("可编辑项", Duration::from_secs(5));
+    assert!(
+        app.tag_is_focused("dm-editable-anchor"),
+        "an editable anchor's menu opens WITHOUT taking focus, so the field must still hold the caret"
+    );
+
+    app.key("a");
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("text(a)")),
+        "the field must go on receiving characters while its menu is open: {texts:?}"
+    );
+
+    app.key("Space");
+    std::thread::sleep(Duration::from_millis(200));
+    app.refresh();
+    assert_eq!(
+        app.overlay_count(),
+        1,
+        "the spacebar belongs to the text: material3's editable anchor must not toggle on it"
+    );
+
+    app.key("Enter");
     std::thread::sleep(Duration::from_millis(250));
     app.refresh();
     assert_eq!(
         app.overlay_count(),
         0,
-        "a PrimaryEditable anchor must not open the menu on a click"
+        "material3 counts Enter as a click on the anchor, so it must close an open menu"
+    );
+}
+
+/// What:  the `PrimaryNotEditable` box, with its menu opened.
+/// When:  Tab is pressed.
+/// Then:  the first item is focused: material3's non-editable anchor opens WITH focus
+///        (`popupPropertiesForAnchorType`, `ExposedDropdownMenu.kt:354`), so the menu owns the keyboard
+///        from its first frame and needs no "reach for the menu" step — the contrast with the editable
+///        anchor below.
+#[test]
+fn exposed_dropdown_non_editable_anchor_opens_with_focus() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    app.click_tag("dm-exposed-anchor");
+    app.expect_overlay_text_timeout("选项 A", Duration::from_secs(5));
+
+    app.key("Tab");
+    assert!(
+        app.overlay_tag_is_focused("dm-exposed-item-0"),
+        "a non-editable anchor's menu owns the keyboard from the start, so Tab lands on its first item"
+    );
+}
+
+/// What:  the `PrimaryEditable` box, with its menu opened (the field keeping the caret).
+/// When:  ArrowDown — material3's "reach for the menu" key — is pressed, then Tab.
+/// Then:  the menu takes the keyboard: `onPreviewKeyEvent` sets `alwaysFocusable = true` for Tab,
+///        ArrowDown and ArrowUp while an editable anchor's menu is expanded
+///        (`ExposedDropdownMenu.kt:1449-1457`), so the field stops being the keyboard target and the
+///        menu's first item becomes reachable.
+#[test]
+fn exposed_dropdown_editable_anchor_hands_the_keyboard_over_on_a_reach_key() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    app.click_tag("dm-editable-anchor");
+    app.expect_overlay_text_timeout("可编辑项", Duration::from_secs(5));
+    assert!(
+        app.tag_is_focused("dm-editable-anchor"),
+        "the menu opens without focus first: the caret stays in the field"
+    );
+
+    app.key("ArrowDown");
+    // The hand-over is observed on the NEXT frame: the box recomposes with the popup as a focus scope,
+    // and the framework claims the keyboard for it right after the overlays are laid out.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while app.tag_is_focused("dm-editable-anchor") && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        app.refresh();
+    }
+    assert!(
+        !app.tag_is_focused("dm-editable-anchor"),
+        "material3's `alwaysFocusable = true` hands the keyboard to the menu, so the field must stop \
+         being the keyboard target"
+    );
+
+    app.key("Tab");
+    assert!(
+        app.overlay_tag_is_focused("dm-editable-item-0"),
+        "once the keyboard is handed over, Tab must reach the menu's first item"
     );
 }
 
