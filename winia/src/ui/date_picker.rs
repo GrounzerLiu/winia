@@ -16,6 +16,7 @@
 //! of the week explicitly, and [`CalendarLocale::default`] is an English, Sunday-first locale. A caller that
 //! needs another language supplies its own; the picker never reads a global.
 
+use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::layout::{Alignment, Arrangement};
@@ -868,6 +869,7 @@ impl DatePicker {
     }
 
     /// Composes the picker.
+    #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let colors = DatePickerColors::from_theme(&WiniaTheme::colors());
         let model = self.state.calendar_model().clone();

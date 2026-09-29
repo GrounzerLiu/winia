@@ -3743,20 +3743,14 @@ fn date_picker_steps_the_month_with_its_arrows() {
 /// When:  it is tapped.
 /// Then:  the picker selects that day.
 ///
-/// BLOCKED, and ignored rather than deleted so the reproduction stays in the tree. Measured on this fixture:
-/// the month navigation's arrows *do* take a tap (their test passes, and the month text changes), but nothing
-/// inside the month grid does. The day cell's 40 dp circle is at the centre the lattice puts it at — `find_tag`
-/// on a temporary tag measured it at `(32, 306, 40, 40)` for the first row — and a tap on that centre leaves the
-/// selection text unchanged. Two controls say the handler itself is not the problem: the same tap on the cell
-/// that already carries paint (today, whose 1 dp ring is drawn) also does nothing, and a clickable attached to
-/// the picker's *container*, whose box covers the whole grid, does not fire for taps below the grid's top
-/// either — so the press is consumed inside the grid and never reaches a handler. `UiTest::tap` (a real
-/// pointer down and up) and `UiTest::click` (the synthetic debug command) behave the same. The next step is to
-/// isolate a lone `Surface::selectable` in a fixture and tap that, to decide between winia's `Surface`
-/// interaction and this grid's nesting.
+/// This is the guard for a frame-dropping regression, and it has to be a UI test rather than a unit test: the
+/// day cell's handler ran and the state changed all along, but `DatePicker::build` was a plain `fn` instead of
+/// `#[composable]`, so its nodes had no stable key base. Every month has a different number of day cells, so
+/// the node count inside the grid changed, the next compose handed a node a `slot_key` another node already
+/// held, winia's `[dup-key]` guard panicked and every later frame was skipped with the previous picture kept.
+/// The taps looked dead; the picture was frozen. Removing `#[composable]` again makes this test time out on an
+/// unchanged `selected:` text while the state underneath has already moved on.
 #[test]
-#[ignore = "clicking inside the month grid consumes the press without calling the day cell's handler; see the \
-            test body for the measurements"]
 fn date_picker_selects_the_day_that_is_tapped() {
     let mut app = UiTest::launch("date_picker");
     app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));

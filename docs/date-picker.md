@@ -256,19 +256,23 @@ non-public hosts and the Tavily extracts of the raw and jsdelivr SVGs came back 
 576 pixels in its 24 dp box, the left one's ink centre sits left of the right one's, and the pair is a near
 mirror (17 of 576 pixels differ).
 
-Four UI tests drive the fixture (`winia/tests/ui_test.rs`), three of them green: the container keeps its 360 dp
+Four UI tests drive the fixture (`winia/tests/ui_test.rs`), all four green: the container keeps its 360 dp
 width and the sum of its rows (measured `(16, 78, 360, 512)` against 120 + 1 + 56 + 48 + 288), the selected day
 is a filled 40 dp circle (measured 39 dp across on a scan through its centre) with today a hollow ring 40 dp
-across, and the arrows step the month and step back.
+across, the arrows step the month and step back, and a tap on the today cell moves the selection to it.
 
-The fourth — a tap on a day cell — is ignored, and the reproduction stays in the tree rather than a passing
-assertion that would hide it. Measured: the arrows do take a tap, but nothing inside the month grid does. A
-temporary `test_tag` on the day cell put the first one at `(32, 306, 40, 40)`, and a tap on that centre (and on
-the painted today cell, and 14 dp above its label) leaves the selection unchanged. A clickable attached to the
-picker's *container*, whose box covers the whole grid, does not fire for taps inside the grid either, so the
-press is consumed there and never reaches a handler; `UiTest::tap` and the synthetic `UiTest::click` behave the
-same. Isolating a lone `Surface::selectable` in a fixture is the next step: that decides between winia's
-`Surface` interaction and this grid's nesting of `Stack` and `Row`.
+The day-tap test guards a pitfall whose symptom points the wrong way, so both halves are recorded. The taps
+looked dead: the arrows took one, nothing inside the month grid did, the day cell's handler never appeared to
+run, and a clickable on the picker's own container — whose box covers the whole grid — stayed silent below the
+grid's top. In fact every tap reached its handler and every handler changed the state; the picture was frozen.
+`DatePicker::build` was a plain `fn` rather than `#[composable]`, so the nodes it composes had no
+per-statement key base. A month has a different number of day cells every month, so the node count inside the
+grid changes; the next compose handed a node a `slot_key` another node already held, winia's `[dup-key]` guard
+panicked in `winia/src/core/materialize.rs`, and every later frame was skipped with the previous picture kept
+(`[render-panic] … 本帧已跳过，上帧画面保留`). The window went on showing September's selection while the state
+underneath moved on, and the hit test on the half-materialized arena stopped finding the day cells at all —
+which is what made the press look consumed. With `#[composable]` back, a 4 dp scan down the container's first
+grid column advances the month and the selection on every tap. Turning the attribute off again makes exactly 1
+test red: `date_picker_selects_the_day_that_is_tapped`.
 
-Next: that isolation, the year picker panel (3 columns, 72 × 36 cells), then `DatePickerDialog` and the input
-mode.
+Next: the year picker panel (3 columns, 72 × 36 cells), then `DatePickerDialog` and the input mode.
