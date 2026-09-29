@@ -218,7 +218,14 @@ Measured, each by turning the rule off and watching the specific test fail:
 | --- | --- | --- |
 | 1970-01-01 is Thursday (`+3` in the weekday anchor) | anchor moved to `+4` | 3 tests red: `the_epoch_is_a_thursday`, `the_month_offset_counts_from_the_locales_first_day`, `dates_format_as_the_header_and_the_field_show_them`; the arithmetic-only tests stayed green |
 | the month offset wraps behind the locale's first day | dropped the `+ 7` wrap | exactly 1 test red: `the_month_offset_counts_from_the_locales_first_day` |
+| both millisecond setters test the year range | filter and guard removed | exactly 2 tests red: `a_selection_outside_the_year_range_is_dropped`, `showing_a_month_outside_the_year_range_is_ignored` |
+| switching mode snaps the calendar to the selection's month | snap removed | exactly 1 test red: `switching_mode_pulls_the_calendar_to_the_selected_month` |
 
-Next: `DatePickerState` (the coercion rules above), then the container/header, the 6 × 7 day grid, the month
-list with its snap fling and displayed-month derivation, the year picker, then `DatePickerDialog` and the input
-mode.
+`DatePickerState` (`with`/`new` over a `DatePickerStateInit`, `remember_date_picker_state` for composition) then
+carries the hoisted values material3's pickers read and drive: `selected_date_millis`,
+`displayed_month_millis`, `display_mode`, `year_range`, `locale`, the `calendar_model` the state was built
+with, and the caller's `SelectableDates` (the default `AllDates` allows everything). The coercion rules above
+are the state's, and `today_millis` on the model is the system clock so tests can inject a fixed date.
+
+Next: the container/header of the picker, the 6 × 7 day grid, the month list with its snap fling and
+displayed-month derivation, the year picker, then `DatePickerDialog` and the input mode.

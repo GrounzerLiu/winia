@@ -16,6 +16,10 @@
 //! of the week explicitly, and [`CalendarLocale::default`] is an English, Sunday-first locale. A caller that
 //! needs another language supplies its own; the picker never reads a global.
 
+use crate::core::state::State;
+use std::ops::RangeInclusive;
+use std::sync::Arc;
+
 /// Milliseconds in a day, the unit material3's pickers count in (`CalendarModel.kt:316`).
 pub const MILLIS_IN_24_HOURS: i64 = 86_400_000;
 
@@ -292,6 +296,16 @@ impl CalendarModel {
         canonical_millis(millis)
     }
 
+    /// Today at the start of its UTC day, from the system clock — material3's `CalendarModel.today`
+    /// (`internal/CalendarModelImpl.android.kt:49-66`), which is the platform clock in UTC.
+    pub fn today_millis(&self) -> i64 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0);
+        canonical_millis(now)
+    }
+
     /// The month and year as text, `September 2024` — the shape `DatePickerFormatter.formatMonthYear`
     /// returns and the picker's year menu shows (`DatePicker.kt:1565-1568`).
     pub fn format_month_year(&self, month_start_millis: i64) -> String {
@@ -318,6 +332,192 @@ impl CalendarModel {
     pub fn number_of_months_in_range(year_range: &std::ops::RangeInclusive<i32>) -> i64 {
         (*year_range.end() as i64 - *year_range.start() as i64 + 1) * 12
     }
+}
+
+/// Which half of a date picker is showing (`DisplayMode`, `DatePicker.kt:330-348`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// The calendar.
+    Picker,
+    /// Manual entry in a text field.
+    Input,
+}
+
+/// Decides which dates and years a picker allows (`SelectableDates`, `DatePicker.kt:286-299`).
+pub trait SelectableDates: Send + Sync {
+    /// Whether the day containing `utc_time_millis` may be selected.
+    fn is_selectable_date(&self, utc_time_millis: i64) -> bool {
+        let _ = utc_time_millis;
+        true
+    }
+
+    /// Whether `year` may be selected. A year that is not selectable disables all of its dates.
+    fn is_selectable_year(&self, year: i32) -> bool {
+        let _ = year;
+        true
+    }
+}
+
+/// The default policy: every date and year is selectable (`DatePickerDefaults.AllDates`, `DatePicker.kt:774`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllDates;
+
+impl SelectableDates for AllDates {}
+
+/// What a [`DatePickerState`] starts from — material3's `DatePickerState(…)` parameters
+/// (`DatePicker.kt:423-438`), in a struct because Rust has no default arguments.
+#[derive(Clone)]
+pub struct DatePickerStateInit {
+    /// The initial selection, `None` for no selection.
+    pub initial_selected_date_millis: Option<i64>,
+    /// The month to show first. `None` means material3's default: the month of the initial selection, or
+    /// today when there is none.
+    pub initial_displayed_month_millis: Option<i64>,
+    /// The years the picker may show and select.
+    pub year_range: RangeInclusive<i32>,
+    /// The mode to start in.
+    pub initial_display_mode: DisplayMode,
+    /// Which dates and years are allowed.
+    pub selectable_dates: Arc<dyn SelectableDates>,
+    /// What "today" means. `None` reads the system clock; a test passes a fixed value.
+    pub today_millis: Option<i64>,
+}
+
+impl Default for DatePickerStateInit {
+    fn default() -> Self {
+        Self {
+            initial_selected_date_millis: None,
+            initial_displayed_month_millis: None,
+            year_range: DEFAULT_YEAR_RANGE,
+            initial_display_mode: DisplayMode::Picker,
+            selectable_dates: Arc::new(AllDates),
+            today_millis: None,
+        }
+    }
+}
+
+/// A date picker's state, hoisted so a caller can read and drive it (`DatePickerState`, `DatePicker.kt:244`).
+///
+/// Both millisecond values are the start of a UTC day, and both setters **coerce** rather than throw: a
+/// selection whose year is outside `year_range` becomes `None`, and a displayed month outside it is dropped.
+/// material3 documents `IllegalArgumentException` and does exactly this in code (`DatePicker.kt:1153-1159`,
+/// `:1209-1218`); see `docs/date-picker.md` for the disagreement.
+#[derive(Clone)]
+pub struct DatePickerState {
+    selected_date_millis: State<Option<i64>>,
+    displayed_month_millis: State<i64>,
+    display_mode: State<DisplayMode>,
+    year_range: RangeInclusive<i32>,
+    locale: CalendarLocale,
+    model: CalendarModel,
+    selectable_dates: Arc<dyn SelectableDates>,
+}
+
+impl DatePickerState {
+    /// A state with material3's defaults: no selection, the calendar on today, the default year range, every
+    /// date selectable.
+    pub fn new(locale: CalendarLocale) -> Self {
+        Self::with(locale, DatePickerStateInit::default())
+    }
+
+    /// A state over `init`.
+    pub fn with(locale: CalendarLocale, init: DatePickerStateInit) -> Self {
+        let model = CalendarModel::new(locale.clone());
+        let today = model.month_of_millis(init.today_millis.unwrap_or_else(|| model.today_millis()));
+        let selected = init
+            .initial_selected_date_millis
+            .map(|millis| model.canonical_millis(millis))
+            .filter(|millis| init.year_range.contains(&model.canonical_date(*millis).year));
+        // material3's default displayed month is the selection's month; a month whose year is out of range
+        // falls back to today, like `BaseDatePickerStateImpl` (`DatePicker.kt:1135-1149`).
+        let displayed = init
+            .initial_displayed_month_millis
+            .or(selected)
+            .map(|millis| model.month_of_millis(millis))
+            .filter(|month| init.year_range.contains(&month.year))
+            .unwrap_or(today);
+        Self {
+            selected_date_millis: State::new(selected),
+            displayed_month_millis: State::new(displayed.start_utc_time_millis),
+            display_mode: State::new(init.initial_display_mode),
+            year_range: init.year_range,
+            locale,
+            model,
+            selectable_dates: init.selectable_dates,
+        }
+    }
+
+    /// The selection, or `None` — the start of the selected day in UTC.
+    pub fn selected_date_millis(&self) -> Option<i64> {
+        self.selected_date_millis.get()
+    }
+
+    /// Sets the selection. The timestamp is canonicalised to the start of its UTC day, and a date whose year
+    /// is outside the year range clears the selection (`DatePicker.kt:1209-1218`).
+    pub fn set_selected_date_millis(&self, millis: Option<i64>) {
+        let canonical = millis
+            .map(|millis| self.model.canonical_millis(millis))
+            .filter(|millis| self.year_range.contains(&self.model.canonical_date(*millis).year));
+        self.selected_date_millis.set(canonical);
+    }
+
+    /// The month the calendar shows, as the millis of its first day.
+    pub fn displayed_month_millis(&self) -> i64 {
+        self.displayed_month_millis.get()
+    }
+
+    /// Shows the month containing `millis`. A month whose year is outside the year range is ignored
+    /// (`DatePicker.kt:1153-1159`).
+    pub fn set_displayed_month_millis(&self, millis: i64) {
+        let month = self.model.month_of_millis(millis);
+        if self.year_range.contains(&month.year) {
+            self.displayed_month_millis.set(month.start_utc_time_millis);
+        }
+    }
+
+    /// The current mode.
+    pub fn display_mode(&self) -> DisplayMode {
+        self.display_mode.get()
+    }
+
+    /// Switches mode. As in material3 (`DatePicker.kt:1228-1233`), a selection pulls the calendar back to the
+    /// month that selection is in.
+    pub fn set_display_mode(&self, mode: DisplayMode) {
+        if let Some(selected) = self.selected_date_millis() {
+            self.set_displayed_month_millis(selected);
+        }
+        self.display_mode.set(mode);
+    }
+
+    /// The years this picker may show and select.
+    pub fn year_range(&self) -> RangeInclusive<i32> {
+        self.year_range.clone()
+    }
+
+    /// The locale the calendar formats and lays out with.
+    pub fn locale(&self) -> &CalendarLocale {
+        &self.locale
+    }
+
+    /// The calendar model this state was built with (`BaseDatePickerStateImpl.calendarModel`,
+    /// `DatePicker.kt:1131`).
+    pub fn calendar_model(&self) -> &CalendarModel {
+        &self.model
+    }
+
+    /// Which dates and years are selectable.
+    pub fn selectable_dates(&self) -> &dyn SelectableDates {
+        self.selectable_dates.as_ref()
+    }
+}
+
+/// The state a picker composes with, remembered across recompositions
+/// (`rememberDatePickerState`, `DatePicker.kt:368-390`).
+pub fn remember_date_picker_state(
+    ctx: &mut crate::core::composer::ComposeCtx,
+    locale: CalendarLocale,
+) -> DatePickerState {
+    ctx.remember(|| DatePickerState::new(locale)).get()
 }
 
 #[cfg(test)]
@@ -467,5 +667,162 @@ mod tests {
         assert!(CalendarDate::new(2024, 13, 1).is_none());
         assert!(CalendarDate::new(2024, 0, 1).is_none());
         assert!(CalendarDate::new(2024, 4, 31).is_none());
+    }
+
+    /// The start of the UTC day `year-month-day`.
+    fn millis(year: i32, month: u32, day: u32) -> i64 {
+        CalendarDate::new(year, month, day).unwrap().start_of_day_millis()
+    }
+
+    /// A state initialised with the given values and a fixed "today", so the tests never read the clock.
+    fn state(
+        init: DatePickerStateInit,
+        today: (i32, u32, u32),
+    ) -> DatePickerState {
+        DatePickerState::with(
+            CalendarLocale::default(),
+            DatePickerStateInit {
+                today_millis: Some(millis(today.0, today.1, today.2)),
+                ..init
+            },
+        )
+    }
+
+    #[test]
+    fn a_selection_outside_the_year_range_is_dropped() {
+        let state = state(
+            DatePickerStateInit {
+                initial_selected_date_millis: Some(millis(1899, 12, 31)),
+                ..Default::default()
+            },
+            (2024, 9, 1),
+        );
+        assert_eq!(
+            state.selected_date_millis(),
+            None,
+            "an initial selection before the year range is no selection"
+        );
+
+        state.set_selected_date_millis(Some(millis(2101, 1, 1)));
+        assert_eq!(
+            state.selected_date_millis(),
+            None,
+            "and a write outside the range clears the selection instead of throwing"
+        );
+
+        state.set_selected_date_millis(Some(millis(2100, 12, 31)));
+        assert_eq!(
+            state.selected_date_millis(),
+            Some(millis(2100, 12, 31)),
+            "the last day of the range is selectable"
+        );
+    }
+
+    #[test]
+    fn a_selection_is_canonicalised_to_the_start_of_its_utc_day() {
+        let state = state(DatePickerStateInit::default(), (2024, 9, 1));
+        state.set_selected_date_millis(Some(millis(2024, 9, 3) + 12 * 3_600_000 + 345));
+        assert_eq!(state.selected_date_millis(), Some(millis(2024, 9, 3)));
+    }
+
+    #[test]
+    fn the_displayed_month_follows_the_selection_and_otherwise_today() {
+        let selected = state(
+            DatePickerStateInit {
+                initial_selected_date_millis: Some(millis(2024, 3, 15)),
+                ..Default::default()
+            },
+            (2024, 9, 1),
+        );
+        assert_eq!(
+            selected.displayed_month_millis(),
+            millis(2024, 3, 1),
+            "without a displayed month, the calendar opens on the selection's month"
+        );
+
+        let unselected = state(DatePickerStateInit::default(), (2024, 9, 1));
+        assert_eq!(unselected.displayed_month_millis(), millis(2024, 9, 1));
+    }
+
+    #[test]
+    fn an_initial_month_outside_the_year_range_falls_back_to_today() {
+        let state = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2200, 1, 1)),
+                ..Default::default()
+            },
+            (2024, 9, 1),
+        );
+        assert_eq!(state.displayed_month_millis(), millis(2024, 9, 1));
+    }
+
+    #[test]
+    fn showing_a_month_outside_the_year_range_is_ignored() {
+        let state = state(DatePickerStateInit::default(), (2024, 9, 1));
+        state.set_displayed_month_millis(millis(2101, 5, 20));
+        assert_eq!(
+            state.displayed_month_millis(),
+            millis(2024, 9, 1),
+            "a month past the year range does not move the calendar"
+        );
+
+        state.set_displayed_month_millis(millis(2001, 5, 20));
+        assert_eq!(
+            state.displayed_month_millis(),
+            millis(2001, 5, 1),
+            "an in-range month snaps to its first day"
+        );
+    }
+
+    #[test]
+    fn switching_mode_pulls_the_calendar_to_the_selected_month() {
+        let state = state(
+            DatePickerStateInit {
+                initial_selected_date_millis: Some(millis(2024, 3, 15)),
+                ..Default::default()
+            },
+            (2024, 9, 1),
+        );
+        state.set_displayed_month_millis(millis(2024, 12, 1));
+        assert_eq!(state.displayed_month_millis(), millis(2024, 12, 1));
+
+        state.set_display_mode(DisplayMode::Input);
+        assert_eq!(state.display_mode(), DisplayMode::Input);
+        assert_eq!(
+            state.displayed_month_millis(),
+            millis(2024, 3, 1),
+            "the switch snaps the calendar back to the month the selection is in"
+        );
+    }
+
+    #[test]
+    fn a_state_starts_in_picker_mode_over_the_full_default_range() {
+        let state = DatePickerState::new(CalendarLocale::default());
+        assert_eq!(state.display_mode(), DisplayMode::Picker);
+        assert_eq!(state.year_range(), DEFAULT_YEAR_RANGE);
+        assert_eq!(state.selected_date_millis(), None);
+        assert!(state.selectable_dates().is_selectable_date(0));
+        assert!(state.selectable_dates().is_selectable_year(2000));
+        assert_eq!(state.locale().first_day_of_week, 7);
+    }
+
+    #[test]
+    fn the_state_keeps_the_selectable_dates_it_was_given() {
+        struct NotSelectable;
+
+        impl SelectableDates for NotSelectable {
+            fn is_selectable_date(&self, _utc_time_millis: i64) -> bool {
+                false
+            }
+        }
+
+        let state = state(
+            DatePickerStateInit {
+                selectable_dates: Arc::new(NotSelectable),
+                ..Default::default()
+            },
+            (2024, 9, 1),
+        );
+        assert!(!state.selectable_dates().is_selectable_date(millis(2024, 9, 1)));
     }
 }
