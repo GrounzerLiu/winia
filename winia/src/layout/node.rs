@@ -988,7 +988,16 @@ pub(crate) fn intrinsic_size_of(
     // `fillMax*` is deliberately not honoured here: Compose's `FillNode` keeps the DEFAULT
     // intrinsic behavior (only its size node and its `defaultMinSize` node override it), and
     // filling is a measure-time act that needs incoming space. Recorded in docs/intrinsic-size.md.
-    content.clamp(lo, hi) + pad_axis
+    //
+    // The range applies to the node's BOX and the padding sits INSIDE it — the pipeline offsets the
+    // constraints by the padding before the content is measured — so the padded content is what
+    // gets clamped: `clamp(c, lo - pad, hi - pad) + pad` == `clamp(c + pad, lo, hi)`. Clamping the
+    // content first and adding the padding afterwards lets the padding escape the clamp (measured:
+    // a menu item with `min_width(112).padding_horizontal(12)` reported 136 instead of 112, because
+    // its 64dp label was lifted to the minimum before the 24dp of padding was added on top).
+    let lo_inner = (lo - pad_axis).max(0.0);
+    let hi_inner = (hi - pad_axis).max(lo_inner);
+    content.clamp(lo_inner, hi_inner) + pad_axis
 }
 
 /// The CONTENT's answer to an intrinsic query: the node's policy, or the node itself as a leaf.
@@ -2777,20 +2786,35 @@ fn measure_node_inner(
     // 位置必须在 padding offset **之前**：管线是"先定节点尺寸，再把 padding 偏移进内层"，
     // 所以这里收紧的是节点自身（含 padding）的尺寸。
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_width_request() {
-        let other = inner_constraints.max_height;
-        let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
-        if enforce_incoming {
-            w = inner_constraints.constrain_width(w);
+        // 同轴上的 `fillMaxWidth` 压过这个请求：Compose 的语义是
+        // `constraints.constrain(fixedWidth(intrinsic))`，而被锚点强制宽度的菜单走到这里时
+        // min == max == 锚点宽（`ExposedDropdownMenu.kt:201-213` 强制 `minWidth = maxWidth =
+        // menuWidth`），constrain 于是覆盖固有值。管线第 3 步才应用 fillMax（在本步之后），
+        // 所以这里必须自己认账——否则 `width(IntrinsicSize.Max)` 会先把节点收到内容宽度，
+        // fillMax 再把 min 抬到那个已经收窄的 max 上，等宽菜单就变成内容宽度而不是锚点宽度。
+        let filled =
+            nodes[idx].modifier.is_fill_max_width() && inner_constraints.max_width < f32::MAX;
+        if !filled {
+            let other = inner_constraints.max_height;
+            let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
+            if enforce_incoming {
+                w = inner_constraints.constrain_width(w);
+            }
+            inner_constraints = inner_constraints.tighten_width(w);
         }
-        inner_constraints = inner_constraints.tighten_width(w);
     }
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
-        let other = inner_constraints.max_width;
-        let mut h = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
-        if enforce_incoming {
-            h = inner_constraints.constrain_height(h);
+        let filled =
+            nodes[idx].modifier.is_fill_max_height() && inner_constraints.max_height < f32::MAX;
+        if !filled {
+            let other = inner_constraints.max_width;
+            let mut h =
+                intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
+            if enforce_incoming {
+                h = inner_constraints.constrain_height(h);
+            }
+            inner_constraints = inner_constraints.tighten_height(h);
         }
-        inner_constraints = inner_constraints.tighten_height(h);
     }
 
     // 2. 应用 padding
@@ -3604,10 +3628,10 @@ mod intrinsic_tests {
         );
     }
 
-    /// The trap `MenuColumnPolicy` had to work around: a label carrying `weight(1f)` has no width of
-    /// its own, so a container that just measures it with an unbounded axis gets the CONSTRAINT back
-    /// (measured at the time: an icon menu's items jumped from 112 to the 280 maximum). Row/Column
-    /// price weighted children by weight unit instead.
+    /// The trap the menu's old hand-written column had to work around: a label carrying `weight(1f)` has no
+    /// width of its own, so a container that just measures it with an unbounded axis gets the CONSTRAINT back
+    /// (measured at the time: an icon menu's items jumped from 112 to the 280 maximum). Row/Column price
+    /// weighted children by weight unit instead.
     #[test]
     fn a_weighted_label_reports_its_own_width_not_the_constraint() {
         let mut nodes = vec![
@@ -3853,6 +3877,63 @@ mod intrinsic_tests {
         assert_eq!(
             intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
             22.0
+        );
+    }
+
+    /// The clamp and the padding have to be applied in the pipeline's order: padding sits INSIDE the size
+    /// constraint (`Constraints::offset`), so a `sizeIn(112, 280)` item whose content plus 12dp of padding is
+    /// 50 wide answers 112 — not 136. Clamping the padded content (`content.clamp(lo, hi) + padding`) reported
+    /// the second number; it is what the old hand-written menu column had to do by hand.
+    #[test]
+    fn the_clamp_applies_inside_the_padding() {
+        // A menu item, structurally: the item is the row itself (its `sizeIn` and `padding` are on the same
+        // node as the policy), and its label is the weighted child (`weight(1f)`, here a plain child because
+        // the arithmetic under test is the chain, not the weight).
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new()
+                    .min_width(112.0)
+                    .max_width(280.0)
+                    .padding_horizontal(12.0),
+                Some(0),
+            ),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            112.0,
+            "the minimum width wins over the padded content"
+        );
+    }
+
+    /// On the same axis, `fillMaxWidth` beats the intrinsic width request. Compose's `IntrinsicWidthNode`
+    /// ends in `constraints.constrain(fixedWidth(intrinsic))`, and where the incoming constraints are already
+    /// fixed (`ExposedDropdownMenu` forces `minWidth = maxWidth = menuWidth`) that pins the axis back to the
+    /// incoming size. winia applies `fillMax` in the pipeline step AFTER the intrinsic one, so the intrinsic
+    /// step skips that axis itself — otherwise it would tighten the node to the content and `fillMax` would
+    /// then raise the minimum to that narrower maximum.
+    #[test]
+    fn fill_max_width_overrides_an_intrinsic_width_request() {
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new().fill_max_width().width(IntrinsicSize::Max),
+                Some(0),
+            ),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) = measure_node(
+            &mut nodes,
+            &policies,
+            0,
+            Constraints::new(0.0, 300.0, 0.0, 200.0),
+        );
+        assert_eq!(
+            size.width, 300.0,
+            "the incoming maximum wins on the filled axis"
         );
     }
 }
