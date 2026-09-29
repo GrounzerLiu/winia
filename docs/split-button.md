@@ -108,10 +108,17 @@ matched on `Shape` exhaustively and now handle the new variant.
   the animated shape (`SplitButton.kt:807-813` passes what `shapeByInteraction` returns, and that wraps
   `rememberAnimatedShape`), so pressing a half slides its label and icon about a dp along the morph and
   back out on release. The spec only tabulates the offset for the two settled states — the per-size
-  "menu icon offset when unselected" and "the icon becomes centered when selected" — so winia reads the
-  resting radius, or the stadium a checked trailing button becomes. Both spec numbers are unchanged;
-  only the slide is gone. `a_press_does_not_move_the_content` pins it (the content must not move while
-  the painted shape must change).
+  "menu icon offset when unselected" and "the icon becomes centered when selected" — so winia animates
+  the offset on its own, from the resting radius to the stadium: both spec numbers are unchanged, the
+  press no longer moves anything, and the checked transition still slides the icon to its centred
+  position. `a_press_does_not_move_the_content` pins it (the content must not move while the painted
+  shape must change).
+- **The morph is a function of the animated radius, so the checked stadium is approached, not snapped
+  to.** material3 rebuilds the shape from each corner radius the animation holds while the state change
+  itself is instantaneous (`AnimatedShape.kt`); winia's shape is therefore derived from the animated
+  radius too, which is what makes the press morph AND the checked stadium animate. Only once the radius
+  has reached `outer` is the token's own shape drawn, so the settled chain reads exactly like
+  material3's. `the_checked_stadium_is_reached_through_the_morph` pins the mid-morph frame.
 
 ## API mapping
 

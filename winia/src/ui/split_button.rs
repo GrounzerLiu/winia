@@ -651,10 +651,7 @@ impl SplitButtonPart {
         });
         let pressed_radius = SplitButtonDefaults::inner_corner_size_pressed(self.size);
         let resting_radius = SplitButtonDefaults::inner_corner_size(self.size);
-        // material3's `shapeByInteraction`: pressed wins over checked, then the resting shape. The
-        // morph itself animates every corner radius (`AnimatedShape.kt`); here the outer corners are
-        // constant, so one animated number is the whole difference — and the content's optical
-        // offset reads the ANIMATED value, exactly as material3 reads it off the animated shape.
+        // material3's `shapeByInteraction`: pressed wins over checked, then the resting shape.
         let target_radius = if state.pressed {
             pressed_radius
         } else if checked {
@@ -667,23 +664,32 @@ impl SplitButtonPart {
         let radius = ctx
             .animate_float_as_state(target_radius, shape_morph_spec())
             .get();
-        // The content's optical offset reads the SETTLED radius — where the button rests, or the
-        // stadium it becomes when checked — not the animated value. material3 derives the offset from
-        // the animated shape (`SplitButton.kt:807-813`), which slides the content ~1 dp along the morph
-        // and back out again on release; the spec only ever tabulates the offset for the two settled
-        // states ("menu icon offset when unselected", "the icon becomes centered when selected"), so
-        // following the spec keeps both and drops the slide. Recorded in `docs/split-button.md`.
-        let settled_radius = if checked { outer } else { resting_radius };
+        // The content's optical offset follows the SETTLED radius — where the button rests, or the
+        // stadium it becomes when checked — on an animation of its own, not the one the pressed radius
+        // feeds. material3 derives the offset from the animated shape (`SplitButton.kt:807-813`), which
+        // slides the content ~1 dp along the press morph and back out again on release; the spec only
+        // ever tabulates the offset for the two SETTLED states ("menu icon offset when unselected", "the
+        // icon becomes centered when selected"). This keeps both of those, drops the press slide, and
+        // still slides the icon to its centred position while the menu opens. Recorded in
+        // `docs/split-button.md`.
+        let settled_radius =
+            ctx.animate_float_as_state(if checked { outer } else { resting_radius }, shape_morph_spec());
+        let settled_radius = settled_radius.get();
 
         // material3's `shapeByInteraction`, then the animation on top: a caller's own shape set is
         // drawn as given, while the default set is rebuilt from the animated radius — the same rule
         // re-evaluated at the value the animation currently holds, which is what `AnimatedShape.kt`
         // does when it animates each corner radius and rebuilds the shape.
         let target_shape = SplitButtonDefaults::shape_for_state(&shapes, state.pressed, checked);
-        let shape = if self.shapes.is_none() && !checked {
-            animated_shape(self.role, outer, radius, rtl)
-        } else {
+        // The default set is rebuilt from the ANIMATED radius: that is what makes the morph into the
+        // checked stadium animate rather than snap — when checked the radius animates up to `outer`, and
+        // four equal radii are the stadium. Once it has settled there the token's own shape is drawn, so
+        // the chain reads exactly as material3's `TrailingCheckedShape`. A caller's own set is drawn at
+        // its resolved state throughout.
+        let shape = if self.shapes.is_some() {
             target_shape
+        } else {
+            morph_or_token(self.role, outer, radius, rtl, checked, target_shape)
         };
 
         let (start_pad, end_pad) = self.content_padding.unwrap_or(match self.role {
@@ -781,6 +787,27 @@ fn animated_shape(role: SplitButtonRole, outer: f32, inner: f32, rtl: bool) -> S
         (SplitButtonRole::Leading, true) => Shape::corners(inner, outer, outer, inner),
         (SplitButtonRole::Trailing, false) => Shape::corners(inner, outer, outer, inner),
         (SplitButtonRole::Trailing, true) => Shape::corners(outer, inner, inner, outer),
+    }
+}
+
+/// The shape a default-styled half draws at the morph's CURRENT radius: while the morph is running that
+/// is the animated corners, and once it has settled on the checked stadium it is the token's own shape,
+/// so the settled chain reads exactly as material3's `TrailingCheckedShape` does.
+///
+/// Keeping this a function of the RADIUS rather than of the state is what makes the checked transition
+/// animate: the half approaches the stadium as the radius grows instead of snapping to it.
+fn morph_or_token(
+    role: SplitButtonRole,
+    outer: f32,
+    radius: f32,
+    rtl: bool,
+    checked: bool,
+    token: Shape,
+) -> Shape {
+    if checked && radius >= outer - 0.01 {
+        token
+    } else {
+        animated_shape(role, outer, radius, rtl)
     }
 }
 
@@ -1291,6 +1318,138 @@ mod tests {
                 "button {i}'s inner corner is the tier's {inner}, measured {near}"
             );
         }
+    }
+
+    /// The checked stadium is APPROACHED, not jumped to: while the morph is still running the half
+    /// draws the animated corners, and only a radius that has reached `outer` is the stadium.
+    ///
+    /// This is the regression guard for the transition itself — reading the shape straight off the
+    /// state (as it used to) makes the `mid` case below return the stadium immediately, i.e. a snap.
+    #[test]
+    fn the_checked_stadium_is_reached_through_the_morph() {
+        let outer = SplitButtonDefaults::outer_corner_size(SplitButtonDefaults::container_height(
+            ButtonSize::Small,
+        ));
+        let inner = SplitButtonDefaults::inner_corner_size(ButtonSize::Small);
+        assert_eq!(
+            morph_or_token(SplitButtonRole::Trailing, outer, outer, false, true, Shape::Pill),
+            Shape::Pill,
+            "a settled trailing half draws material3's own checked shape"
+        );
+        assert_eq!(
+            morph_or_token(SplitButtonRole::Trailing, outer, inner, false, true, Shape::Pill),
+            Shape::corners(inner, outer, outer, inner),
+            "mid-morph the half draws the animated corners, so the stadium is approached"
+        );
+        let nearly = morph_or_token(
+            SplitButtonRole::Trailing,
+            outer,
+            outer - 1.0,
+            false,
+            true,
+            Shape::Pill,
+        );
+        assert_ne!(
+            nearly, Shape::Pill,
+            "a radius one dp short of `outer` is not the stadium yet: {nearly:?}"
+        );
+    }
+
+    /// The checked trailing half is a stadium in the PAINTED pixels, not only in the modifier chain:
+    /// material3's `TrailingCheckedShape = CircleShape` (`SplitButton.kt:427`), which for a
+    /// wider-than-tall button is every corner at `outer`.
+    #[test]
+    fn a_checked_trailing_paints_the_stadium() {
+        let interaction = MutableInteractionSource::new();
+        let expanded = State::new(true);
+        let mut composer =
+            compose_split_with_source(&interaction, Some(expanded), LayoutDirection::Ltr);
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        let trailing = nodes[root].children[1];
+        let (x, y, w) = (
+            nodes[trailing].position.x.round() as usize,
+            nodes[trailing].position.y.round() as usize,
+            nodes[trailing].measured_size.width.round() as usize,
+        );
+        let mut surface = skia_safe::surfaces::raster_n32_premul((400, 200)).expect("surface");
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pixels = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
+        let painted = |x: usize, y: usize| px[y * 400 + x][0] < 200;
+        let row = y + 1;
+        let left = (x..x + w).find(|x| painted(*x, row)).expect("painted") - x;
+        let right = (x + w - 1) - (x..x + w).rev().find(|x| painted(*x, row)).expect("painted");
+        eprintln!("checked trailing painted corners (left, right): ({left}, {right})");
+        assert!(
+            left.abs_diff(right) <= 2,
+            "a checked trailing half is a stadium, so both of its top corners round the same: \
+             measured ({left}, {right})"
+        );
+        assert!(
+            left > 8,
+            "and its gap-side corner has grown to the outer radius, measured {left}"
+        );
+    }
+
+    /// A press rounds the inner corner — and does NOT round it all the way. material3's pressed inner
+    /// corner is `SmallInnerCornerSizePressed = 12.dp` against a 40 dp container (full would be 20), so
+    /// the pressed half is asymmetric on purpose: the outer corner stays `CornerFull`.
+    ///
+    /// The inset of the top row of the painted rect is that corner's radius (measured with the raster's
+    /// bias, which under-reads both the same way, so the comparison between the two states holds).
+    #[test]
+    fn a_press_rounds_the_inner_corner_without_making_it_full() {
+        let measure = |pressed: bool| {
+            let interaction = MutableInteractionSource::new();
+            if pressed {
+                interaction.emit_press();
+            }
+            let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let leading = nodes[root].children[0];
+            let (x, y, w) = (
+                nodes[leading].position.x.round() as usize,
+                nodes[leading].position.y.round() as usize,
+                nodes[leading].measured_size.width.round() as usize,
+            );
+            let mut surface =
+                skia_safe::surfaces::raster_n32_premul((400, 200)).expect("surface");
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::WHITE);
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            let pixels = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
+            let painted = |x: usize, y: usize| px[y * 400 + x][0] < 200;
+            let row = y + 1;
+            let first = (x..x + w).find(|x| painted(*x, row)).expect("painted") - x;
+            let last = (x..x + w).rev().find(|x| painted(*x, row)).expect("painted");
+            (first, (x + w - 1) - last)
+        };
+        let (resting_outer, resting_inner) = measure(false);
+        let (pressed_outer, pressed_inner) = measure(true);
+        eprintln!(
+            "split button leading, painted corners (outer, inner): resting ({resting_outer}, \
+             {resting_inner}) pressed ({pressed_outer}, {pressed_inner})"
+        );
+        assert!(
+            pressed_inner > resting_inner + 4,
+            "a press rounds the inner corner (resting {resting_inner} -> pressed {pressed_inner})"
+        );
+        assert!(
+            pressed_inner < pressed_outer - 4,
+            "and it does not round it all the way: material3's pressed inner corner is 12 dp against \
+             the 20 dp CornerFull outer (pressed ({pressed_outer}, {pressed_inner}))"
+        );
+        assert!(
+            pressed_outer >= resting_outer - 2,
+            "the outer corner stays CornerFull under the press ({resting_outer} -> {pressed_outer})"
+        );
     }
 
     /// A press must change the SHAPE and not move the content: the optical offset reads the settled
