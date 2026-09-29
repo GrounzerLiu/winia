@@ -3733,10 +3733,57 @@ fn date_picker_steps_the_month_with_its_arrows() {
     let (x, y, w, _) = app.find_tag("dp-picker").expect("the picker container");
     let nav_y = y + 120.0 + 1.0 + 28.0;
 
-    app.tap(x + 12.0 + 20.0, nav_y);
+    // The year menu button takes the row's start, so the arrows sit together at its end: two 48 dp icon buttons
+    // in the last 96 dp of the 336 dp content row, which puts their centres at 276 and 324 from the container's
+    // left edge (measured from the chevrons' ink: one glyph at x = 283, the other at 333-335).
+    app.tap(x + 276.0, nav_y);
     app.expect_text_timeout("month: August 2024", Duration::from_secs(5));
-    app.tap(x + w - 12.0 - 20.0, nav_y);
+    app.tap(x + 324.0, nav_y);
     app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+}
+
+/// What:  the year menu button in the month navigation row.
+/// When:  it is tapped, and then a year in the panel is tapped.
+/// Then:  the year panel stands in for the calendar at the same height, and picking a year keeps the month.
+///
+/// The geometry this reads: the panel is `RecommendedSizeForAccessibility * (MaxCalendarRows + 1)` less its
+/// divider — the weekday row plus the month grid — so the container must not move when it opens; a year cell is
+/// 72 × 36 (`SelectionYearContainerWidth`/`Height`).
+#[test]
+fn date_picker_opens_its_year_panel_and_picks_a_year() {
+    let mut app = UiTest::launch("date_picker");
+    app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+    let (x, y, w, h) = app.find_tag("dp-picker").expect("the picker container");
+
+    let (mx, my, mw, mh) = app.find_tag("dp-year-menu").expect("the year menu button");
+    app.tap(mx + mw / 2.0, my + mh / 2.0);
+    app.refresh();
+
+    let after = app.find_tag("dp-picker").expect("the picker container");
+    assert_eq!(
+        after,
+        (x, y, w, h),
+        "the year panel is as tall as the calendar it stands in for"
+    );
+    let (_yx, _yy, yw, yh) = app.find_tag("dp-year-2024").expect("the displayed year's cell");
+    assert_eq!((yw, yh), (72.0, 36.0), "a year cell is 72 x 36");
+
+    // A test tag inside a scrolled list reports the item's position in the list's CONTENT coordinates, so a
+    // year cell cannot be tapped through the rectangle `find_tag` returns — it comes back 2079 dp (this list's
+    // scroll offset) below where the cell is drawn. The horizontal position does come through, because the list
+    // does not scroll sideways. The row is computed the way the panel seeds it (`year_panel_first_row`): the
+    // panel opens on the row above the displayed year, which for September 2024 in the default 1900..2100 range
+    // is row 40, so 2024 and 2025 are in the row 36 + 16 dp below the panel's top.
+    let (nx, _, nw, _) = app.find_tag("dp-year-2025").expect("the next year's cell");
+    let cell_y = y + 120.0 + 1.0 + 56.0 + 52.0 + 18.0;
+    app.tap(nx + nw / 2.0, cell_y);
+    app.expect_text_timeout("month: September 2025", Duration::from_secs(5));
+    app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
+    app.refresh();
+    assert!(
+        app.find_tag("dp-year-2025").is_none(),
+        "picking a year closes the panel"
+    );
 }
 
 /// What:  a day cell.

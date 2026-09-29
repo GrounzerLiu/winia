@@ -24,7 +24,9 @@ use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::divider::Divider;
 use crate::ui::icon::Icon;
 use crate::ui::icon_button::IconButton;
-use crate::ui::layout_components::{Column, Row, Stack};
+use crate::ui::lazy_column::{LazyColumn, LazyListState};
+use crate::ui::layout_components::{Column, Row, Spacer, Stack};
+use crate::ui::overlay::ExposedDropdownMenuDefaults;
 use crate::ui::surface::{Surface, SurfaceBorder};
 use crate::ui::text::{ProvideTextStyle, Text};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -484,6 +486,20 @@ impl DatePickerState {
         self.today_millis
     }
 
+    /// Shows `year`, keeping the displayed month (`MonthPicker`'s `onYearSelected`, `DatePicker.kt:1643-1652`):
+    /// material3 scrolls its month list to `(year - first) * 12 + month - 1` and lets the list write the
+    /// displayed month back, winia shows one month at a time and writes it here. A year outside the year range
+    /// is ignored.
+    pub fn set_displayed_year(&self, year: i32) {
+        if !self.year_range.contains(&year) {
+            return;
+        }
+        let model = self.calendar_model();
+        let current = model.month_of_millis(self.displayed_month_millis());
+        let month = model.month_of(year, current.month);
+        self.set_displayed_month_millis(month.start_utc_time_millis);
+    }
+
     /// The selection, or `None` — the start of the selected day in UTC.
     pub fn selected_date_millis(&self) -> Option<i64> {
         self.selected_date_millis.get()
@@ -734,6 +750,34 @@ impl DatePickerDefaults {
     /// The height a month reserves, `RecommendedSizeForAccessibility * MaxCalendarRows`
     /// (`DatePicker.kt:1859`).
     pub const MONTH_HEIGHT: f32 = Self::ACCESSIBLE_SIZE * MAX_CALENDAR_ROWS as f32;
+
+    /// `YearsInRow` (`DatePicker.kt:2304`): the year panel's columns.
+    pub const YEARS_PER_ROW: usize = 3;
+
+    /// `DatePickerModalTokens.SelectionYearContainerWidth`: a year cell's width.
+    pub const YEAR_CELL_WIDTH: f32 = 72.0;
+
+    /// `DatePickerModalTokens.SelectionYearContainerHeight`: a year cell's height.
+    pub const YEAR_CELL_HEIGHT: f32 = 36.0;
+
+    /// `YearsVerticalPadding` (`DatePicker.kt:2301`): between the year panel's rows.
+    pub const YEARS_VERTICAL_PADDING: f32 = 16.0;
+
+    /// `ButtonSmallTokens.IconLabelSpace` (`ButtonDefaults.IconSpacing`): between the year menu button's text
+    /// and its dropdown arrow.
+    pub const YEAR_MENU_ICON_SPACING: f32 = 8.0;
+
+    /// `ButtonSmallTokens.ContainerHeight` (`ButtonDefaults.MinHeight`): the year menu button's height.
+    pub const YEAR_MENU_BUTTON_HEIGHT: f32 = 40.0;
+
+    /// `DividerDefaults.Thickness`, which the year panel takes off its height (`DatePicker.kt:1639`).
+    pub const DIVIDER_THICKNESS: f32 = 1.0;
+
+    /// The year panel's height, `RecommendedSizeForAccessibility * (MaxCalendarRows + 1)` less the divider that
+    /// closes it (`DatePicker.kt:1634-1641`). It equals the weekday row plus the month grid — the two things it
+    /// stands in for — so opening the panel moves nothing above or below it.
+    pub const YEAR_PANEL_HEIGHT: f32 =
+        Self::ACCESSIBLE_SIZE * (MAX_CALENDAR_ROWS as f32 + 1.0) - Self::DIVIDER_THICKNESS;
 }
 
 /// The colour roles a date picker paints with (`DatePickerColors`, `DatePicker.kt:835-1103`).
@@ -755,6 +799,9 @@ pub struct DatePickerColors {
     pub navigation_content: Color,
     /// A day's label when it is neither selected nor today.
     pub day_content: Color,
+    /// A year's label when it is neither the current year nor selected
+    /// (`SelectionYearUnselectedLabelTextColor`).
+    pub year_content: Color,
     /// The label of a selected day or year.
     pub selected_content: Color,
     /// The container of a selected day or year.
@@ -777,6 +824,7 @@ impl DatePickerColors {
             weekday_content: theme.on_surface,
             navigation_content: theme.on_surface_variant,
             day_content: theme.on_surface,
+            year_content: theme.on_surface_variant,
             selected_content: theme.on_primary,
             selected_container: theme.primary,
             today_content: theme.primary,
@@ -819,7 +867,39 @@ impl DatePickerColors {
             (false, false) => Self::disabled(self.day_content),
         }
     }
+
+    /// The container behind one year cell (`yearContainerColor`, `DatePicker.kt:1029-1046`): `Primary` when the
+    /// year is selected, transparent when it is not.
+    pub fn year_container(&self, selected: bool, enabled: bool) -> Color {
+        if !selected {
+            return Color::TRANSPARENT;
+        }
+        if enabled {
+            self.selected_container
+        } else {
+            Self::disabled(self.selected_container)
+        }
+    }
+
+    /// One year cell's label (`yearContentColor`, `DatePicker.kt:1005-1027`): a selected year takes
+    /// `OnPrimary`, the current year takes `Primary`, anything else takes the plain year role — and a disabled
+    /// cell takes the plain role at `DisabledAlpha` even when it is the current year.
+    pub fn year_label(&self, current_year: bool, selected: bool, enabled: bool) -> Color {
+        match (selected, enabled) {
+            (true, true) => self.selected_content,
+            (true, false) => Self::disabled(self.selected_content),
+            (false, true) if current_year => self.today_content,
+            (false, true) => self.year_content,
+            (false, false) => Self::disabled(self.year_content),
+        }
+    }
 }
+
+/// The `test_tag` on the year menu button, so a UI test can tap the control that opens the year panel.
+const YEAR_MENU_TAG: &str = "dp-year-menu";
+
+/// The prefix of a year cell's `test_tag` — `dp-year-2024` — so a UI test can find one year's box.
+const YEAR_CELL_TAG_PREFIX: &str = "dp-year-";
 
 /// Material Icons `keyboard_arrow_left` (24 dp), the glyph material3 auto-mirrors for its month arrows
 /// (`internal/Icons.kt:34`). Provenance and the measured guard: `docs/date-picker.md`.
@@ -882,6 +962,33 @@ impl DatePicker {
         );
         let state = self.state.clone();
         let title = self.title.clone();
+        // material3 keeps the year panel's visibility in a `rememberSaveable` inside the picker
+        // (`DatePicker.kt:1557`). winia keeps it in a remembered `State`, so a toggle recomposes the picker.
+        let year_panel_open = ctx.remember(|| State::new(false)).get();
+        // The panel's row list, which the toggle scrolls to the row above the displayed year.
+        let year_rows = ctx.remember(LazyListState::new).get();
+        let on_toggle_year_panel = {
+            let year_panel_open = year_panel_open.clone();
+            let year_rows = year_rows.clone();
+            let state = state.clone();
+            let model = model.clone();
+            move || {
+                let open = !year_panel_open.get();
+                if open {
+                    year_rows.scroll_to_item(year_panel_first_row(&state, &model), 0.0);
+                }
+                year_panel_open.set(open);
+            }
+        };
+        // material3's `onYearSelected` both shows the picked year and closes the panel (`DatePicker.kt:1643-1652`).
+        let on_year_selected = {
+            let year_panel_open = year_panel_open.clone();
+            let state = state.clone();
+            move |year: i32| {
+                state.set_displayed_year(year);
+                year_panel_open.set(false);
+            }
+        };
         // material3 pins the picker's width with `sizeIn(minWidth = 360)` on a column that wraps its content,
         // and those numbers are exact: seven slots of the 48 dp accessibility size (336) plus the 12 dp of
         // horizontal padding on both sides. winia stretches an auto-width child to the width its parent
@@ -904,9 +1011,14 @@ impl DatePicker {
                     )
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
-                        months_navigation(ctx, &state, &month, &colors);
-                        weekday_row(ctx, &model, &colors);
-                        month_grid(ctx, &state, &model, &grid, &colors);
+                        let open = year_panel_open.get();
+                        months_navigation(ctx, &state, &month, open, on_toggle_year_panel, &colors);
+                        if open {
+                            year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
+                        } else {
+                            weekday_row(ctx, &model, &colors);
+                            month_grid(ctx, &state, &model, &grid, &colors);
+                        }
                     });
             });
     }
@@ -974,12 +1086,15 @@ fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, co
         });
 }
 
-/// The month navigation row: the month and year text between the two arrows (`MonthsNavigation`,
-/// `DatePicker.kt:2182-2239`). The year menu button arrives with the year picker.
+/// The month navigation row: the year menu button, then the two month arrows while the year panel is closed
+/// (`MonthsNavigation`, `DatePicker.kt:2182-2239`). material3 drops the arrows and packs the row to its start
+/// while the panel is open.
 fn months_navigation(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
     month: &CalendarMonth,
+    year_panel_open: bool,
+    on_toggle_year_panel: impl Fn() + Send + Sync + 'static,
     colors: &DatePickerColors,
 ) {
     let year_range = state.year_range();
@@ -994,17 +1109,25 @@ fn months_navigation(
                 .fill_max_width()
                 .height(DatePickerDefaults::MONTH_YEAR_HEIGHT),
         )
-        .arrangement(Arrangement::SpaceBetween)
+        .arrangement(if year_panel_open {
+            Arrangement::Start
+        } else {
+            Arrangement::SpaceBetween
+        })
         .alignment(Alignment::Center)
         .build(ctx, |ctx| {
-            month_arrow(ctx, state, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
-            ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
-                Text::new(text)
-                    .color(navigation_color)
-                    .max_lines(1)
-                    .build(ctx);
-            });
-            month_arrow(ctx, state, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
+            year_menu_button(ctx, text, on_toggle_year_panel, navigation_color);
+            if !year_panel_open {
+                // The arrows are one unit at the row's far end: in a `SpaceBetween` row they need a row of
+                // their own, or the arrangement would spread them across the whole width.
+                Row::new()
+                    .arrangement(Arrangement::Start)
+                    .alignment(Alignment::Center)
+                    .build(ctx, |ctx| {
+                        month_arrow(ctx, state, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
+                        month_arrow(ctx, state, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
+                    });
+            }
         });
 }
 
@@ -1027,6 +1150,172 @@ fn month_arrow(
         .build(ctx, |ctx| {
             Icon::svg_path(path).tint(color).build(ctx);
         });
+}
+
+/// The year menu button: the "September 2024" text and a dropdown arrow, the control that opens the year panel
+/// (`YearPickerMenuButton`, `DatePicker.kt:2243-2269`). material3 builds it from a `TextButton` whose elevation
+/// and border it explicitly clears; winia's buttons carry no such parameters to clear.
+fn year_menu_button(
+    ctx: &mut ComposeCtx,
+    text: String,
+    on_click: impl Fn() + Send + Sync + 'static,
+    color: Color,
+) {
+    let description = text.clone();
+    Surface::new()
+        .shape(Shape::Pill)
+        .color(Color::TRANSPARENT)
+        .content_color(color)
+        .selectable(false, on_click)
+        .modifier(
+            Modifier::new()
+                .height(DatePickerDefaults::YEAR_MENU_BUTTON_HEIGHT)
+                .test_tag(YEAR_MENU_TAG)
+                // material3 repeats the button's text as its content description and makes it a polite live
+                // region, so a reader announces the month as the arrows move it (`DatePicker.kt:2205-2216`).
+                .semantics(crate::semantics::SemanticsConfig::new().content_description(description)),
+        )
+        .build(ctx, |ctx| {
+            Row::new()
+                .arrangement(Arrangement::Start)
+                .alignment(Alignment::Center)
+                .build(ctx, |ctx| {
+                    ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                        Text::new(text).color(color).max_lines(1).build(ctx);
+                    });
+                    Spacer::horizontal(DatePickerDefaults::YEAR_MENU_ICON_SPACING).build(ctx);
+                    Icon::svg_path(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH)
+                        .tint(color)
+                        .build(ctx);
+                });
+        });
+}
+
+/// The row the year list starts on when the panel opens: material3's
+/// `max(0, displayedYear - yearRange.first - YearsInRow)` as an item index of a three-column grid
+/// (`DatePicker.kt:2073-2080`), which is one row above the displayed year.
+fn year_panel_first_row(state: &DatePickerState, model: &CalendarModel) -> usize {
+    let year_range = state.year_range();
+    let displayed_year = model.month_of_millis(state.displayed_month_millis()).year;
+    let offset = (displayed_year - *year_range.start()).max(0) as usize;
+    (offset / DatePickerDefaults::YEARS_PER_ROW).saturating_sub(1)
+}
+
+/// The year panel: three columns of years in a lazy list, `YEAR_PANEL_HEIGHT` tall over the divider that closes
+/// it (`YearPicker`, `DatePicker.kt:2061-2116`).
+///
+/// material3 overlays this on the month calendar and keeps the calendar composed underneath
+/// (`DatePicker.kt:1612-1660`); winia swaps the calendar out instead, which looks the same because the panel is
+/// exactly as tall as the weekday row and the grid it replaces and paints the picker's own container colour
+/// behind it. What is missing is material3's expand and fade (`AnimatedVisibility`); `docs/date-picker.md` lists
+/// that among the deviations.
+fn year_panel(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    colors: &DatePickerColors,
+    rows: &LazyListState,
+    on_year_selected: impl Fn(i32) + Clone + Send + Sync + 'static,
+) {
+    let year_range = state.year_range();
+    let first = *year_range.start();
+    let count = year_range.clone().count();
+    let row_count = count.div_ceil(DatePickerDefaults::YEARS_PER_ROW);
+    let current_year = model.month_of_millis(state.today_millis()).year;
+    let selected_year = state
+        .selected_date_millis()
+        .map(|millis| model.month_of_millis(millis).year);
+    let list_state = rows.clone();
+    let cell_state = state.clone();
+    let cell_colors = colors.clone();
+
+    Column::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS),
+        )
+        .arrangement(Arrangement::Start)
+        .build(ctx, |ctx| {
+            ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
+                LazyColumn::new()
+                    .modifier(Modifier::new().height(DatePickerDefaults::YEAR_PANEL_HEIGHT))
+                    .state(list_state)
+                    .spacing(DatePickerDefaults::YEARS_VERTICAL_PADDING)
+                    .items(
+                        row_count,
+                        |row| row as u64,
+                        move |ctx, row| {
+                            Row::new()
+                                .modifier(Modifier::new().fill_max_width())
+                                .arrangement(Arrangement::SpaceEvenly)
+                                .alignment(Alignment::Center)
+                                .build(ctx, |ctx| {
+                                    for column in 0..DatePickerDefaults::YEARS_PER_ROW {
+                                        let index = row * DatePickerDefaults::YEARS_PER_ROW + column;
+                                        if index >= count {
+                                            break;
+                                        }
+                                        let year = first + index as i32;
+                                        year_cell(
+                                            ctx,
+                                            &cell_colors,
+                                            cell_state.selectable_dates().is_selectable_year(year),
+                                            year,
+                                            selected_year == Some(year),
+                                            year == current_year,
+                                            on_year_selected.clone(),
+                                        );
+                                    }
+                                });
+                        },
+                    )
+                    .build(ctx);
+            });
+            Divider::horizontal().build(ctx);
+        });
+}
+
+/// One year in the panel (`Year`, `DatePicker.kt:2120-2180`): a 72 × 36 stadium that fills with `Primary` when
+/// it is the displayed year, and carries the same 1 dp outline around the current year that today gets. winia
+/// notes `Pill` where material3 notes `CornerFull`; on a 72 × 36 box they are the same stadium.
+fn year_cell(
+    ctx: &mut ComposeCtx,
+    colors: &DatePickerColors,
+    enabled: bool,
+    year: i32,
+    selected: bool,
+    current_year: bool,
+    on_year_selected: impl Fn(i32) + Send + Sync + 'static,
+) {
+    let label = year.to_string();
+    // material3 merges the description into the surface and clears the inner text's semantics
+    // (`DatePicker.kt:2141-2162`); the label's colour role rides on the surface's content colour here.
+    let description = format!("Navigate to {label}");
+    let mut surface = Surface::new()
+        .shape(Shape::Pill)
+        .color(colors.year_container(selected, enabled))
+        .content_color(colors.year_label(current_year, selected, enabled))
+        .enabled(enabled)
+        .selectable(selected, move || on_year_selected(year))
+        .modifier(
+            Modifier::new()
+                .size(
+                    DatePickerDefaults::YEAR_CELL_WIDTH,
+                    DatePickerDefaults::YEAR_CELL_HEIGHT,
+                )
+                .test_tag(format!("{YEAR_CELL_TAG_PREFIX}{year}"))
+                .semantics(crate::semantics::SemanticsConfig::new().content_description(description)),
+        );
+    if current_year && !selected {
+        surface = surface.border(SurfaceBorder::new(
+            DatePickerDefaults::TODAY_OUTLINE_WIDTH,
+            colors.today_border,
+        ));
+    }
+    surface.build(ctx, |ctx| {
+        Text::new(label).build(ctx);
+    });
 }
 
 /// The weekday header: the locale's names in row order, one cell per column (`WeekDays`,
@@ -1663,6 +1952,137 @@ mod tests {
                 ..colors.day_content
             }
         );
+    }
+
+    #[test]
+    fn a_year_label_follows_material3s_precedence() {
+        let colors = DatePickerColors::from_theme(&ThemeColors::default_light());
+        // The signature is `year_label(current_year, selected, enabled)`, the order material3's
+        // `yearContentColor(currentYear, selected, enabled)` takes (`DatePicker.kt:1005-1027`).
+        assert_eq!(
+            colors.year_label(true, false, true),
+            colors.today_content,
+            "the current year reads as today's label"
+        );
+        assert_eq!(colors.year_label(false, false, true), colors.year_content);
+        assert_eq!(colors.year_label(false, true, true), colors.selected_content);
+        assert_eq!(
+            colors.year_label(false, true, false),
+            Color {
+                a: 97,
+                ..colors.selected_content
+            },
+            "a disabled selected year is OnPrimary at DisabledAlpha"
+        );
+        assert_eq!(
+            colors.year_label(true, false, false),
+            Color {
+                a: 97,
+                ..colors.year_content
+            },
+            "material3 falls through to the disabled branch, so the current year's colour does not survive the \
+             disable"
+        );
+    }
+
+    #[test]
+    fn a_year_container_is_primary_only_when_the_year_is_displayed() {
+        let colors = DatePickerColors::from_theme(&ThemeColors::default_light());
+        assert_eq!(colors.year_container(true, true), colors.selected_container);
+        assert_eq!(
+            colors.year_container(true, false),
+            Color {
+                a: 97,
+                ..colors.selected_container
+            }
+        );
+        assert_eq!(colors.year_container(false, true), Color::TRANSPARENT);
+        assert_eq!(colors.year_container(false, false), Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn the_year_panel_is_as_tall_as_the_calendar_it_stands_in_for() {
+        // material3 takes the panel off `RecommendedSizeForAccessibility * (MaxCalendarRows + 1)` and draws the
+        // divider below it inside that height (`DatePicker.kt:1634-1641`), so the panel plus its divider is the
+        // weekday row (48) plus the month grid (288) exactly — opening it moves nothing above or below.
+        assert_eq!(
+            DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS,
+            DatePickerDefaults::ACCESSIBLE_SIZE + DatePickerDefaults::MONTH_HEIGHT
+        );
+        assert_eq!(
+            DatePickerDefaults::DIVIDER_THICKNESS,
+            crate::ui::divider::DividerDefaults::thickness()
+        );
+    }
+
+    #[test]
+    fn a_year_keeps_the_displayed_month() {
+        let state = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 9, 1)),
+                ..Default::default()
+            },
+            (2024, 9, 5),
+        );
+        let text = |state: &DatePickerState| {
+            state
+                .calendar_model()
+                .format_month_year(state.displayed_month_millis())
+        };
+        // material3 scrolls its month list to `(year - yearRange.first) * 12 + displayedMonth.month - 1`, which
+        // keeps the month of year (`DatePicker.kt:1643-1652`).
+        state.set_displayed_year(2025);
+        assert_eq!(text(&state), "September 2025");
+        state.set_displayed_year(2023);
+        assert_eq!(text(&state), "September 2023");
+    }
+
+    #[test]
+    fn a_year_outside_the_range_is_ignored() {
+        let state = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 9, 1)),
+                year_range: 2000..=2100,
+                ..Default::default()
+            },
+            (2024, 9, 5),
+        );
+        let text = |state: &DatePickerState| {
+            state
+                .calendar_model()
+                .format_month_year(state.displayed_month_millis())
+        };
+        state.set_displayed_year(1999);
+        assert_eq!(text(&state), "September 2024");
+        state.set_displayed_year(2101);
+        assert_eq!(text(&state), "September 2024");
+        state.set_displayed_year(2100);
+        assert_eq!(text(&state), "September 2100");
+    }
+
+    #[test]
+    fn the_year_panel_starts_one_row_above_the_displayed_year() {
+        let displayed = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 9, 1)),
+                ..Default::default()
+            },
+            (2024, 9, 5),
+        );
+        let model = displayed.calendar_model().clone();
+        // 2024 is item 124 of the range that starts at 1900 — row 41 of three columns — and material3's
+        // `max(0, displayedYear - yearRange.first - YearsInRow)` item index (`DatePicker.kt:2073-2080`) is that
+        // row less one.
+        assert_eq!(year_panel_first_row(&displayed, &model), 40);
+        // A displayed year at the range's start clamps to the first row rather than underflowing.
+        let at_range_start = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(1900, 1, 1)),
+                ..Default::default()
+            },
+            (2024, 9, 5),
+        );
+        assert_eq!(year_panel_first_row(&at_range_start, &model), 0);
     }
 
     #[test]

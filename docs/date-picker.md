@@ -140,6 +140,9 @@ refreshes each composition.
 | Months list | `LazyRow` of `numberOfMonthsInRange(yearRange) = (last - first + 1) * 12` months (`:1733`, `:1963`), each in `Box(fillParentMaxWidth())`, with snap fling and a `horizontalScrollAxisRange` semantics override so a screen reader does not scroll months | `:1722-1750` |
 | Month paging | `snapshotFlow { firstVisibleItemIndex }` → `yearOffset = index / 12`, `month = index % 12 + 1`, `onDisplayedMonthChange(getMonth(yearRange.first + yearOffset, month).startUtcTimeMillis)` | `:1763-1779` |
 | Year picker overlay | `AnimatedVisibility` over the month column, `clipToBounds`, expand/shrink plus fade; height is `RecommendedSizeForAccessibility * (MaxCalendarRows + 1) - DividerDefaults.Thickness`, `padding(horizontal = 12)`; a divider follows it; picking a year closes the overlay and scrolls to `(year - yearRange.first) * 12 + displayedMonth.month - 1` | `:1619-1665` |
+| Year menu button | `YearPickerMenuButton`: a `TextButton(shape = CircleShape, elevation = null, border = null)` holding the formatted month-year text and `Icons.Filled.ArrowDropDown` after `ButtonDefaults.IconSpacing` (8); the text repeats itself as the content description and is a polite live region; the month arrows are composed **only while the overlay is closed**, and the row's arrangement switches `SpaceBetween` → `Start` | `:2194-2269` |
+| Year panel grid | `LazyVerticalGrid(GridCells.Fixed(YearsInRow = 3))`, `background(colors.containerColor)`, `SpaceEvenly` horizontally, `spacedBy(YearsVerticalPadding = 16)` vertically, `SelectionYearLabelTextFont` (BodyLarge); `initialFirstVisibleItemIndex = max(0, displayedYear - yearRange.first - YearsInRow)`; every year is `requiredSize(SelectionYearContainerWidth = 72, SelectionYearContainerHeight = 36)` | `:2061-2116`, `:2301-2304` |
+| Year cell | `Surface(shape = SelectionYearStateLayerShape = CornerFull, selected, enabled, onClick)` with `border = 1 dp todayDateBorderColor` when it is the current year and not selected; container `yearContainerColor(selected, enabled)` (`Primary` when selected, otherwise transparent), label `yearContentColor(currentYear, selected, enabled)`; description is the `DatePickerNavigateToYearDescription` string | `:2120-2180`, `:1005-1046` |
 | Constants | `RecommendedSizeForAccessibility = 48.dp`, `MonthYearHeight = 56.dp`, `DatePickerHorizontalPadding = 12.dp`, `DatePickerModeTogglePadding = PaddingValues(end = 12.dp, bottom = 12.dp)`, `DatePickerTitlePadding = PaddingValues(start = 24.dp, end = 12.dp, top = 16.dp)`, `DatePickerHeadlinePadding = PaddingValues(start = 24.dp, end = 12.dp, bottom = 12.dp)`, `YearsVerticalPadding = 16.dp` | `:2293-2301` |
 
 ## Colour roles
@@ -223,6 +226,9 @@ Measured, each by turning the rule off and watching the specific test fail:
 | the cells outside a month are empty, and an unselectable year disables all of its dates | both guards removed together | exactly their 2 tests red: `the_cells_outside_a_month_are_empty`, `an_unselectable_day_or_year_disables_cells` (4 failed in that run, the other 2 from the row-count probe below) |
 | the grid is six rows tall | `MAX_CALENDAR_ROWS` set to 5 | 2 tests red: `a_month_grid_is_always_six_rows_of_seven`, and `today_and_the_selection_are_flagged_on_their_own_cells` because a five-row grid cuts a 30-day month short |
 | a disabled day that is also today | today's role kept instead of the disabled day role | exactly 1 test red: `a_day_label_follows_material3s_precedence` |
+| a year outside the year range | the guard dropped | exactly 1 test red: `a_year_outside_the_range_is_ignored` |
+| the year panel is the calendar's height | `YEAR_PANEL_HEIGHT` set to the month alone | exactly 1 test red: `the_year_panel_is_as_tall_as_the_calendar_it_stands_in_for` |
+| picking a year closes the panel | `year_panel_open.set(false)` dropped | exactly 1 test red: `date_picker_opens_its_year_panel_and_picks_a_year` (`picking a year closes the panel`) |
 | the two month arrows | the chevron constants swapped | exactly 1 test red: `the_month_arrows_draw_mirrored_chevrons` |
 
 `DatePickerState` (`with`/`new` over a `DatePickerStateInit`, `remember_date_picker_state` for composition) then
@@ -240,26 +246,50 @@ start + day − 1 days), and the `is_today` / `is_selected` / `is_enabled` flags
 `DatePicker` draws the docked variant: a `Column` at least `CONTAINER_WIDTH` (360) wide on
 `surface_container_high`, a header of the title (`LabelLarge`, `OnSurfaceVariant`) over the headline
 (`HeadlineLarge`, `OnSurfaceVariant`, one line) with the divider below them, and a body of the month
-navigation (56 high, a chevron either side, each arrow enabled while the month has a neighbour inside the year
-range), the weekday row (48 high, 48-wide cells, narrow names) and the 6 × 7 grid of 40 dp circular day
-`Surface`s — today outlined 1 dp in `Primary` unless it is selected, a selected day filled with `Primary`.
+navigation (56 high: the year menu button at its start and, while the year panel is closed, the two chevrons
+together at its end, each arrow enabled while the month has a neighbour inside the year range), then either the
+weekday row (48 high, 48-wide cells, narrow names) with the 6 × 7 grid of 40 dp circular day `Surface`s — today
+outlined 1 dp in `Primary` unless it is selected, a selected day filled with `Primary` — or, while the panel is
+open, the year list: rows of three 72 × 36 `Pill`-shaped `Surface`s (`SelectionYearStateLayerShape` is
+`CornerFull`, and on that box the two are the same stadium), the displayed year filled with `Primary`, the
+current year outlined, 16 dp between rows, over a divider.
 `DatePickerDefaults` carries every measurement with its token anchor, and `DatePickerColors` resolves the roles
 from the theme, including the one material3 hardcodes for navigation (`DatePicker.kt:559`).
 
 Deliberate deviations: the picker composes one month at a time (winia has no lazy row, so material3's
 `LazyRow` of 2412 months with its snap fling is out, and the arrows step a month); the mode toggle and the
-input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads the
-theme. The chevron path data is the Material Icons 24 dp artwork, which this sandbox cannot byte-verify
+input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads the theme.
+
+The year panel carries the second deviation. material3 overlays it on the month calendar inside an
+`AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia swaps the calendar out,
+which shows the same picture because the panel is exactly as tall as what it replaces (335 + 1 dp of divider
+against the weekday row's 48 plus the grid's 288) and paints the picker's own container colour behind the years —
+the difference is the missing animation. Its list is a `LazyColumn` of *row* items rather than a
+`LazyVerticalGrid`, and it opens on `year_panel_first_row = max(0, displayedYear - yearRange.first) / 3 - 1`,
+which is material3's `initialFirstVisibleItemIndex` converted from a cell index to a row. material3 also scrolls
+its month list to the picked year and lets the list write the displayed month back; winia has no month list, so
+`DatePickerState::set_displayed_year` writes that month directly, keeping the month of year. The year menu button
+is a plain transparent `Pill` `Surface` holding the label and the dropdown glyph, where material3 starts from a
+`TextButton` and clears its elevation and border; the 8 dp between text and glyph is
+`ButtonSmallTokens.IconLabelSpace`. The chevron path data is the Material Icons 24 dp artwork, which this sandbox cannot byte-verify
 against Google's assets — the same limitation the split button demo's `add` glyph carries (`web_fetch` refuses
 non-public hosts and the Tavily extracts of the raw and jsdelivr SVGs came back empty) — so
 `the_month_arrows_draw_mirrored_chevrons` measures the published data instead: each glyph inks 26–31 of the
 576 pixels in its 24 dp box, the left one's ink centre sits left of the right one's, and the pair is a near
 mirror (17 of 576 pixels differ).
 
-Four UI tests drive the fixture (`winia/tests/ui_test.rs`), all four green: the container keeps its 360 dp
+Five UI tests drive the fixture (`winia/tests/ui_test.rs`), all five green: the container keeps its 360 dp
 width and the sum of its rows (measured `(16, 78, 360, 512)` against 120 + 1 + 56 + 48 + 288), the selected day
 is a filled 40 dp circle (measured 39 dp across on a scan through its centre) with today a hollow ring 40 dp
-across, the arrows step the month and step back, and a tap on the today cell moves the selection to it.
+across, the arrows step the month and step back, a tap on the today cell moves the selection to it, and the year
+menu button opens the panel: the container's rectangle is unchanged while it is open, a year cell measures
+72 × 36, and tapping the next year keeps the month (`month: September 2025`) and closes the panel.
+
+One trap that measurement found is recorded in the year test: a `test_tag` inside a scrolled list reports the
+item's position in the list's **content** coordinates rather than the viewport's. The picked year came back at
+y = 2316 while it is drawn at 237 — exactly the list's 2079 dp of scroll — so tapping the rectangle `find_tag`
+returns lands outside the window and does nothing at all. The test takes the cell's x from the tag (the list does
+not scroll sideways) and computes y from the panel's top.
 
 The day-tap test guards a pitfall whose symptom points the wrong way, so both halves are recorded. The taps
 looked dead: the arrows took one, nothing inside the month grid did, the day cell's handler never appeared to
@@ -275,4 +305,5 @@ which is what made the press look consumed. With `#[composable]` back, a 4 dp sc
 grid column advances the month and the selection on every tap. Turning the attribute off again makes exactly 1
 test red: `date_picker_selects_the_day_that_is_tapped`.
 
-Next: the year picker panel (3 columns, 72 × 36 cells), then `DatePickerDialog` and the input mode.
+Next: `DatePickerDialog` (the modal picker: `requiredWidth(360)`, `heightIn(max = 568)`, shape 28,
+`DialogProperties(usePlatformDefaultWidth = false)`), then the input mode.
