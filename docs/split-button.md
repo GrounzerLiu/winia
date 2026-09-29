@@ -104,6 +104,14 @@ matched on `Shape` exhaustively and now handle the new variant.
   `ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH` — the published 24dp asset's own path data, now a
   public constant, so the arrow exists once in the tree instead of as a copy per fixture; the UI suite
   runs without the symbols feature, which is why the fixture uses the asset rather than the font.
+- **The content's optical offset follows the settled shape, not the morph.** material3 computes it from
+  the animated shape (`SplitButton.kt:807-813` passes what `shapeByInteraction` returns, and that wraps
+  `rememberAnimatedShape`), so pressing a half slides its label and icon about a dp along the morph and
+  back out on release. The spec only tabulates the offset for the two settled states — the per-size
+  "menu icon offset when unselected" and "the icon becomes centered when selected" — so winia reads the
+  resting radius, or the stadium a checked trailing button becomes. Both spec numbers are unchanged;
+  only the slide is gone. `a_press_does_not_move_the_content` pins it (the content must not move while
+  the painted shape must change).
 
 ## API mapping
 

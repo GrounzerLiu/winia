@@ -662,9 +662,18 @@ impl SplitButtonPart {
         } else {
             resting_radius
         };
+        // The morph animates every corner radius (`AnimatedShape.kt`); the outer corners are constant,
+        // so one animated number is the whole difference.
         let radius = ctx
             .animate_float_as_state(target_radius, shape_morph_spec())
             .get();
+        // The content's optical offset reads the SETTLED radius — where the button rests, or the
+        // stadium it becomes when checked — not the animated value. material3 derives the offset from
+        // the animated shape (`SplitButton.kt:807-813`), which slides the content ~1 dp along the morph
+        // and back out again on release; the spec only ever tabulates the offset for the two settled
+        // states ("menu icon offset when unselected", "the icon becomes centered when selected"), so
+        // following the spec keeps both and drops the slide. Recorded in `docs/split-button.md`.
+        let settled_radius = if checked { outer } else { resting_radius };
 
         // material3's `shapeByInteraction`, then the animation on top: a caller's own shape set is
         // drawn as given, while the default set is rebuilt from the animated radius — the same rule
@@ -689,7 +698,7 @@ impl SplitButtonPart {
             SplitButtonRole::Trailing => start_pad,
         };
         let shift = if self.optical_shift {
-            SplitButtonDefaults::optical_shift(outer, radius, gap_padding)
+            SplitButtonDefaults::optical_shift(outer, settled_radius, gap_padding)
         } else {
             0.0
         };
@@ -1282,5 +1291,46 @@ mod tests {
                 "button {i}'s inner corner is the tier's {inner}, measured {near}"
             );
         }
+    }
+
+    /// A press must change the SHAPE and not move the content: the optical offset reads the settled
+    /// radius, not the animated one. The press has to show up somewhere or the assertion proves nothing,
+    /// so the same state is also asked for the shape it paints.
+    #[test]
+    fn a_press_does_not_move_the_content() {
+        let measure = |pressed: bool| {
+            let interaction = MutableInteractionSource::new();
+            if pressed {
+                interaction.emit_press();
+            }
+            let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
+            split_children(&mut composer);
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let buttons = nodes[root].children.clone();
+            let offsets: Vec<f32> = buttons
+                .iter()
+                .map(|b| {
+                    let content = nodes[*b].children.first().expect("the button's content");
+                    nodes[*content].position.x - nodes[*b].position.x
+                })
+                .collect();
+            let shapes: Vec<Option<Shape>> = buttons
+                .iter()
+                .map(|b| drawn_backgrounds(&composer, *b).into_iter().next())
+                .collect();
+            (offsets, shapes)
+        };
+        let (resting_offsets, resting_shapes) = measure(false);
+        let (pressed_offsets, pressed_shapes) = measure(true);
+        eprintln!("split button content offsets: resting {resting_offsets:?} pressed {pressed_offsets:?}");
+        assert_eq!(
+            resting_offsets, pressed_offsets,
+            "a press must not move the content (the optical offset reads the settled radius)"
+        );
+        assert_ne!(
+            resting_shapes, pressed_shapes,
+            "the press must still morph the shape, or this test proves nothing"
+        );
     }
 }
