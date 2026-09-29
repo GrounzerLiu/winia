@@ -417,6 +417,7 @@ pub struct DatePickerState {
     selected_date_millis: State<Option<i64>>,
     displayed_month_millis: State<i64>,
     display_mode: State<DisplayMode>,
+    today_millis: i64,
     year_range: RangeInclusive<i32>,
     locale: CalendarLocale,
     model: CalendarModel,
@@ -433,7 +434,11 @@ impl DatePickerState {
     /// A state over `init`.
     pub fn with(locale: CalendarLocale, init: DatePickerStateInit) -> Self {
         let model = CalendarModel::new(locale.clone());
-        let today = model.month_of_millis(init.today_millis.unwrap_or_else(|| model.today_millis()));
+        let today_millis = init
+            .today_millis
+            .map(canonical_millis)
+            .unwrap_or_else(|| model.today_millis());
+        let today = model.month_of_millis(today_millis);
         let selected = init
             .initial_selected_date_millis
             .map(|millis| model.canonical_millis(millis))
@@ -450,11 +455,32 @@ impl DatePickerState {
             selected_date_millis: State::new(selected),
             displayed_month_millis: State::new(displayed.start_utc_time_millis),
             display_mode: State::new(init.initial_display_mode),
+            today_millis,
             year_range: init.year_range,
             locale,
             model,
             selectable_dates: init.selectable_dates,
         }
+    }
+
+    /// Steps the displayed month by `delta`, clamped to the year range.
+    ///
+    /// The month arrows call this rather than computing from a month captured when they were composed: that
+    /// value goes stale as soon as the picker recomposes without rebuilding the arrow, which made a step back
+    /// followed by a step forward read the month it started from.
+    pub fn step_displayed_month(&self, delta: i32) {
+        let model = self.calendar_model();
+        let current = model.month_of_millis(self.displayed_month_millis());
+        let month = model.plus_months(current.start_utc_time_millis, delta as i64);
+        if self.year_range.contains(&month.year) {
+            self.set_displayed_month_millis(month.start_utc_time_millis);
+        }
+    }
+
+    /// The day the picker outlines as today, at the start of its UTC day. material3 reads the platform clock
+    /// for it (`internal/CalendarModelImpl.android.kt:49-66`); a caller may pin it, and the tests do.
+    pub fn today_millis(&self) -> i64 {
+        self.today_millis
     }
 
     /// The selection, or `None` — the start of the selected day in UTC.
@@ -691,6 +717,10 @@ impl DatePickerDefaults {
     /// `DatePickerHeadlinePadding`'s bottom (`DatePicker.kt:2299`).
     pub const HEADLINE_BOTTOM_PADDING: f32 = 12.0;
 
+    /// The header's height when there is no title: material3 applies no minimum then, so the header is the
+    /// headline's row — one `HeadlineLarge` line plus `HEADLINE_BOTTOM_PADDING`.
+    pub const HEADLINE_ROW_HEIGHT: f32 = 44.0;
+
     /// `DatePickerModeTogglePadding` (`DatePicker.kt:2296`).
     pub const MODE_TOGGLE_PADDING: f32 = 12.0;
 
@@ -845,18 +875,23 @@ impl DatePicker {
         let grid = MonthGrid::of(
             month,
             self.state.selected_date_millis(),
-            model.today_millis(),
+            self.state.today_millis(),
             self.state.selectable_dates(),
         );
         let state = self.state.clone();
         let title = self.title.clone();
+        // material3 pins the picker's width with `sizeIn(minWidth = 360)` on a column that wraps its content,
+        // and those numbers are exact: seven slots of the 48 dp accessibility size (336) plus the 12 dp of
+        // horizontal padding on both sides. winia stretches an auto-width child to the width its parent
+        // offers, which would spread the weekday row and the grid past that lattice, so the width is pinned.
         let container = self
             .modifier
-            .then(Modifier::new().min_width(DatePickerDefaults::CONTAINER_WIDTH))
+            .then(Modifier::new().width(DatePickerDefaults::CONTAINER_WIDTH))
             .background(colors.container, Shape::Rectangle);
 
         Column::new()
             .modifier(container)
+            .arrangement(Arrangement::Start)
             .build(ctx, |ctx| {
                 header(ctx, &state, title.as_deref(), &colors);
                 Column::new()
@@ -865,6 +900,7 @@ impl DatePicker {
                             .fill_max_width()
                             .padding_horizontal(DatePickerDefaults::HORIZONTAL_PADDING),
                     )
+                    .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
                         months_navigation(ctx, &state, &month, &colors);
                         weekday_row(ctx, &model, &colors);
@@ -882,13 +918,20 @@ fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, co
         .selected_date_millis()
         .map(|millis| model.format_date(millis, false))
         .unwrap_or_else(|| DatePickerDefaults::HEADLINE.to_string());
-    let min_height = if title.is_some() { DatePickerDefaults::HEADER_MIN_HEIGHT } else { 0.0 };
+    // material3 gives the header a *minimum* height of 120 dp and lets its content grow past it; winia
+    // stretches an auto-height child to fill the space its parent offers, which with `SpaceBetween` would push
+    // the title and the headline apart, so the header's height is exact here.
+    let height = if title.is_some() {
+        DatePickerDefaults::HEADER_MIN_HEIGHT
+    } else {
+        DatePickerDefaults::HEADLINE_ROW_HEIGHT
+    };
     let title = title.map(str::to_string);
     let title_color = colors.title_content;
     let headline_color = colors.headline_content;
 
     Column::new()
-        .modifier(Modifier::new().fill_max_width().min_height(min_height))
+        .modifier(Modifier::new().fill_max_width().height(height))
         .arrangement(Arrangement::SpaceBetween)
         .build(ctx, |ctx| {
             if let Some(text) = title.as_deref() {
@@ -952,37 +995,33 @@ fn months_navigation(
         .arrangement(Arrangement::SpaceBetween)
         .alignment(Alignment::Center)
         .build(ctx, |ctx| {
-            month_arrow(ctx, state, month, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
+            month_arrow(ctx, state, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
             ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
                 Text::new(text)
                     .color(navigation_color)
                     .max_lines(1)
                     .build(ctx);
             });
-            month_arrow(ctx, state, month, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
+            month_arrow(ctx, state, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
         });
 }
 
 /// One month arrow. material3 enables them from the month list's scroll state
 /// (`monthsListState.canScrollBackward/Forward`, `DatePicker.kt:1561-1562`); with one month composed at a time
-/// they are enabled while the month has a neighbour inside the year range.
+/// they are enabled while the month has a neighbour inside the year range. The step reads the displayed month
+/// at the moment of the click (`DatePickerState::step_displayed_month`).
 fn month_arrow(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
-    month: &CalendarMonth,
-    step: i64,
+    step: i32,
     enabled: bool,
     path: &'static str,
     color: Color,
 ) {
     let state = state.clone();
-    let start = month.start_utc_time_millis;
     IconButton::new()
         .enabled(enabled)
-        .on_click(move || {
-            let month = state.calendar_model().plus_months(start, step);
-            state.set_displayed_month_millis(month.start_utc_time_millis);
-        })
+        .on_click(move || state.step_displayed_month(step))
         .build(ctx, |ctx| {
             Icon::svg_path(path).tint(color).build(ctx);
         });
@@ -996,7 +1035,7 @@ fn weekday_row(ctx: &mut ComposeCtx, model: &CalendarModel, colors: &DatePickerC
         .modifier(
             Modifier::new()
                 .fill_max_width()
-                .min_height(DatePickerDefaults::ACCESSIBLE_SIZE),
+                .height(DatePickerDefaults::ACCESSIBLE_SIZE),
         )
         .arrangement(Arrangement::SpaceEvenly)
         .alignment(Alignment::Center)
@@ -1271,6 +1310,58 @@ mod tests {
                 ..init
             },
         )
+    }
+
+    #[test]
+    fn the_arrows_step_from_the_month_the_state_is_on_now() {
+        let state = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 9, 1)),
+                ..Default::default()
+            },
+            (2024, 9, 5),
+        );
+        let text = |state: &DatePickerState| {
+            state
+                .calendar_model()
+                .format_month_year(state.displayed_month_millis())
+        };
+        state.step_displayed_month(-1);
+        assert_eq!(text(&state), "August 2024");
+        // The second step reads what the first one left rather than the month the picker started on: a step
+        // back and then forward returns to September, never to October.
+        state.step_displayed_month(1);
+        assert_eq!(text(&state), "September 2024");
+        state.step_displayed_month(1);
+        assert_eq!(text(&state), "October 2024");
+    }
+
+    #[test]
+    fn the_arrows_stop_at_the_year_range() {
+        let state = state(
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 1, 1)),
+                year_range: 2024..=2025,
+                ..Default::default()
+            },
+            (2024, 1, 5),
+        );
+        state.step_displayed_month(-1);
+        assert_eq!(
+            state
+                .calendar_model()
+                .format_month_year(state.displayed_month_millis()),
+            "January 2024",
+            "a step below the range is dropped"
+        );
+        state.step_displayed_month(24);
+        assert_eq!(
+            state
+                .calendar_model()
+                .format_month_year(state.displayed_month_millis()),
+            "January 2024",
+            "and so is a step above it"
+        );
     }
 
     #[test]

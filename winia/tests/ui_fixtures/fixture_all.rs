@@ -34,6 +34,8 @@ mod lazy_resize;
 mod dropdown_menu;
 #[path = "fixture_split_button.rs"]
 mod split_button;
+#[path = "fixture_date_picker.rs"]
+mod date_picker;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -95,6 +97,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("dialog_dismiss", dialog_dismiss::main),
     ("dropdown_menu", dropdown_menu::main),
     ("split_button", split_button::main),
+    ("date_picker", date_picker::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),
     ("overlay", overlay::main),

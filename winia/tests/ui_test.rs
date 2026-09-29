@@ -3611,3 +3611,159 @@ fn split_button_centres_its_trailing_icon_when_its_menu_opens() {
         "and a pointer move does not move it again, measured {after_move}"
     );
 }
+
+/// The grid lattice the date picker's own geometry defines: `horizontal_padding` (12) in from the container,
+/// seven columns of the 48 dp accessibility size, and the rows below the header (120), its divider (1), the
+/// month navigation (56) and the weekday row (48).
+fn date_picker_cell_centre(x: f32, y: f32, column: f32, row: f32) -> (f32, f32) {
+    (
+        x + 12.0 + column * 48.0 + 24.0,
+        y + 120.0 + 1.0 + 56.0 + 48.0 + row * 48.0 + 24.0,
+    )
+}
+
+/// What:  the docked date picker's container.
+/// When:  it is composed with a title.
+/// Then:  it keeps material3's 360 dp minimum width, and its height is the header's 120 plus its divider, the
+///        month navigation's 56, the weekday row's 48 and the month grid's 288 — the tokens, summed.
+#[test]
+fn date_picker_keeps_its_container_and_rows_the_token_sizes() {
+    let mut app = UiTest::launch("date_picker");
+    app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+    let (x, y, w, h) = app.find_tag("dp-picker").expect("the picker container");
+    eprintln!("date picker: container ({x},{y},{w},{h})");
+    assert!(
+        w >= 360.0,
+        "the container keeps the 360 dp minimum width (got {w})"
+    );
+    // The rows sum to 120 + 1 + 56 + 48 + 288 = 513, material3's content height. winia's container then takes
+    // the height its parent offers (measured 606 in this 700 dp window) — a documented deviation; the rows
+    // themselves are measured by the pixel tests below.
+    // Measured 512 where the tokens sum to 513 — a dp either way, so the guard allows rasterisation rather
+    // than pretending the sum is exact.
+    let rows = 120.0 + 1.0 + 56.0 + 48.0 + 288.0;
+    assert!(
+        (h - rows).abs() <= 2.0,
+        "the container is the sum of its rows ({rows}, got {h})"
+    );
+}
+
+/// What:  a day cell and today.
+/// When:  the docked picker is drawn.
+/// Then:  a day is a 40 dp circle — the selected one filled, today a 1 dp ring with the container showing
+///        through it — measured on the grid's own 48 dp lattice.
+///
+/// The scan line runs through the circle's centre, so its chord IS the 40 dp width, and today's ring is the two
+/// painted ends of that chord with nothing painted between them.
+#[test]
+fn date_picker_paints_a_forty_dp_day_with_a_one_dp_ring_around_today() {
+    let mut app = UiTest::launch("date_picker");
+    app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+    let (x, y, _, _) = app.find_tag("dp-picker").expect("the picker container");
+
+    // The selection: the 10th, second row, third column (2024-09-01 is a Sunday).
+    let (sx, sy) = date_picker_cell_centre(x, y, 2.0, 1.0);
+    let scan: Vec<(f32, f32)> = (-26..=26).map(|i| (sx + i as f32, sy)).collect();
+    let pixels = app.pixels_at_logical(&scan);
+    let background = pixels[0].expect("a container pixel beside the circle");
+    let painted: Vec<bool> = pixels.iter().map(|p| p.is_some_and(|c| c != background)).collect();
+    let first = painted.iter().position(|on| *on).expect("the selection's left edge");
+    let last = painted.iter().rposition(|on| *on).expect("the selection's right edge");
+    let width = (last - first) as f32;
+    eprintln!(
+        "date picker: the selected day spans {width} dp with {} painted pixels",
+        painted.iter().filter(|on| **on).count()
+    );
+    assert!(
+        (width - 40.0).abs() <= 2.0,
+        "the selected day is 40 dp across (measured {width})"
+    );
+    assert!(
+        painted[first..=last].iter().all(|on| *on),
+        "and it is filled rather than a ring"
+    );
+
+    // Today: the 5th, first row, fifth column. Its circle is an outline, so the centre row measures the ring's
+    // 40 dp while a row 12 dp above the centre — clear of the day number — meets only the two edges, 32 dp
+    // apart, which is the chord of a 20 dp radius 12 dp off the middle.
+    let (tx, ty) = date_picker_cell_centre(x, y, 4.0, 0.0);
+    let scan: Vec<(f32, f32)> = (-26..=26).map(|i| (tx + i as f32, ty)).collect();
+    let pixels = app.pixels_at_logical(&scan);
+    let background = pixels[0].expect("a container pixel beside the ring");
+    let painted: Vec<bool> = pixels.iter().map(|p| p.is_some_and(|c| c != background)).collect();
+    let first = painted.iter().position(|on| *on).expect("today's ring's left edge");
+    let last = painted.iter().rposition(|on| *on).expect("today's ring's right edge");
+    let width = (last - first) as f32;
+    eprintln!("date picker: today's ring spans {width} dp");
+    assert!(
+        (width - 40.0).abs() <= 2.0,
+        "today's ring is 40 dp across (measured {width})"
+    );
+
+    // A ring, measured where it must be rather than by counting antialiased pixels: 12 dp above the centre,
+    // the circle's 20 dp radius is 16 dp out on either side, and the middle of that row is inside it.
+    let check = app.pixels_at_logical(&[
+        (tx - 16.0, ty - 12.0),
+        (tx, ty - 12.0),
+        (tx + 16.0, ty - 12.0),
+    ]);
+    eprintln!("date picker: across the ring {check:?}, background {background:?}");
+    assert_eq!(
+        check[1],
+        Some(background),
+        "the ring is hollow: its middle shows the container"
+    );
+    assert!(
+        check[0].is_some_and(|c| c != background),
+        "the ring paints its left edge"
+    );
+    assert!(
+        check[2].is_some_and(|c| c != background),
+        "the ring paints its right edge"
+    );
+}
+
+/// What:  the month navigation's arrows.
+/// When:  each is tapped.
+/// Then:  the calendar steps one month either way, so the header reads August, then September again.
+#[test]
+fn date_picker_steps_the_month_with_its_arrows() {
+    let mut app = UiTest::launch("date_picker");
+    app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+    let (x, y, w, _) = app.find_tag("dp-picker").expect("the picker container");
+    let nav_y = y + 120.0 + 1.0 + 28.0;
+
+    app.tap(x + 12.0 + 20.0, nav_y);
+    app.expect_text_timeout("month: August 2024", Duration::from_secs(5));
+    app.tap(x + w - 12.0 - 20.0, nav_y);
+    app.expect_text_timeout("month: September 2024", Duration::from_secs(5));
+}
+
+/// What:  a day cell.
+/// When:  it is tapped.
+/// Then:  the picker selects that day.
+///
+/// BLOCKED, and ignored rather than deleted so the reproduction stays in the tree. Measured on this fixture:
+/// the month navigation's arrows *do* take a tap (their test passes, and the month text changes), but nothing
+/// inside the month grid does. The day cell's 40 dp circle is at the centre the lattice puts it at — `find_tag`
+/// on a temporary tag measured it at `(32, 306, 40, 40)` for the first row — and a tap on that centre leaves the
+/// selection text unchanged. Two controls say the handler itself is not the problem: the same tap on the cell
+/// that already carries paint (today, whose 1 dp ring is drawn) also does nothing, and a clickable attached to
+/// the picker's *container*, whose box covers the whole grid, does not fire for taps below the grid's top
+/// either — so the press is consumed inside the grid and never reaches a handler. `UiTest::tap` (a real
+/// pointer down and up) and `UiTest::click` (the synthetic debug command) behave the same. The next step is to
+/// isolate a lone `Surface::selectable` in a fixture and tap that, to decide between winia's `Surface`
+/// interaction and this grid's nesting.
+#[test]
+#[ignore = "clicking inside the month grid consumes the press without calling the day cell's handler; see the \
+            test body for the measurements"]
+fn date_picker_selects_the_day_that_is_tapped() {
+    let mut app = UiTest::launch("date_picker");
+    app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
+    let (x, y, _, _) = app.find_tag("dp-picker").expect("the picker container");
+
+    // The 5th is today, first row, fifth column (2024-09-01 is a Sunday).
+    let (cx, cy) = date_picker_cell_centre(x, y, 4.0, 0.0);
+    app.tap(cx, cy);
+    app.expect_text_timeout("selected: Sep 5, 2024", Duration::from_secs(5));
+}

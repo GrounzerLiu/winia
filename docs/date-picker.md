@@ -256,5 +256,19 @@ non-public hosts and the Tavily extracts of the raw and jsdelivr SVGs came back 
 576 pixels in its 24 dp box, the left one's ink centre sits left of the right one's, and the pair is a near
 mirror (17 of 576 pixels differ).
 
-Next: the UI fixture and geometry guards for the docked picker, the year picker panel (3 columns, 72 × 36
-cells), then `DatePickerDialog` and the input mode.
+Four UI tests drive the fixture (`winia/tests/ui_test.rs`), three of them green: the container keeps its 360 dp
+width and the sum of its rows (measured `(16, 78, 360, 512)` against 120 + 1 + 56 + 48 + 288), the selected day
+is a filled 40 dp circle (measured 39 dp across on a scan through its centre) with today a hollow ring 40 dp
+across, and the arrows step the month and step back.
+
+The fourth — a tap on a day cell — is ignored, and the reproduction stays in the tree rather than a passing
+assertion that would hide it. Measured: the arrows do take a tap, but nothing inside the month grid does. A
+temporary `test_tag` on the day cell put the first one at `(32, 306, 40, 40)`, and a tap on that centre (and on
+the painted today cell, and 14 dp above its label) leaves the selection unchanged. A clickable attached to the
+picker's *container*, whose box covers the whole grid, does not fire for taps inside the grid either, so the
+press is consumed there and never reaches a handler; `UiTest::tap` and the synthetic `UiTest::click` behave the
+same. Isolating a lone `Surface::selectable` in a fixture is the next step: that decides between winia's
+`Surface` interaction and this grid's nesting of `Stack` and `Row`.
+
+Next: that isolation, the year picker panel (3 columns, 72 × 36 cells), then `DatePickerDialog` and the input
+mode.
