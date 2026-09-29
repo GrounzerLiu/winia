@@ -194,23 +194,29 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                 })
                 .build(
                     ctx,
-                    |ctx| {
-                        TextField::new(exposed_value.clone())
-                            .outlined()
-                            .read_only(true)
-                            .label(|ctx| Text::new("选择").build(ctx))
-                            .modifier(Modifier::new().width(200.0).test_tag("dm-exposed-anchor"))
-                            .trailing_icon({
-                                let arrow_state = exposed_open.clone();
-                                move |ctx| {
-                                    ExposedDropdownMenuDefaults::trailing_icon(
-                                        ctx,
-                                        arrow_state.clone(),
-                                        Modifier::new().test_tag("dm-exposed-arrow"),
-                                    );
-                                }
-                            })
-                            .build(ctx);
+                    {
+                        // `move` (and the clone) because the anchor closure is stored: the box's builder
+                        // takes it as `'static`, like every other component's content closure here.
+                        let exposed_value = exposed_value.clone();
+                        let exposed_open = exposed_open.clone();
+                        move |ctx| {
+                            TextField::new(exposed_value.clone())
+                                .outlined()
+                                .read_only(true)
+                                .label(|ctx| Text::new("选择").build(ctx))
+                                .modifier(Modifier::new().width(200.0).test_tag("dm-exposed-anchor"))
+                                .trailing_icon({
+                                    let arrow_state = exposed_open.clone();
+                                    move |ctx| {
+                                        ExposedDropdownMenuDefaults::trailing_icon(
+                                            ctx,
+                                            arrow_state.clone(),
+                                            Modifier::new().test_tag("dm-exposed-arrow"),
+                                        );
+                                    }
+                                })
+                                .build(ctx);
+                        }
                     },
                     {
                         let exposed_open = exposed_open.clone();
@@ -250,11 +256,14 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                 .anchor_type(ExposedDropdownMenuAnchorType::PrimaryEditable)
                 .build(
                     ctx,
-                    |ctx| {
-                        TextField::new(editable_value.clone())
-                            .outlined()
-                            .modifier(Modifier::new().width(200.0).test_tag("dm-editable-anchor"))
-                            .build(ctx);
+                    {
+                        let editable_value = editable_value.clone();
+                        move |ctx| {
+                            TextField::new(editable_value.clone())
+                                .outlined()
+                                .modifier(Modifier::new().width(200.0).test_tag("dm-editable-anchor"))
+                                .build(ctx);
+                        }
                     },
                     {
                         let editable_open = editable_open.clone();
@@ -263,6 +272,55 @@ fn dropdown_menu_fixture(ctx: &mut ComposeCtx) {
                                 .modifier(Modifier::new().test_tag("dm-editable-item-0"))
                                 .on_click({
                                     let closer = editable_open.clone();
+                                    move || closer.set(false)
+                                })
+                                .build(ctx);
+                        }
+                    },
+                );
+
+            // A `SecondaryEditable` anchor: material3 hangs `menuAnchor(SecondaryEditable)` on an element
+            // INSIDE the field — an icon — and that element owns the toggle (`ExposedDropdownMenu.kt:449-482`).
+            // `build_with_anchor_modifier` is the winia shape for it: the element gets the modifier, and
+            // because it takes the press target the click never reaches the field, which is material3's
+            // `downEvent.consume()` (`:1427-1429`) expressed in winia's dispatch rule.
+            let secondary_open = ctx.remember(|| false);
+            let secondary_value = ctx.remember(|| TextFieldValue::new(""));
+            ExposedDropdownMenuBox::new(secondary_open.clone())
+                .anchor_type(ExposedDropdownMenuAnchorType::SecondaryEditable)
+                .build_with_anchor_modifier(
+                    ctx,
+                    {
+                        let secondary_value = secondary_value.clone();
+                        let secondary_open = secondary_open.clone();
+                        move |ctx, anchor_modifier| {
+                            let arrow_state = secondary_open.clone();
+                            TextField::new(secondary_value.clone())
+                                .outlined()
+                                .modifier(
+                                    Modifier::new()
+                                        .width(200.0)
+                                        .test_tag("dm-secondary-anchor"),
+                                )
+                                .trailing_icon(move |ctx| {
+                                    ExposedDropdownMenuDefaults::trailing_icon(
+                                        ctx,
+                                        arrow_state.clone(),
+                                        Modifier::new()
+                                            .test_tag("dm-secondary-icon")
+                                            .then(anchor_modifier.clone()),
+                                    );
+                                })
+                                .build(ctx);
+                        }
+                    },
+                    {
+                        let secondary_open = secondary_open.clone();
+                        move |ctx| {
+                            DropdownMenuItem::new("次级项")
+                                .modifier(Modifier::new().test_tag("dm-secondary-item-0"))
+                                .on_click({
+                                    let closer = secondary_open.clone();
                                     move || closer.set(false)
                                 })
                                 .build(ctx);

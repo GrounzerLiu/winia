@@ -3145,6 +3145,135 @@ fn exposed_dropdown_editable_anchor_hands_the_keyboard_over_on_a_reach_key() {
     );
 }
 
+/// The published semantics of the secondary anchor's element: the ONE node in this fixture that declares
+/// both a role and an `expanded` state, which is what material3's secondary anchor reports
+/// (`ExposedDropdownMenu.kt:1462-1477`: `role = Button` plus the expanded state).
+fn secondary_anchor_semantics(snapshot: &serde_json::Value) -> Option<(String, bool)> {
+    fn walk(n: &serde_json::Value, out: &mut Option<(String, bool)>) {
+        if let Some(arr) = n.as_array() {
+            for child in arr {
+                walk(child, out);
+            }
+            return;
+        }
+        let role = n.get("role").and_then(|v| v.as_str()).map(str::to_string);
+        let expanded = n
+            .get("state")
+            .and_then(|s| s.get("expanded"))
+            .and_then(|v| v.as_bool());
+        if let (Some(role), Some(expanded)) = (role, expanded) {
+            *out = Some((role, expanded));
+        }
+        for key in ["children", "content", "root", "main", "overlays"] {
+            if let Some(child) = n.get(key) {
+                walk(child, out);
+            }
+        }
+    }
+    let mut out = None;
+    walk(snapshot, &mut out);
+    out
+}
+
+/// What:  a box whose anchor is `SecondaryEditable` — material3's "`menuAnchor` on an element inside the
+///        field" shape, here the trailing icon — with nothing focused yet.
+/// When:  the icon is clicked once, then a second time.
+/// Then:  the first click OPENS the menu and the second closes it: exactly one toggle per click. And the
+///        field does not take focus from that click, because the element owns the press target — winia's
+///        form of material3's `downEvent.consume()` (`ExposedDropdownMenu.kt:1427-1429`), which exists so
+///        the click does not move the caret into the field.
+#[test]
+fn exposed_dropdown_secondary_anchor_toggles_from_its_icon_without_taking_focus() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    let (fx, fy, fw, fh) = app.find_tag("dm-secondary-anchor").expect("the secondary field");
+    let (ix, iy, iw, ih) = app.find_tag("dm-secondary-icon").expect("the anchor icon");
+    assert!(
+        ix >= fx - 0.5 && ix + iw <= fx + fw + 0.5 && iy >= fy - 0.5 && iy + ih <= fy + fh + 0.5,
+        "the anchor element must sit inside the field: icon ({ix},{iy},{iw},{ih}) against field \
+         ({fx},{fy},{fw},{fh})"
+    );
+
+    app.tap(ix + iw / 2.0, iy + ih / 2.0);
+    app.expect_overlay_text_timeout("次级项", Duration::from_secs(5));
+    assert_eq!(
+        app.overlay_count(),
+        1,
+        "one click on the anchor element must toggle the menu exactly once"
+    );
+    assert!(
+        !app.tag_is_focused("dm-secondary-anchor"),
+        "the element owns the press, so the field must not take focus from a click on the icon"
+    );
+
+    // The anchor element reports material3's semantics for a secondary anchor: a button whose expanded
+    // state follows the menu.
+    let opened = app
+        .semantics_until(Duration::from_secs(3), |s| {
+            secondary_anchor_semantics(s) == Some(("button".to_string(), true))
+        })
+        .expect("a semantics snapshot");
+    assert_eq!(
+        secondary_anchor_semantics(&opened),
+        Some(("button".to_string(), true)),
+        "the anchor element must publish role button + expanded while the menu is showing"
+    );
+
+    app.tap(ix + iw / 2.0, iy + ih / 2.0);
+    std::thread::sleep(Duration::from_millis(250));
+    app.refresh();
+    assert_eq!(
+        app.overlay_count(),
+        0,
+        "a second click on the same element must close the menu"
+    );
+    let closed = app
+        .semantics_until(Duration::from_secs(3), |s| {
+            secondary_anchor_semantics(s) == Some(("button".to_string(), false))
+        })
+        .expect("a semantics snapshot");
+    assert_eq!(
+        secondary_anchor_semantics(&closed),
+        Some(("button".to_string(), false)),
+        "…and collapse again when it closes"
+    );
+}
+
+/// What:  the same `SecondaryEditable` box, with its field focused and holding text.
+/// When:  the icon is clicked, then another character is typed.
+/// Then:  the menu opens AND the field keeps the keyboard: the caret stays usable while the list is
+///        showing, which is the point of material3 opening a secondary anchor's menu the way it does.
+#[test]
+fn exposed_dropdown_secondary_anchor_keeps_the_caret_in_a_focused_field() {
+    let mut app = UiTest::launch("dropdown_menu");
+    app.expect_text_timeout("dm-exposed-open: no", Duration::from_secs(5));
+    let (fx, fy, fw, fh) = app.find_tag("dm-secondary-anchor").expect("the secondary field");
+    app.tap(fx + 24.0, fy + fh / 2.0);
+    app.key("a");
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("text(a)")),
+        "the field must take the text before the menu is opened: {texts:?}"
+    );
+
+    let (ix, iy, iw, ih) = app.find_tag("dm-secondary-icon").expect("the anchor icon");
+    app.tap(ix + iw / 2.0, iy + ih / 2.0);
+    app.expect_overlay_text_timeout("次级项", Duration::from_secs(5));
+    assert!(
+        app.tag_is_focused("dm-secondary-anchor"),
+        "an open menu must not take the keyboard away from the field of a secondary anchor"
+    );
+
+    app.key("b");
+    app.refresh();
+    let texts = app.all_texts();
+    assert!(
+        texts.iter().any(|t| t.contains("text(ab)")),
+        "the caret must still be usable while the menu is showing: {texts:?}"
+    );
+}
+
 /// What:  the exposed-dropdown field, with and without its menu open.
 /// When:  a vertical scan through the trailing icon's column is read, plus one point on the field's far
 ///        side as the background reference.

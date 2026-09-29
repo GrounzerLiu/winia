@@ -283,6 +283,17 @@ impl UiTest {
         std::thread::sleep(Duration::from_millis(150));
     }
 
+    /// 真实指针点击：down + 原地 up，即物理点击走的路径（`tap_pointer_down` → `gesture_down`），
+    /// **不是**合成的 debug `c` 指令。两者有一个可观测差别，凡是"这次点击不该抢焦点"的测试都必须
+    /// 用这一个：debug 点击按设计会聚焦命中路径上最深的 focusable 节点（这样紧随其后的 `k <char>`
+    /// 才有目标），而真实路径把聚焦交给组件自己。
+    pub fn tap(&mut self, x: f32, y: f32) {
+        self.send(&format!("d {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(40));
+        self.send(&format!("u {} {}", x as i32, y as i32));
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
     /// 按下/移动/释放（拖拽选择）
     pub fn drag(&mut self, x1: f32, y1: f32, x2: f32, y2: f32) {
         self.send(&format!("d {} {}", x1 as i32, y1 as i32));

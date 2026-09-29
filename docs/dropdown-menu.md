@@ -311,7 +311,7 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 ### 4.12 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
-- **`SecondaryEditable` 等同 `PrimaryNotEditable`**，且锚点的语义角色（`role = DropdownList` / `Button` + stateDescription）未发布。原因与出处见 §4.13 末两条。
+- **`SecondaryEditable` 的逐元素锚点已实现，但两条附带条件仍是偏差**（§4.14）：① 弹层焦点性在 M3 里取决于"是否开启无障碍服务"，winia 没有该信号，故实现的是**非可访问分支**（不带焦点打开，字段保住光标与 IME）；② M3 给两个 primary 锚点发布的 `role = DropdownList` 在 winia 的 `SemanticsRole` 里还没有变体（只有 Button/Checkbox/Switch/RadioButton/Tab/Image/ProgressBar/Dialog），secondary 锚点的 `Button` + expanded 已发布并断言。
 
 ### 4.13 Editable anchors (`PrimaryEditable`): what was implemented
 
@@ -381,3 +381,46 @@ hands the keyboard over, then Tab reaches the first item) in `winia/tests/ui_tes
   the field must still hold the caret";
 - the spacebar guard removed → "the spacebar belongs to the text: material3's editable anchor must not
   toggle on it" (`left == right` failed).
+
+### 4.14 Secondary anchors: the element inside the field
+
+material3 hangs `menuAnchor(SecondaryEditable)` on an element INSIDE the field — a trailing icon — and that
+element, not the field, owns the toggle (`ExposedDropdownMenu.kt:449-482`). Three things come with it: the
+element consumes the pointer DOWN so the click does not move the caret (`:1427-1429`), the popup's
+focusability is conditional on accessibility services being enabled (`:475-482`), and the semantics is a
+`Button` that reports whether the menu is expanded (`:1462-1477`).
+
+winia's shape for it is `ExposedDropdownMenuBox::build_with_anchor_modifier(ctx, |ctx, modifier| …, menu)`:
+the closure receives the modifier to put on the inner element, and the box's own wrapper stays inert — no
+`clickable` and, importantly, no press — so the click cannot be counted twice.
+
+- **The press registration IS winia's `downEvent.consume()`.** winia has no consume flag in the pointer
+  path; the equivalent is "be the innermost node on the hit path that declares a gesture", because a press
+  is dispatched to exactly one node (`winia/src/app.rs::press_gesture_target`). A `Clickable` alone does
+  NOT qualify — `Modifier::has_gesture` lists the tap and drag callbacks only — so an anchor element that
+  carried `clickable` and nothing else would still let the field's own `on_press` (the caret placement,
+  `text_field.rs`) fire. Measured three ways: the unit tests in `app::press_target_tests`, and the UI test
+  `exposed_dropdown_secondary_anchor_toggles_from_its_icon_without_taking_focus`, which goes red with
+  "the element owns the press, so the field must not take focus from a click on the icon" the moment the
+  press registration is removed.
+- **Focus policy per anchor type** now reads directly off `popupPropertiesForAnchorType`: a non-editable
+  primary anchor opens WITH focus; an editable one opens without it and the reach keys hand it over; a
+  secondary one is focusable only when accessibility services are on. winia has no accessibility-services
+  signal (the model exists, the OS bridge does not — `docs/semantics-gap.md`), so the NON-ACCESSIBLE branch
+  is the one implemented: the menu opens without focus and the field that shares its IME keeps the caret
+  and keeps receiving characters. Recorded rather than faked — the conditional branch becomes reachable
+  the day a bridge exists.
+- **Semantics published**: `role = Button` plus the expanded state on the anchor element. Asserted through
+  the published semantics snapshot (`secondary_anchor_semantics` in `ui_test.rs`), not just declared.
+
+Test-harness lesson, worth keeping because it cost a round: `UiTest::click` sends the synthetic debug `c`
+command, which focuses the deepest focusable node on the hit path BY DESIGN (so a following `k <char>` has
+a target). A test about "this click must not steal focus" therefore has to drive the REAL pointer path —
+`UiTest::tap` (a `d` + `u` pair) — or it measures the harness instead of the framework. Measured: the
+focus assertion failed under `click` and passed under `tap` with no change to the component.
+
+Tests: `exposed_dropdown_secondary_anchor_toggles_from_its_icon_without_taking_focus` (one toggle per
+click, in both directions; the field does not take focus; the element reports button + expanded, then
+button + collapsed) and `exposed_dropdown_secondary_anchor_keeps_the_caret_in_a_focused_field` (with the
+field focused and holding text, clicking the icon opens the menu, keeps the keyboard in the field and the
+caret usable). Library tests: `app::press_target_tests` pins the three press-target rules.

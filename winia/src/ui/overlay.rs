@@ -1294,13 +1294,54 @@ impl ExposedDropdownMenuBox {
     pub fn build(
         self,
         ctx: &mut crate::core::composer::ComposeCtx,
-        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx),
+        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx) + 'static,
         menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+    ) {
+        self.build_inner(
+            ctx,
+            false,
+            Box::new(move |ctx, _anchor_element| anchor(ctx)),
+            Box::new(menu),
+        );
+    }
+
+    /// material3's `Modifier.menuAnchor(type)` applied to an element INSIDE the anchor — its
+    /// `SecondaryEditable` shape, where the anchor is an icon in the field rather than the field itself
+    /// (`ExposedDropdownMenu.kt:449-482`, `:266-269`).
+    ///
+    /// The closure receives the modifier to put on that element; the element then owns the toggle, and
+    /// the box's own wrapper stops toggling so a click cannot be counted twice. Use this when the anchor
+    /// is a field that has its own pointer work (a text cursor): the element takes the press target, so
+    /// the click does not move the caret — winia's form of material3's `downEvent.consume()`
+    /// (`:1427-1429`). See [`ExposedDropdownMenuAnchorType::SecondaryEditable`].
+    #[composable]
+    pub fn build_with_anchor_modifier(
+        self,
+        ctx: &mut crate::core::composer::ComposeCtx,
+        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx, crate::modifier::Modifier) + 'static,
+        menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+    ) {
+        self.build_inner(ctx, true, Box::new(anchor), Box::new(menu));
+    }
+
+    /// The shared body of [`Self::build`] and [`Self::build_with_anchor_modifier`]; `element_anchor`
+    /// tells it which node carries the anchor behaviour.
+    #[composable]
+    fn build_inner(
+        self,
+        ctx: &mut crate::core::composer::ComposeCtx,
+        element_anchor: bool,
+        anchor: Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx, crate::modifier::Modifier)>,
+        menu: Box<dyn Fn(&mut crate::core::composer::ComposeCtx) + 'static>,
     ) {
         let expanded = self.expanded.clone();
         let editable = matches!(
             self.anchor_type,
             ExposedDropdownMenuAnchorType::PrimaryEditable
+        );
+        let secondary = matches!(
+            self.anchor_type,
+            ExposedDropdownMenuAnchorType::SecondaryEditable
         );
         let enabled = self.enabled;
         // material3's `alwaysFocusable` (`ExposedDropdownMenu.kt:1436-1457`), which feeds
@@ -1373,11 +1414,55 @@ impl ExposedDropdownMenuBox {
                 false
             }
         };
+        // material3's `Modifier.menuAnchor(type)` on an element inside the anchor, handed to the caller
+        // by `build_with_anchor_modifier`.
+        //
+        // The PRESS registration is the load-bearing part, and it is not decoration: winia's equivalent
+        // of material3's `downEvent.consume()` (`ExposedDropdownMenu.kt:1427-1429`) is "be the innermost
+        // press target on the hit path", because the press is dispatched to exactly one node
+        // (`app.rs::press_gesture_target`). A `Clickable` alone does NOT qualify — `Modifier::has_gesture`
+        // lists only the tap and drag callbacks — so an element with `clickable` and no press still lets
+        // the field's own `on_press` (the caret placement, `text_field.rs`) fire. Measured:
+        // `app::press_target_tests::a_clickable_alone_does_not_take_the_press`.
+        //
+        // No key handler here, unlike the wrapper form: material3's `onPreviewKeyEvent` reaches an element
+        // only while that element (or a descendant) has the focus, and an icon inside a field never does —
+        // the field owns the keyboard. That is material3's own outcome for `SecondaryEditable`.
+        let anchor_element = {
+            let mut m = crate::modifier::Modifier::new();
+            if enabled && element_anchor {
+                m = m.clickable(toggler.clone()).on_press(|_| {});
+                if secondary {
+                    // material3's semantics for a secondary anchor (`:1462-1477`): a button that reports
+                    // whether the menu is showing. This half is unconditional in material3 — the
+                    // accessibility SERVICES condition decides only whether the popup takes focus, and
+                    // winia implements the non-accessible branch (see the `focus_scope` call below).
+                    m = m.semantics(
+                        crate::semantics::SemanticsConfig::new()
+                            .role(crate::semantics::SemanticsRole::Button)
+                            .merge_descendants(true)
+                            .state(
+                                crate::semantics::SemanticsState::new().expanded(expanded.get()),
+                            ),
+                    );
+                }
+            }
+            m
+        };
         DropdownMenu::new(expanded.clone())
             .match_anchor_width(self.match_anchor_width)
-            // material3's `popupPropertiesForAnchorType(anchorType, alwaysFocusable)`: the menu owns the
-            // keyboard unless the anchor is editable and it has not been handed over yet.
-            .focus_scope(keyboard.get() || !editable)
+            // material3's `popupPropertiesForAnchorType(anchorType, alwaysFocusable)`. A non-editable
+            // primary anchor opens WITH focus (that is `DefaultMenuProperties`); an editable one opens
+            // without it and gets the keyboard handed over by the reach keys above; a SECONDARY anchor's
+            // focusability is conditional on accessibility services being on (`ExposedDropdownMenu.kt`
+            // :475-482) — a signal winia has no bridge for, so the NON-ACCESSIBLE branch is the one
+            // implemented: it opens without focus, and the field that shares its IME keeps the caret. That
+            // is also the branch that gives this anchor type its purpose.
+            .focus_scope(match self.anchor_type {
+                ExposedDropdownMenuAnchorType::PrimaryNotEditable => true,
+                ExposedDropdownMenuAnchorType::PrimaryEditable => keyboard.get(),
+                ExposedDropdownMenuAnchorType::SecondaryEditable => false,
+            })
             .on_dismiss_request({
                 let expanded = expanded.clone();
                 let on_change = on_change.clone();
@@ -1391,9 +1476,11 @@ impl ExposedDropdownMenuBox {
             .build(
                 ctx,
                 move |ctx| {
-                    // material3's `menuAnchor(type, enabled)`: a disabled anchor neither toggles nor takes
-                    // the activation keys.
-                    let modifier = if enabled {
+                    // Wrapper behaviour: material3's `menuAnchor` on the field's container, which is what
+                    // the primary anchor types use. With the per-element form the element owns the toggle
+                    // and the wrapper stays inert — it must not carry a PRESS either, or it would take the
+                    // press target back from the element and the caret would move again.
+                    let modifier = if enabled && !element_anchor {
                         crate::modifier::Modifier::new()
                             .clickable(toggler)
                             .on_pre_key_event(keys)
@@ -1402,7 +1489,7 @@ impl ExposedDropdownMenuBox {
                     };
                     crate::ui::Column::new()
                         .modifier(modifier)
-                        .build(ctx, |ctx| anchor(ctx));
+                        .build(ctx, |ctx| anchor(ctx, anchor_element));
                 },
                 menu,
             );

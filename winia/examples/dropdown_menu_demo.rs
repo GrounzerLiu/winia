@@ -288,7 +288,11 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                     })
                     .build(
                         ctx,
-                        |ctx| {
+                        {
+                            // `move` (with the clones) because the box stores the anchor closure: it is
+                            // `'static` like every other content closure in this framework.
+                            clone!(exposed_value, exposed_open);
+                            move |ctx| {
                             TextField::new(exposed_value.clone())
                                 .outlined()
                                 .read_only(true)
@@ -306,6 +310,7 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                                     }
                                 })
                                 .build(ctx);
+                            }
                         },
                         {
                             clone!(exposed_open, exposed_value, picked);
