@@ -143,6 +143,9 @@ refreshes each composition.
 | Year menu button | `YearPickerMenuButton`: a `TextButton(shape = CircleShape, elevation = null, border = null)` holding the formatted month-year text and `Icons.Filled.ArrowDropDown` after `ButtonDefaults.IconSpacing` (8); the text repeats itself as the content description and is a polite live region; the month arrows are composed **only while the overlay is closed**, and the row's arrangement switches `SpaceBetween` → `Start` | `:2194-2269` |
 | Year panel grid | `LazyVerticalGrid(GridCells.Fixed(YearsInRow = 3))`, `background(colors.containerColor)`, `SpaceEvenly` horizontally, `spacedBy(YearsVerticalPadding = 16)` vertically, `SelectionYearLabelTextFont` (BodyLarge); `initialFirstVisibleItemIndex = max(0, displayedYear - yearRange.first - YearsInRow)`; every year is `requiredSize(SelectionYearContainerWidth = 72, SelectionYearContainerHeight = 36)` | `:2061-2116`, `:2301-2304` |
 | Year cell | `Surface(shape = SelectionYearStateLayerShape = CornerFull, selected, enabled, onClick)` with `border = 1 dp todayDateBorderColor` when it is the current year and not selected; container `yearContainerColor(selected, enabled)` (`Primary` when selected, otherwise transparent), label `yearContentColor(currentYear, selected, enabled)`; description is the `DatePickerNavigateToYearDescription` string | `:2120-2180`, `:1005-1046` |
+| Modal dialog | `BasicAlertDialog(wrapContentHeight)` around a `Surface(requiredWidth(ContainerWidth = 360), heightIn(max = ContainerHeight = 568), shape = DatePickerDefaults.shape, color = colors.containerColor, tonalElevation = DatePickerDefaults.TonalElevation)`; the dialog contributes no padding — the picker is the surface | `DatePickerDialog.kt:57-66`, `DatePickerDialog.android.kt:85-94` |
+| Modal body | `Column(verticalArrangement = SpaceBetween)`: the content in a `Box(weight(1f, fill = false))` — the `fill = false` is what lets the dialog collapse when the input mode is shorter — then the action row | `DatePickerDialog.android.kt:95-111` |
+| Action row | `Box(align End, DialogButtonsPadding = PaddingValues(bottom = 8, end = 6))` holding an `AlertDialogFlowRow(mainAxisSpacing = 8, crossAxisSpacing = 12)` of the dismiss button then the confirm button, in `DialogTokens.ActionLabelTextColor` (`Primary`) and `ActionLabelTextFont` (LabelLarge) | `DatePickerDialog.android.kt:105-118` |
 | Constants | `RecommendedSizeForAccessibility = 48.dp`, `MonthYearHeight = 56.dp`, `DatePickerHorizontalPadding = 12.dp`, `DatePickerModeTogglePadding = PaddingValues(end = 12.dp, bottom = 12.dp)`, `DatePickerTitlePadding = PaddingValues(start = 24.dp, end = 12.dp, top = 16.dp)`, `DatePickerHeadlinePadding = PaddingValues(start = 24.dp, end = 12.dp, bottom = 12.dp)`, `YearsVerticalPadding = 16.dp` | `:2293-2301` |
 
 ## Colour roles
@@ -229,6 +232,7 @@ Measured, each by turning the rule off and watching the specific test fail:
 | a year outside the year range | the guard dropped | exactly 1 test red: `a_year_outside_the_range_is_ignored` |
 | the year panel is the calendar's height | `YEAR_PANEL_HEIGHT` set to the month alone | exactly 1 test red: `the_year_panel_is_as_tall_as_the_calendar_it_stands_in_for` |
 | picking a year closes the panel | `year_panel_open.set(false)` dropped | exactly 1 test red: `date_picker_opens_its_year_panel_and_picks_a_year` (`picking a year closes the panel`) |
+| the modal dialog adds no padding of its own | `.content_padding(0.0)` dropped, so winia's `BasicAlertDialog` inset its surface by the alert dialog's 24 dp | exactly 1 test red: `date_picker_dialog_is_the_modal_picker` — the picker inside is pushed 24 dp in and the tap on today misses its cell, which is the measured shape of that mistake |
 | the two month arrows | the chevron constants swapped | exactly 1 test red: `the_month_arrows_draw_mirrored_chevrons` |
 
 `DatePickerState` (`with`/`new` over a `DatePickerStateInit`, `remember_date_picker_state` for composition) then
@@ -271,7 +275,27 @@ its month list to the picked year and lets the list write the displayed month ba
 `DatePickerState::set_displayed_year` writes that month directly, keeping the month of year. The year menu button
 is a plain transparent `Pill` `Surface` holding the label and the dropdown glyph, where material3 starts from a
 `TextButton` and clears its elevation and border; the 8 dp between text and glyph is
-`ButtonSmallTokens.IconLabelSpace`. The chevron path data is the Material Icons 24 dp artwork, which this sandbox cannot byte-verify
+`ButtonSmallTokens.IconLabelSpace`.
+
+The modal variant, `DatePickerDialog`, is that docked picker in a dialog: winia opens the centred modal overlay
+`BasicAlertDialog` opens, with the surface's own geometry — `width(CONTAINER_WIDTH)` and
+`max_height(MODAL_CONTAINER_HEIGHT)` on the wrapper, no content padding, shape 28 (`CONTAINER_CORNER`), filled
+with `colors.container` — and the action row under the content (`Row` at `MODAL_BUTTONS_SPACING` 8, padded 8
+bottom and 6 end, inside `WiniaTheme::with_content_color(Primary)` and `ProvideTextStyle(LabelLarge)`).
+Measured on the fixture: the dialog is `360 × 568` exactly, which is the docked picker's 512 plus the action
+row's 56 — material3's `ContainerHeight` is the number that content happens to reach. The content defaults to a
+`DatePicker` over the dialog's state and `DatePickerDialog::content` replaces it.
+
+Two deviations there. material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog collapses
+when the input mode is shorter than the calendar; winia has no weights, so the content and the action row follow
+one another in the `Column` — the row still lands at the end, because the column is only as tall as its content.
+And `AlertDialogFlowRow`'s `crossAxisSpacing` (12) only matters when the two buttons wrap onto two lines, which
+winia's `Row` does not do; the row here is not a `FlowRow`.
+
+That needed one change outside this component: winia's `BasicAlertDialog` carried the alert dialog's 24 dp of
+content padding on its surface, where Compose's `BasicAlertDialog` has none — the padding belongs to
+`AlertDialog`'s own content column. It is now `BasicAlertDialog::content_padding(padding)`, still 24 dp by
+default for `AlertDialog`, and the date picker dialog passes `0.0`. The chevron path data is the Material Icons 24 dp artwork, which this sandbox cannot byte-verify
 against Google's assets — the same limitation the split button demo's `add` glyph carries (`web_fetch` refuses
 non-public hosts and the Tavily extracts of the raw and jsdelivr SVGs came back empty) — so
 `the_month_arrows_draw_mirrored_chevrons` measures the published data instead: each glyph inks 26–31 of the
@@ -284,6 +308,12 @@ is a filled 40 dp circle (measured 39 dp across on a scan through its centre) wi
 across, the arrows step the month and step back, a tap on the today cell moves the selection to it, and the year
 menu button opens the panel: the container's rectangle is unchanged while it is open, a year cell measures
 72 × 36, and tapping the next year keeps the month (`month: September 2025`) and closes the panel.
+
+A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, six tests in all): the dialog is an
+overlay, measures 360 × 568, a tap on the today cell moves the selection the page reads out, the dismiss button
+closes it and the page's button re-opens it. The overlay entry outlives the state that closes it while the
+dialog's exit motion plays, so that test polls `overlay_count` rather than reading it once — the same wait the
+popup test uses.
 
 One trap that measurement found is recorded in the year test: a `test_tag` inside a scrolled list reports the
 item's position in the list's **content** coordinates rather than the viewport's. The picked year came back at
@@ -305,5 +335,5 @@ which is what made the press look consumed. With `#[composable]` back, a 4 dp sc
 grid column advances the month and the selection on every tap. Turning the attribute off again makes exactly 1
 test red: `date_picker_selects_the_day_that_is_tapped`.
 
-Next: `DatePickerDialog` (the modal picker: `requiredWidth(360)`, `heightIn(max = 568)`, shape 28,
-`DialogProperties(usePlatformDefaultWidth = false)`), then the input mode.
+Next: the input mode — `DatePicker(state, displayMode = Input)`, the header's mode toggle, and the
+`DateInputContent` the public picker switches to (material3 1.5 has no public `DateInput`).

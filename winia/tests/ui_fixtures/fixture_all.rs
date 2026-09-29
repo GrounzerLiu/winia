@@ -36,6 +36,8 @@ mod dropdown_menu;
 mod split_button;
 #[path = "fixture_date_picker.rs"]
 mod date_picker;
+#[path = "fixture_date_picker_dialog.rs"]
+mod date_picker_dialog;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -98,6 +100,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("dropdown_menu", dropdown_menu::main),
     ("split_button", split_button::main),
     ("date_picker", date_picker::main),
+    ("date_picker_dialog", date_picker_dialog::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),
     ("overlay", overlay::main),

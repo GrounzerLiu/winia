@@ -106,6 +106,7 @@ pub struct BasicAlertDialog {
     dismiss_on_outside: bool,
     shape: Option<Shape>,
     container_color: Option<Color>,
+    content_padding: f32,
     modifier: Modifier,
     content: Box<dyn Fn(&mut ComposeCtx)>,
 }
@@ -118,9 +119,21 @@ impl BasicAlertDialog {
             dismiss_on_outside: true,
             shape: None,
             container_color: None,
+            content_padding: DIALOG_CONTAINER_PADDING,
             modifier: Modifier::new(),
             content: Box::new(|_| {}),
         }
+    }
+
+    /// The inset between the container and the content, [`DIALOG_CONTAINER_PADDING`] by default.
+    ///
+    /// Compose's `BasicAlertDialog` has no padding of its own — the 24 dp belongs to `AlertDialog`'s
+    /// content column — but winia's surface carries it so an alert dialog lands on the token
+    /// geometry without repeating it. A caller that brings its own surface passes `0.0`: the date
+    /// picker dialog's container IS its content (a 360 dp calendar with the action row under it).
+    pub fn content_padding(mut self, padding: f32) -> Self {
+        self.content_padding = padding;
+        self
     }
 
     /// The dialog's body — an arbitrary subtree. `Fn`, not `FnOnce`: the overlay's content is
@@ -188,6 +201,7 @@ impl BasicAlertDialog {
             .unwrap_or_else(|| AlertDialogDefaults::container_color(&theme));
         let content = self.content;
         let on_dismiss = self.on_dismiss_request;
+        let content_padding = self.content_padding;
         let user_modifier = self.modifier;
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
@@ -218,7 +232,7 @@ impl BasicAlertDialog {
                     .clip(shape)
                     // `AlertDialogDefaults.dialogPadding` — on the surface, so the background
                     // covers it and the slots lay out inside it.
-                    .padding(DIALOG_CONTAINER_PADDING);
+                    .padding(content_padding);
                 // The caller's modifier is a WRAPPER, as in Compose's
                 // `Box(modifier.sizeIn(...))`: a caller's padding must sit outside the dialog's
                 // background, not eat into it.

@@ -21,6 +21,7 @@ use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::layout::{Alignment, Arrangement};
 use crate::modifier::{Color, Modifier, Shape};
+use crate::ui::alert_dialog::{AlertDialogDefaults, BasicAlertDialog};
 use crate::ui::divider::Divider;
 use crate::ui::icon::Icon;
 use crate::ui::icon_button::IconButton;
@@ -778,6 +779,19 @@ impl DatePickerDefaults {
     /// stands in for — so opening the panel moves nothing above or below it.
     pub const YEAR_PANEL_HEIGHT: f32 =
         Self::ACCESSIBLE_SIZE * (MAX_CALENDAR_ROWS as f32 + 1.0) - Self::DIVIDER_THICKNESS;
+
+    /// `DatePickerModalTokens.ContainerHeight` (568): the height the modal picker's dialog is capped at
+    /// (`DatePickerDialog.android.kt:92`). The docked picker's 512 plus the action row's 56 reach it exactly.
+    pub const MODAL_CONTAINER_HEIGHT: f32 = 568.0;
+
+    /// `DialogButtonsPadding`'s bottom (`DatePickerDialog.android.kt:113`).
+    pub const MODAL_BUTTONS_BOTTOM_PADDING: f32 = 8.0;
+
+    /// `DialogButtonsPadding`'s end.
+    pub const MODAL_BUTTONS_END_PADDING: f32 = 6.0;
+
+    /// `DialogButtonsMainAxisSpacing`: between the dismiss and the confirm button.
+    pub const MODAL_BUTTONS_SPACING: f32 = 8.0;
 }
 
 /// The colour roles a date picker paints with (`DatePickerColors`, `DatePicker.kt:835-1103`).
@@ -1021,6 +1035,165 @@ impl DatePicker {
                         }
                     });
             });
+    }
+}
+
+/// The modal date picker's dialog (`DatePickerDialog`, `DatePickerDialog.kt:57-66`; its Android body is
+/// `DatePickerDialog.android.kt:85-118`).
+///
+/// material3 wraps the picker in a `BasicAlertDialog` whose own surface is
+/// `requiredWidth(ContainerWidth = 360)` and `heightIn(max = ContainerHeight = 568)`, shaped
+/// `DatePickerDefaults.shape` (28 dp) and filled with `colors.containerColor` — the dialog contributes no
+/// padding, the picker IS the surface. Under it comes the action row: `DialogButtonsPadding` (bottom 8, end 6)
+/// holding a `FlowRow` at `DialogButtonsMainAxisSpacing` (8), the dismiss button first and the confirm button
+/// second, in `DialogTokens.ActionLabelTextFont` (LabelLarge) with `DialogTokens.ActionLabelTextColor`
+/// (`Primary`) as a default the buttons may override.
+///
+/// The content defaults to the docked [`DatePicker`] over this dialog's state, which is what M3's modal date
+/// picker draws; [`DatePickerDialog::content`] replaces it (the input mode will).
+///
+/// ```ignore
+/// DatePickerDialog::new(state.clone(), open.get())
+///     .on_dismiss_request(move || open.set(false))
+///     .dismiss_button(|ctx| { Button::text().build(ctx, |ctx| { Text::new("Cancel").build(ctx); }); })
+///     .confirm_button(|ctx| { Button::text().build(ctx, |ctx| { Text::new("OK").build(ctx); }); })
+///     .build(ctx);
+/// ```
+pub struct DatePickerDialog {
+    state: DatePickerState,
+    visible: bool,
+    on_dismiss_request: Option<Arc<dyn Fn() + Send + Sync>>,
+    dismiss_button: Option<Box<dyn Fn(&mut ComposeCtx)>>,
+    confirm_button: Option<Box<dyn Fn(&mut ComposeCtx)>>,
+    content: Option<Box<dyn Fn(&mut ComposeCtx)>>,
+    modifier: Modifier,
+    shape: Option<Shape>,
+    colors: Option<DatePickerColors>,
+}
+
+impl DatePickerDialog {
+    /// A dialog over `state`, up while `visible` is true. material3 takes the confirm button as a required
+    /// parameter and the dismiss button as an optional one; the same here, as builders.
+    pub fn new(state: DatePickerState, visible: bool) -> Self {
+        Self {
+            state,
+            visible,
+            on_dismiss_request: None,
+            dismiss_button: None,
+            confirm_button: None,
+            content: None,
+            modifier: Modifier::new(),
+            shape: None,
+            colors: None,
+        }
+    }
+
+    /// Compose's `onDismissRequest`: a click outside the dialog, not the dismiss button.
+    pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_dismiss_request = Some(Arc::new(cb));
+        self
+    }
+
+    /// The affirming action. It sits after the dismiss button in the row, and the dialog wires no event of its
+    /// own into it — not even its enablement.
+    pub fn confirm_button(mut self, button: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.confirm_button = Some(Box::new(button));
+        self
+    }
+
+    /// The dismissing action, before the confirm button.
+    pub fn dismiss_button(mut self, button: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.dismiss_button = Some(Box::new(button));
+        self
+    }
+
+    /// The dialog's content, in place of the default docked picker.
+    pub fn content(mut self, content: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.content = Some(Box::new(content));
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    /// `DatePickerDefaults.shape` (28 dp) by default.
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+
+    /// The picker's colour roles, read from the theme by default.
+    pub fn colors(mut self, colors: DatePickerColors) -> Self {
+        self.colors = Some(colors);
+        self
+    }
+
+    /// Composes the dialog into the overlay layer while `visible`.
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let theme = WiniaTheme::colors();
+        let colors = self
+            .colors
+            .unwrap_or_else(|| DatePickerColors::from_theme(&theme));
+        let shape = self.shape.unwrap_or(Shape::RoundedRect {
+            corner_radius: DatePickerDefaults::CONTAINER_CORNER,
+        });
+        let button_color = AlertDialogDefaults::button_color(&theme);
+        let button_style = WiniaTheme::typography().label_large.clone();
+        let state = self.state.clone();
+        let confirm = self.confirm_button;
+        let dismiss = self.dismiss_button;
+        let content = self.content;
+        let size = Modifier::new()
+            .width(DatePickerDefaults::CONTAINER_WIDTH)
+            .max_height(DatePickerDefaults::MODAL_CONTAINER_HEIGHT);
+
+        let mut dialog = BasicAlertDialog::new(self.visible)
+            .shape(shape)
+            .container_color(colors.container)
+            // The picker is the container: material3's date picker dialog adds no padding, where winia's
+            // `BasicAlertDialog` carries the alert dialog's 24 dp (`DatePickerDialog.android.kt:88-93`).
+            .content_padding(0.0)
+            .modifier(self.modifier.then(size))
+            .content(move |ctx| {
+                // `Column(verticalArrangement = SpaceBetween)`: the content in a `weight(1f, fill = false)` box,
+                // the action row aligned to the end under it (`DatePickerDialog.android.kt:96-111`). winia has no
+                // weights, and the action row is short enough to follow the content directly.
+                Column::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .arrangement(Arrangement::SpaceBetween)
+                    .alignment(Alignment::End)
+                    .build(ctx, |ctx| {
+                        match content.as_ref() {
+                            Some(content) => content(ctx),
+                            None => DatePicker::new(state.clone()).build(ctx),
+                        }
+                        Row::new()
+                            .modifier(
+                                Modifier::new()
+                                    .padding_bottom(DatePickerDefaults::MODAL_BUTTONS_BOTTOM_PADDING)
+                                    .padding_end(DatePickerDefaults::MODAL_BUTTONS_END_PADDING),
+                            )
+                            .spacing(DatePickerDefaults::MODAL_BUTTONS_SPACING)
+                            .alignment(Alignment::Center)
+                            .build(ctx, |ctx| {
+                                ProvideTextStyle(button_style.clone(), ctx, |ctx| {
+                                    WiniaTheme::with_content_color(button_color, ctx, |ctx| {
+                                        if let Some(dismiss) = dismiss.as_ref() {
+                                            dismiss(ctx);
+                                        }
+                                        if let Some(confirm) = confirm.as_ref() {
+                                            confirm(ctx);
+                                        }
+                                    });
+                                });
+                            });
+                    });
+            });
+        // The handler is already boxed here, so it goes in through the same slot `AlertDialog` uses.
+        dialog.dismiss_handler(self.on_dismiss_request).build(ctx);
     }
 }
 

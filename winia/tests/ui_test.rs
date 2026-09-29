@@ -3786,6 +3786,55 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     );
 }
 
+/// What:  the modal date picker's dialog.
+/// When:  it is up, and then a day and the dismiss button are tapped.
+/// Then:  the container is the token size, the tap reaches the state the page reads, and the dialog closes and
+///        re-opens.
+///
+/// The geometry this reads: `DatePickerModalTokens.ContainerWidth` (360) and `ContainerHeight` (568), the
+/// latter capping a container whose content is the docked picker plus the action row.
+#[test]
+fn date_picker_dialog_is_the_modal_picker() {
+    let mut app = UiTest::launch("date_picker_dialog");
+    app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 1, "the modal picker is an overlay");
+
+    let (x, y, w, h) = app.find_tag_in_overlay("dpd-dialog").expect("the dialog");
+    assert_eq!(w, 360.0, "ContainerWidth is 360 dp");
+    assert_eq!(
+        h, 568.0,
+        "the docked picker plus the action row reach ContainerHeight exactly"
+    );
+
+    // The same lattice as the docked picker: today is the first row's fifth column, the selection the second
+    // row's third (2024-09-01 is a Sunday).
+    let (cx, cy) = date_picker_cell_centre(x, y, 4.0, 0.0);
+    app.tap(cx, cy);
+    app.expect_text_timeout("selected: Sep 5, 2024", Duration::from_secs(5));
+
+    let (bx, by, bw, bh) = app.find_tag_in_overlay("dpd-cancel").expect("the dismiss button");
+    app.tap(bx + bw / 2.0, by + bh / 2.0);
+    app.expect_text_timeout("open: no", Duration::from_secs(5));
+    // The overlay stays registered while the dialog's exit motion plays, so the count is polled rather than
+    // read once.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dismiss button closes the dialog"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let (ox, oy, ow, oh) = app.find_tag("dpd-open").expect("the page's open button");
+    app.tap(ox + ow / 2.0, oy + oh / 2.0);
+    app.expect_text_timeout("open: yes", Duration::from_secs(5));
+}
+
 /// What:  a day cell.
 /// When:  it is tapped.
 /// Then:  the picker selects that day.
