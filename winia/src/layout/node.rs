@@ -3482,7 +3482,11 @@ pub fn compute_spacing(
         }
         crate::layout::Arrangement::SpaceEvenly => {
             if gap_count > 0 {
-                let space = remaining / (gap_count + 1) as f32;
+                // n children leave n+1 equal gaps: one before the first child and one after the
+                // last, on top of the n-1 between pairs. Dividing by `gap_count + 1` left the
+                // trailing gap out — measured on the docked picker's month list, whose four 36 dp
+                // rows came out at leading 47.75 / pitch 47.75 / trailing 0 in a 335 dp panel.
+                let space = remaining / (gap_count + 2) as f32;
                 (space, space) // 元素间与边缘间距相等
             } else {
                 (0.0, remaining / 2.0)
