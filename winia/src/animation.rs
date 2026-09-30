@@ -160,6 +160,70 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
     push_animatable_handle(state.into_animating(), target, spec);
 }
 
+/// [`push_animatable`] starting from an explicit velocity rather than inheriting one from a replaced
+/// animation.
+///
+/// What a snapping fling needs. Compose's `SnapFlingBehavior` finishes by calling `animateWithTarget`
+/// on `animationState.copy(value = 0f)` (`SnapFlingBehavior.kt:150-158`) — the VALUE is reset to the
+/// current offset but the FLING's velocity is carried into the snap spring, so the gesture's momentum
+/// continues into the settle instead of the list stopping dead and starting again. Without it the
+/// snap reads as two separate motions, which is exactly what a hand-off through a stopped animation
+/// looks like.
+pub fn push_animatable_with_velocity<
+    T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
+>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    velocity: f32,
+) {
+    push_animatable_with_velocity_and_done(state, target, spec, velocity, || {});
+}
+
+/// [`push_animatable_with_velocity`] reporting completion, for a caller that has to hold a flag up
+/// for as long as the motion lasts.
+pub fn push_animatable_with_velocity_and_done<
+    T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
+>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    velocity: f32,
+    done: impl FnOnce() + Send + 'static,
+) {
+    let handle = state.into_animating();
+    if handle.peek() == target {
+        // Already there: no motion to run, so report completion rather than leaving the caller waiting.
+        done();
+        return;
+    }
+    let sid = handle.state_id();
+    // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
+    let spec = if T::supports_spring() {
+        spec
+    } else {
+        match spec {
+            AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
+            other => other,
+        }
+    };
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) {
+            // The same motion is already running and owns its own callback; this one would never fire.
+            done();
+            return;
+        }
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::from_animating(handle);
+    anim.start_with_velocity(target, spec, velocity);
+    anim.on_finish(done);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    crate::core::state::wake_loop();
+}
+
 /// `push_animatable` 的 Animating-handle 入口（调用方已持有 Animating
 /// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
 pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::core::state::Animating<T>, target: T, spec: AnimationSpec) {

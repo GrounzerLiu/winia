@@ -27,7 +27,7 @@ use crate::ui::button::Button;
 use crate::ui::divider::Divider;
 use crate::ui::icon::Icon;
 use crate::ui::icon_button::{IconButton, IconButtonSize};
-use crate::ui::lazy_column::{LazyColumn, LazyListState};
+use crate::ui::lazy_column::{LazyColumn, LazyListState, LazyRow};
 use crate::ui::layout_components::{Column, Row, Spacer, Stack};
 use crate::ui::overlay::ExposedDropdownMenuDefaults;
 use crate::ui::scrollbar::LazyScrollbar;
@@ -573,6 +573,12 @@ impl DatePickerState {
     pub fn selectable_dates(&self) -> &dyn SelectableDates {
         self.selectable_dates.as_ref()
     }
+
+    /// The same roles as [`Self::selectable_dates`], but cloneable — for a lazy item closure, which has
+    /// to own what it captures (`'static`) and so cannot borrow out of the state.
+    pub fn selectable_dates_arc(&self) -> Arc<dyn SelectableDates> {
+        self.selectable_dates.clone()
+    }
 }
 
 /// The state a picker composes with, remembered across recompositions
@@ -1050,6 +1056,15 @@ impl DatePicker {
         let year_panel_open = ctx.remember(|| State::new(false)).get();
         // The panel's row list, which the toggle scrolls to the row above the displayed year.
         let year_rows = ctx.remember(LazyListState::new).get();
+        // The paged month list. Its position IS the displayed month (see `sync_month_pages`), so the
+        // arrows animate it rather than writing the month — the same two-way sync material3 has
+        // between `monthsListState` and `displayedMonthMillis` (`DatePicker.kt:1541-1592`). It is
+        // seeded by that sync's `scroll_to_item`, which is the anchor-authoritative jump: a
+        // constructor cannot do it, because the pixel offset it needs comes from the measure.
+        let month_rows = ctx.remember(LazyListState::new).get();
+        // Page 0 is the January of the range's first year, so a page index converts to a month by
+        // counting from here — the same reference `month_pages` composes against.
+        let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
         let on_toggle_year_panel = {
             let year_panel_open = year_panel_open.clone();
             let year_rows = year_rows.clone();
@@ -1095,17 +1110,143 @@ impl DatePicker {
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
                         let open = year_panel_open.get();
-                        months_navigation(ctx, &state, &month, open, on_toggle_year_panel, &colors);
+                        sync_month_pages(ctx, &state, &model, &month_rows, first_month);
+                        months_navigation(
+                            ctx,
+                            &state,
+                            &month,
+                            open,
+                            on_toggle_year_panel,
+                            &colors,
+                            &month_rows,
+                        );
                         if open {
                             year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
                         } else {
                             weekday_row(ctx, &model, &colors);
                             // The modal picker leaves the neighbouring month's slots empty, as material3
                             // does and as the M3 specs' modal anatomy has no state for.
-                            month_grid(ctx, &state, &model, &grid, &colors, false);
+                            month_pages(ctx, &state, &model, &colors, &month_rows, false);
                         }
                     });
             });
+    }
+}
+
+/// The paged month list (material3's `HorizontalMonthsList`, `DatePicker.kt:1700-1761`): one page per
+/// month across the whole year range — `(last - first + 1) * 12`, 2412 for the default range — so the
+/// calendar can be swiped. material3's items are `Box(fillParentMaxWidth())`, which winia reaches with
+/// [`crate::ui::LazyRow::fill_items`], and its `rememberSnapFlingBehavior` with
+/// [`crate::ui::LazyRow::snap_paging`], so a fast swipe settles on a whole month.
+///
+/// `show_outside_month` is what separates the two variants: the docked picker draws the neighbouring
+/// month's days in the padding cells, the modal one leaves them empty (see [`MonthGrid`]).
+fn month_pages(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    colors: &DatePickerColors,
+    list: &LazyListState,
+    show_outside_month: bool,
+) {
+    let range = state.year_range();
+    let first_month = model.month_of(*range.start(), 1).start_utc_time_millis;
+    let page_count = CalendarModel::number_of_months_in_range(&range) as usize;
+    let today = state.today_millis();
+    let selected = state.selected_date_millis();
+    let selectable = state.selectable_dates_arc();
+    let list_state = list.clone();
+    let list_model = model.clone();
+    let list_state_for_pages = state.clone();
+    let list_colors = colors.clone();
+
+    LazyRow::new()
+        .state(list_state)
+        .fill_items(true)
+        .snap_paging(true)
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::MONTH_HEIGHT),
+        )
+        .items(page_count, |index: usize| index as u64, move |ctx, index| {
+            let month = list_model.plus_months(first_month, index as i64);
+            let grid = MonthGrid::of(month, selected, today, selectable.as_ref());
+            month_grid(ctx, &list_state_for_pages, &list_model, &grid, &list_colors, show_outside_month);
+        })
+        .build(ctx);
+}
+
+/// material3's two-way sync between the page list and `displayedMonthMillis`, in one place:
+/// `LaunchedEffect(monthIndex)` scrolls the list when the month changes from OUTSIDE it
+/// (`DatePicker.kt:1544-1554`), and `snapshotFlow { firstVisibleItemIndex }` writes the list's page
+/// back into the month (`DatePicker.kt:1763-1779`).
+///
+/// There is no separate "current page" state: the list's position IS the displayed month, and the
+/// arrows animate the list rather than writing the month themselves. That is what keeps a swipe and
+/// an arrow press indistinguishable, and what lets arrow enablement come from the list
+/// (`canScrollForward` / `canScrollBackward`) instead of being recomputed from the year range.
+///
+/// The one piece of memory is `published` — the month THIS function last wrote into the state. That is
+/// what makes the two directions distinguishable, and it has to be that rather than "did the month
+/// change since last frame": `displayed_month_millis` is read at the top of `build`
+/// (`DatePicker::build`), so on the frame after a write it still carries the value from BEFORE it, one
+/// frame behind the list. Comparing against a lagging value makes each direction react to the other's
+/// past and the two chase each other — measured on a month arrow, the picker ping-ponged 1500 ⇄ 1520
+/// forever, one `scroll_to_item` per frame, each cancelling the animation the last one started.
+///
+/// `pending` holds the page an outside change asked for, so the list side stays quiet until the list
+/// actually arrives there instead of publishing the page it is still leaving.
+fn sync_month_pages(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    list: &LazyListState,
+    first_month: i64,
+) {
+    let range = state.year_range();
+    let page_of = |month_millis: i64| {
+        model
+            .month_of_millis(month_millis)
+            .index_in(&range)
+            .max(0) as usize
+    };
+    let month_of = |page: usize| model.plus_months(first_month, page as i64).start_utc_time_millis;
+
+    let published = ctx.remember(|| State::new(i64::MIN)).get();
+    let pending = ctx.remember(|| State::new(None::<usize>)).get();
+
+    let displayed = state.displayed_month_millis();
+    let actual = list.first_visible();
+
+    match pending.get() {
+        // An outside change is still being carried out. Say nothing until the list arrives; the page
+        // it is leaving is not news.
+        Some(target) if actual != target => return,
+        Some(_) => pending.set(None),
+        None => {}
+    }
+
+    if displayed != published.get() {
+        // The month holds something this function did not put there, so it came from outside — the
+        // year panel, or a caller writing the month. Take the list to it.
+        let target = page_of(displayed);
+        if actual == target {
+            published.set(displayed);
+        } else {
+            list.scroll_to_item(target, 0.0);
+            pending.set(Some(target));
+            published.set(displayed);
+        }
+        return;
+    }
+
+    // Nothing came from outside, so any difference is the LIST having moved — a swipe, or an arrow's
+    // animation partway through. Publish where it is so the nav row and the headline follow.
+    let landed = month_of(actual);
+    if landed != displayed {
+        state.set_displayed_month_millis(landed);
+        published.set(landed);
     }
 }
 
@@ -1333,6 +1474,11 @@ fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, co
 /// The month navigation row: the year menu button, then the two month arrows while the year panel is closed
 /// (`MonthsNavigation`, `DatePicker.kt:2182-2239`). material3 drops the arrows and packs the row to its start
 /// while the panel is open.
+///
+/// The arrows' enablement and effect both come from the page list, not from the year range:
+/// `nextAvailable = monthsListState.canScrollForward` (`DatePicker.kt:1561-1562`) and a press runs
+/// `animateScrollToItem(firstVisibleItemIndex ± 1)` (`DatePicker.kt:1569-1592`). An arrow that read the
+/// year range instead could disagree with a swipe at the ends of the list.
 fn months_navigation(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
@@ -1340,10 +1486,8 @@ fn months_navigation(
     year_panel_open: bool,
     on_toggle_year_panel: impl Fn() + Send + Sync + 'static,
     colors: &DatePickerColors,
+    list: &LazyListState,
 ) {
-    let year_range = state.year_range();
-    let index = month.index_in(&year_range);
-    let last = CalendarModel::number_of_months_in_range(&year_range) - 1;
     let text = state.calendar_model().format_month_year(month.start_utc_time_millis);
     let navigation_color = colors.navigation_content;
 
@@ -1368,10 +1512,12 @@ fn months_navigation(
                     .arrangement(Arrangement::Start)
                     .alignment(Alignment::Center)
                     .build(ctx, |ctx| {
-                        let step_back = state.clone();
-                        step_arrow(ctx, move || step_back.step_displayed_month(-1), index > 0, CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
-                        let step_forward = state.clone();
-                        step_arrow(ctx, move || step_forward.step_displayed_month(1), index < last, CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
+                        let back = list.clone();
+                        let back_page = list.first_visible();
+                        step_arrow(ctx, move || back.animate_scroll_to_item(back_page.saturating_sub(1), 0.0), list.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
+                        let forward = list.clone();
+                        let forward_page = list.first_visible();
+                        step_arrow(ctx, move || forward.animate_scroll_to_item(forward_page + 1, 0.0), list.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
                     });
             }
         });
@@ -1958,6 +2104,11 @@ impl DockedDatePicker {
         let panel = ctx.remember(|| State::new(DockedPanel::Calendar)).get();
         // The year list's scroll state, parked here so reopening the panel keeps its position.
         let year_rows = ctx.remember(LazyListState::new).get();
+        // The paged month list, its position being the displayed month (see `sync_month_pages`), which
+        // seeds it with `scroll_to_item` — see the note in `DatePicker::build`.
+        let month_rows = ctx.remember(LazyListState::new).get();
+        // Page 0 is the January of the range's first year — see the note in `DatePicker::build`.
+        let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
         let on_confirm = self.on_confirm.clone();
         let on_dismiss = self.on_dismiss.clone();
 
@@ -1980,7 +2131,12 @@ impl DockedDatePicker {
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
                         let current = panel.get();
-                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows);
+                        // Only while the calendar is the panel on show: an inline month or year list
+                        // covers the pages, and the year panel is exactly what moves the month.
+                        if current == DockedPanel::Calendar {
+                            sync_month_pages(ctx, &state, &model, &month_rows, first_month);
+                        }
+                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows, &month_rows);
                         // The inline lists crossfade in and out of the calendar's place (material3
                         // swaps its year overlay with expand + fade; a full-bleed fade reads the same
                         // here and never moves the action row).
@@ -1990,6 +2146,7 @@ impl DockedDatePicker {
                         let cross_grid = grid.clone();
                         let cross_colors = colors.clone();
                         let cross_rows = year_rows.clone();
+                        let cross_month_rows = month_rows.clone();
                         let cross_panel = panel.clone();
                         crate::ui::Crossfade::new(panel.clone())
                             // The default 300 ms linear tween plays twice per switch (out, then
@@ -2010,15 +2167,15 @@ impl DockedDatePicker {
                                         .arrangement(Arrangement::Start)
                                         .build(ctx, |ctx| {
                                             weekday_row(ctx, &cross_model, &cross_colors);
-                                            month_grid(
+                                            // The docked picker draws the neighbouring month's days — the
+                                            // M3 specs' docked anatomy lists them as a grid state, and
+                                            // the modal one does not.
+                                            month_pages(
                                                 ctx,
                                                 &cross_state,
                                                 &cross_model,
-                                                &cross_grid,
                                                 &cross_colors,
-                                                // The docked picker draws the neighbouring month's
-                                                // days — the M3 specs' docked anatomy lists them as a
-                                                // grid state, and the modal one does not.
+                                                &cross_month_rows,
                                                 true,
                                             );
                                         });
@@ -2066,10 +2223,8 @@ fn docked_navigation(
     panel: &State<DockedPanel>,
     colors: &DatePickerColors,
     year_rows: &LazyListState,
+    month_rows: &LazyListState,
 ) {
-    let year_range = state.year_range();
-    let index = month.index_in(&year_range);
-    let last = CalendarModel::number_of_months_in_range(&year_range) - 1;
     let navigation_color = colors.navigation_content;
     let months_open = current == DockedPanel::Months;
     let years_open = current == DockedPanel::Years;
@@ -2087,13 +2242,15 @@ fn docked_navigation(
         .arrangement(Arrangement::SpaceBetween)
         .alignment(Alignment::Center)
         .build(ctx, |ctx| {
-            // Month group: step arrows around the month name; the button swaps in the month list.
+            // Month group: step arrows around the month name; the button swaps in the month list. The
+            // arrows page the list, like the modal picker's — they never write the month themselves.
             Row::new()
                 .arrangement(Arrangement::Start)
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
-                    let step_back = state.clone();
-                    step_arrow(ctx, move || step_back.step_displayed_month(-1), index > 0, CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    let back = month_rows.clone();
+                    let back_page = month_rows.first_visible();
+                    step_arrow(ctx, move || back.animate_scroll_to_item(back_page.saturating_sub(1), 0.0), month_rows.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                     let panel_toggle = panel.clone();
                     let is_open = months_open;
                     // Abbreviated month ("Sep", not "September") — the M3 specs docked figure.
@@ -2112,8 +2269,9 @@ fn docked_navigation(
                         !years_open,
                         MONTH_MENU_TAG,
                     );
-                    let step_forward = state.clone();
-                    step_arrow(ctx, move || step_forward.step_displayed_month(1), index < last, CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    let forward = month_rows.clone();
+                    let forward_page = month_rows.first_visible();
+                    step_arrow(ctx, move || forward.animate_scroll_to_item(forward_page + 1, 0.0), month_rows.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                 });
             // Year group: step arrows around the year; the button swaps in the year list.
             Row::new()
@@ -2121,6 +2279,7 @@ fn docked_navigation(
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
                     let displayed_year = month.year;
+                    let year_range = state.year_range();
                     let state_for_step = state.clone();
                     step_arrow(
                         ctx,
@@ -3106,43 +3265,64 @@ mod tests {
 
     /// The M3 specs page draws the two variants differently and this pins it: the DOCKED anatomy lists
     /// "Outside month date" among the grid's states, the MODAL anatomy has no such entry, and material3
-    /// agrees with the modal one (it composes a `Spacer`, `DatePicker.kt:1870-1890`). So the docked grid
-    /// fills all 42 slots and the modal grid draws only its own month.
+    /// agrees with the modal one (it composes a `Spacer`, `DatePicker.kt:1870-1890`). So a docked page
+    /// fills all 42 slots and a modal page draws only its own month.
     ///
-    /// Counting the drawn day labels is the blunt way to say it: a month's grid composes one numeric text
-    /// per day and nothing else in either picker is a bare number (the weekday cells use narrow letters,
-    /// the menu button "September 2024" and the headline "Sep 10, 2024" are not).
+    /// Counted by what is INERT rather than by how many labels there are. The grid is a paged `LazyRow`
+    /// now (material3's `HorizontalMonthsList`), so a frame composes a couple of dozen pages of mixed
+    /// lengths and "42 a page against 30" is not a number the tree can be asked for. What it can be
+    /// asked is the difference that does not depend on the page count: an outside-month cell is never
+    /// enabled, so its `Surface` carries no `click`, while every real day of the month does.
     #[test]
     fn the_docked_grid_draws_the_neighbouring_months_days_and_the_modal_one_does_not() {
-        // One bare number per drawn day, and nothing else in either picker is a bare number: the weekday
-        // cells use narrow letters, the menu button reads "September 2024" and the headline "Sep 10, 2024".
-        fn drawn_day_labels(composer: &crate::core::composer::Composer) -> Vec<u32> {
-            use crate::modifier::ModifierElement;
-            composer
-                .arena_nodes()
-                .iter()
-                .flat_map(|node| node.modifier.elements().to_vec())
-                .filter_map(|element| match element {
-                    ModifierElement::TextContent { content, .. } => {
-                        let value: u32 = content.parse().ok()?;
-                        (1..=31).contains(&value).then_some(value)
-                    }
-                    _ => None,
-                })
-                .collect()
-        }
-
-        // September 2026 starts on a Tuesday and has 30 days, so of the 42 slots two lead and ten trail:
-        // the two pickers differ by exactly those 12 drawn cells — 42 against 30.
         let model = CalendarModel::new(CalendarLocale::default());
         let month = model.month_of(2026, 9);
-        assert_eq!(month.days_from_start_of_week_to_first_of_month, 2);
-        assert_eq!(month.number_of_days, 30);
-        assert_eq!(
-            2 + month.number_of_days + 10,
-            (MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as u32,
-            "two leading slots, the month, ten trailing"
-        );
+
+        /// `(choosable day cells, inert day cells)`. A day label is one numeric text in 1..=31; it is a
+        /// leaf, so its `Surface` is two levels up — past the centring `Stack` — and that `Surface` is
+        /// clickable exactly when the day can be chosen.
+        fn day_cells(composer: &crate::core::composer::Composer) -> (usize, usize) {
+            let nodes = composer.arena_nodes();
+            // `LayoutNode` stores children but not a parent, so invert it to walk up from a leaf.
+            let mut parent = vec![usize::MAX; nodes.len()];
+            for (idx, node) in nodes.iter().enumerate() {
+                for &child in &node.children {
+                    if child < parent.len() {
+                        parent[child] = idx;
+                    }
+                }
+            }
+            let clickable = |idx: usize| {
+                nodes[idx].modifier.elements().iter().any(|e| {
+                    matches!(e, crate::modifier::ModifierElement::Clickable { .. })
+                })
+            };
+            let day_label = |idx: usize| {
+                nodes[idx].modifier.elements().iter().any(|e| match e {
+                    crate::modifier::ModifierElement::TextContent { content, .. } => {
+                        content.parse::<u32>().is_ok_and(|v| (1..=31).contains(&v))
+                    }
+                    _ => false,
+                })
+            };
+            let (mut choosable, mut inert) = (0, 0);
+            for idx in 0..nodes.len() {
+                if !day_label(idx) {
+                    continue;
+                }
+                let stack = parent[idx];
+                let surface = if stack == usize::MAX { usize::MAX } else { parent[stack] };
+                if surface == usize::MAX {
+                    continue;
+                }
+                if clickable(surface) {
+                    choosable += 1;
+                } else {
+                    inert += 1;
+                }
+            }
+            (choosable, inert)
+        }
 
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
@@ -3150,7 +3330,7 @@ mod tests {
             state.set_displayed_month_millis(month.start_utc_time_millis);
             DockedDatePicker::new(state).build(ctx);
         });
-        let docked = drawn_day_labels(&composer);
+        let (docked_choosable, docked_inert) = day_cells(&composer);
 
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
@@ -3158,17 +3338,20 @@ mod tests {
             state.set_displayed_month_millis(month.start_utc_time_millis);
             DatePicker::new(state).build(ctx);
         });
-        let modal = drawn_day_labels(&composer);
+        let (modal_choosable, modal_inert) = day_cells(&composer);
 
-        assert_eq!(docked.len(), 42, "the docked grid draws every slot");
-        assert_eq!(modal.len(), 30, "the modal grid draws only its own month");
-        assert_eq!(
-            docked.len() - modal.len(),
-            12,
-            "exactly the two leading plus ten trailing slots"
+        assert!(
+            docked_inert > 0,
+            "the docked grid composes inert outside-month cells, found none"
         );
-        // And the modal grid holds the month itself, with no day from before or after it.
-        assert!(modal.iter().all(|day| (1..=30).contains(day)));
+        assert_eq!(
+            modal_inert, 0,
+            "the modal grid composes an inert day cell, so it is drawing an outside-month cell"
+        );
+        assert_eq!(
+            docked_choosable, modal_choosable,
+            "both compose the same pages, so both draw the same number of choosable days"
+        );
     }
 
     /// The 24x24 ink mask of a glyph drawn through the real `Icon` pipeline (node, then render, then pixels),

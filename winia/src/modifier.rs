@@ -2920,6 +2920,66 @@ pub struct ScrollState {
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
     pub(crate) scroll_pulse: crate::core::state::State<u64>,
+    /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
+    /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
+    pub(crate) snap: crate::core::state::Backchannel<Option<SnapSpec>>,
+}
+
+/// How a PAGED list's fling settles, written back by the list's measure and read by
+/// [`ScrollState::fling_with_boundary`].
+///
+/// The pair is what Compose splits across `snapFlingBehavior` and `SnapLayoutInfoProvider`: `step` is
+/// the spacing of the snap positions, and `min_fling_velocity` is `MinFlingVelocityDp = 400.dp`
+/// converted at the density the list composed under, which is the threshold between "settle on the
+/// nearer position" and "carry on to the next one".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SnapSpec {
+    /// Distance between two snap positions — the page size.
+    pub step: f32,
+    /// Below this velocity the fling settles on the NEARER snap position, at or above it on the one
+    /// in the direction of travel (Compose `calculateFinalSnappingItem`,
+    /// `LazyListSnapLayoutInfoProvider.kt:139-145`).
+    pub min_fling_velocity: f32,
+}
+
+/// Where a snapping fling should land, from where it started and how fast it was let go.
+///
+/// Compose's `calculateSnapOffset` for a list whose items are all one `step` wide
+/// (`LazyListSnapLayoutInfoProvider.kt:66-100`) plus `calculateFinalOffset` (`SnapFlingBehavior.kt:436-467`):
+/// the two candidates are the snap positions bracketing the current offset, and which of them wins is
+/// decided by the velocity alone — the nearer one below the threshold, otherwise the one ahead.
+///
+/// **One gesture moves at most one page, however hard it was flicked.** That ceiling IS the feel of a
+/// pager. Clamping only to the list's end instead lets a hard flick bank thousands of pixels of decay
+/// first; on a 2412-page month list that is most of a year, and the direction ends up decided by where
+/// the decay happened to run out rather than by the gesture.
+fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
+    let step = snap.step;
+    let lower = (current / step).floor() * step; // distance to it is <= 0
+    let upper = (current / step).ceil() * step; // distance to it is >= 0
+    let picked = if velocity.abs() < snap.min_fling_velocity {
+        if (upper - current).abs() <= (current - lower).abs() {
+            upper
+        } else {
+            lower
+        }
+    } else if velocity > 0.0 {
+        upper
+    } else {
+        lower
+    };
+    picked.clamp(0.0, limit.max(0.0))
+}
+
+/// How a snapping fling settles. material3 hands `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects`
+/// as its `snapAnimationSpec` (`DatePicker.kt:744`); the plain foundation API uses
+/// `spring(stiffness = Spring.StiffnessMediumLow)`, and winia has no motion scheme, so this is that spring
+/// — `StiffnessMediumLow` is 400, against winia's `SpringSpec::default()` of `StiffnessLow` (200).
+fn snap_settle() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
+        stiffness: 400.0,
+        ..crate::animation::SpringSpec::default()
+    })
 }
 
 impl ScrollState {
@@ -2929,6 +2989,7 @@ impl ScrollState {
             is_scroll_in_progress: crate::core::state::State::new(false),
             fling_limit: crate::core::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::core::state::State::new(0),
+            snap: crate::core::state::Backchannel::new(None),
         }
     }
 
@@ -2976,14 +3037,40 @@ impl ScrollState {
         let off = self.offset.clone();
         let limit = self.fling_limit.clone();
         let done_flag = self.is_scroll_in_progress.clone();
+
+        // A snapping fling is ONE animation, not a decay followed by a settle — that is the whole
+        // point of Compose zeroing `calculateApproachOffset` for material3 (`DatePicker.kt:749-753`):
+        // with the approach offset at zero, `tryApproach` returns without animating at all
+        // (`SnapFlingBehavior.kt:165-176`) and the whole motion is the snap spring, launched with the
+        // FLING's velocity (`:150-158`).
+        //
+        // So there is no free decay to run: the target comes from the velocity, and the spring carries
+        // the gesture's momentum into it. Ending phase one first would both overshoot the target and
+        // visibly stop the list before the second animation moves it again.
+        if let Some(snap) = self.snap.peek().filter(|s| s.step.is_finite() && s.step > 0.0) {
+            let target = snap_target(off.peek(), velocity, snap, limit.peek());
+            let settle = done_flag.clone();
+            crate::animation::push_animatable_with_velocity_and_done(
+                off,
+                target,
+                snap_settle(),
+                velocity,
+                move || settle.set(false),
+            );
+            return;
+        }
+
         crate::animation::push_fling_with_boundary(
-            off,
+            off.clone(),
             velocity,
             crate::animation::exponential_decay(4.2),
-            move |o| {
-                // The limit IS the truth here: `f32::MAX` while the layout has not measured the content
-                // yet, `0` when the content fits and this container cannot move.
-                o.clamp(0.0, limit.peek())
+            {
+                let limit = limit.clone();
+                move |o| {
+                    // The limit IS the truth here: `f32::MAX` while the layout has not measured the content
+                    // yet, `0` when the content fits and this container cannot move.
+                    o.clamp(0.0, limit.peek())
+                }
             },
             on_boundary,
             move || {
@@ -3091,6 +3178,114 @@ impl From<&FocusRequester> for FocusRequester {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `snap_target` is Compose's `calculateSnapOffset` + `calculateFinalOffset` for a uniformly
+    /// paged list, and the property that matters is its CEILING: one gesture moves at most one page.
+    #[test]
+    fn a_snapping_fling_moves_at_most_one_page() {
+        const STEP: f32 = 336.0;
+        const MIN_FLING: f32 = 400.0;
+        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING };
+        let limit = STEP * 10.0;
+
+        // Anywhere inside a page, any velocity: the answer is one of the two neighbours, never further.
+        for offset in [0.0f32, 1.0, 100.0, 167.9, 168.1, 335.0] {
+            for velocity in [-9000.0f32, -MIN_FLING, -MIN_FLING + 1.0, 0.0, MIN_FLING, MIN_FLING - 1.0, 9000.0] {
+                let target = snap_target(offset, velocity, snap, limit);
+                assert!(
+                    (target - offset).abs() <= STEP + 0.5,
+                    "offset {offset} at velocity {velocity} moved {} — more than one page",
+                    (target - offset).abs()
+                );
+                assert_eq!(
+                    (target / STEP - (target / STEP).round()).abs() < 1e-3,
+                    true,
+                    "target {target} is not a page boundary"
+                );
+            }
+        }
+
+        // A hard flick goes the way the gesture went; a slow one settles on the CLOSER page — which is
+        // how a small push returns the picker to the month it started on.
+        assert_eq!(snap_target(100.0, 9000.0, snap, limit), STEP, "hard forward -> next page");
+        assert_eq!(snap_target(100.0, -9000.0, snap, limit), 0.0, "hard back -> previous page");
+        assert_eq!(snap_target(100.0, 10.0, snap, limit), 0.0, "a nudge -> the nearer page");
+        assert_eq!(snap_target(300.0, 10.0, snap, limit), STEP, "a nudge past halfway -> the next");
+
+        // And the ends of the list hold.
+        assert_eq!(snap_target(0.0, -9000.0, snap, limit), 0.0);
+        assert_eq!(snap_target(limit, 9000.0, snap, limit), limit);
+    }
+
+    /// A snapping fling runs ONE animation that carries the gesture's velocity, so it never stops
+    /// between a decay and a settle. `is_scroll_in_progress` is up for the whole of it and comes back
+    /// down when the spring lands.
+    #[test]
+    fn a_snapping_fling_runs_one_motion_and_lands_on_the_boundary() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        const STEP: f32 = 336.0;
+        let scroll = ScrollState::new();
+        scroll.fling_limit.set(STEP * 10.0);
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0 }));
+        scroll.offset.set(100.0);
+
+        scroll.fling(4000.0);
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            frames += 1;
+            if !crate::animation::has_animation_for_state(scroll.offset.state_id()) || frames > 400 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            scroll.offset.get(),
+            STEP,
+            "a hard forward fling advances exactly one page"
+        );
+        assert!(
+            !scroll.is_scroll_in_progress.get(),
+            "and reports the scroll finished once it lands"
+        );
+    }
+
+    /// Without a snap spec the fling is the plain decay it always was — the snap is opt-in, so every
+    /// existing scroll container keeps its behaviour.
+    #[test]
+    fn a_fling_without_a_snap_keeps_stopping_where_the_decay_ends() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let scroll = ScrollState::new();
+        scroll.fling_limit.set(4000.0);
+        scroll.snap.set(None);
+        scroll.offset.set(100.0);
+
+        scroll.fling(5200.0);
+        let mut frames = 0;
+        loop {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            frames += 1;
+            if !crate::animation::has_animation_for_state(scroll.offset.state_id()) || frames > 400 {
+                break;
+            }
+        }
+
+        let end = scroll.offset.get();
+        assert!(
+            end > 1000.0,
+            "an unsnapped fling keeps its decay distance, got {end}"
+        );
+        assert!(
+            (end / 400.0 - (end / 400.0).round()).abs() >= 0.02,
+            "and must NOT land on a boundary, got {end}"
+        );
+    }
 
     #[test]
     fn test_focus_requests_are_window_scoped() {

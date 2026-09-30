@@ -323,12 +323,17 @@ current year outlined, 16 dp between rows, over a divider.
 `DatePickerDefaults` carries every measurement with its token anchor, and `DatePickerColors` resolves the roles
 from the theme, including the one material3 hardcodes for navigation (`DatePicker.kt:559`).
 
-Deliberate deviations: the picker composes one month at a time (winia has no lazy row, so material3's
-`LazyRow` of 2412 months with its snap fling is out, and the arrows step a month); the **docked** picker's
-grid fills its leading and trailing slots with the neighbouring month's days where material3 — and the M3
-specs' modal anatomy — leave them empty (the one place winia follows the docked specs against the Compose
-source, see "Outside-month days"); the mode toggle and the input body arrive with the input mode; the picker
-takes no `DatePickerColors` parameter yet and reads the theme.
+Deliberate deviations: the **docked** picker's grid fills its leading and trailing slots with the
+neighbouring month's days where material3 — and the M3 specs' modal anatomy — leave them empty (the one
+place winia follows the docked specs against the Compose source, see "Outside-month days"); the mode toggle
+and the input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads
+the theme.
+
+One deviation that used to be recorded here was **wrong** and is gone: this file claimed winia composes one
+month at a time because "winia has no lazy row", with the arrows stepping the month directly. winia has had
+`LazyRow` (`LazyList<HorizontalAxis>`, `ui/lazy_column.rs`) all along. Both pickers now compose material3's
+shape — a paged `LazyRow` over every month in the year range, with the arrows animating the list rather than
+writing the month — see "Swiping between months".
 
 The year panel carries the second deviation. material3 overlays it on the month calendar inside an
 `AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia swaps the calendar out,
@@ -374,6 +379,94 @@ is a filled 40 dp circle (measured 39 dp across on a scan through its centre) wi
 across, the arrows step the month and step back, a tap on the today cell moves the selection to it, and the year
 menu button opens the panel: the container's rectangle is unchanged while it is open, a year cell measures
 72 × 36, and tapping the next year keeps the month (`month: September 2025`) and closes the panel.
+
+## Swiping between months
+
+Both pickers put the calendar in a paged `LazyRow` over every month in the year range — 2412 pages for the
+default `1900..=2100` — exactly as material3's `HorizontalMonthsList` does (`DatePicker.kt:1700-1761`). The
+weekday row stays OUTSIDE the list, so it does not scroll with the months (`DatePicker.kt:1597-1604`).
+
+| material3 | winia |
+| --- | --- |
+| `LazyRow` of `numberOfMonthsInRange(yearRange)` items | `LazyRow::items(page_count, …)` |
+| `Box(Modifier.fillParentMaxWidth())` per item | `LazyRow::fill_items(true)` |
+| `rememberSnapFlingBehavior(lazyListState)` | `LazyRow::snap_paging(true)` |
+| `firstVisibleItemIndex` is the current month | `LazyListState::first_visible()` |
+| arrows run `animateScrollToItem(index ± 1)` | the same |
+| `canScrollForward` / `canScrollBackward` enable the arrows (`:1561-1562`) | the same |
+
+### The snap, and the three ways it was got wrong first
+
+Compose's `SnapFlingBehavior` (`foundation/gestures/snapping/SnapFlingBehavior.kt`) is not "decay, then
+settle". material3 hands it a layout provider whose `calculateApproachOffset` returns **0**
+(`DatePicker.kt:749-753`), and with that offset at zero `tryApproach` returns WITHOUT animating
+(`SnapFlingBehavior.kt:165-176`). So the whole motion is one animation:
+
+1. `calculateSnapOffset(velocity)` picks the target (`LazyListSnapLayoutInfoProvider.kt:66-100`). Its
+   candidates are the two snap positions bracketing the current offset, and
+   `calculateFinalSnappingItem` (`:139-145`) chooses between them by velocity alone — the NEARER one below
+   `MinFlingVelocityDp = 400.dp`, otherwise the one in the direction of travel.
+   **One gesture therefore moves at most one page, however hard it was flicked.** That ceiling is the
+   entire feel of a pager.
+2. The snap animation runs on `animationState.copy(value = 0f)` (`:150-158`) — the value resets to the
+   current offset but the FLING's velocity is carried in, so the gesture's momentum continues into the
+   settle.
+3. The spec is `spring(stiffness = StiffnessMediumLow)` (400), not a tween.
+
+The first version of this did all three differently, and each was visible:
+
+| wrong | what it did | what it looked like |
+| --- | --- | --- |
+| ran a free exponential decay first, then snapped to the nearest boundary of wherever it stopped | with 2412 pages a hard flick banked thousands of pixels of decay | a flick jumped most of a year, and the DIRECTION came from where the decay happened to run out rather than from the gesture |
+| no velocity threshold | a nudge and a flick were the same rule | a small push could not settle back on the month it started from |
+| a 300 ms tween from rest | the list stopped dead, then moved again | two visible motions — "not smooth" |
+
+Measured after the fix, driving the debug server with real pointer drags (`tmp/probe_swipe.py`):
+
+| gesture (276 dp across a 336 dp page) | months moved | label transitions |
+| --- | --- | --- |
+| slow drag, pointer left (forward) | +1 | 1 — settled |
+| slow drag, pointer right (back) | −1 | settled |
+| flick left (3 steps, same distance) | +1 | settled |
+| flick right | −1 | settled |
+| 20 dp nudge | 0 | settled back on the same page |
+
+### The two-way sync, and why the frame lag matters
+
+material3 has two independent effects: `LaunchedEffect(monthIndex)` scrolls the list when the month changes
+from outside (`:1544-1554`), and `snapshotFlow { firstVisibleItemIndex }` writes the page back into the month
+(`:1763-1779`). winia's `sync_month_pages` does both.
+
+Its one piece of memory is the month **this function last published**, not "what the month was last frame".
+That distinction is load-bearing: `displayed_month_millis` is read at the top of `build`, so on the frame
+after a write it still carries the value from BEFORE it — one frame behind the list. Comparing against that
+lagging value makes each direction react to the other's past.
+
+Measured with a debug trace, that is exactly what happened: clicking a month arrow made the picker
+ping-pong between two pages forever, one `scroll_to_item` per frame, each cancelling the animation the last
+one had started — `page=1500 month_index=1520` then `page=1520 month_index=1500`, repeating. Remembering
+what we published instead removed the feedback path, and the arrows now settle with a single transition
+(`tmp/probe_arrow.py`, both directions, both variants).
+
+`pending` is the second piece: the page an outside change asked for. The list side stays quiet until the
+list actually arrives there, so a month picked in the year panel is not overwritten by the page the list is
+still leaving.
+
+There is no "current page" field anywhere. The list's position IS the displayed month, which is what makes a
+swipe and an arrow press indistinguishable and lets arrow enablement come from the list rather than being
+recomputed from the year range.
+
+### One framework change this needed
+
+`LazyList`'s measure leaves the main axis unbounded so items wrap to their content, which is wrong for a
+paged list: `fill_items(true)` pins each item to the viewport, and `snap_paging(true)` writes the snap
+configuration back for the fling to read.
+
+The related framework fix is in `ItemHeightCache::set_uniform`. The 2412 pages are priced at the flat
+`LAZY_ITEM_ESTIMATED_HEIGHT` until each is measured, and a page is several times that, so every position
+past the measured window is wrong — and so is every fling that reaches it. `fill_items` guarantees the item
+size, so the cache is told it instead of guessing; measured, the page positions went from meaningless
+(~78 000 for the pages after the visible one) to exact multiples of 336.
 
 ## Outside-month days
 

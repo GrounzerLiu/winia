@@ -32,10 +32,10 @@ mod sealed_axis {
     pub trait Sealed {}
 }
 
-/// 懒列表主轴——类型级参数：`LazyColumn = LazyList<VerticalAxis>`（垂直）、
-/// `LazyRow = LazyList<HorizontalAxis>`（水平）。
+/// The lazy list's main axis, as a type-level parameter: `LazyColumn = LazyList<VerticalAxis>`
+/// (vertical) and `LazyRow = LazyList<HorizontalAxis>` (horizontal).
 ///
-/// ⚠ 密封 trait：不要为自定义类型实现。两种标记类型即全部实例化。
+/// Sealed trait: do not implement it for your own types. Those two marker types are the whole set.
 pub trait LazyAxis: sealed_axis::Sealed + 'static {
     #[doc(hidden)]
     fn main_max(c: Constraints) -> f32;
@@ -45,24 +45,32 @@ pub trait LazyAxis: sealed_axis::Sealed + 'static {
     fn main_size(s: Size) -> f32;
     #[doc(hidden)]
     fn cross_size(s: Size) -> f32;
-    /// 子项约束：交叉轴继承父 max，主轴无界（wrap content）
+    /// A child's constraints: the cross axis inherits the parent's max, the main axis is unbounded
+    /// (wrap content).
     #[doc(hidden)]
     fn child_constraints(c: Constraints) -> Constraints;
-    /// 交叉轴 max 修改（contentPadding 缩小 item 可用宽度）
+    /// Replace the cross-axis max (`contentPadding` shrinks the item's usable width).
     #[doc(hidden)]
     fn with_cross_max(c: Constraints, v: f32) -> Constraints;
-    /// (交叉轴, 主轴) → 位置
+    /// Pin the main axis's min AND max to `v` — what `fillParentMaxWidth` / `fillParentMaxHeight` do.
+    ///
+    /// Off by default: the unbounded main axis is what lets an item wrap to its content (see
+    /// [`Self::child_constraints`]). A PAGED list wants the opposite — each item exactly fills the
+    /// viewport, which is what makes a snap position an item boundary.
+    #[doc(hidden)]
+    fn with_main_exact(c: Constraints, v: f32) -> Constraints;
+    /// (cross, main) → position
     #[doc(hidden)]
     fn point(cross: f32, main: f32) -> Point;
-    /// (交叉轴, 主轴) → 尺寸
+    /// (cross, main) → size
     #[doc(hidden)]
     fn size(cross: f32, main: f32) -> Size;
-    /// 滚动 modifier（垂直/水平）
+    /// The scroll modifier, per axis (vertical / horizontal)
     #[doc(hidden)]
     fn scroll(state: crate::modifier::ScrollState) -> Modifier;
 }
 
-/// 垂直主轴标记（`LazyColumn = LazyList<VerticalAxis>`）
+/// The vertical main-axis marker (`LazyColumn = LazyList<VerticalAxis>`)
 pub enum VerticalAxis {}
 impl sealed_axis::Sealed for VerticalAxis {}
 impl LazyAxis for VerticalAxis {
@@ -76,6 +84,9 @@ impl LazyAxis for VerticalAxis {
     fn with_cross_max(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: 0.0, max_width: v, min_height: 0.0, max_height: c.max_height }
     }
+    fn with_main_exact(c: Constraints, v: f32) -> Constraints {
+        Constraints { min_width: c.min_width, max_width: c.max_width, min_height: v, max_height: v }
+    }
     fn point(cross: f32, main: f32) -> Point { Point::new(cross, main) }
     fn size(cross: f32, main: f32) -> Size { Size::new(cross, main) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
@@ -83,7 +94,7 @@ impl LazyAxis for VerticalAxis {
     }
 }
 
-/// 水平主轴标记（`LazyRow = LazyList<HorizontalAxis>`）
+/// The horizontal main-axis marker (`LazyRow = LazyList<HorizontalAxis>`)
 pub enum HorizontalAxis {}
 impl sealed_axis::Sealed for HorizontalAxis {}
 impl LazyAxis for HorizontalAxis {
@@ -96,6 +107,9 @@ impl LazyAxis for HorizontalAxis {
     }
     fn with_cross_max(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: v }
+    }
+    fn with_main_exact(c: Constraints, v: f32) -> Constraints {
+        Constraints { min_width: v, max_width: v, min_height: c.min_height, max_height: c.max_height }
     }
     fn point(cross: f32, main: f32) -> Point { Point::new(main, cross) }
     fn size(cross: f32, main: f32) -> Size { Size::new(main, cross) }
@@ -136,6 +150,16 @@ pub struct LazyListState {
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
     /// 的 scrollbar.rs 可见）。
     pub(crate) scroll_pulse: crate::core::state::State<u64>,
+    /// Whether a drag or a fling is in progress. Lives here rather than only in the ScrollState
+    /// `build` assembles because a caller has to be able to ASK — that is Compose's
+    /// `!isScrollInProgress` guard on `LaunchedEffect(monthIndex)` (`DatePicker.kt:1549`), and without
+    /// it a sync that scrolls the list cancels the gesture that was already moving it.
+    pub(crate) is_scrolling: crate::core::state::State<bool>,
+    /// The paging snap configuration, written back by the measure pass when `snap_paging` is on and
+    /// every measured item fills the viewport; `None` means no snapping. Lives beside `fling_limit` for
+    /// the same reason — the ScrollState `build` assembles is shared with the measure policy, and this
+    /// is the one that tells a finished fling where to land.
+    pub(crate) snap: crate::core::state::Backchannel<Option<crate::modifier::SnapSpec>>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::core::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -151,6 +175,8 @@ impl LazyListState {
             jump_request: crate::core::state::State::new(None),
             fling_limit: crate::core::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::core::state::State::new(0),
+            snap: crate::core::state::Backchannel::new(None),
+            is_scrolling: crate::core::state::State::new(false),
             first_visible_index: crate::core::state::State::new(0),
             first_visible_offset: crate::core::state::State::new(0.0),
         }
@@ -161,6 +187,22 @@ impl LazyListState {
 
     /// 当前第一个可见项偏移
     pub fn offset(&self) -> f32 { self.offset.get() }
+
+    /// Whether there is content past the last visible item (Compose
+    /// `LazyListState.canScrollForward`). Asked from the pixel offset against the measured limit, so
+    /// it answers what a scrollbar would: is the list already resting at its end?
+    pub fn can_scroll_forward(&self) -> bool {
+        let limit = self.fling_limit.peek();
+        limit.is_finite() && self.offset.get() < limit - 0.5
+    }
+
+    /// Whether there is content before the first visible item (Compose
+    /// `LazyListState.canScrollBackward`).
+    pub fn can_scroll_backward(&self) -> bool { self.offset.get() > 0.5 }
+
+    /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`, which
+    /// callers use to stay off a list that is already moving.
+    pub fn is_scrolling(&self) -> bool { self.is_scrolling.get() }
 
     /// 立即滚动到指定索引（项顶部对齐视口顶部，可带偏移）。
     ///
@@ -334,39 +376,49 @@ impl IntervalList {
 // LazyColumn — 公开组件
 // ═══════════════════════════════════════════════════════
 
-/// 懒加载列表（对齐 Compose `LazyColumn`）
+/// A lazily built list (Compose's `LazyColumn` / `LazyRow`), whose axis the type parameter picks.
 ///
-/// 只组合/测量可见项（含上下预取窗）。items 支持稳定 key 工厂——
-/// 数据前部增删后按 key 保持滚动位置。
-/// 懒列表构建器（轴由类型参数决定：`LazyColumn` 垂直 / `LazyRow` 水平）
+/// Only the visible items are composed and measured (plus the prefetch window either side). `items` takes
+/// a stable key factory, so a scroll position survives an insert or a removal earlier in the data.
 pub struct LazyList<A: LazyAxis> {
     axis: PhantomData<A>,
     state: Option<LazyListState>,
     spacing: f32,
     modifier: Modifier,
     intervals: IntervalList,
-    /// 主轴内容内边距 (before, after)——垂直 = top/bottom；水平 = start/end
+    /// Main-axis content padding `(before, after)` — vertical = top/bottom, horizontal = start/end
     content_padding: (f32, f32),
-    /// 交叉轴内容内边距 (before, after)——垂直 = start/end；水平 = top/bottom
+    /// Cross-axis content padding `(before, after)` — vertical = start/end, horizontal = top/bottom
     cross_padding: (f32, f32),
-    /// 反向布局（对齐 Compose `reverseLayout`）：内容从主轴末端开始排布——
-    /// index 0 在底部/右端，offset=0 显示列表开头（项 0 在视口底），
-    /// 滚动方向与正向一致（offset 增 = 向列表末尾）
+    /// Reverse layout (Compose's `reverseLayout`): the content is laid out from the far end of the main
+    /// axis — index 0 at the bottom/right, offset 0 showing the list's start (item 0 at the viewport's
+    /// far edge), and the scroll direction stays the same (offset grows toward the list's end).
     reverse: bool,
+    /// Paging snap (Compose's `snapFlingBehavior`): every item exactly fills the viewport along the
+    /// main axis, and a finished fling settles onto the nearest item boundary.
+    ///
+    /// Only meaningful for a PAGED list — which is what the date picker's months are (`fillParentMaxWidth`
+    /// items), the same shape material3 reaches with `LazyRow` + `Box(fillParentMaxWidth())`
+    /// (`DatePicker.kt:1722-1750`). Items of unequal main size turn it off instead: there is no snap
+    /// position to speak of.
+    snap_paging: bool,
+    /// Every item fills the viewport along the main axis (`fillParentMaxWidth` / `fillParentMaxHeight`).
+    /// Off by default, where items wrap to their content.
+    fill_items: bool,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
 pub type LazyColumn = LazyList<VerticalAxis>;
-/// 水平懒列表（对标 Compose `LazyRow`）
+/// A horizontal lazy list (Compose's `LazyRow`)
 pub type LazyRow = LazyList<HorizontalAxis>;
 
 impl LazyList<VerticalAxis> {
-    /// 垂直列表（LazyColumn）
+    /// A vertical list (LazyColumn)
     pub fn new() -> Self { Self::new_list() }
 }
 
 impl LazyList<HorizontalAxis> {
-    /// 水平列表（LazyRow）
+    /// A horizontal list (LazyRow)
     pub fn new() -> Self { Self::new_list() }
 }
 
@@ -381,40 +433,65 @@ impl<A: LazyAxis> LazyList<A> {
             content_padding: (0.0, 0.0),
             cross_padding: (0.0, 0.0),
             reverse: false,
+            snap_paging: false,
+            fill_items: false,
         }
     }
 
-    /// 主轴内容内边距（对齐 Compose `contentPadding`）：垂直列表 = top/bottom，
-    /// 水平列表 = start/end。内容从 before 处开始放置；滚动到边界时内容
-    /// 停在 padding 处（不贴视口边）；sticky header 钉在 before 处；
-    /// 总内容高 = before + 项 + after（max_offset 含 padding）。
+    /// Main-axis content padding (Compose's `contentPadding`): top/bottom for a vertical list,
+    /// start/end for a horizontal one. The content is placed from `before`; at either end of the
+    /// scroll the content stops at the padding rather than against the viewport edge; a sticky header
+    /// pins at `before`; the total content size is `before + items + after` (`max_offset` includes it).
     pub fn content_padding(mut self, before: f32, after: f32) -> Self {
         self.content_padding = (before, after);
         self
     }
 
-    /// 交叉轴内容内边距（垂直列表 = start/end）：缩小 item 可用宽度并让
-    /// item 从 before 处开始放置（对齐 Compose contentPadding 的交叉轴语义）。
+    /// Cross-axis content padding (start/end for a vertical list): shrinks the width an item may use
+    /// and places items from `before` (the cross axis of Compose's `contentPadding`).
     pub fn content_padding_cross(mut self, before: f32, after: f32) -> Self {
         self.cross_padding = (before, after);
         self
     }
 
-    /// 反向布局（对齐 Compose `reverseLayout`）：index 0 在视口主轴末端
-    /// （LazyColumn = 底部），offset=0 时项 0 在视口底；滚动方向与正向
-    /// 一致（offset 增 = 向列表末尾）。典型用途：聊天列表（最新消息在底部）。
+    /// Reverse layout (Compose's `reverseLayout`): index 0 sits at the far end of the main axis (the
+    /// bottom for a LazyColumn), offset 0 showing item 0 there, and the scroll direction stays the
+    /// same (offset grows toward the list's end). Typical use: a chat list with the newest at the end.
     pub fn reverse_layout(mut self, reverse: bool) -> Self {
         self.reverse = reverse;
         self
     }
 
-    /// 注入外部滚动状态（跨重组保持；不传则内部 remember）
+    /// Inject an external scroll state (kept across recompositions; remembered internally if absent)
     pub fn state(mut self, state: LazyListState) -> Self {
         self.state = Some(state);
         self
     }
 
-    /// 项间距（主轴方向）
+    /// Every item fills the viewport along the main axis — the effect of `fillParentMaxWidth` /
+    /// `fillParentMaxHeight`, and the half of material3's month list that reads
+    /// `Box(Modifier.fillParentMaxWidth())` (`DatePicker.kt:1735`).
+    ///
+    /// Off by default, where the main axis is unbounded and an item wraps to its content.
+    pub fn fill_items(mut self, enabled: bool) -> Self {
+        self.fill_items = enabled;
+        self
+    }
+
+    /// Paging snap (Compose's `snapFlingBehavior`, which material3 reaches through
+    /// `DatePickerDefaults.rememberSnapFlingBehavior`): every item fills the viewport along the main
+    /// axis, and a finished fling settles onto the nearest item boundary — so a fast swipe stops on a
+    /// whole month instead of between two.
+    ///
+    /// Pair it with [`Self::fill_items`]: the measure pass writes the step back only when every measured
+    /// item really does measure at the viewport's size, and turns snapping off otherwise rather than
+    /// snapping to a step that means nothing.
+    pub fn snap_paging(mut self, enabled: bool) -> Self {
+        self.snap_paging = enabled;
+        self
+    }
+
+    /// Spacing between items, along the main axis
     pub fn spacing(mut self, s: f32) -> Self {
         self.spacing = s;
         self
@@ -425,7 +502,7 @@ impl<A: LazyAxis> LazyList<A> {
         self
     }
 
-    /// 单个固定项（对标 `item(key, content)`）
+    /// One fixed item (Compose's `item(key, content)`)
     pub fn item(mut self, content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         let c = Arc::new(move |ctx: &mut ComposeCtx, _local: usize| content(ctx));
         self.intervals.add(1, None, c, false);
@@ -526,16 +603,33 @@ pub struct ItemHeightCache {
     /// The last few measured heights, a ring — the sample behind [`ItemHeightCache::coverage_height`]'s
     /// median. Not the `keyed` view: this is about the rows being shown NOW, not about identity.
     recent: Vec<f32>,
+    /// The item size when the list GUARANTEES it — `fill_items` pins every item to the viewport, so the
+    /// size is known analytically and a measured item is not needed to price the rest.
+    ///
+    /// This is not a nicety. Without it the 2412 month pages of a date picker are priced at the flat
+    /// `LAZY_ITEM_ESTIMATED_HEIGHT` until each is measured, and since the real page is several times
+    /// that, every position past the measured window — and so every fling that leaves it — lands
+    /// somewhere meaningless. Measured: with the estimate in place a flick moved the picker six months
+    /// in one gesture and a plain drag moved it backwards.
+    uniform: Option<f32>,
 }
 
 impl ItemHeightCache {
-    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new(), recent: Vec::new() } }
+    pub fn new() -> Self { Self { heights: Vec::new(), keyed: std::collections::HashMap::new(), recent: Vec::new(), uniform: None } }
+
+    /// Declare that every item measures `size` along the main axis, so unmeasured indices can be
+    /// priced exactly instead of estimated. `None` restores the estimating behaviour.
+    pub fn set_uniform(&mut self, size: Option<f32>) { self.uniform = size; }
 }
 
 impl ItemHeightCache {
     pub fn height(&self, index: usize) -> f32 {
         // 未测（缺失或 0）→ 预估；记录过的 >0 高度直接返回
-        self.heights.get(index).copied().filter(|&h| h > 0.0).unwrap_or(LAZY_ITEM_ESTIMATED_HEIGHT)
+        self.heights
+            .get(index)
+            .copied()
+            .filter(|&h| h > 0.0)
+            .unwrap_or_else(|| self.uniform.unwrap_or(LAZY_ITEM_ESTIMATED_HEIGHT))
     }
 
     /// The height to assume for an item that has NOT been measured, when deciding how much to COMPOSE
@@ -556,6 +650,11 @@ impl ItemHeightCache {
     pub fn coverage_height(&self, index: usize) -> f32 {
         if let Some(h) = self.heights.get(index).copied().filter(|&h| h > 0.0) {
             return h;
+        }
+        // A list that guarantees its item size (`fill_items`) is priced exactly — the median below is
+        // a guess, and the guarantee makes the guess unnecessary.
+        if let Some(size) = self.uniform {
+            return size;
         }
         match self.recent_median() {
             Some(m) => m.clamp(LAZY_ITEM_ESTIMATED_HEIGHT * 0.5, LAZY_ITEM_ESTIMATED_HEIGHT),
@@ -725,9 +824,13 @@ impl<A: LazyAxis> LazyList<A> {
         // 跨帧 remember：高度缓存 / 视口高 / 滚动中标记 / fling 极限
         let cache = ctx.remember(|| crate::core::state::State::new(ItemHeightCache::default())).get();
         let viewport = ctx.remember(|| crate::core::state::State::new(600.0f32)).get();
-        let is_scrolling = ctx.remember(|| crate::core::state::State::new(false)).get();
+        let is_scrolling = state.is_scrolling.clone();
         let content_height = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
         let fling_limit = ctx.remember(|| crate::core::state::Backchannel::new(f32::MAX)).get();
+        let snap_paging = self.snap_paging;
+        ctx.changed(&snap_paging);
+        let fill_items = self.fill_items;
+        ctx.changed(&fill_items);
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
@@ -883,6 +986,7 @@ impl<A: LazyAxis> LazyList<A> {
             // 生命周期），拼装 clone 进去——分发层自增落在同一 State 上，
             // scrollbar 侧 pulse 点亮对 lazy 同样生效。
             scroll_pulse: state.scroll_pulse.clone(),
+            snap: state.snap.clone(),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。
@@ -917,6 +1021,8 @@ impl<A: LazyAxis> LazyList<A> {
             sticky_children,
             pin,
             reverse: self.reverse,
+            snap_paging,
+            fill_items,
             state: state.clone(),
         };
         let m = Modifier::new()
@@ -990,6 +1096,12 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub pin: Option<usize>,
     /// 反向布局（reverseLayout）：放置内容坐标 = content_h - 镜像位置 - 项高
     pub reverse: bool,
+    /// Paging snap (from `snap_paging`): the step is written back only when every measured item
+    /// measures at the viewport's main size, and `None` (no snapping) otherwise — with items of
+    /// unequal size there is no snap position to speak of.
+    pub snap_paging: bool,
+    /// Every item fills the viewport along the main axis (`fillParentMax*`), from `fill_items`.
+    pub fill_items: bool,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
@@ -1021,13 +1133,19 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             self.viewport.get()
         };
 
-        // 测量每个子节点：交叉轴继承父 max（扣交叉轴 contentPadding——
-        // 对齐 Compose：item 可用宽度 = 视口 - cross padding），主轴无界
-        // （wrap content——不能传父约束（max=视口）否则子项被撑满视口）
+        // Measure each child: the cross axis inherits the parent's max less the cross-axis
+        // `contentPadding` (Compose: an item's usable width is the viewport minus that padding), and
+        // the main axis is unbounded so the item wraps to its content — passing the parent's max
+        // (= the viewport) there would inflate every item to fill it. `fill_items` opts back into
+        // exactly that inflation, which is what `fillParentMaxWidth` asks for and what makes a snap
+        // position an item boundary.
         let (cb, ca) = self.cross_padding;
         let mut child_constraints = A::child_constraints(constraints);
         let cross_max = A::cross_max(child_constraints);
         child_constraints = A::with_cross_max(child_constraints, (cross_max - cb - ca).max(0.0));
+        if self.fill_items && vh > 0.0 {
+            child_constraints = A::with_main_exact(child_constraints, vh);
+        }
         let mut placements = Vec::with_capacity(children.len());
         let mut measured: Vec<(f32, f32)> = Vec::with_capacity(children.len());
         for &c in children.iter() {
@@ -1039,6 +1157,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 但 build 只给了 policy first_index（锚点）——子节点全局序需要从 placement 反推：
         // 实际实现：build 把 (start, end) 传给 policy，这里按序写回
         let mut cache = self.cache.get();
+        // `fill_items` pins every item to the viewport, so unmeasured items can be priced exactly. It
+        // has to be declared, or the flat estimate is used and every position outside the measured
+        // window — and so every fling that leaves it — is computed from the wrong size.
+        let uniform = if self.fill_items && vh > 0.0 { Some(vh) } else { None };
+        if cache.uniform != uniform {
+            cache.set_uniform(uniform);
+        }
         for (i, (h, _)) in measured.iter().enumerate() {
             let global = self.globals[i];
             cache.record(global, *h);
@@ -1093,6 +1218,28 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
         self.fling_limit.set(max_off);
         self.state.fling_limit.set(max_off);
+        // Paging snap step, written back so a finished fling knows where to land. Only given when
+        // every measured item is exactly the viewport's main size: `measured` covers every item in
+        // this frame's composition window, so unequal items are caught and snapping turns itself off
+        // rather than snapping to a step that means nothing. Fewer than two items is no snapping
+        // either — there is nothing to page to, and nothing should move.
+        let snap = if self.snap_paging
+            && measured.len() >= 2
+            && vh > 0.0
+            && measured.iter().all(|(size, _)| (size - vh).abs() < 0.5)
+        {
+            Some(crate::modifier::SnapSpec {
+                step: vh,
+                // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
+                // under — below it a fling settles back on the page it started from.
+                min_fling_velocity: 400.0 * crate::unit::current_density().density,
+            })
+        } else {
+            None
+        };
+        if self.state.snap.peek() != snap {
+            self.state.snap.set(snap);
+        }
         let clamped = self.state.offset.get().clamp(0.0, max_off);
         if clamped != self.state.offset.get() {
             self.state.offset.set(clamped);
@@ -1476,9 +1623,59 @@ mod tests {
         assert!(n <= 60, "组合项数应远小于总数 1000，实际 {n}");
     }
 
+    /// `fill_items` gives every item the viewport's main size — `fillParentMaxWidth` — and that is
+    /// also the precondition the paging snap measures: the step is only written back when the items
+    /// really do fill the viewport. Without the flag the items wrap to their text and the snap stands
+    /// down.
+    #[test]
+    fn fill_items_widens_each_item_to_the_viewport_and_enables_the_snap_step() {
+        const VIEWPORT: f32 = 300.0;
+        let state = LazyListState::new();
+        let state_paged = LazyListState::new();
+
+        let rows = |state: &LazyListState, fill: bool| {
+            render_lazy_sized(
+                move |ctx| {
+                    LazyRow::new()
+                        .state(state.clone())
+                        .fill_items(fill)
+                        .snap_paging(true)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .items(40, |i: usize| i as u64, |ctx, i| {
+                            crate::ui::text::Text::new(format!("M{i}"))
+                                .font_size(14.0)
+                                .build(ctx);
+                        })
+                        .build(ctx);
+                },
+                VIEWPORT,
+                100.0,
+            )
+        };
+
+        // Wrapping items measure at their text's width, so the snap step stays unset.
+        rows(&state, false);
+        assert_eq!(
+            state.snap.peek(),
+            None,
+            "items that wrap to their content have no snap positions"
+        );
+
+        // Filling items measure at the viewport, and the config comes back with that as the step.
+        rows(&state_paged, true);
+        let snap = state_paged.snap.peek().expect(
+            "fill_items makes every item one viewport wide, which IS the snap step",
+        );
+        assert_eq!(snap.step, VIEWPORT);
+        assert!(
+            snap.min_fling_velocity > 0.0,
+            "and the velocity threshold comes with it ({} was passed)",
+            snap.min_fling_velocity
+        );
+    }
+
     #[test]
     fn lazy_scroll_changes_visible_items() {
-        // 滚动到 offset=2000 后，渲染的 Item 文本应变化（不同项）
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
         let (px0, w0) = render_lazy(|ctx| {

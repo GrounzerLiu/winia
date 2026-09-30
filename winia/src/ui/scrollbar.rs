@@ -569,6 +569,9 @@ impl LazyScrollbar {
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),
             scroll_pulse: self.state.scroll_pulse.clone(),
+            // The scrollbar drives its OWN drag, not the list's: it reads the list's offset but writes
+            // its dragging state here, so it must not pick up the list's paging snap.
+            snap: crate::core::state::Backchannel::new(None),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse)
             .then(self.modifier);
@@ -652,6 +655,8 @@ impl HorizontalLazyScrollbar {
             is_scroll_in_progress: scrolling_state.clone(),
             fling_limit: self.state.fling_limit.clone(),
             scroll_pulse: self.state.scroll_pulse.clone(),
+            // As above: the scrollbar's own drag must not inherit the list's paging snap.
+            snap: crate::core::state::Backchannel::new(None),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
             .then(self.modifier);
