@@ -609,21 +609,23 @@ pub struct DayCell {
     pub is_enabled: bool,
     /// Whether the day belongs to the neighbouring month rather than the displayed one.
     ///
-    /// A deliberate divergence from material3, which composes a `Spacer` in these cells
-    /// (`DatePicker.kt:1870-1890`) and has no colour role for them at all. The M3 specs anatomy lists
-    /// "Outside month date" among the grid's date states and gives it its own tokens — "Date unselected
-    /// outside month label text color" `#1D1B20` and "…label text opacity" `0.38` — so winia fills the
-    /// cells instead of leaving them blank.
+    /// A divergence from material3 in the DOCKED picker, and only there. Compose composes a `Spacer` in
+    /// these cells and has no colour role for them (`DatePicker.kt:1870-1890`), but the M3 specs page draws
+    /// the two variants differently: the *Docked date picker* anatomy lists "Outside month date" among the
+    /// grid's states and gives it its own tokens, while the *Modal date picker* anatomy has no such entry.
+    /// So the docked picker draws these days and the modal one leaves the slots empty; the model computes
+    /// them either way, because the dates are true regardless of who draws them.
     pub is_outside_month: bool,
 }
 
 /// A month laid out the way the picker draws it: [`MAX_CALENDAR_ROWS`] rows of [`DAYS_IN_WEEK`] cells.
 ///
-/// Every cell is filled. A month that does not start on the first day of the week, or does not end on the
-/// last, is padded with the days of the month before or after it, so the grid is always six full rows.
+/// Every cell carries a day. A month that does not start on the first day of the week, or does not end on
+/// the last, is padded with the days of the month before or after it, so the grid is always six full rows.
 ///
-/// material3 leaves those cells empty (`Month`, `DatePicker.kt:1856-1890`); the M3 specs page specifies
-/// them, so this follows the specs — see [`DayCell::is_outside_month`]. Outside-month days are drawn as
+/// material3 leaves those cells empty (`Month`, `DatePicker.kt:1856-1890`) and so does winia's modal
+/// picker, which is what the M3 specs' modal anatomy shows. Only the docked picker draws them — see
+/// [`DayCell::is_outside_month`] and `month_grid`'s `show_outside_month`. Outside-month days are drawn as
 /// context and are never selectable: `is_enabled` is `false` for them whatever `SelectableDates` says, so
 /// tapping one cannot move the selection into a month the grid is not showing.
 #[derive(Clone, Debug)]
@@ -923,7 +925,7 @@ impl DatePickerColors {
         }
     }
 
-    /// A day that belongs to the neighbouring month.
+    /// A day that belongs to the neighbouring month, in the docked picker.
     ///
     /// The M3 specs page gives this its own two tokens — "Date unselected outside month label text color"
     /// `#1D1B20` and "Date unselected outside month label text opacity" `0.38`. `#1D1B20` is the baseline
@@ -935,7 +937,8 @@ impl DatePickerColors {
     /// are NOT disabled — they are context, and [`DayCell::is_enabled`] is false for them for a different
     /// reason. material3 has no colour for them at all (it composes an empty `Spacer`,
     /// `DatePicker.kt:1870-1890`), so the match with the disabled expression is the only thing joining them,
-    /// and a reader should not have to rediscover that.
+    /// and a reader should not have to rediscover that. Only the docked picker reaches this; the modal one
+    /// leaves those slots empty.
     pub fn outside_month_label(&self) -> Color {
         Self::disabled(self.day_content)
     }
@@ -1097,7 +1100,9 @@ impl DatePicker {
                             year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
                         } else {
                             weekday_row(ctx, &model, &colors);
-                            month_grid(ctx, &state, &model, &grid, &colors);
+                            // The modal picker leaves the neighbouring month's slots empty, as material3
+                            // does and as the M3 specs' modal anatomy has no state for.
+                            month_grid(ctx, &state, &model, &grid, &colors, false);
                         }
                     });
             });
@@ -1680,14 +1685,23 @@ fn weekday_row(ctx: &mut ComposeCtx, model: &CalendarModel, colors: &DatePickerC
 
 /// The month grid: six rows of seven slots, each slot a day (`Month`, `DatePicker.kt:1856-1890`).
 ///
-/// material3 leaves a `Spacer` in the cells before the 1st and after the last day; winia fills them with the
-/// neighbouring month's days, as the M3 specs figure draws them — see [`MonthGrid`].
+/// `show_outside_month` decides what the leading and trailing slots do with the days that belong to the
+/// neighbouring month, which [`MonthGrid`] always computes — the dates are true whether or not they are
+/// drawn. The docked picker asks for them and material3 does not:
+///
+/// - Docked: drawn, at the specs' dimmed label. The M3 specs' *Docked date picker* anatomy lists
+///   "Outside month date" among the grid's states, and gives it two tokens of its own.
+/// - Modal: a `Spacer`, exactly as `Month` composes them (`DatePicker.kt:1870-1890`). The *Modal date
+///   picker* anatomy on the same specs page has no "Outside month date" entry at all.
+///
+/// The slot still measures 48 dp either way, so the grid's geometry does not depend on the flag.
 fn month_grid(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
     model: &CalendarModel,
     grid: &MonthGrid,
     colors: &DatePickerColors,
+    show_outside_month: bool,
 ) {
     let rows = grid.rows().map(<[DayCell]>::to_vec).collect::<Vec<_>>();
     Column::new()
@@ -1706,6 +1720,25 @@ fn month_grid(
                         .alignment(Alignment::Center)
                         .build(ctx, |ctx| {
                             for cell in row {
+                                // material3's empty cell, and it is NOT an empty node: `Month` composes a
+                                // `Spacer` sized to the day's 48 dp so the row keeps its lattice
+                                // (`DatePicker.kt:1876-1890`, whose comment says exactly that). Composing
+                                // nothing collapses the row to zero and `SpaceEvenly` then shifts every
+                                // row above it — measured on September 2024, whose trailing week is
+                                // entirely outside the month: the rows moved 13.7 dp up, and a scan across
+                                // the 10th's old centre measured a 31 dp chord instead of 39.
+                                //
+                                // An empty `Stack`, because winia's `Spacer` only spans one axis; both are
+                                // childless `BoxLayout`s, so the slot measures the same.
+                                if cell.is_outside_month && !show_outside_month {
+                                    Stack::new()
+                                        .modifier(Modifier::new().size(
+                                            DatePickerDefaults::ACCESSIBLE_SIZE,
+                                            DatePickerDefaults::ACCESSIBLE_SIZE,
+                                        ))
+                                        .build(ctx, |_| {});
+                                    continue;
+                                }
                                 Stack::new()
                                     .alignment(Alignment::Center)
                                     .modifier(Modifier::new().size(
@@ -1983,6 +2016,10 @@ impl DockedDatePicker {
                                                 &cross_model,
                                                 &cross_grid,
                                                 &cross_colors,
+                                                // The docked picker draws the neighbouring month's
+                                                // days — the M3 specs' docked anatomy lists them as a
+                                                // grid state, and the modal one does not.
+                                                true,
                                             );
                                         });
                                 }
@@ -3065,6 +3102,73 @@ mod tests {
             left_top.abs_diff(right_top) <= 1 && left_bottom.abs_diff(right_bottom) <= 1,
             "both chevrons span the same rows ({left_top}..{left_bottom} vs {right_top}..{right_bottom})"
         );
+    }
+
+    /// The M3 specs page draws the two variants differently and this pins it: the DOCKED anatomy lists
+    /// "Outside month date" among the grid's states, the MODAL anatomy has no such entry, and material3
+    /// agrees with the modal one (it composes a `Spacer`, `DatePicker.kt:1870-1890`). So the docked grid
+    /// fills all 42 slots and the modal grid draws only its own month.
+    ///
+    /// Counting the drawn day labels is the blunt way to say it: a month's grid composes one numeric text
+    /// per day and nothing else in either picker is a bare number (the weekday cells use narrow letters,
+    /// the menu button "September 2024" and the headline "Sep 10, 2024" are not).
+    #[test]
+    fn the_docked_grid_draws_the_neighbouring_months_days_and_the_modal_one_does_not() {
+        // One bare number per drawn day, and nothing else in either picker is a bare number: the weekday
+        // cells use narrow letters, the menu button reads "September 2024" and the headline "Sep 10, 2024".
+        fn drawn_day_labels(composer: &crate::core::composer::Composer) -> Vec<u32> {
+            use crate::modifier::ModifierElement;
+            composer
+                .arena_nodes()
+                .iter()
+                .flat_map(|node| node.modifier.elements().to_vec())
+                .filter_map(|element| match element {
+                    ModifierElement::TextContent { content, .. } => {
+                        let value: u32 = content.parse().ok()?;
+                        (1..=31).contains(&value).then_some(value)
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+
+        // September 2026 starts on a Tuesday and has 30 days, so of the 42 slots two lead and ten trail:
+        // the two pickers differ by exactly those 12 drawn cells — 42 against 30.
+        let model = CalendarModel::new(CalendarLocale::default());
+        let month = model.month_of(2026, 9);
+        assert_eq!(month.days_from_start_of_week_to_first_of_month, 2);
+        assert_eq!(month.number_of_days, 30);
+        assert_eq!(
+            2 + month.number_of_days + 10,
+            (MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as u32,
+            "two leading slots, the month, ten trailing"
+        );
+
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            let mut state = DatePickerState::new(CalendarLocale::default());
+            state.set_displayed_month_millis(month.start_utc_time_millis);
+            DockedDatePicker::new(state).build(ctx);
+        });
+        let docked = drawn_day_labels(&composer);
+
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            let mut state = DatePickerState::new(CalendarLocale::default());
+            state.set_displayed_month_millis(month.start_utc_time_millis);
+            DatePicker::new(state).build(ctx);
+        });
+        let modal = drawn_day_labels(&composer);
+
+        assert_eq!(docked.len(), 42, "the docked grid draws every slot");
+        assert_eq!(modal.len(), 30, "the modal grid draws only its own month");
+        assert_eq!(
+            docked.len() - modal.len(),
+            12,
+            "exactly the two leading plus ten trailing slots"
+        );
+        // And the modal grid holds the month itself, with no day from before or after it.
+        assert!(modal.iter().all(|day| (1..=30).contains(day)));
     }
 
     /// The 24x24 ink mask of a glyph drawn through the real `Icon` pipeline (node, then render, then pixels),
