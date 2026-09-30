@@ -604,16 +604,32 @@ pub struct DayCell {
     /// Whether this is the selected day.
     pub is_selected: bool,
     /// Whether it may be chosen: `SelectableDates::is_selectable_date`, and its year must be selectable too
-    /// (`DatePicker.kt:294-298`).
+    /// (`DatePicker.kt:294-298`). Always `false` for an outside-month cell — those are context, not a way to
+    /// reach another month (see [`MonthGrid`]).
     pub is_enabled: bool,
+    /// Whether the day belongs to the neighbouring month rather than the displayed one.
+    ///
+    /// A deliberate divergence from material3, which composes a `Spacer` in these cells
+    /// (`DatePicker.kt:1870-1890`) and has no colour role for them at all. The M3 specs anatomy lists
+    /// "Outside month date" among the grid's date states and gives it its own tokens — "Date unselected
+    /// outside month label text color" `#1D1B20` and "…label text opacity" `0.38` — so winia fills the
+    /// cells instead of leaving them blank.
+    pub is_outside_month: bool,
 }
 
-/// A month laid out the way the picker draws it: [`MAX_CALENDAR_ROWS`] rows of [`DAYS_IN_WEEK`] cells, with the
-/// cells before the 1st and after the last day empty (`Month`, `DatePicker.kt:1856-1890`).
+/// A month laid out the way the picker draws it: [`MAX_CALENDAR_ROWS`] rows of [`DAYS_IN_WEEK`] cells.
+///
+/// Every cell is filled. A month that does not start on the first day of the week, or does not end on the
+/// last, is padded with the days of the month before or after it, so the grid is always six full rows.
+///
+/// material3 leaves those cells empty (`Month`, `DatePicker.kt:1856-1890`); the M3 specs page specifies
+/// them, so this follows the specs — see [`DayCell::is_outside_month`]. Outside-month days are drawn as
+/// context and are never selectable: `is_enabled` is `false` for them whatever `SelectableDates` says, so
+/// tapping one cannot move the selection into a month the grid is not showing.
 #[derive(Clone, Debug)]
 pub struct MonthGrid {
     month: CalendarMonth,
-    cells: Vec<Option<DayCell>>,
+    cells: Vec<DayCell>,
 }
 
 impl MonthGrid {
@@ -624,26 +640,28 @@ impl MonthGrid {
         today_millis: i64,
         selectable_dates: &dyn SelectableDates,
     ) -> Self {
-        let offset = month.days_from_start_of_week_to_first_of_month as usize;
-        let end = offset + month.number_of_days as usize;
+        let offset = month.days_from_start_of_week_to_first_of_month as i64;
+        let end = offset + month.number_of_days as i64;
         let year_selectable = selectable_dates.is_selectable_year(month.year);
         let mut cells = Vec::with_capacity((MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as usize);
-        for index in 0..(MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as usize {
-            if index < offset || index >= end {
-                cells.push(None);
-                continue;
-            }
-            let day = (index - offset) as u32 + 1;
+        for index in 0..(MAX_CALENDAR_ROWS * DAYS_IN_WEEK) as i64 {
+            // The month start is the 1st at 00:00 UTC, so a signed day offset walks back into the previous
+            // month and forward into the next one on its own — `date_of_millis` resolves the day number.
+            // material3 adds the same product for its in-month cells (`DatePicker.kt:1893-1894`).
             let utc_time_millis =
-                month.start_utc_time_millis + (index - offset) as i64 * MILLIS_IN_24_HOURS;
-            cells.push(Some(DayCell {
-                day,
+                month.start_utc_time_millis + (index - offset) * MILLIS_IN_24_HOURS;
+            let date = date_of_millis(utc_time_millis);
+            let is_outside_month = index < offset || index >= end;
+            cells.push(DayCell {
+                day: date.day,
                 utc_time_millis,
                 is_today: utc_time_millis == today_millis,
                 is_selected: selection == Some(utc_time_millis),
-                is_enabled: year_selectable
+                is_enabled: !is_outside_month
+                    && year_selectable
                     && selectable_dates.is_selectable_date(utc_time_millis),
-            }));
+                is_outside_month,
+            });
         }
         Self { month, cells }
     }
@@ -653,18 +671,18 @@ impl MonthGrid {
         self.month
     }
 
-    /// Every cell, row by row.
-    pub fn cells(&self) -> &[Option<DayCell>] {
+    /// Every cell, in reading order.
+    pub fn cells(&self) -> &[DayCell] {
         &self.cells
     }
 
     /// The grid row by row, [`DAYS_IN_WEEK`] cells each.
-    pub fn rows(&self) -> impl Iterator<Item = &[Option<DayCell>]> {
+    pub fn rows(&self) -> impl Iterator<Item = &[DayCell]> {
         self.cells.chunks(DAYS_IN_WEEK as usize)
     }
 
     /// The cell at `row` and `column`, counting from zero.
-    pub fn cell(&self, row: u32, column: u32) -> Option<&Option<DayCell>> {
+    pub fn cell(&self, row: u32, column: u32) -> Option<&DayCell> {
         self.cells.get((row * DAYS_IN_WEEK + column) as usize)
     }
 }
@@ -903,6 +921,23 @@ impl DatePickerColors {
             (false, true) => self.day_content,
             (false, false) => Self::disabled(self.day_content),
         }
+    }
+
+    /// A day that belongs to the neighbouring month.
+    ///
+    /// The M3 specs page gives this its own two tokens — "Date unselected outside month label text color"
+    /// `#1D1B20` and "Date unselected outside month label text opacity" `0.38`. `#1D1B20` is the baseline
+    /// `onSurface`, the same colour the specs give "Date unselected label text color", and `0.38` is
+    /// `DisabledAlpha` (`ColorScheme.kt:1518`) — so the pair lands on the plain day role dimmed to 38%, which
+    /// is what [`Self::day_label`] returns for a disabled, unselected cell.
+    ///
+    /// Spelled out as its own role rather than left to fall out of [`Self::day_label`] because outside days
+    /// are NOT disabled — they are context, and [`DayCell::is_enabled`] is false for them for a different
+    /// reason. material3 has no colour for them at all (it composes an empty `Spacer`,
+    /// `DatePicker.kt:1870-1890`), so the match with the disabled expression is the only thing joining them,
+    /// and a reader should not have to rediscover that.
+    pub fn outside_month_label(&self) -> Color {
+        Self::disabled(self.day_content)
     }
 
     /// The container behind one year cell (`yearContainerColor`, `DatePicker.kt:1029-1046`): `Primary` when the
@@ -1643,8 +1678,10 @@ fn weekday_row(ctx: &mut ComposeCtx, model: &CalendarModel, colors: &DatePickerC
         });
 }
 
-/// The month grid: six rows of seven slots, each slot a day or empty (`Month`,
-/// `DatePicker.kt:1856-1890`).
+/// The month grid: six rows of seven slots, each slot a day (`Month`, `DatePicker.kt:1856-1890`).
+///
+/// material3 leaves a `Spacer` in the cells before the 1st and after the last day; winia fills them with the
+/// neighbouring month's days, as the M3 specs figure draws them — see [`MonthGrid`].
 fn month_grid(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
@@ -1652,7 +1689,7 @@ fn month_grid(
     grid: &MonthGrid,
     colors: &DatePickerColors,
 ) {
-    let rows = grid.rows().map(<[Option<DayCell>]>::to_vec).collect::<Vec<_>>();
+    let rows = grid.rows().map(<[DayCell]>::to_vec).collect::<Vec<_>>();
     Column::new()
         .modifier(
             Modifier::new()
@@ -1676,9 +1713,7 @@ fn month_grid(
                                         DatePickerDefaults::ACCESSIBLE_SIZE,
                                     ))
                                     .build(ctx, |ctx| {
-                                        if let Some(cell) = cell {
-                                            day_cell(ctx, state, model, cell, colors);
-                                        }
+                                        day_cell(ctx, state, model, cell, colors);
                                     });
                             }
                         });
@@ -1729,6 +1764,10 @@ impl crate::modifier::DrawNode for DayCircleNode {
 
 /// One day of the grid: a 40 dp circle, outlined when it is today and not selected, filled when it is selected
 /// (`Day`, `DatePicker.kt:1993-2058`).
+///
+/// An outside-month cell (`DayCell::is_outside_month`) is context: it takes the specs' dimmed label, gets no
+/// today ring and no selection fill, and is not clickable — which `is_enabled` already carries, since
+/// [`MonthGrid`] never enables one.
 fn day_cell(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
@@ -1739,11 +1778,15 @@ fn day_cell(
     let state_for_click = state.clone();
     let millis = cell.utc_time_millis;
     let description = day_content_description(model, cell);
+    let outside = cell.is_outside_month;
     // Selection progress 0 → 1: every cell remembers one, so landing the selection here plays the
     // circle in, and moving it away plays the same value 1 → 0 (the node keeps drawing while the
     // progress is above zero, so the circle shrinks out instead of vanishing).
+    //
+    // An outside cell is pinned to 0: a date selected in another month can appear here, and a context cell
+    // must not claim it with a fill the user cannot tap to keep.
     let pop = ctx.animate_float_as_state(
-        if cell.is_selected { 1.0 } else { 0.0 },
+        if cell.is_selected && !outside { 1.0 } else { 0.0 },
         AnimationSpec::Tween(TweenSpec::new(
             std::time::Duration::from_millis(DAY_POP_MILLIS),
             crate::animation::interpolator::EaseOutCubic::new(),
@@ -1752,7 +1795,11 @@ fn day_cell(
     let mut surface = Surface::new()
         .shape(Shape::Circle)
         .color(Color::TRANSPARENT)
-        .content_color(colors.day_label(cell.is_selected, cell.is_enabled, cell.is_today))
+        .content_color(if outside {
+            colors.outside_month_label()
+        } else {
+            colors.day_label(cell.is_selected, cell.is_enabled, cell.is_today)
+        })
         .enabled(cell.is_enabled)
         .selectable(cell.is_selected, move || {
             state_for_click.set_selected_date_millis(Some(millis));
@@ -1773,7 +1820,9 @@ fn day_cell(
                     color: colors.day_container(true, cell.is_enabled),
                 }),
         );
-    if cell.is_today && !cell.is_selected {
+    // No today ring on a context cell either: the specs draw "Today's date" and "Outside month date" as
+    // separate states, and a ring would claim a cell that cannot be chosen.
+    if cell.is_today && !cell.is_selected && !outside {
         surface = surface.border(SurfaceBorder::new(
             DatePickerDefaults::TODAY_OUTLINE_WIDTH,
             colors.today_border,
@@ -2604,24 +2653,96 @@ mod tests {
     }
 
     #[test]
-    fn the_cells_outside_a_month_are_empty() {
+    fn the_cells_outside_a_month_hold_the_neighbouring_month() {
         let model = CalendarModel::new(CalendarLocale::default());
         let mut monday_first_locale = CalendarLocale::default();
         monday_first_locale.first_day_of_week = 1;
         let monday_first = CalendarModel::new(monday_first_locale);
 
-        // Sunday-first, 2024-09-01 is a Sunday: no leading cells, and four empty cells after the 30th.
+        // Sunday-first, 2024-09-01 is a Sunday: no leading cells, and four cells after the 30th carry
+        // October's first days — 2024-09-30 is a Monday, so the month ends six cells in.
         let grid = MonthGrid::of(model.month_of(2024, 9), None, 0, &AllDates);
-        assert_eq!(grid.cells()[0].unwrap().day, 1, "no leading cells");
-        assert_eq!(grid.cells()[29].unwrap().day, 30);
-        assert!(grid.cells()[30].is_none(), "the cells after the 30th are empty");
-        assert!(grid.cells()[41].is_none(), "the last cell is empty too");
+        assert_eq!(grid.cells()[0].day, 1, "no leading cells");
+        assert_eq!(grid.cells()[29].day, 30);
+        assert!(!grid.cells()[..30].iter().any(|cell| cell.is_outside_month));
+        let tail: Vec<u32> = grid.cells()[30..].iter().map(|cell| cell.day).collect();
+        assert_eq!(tail, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert!(grid.cells()[30..].iter().all(|cell| cell.is_outside_month));
+        // October's cells carry October's dates, not September's day numbers shifted along.
+        assert_eq!(date_of_millis(grid.cells()[30].utc_time_millis).month, 10);
 
-        // Monday-first, the same month starts six cells in.
+        // Monday-first, the same month starts six cells in, and August's last days fill the gap.
         let grid = MonthGrid::of(monday_first.month_of(2024, 9), None, 0, &AllDates);
-        assert!(grid.cells()[..6].iter().all(|cell| cell.is_none()));
-        assert_eq!(grid.cells()[6].unwrap().day, 1);
-        assert_eq!(grid.cells()[35].unwrap().day, 30);
+        assert!(grid.cells()[..6].iter().all(|cell| cell.is_outside_month));
+        let head: Vec<u32> = grid.cells()[..6].iter().map(|cell| cell.day).collect();
+        assert_eq!(head, vec![26, 27, 28, 29, 30, 31], "August's last six days");
+        assert_eq!(date_of_millis(grid.cells()[0].utc_time_millis).month, 8);
+        assert_eq!(grid.cells()[6].day, 1);
+        assert_eq!(grid.cells()[35].day, 30);
+    }
+
+    #[test]
+    fn an_outside_month_cell_is_never_selectable() {
+        // `SelectableDates` allows everything, so a disabled outside cell is the grid's own rule and not
+        // the caller's: tapping a context day must not move the selection into a month on the other side
+        // of the displayed one.
+        let model = CalendarModel::new(CalendarLocale::default());
+        let grid = MonthGrid::of(model.month_of(2024, 9), None, 0, &AllDates);
+        assert!(
+            grid.cells()
+                .iter()
+                .filter(|cell| cell.is_outside_month)
+                .all(|cell| !cell.is_enabled)
+        );
+        assert_eq!(
+            grid.cells().iter().filter(|cell| cell.is_enabled).count(),
+            30,
+            "exactly the displayed month stays enabled"
+        );
+    }
+
+    #[test]
+    fn an_outside_month_cell_still_knows_its_real_date() {
+        // The flags describe the date, not the cell's role in the grid: an outside cell can be today or the
+        // selected date, and `day_cell` is what decides to draw it as context.
+        let model = CalendarModel::new(CalendarLocale::default());
+        let month = model.month_of(2024, 9);
+        let october_first = month.start_utc_time_millis + 30 * MILLIS_IN_24_HOURS;
+        let grid = MonthGrid::of(month, Some(october_first), october_first, &AllDates);
+        let cell = grid.cells()[30];
+        assert_eq!(cell.day, 1);
+        assert!(cell.is_outside_month);
+        assert!(cell.is_today, "today is reported wherever it lands");
+        assert!(cell.is_selected);
+        assert!(!cell.is_enabled);
+    }
+
+    #[test]
+    fn an_outside_month_label_is_the_plain_role_at_disabled_alpha() {
+        // The M3 specs tokens: "Date unselected outside month label text color" #1D1B20, "…text opacity"
+        // 0.38. In the baseline light scheme #1D1B20 is onSurface, which is the plain day role.
+        let colors = DatePickerColors::from_theme(&ThemeColors::default_light());
+        assert_eq!(colors.outside_month_label().a, 97, "0.38 of 255 rounds to 97");
+        assert_eq!(
+            Color { a: 255, ..colors.outside_month_label() },
+            Color { a: 255, ..colors.day_content },
+            "same rgb as the plain day role, only the alpha differs"
+        );
+        assert_eq!(
+            colors.outside_month_label(),
+            colors.day_label(false, false, false),
+            "the same expression as a disabled unselected day, which is what the two tokens add up to"
+        );
+        assert_eq!(
+            colors.outside_month_label().a,
+            (DatePickerDefaults::DISABLED_ALPHA * 255.0).round() as u8,
+            "and that alpha is the theme's DisabledAlpha (0.38)"
+        );
+        assert_ne!(
+            colors.outside_month_label(),
+            colors.day_label(false, true, false),
+            "a real day in the month is not dimmed"
+        );
     }
 
     #[test]
@@ -2629,14 +2750,14 @@ mod tests {
         let model = CalendarModel::new(CalendarLocale::default());
         let month = model.month_of(2024, 9);
         let grid = MonthGrid::of(month, None, 0, &AllDates);
-        let fifteenth = grid.cells()[14].unwrap();
+        let fifteenth = &grid.cells()[14];
         assert_eq!(fifteenth.day, 15);
         assert_eq!(
             fifteenth.utc_time_millis,
             month.start_utc_time_millis + 14 * MILLIS_IN_24_HOURS
         );
         assert_eq!(date_of_millis(fifteenth.utc_time_millis).day, 15);
-        assert_eq!(grid.cell(2, 0).unwrap().unwrap().day, 15, "row two, column zero");
+        assert_eq!(grid.cell(2, 0).unwrap().day, 15, "row two, column zero");
     }
 
     #[test]
@@ -2650,7 +2771,6 @@ mod tests {
         let flagged = |pick: fn(&DayCell) -> bool| {
             grid.cells()
                 .iter()
-                .flatten()
                 .filter(|day| pick(day))
                 .map(|day| day.day)
                 .collect::<Vec<u32>>()
@@ -2683,7 +2803,6 @@ mod tests {
         let enabled = grid
             .cells()
             .iter()
-            .flatten()
             .filter(|cell| cell.is_enabled)
             .map(|cell| cell.day)
             .collect::<Vec<u32>>();
@@ -2692,7 +2811,7 @@ mod tests {
         // material3: a year that cannot be selected makes every date in it unselectable
         // (`DatePicker.kt:296-297`).
         let grid = MonthGrid::of(model.month_of(2025, 3), None, 0, &No2025);
-        assert!(grid.cells().iter().flatten().all(|cell| !cell.is_enabled));
+        assert!(grid.cells().iter().all(|cell| !cell.is_enabled));
     }
 
     #[test]
@@ -2702,12 +2821,23 @@ mod tests {
         let grid = MonthGrid::of(month, None, month.start_utc_time_millis, &AllDates);
 
         assert_eq!(
-            day_content_description(&model, &grid.cells()[0].unwrap()),
+            day_content_description(&model, &grid.cells()[0]),
             "Today, Sunday, September 1, 2024"
         );
         assert_eq!(
-            day_content_description(&model, &grid.cells()[1].unwrap()),
+            day_content_description(&model, &grid.cells()[1]),
             "Monday, September 2, 2024"
+        );
+        // An outside cell announces its own real date, which is what makes it context rather than noise.
+        // Monday-first, September 2024 starts a week in (its 1st is a Sunday), so cell zero is six days
+        // earlier — 2024-08-26, a Monday.
+        let mut monday_first_locale = CalendarLocale::default();
+        monday_first_locale.first_day_of_week = 1;
+        let monday_first = CalendarModel::new(monday_first_locale);
+        let grid = MonthGrid::of(monday_first.month_of(2024, 9), None, 0, &AllDates);
+        assert_eq!(
+            day_content_description(&model, &grid.cells()[0]),
+            "Monday, August 26, 2024"
         );
     }
 

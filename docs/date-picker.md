@@ -135,7 +135,7 @@ refreshes each composition.
 | Mode switch | `AnimatedContent` between calendar and input, `-48.dp` parallax, spatial/effects motion-scheme specs, `SizeTransform(clip = true)` | `:1432-1497` |
 | Months navigation | `padding(horizontal = DatePickerHorizontalPadding)` = 12; `yearPickerText = dateFormatter.formatMonthYear(displayedMonthMillis, locale) ?: "-"`; next/previous call `animateScrollToItem(index ± 1)` and swallow `IllegalArgumentException` | `:1559-1595`, `:1569-1592` |
 | Weekday row | `defaultMinSize(minHeight = RecommendedSizeForAccessibility)` = 48, `fillMaxWidth`, `SpaceEvenly`; labels `sizeIn(40, 40)` then `size(LocalMinimumInteractiveComponentSize)`, content description per label, `colors.weekdayContentColor`, `WeekdaysLabelTextFont` | `:1796-1827` |
-| Month column | `requiredHeight(RecommendedSizeForAccessibility * MaxCalendarRows)` = 48 × rows, `SpaceEvenly`; `MaxCalendarRows` rows of `DaysInWeek` cells, each `Row(fillMaxWidth, SpaceEvenly, CenterVertically)`; leading cells before `month.daysFromStartOfWeekToFirstOfMonth` and trailing cells stay empty | `:1856-1871` |
+| Month column | `requiredHeight(RecommendedSizeForAccessibility * MaxCalendarRows)` = 48 × rows, `SpaceEvenly`; `MaxCalendarRows` rows of `DaysInWeek` cells, each `Row(fillMaxWidth, SpaceEvenly, CenterVertically)`; leading cells before `month.daysFromStartOfWeekToFirstOfMonth` and trailing cells stay empty — **winia fills them instead, see "Outside-month days" below** | `:1856-1871` |
 | Day cell | `Surface(shape = DateContainerShape, selected, enabled, onClick)` with `border = 1 dp todayDateBorderColor` **only when today and not selected**; the box is `requiredSize(40, 40)` and centres the text; semantics `text = AnnotatedString(description)`, `role = Role.Button`, `mergeDescendants = true`; the text itself sets `clearAndSetSemantics {}` | `:2005-2056` |
 | Months list | `LazyRow` of `numberOfMonthsInRange(yearRange) = (last - first + 1) * 12` months (`:1733`, `:1963`), each in `Box(fillParentMaxWidth())`, with snap fling and a `horizontalScrollAxisRange` semantics override so a screen reader does not scroll months | `:1722-1750` |
 | Month paging | `snapshotFlow { firstVisibleItemIndex }` → `yearOffset = index / 12`, `month = index % 12 + 1`, `onDisplayedMonthChange(getMonth(yearRange.first + yearOffset, month).startUtcTimeMillis)` | `:1763-1779` |
@@ -286,7 +286,7 @@ Measured, each by turning the rule off and watching the specific test fail:
 | the month offset wraps behind the locale's first day | dropped the `+ 7` wrap | exactly 1 test red: `the_month_offset_counts_from_the_locales_first_day` |
 | both millisecond setters test the year range | filter and guard removed | exactly 2 tests red: `a_selection_outside_the_year_range_is_dropped`, `showing_a_month_outside_the_year_range_is_ignored` |
 | switching mode snaps the calendar to the selection's month | snap removed | exactly 1 test red: `switching_mode_pulls_the_calendar_to_the_selected_month` |
-| the cells outside a month are empty, and an unselectable year disables all of its dates | both guards removed together | exactly their 2 tests red: `the_cells_outside_a_month_are_empty`, `an_unselectable_day_or_year_disables_cells` (4 failed in that run, the other 2 from the row-count probe below) |
+| the cells outside a month are empty, and an unselectable year disables all of its dates | both guards removed together | exactly their 2 tests red: `the_cells_outside_a_month_are_empty`, `an_unselectable_day_or_year_disables_cells` (4 failed in that run, the other 2 from the row-count probe below). Superseded — the first is now `the_cells_outside_a_month_hold_the_neighbouring_month`, since winia fills those cells rather than leaving them empty |
 | the grid is six rows tall | `MAX_CALENDAR_ROWS` set to 5 | 2 tests red: `a_month_grid_is_always_six_rows_of_seven`, and `today_and_the_selection_are_flagged_on_their_own_cells` because a five-row grid cuts a 30-day month short |
 | a disabled day that is also today | today's role kept instead of the disabled day role | exactly 1 test red: `a_day_label_follows_material3s_precedence` |
 | a year outside the year range | the guard dropped | exactly 1 test red: `a_year_outside_the_range_is_ignored` |
@@ -302,9 +302,11 @@ with, and the caller's `SelectableDates` (the default `AllDates` allows everythi
 are the state's, and `today_millis` on the model is the system clock so tests can inject a fixed date.
 
 `MonthGrid` then lays a month out the way the picker draws it: `MAX_CALENDAR_ROWS` (6) rows of `DAYS_IN_WEEK`
-(7) cells, the cells before the 1st and after the last day empty, each day cell carrying its millis (month
-start + day − 1 days), and the `is_today` / `is_selected` / `is_enabled` flags — the last one consulting
-`SelectableDates` for the day *and* its year, because material3 disables every date of an unselectable year.
+(7) cells, every cell filled — the cells before the 1st and after the last day hold the neighbouring month's
+days (see "Outside-month days" below) — each day cell carrying its millis (month start + day − 1 days, a
+signed offset that walks across the month boundary on its own), and the `is_today` / `is_selected` /
+`is_enabled` / `is_outside_month` flags — `is_enabled` consulting `SelectableDates` for the day *and* its
+year, because material3 disables every date of an unselectable year, and forced off for an outside cell.
 `day_content_description` assembles what a cell announces, today's word first.
 
 `DatePicker` draws the docked variant: a `Column` at least `CONTAINER_WIDTH` (360) wide on
@@ -321,8 +323,11 @@ current year outlined, 16 dp between rows, over a divider.
 from the theme, including the one material3 hardcodes for navigation (`DatePicker.kt:559`).
 
 Deliberate deviations: the picker composes one month at a time (winia has no lazy row, so material3's
-`LazyRow` of 2412 months with its snap fling is out, and the arrows step a month); the mode toggle and the
-input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads the theme.
+`LazyRow` of 2412 months with its snap fling is out, and the arrows step a month); the month grid fills its
+leading and trailing cells with the neighbouring month's days where material3 leaves them empty (the one
+place winia follows the M3 specs against the Compose source — see "Outside-month days"); the mode toggle and
+the input body arrive with the input mode; the picker takes no `DatePickerColors` parameter yet and reads
+the theme.
 
 The year panel carries the second deviation. material3 overlays it on the month calendar inside an
 `AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia swaps the calendar out,
@@ -368,6 +373,52 @@ is a filled 40 dp circle (measured 39 dp across on a scan through its centre) wi
 across, the arrows step the month and step back, a tap on the today cell moves the selection to it, and the year
 menu button opens the panel: the container's rectangle is unchanged while it is open, a year cell measures
 72 × 36, and tapping the next year keeps the month (`month: September 2025`) and closes the panel.
+
+## Outside-month days
+
+The grid is always six full rows of seven. A month that does not start on the week's first day, or end on
+its last, is padded with the neighbouring month's days — September 2026 opens with August's 30th and 31st
+and closes with October's 1st through 10th.
+
+**This is a deliberate divergence from material3**, and the only one where winia follows the M3 specs page
+against the Compose source. `Month` composes a `Spacer` in those cells (`DatePicker.kt:1870-1890`), and a
+grep for `outsideMonth` / `outside_month` across `target/compose-src` finds nothing: material3 has no such
+state and no colour role for it. The specs page, however, lists "Outside month date" in the grid's anatomy
+and gives it its own two tokens:
+
+| Specs token | Value | winia |
+| --- | --- | --- |
+| Date unselected outside month label text color | `#1D1B20` | `theme.on_surface` — the baseline value of `#1D1B20`, which is also what the plain unselected day role resolves to (verified: `day_content` in the default light scheme is rgb(29, 27, 32), the hex exactly) |
+| Date unselected outside month label text opacity | `0.38` | `DISABLED_ALPHA` (`ColorScheme.kt:1518`), which winia already carries at 0.38 |
+
+So `DatePickerColors::outside_month_label()` is the plain day role at `DisabledAlpha` — the same expression
+`day_label(_, false, _)` already returns for a disabled unselected day. It is spelled out as its own role
+anyway, because outside days are NOT disabled (they are context), and material3 has no colour for them, so
+the match with the disabled expression is the only thing joining the two and a reader should not have to
+rediscover it.
+
+Measured on the running demo, comparing an outside day against an in-month day in the same grid row:
+outside label peak luma 114.0, in-month 229.0, container 43.7 — an implied alpha of
+`(114.0 − 43.7) / (229.0 − 43.7) = 0.379` against the specs' 0.38.
+
+**Outside days are context and are never selectable.** `MonthGrid::of` forces `is_enabled = false` for them
+whatever `SelectableDates` says, so tapping one cannot move the selection into a month the grid is not
+showing. Measured with the debug server: selecting an in-month day moves the painted selection disc to
+(258, 417), tapping the outside "30" leaves it at (258, 417), and tapping the next in-month day moves it
+again to (289, 416) — inert, not dead.
+
+An outside cell carries its real flags: `utc_time_millis`, `is_today` and `is_selected` are all computed
+from the date, so a day selected in another month still reports itself as selected and announces its own
+date to a screen reader. `day_cell` is what declines to draw it as such — the selection fill is pinned to 0
+and the today ring is suppressed, since the specs draw "Today's date" and "Outside month date" as separate
+states and a ring would claim a cell the user cannot choose. The millis arithmetic needs no special case:
+the month start is the 1st at 00:00 UTC, so a signed day offset walks into the neighbouring month on its own
+and `date_of_millis` resolves the day number.
+
+`MonthGrid` therefore fills every cell, and `cells()`, `rows()` and `cell()` return `DayCell` rather than
+`Option<DayCell>` — a public signature change, so both `cargo check --examples` and `cargo check --tests`
+were re-run.
+
 
 A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, six tests in all): the dialog is an
 overlay, measures 360 × 568, a tap on the today cell moves the selection the page reads out, the dismiss button
