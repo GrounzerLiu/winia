@@ -208,6 +208,66 @@ the day is today; `null` when nothing applies. The range words come from `DateRa
 - **Not mirrored on purpose**: `DatePickerColors.equals`/`hashCode` ignore `navigationContentColor`,
   `dividerColor` and `dateTextFieldColors` (`DatePicker.kt:1045-1102`) — an upstream omission, not behaviour.
 
+## RTL
+
+Compose mirrors two independent things, and a picker needs both:
+
+1. **Layout** — `Row` puts its first child at the *start* (the right edge under RTL), and
+   `Arrangement.Start`/`End`, `paddingStart`/`paddingEnd` swap meaning with it. winia mirrors placements
+   in `layout/flex.rs:288` and every container reads the ambient direction at compose time
+   (`ui/layout_components.rs:110`), so this half needed no date picker work.
+2. **Artwork** — only glyphs the caller marks auto-mirrored flip. material3's two month arrows are
+   `Icons.AutoMirrored.Filled.KeyboardArrowLeft` / `…KeyboardArrowRight` (`DatePicker.kt:2225`, `:2232`),
+   which is why the arrow keeps pointing outward in both directions; the year menu button's
+   `Filled.ArrowDropDown` is not auto-mirrored, and is symmetric anyway.
+
+Measured on the docked demo in RTL (picker content spans x = 36…372 in a 560 dp window), every part of the
+picker mirrors correctly except the arrow artwork:
+
+| Part | LTR | RTL | Correct? |
+| --- | --- | --- | --- |
+| Navigation group order | month x = 68, year x = 248 | month x = 256, year x = 68 | yes — `SpaceBetween` mirrors the pair |
+| Arrow order inside a group | prev x = 40, next x = 156 | prev x = 344, next x = 228 | yes — `Row` mirrors the triple |
+| Chevron artwork | prev `<`, next `>` | prev `<`, next `>` | **no** — both point inward |
+| Weekday row | Sunday leftmost | Sunday x = 324 (rightmost), Saturday x = 36 | yes |
+| Day grid | leading blanks left | blanks for Sun/Mon at x = 324/276, day 1 at x = 228 | yes |
+| Action row | Cancel, OK | OK x = 61, Cancel x = 120 | yes — `Arrangement::End` mirrors to the left |
+| Year menu button internals | text then `▾` | label x = 304 (right), `▾` x = 272 (left); 12 start pad on the right, 16 end pad on the left | yes |
+
+The arrow failure is the one half winia did not do: `step_arrow` built its `Icon` without
+`auto_mirror(true)`, so the layout carried the previous arrow to the right edge while the artwork stayed
+put, and both arrows pointed at the label. `render.rs:513` applies the mirror
+(`spec.auto_mirror && direction == Rtl`) and `Icon::auto_mirror` (`ui/icon.rs:606`) sets it, so the fix is
+the flag on the arrow. After it: prev `>` at x = 344, next `<` at x = 228.
+
+Two tests guard it, and neither uses an ink centroid — the chevron's centroid sits at ~11.5 either way
+round (measured 11.516 under LTR, 11.484 under RTL), because the shape is near-symmetric about its own box,
+so a centroid test cannot see the flip at all. `the_navigation_arrows_flip_their_artwork_under_rtl`
+compares inked pixels against the *other* glyph through the real render pipeline: 17 of 576 pixels differ
+under RTL against the next chevron's LTR rendering, 41 differ under LTR (17 is the figure
+`the_month_arrows_draw_mirrored_chevrons` already records for this pair of paths).
+`the_picker_composes_its_chevrons_as_auto_mirrored` composes the real `DockedDatePicker` and asserts the
+`IconSpec` carries `auto_mirror`, so dropping the flag turns it red instead of silently passing.
+
+### Open gaps next to the picker
+
+Neither is the picker's own code, and both are recorded here because the docked picker's normal use puts
+them directly on screen.
+
+- **`TextField` has no direction handling at all** (`ui/text_field.rs`: no `LayoutDirection`, no
+  `padding_start`/`padding_end`; the paddings are literal arithmetic). Measured: with the demo window in
+  RTL, the surrounding text mirrors (x 24 → 60) while the field's `Date` label stays at x = 38 and its
+  trailing icon at x = 268. Any caller that puts a `TextField` in an RTL window gets an LTR field.
+- **`PopupPosition` is direction-blind** (`ui/overlay.rs:162`, applied at `app.rs:3667`). The enum names
+  absolute corners, and the anchored branch is pure geometry — `BottomLeft => (ax, ay + ah)` — so an
+  anchored popup aligns to the anchor's geometric left edge in both directions. There is no
+  `BottomStart`/`TopStart`, which is what "follow the anchor's start edge" needs: this demo passes
+  `PopupPosition::BottomLeft` and happens to look right only because its `TextField` does not mirror
+  either. **Planned fix: add Start/End variants and migrate to them** — not to make the existing corners
+  mirror, since a name that says "Left" should keep meaning left. It touches the shared placement path
+  (`DropdownMenu`, `SearchBar` and `Tooltip` all pass a `PopupPosition`), so it is its own task;
+  `docs/dropdown-menu.md` §4.15 carries the plan and the caller list.
+
 ## winia status
 
 `winia/src/ui/date_picker.rs` holds the calendar model the rest of the component needs:

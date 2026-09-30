@@ -16,18 +16,21 @@
 //! of the week explicitly, and [`CalendarLocale::default`] is an English, Sunday-first locale. A caller that
 //! needs another language supplies its own; the picker never reads a global.
 
+use crate::animation::{AnimationSpec, TweenSpec};
 use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::layout::{Alignment, Arrangement};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::alert_dialog::{AlertDialogDefaults, BasicAlertDialog};
+use crate::ui::button::Button;
 use crate::ui::divider::Divider;
 use crate::ui::icon::Icon;
-use crate::ui::icon_button::IconButton;
+use crate::ui::icon_button::{IconButton, IconButtonSize};
 use crate::ui::lazy_column::{LazyColumn, LazyListState};
 use crate::ui::layout_components::{Column, Row, Spacer, Stack};
 use crate::ui::overlay::ExposedDropdownMenuDefaults;
+use crate::ui::scrollbar::LazyScrollbar;
 use crate::ui::surface::{Surface, SurfaceBorder};
 use crate::ui::text::{ProvideTextStyle, Text};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -192,6 +195,9 @@ pub struct CalendarLocale {
     pub weekday_names: [(String, String); 7],
     /// The twelve month names, January first, for the header's month and year text.
     pub month_names: [String; 12],
+    /// The twelve abbreviated month names, January first, for the docked picker's compact month
+    /// button (the M3 specs docked figure notes "Aug", not "August").
+    pub month_names_short: [String; 12],
 }
 
 impl Default for CalendarLocale {
@@ -219,11 +225,15 @@ impl Default for CalendarLocale {
             "November",
             "December",
         ];
+        const MONTHS_SHORT: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
         Self {
             // Sunday, the first day of the week in the en-US locale material3's samples run in.
             first_day_of_week: 7,
             weekday_names: WEEKDAYS.map(|(full, narrow)| (full.to_string(), narrow.to_string())),
             month_names: MONTHS.map(|name| name.to_string()),
+            month_names_short: MONTHS_SHORT.map(|name| name.to_string()),
         }
     }
 }
@@ -758,11 +768,24 @@ impl DatePickerDefaults {
     /// `DatePickerModalTokens.SelectionYearContainerWidth`: a year cell's width.
     pub const YEAR_CELL_WIDTH: f32 = 72.0;
 
+    /// A month pill's width in the DOCKED month list: a year cell (72 dp) widened for the longest English
+    /// month name. NOT a material3 token — material3 has no docked month list to tokenize — so this is a
+    /// winia measurement: three 104 dp pills plus [`Self::CELL_SPACING`] fill the 336 dp content width
+    /// exactly, and at 72 dp "September" renders as "Septemb" (measured). It lives here only because the
+    /// docked picker's sizing has no defaults object of its own yet.
+    pub const MONTH_CELL_WIDTH: f32 = 104.0;
+
     /// `DatePickerModalTokens.SelectionYearContainerHeight`: a year cell's height.
     pub const YEAR_CELL_HEIGHT: f32 = 36.0;
 
     /// `YearsVerticalPadding` (`DatePicker.kt:2301`): between the year panel's rows.
     pub const YEARS_VERTICAL_PADDING: f32 = 16.0;
+
+    /// The gap between the docked month list's cells, on both axes. NOT a material3 token, like
+    /// [`Self::MONTH_CELL_WIDTH`] — it is the measurement that keeps three of those pills even across the
+    /// 336 dp content width, and matching the two axes is what keeps the grid even (measured:
+    /// `SpaceEvenly` + a vertical `spacing` gave 8 dp across and 16 dp down).
+    pub const CELL_SPACING: f32 = 12.0;
 
     /// `ButtonSmallTokens.IconLabelSpace` (`ButtonDefaults.IconSpacing`): between the year menu button's text
     /// and its dropdown arrow.
@@ -909,11 +932,19 @@ impl DatePickerColors {
     }
 }
 
-/// The `test_tag` on the year menu button, so a UI test can tap the control that opens the year panel.
+/// The `test_tag` on the menu button shared by `DatePicker` and the docked picker, so a UI test can tap
+/// the control that opens the year/month panel. Docked composes two buttons: pass a distinct tag per group.
 const YEAR_MENU_TAG: &str = "dp-year-menu";
+
+/// The docked month menu button's tag (`dp-month-menu`), distinct from the year groups'.
+const MONTH_MENU_TAG: &str = "dp-month-menu";
 
 /// The prefix of a year cell's `test_tag` — `dp-year-2024` — so a UI test can find one year's box.
 const YEAR_CELL_TAG_PREFIX: &str = "dp-year-";
+
+/// The prefix of a month cell's `test_tag` in the docked month list — `dp-month-9` — matching
+/// [`YEAR_CELL_TAG_PREFIX`]'s scheme so a UI test can find one month's pill.
+const MONTH_CELL_TAG_PREFIX: &str = "dp-month-";
 
 /// Material Icons `keyboard_arrow_left` (24 dp), the glyph material3 auto-mirrors for its month arrows
 /// (`internal/Icons.kt:34`). Provenance and the measured guard: `docs/date-picker.md`.
@@ -922,8 +953,8 @@ pub const CHEVRON_LEFT_PATH: &str = "M15.41 16.09l-4.58-4.59 4.58-4.59L14 5.5l-6
 /// Material Icons `keyboard_arrow_right` (24 dp, `internal/Icons.kt:60`).
 pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z";
 
-/// The docked date picker: a title and a headline over a month calendar
-/// (`DatePicker`, `DatePicker.kt:168-237`; the M3 spec's docked date picker).
+/// The modal date picker: a title and a headline over a month calendar
+/// (`DatePicker`, `DatePicker.kt:168-237`).
 ///
 /// ```ignore
 /// let state = remember_date_picker_state(ctx, CalendarLocale::default());
@@ -1049,7 +1080,7 @@ impl DatePicker {
 /// second, in `DialogTokens.ActionLabelTextFont` (LabelLarge) with `DialogTokens.ActionLabelTextColor`
 /// (`Primary`) as a default the buttons may override.
 ///
-/// The content defaults to the docked [`DatePicker`] over this dialog's state, which is what M3's modal date
+/// The content defaults to [`DatePicker`] over this dialog's state, which is what M3's modal date
 /// picker draws; [`DatePickerDialog::content`] replaces it (the input mode will).
 ///
 /// ```ignore
@@ -1107,7 +1138,7 @@ impl DatePickerDialog {
         self
     }
 
-    /// The dialog's content, in place of the default docked picker.
+    /// The dialog's content, in place of the default calendar.
     pub fn content(mut self, content: impl Fn(&mut ComposeCtx) + 'static) -> Self {
         self.content = Some(Box::new(content));
         self
@@ -1289,7 +1320,7 @@ fn months_navigation(
         })
         .alignment(Alignment::Center)
         .build(ctx, |ctx| {
-            year_menu_button(ctx, text, on_toggle_year_panel, navigation_color);
+            year_menu_button(ctx, text, on_toggle_year_panel, colors, true, YEAR_MENU_TAG);
             if !year_panel_open {
                 // The arrows are one unit at the row's far end: in a `SpaceBetween` row they need a row of
                 // their own, or the arrangement would spread them across the whole width.
@@ -1297,69 +1328,126 @@ fn months_navigation(
                     .arrangement(Arrangement::Start)
                     .alignment(Alignment::Center)
                     .build(ctx, |ctx| {
-                        month_arrow(ctx, state, -1, index > 0, CHEVRON_LEFT_PATH, navigation_color);
-                        month_arrow(ctx, state, 1, index < last, CHEVRON_RIGHT_PATH, navigation_color);
+                        let step_back = state.clone();
+                        step_arrow(ctx, move || step_back.step_displayed_month(-1), index > 0, CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
+                        let step_forward = state.clone();
+                        step_arrow(ctx, move || step_forward.step_displayed_month(1), index < last, CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
                     });
             }
         });
 }
 
-/// One month arrow. material3 enables them from the month list's scroll state
-/// (`monthsListState.canScrollBackward/Forward`, `DatePicker.kt:1561-1562`); with one month composed at a time
-/// they are enabled while the month has a neighbour inside the year range. The step reads the displayed month
-/// at the moment of the click (`DatePickerState::step_displayed_month`).
-fn month_arrow(
+/// One navigation arrow: the month stepper's arrows (`monthsListState.canScrollBackward/Forward`,
+/// `DatePicker.kt:1561-1562`; enabled here while the month has a neighbour inside the year range) and the docked
+/// picker's year arrows.
+///
+/// `on_click` carries what the arrow steps, because that is the only thing that differs between them — the
+/// month arrows read the displayed month at the moment of the click (`DatePickerState::step_displayed_month`),
+/// the year ones step the displayed year by one. Sharing the control keeps the hiding rule in one place.
+///
+/// The glyph auto-mirrors, which is the second half of RTL and is easy to miss: `Row` already puts the
+/// previous arrow at the start (the RIGHT edge in RTL), so without the mirror both arrows would point
+/// INWARD — "previous" pointing right, towards the label, and "next" pointing left, towards it too.
+/// material3 asks for exactly this by drawing the two arrows as `Icons.AutoMirrored.Filled.KeyboardArrowLeft`
+/// and `…KeyboardArrowRight` (`DatePicker.kt:2225`, `:2232`), so the artwork flips and each arrow keeps
+/// pointing outward from the month it moves.
+fn step_arrow(
     ctx: &mut ComposeCtx,
-    state: &DatePickerState,
-    step: i32,
+    on_click: impl Fn() + Send + Sync + 'static,
     enabled: bool,
     path: &'static str,
     color: Color,
+    size: IconButtonSize,
+    visible: bool,
 ) {
-    let state = state.clone();
+    // Hidden arrows stay composed at alpha 0 (still disabled): removing them would shift the menu
+    // button, and the alpha reads straight into a fade animation later.
+    let mut modifier = Modifier::new();
+    if !visible {
+        modifier = modifier.alpha(0.0);
+    }
     IconButton::new()
-        .enabled(enabled)
-        .on_click(move || state.step_displayed_month(step))
+        .size(size)
+        .modifier(modifier)
+        .enabled(enabled && visible)
+        .on_click(on_click)
         .build(ctx, |ctx| {
-            Icon::svg_path(path).tint(color).build(ctx);
+            Icon::svg_path(path)
+                .tint(color)
+                .auto_mirror(true)
+                .build(ctx);
         });
 }
 
 /// The year menu button: the "September 2024" text and a dropdown arrow, the control that opens the year panel
 /// (`YearPickerMenuButton`, `DatePicker.kt:2243-2269`). material3 builds it from a `TextButton` whose elevation
 /// and border it explicitly clears; winia's buttons carry no such parameters to clear.
+///
+/// A disabled button degrades to plain dimmed text with its dropdown glyph faded to alpha 0 (still
+/// composed, so the label does not shift) and no interaction — the M3 specs docked figure shows the idle
+/// group exactly so ("2025" with neither pill nor arrow) while the other group's list is open.
 fn year_menu_button(
     ctx: &mut ComposeCtx,
     text: String,
     on_click: impl Fn() + Send + Sync + 'static,
-    color: Color,
+    colors: &DatePickerColors,
+    enabled: bool,
+    tag: &str,
 ) {
     let description = text.clone();
+    let color = if enabled {
+        colors.navigation_content
+    } else {
+        DatePickerColors::disabled(colors.navigation_content)
+    };
     Surface::new()
         .shape(Shape::Pill)
         .color(Color::TRANSPARENT)
         .content_color(color)
+        .enabled(enabled)
         .selectable(false, on_click)
         .modifier(
             Modifier::new()
                 .height(DatePickerDefaults::YEAR_MENU_BUTTON_HEIGHT)
-                .test_tag(YEAR_MENU_TAG)
+                .test_tag(tag.to_string())
                 // material3 repeats the button's text as its content description and makes it a polite live
                 // region, so a reader announces the month as the arrows move it (`DatePicker.kt:2205-2216`).
                 .semantics(crate::semantics::SemanticsConfig::new().content_description(description)),
         )
         .build(ctx, |ctx| {
-            Row::new()
-                .arrangement(Arrangement::Start)
+            // The wrapper fills the button's 40 dp height and centres the row in it; a wrap-content
+            // row would hug the top while the arrows around it centre in theirs. Height only: filling
+            // the width as well stretches the surface full-bleed and the hover state layer with it.
+            Stack::new()
                 .alignment(Alignment::Center)
+                .modifier(Modifier::new().fill_max_height())
                 .build(ctx, |ctx| {
-                    ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
-                        Text::new(text).color(color).max_lines(1).build(ctx);
-                    });
-                    Spacer::horizontal(DatePickerDefaults::YEAR_MENU_ICON_SPACING).build(ctx);
-                    Icon::svg_path(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH)
-                        .tint(color)
-                        .build(ctx);
+                    // material3's `TextButtonWithIconContentPadding` (a `TextButton` holding the
+                    // dropdown glyph): 12 dp at the start, 16 dp at the end (`Button.kt:515-522`).
+                    Row::new()
+                        .modifier(
+                            Modifier::new()
+                                .padding_start(12.0)
+                                .padding_end(16.0),
+                        )
+                        .arrangement(Arrangement::Start)
+                        .alignment(Alignment::Center)
+                        .build(ctx, |ctx| {
+                            ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                                Text::new(text).color(color).max_lines(1).build(ctx);
+                            });
+                            Spacer::horizontal(DatePickerDefaults::YEAR_MENU_ICON_SPACING).build(ctx);
+                            // Faded, not removed: dropping the glyph would shrink the button and shift the
+                            // label, and the alpha reads straight into a fade animation later.
+                            let mut glyph = Modifier::new();
+                            if !enabled {
+                                glyph = glyph.alpha(0.0);
+                            }
+                            Icon::svg_path(ExposedDropdownMenuDefaults::ARROW_DROP_DOWN_PATH)
+                                .tint(color)
+                                .modifier(glyph)
+                                .build(ctx);
+                        });
                 });
         });
 }
@@ -1380,8 +1468,9 @@ fn year_panel_first_row(state: &DatePickerState, model: &CalendarModel) -> usize
 /// material3 overlays this on the month calendar and keeps the calendar composed underneath
 /// (`DatePicker.kt:1612-1660`); winia swaps the calendar out instead, which looks the same because the panel is
 /// exactly as tall as the weekday row and the grid it replaces and paints the picker's own container colour
-/// behind it. What is missing is material3's expand and fade (`AnimatedVisibility`); `docs/date-picker.md` lists
-/// that among the deviations.
+/// behind it. What is missing is material3's expand and fade (`AnimatedVisibility`) — the modal path still
+/// switches abruptly, while the docked path wraps this panel in a `Crossfade` of its own, so only the modal
+/// picker carries that deviation; `docs/date-picker.md` lists it.
 fn year_panel(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,
@@ -1395,9 +1484,10 @@ fn year_panel(
     let count = year_range.clone().count();
     let row_count = count.div_ceil(DatePickerDefaults::YEARS_PER_ROW);
     let current_year = model.month_of_millis(state.today_millis()).year;
-    let selected_year = state
-        .selected_date_millis()
-        .map(|millis| model.month_of_millis(millis).year);
+    // material3 highlights the DISPLAYED year, not the selected date's year — `YearPicker` passes
+    // `selected = selectedYear == displayedYear` (`DatePicker.kt:2091`). The displayed year is what
+    // the panel replaces and what picking one changes, so it is the one the user sees filled.
+    let displayed_year = model.month_of_millis(state.displayed_month_millis()).year;
     let list_state = rows.clone();
     let cell_state = state.clone();
     let cell_colors = colors.clone();
@@ -1410,40 +1500,60 @@ fn year_panel(
         )
         .arrangement(Arrangement::Start)
         .build(ctx, |ctx| {
+            // A divider closes the panel at both ends; the list gives back 1 dp so the 336 dp
+            // total still matches the weekday row plus the grid it replaces.
+            Divider::horizontal().build(ctx);
             ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
-                LazyColumn::new()
-                    .modifier(Modifier::new().height(DatePickerDefaults::YEAR_PANEL_HEIGHT))
-                    .state(list_state)
-                    .spacing(DatePickerDefaults::YEARS_VERTICAL_PADDING)
-                    .items(
-                        row_count,
-                        |row| row as u64,
-                        move |ctx, row| {
-                            Row::new()
-                                .modifier(Modifier::new().fill_max_width())
-                                .arrangement(Arrangement::SpaceEvenly)
-                                .alignment(Alignment::Center)
-                                .build(ctx, |ctx| {
-                                    for column in 0..DatePickerDefaults::YEARS_PER_ROW {
-                                        let index = row * DatePickerDefaults::YEARS_PER_ROW + column;
-                                        if index >= count {
-                                            break;
-                                        }
-                                        let year = first + index as i32;
-                                        year_cell(
-                                            ctx,
-                                            &cell_colors,
-                                            cell_state.selectable_dates().is_selectable_year(year),
-                                            year,
-                                            selected_year == Some(year),
-                                            year == current_year,
-                                            on_year_selected.clone(),
-                                        );
-                                    }
-                                });
-                        },
+                Row::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(DatePickerDefaults::YEAR_PANEL_HEIGHT - DatePickerDefaults::DIVIDER_THICKNESS),
                     )
-                    .build(ctx);
+                    .arrangement(Arrangement::Start)
+                    .build(ctx, |ctx| {
+                        LazyColumn::new()
+                            .modifier(Modifier::new().layout_weight(1.0).fill_max_height())
+                            .state(list_state.clone())
+                            .spacing(DatePickerDefaults::YEARS_VERTICAL_PADDING)
+                            .items(
+                                row_count,
+                                |row| row as u64,
+                                move |ctx, row| {
+                                    Row::new()
+                                        .modifier(Modifier::new().fill_max_width())
+                                        .arrangement(Arrangement::SpaceEvenly)
+                                        .alignment(Alignment::Center)
+                                        .build(ctx, |ctx| {
+                                            for column in 0..DatePickerDefaults::YEARS_PER_ROW {
+                                                let index =
+                                                    row * DatePickerDefaults::YEARS_PER_ROW + column;
+                                                if index >= count {
+                                                    break;
+                                                }
+                                                let year = first + index as i32;
+                                                year_cell(
+                                                    ctx,
+                                                    &cell_colors,
+                                                    cell_state
+                                                        .selectable_dates()
+                                                        .is_selectable_year(year),
+                                                    year,
+                                                    displayed_year == year,
+                                                    year == current_year,
+                                                    on_year_selected.clone(),
+                                                );
+                                            }
+                                        });
+                                },
+                            )
+                            .build(ctx);
+                        // Always visible: the list is 2412 months tall and nothing else tells the user
+                        // it scrolls (the bottom row is cut off mid-year otherwise).
+                        LazyScrollbar::new(list_state)
+                            .always_show(true)
+                            .build(ctx);
+                    });
             });
             Divider::horizontal().build(ctx);
         });
@@ -1487,7 +1597,14 @@ fn year_cell(
         ));
     }
     surface.build(ctx, |ctx| {
-        Text::new(label).build(ctx);
+        // Same centering as `day_cell`: the surface lays content out top-start, so without this
+        // the label hugs the pill's edge and the today outline clips it (measured on "2026").
+        Stack::new()
+            .alignment(Alignment::Center)
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                Text::new(label).build(ctx);
+            });
     });
 }
 
@@ -1570,6 +1687,46 @@ fn month_grid(
         });
 }
 
+/// The selected day's background circle, drawn by its own node so that only it animates: it fades
+/// 0 → full over [`DAY_POP_MILLIS`] when the selection lands (and back out when it leaves), radius
+/// always full, and the label above it never moves.
+/// The progress is peeked at paint time (ticks never recompose); per the `DrawNode` contract it stays
+/// out of `node_key` — only the static color fingerprints the node.
+///
+/// How long the selected circle takes to fade in and out. material3 has no selection animation of its own
+/// (the container colour switches outright, `DatePicker.kt:973-993`), so this is winia's own: a short,
+/// symmetric ease-out that keeps the change legible without making the grid feel slow.
+const DAY_POP_MILLIS: u64 = 220;
+#[derive(Debug)]
+struct DayCircleNode {
+    progress: State<f32>,
+    color: Color,
+}
+
+impl crate::modifier::DrawNode for DayCircleNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let t = self.progress.peek().clamp(0.0, 1.0);
+        if t <= 0.0 {
+            return;
+        }
+        let mut paint = skia_safe::Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_style(skia_safe::PaintStyle::Fill);
+        paint.set_color(crate::render::skia_color(Color {
+            a: (t * 255.0).round() as u8,
+            ..self.color
+        }));
+        canvas.draw_circle(
+            skia_safe::Point::new(rect.center_x(), rect.center_y()),
+            rect.width().min(rect.height()) / 2.0,
+            &paint,
+        );
+    }
+    fn node_key(&self) -> String {
+        format!("day-circle:{:?}", self.color)
+    }
+}
+
 /// One day of the grid: a 40 dp circle, outlined when it is today and not selected, filled when it is selected
 /// (`Day`, `DatePicker.kt:1993-2058`).
 fn day_cell(
@@ -1582,9 +1739,19 @@ fn day_cell(
     let state_for_click = state.clone();
     let millis = cell.utc_time_millis;
     let description = day_content_description(model, cell);
+    // Selection progress 0 → 1: every cell remembers one, so landing the selection here plays the
+    // circle in, and moving it away plays the same value 1 → 0 (the node keeps drawing while the
+    // progress is above zero, so the circle shrinks out instead of vanishing).
+    let pop = ctx.animate_float_as_state(
+        if cell.is_selected { 1.0 } else { 0.0 },
+        AnimationSpec::Tween(TweenSpec::new(
+            std::time::Duration::from_millis(DAY_POP_MILLIS),
+            crate::animation::interpolator::EaseOutCubic::new(),
+        )),
+    );
     let mut surface = Surface::new()
         .shape(Shape::Circle)
-        .color(colors.day_container(cell.is_selected, cell.is_enabled))
+        .color(Color::TRANSPARENT)
         .content_color(colors.day_label(cell.is_selected, cell.is_enabled, cell.is_today))
         .enabled(cell.is_enabled)
         .selectable(cell.is_selected, move || {
@@ -1595,7 +1762,16 @@ fn day_cell(
                 .size(DatePickerDefaults::DAY_CELL, DatePickerDefaults::DAY_CELL)
                 .semantics(
                     crate::semantics::SemanticsConfig::new().content_description(description),
-                ),
+                )
+                .draw_node(DayCircleNode {
+                    // The circle's own selected-container color, NOT `day_container(is_selected)`:
+                    // on deselect the cell rebuilds unselected while the progress is still fading,
+                    // and `TRANSPARENT` carries zeroed rgb — fading that paints a black disc instead
+                    // of the primary one (measured). The node only draws while progress > 0, so the
+                    // base stays valid across the whole out-play.
+                    progress: pop,
+                    color: colors.day_container(true, cell.is_enabled),
+                }),
         );
     if cell.is_today && !cell.is_selected {
         surface = surface.border(SurfaceBorder::new(
@@ -1604,8 +1780,456 @@ fn day_cell(
         ));
     }
     surface.build(ctx, |ctx| {
-        Text::new(cell.day.to_string()).build(ctx);
+        // material3's `Day` centers its label in the 40 dp circle (`DatePicker.kt:1993-2058`); the surface
+        // itself lays content out top-start, so the centering is explicit here.
+        Stack::new()
+            .alignment(Alignment::Center)
+            .modifier(Modifier::new().fill_max_size())
+            .build(ctx, |ctx| {
+                Text::new(cell.day.to_string()).build(ctx);
+            });
     });
+}
+
+// ── Docked date picker ──
+
+/// Material Icons `calendar_month` glyph for the docked picker's input affordance. Like the chevrons above,
+/// this sandbox cannot byte-verify the artwork against Google's assets, so it is an inline path.
+pub const CALENDAR_MONTH_PATH: &str = "M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zM9 14H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2zm-8 4H7v-2h2v2zm4 0h-2v-2h2v2zm4 0h-2v-2h2v2z";
+
+/// The docked container's corner radius, read off the M3 specs measurements diagram. Provisional: docked has
+/// no token file (unlike the modal's 28 dp `ContainerShape`), so this stays a plain constant until the token
+/// value is confirmed.
+pub const DOCKED_CONTAINER_CORNER: f32 = 16.0;
+
+/// The inline panel the docked picker shows in place of the weekday row and the month grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DockedPanel {
+    Calendar,
+    Months,
+    Years,
+}
+
+/// The docked date picker: the M3 specs variant that opens from an onscreen input.
+///
+/// Unlike [`DatePicker`] (the modal calendar with its "Select date" title and headline), the docked picker has
+/// no header. Its container holds, top to bottom: a navigation row with a month group and a year group (each
+/// arrows plus a button whose list opens inline, replacing the grid), the weekday row, the month grid, and a
+/// Cancel/OK action row.
+///
+/// The input field is NOT part of this component: in material3 it belongs to the caller that opens the picker
+/// (`DatePickerDialog`'s dock mode keeps its own field, and the M3 specs docked figure draws one above the
+/// picker), so winia leaves it out and the caller pairs this with a `TextField` of its own.
+///
+/// Day taps write the selection into `state` immediately; Cancel/OK only notify. A caller that needs
+/// discard-on-cancel snapshots `selected_date_millis` before opening and restores it in `on_dismiss`.
+pub struct DockedDatePicker {
+    state: DatePickerState,
+    on_confirm: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+    modifier: Modifier,
+}
+
+impl DockedDatePicker {
+    /// A docked picker over `state`.
+    pub fn new(state: DatePickerState) -> Self {
+        Self {
+            state,
+            on_confirm: None,
+            on_dismiss: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The affirming action, after the dismiss button in the row. The picker wires no event of its own into it.
+    pub fn on_confirm(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_confirm = Some(Arc::new(cb));
+        self
+    }
+
+    /// The dismissing action, before the confirm button in the row.
+    pub fn on_dismiss(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_dismiss = Some(Arc::new(cb));
+        self
+    }
+
+    /// A modifier for the container (`modifier`).
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    /// Composes the picker.
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let colors = DatePickerColors::from_theme(&WiniaTheme::colors());
+        let model = self.state.calendar_model().clone();
+        let month = model.month_of_millis(self.state.displayed_month_millis());
+        let grid = MonthGrid::of(
+            month,
+            self.state.selected_date_millis(),
+            self.state.today_millis(),
+            self.state.selectable_dates(),
+        );
+        let state = self.state.clone();
+        // Which inline panel replaces the weekday row and the grid, if any.
+        let panel = ctx.remember(|| State::new(DockedPanel::Calendar)).get();
+        // The year list's scroll state, parked here so reopening the panel keeps its position.
+        let year_rows = ctx.remember(LazyListState::new).get();
+        let on_confirm = self.on_confirm.clone();
+        let on_dismiss = self.on_dismiss.clone();
+
+        let container = self
+            .modifier
+            .then(Modifier::new().width(DatePickerDefaults::CONTAINER_WIDTH))
+            .background(colors.container, Shape::rounded(DOCKED_CONTAINER_CORNER))
+            .clip(Shape::rounded(DOCKED_CONTAINER_CORNER));
+
+        Column::new()
+            .modifier(container)
+            .arrangement(Arrangement::Start)
+            .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .padding_horizontal(DatePickerDefaults::HORIZONTAL_PADDING),
+                    )
+                    .arrangement(Arrangement::Start)
+                    .build(ctx, |ctx| {
+                        let current = panel.get();
+                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows);
+                        // The inline lists crossfade in and out of the calendar's place (material3
+                        // swaps its year overlay with expand + fade; a full-bleed fade reads the same
+                        // here and never moves the action row).
+                        let cross_state = state.clone();
+                        let cross_model = model.clone();
+                        let cross_month = month;
+                        let cross_grid = grid.clone();
+                        let cross_colors = colors.clone();
+                        let cross_rows = year_rows.clone();
+                        let cross_panel = panel.clone();
+                        crate::ui::Crossfade::new(panel.clone())
+                            // The default 300 ms linear tween plays twice per switch (out, then
+                            // in) — 150 ms eased each way lands about as fast as the panel feels.
+                            .animation(TweenSpec::new(
+                                std::time::Duration::from_millis(150),
+                                crate::animation::interpolator::EaseOutCubic::new(),
+                            ))
+                            .build(
+                            ctx,
+                            move |ctx, shown| match shown {
+                                DockedPanel::Calendar => {
+                                    // A Column, not bare siblings: `Crossfade` wraps its content in a
+                                    // Box (stacked, overlapping children), so without this the grid
+                                    // starts at the same y as the weekday row (measured overlap).
+                                    Column::new()
+                                        .modifier(Modifier::new().fill_max_width())
+                                        .arrangement(Arrangement::Start)
+                                        .build(ctx, |ctx| {
+                                            weekday_row(ctx, &cross_model, &cross_colors);
+                                            month_grid(
+                                                ctx,
+                                                &cross_state,
+                                                &cross_model,
+                                                &cross_grid,
+                                                &cross_colors,
+                                            );
+                                        });
+                                }
+                                DockedPanel::Months => {
+                                    month_list(
+                                        ctx,
+                                        &cross_state,
+                                        &cross_model,
+                                        &cross_month,
+                                        &cross_panel,
+                                        &cross_colors,
+                                    );
+                                }
+                                DockedPanel::Years => {
+                                    let panel_for_close = cross_panel.clone();
+                                    let state_for_close = cross_state.clone();
+                                    year_panel(
+                                        ctx,
+                                        &cross_state,
+                                        &cross_model,
+                                        &cross_colors,
+                                        &cross_rows,
+                                        move |year| {
+                                            state_for_close.set_displayed_year(year);
+                                            panel_for_close.set(DockedPanel::Calendar);
+                                        },
+                                    );
+                                }
+                            },
+                        );
+                        docked_action_row(ctx, on_confirm, on_dismiss);
+                    });
+            });
+    }
+}
+
+/// The docked navigation row: a month group and a year group, each arrows around a button whose list opens
+/// inline. While a group's panel is open its arrows are hidden, leaving the button to close it.
+fn docked_navigation(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    month: &CalendarMonth,
+    current: DockedPanel,
+    panel: &State<DockedPanel>,
+    colors: &DatePickerColors,
+    year_rows: &LazyListState,
+) {
+    let year_range = state.year_range();
+    let index = month.index_in(&year_range);
+    let last = CalendarModel::number_of_months_in_range(&year_range) - 1;
+    let navigation_color = colors.navigation_content;
+    let months_open = current == DockedPanel::Months;
+    let years_open = current == DockedPanel::Years;
+    // While either list is open both groups' step arrows fade to alpha 0 (still composed and disabled),
+    // so neither button moves; the idle group degrades to plain dimmed text (the M3 specs docked figure
+    // shows the year side exactly so: "2025" with neither pill nor dropdown arrow, both chevron pairs gone).
+    let panel_open = months_open || years_open;
+
+    Row::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::MONTH_YEAR_HEIGHT),
+        )
+        .arrangement(Arrangement::SpaceBetween)
+        .alignment(Alignment::Center)
+        .build(ctx, |ctx| {
+            // Month group: step arrows around the month name; the button swaps in the month list.
+            Row::new()
+                .arrangement(Arrangement::Start)
+                .alignment(Alignment::Center)
+                .build(ctx, |ctx| {
+                    let step_back = state.clone();
+                    step_arrow(ctx, move || step_back.step_displayed_month(-1), index > 0, CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    let panel_toggle = panel.clone();
+                    let is_open = months_open;
+                    // Abbreviated month ("Sep", not "September") — the M3 specs docked figure.
+                    let label = state.calendar_model().locale().month_names_short[month.month as usize - 1].clone();
+                    year_menu_button(
+                        ctx,
+                        label,
+                        move || {
+                            panel_toggle.set(if is_open {
+                                DockedPanel::Calendar
+                            } else {
+                                DockedPanel::Months
+                            });
+                        },
+                        colors,
+                        !years_open,
+                        MONTH_MENU_TAG,
+                    );
+                    let step_forward = state.clone();
+                    step_arrow(ctx, move || step_forward.step_displayed_month(1), index < last, CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                });
+            // Year group: step arrows around the year; the button swaps in the year list.
+            Row::new()
+                .arrangement(Arrangement::Start)
+                .alignment(Alignment::Center)
+                .build(ctx, |ctx| {
+                    let displayed_year = month.year;
+                    let state_for_step = state.clone();
+                    step_arrow(
+                        ctx,
+                        move || state_for_step.set_displayed_year(displayed_year - 1),
+                        year_range.contains(&(displayed_year - 1)),
+                        CHEVRON_LEFT_PATH,
+                        navigation_color,
+                        IconButtonSize::XSmall,
+                        !panel_open,
+                    );
+                    let panel_toggle = panel.clone();
+                    let is_open = years_open;
+                    let rows_for_scroll = year_rows.clone();
+                    let state_for_scroll = state.clone();
+                    year_menu_button(
+                        ctx,
+                        displayed_year.to_string(),
+                        move || {
+                            if is_open {
+                                panel_toggle.set(DockedPanel::Calendar);
+                            } else {
+                                // Park the list one row above the displayed year before it opens
+                                // (mirrors `DatePicker`'s toggle).
+                                rows_for_scroll.scroll_to_item(
+                                    year_panel_first_row(
+                                        &state_for_scroll,
+                                        state_for_scroll.calendar_model(),
+                                    ),
+                                    0.0,
+                                );
+                                panel_toggle.set(DockedPanel::Years);
+                            }
+                        },
+                        colors,
+                        !months_open,
+                        YEAR_MENU_TAG,
+                    );
+                    let state_for_step = state.clone();
+                    step_arrow(
+                        ctx,
+                        move || state_for_step.set_displayed_year(displayed_year + 1),
+                        year_range.contains(&(displayed_year + 1)),
+                        CHEVRON_RIGHT_PATH,
+                        navigation_color,
+                        IconButtonSize::XSmall,
+                        !panel_open,
+                    );
+                });
+        });
+}
+
+/// The checkmark that flags the displayed month in the month list.
+pub const CHECK_PATH: &str = "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+
+/// The month list: the twelve months in four rows of three pill cells, exactly as tall as the calendar it
+/// replaces. Three columns do fit: the month pills are 104 dp wide (the year cells' 72 dp plus room for the
+/// longest English name), not 72 dp.
+fn month_list(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    model: &CalendarModel,
+    month: &CalendarMonth,
+    panel: &State<DockedPanel>,
+    colors: &DatePickerColors,
+) {
+    let names = model.locale().month_names.clone();
+    let displayed_year = month.year;
+    let displayed_month = month.month;
+    let year_enabled = state.selectable_dates().is_selectable_year(displayed_year);
+    // The item closure outlives this call, so it only captures owned clones (mirrors `year_panel`).
+    let cell_state = state.clone();
+    let cell_model = model.clone();
+    let cell_panel = panel.clone();
+    let cell_colors = colors.clone();
+    let cell_names = names.clone();
+
+    Column::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .height(DatePickerDefaults::YEAR_PANEL_HEIGHT + DatePickerDefaults::DIVIDER_THICKNESS),
+        )
+        .arrangement(Arrangement::Start)
+        .build(ctx, |ctx| {
+            // Same chrome as the year panel: a divider closes the list at both ends, and the grid
+            // gives back 1 dp so the 336 dp total still matches the calendar it replaces.
+            Divider::horizontal().build(ctx);
+            ProvideTextStyle(WiniaTheme::typography().body_large.clone(), ctx, |ctx| {
+                // The panel keeps the calendar's height, so the four rows are spread over the whole of
+                // it (`SpaceEvenly` on the column) instead of huddling in the middle — `Center` leaves
+                // 155 dp of blank above and below. Inside a row, `Start` plus an explicit
+                // `CELL_SPACING` is what measures 12 dp across and 12 dp down: `SpaceEvenly` adds its
+                // own extra ON TOP of `spacing` (see `flex.rs`), so three 104 dp pills and two 12 dp
+                // gaps fill the 336 dp content width exactly.
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .fill_max_width()
+                            .height(DatePickerDefaults::YEAR_PANEL_HEIGHT - DatePickerDefaults::DIVIDER_THICKNESS),
+                    )
+                    .arrangement(Arrangement::SpaceEvenly)
+                    .build(ctx, |ctx| {
+                        for row in 0..4 {
+                            Row::new()
+                                .modifier(Modifier::new().fill_max_width())
+                                .arrangement(Arrangement::Start)
+                                .spacing(DatePickerDefaults::CELL_SPACING)
+                                .alignment(Alignment::Center)
+                                .build(ctx, |ctx| {
+                                    for column in 0..3 {
+                                        let month_no = (row * 3 + column + 1) as u32;
+                                        let label = cell_names[month_no as usize - 1].clone();
+                                        let selected = month_no == displayed_month;
+                                        let state_for_pick = cell_state.clone();
+                                        let model_for_pick = cell_model.clone();
+                                        let panel_for_close = cell_panel.clone();
+                                        let surface = Surface::new()
+                                            .shape(Shape::Pill)
+                                            .color(cell_colors.year_container(selected, year_enabled))
+                                            .content_color(
+                                                cell_colors.year_label(false, selected, year_enabled),
+                                            )
+                                            .enabled(year_enabled)
+                                            .selectable(selected, move || {
+                                                let target =
+                                                    model_for_pick.month_of(displayed_year, month_no);
+                                                state_for_pick.set_displayed_month_millis(
+                                                    target.start_utc_time_millis,
+                                                );
+                                                panel_for_close.set(DockedPanel::Calendar);
+                                            })
+                                            .modifier(
+                                                Modifier::new()
+                                                    .size(
+                                                        DatePickerDefaults::MONTH_CELL_WIDTH,
+                                                        DatePickerDefaults::YEAR_CELL_HEIGHT,
+                                                    )
+                                                    .test_tag(format!(
+                                                        "{MONTH_CELL_TAG_PREFIX}{month_no}"
+                                                    )),
+                                            );
+                                        surface.build(ctx, |ctx| {
+                                            Stack::new()
+                                                .alignment(Alignment::Center)
+                                                .modifier(Modifier::new().fill_max_size())
+                                                .build(ctx, |ctx| {
+                                                    Text::new(label).build(ctx);
+                                                });
+                                        });
+                                    }
+                                });
+                        }
+                    });
+            });
+            Divider::horizontal().build(ctx);
+        });
+}
+
+/// The Cancel/OK action row at the picker's end: the dismiss button first, the confirm button second.
+///
+/// A row with only one of the two has no gap to draw, so the spacer is composed only when both buttons are.
+fn docked_action_row(
+    ctx: &mut ComposeCtx,
+    on_confirm: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
+) {
+    let both_present = on_confirm.is_some() && on_dismiss.is_some();
+    Row::new()
+        .modifier(
+            Modifier::new()
+                .fill_max_width()
+                .padding_end(DatePickerDefaults::MODAL_BUTTONS_END_PADDING)
+                .padding_bottom(DatePickerDefaults::MODAL_BUTTONS_BOTTOM_PADDING),
+        )
+        .arrangement(Arrangement::End)
+        .alignment(Alignment::Center)
+        .build(ctx, |ctx| {
+            if let Some(on_dismiss) = on_dismiss {
+                Button::text()
+                    .on_click(move || on_dismiss())
+                    .build(ctx, |ctx| {
+                        Text::new("Cancel").build(ctx);
+                    });
+            }
+            if both_present {
+                Spacer::horizontal(DatePickerDefaults::MODAL_BUTTONS_SPACING).build(ctx);
+            }
+            if let Some(on_confirm) = on_confirm {
+                Button::text()
+                    .on_click(move || on_confirm())
+                    .build(ctx, |ctx| {
+                        Text::new("OK").build(ctx);
+                    });
+            }
+        });
 }
 
 #[cfg(test)]
@@ -2317,12 +2941,22 @@ mod tests {
     /// the measurement `the_published_arrow_data_draws_the_same_arrow` makes for the dropdown arrow
     /// (`winia/src/ui/overlay.rs:1970`).
     fn render_glyph(data: &str) -> Vec<bool> {
+        render_glyph_in(data, crate::layout::LayoutDirection::Ltr)
+    }
+
+    /// [`render_glyph`] under an ambient `direction`, so the RTL run exercises the real path — the theme's
+    /// direction reaching the node's `layout_direction` and `draw_icon`'s mirror test — rather than a
+    /// modifier bolted on for the test. `auto_mirror` is on, which is what the arrow tests are about.
+    fn render_glyph_in(data: &str, direction: crate::layout::LayoutDirection) -> Vec<bool> {
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
-            Icon::svg_path(data)
-                .tint(Color::BLACK)
-                .size(24.0)
-                .build(ctx);
+            WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
+                Icon::svg_path(data)
+                    .tint(Color::BLACK)
+                    .size(24.0)
+                    .auto_mirror(true)
+                    .build(ctx);
+            });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 24.0, 0.0, 24.0));
         let mut surface = skia_safe::surfaces::raster_n32_premul((24, 24)).expect("surface");
@@ -2333,6 +2967,79 @@ mod tests {
         let pixels = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pixels.pixels::<[u8; 4]>().expect("pixels");
         px.iter().map(|p| p[0] < 128).collect()
+    }
+
+    #[test]
+    fn the_navigation_arrows_flip_their_artwork_under_rtl() {
+        // `Row` already carries the previous arrow to the RIGHT edge in RTL, so the artwork has to flip
+        // with it or both arrows point inward — the failure `step_arrow` guards with `auto_mirror`.
+        // Inked pixels are compared against the OTHER glyph rather than through an ink centroid: the
+        // chevron's centroid sits at ~11.5 either way round, so a centroid cannot see the flip at all
+        // (measured: 11.516 under LTR, 11.484 under RTL — a genuine mirror that a centroid test misses).
+        let previous_ltr = render_glyph(CHEVRON_LEFT_PATH);
+        let previous_rtl = render_glyph_in(CHEVRON_LEFT_PATH, crate::layout::LayoutDirection::Rtl);
+        let next_ltr = render_glyph(CHEVRON_RIGHT_PATH);
+        let ink_diff = |a: &[bool], b: &[bool]| a.iter().zip(b.iter()).filter(|(x, y)| x != y).count();
+
+        // Under RTL the previous arrow lands on the next chevron's pixels — 17 of 576 measured, the
+        // same figure `the_month_arrows_draw_mirrored_chevrons` records for this pair of paths.
+        assert!(
+            ink_diff(&previous_rtl, &next_ltr) <= 24,
+            "under RTL the previous chevron draws as the next one ({} pixels differ)",
+            ink_diff(&previous_rtl, &next_ltr)
+        );
+
+        // And under LTR it does not, so the assertion above is the mirror doing work rather than the
+        // two constants happening to rasterize alike (41 pixels measured).
+        assert!(
+            ink_diff(&previous_ltr, &next_ltr) > 24,
+            "under LTR the previous chevron stays its own glyph (only {} pixels differ)",
+            ink_diff(&previous_ltr, &next_ltr)
+        );
+    }
+
+    /// The real guard on `step_arrow`: composing the picker has to mark its chevrons auto-mirrored. The
+    /// pixel test above proves the pipeline flips an icon that ASKS to be flipped; this one proves the
+    /// picker asks — drop the `auto_mirror(true)` from `step_arrow` and it goes red.
+    #[test]
+    fn the_picker_composes_its_chevrons_as_auto_mirrored() {
+        use crate::modifier::ModifierElement;
+        use crate::ui::icon::IconSource;
+
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            let state = DatePickerState::new(CalendarLocale::default());
+            DockedDatePicker::new(state).build(ctx);
+        });
+
+        let chevrons: Vec<(String, bool)> = composer
+            .arena_nodes()
+            .iter()
+            .flat_map(|node| node.modifier.elements().to_vec())
+            .filter_map(|element| match element {
+                ModifierElement::DrawIcon { spec } => match &spec.source {
+                    IconSource::SvgPath { data, .. }
+                        if data.as_ref() == CHEVRON_LEFT_PATH || data.as_ref() == CHEVRON_RIGHT_PATH =>
+                    {
+                        Some((data.to_string(), spec.auto_mirror))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !chevrons.is_empty(),
+            "the docked picker composes no chevron icons, so this test would pass vacuously"
+        );
+        for (data, auto_mirror) in &chevrons {
+            assert!(
+                *auto_mirror,
+                "the chevron `{}` is not marked auto_mirror, so RTL leaves it pointing inward",
+                &data[..data.len().min(24)]
+            );
+        }
     }
 
     /// The half-open pixel box an ink mask covers, `(left, top, right, bottom)`, or `(0, 0, 0, 0)` when nothing

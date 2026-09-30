@@ -424,3 +424,32 @@ click, in both directions; the field does not take focus; the element reports bu
 button + collapsed) and `exposed_dropdown_secondary_anchor_keeps_the_caret_in_a_focused_field` (with the
 field focused and holding text, clicking the icon opens the menu, keeps the keyboard in the field and the
 caret usable). Library tests: `app::press_target_tests` pins the three press-target rules.
+
+### 4.15 Planned: `PopupPosition` moves to Start/Center/End
+
+`PopupPosition` (`winia/src/ui/overlay.rs:162`) names **absolute corners**: `TopLeft`, `TopCenter`,
+`TopRight`, `Center`, `BottomLeft`, `BottomCenter`, `BottomRight`. Neither the enum nor the anchored
+placement branch consults the layout direction — `app.rs:3667` resolves `BottomLeft` to `(ax, ay + ah)`,
+pure geometry, and the unanchored branch to `(0.0, h - size.1)`. So an anchored popup aligns to the
+anchor's geometric left edge under RTL exactly as it does under LTR.
+
+That is wrong for anything that should follow the anchor's *start* edge. material3's `Popup` and
+`DropdownMenu` take `Alignment`, which is direction-resolved (`Alignment.TopStart` is the left edge in LTR
+and the right edge in RTL), so "below my anchor, aligned to its start" is expressible there and not here.
+Measured on the docked date picker: the demo passes `BottomLeft` and looks right only because its
+`TextField` does not mirror either — see `docs/date-picker.md` §RTL.
+
+**The plan is to add Start/End variants and migrate to them**, not to make the existing corners mirror —
+mirroring a name that says "Left" would be a lie, and would silently change every current caller. Shape:
+
+- Add `TopStart` / `BottomStart` alongside the existing seven; resolve them against
+  `WiniaTheme::direction()` at the placement site, which is the same point `Row` reads it
+  (`ui/layout_components.rs:110`).
+- Migrate the callers that mean "start": the docked date picker's popup, `ExposedDropdownMenuBox`, and the
+  `DropdownMenu` trigger path. Callers that genuinely mean an absolute corner (`SearchBar`'s full-screen
+  and collapsed overlays, `Tooltip`'s `TopCenter`) stay as they are.
+- `fit_around_anchor`'s horizontal candidate sequence (§4.3) is the same question one level up: it walks
+  "align to the anchor's start, then its end, then the window edge", which is direction-resolved in M3
+  (`internal/MenuPosition.kt`) and geometric in winia today. It wants the same start/end treatment.
+
+Nothing is implemented yet. This is the parking note so the gap is not rediscovered as a bug.
