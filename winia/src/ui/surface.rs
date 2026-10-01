@@ -193,11 +193,20 @@ impl Surface {
         // （`ColorScheme.kt:1540-1547`, `:1125-1129`）。底色不是 surface（如对话框的
         // surfaceContainerHigh）则不上色——这正是 Compose 的行为，也是 AlertDialog 传了
         // `tonalElevation` 也是空转的原因。
+        //
+        // The elevation that decides the alpha is the ABSOLUTE one, not this surface's own: Compose
+        // sums the ancestors first (`LocalAbsoluteTonalElevation.current + tonalElevation`, then
+        // `provides` for the subtree — `Surface.kt:106,109` and the same three lines in the other
+        // overloads at `:211`、`:317`、`:424`). The stated reason is `Surface.kt:146-150`: a Surface
+        // must never look LESS raised than its ancestors. Tinting from the local value instead made
+        // every nested surface in a stack read as flat as its parent.
+        let absolute_elevation = crate::ui::theme::WiniaTheme::absolute_tonal_elevation()
+            + self.tonal_elevation;
         let color = if self.tonal_elevation > 0.0
             && base_color == theme.surface
             && crate::ui::theme::WiniaTheme::tonal_elevation_enabled()
         {
-            surface_color_at_elevation(theme, self.tonal_elevation)
+            surface_color_at_elevation(theme, absolute_elevation)
         } else {
             base_color
         };
@@ -282,7 +291,15 @@ impl Surface {
             GroupStatus::Enter => {
                 // 内容色下传（LocalContentColor 等价物——future Text/Icon 默认色）
                 crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    content(ctx);
+                    // And the absolute elevation down with it, so a nested Surface tints from the sum
+                    // rather than from its own number alone (`Surface.kt:109`).
+                    crate::ui::theme::WiniaTheme::with_absolute_tonal_elevation(
+                        absolute_elevation,
+                        ctx,
+                        |ctx| {
+                            content(ctx);
+                        },
+                    );
                 });
             }
         }
@@ -331,9 +348,82 @@ mod tests {
     }
 
     /// Compose's published alphas, from `alpha = ((4.5·ln(elev+1)) + 2) / 100` over the
-    /// `ElevationTokens` levels (`ElevationTokens.kt:25-29`).
+    /// `ElevationTokens` levels (`ElevationTokens.kt:24-29`, Level0 at `:24` through Level5 at `:29`).
     fn compose_alpha(elevation: f32) -> f32 {
         ((4.5 * (elevation + 1.0).ln()) + 2.0) / 100.0
+    }
+
+    /// Every background the tree paints, outermost first — the same read as [`painted_background`], for
+    /// the cases where there is more than one surface and they are not interchangeable.
+    fn painted_backgrounds(
+        theme: ThemeColors,
+        tonal_enabled: bool,
+        build: impl FnOnce(&mut ComposeCtx),
+    ) -> Vec<Color> {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme, ctx, |ctx| {
+                WiniaTheme::with_tonal_elevation_enabled(tonal_enabled, ctx, |ctx| build(ctx));
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    /// A nested Surface tints from the SUM of its ancestors' elevations, not from its own number alone
+    /// (`Surface.kt:106,109`; the reason is at `:146-150` — a Surface must never look less raised than
+    /// its ancestors). Reading the local value made a 3dp-inside-3dp surface paint the same 8.24% as
+    /// its parent, which is to say it looked perfectly flat.
+    #[test]
+    fn a_nested_surface_tints_from_its_ancestors_elevation_too() {
+        let theme = ThemeColors::default_light();
+        let backgrounds = painted_backgrounds(theme.clone(), true, |ctx| {
+            Surface::new().tonal_elevation(3.0).build(ctx, |ctx| {
+                Surface::new().tonal_elevation(3.0).build(ctx, |_| {});
+            });
+        });
+        assert_eq!(backgrounds.len(), 2, "both surfaces paint, got {backgrounds:?}");
+        assert_eq!(
+            backgrounds[0],
+            theme.surface.overlay(theme.surface_tint, compose_alpha(3.0)),
+            "the outer surface is unchanged — nothing above it"
+        );
+        assert_eq!(
+            backgrounds[1],
+            theme.surface.overlay(theme.surface_tint, compose_alpha(6.0)),
+            "the inner surface adds its 3dp to the outer's, so it reads 6dp and not 3dp"
+        );
+        assert_ne!(
+            backgrounds[1], backgrounds[0],
+            "a nested surface that paints exactly its parent's tint is the bug"
+        );
+
+        // Three deep, to show it is a sum rather than a two-level special case.
+        let deep = painted_backgrounds(theme.clone(), true, |ctx| {
+            Surface::new().tonal_elevation(1.0).build(ctx, |ctx| {
+                Surface::new().tonal_elevation(1.0).build(ctx, |ctx| {
+                    Surface::new().tonal_elevation(1.0).build(ctx, |_| {});
+                });
+            });
+        });
+        assert_eq!(deep.len(), 3, "all three paint, got {deep:?}");
+        for (depth, painted) in deep.iter().enumerate() {
+            let elevation = depth as f32 + 1.0;
+            assert_eq!(
+                *painted,
+                theme.surface.overlay(theme.surface_tint, compose_alpha(elevation)),
+                "surface {depth} should read {elevation}dp"
+            );
+        }
     }
 
     #[test]

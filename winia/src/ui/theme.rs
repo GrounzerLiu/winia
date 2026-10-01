@@ -371,6 +371,14 @@ static LOCAL_CONTENT_COLOR: LazyLock<CompositionLocal<Color>> =
 static LOCAL_TONAL_ELEVATION_ENABLED: LazyLock<CompositionLocal<bool>> =
     LazyLock::new(|| CompositionLocal::new(|| true));
 
+/// 绝对 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation`，`Surface.kt:487`）——每层
+/// `Surface` 把自己的 `tonal_elevation` 加到父层提供的值上再下传，tint 按这个**和**取值。Compose 四个
+/// 重载都是 `LocalAbsoluteTonalElevation.current + tonalElevation`（`Surface.kt:106`、`:211`、`:317`、
+/// `:424`），理由见 `Surface.kt:146-150`：a Surface never appears to have a lower elevation overlay than
+/// its ancestors。默认 0。
+static LOCAL_ABSOLUTE_TONAL_ELEVATION: LazyLock<CompositionLocal<f32>> =
+    LazyLock::new(|| CompositionLocal::new(|| 0.0));
+
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════
@@ -697,6 +705,22 @@ impl WiniaTheme {
     /// 当前子树是否启用 tonal overlay（默认开——对标 Compose `LocalTonalElevationEnabled`）。
     pub(crate) fn tonal_elevation_enabled() -> bool {
         LOCAL_TONAL_ELEVATION_ENABLED.current()
+    }
+
+    /// 在子树中提供绝对 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation provides
+    /// absoluteElevation`，`Surface.kt:109`）。只有 `Surface` 自己会调——它提供的是"自己那份加上
+    /// 父层已经提供的和"。
+    pub(crate) fn with_absolute_tonal_elevation(
+        elevation: f32,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation, || content(ctx));
+    }
+
+    /// 父层累积下来的 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation.current`）。
+    pub(crate) fn absolute_tonal_elevation() -> f32 {
+        LOCAL_ABSOLUTE_TONAL_ELEVATION.current()
     }
 
     /// 读取当前子树主题色。

@@ -402,11 +402,14 @@ pub struct OverlayDesc {
     /// default true).
     pub(crate) dismiss_on_outside: bool,
     /// Whether Escape (the back press) triggers `on_dismiss_request` — Compose's
-    /// `DialogProperties.dismissOnBackPress` (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    /// `DialogProperties.dismissOnBackPress`. Compose routes Escape through this same flag
+    /// (`BasicEdgeToEdgeDialog.android.kt:227-233`), which is the part winia copies.
     ///
-    /// When false the key is still CONSUMED, exactly as Compose consumes it and only skips
-    /// `onDismissRequest`: the page behind the scrim must not start reacting to an Escape the
-    /// dialog swallowed. Default true, so every overlay that predates this is unchanged.
+    /// When false the key is still CONSUMED. That part is winia's own: Compose's dialog is a separate
+    /// window, so with the flag false `onKeyUp` falls through to `super` (`:235`) and there is no page
+    /// behind to reach. winia draws the overlay over the live page, so letting the key through would
+    /// hand an Escape the dialog deliberately kept to the page under its scrim. Default true, so every
+    /// overlay that predates this is unchanged.
     pub(crate) dismiss_on_back_press: bool,
     /// When overlay content is hit, **pass through to the main tree** without
     /// consuming the event — used by Tooltip: when a tooltip covers its anchor,

@@ -150,9 +150,11 @@ pub struct LazyListState {
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
     /// 的 scrollbar.rs 可见）。
     pub(crate) scroll_pulse: crate::core::state::State<u64>,
-    /// Whether a drag or a fling is in progress. Lives here rather than only in the ScrollState
-    /// `build` assembles because a caller has to be able to ASK — that is Compose's
-    /// `!isScrollInProgress` guard on `LaunchedEffect(monthIndex)` (`DatePicker.kt:1549`), and without
+    /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`. This is
+    /// not a flag of its own: `build` hands this same state to the `ScrollState` the list assembles as
+    /// its `is_scroll_in_progress` (`:983`, `:1014`), so it is whatever the drag and fling paths last
+    /// wrote. The getter exists because a caller has to be able to ASK, which is Compose's
+    /// `!isScrollInProgress` guard on `LaunchedEffect(monthIndex)` (`DatePicker.kt:1548-1553`) — without
     /// it a sync that scrolls the list cancels the gesture that was already moving it.
     pub(crate) is_scrolling: crate::core::state::State<bool>,
     /// The paging snap configuration, written back by the measure pass when `snap_paging` is on and
@@ -191,9 +193,14 @@ impl LazyListState {
     /// Whether there is content past the last visible item (Compose
     /// `LazyListState.canScrollForward`). Asked from the pixel offset against the measured limit, so
     /// it answers what a scrollbar would: is the list already resting at its end?
+    ///
+    /// ⚠ The sentinel is `f32::MAX`, not infinity — see the same warning on `fling_limit` at measure
+    /// time — so `is_finite()` is TRUE before the first measure and the naive test answered "yes, you
+    /// can scroll" on a list nobody has laid out yet. Compose's `canScrollForward` starts at `false`
+    /// (`LazyListState.kt:474`).
     pub fn can_scroll_forward(&self) -> bool {
         let limit = self.fling_limit.peek();
-        limit.is_finite() && self.offset.get() < limit - 0.5
+        limit < f32::MAX && self.offset.get() < limit - 0.5
     }
 
     /// Whether there is content before the first visible item (Compose

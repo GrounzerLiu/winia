@@ -463,9 +463,19 @@ impl PerWindow {
             if self.overlays[i].on_dismiss.is_none() {
                 return false;
             }
-            // `dismissOnBackPress = false` still SWALLOWS the key, exactly as Compose consumes it and
-            // only skips `onDismissRequest` (`BasicEdgeToEdgeDialog.android.kt:225-236`): the page
-            // behind the scrim must not start reacting to an Escape the dialog kept.
+            // `dismissOnBackPress = false` SWALLOWS the key. This is a deliberate divergence, and the
+            // reason is structural rather than a quote: Compose runs a dialog in its OWN window, so
+            // with the flag false its `onKeyUp` simply falls through to `super` (`BasicEdgeToEdge
+            // Dialog.android.kt:227,235`) and there is no page behind to reach anyway. winia draws the
+            // dialog as an overlay over the live page, so letting the key through would hand an Escape
+            // the dialog deliberately kept to the page under its scrim — where it would clear that
+            // page's focus. (Note that `AlertDialog` does not even go through
+            // `BasicEdgeToEdgeDialog`: it reaches `androidx.compose.ui.window.Dialog` via
+            // `DefaultBasicAlertDialogOverride`, `AlertDialog.kt:165-172`.)
+            //
+            // Ordering matters and is not an accident: with no `on_dismiss_request` there is nothing
+            // for a dismissal to ask, so the handler check above wins and the key is left alone even
+            // when this flag is off.
             if !self.overlays[i].dismiss_on_back_press {
                 return true;
             }
@@ -2496,8 +2506,14 @@ fn dispatch_nested_scroll_fling(
             .collect();
     let child_started = {
         let node = &nodes[target];
+        // The 50 px/s floor below is a DEACAY floor — it stops a release that is really just the tail
+        // of a drag from banking momentum. A paging list must ignore it: its whole motion is the snap
+        // spring, so a slow drag past halfway that is let go with the finger nearly still has to still
+        // advance a page. Skipping the fling there left the list resting between two pages for good,
+        // because nothing else ever snaps it back. Compose has no such floor — `Scrollable.kt:857-881`
+        // calls `performFling` on every release.
         if let Some(ss) = node.modifier.vertical_scroll_state() {
-            if child_velocity.y.abs() >= 50.0 {
+            if child_velocity.y.abs() >= 50.0 || ss.snaps() {
                 let post_connections = post_connections.clone();
                 ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
                     // child 实际消费 = 起始 − 边界剩余（剩余为 0 时全消费）
@@ -2514,7 +2530,7 @@ fn dispatch_nested_scroll_fling(
                 true
             } else { ss.is_scroll_in_progress.set(false); false }
         } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
-            if child_velocity.x.abs() >= 50.0 {
+            if child_velocity.x.abs() >= 50.0 || ss.snaps() {
                 let post_connections = post_connections.clone();
                 // ⚠ reverse（RTL）滚动：fling 速度方向与手势 delta 同需镜像
                 //（apply_scroll_delta 已镜像 delta，此处镜像速度保持一致）
@@ -5404,8 +5420,8 @@ mod overlay_close_tests {
     }
 
     /// `DialogProperties.dismissOnBackPress = false` still SWALLOWS Escape — the page behind the scrim
-    /// must not react to a key the dialog kept — but does not close the dialog, which is exactly what
-    /// Compose does (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    /// must not react to a key the dialog kept — but does not close the dialog. That swallow is winia's
+    /// own, not Compose's: see the note on [`PerWindow::escape_key`].
     #[test]
     fn escape_respects_dismiss_on_back_press() {
         let desc = |dismiss_on_back_press: bool| OverlayDesc {

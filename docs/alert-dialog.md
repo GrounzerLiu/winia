@@ -90,15 +90,30 @@ elevation. M3 dialogs look "raised" this way.
 
 Over the published `ElevationTokens` levels that is `1dp → 5.1%`, `3dp → 8.2%`, `6dp → 10.8%`.
 
-**This does not change any dialog.** Every M3 dialog's container is `surfaceContainerHigh`/`surfaceVariant`,
-never `surface`, so the gate excludes them all — which is exactly why Compose's own `AlertDialog` gets
-nothing from its `tonalElevation` parameter either. The capability lives on `Surface` because that is where
-Compose puts it, and `Card`/`Menu` are the surfaces that actually sit on `surface`.
+**It accumulates.** The elevation that decides the alpha is the ABSOLUTE one: each `Surface` adds its own
+`tonal_elevation` to whatever its ancestors provided and tints from the sum, then provides that sum downward
+(`Surface.kt:106,109` and the same pair in the other three overloads at `:211`、`:317`、`:424`; the reason is
+at `Surface.kt:146-150` — *a Surface never appears to have a lower elevation overlay than its ancestors*).
+So a 3 dp surface inside a 3 dp one reads 6 dp, not 3. winia previously tinted from the local number alone,
+which made every surface in a stack read as flat as its parent.
 
-Five tests in `ui::surface` pin it: the tint and the formula (with the Level2 8.24% alpha checked against the
-published value, not just against the formula's own output), the non-`surface` colours staying untouched, zero
-elevation and the switch each doing nothing, the content colour still following the UNTINTED base colour, and
-the tint reaching the rendered pixels.
+**This does not change any dialog.** Every M3 dialog's container is `surfaceContainerHigh`/`surfaceVariant`,
+never `surface`, so the gate excludes them all — which is also why Compose's own `AlertDialog` gets nothing
+from its `tonalElevation` parameter, whose default is `0.dp` anyway (`AlertDialogDefaults.TonalElevation`,
+`AlertDialog.kt:241`). Note that gate holds only for the DEFAULT container colour: `containerColor` is a
+parameter, and a caller who passes `ColorScheme.surface` would get the tint. That is why `AlertDialog` does
+not expose `tonalElevation` here — see "Deviations from Compose".
+
+`Card` is not one of the tonal surfaces. Compose's `Card` passes no `tonalElevation` at all, only
+`shadowElevation` (`Card.kt:88-94`, `:149-157`), and its container is `surfaceContainerHighest`
+(`FilledCardTokens.kt:24`) — neither half of the gate. `Menu` does pass one (`Menu.kt:403`), but its default
+is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
+`Surface` because that is where Compose puts it, not because a stock caller uses it.
+
+Six tests in `ui::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
+colours staying untouched, zero elevation and the switch each doing nothing, the content colour still
+following the UNTINTED base colour, the tint reaching the rendered pixels, and the accumulation across two
+and three nested surfaces.
 
 ## Layout
 
@@ -152,11 +167,20 @@ them, but the group holds nothing winia acts on differently):
 | `dismissOnClickOutside` | `dismiss_on_outside` | true |
 | `dismissOnBackPress` | `dismiss_on_back_press` | true |
 | `isFocusable` | `focusable` (drives the overlay's `focus_scope`) | true |
-| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | — | Android-window concepts with no counterpart in a desktop overlay; deliberately not stubbed |
+| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | — | `usePlatformDefaultWidth` is a common `DialogProperties` field with no counterpart in an overlay that sizes itself; `decorFitsSystemWindows` is an Android-window concept. Deliberately not stubbed |
 
-`dismiss_on_back_press(false)` still SWALLOWS Escape rather than letting it through — the page behind the
-scrim must not react to a key this dialog kept, and that is what Compose does
-(`BasicEdgeToEdgeDialog.android.kt:225-236`: the key is consumed, only `onDismissRequest` is skipped).
+`dismiss_on_back_press(false)` still SWALLOWS Escape rather than letting it through, so the page behind the
+scrim never reacts to a key this dialog kept. **That swallow is winia's own, not a copy of Compose's** —
+Compose routes Escape through the same flag (`BasicEdgeToEdgeDialog.android.kt:227-233`), but because its
+dialog lives in a separate window it can simply fall through to `super.onKeyUp` (`:235`) when the flag is
+false and still have no page behind to reach. winia draws the dialog as an overlay over the live page, so
+letting the key through would clear the focus of the page under the scrim. (`AlertDialog` does not even go
+through `BasicEdgeToEdgeDialog`; it reaches `androidx.compose.ui.window.Dialog` via
+`DefaultBasicAlertDialogOverride`, `AlertDialog.kt:165-172`.)
+
+One ordering detail worth knowing: the handler check runs first, so a dialog with
+`dismiss_on_back_press(false)` **and no** `on_dismiss_request` does not swallow — with nothing to ask, the
+key is left to the page.
 Pinned by `app::overlay_close_tests::escape_respects_dismiss_on_back_press`, which drives `escape_key`
 itself rather than only reading the flag.
 
@@ -182,26 +206,30 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
 
 ## Deviations from Compose
 
-- **No `tonalElevation` parameter — and it would be a no-op here anyway.** Compose's `AlertDialogImpl`
-  renders a `Surface` with `tonalElevation` (default 0) and no shadow elevation, so the CONTENT is flat.
-  winia's `Surface` DOES now implement tonal overlay (the tint, the elevation formula, and the
-  `LocalTonalElevationEnabled` switch — see the next section), but Compose's gate
-  (`ColorScheme.applyTonalElevation`, `ColorScheme.kt:1540-1547`) tints **only when the background colour
-  is exactly `surface`**, and a dialog's container is `surfaceContainerHigh`. So an AlertDialog gains
-  nothing from `tonalElevation` in Compose either, and exposing the parameter here would be a parameter
-  that provably does nothing. (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere in the
-  alert-dialog implementations — what it belongs to is not demonstrable, so nothing here claims it.)
-  The default (0) is what you get.
+- **No `tonalElevation` parameter.** Compose exposes one (`AlertDialog.kt:108`, default
+  `AlertDialogDefaults.TonalElevation = 0.dp`, `:241`) and forwards it to its `Surface`. With the default
+  container colour the gate (`ColorScheme.applyTonalElevation`, `ColorScheme.kt:1540-1547`) excludes it —
+  a dialog's container is `surfaceContainerHigh`, never `surface` — so the default value is a no-op in
+  Compose too, and so would be anything else winia accepted here while the container colour is the default.
+  It is not a no-op for a caller who also passes `container_color` equal to `theme.surface`, which is why
+  this is listed rather than dismissed. (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere
+  in the alert-dialog implementations — what it belongs to is not demonstrable, so nothing here claims it.)
+- **Tab goes nowhere when `focusable(false)`.** Compose's non-focusable dialog is a window that never took
+  focus, so Tab belongs to whatever is behind it. winia draws the dialog over the live page, but the key
+  path consumes Tab unconditionally (`app.rs:1350-1352`) and `keyboard_scope` finds no arena to move
+  within when no focus-scope overlay is up (`app.rs:3330-3337`), so focus does not reach the page behind.
+  Every other key does fall through (`focus_scope_is_open` is false), so this is Tab only. Not fixed: the
+  unconditional consume is load-bearing for every other overlay.
 - **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack
   when the *caller* imposes a height, which puts the action row at the bottom of that height;
   winia's `layout_weight` has no `fill` flag and would stretch the node, so it is omitted and the
   slack stays BELOW the buttons instead (the column stacks from the top). A dialog sizes to its
   content by default, so this only shows with a caller-imposed height.
 - **No `DialogProperties` object** — the three cross-platform fields are flat on the builder
-  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped. The Android-only
-  `usePlatformDefaultWidth` / `decorFitsSystemWindows` are deliberately absent: they describe the platform
-  window, and winia's overlay has no such concept to configure. See the table under "Structure and
-  behaviour" for which is which.
+  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped.
+  `usePlatformDefaultWidth` is a common `DialogProperties` field (`DatePickerDialog.kt:59`) that winia's
+  overlay has no counterpart for, and `decorFitsSystemWindows` is an Android-window concept; both are
+  deliberately absent. See the table under "Structure and behaviour" for which is which.
 - The tests find the dialog's nodes through `Modifier::test_tag` and a real overlay layout (the
   registered overlay's content is composed in its own `Composer`, as the app does), so they
   check the geometry the user sees rather than the builder's fields.

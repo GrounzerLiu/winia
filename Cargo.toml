@@ -29,3 +29,5 @@ parking_lot = "0.12"
 log = "0.4"
 thiserror = "2"
 letclone = "0.3.0"
+# The local UTC offset, for the date picker's "today" — Compose takes the LOCAL calendar date.
+time = { version = "0.3", features = ["local-offset"] }

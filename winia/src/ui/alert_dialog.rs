@@ -166,8 +166,10 @@ impl BasicAlertDialog {
     /// `DialogProperties.dismissOnBackPress`, default true).
     ///
     /// False still SWALLOWS the key rather than letting it through: the page behind the scrim must not
-    /// react to an Escape this dialog kept, and that is what Compose does
-    /// (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    /// react to an Escape this dialog kept. Compose has no reason to swallow — its dialog is a separate
+    /// window, so `onKeyUp` just falls through (`BasicEdgeToEdgeDialog.android.kt:227,235`) — which is
+    /// exactly why this is winia's rule and not a quote of Compose's. See [`crate::app`]'s
+    /// `escape_key`.
     pub fn dismiss_on_back_press(mut self, v: bool) -> Self {
         self.dismiss_on_back_press = v;
         self
@@ -176,9 +178,17 @@ impl BasicAlertDialog {
     /// Whether the dialog can take the keyboard while it is up (Compose
     /// `DialogProperties.isFocusable`, default true).
     ///
-    /// False leaves Tab and the keyboard with the page behind the scrim — for a dialog that is really a
+    /// False gives the page behind the scrim its ordinary key handling — for a dialog that is really a
     /// transient notice with nothing to focus. A non-focusable dialog is also skipped by the
     /// "topmost focus scope" test (`app.rs::focus_scope_is_open`), so a lower dialog does not inherit it.
+    ///
+    /// ⚠ **Tab is the exception, and it does not behave the way the sentence above implies.** Tab is
+    /// consumed unconditionally by the key path (`app.rs:1350-1352`), and with no focus-scope overlay up
+    /// `keyboard_scope` finds no arena to move within (`app.rs:3330-3337`), so focus goes nowhere at all
+    /// rather than reaching the page behind. Compose's window model does not have this case — a
+    /// non-focusable dialog is a window that never took focus, and Tab belongs to whatever is behind it.
+    /// Recorded in `docs/alert-dialog.md`; not fixed here because the key path's unconditional consume is
+    /// load-bearing for every other overlay.
     pub fn focusable(mut self, v: bool) -> Self {
         self.focusable = v;
         self

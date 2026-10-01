@@ -119,6 +119,30 @@ pub fn canonical_millis(millis: i64) -> i64 {
     millis.div_euclid(MILLIS_IN_24_HOURS) * MILLIS_IN_24_HOURS
 }
 
+/// "Today" for a machine whose clock reads `now_millis` and whose zone runs `offset_millis` ahead of
+/// UTC — the clock and the zone kept apart so the arithmetic underneath is testable without a
+/// calendar.
+fn today_at(now_millis: i64, offset_millis: i64) -> i64 {
+    canonical_millis(now_millis.saturating_add(offset_millis))
+}
+
+/// How far the machine's local zone runs ahead of UTC, in milliseconds.
+///
+/// Everything in this module is UTC arithmetic — `canonical_millis` stamps a day boundary and
+/// `civil_from_days` reads one back — so the local zone shows up in exactly one place, and this is it.
+/// The offset is a whole number of minutes by definition (every zone definition is), which is why
+/// nothing here has to model a DST transition: an offset that shifts mid-day moves the whole instant,
+/// and the day it lands in is still the local one.
+fn local_utc_offset_millis() -> i64 {
+    // `time`'s local-offset probe is fallible in principle (a system with no zone configured) and in
+    // practice on a handful of exotic targets. UTC is the one answer that is always representable, and
+    // it is what this returned before any of this, so a failure degrades to the old behaviour rather
+    // than to nonsense.
+    time::UtcOffset::current_local_offset()
+        .map(|offset| offset.whole_seconds() as i64 * 1000)
+        .unwrap_or(0)
+}
+
 /// Days from 1970-01-01 to `year-month-day`, proleptic Gregorian (Howard Hinnant's `days_from_civil`).
 ///
 /// The month is shifted so the year starts in March, which puts the leap day at the end of the year and makes
@@ -321,13 +345,21 @@ impl CalendarModel {
     }
 
     /// Today at the start of its UTC day, from the system clock — material3's `CalendarModel.today`
-    /// (`internal/CalendarModelImpl.android.kt:49-66`), which is the platform clock in UTC.
+    /// (`internal/CalendarModelImpl.android.kt:49-62`).
+    ///
+    /// Compose reads `LocalDate.now()` and only THEN stamps it at UTC midnight
+    /// (`.atTime(MIDNIGHT).atZone(utcTimeZoneId)`), so the DATE it rings is the user's local calendar
+    /// date while the timestamp it stores is a UTC one. Taking the UTC instant at face value — which is
+    /// what this used to do — rings the wrong cell for every user whose local date has already rolled
+    /// over: at UTC+8 that is the eight hours after local midnight, when the picker would open on the
+    /// previous day. So the local offset goes in first, and `canonical_millis` then does the UTC
+    /// stamping exactly as it always did.
     pub fn today_millis(&self) -> i64 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis() as i64)
             .unwrap_or(0);
-        canonical_millis(now)
+        today_at(now, local_utc_offset_millis())
     }
 
     /// The month and year as text, `September 2024` — the shape `DatePickerFormatter.formatMonthYear`
@@ -1005,12 +1037,15 @@ pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 
 /// DatePicker::new(state).build(ctx);
 /// ```
 ///
-/// Deliberate deviations: material3 pages months in a `LazyRow` with a snap fling, while winia has no lazy row,
-/// so the picker composes the displayed month and its arrows step it one month at a time; and the mode toggle
-/// arrives with the input mode.
+/// Deliberate deviations: the mode toggle arrives with the input mode. (The months ARE paged, in a
+/// `LazyRow` with a snap fling, exactly as material3 does — `month_pages`.)
 pub struct DatePicker {
     state: DatePickerState,
     title: Option<String>,
+    /// The colour roles, read from the theme when absent. [`DatePickerDialog`] forwards its own set here
+    /// for its default content, because material3 threads ONE `DatePickerColors` from the dialog down
+    /// into the picker (`DatePickerDialog.kt:57-58` → `DatePicker.kt:172`).
+    colors: Option<DatePickerColors>,
     modifier: Modifier,
 }
 
@@ -1020,8 +1055,21 @@ impl DatePicker {
         Self {
             state,
             title: Some(DatePickerDefaults::TITLE.to_string()),
+            colors: None,
             modifier: Modifier::new(),
         }
+    }
+
+    /// The picker's colour roles (`colors`), read from the theme by default.
+    ///
+    /// Material3 has no such parameter on `DatePicker` itself — the colours arrive from whatever
+    /// composed it — but winia needs the setter for [`DatePickerDialog`] to hand its own set down. The
+    /// gap it closes was visible: the dialog painted its surface from `colors.container` and then let
+    /// the default content re-derive a fresh set from the theme, so an overridden dialog got a calendar
+    /// in the theme's colours inside a container in the caller's.
+    pub fn colors(mut self, colors: DatePickerColors) -> Self {
+        self.colors = Some(colors);
+        self
     }
 
     /// The title above the headline. `None` drops the title slot, and with it the header's minimum height and
@@ -1040,15 +1088,9 @@ impl DatePicker {
     /// Composes the picker.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let colors = DatePickerColors::from_theme(&WiniaTheme::colors());
+        let colors = self.colors.unwrap_or_else(|| DatePickerColors::from_theme(&WiniaTheme::colors()));
         let model = self.state.calendar_model().clone();
         let month = model.month_of_millis(self.state.displayed_month_millis());
-        let grid = MonthGrid::of(
-            month,
-            self.state.selected_date_millis(),
-            self.state.today_millis(),
-            self.state.selectable_dates(),
-        );
         let state = self.state.clone();
         let title = self.title.clone();
         // material3 keeps the year panel's visibility in a `rememberSaveable` inside the picker
@@ -1233,11 +1275,18 @@ fn sync_month_pages(
         let target = page_of(displayed);
         if actual == target {
             published.set(displayed);
-        } else {
+        } else if !list.is_scrolling() {
             list.scroll_to_item(target, 0.0);
             pending.set(Some(target));
             published.set(displayed);
         }
+        // Else a drag or a fling is still running and this has to wait for it. Compose guards the same
+        // way, and for the same reason — its comment is "The DatePicker has other actions that can
+        // trigger a scroll and update the displayedMonthMillis as they do so, hence we check here for
+        // isScrollInProgress and only scroll to the monthIndex when there is none in progress"
+        // (`DatePicker.kt:1546-1553`). Without it `scroll_to_item` calls `cancel_animation`, so the jump
+        // would land by killing the gesture the user was in the middle of. Leaving `published` alone is
+        // what makes this retry: `displayed != published` still holds next frame.
         return;
     }
 
@@ -1250,7 +1299,7 @@ fn sync_month_pages(
     }
 }
 
-/// The modal date picker's dialog (`DatePickerDialog`, `DatePickerDialog.kt:57-66`; its Android body is
+/// The modal date picker's dialog (`DatePickerDialog`, `DatePickerDialog.kt:51-61`; its Android body is
 /// `DatePickerDialog.android.kt:85-118`).
 ///
 /// material3 wraps the picker in a `BasicAlertDialog` whose own surface is
@@ -1358,6 +1407,11 @@ impl DatePickerDialog {
         let confirm = self.confirm_button;
         let dismiss = self.dismiss_button;
         let content = self.content;
+        // The same set the surface is painted from, handed to the default content too — material3 threads
+        // ONE `DatePickerColors` from the dialog into the picker (`DatePickerDialog.kt:57-58` →
+        // `DatePicker.kt:172`), so a caller overriding the dialog gets the calendar in those colours and
+        // not in a fresh set re-derived from the theme.
+        let content_colors = colors.clone();
         let size = Modifier::new()
             .width(DatePickerDefaults::CONTAINER_WIDTH)
             .max_height(DatePickerDefaults::MODAL_CONTAINER_HEIGHT);
@@ -1380,7 +1434,9 @@ impl DatePickerDialog {
                     .build(ctx, |ctx| {
                         match content.as_ref() {
                             Some(content) => content(ctx),
-                            None => DatePicker::new(state.clone()).build(ctx),
+                            None => DatePicker::new(state.clone())
+                                .colors(content_colors.clone())
+                                .build(ctx),
                         }
                         Row::new()
                             .modifier(
@@ -2093,12 +2149,6 @@ impl DockedDatePicker {
         let colors = DatePickerColors::from_theme(&WiniaTheme::colors());
         let model = self.state.calendar_model().clone();
         let month = model.month_of_millis(self.state.displayed_month_millis());
-        let grid = MonthGrid::of(
-            month,
-            self.state.selected_date_millis(),
-            self.state.today_millis(),
-            self.state.selectable_dates(),
-        );
         let state = self.state.clone();
         // Which inline panel replaces the weekday row and the grid, if any.
         let panel = ctx.remember(|| State::new(DockedPanel::Calendar)).get();
@@ -2143,7 +2193,6 @@ impl DockedDatePicker {
                         let cross_state = state.clone();
                         let cross_model = model.clone();
                         let cross_month = month;
-                        let cross_grid = grid.clone();
                         let cross_colors = colors.clone();
                         let cross_rows = year_rows.clone();
                         let cross_month_rows = month_rows.clone();
@@ -2486,6 +2535,59 @@ mod tests {
         // 1970-01-01 is the reference point of the whole module, and Thursday is 4 when Monday is 1.
         assert_eq!(CalendarDate::new(1970, 1, 1).unwrap().day_of_week(), 4);
         assert_eq!(CalendarDate::new(1970, 1, 1).unwrap().days_since_epoch(), 0);
+    }
+
+    /// "Today" is the LOCAL calendar date, stamped at UTC midnight — Compose's `LocalDate.now()` then
+    /// `.atTime(MIDNIGHT).atZone(utcTimeZoneId)` (`CalendarModelImpl.android.kt:49-62`). Reading the UTC
+    /// instant directly rings the previous day for every user whose local date has already rolled over.
+    #[test]
+    fn today_is_the_local_date_stamped_at_utc_midnight() {
+        const HOUR: i64 = 3_600_000;
+        /// 2024-09-01T00:00Z, the UTC midnight the local dates below are stamped at.
+        const SEP_1: i64 = 1_725_148_800_000;
+        // UTC+8 at 01:00 local on the 2nd: the UTC instant is still the 1st, the local date is not.
+        let after_local_midnight = SEP_1 + 17 * HOUR; // 2024-09-01T17:00Z
+        assert_eq!(date_of_millis(after_local_midnight), CalendarDate { year: 2024, month: 9, day: 1 });
+        assert_eq!(
+            date_of_millis(today_at(after_local_midnight, 8 * HOUR)),
+            CalendarDate { year: 2024, month: 9, day: 2 },
+            "at UTC+8 the local date is already the 2nd"
+        );
+        // The same instant in UTC is still the 1st — which is the bug this offset exists to avoid.
+        assert_eq!(
+            date_of_millis(today_at(after_local_midnight, 0)),
+            CalendarDate { year: 2024, month: 9, day: 1 }
+        );
+        // West of UTC the correction runs the other way: UTC-5 at 20:00 local on the 1st is already the
+        // 2nd in UTC, and the local date is the one that has to win.
+        assert_eq!(
+            date_of_millis(today_at(SEP_1 + 25 * HOUR, -5 * HOUR)),
+            CalendarDate { year: 2024, month: 9, day: 1 },
+            "at UTC-5 the local date is still the 1st while UTC has moved on"
+        );
+        // The stamped value is still a UTC day boundary, which is what every other reader here assumes,
+        // and a real zone offset can only move the answer by the day it actually straddles.
+        let instant = SEP_1 + 9 * HOUR; // 2024-09-01T09:00Z
+        for offset in [-12 * HOUR, -5 * HOUR, 0, 5 * HOUR + 30 * 60_000, 14 * HOUR] {
+            let today = today_at(instant, offset);
+            assert_eq!(today % MILLIS_IN_24_HOURS, 0, "today {today} is not on a UTC day boundary");
+            assert!(
+                (today - canonical_millis(instant)).abs() <= MILLIS_IN_24_HOURS,
+                "an offset of {offset} moved today {today} more than a day from the instant"
+            );
+        }
+    }
+
+    /// The live probe behind it: whatever zone this machine is in, the offset has to be one a real zone
+    /// could carry. A garbage answer here is the one failure mode `today_at` cannot catch.
+    #[test]
+    fn the_local_offset_is_a_whole_number_of_minutes_in_range() {
+        let offset = local_utc_offset_millis();
+        assert_eq!(offset % 60_000, 0, "offset {offset} is not a whole number of minutes");
+        assert!(
+            offset.abs() <= 14 * 3_600_000,
+            "offset {offset} is outside the real range of UTC-12..UTC+14"
+        );
     }
 
     #[test]

@@ -2971,13 +2971,22 @@ fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
     picked.clamp(0.0, limit.max(0.0))
 }
 
-/// How a snapping fling settles. material3 hands `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects`
-/// as its `snapAnimationSpec` (`DatePicker.kt:744`); the plain foundation API uses
-/// `spring(stiffness = Spring.StiffnessMediumLow)`, and winia has no motion scheme, so this is that spring
-/// — `StiffnessMediumLow` is 400, against winia's `SpringSpec::default()` of `StiffnessLow` (200).
+/// How a snapping fling settles: `MotionSchemeKeyTokens.DefaultEffects`, the spec material3 hands
+/// `snapFlingBehavior` (`DatePicker.kt:744`).
+///
+/// Following that reference all the way down rather than stopping at it: `MotionScheme.kt:276` maps the
+/// key to `defaultEffectsSpec()`, which is `spring(dampingRatio = SpringDefaultEffectsDamping,
+/// stiffness = SpringDefaultEffectsStiffness)` (`:152-156`) — and `StandardMotionTokens.kt:22-23` puts
+/// those at **1.0 and 1600.0**. The expressive scheme is the same (`ExpressiveMotionTokens.kt:24-25`), so
+/// the value does not depend on which scheme an app selects.
+///
+/// This used to be `StiffnessMediumLow` = 400, which is the *foundation* `rememberSnapFlingBehavior`
+/// default, not material3's — roughly four times softer, and it settled visibly slower than the picker
+/// it was ported from. `SpringSpec::default()`'s damping ratio is already 1.0, matching
+/// `SpringDefaultEffectsDamping` and Compose's `DampingRatioNoBouncy`.
 fn snap_settle() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        stiffness: 400.0,
+        stiffness: 1600.0,
         ..crate::animation::SpringSpec::default()
     })
 }
@@ -3029,8 +3038,27 @@ impl ScrollState {
     }
 
     /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
+    /// Whether this container settles its flings on a page boundary — the question a CALLER has to ask
+    /// before it decides whether a release is worth starting a fling for at all. Same filter as the
+    /// snap branch of [`Self::fling_with_boundary`], so the two can never disagree about what "snapping"
+    /// means.
+    pub(crate) fn snaps(&self) -> bool {
+        self.snap.peek().is_some_and(|s| s.step.is_finite() && s.step > 0.0)
+    }
+
     pub fn fling_with_boundary(&self, velocity: f32, on_boundary: impl FnOnce(f32) + Send + 'static) {
-        if !velocity.is_finite() || velocity.abs() < 1.0 {
+        if !velocity.is_finite() {
+            return;
+        }
+        let snapping = self.snap.peek().filter(|s| s.step.is_finite() && s.step > 0.0);
+        // The 1 px/s floor keeps a scrollbar's trailing jitter from starting a decay that nothing asked
+        // for. A snap must not have that floor: with `calculateApproachOffset` at zero there IS no decay
+        // to suppress, so a release at rest has to still run the snap spring — that is the whole
+        // behaviour. Compose has no equivalent floor at all: `Scrollable.kt:857-881` calls
+        // `performFling` on every release, and `SnapFlingBehavior.kt:139-158` then always computes a
+        // snap offset, which is how a slow drag past halfway still advances a page and a slow drag
+        // short of it returns to the page it started on.
+        if snapping.is_none() && velocity.abs() < 1.0 {
             return;
         }
         self.is_scroll_in_progress.set(true);
@@ -3047,7 +3075,7 @@ impl ScrollState {
         // So there is no free decay to run: the target comes from the velocity, and the spring carries
         // the gesture's momentum into it. Ending phase one first would both overshoot the target and
         // visibly stop the list before the second animation moves it again.
-        if let Some(snap) = self.snap.peek().filter(|s| s.step.is_finite() && s.step > 0.0) {
+        if let Some(snap) = snapping {
             let target = snap_target(off.peek(), velocity, snap, limit.peek());
             let settle = done_flag.clone();
             crate::animation::push_animatable_with_velocity_and_done(
@@ -3250,6 +3278,65 @@ mod tests {
         assert!(
             !scroll.is_scroll_in_progress.get(),
             "and reports the scroll finished once it lands"
+        );
+    }
+
+    /// The release velocity gate must not apply to a snap. This is the case that was broken: a drag
+    /// carried more than halfway and then let go with the finger nearly still — under 50 px/s, and
+    /// under `fling_with_boundary`'s own 1 px/s floor — reached neither the decay nor the snap, so the
+    /// list came to rest between two pages and nothing ever moved it again.
+    #[test]
+    fn a_paged_list_settles_even_when_it_is_released_at_rest() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        const STEP: f32 = 336.0;
+        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0 };
+        let settle = |offset: f32, velocity: f32| {
+            let scroll = ScrollState::new();
+            scroll.fling_limit.set(STEP * 10.0);
+            scroll.snap.set(Some(snap));
+            scroll.offset.set(offset);
+            scroll.fling(velocity);
+            let mut frames = 0;
+            loop {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                frames += 1;
+                if !crate::animation::has_animation_for_state(scroll.offset.state_id()) || frames > 400 {
+                    break;
+                }
+            }
+            scroll.offset.get()
+        };
+
+        assert_eq!(
+            settle(200.0, 0.0),
+            STEP,
+            "a drag past halfway released at rest still advances to the next page"
+        );
+        assert_eq!(
+            settle(100.0, 0.0),
+            0.0,
+            "and one short of halfway returns to the page it started on"
+        );
+        assert_eq!(
+            settle(200.0, 12.0),
+            STEP,
+            "a velocity under the 50 px/s decay floor still snaps — that floor is the decay's, not the snap's"
+        );
+
+        // And the floor still guards what it was written for: without a snap spec, a release below
+        // 1 px/s must start no animation at all.
+        crate::animation::clear_all_animations();
+        let plain = ScrollState::new();
+        plain.fling_limit.set(STEP * 10.0);
+        plain.offset.set(200.0);
+        plain.fling(0.5);
+        crate::animation::update_animations();
+        assert!(
+            !crate::animation::has_animation_for_state(plain.offset.state_id()),
+            "an unsnapped container still ignores a sub-1 px/s release instead of decaying from it"
         );
     }
 

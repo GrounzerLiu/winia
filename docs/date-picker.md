@@ -143,7 +143,7 @@ refreshes each composition.
 | Year menu button | `YearPickerMenuButton`: a `TextButton(shape = CircleShape, elevation = null, border = null)` holding the formatted month-year text and `Icons.Filled.ArrowDropDown` after `ButtonDefaults.IconSpacing` (8); the text repeats itself as the content description and is a polite live region; the month arrows are composed **only while the overlay is closed**, and the row's arrangement switches `SpaceBetween` → `Start` | `:2194-2269` |
 | Year panel grid | `LazyVerticalGrid(GridCells.Fixed(YearsInRow = 3))`, `background(colors.containerColor)`, `SpaceEvenly` horizontally, `spacedBy(YearsVerticalPadding = 16)` vertically, `SelectionYearLabelTextFont` (BodyLarge); `initialFirstVisibleItemIndex = max(0, displayedYear - yearRange.first - YearsInRow)`; every year is `requiredSize(SelectionYearContainerWidth = 72, SelectionYearContainerHeight = 36)` | `:2061-2116`, `:2301-2304` |
 | Year cell | `Surface(shape = SelectionYearStateLayerShape = CornerFull, selected, enabled, onClick)` with `border = 1 dp todayDateBorderColor` when it is the current year and not selected; container `yearContainerColor(selected, enabled)` (`Primary` when selected, otherwise transparent), label `yearContentColor(currentYear, selected, enabled)`; description is the `DatePickerNavigateToYearDescription` string | `:2120-2180`, `:1005-1046` |
-| Modal dialog | `BasicAlertDialog(wrapContentHeight)` around a `Surface(requiredWidth(ContainerWidth = 360), heightIn(max = ContainerHeight = 568), shape = DatePickerDefaults.shape, color = colors.containerColor, tonalElevation = DatePickerDefaults.TonalElevation)`; the dialog contributes no padding — the picker is the surface | `DatePickerDialog.kt:57-66`, `DatePickerDialog.android.kt:85-94` |
+| Modal dialog | `BasicAlertDialog(wrapContentHeight)` around a `Surface(requiredWidth(ContainerWidth = 360), heightIn(max = ContainerHeight = 568), shape = DatePickerDefaults.shape, color = colors.containerColor, tonalElevation = DatePickerDefaults.TonalElevation)`; the dialog contributes no padding — the picker is the surface | `DatePickerDialog.kt:51-61`, `DatePickerDialog.android.kt:85-94` |
 | Modal body | `Column(verticalArrangement = SpaceBetween)`: the content in a `Box(weight(1f, fill = false))` — the `fill = false` is what lets the dialog collapse when the input mode is shorter — then the action row | `DatePickerDialog.android.kt:95-111` |
 | Action row | `Box(align End, DialogButtonsPadding = PaddingValues(bottom = 8, end = 6))` holding an `AlertDialogFlowRow(mainAxisSpacing = 8, crossAxisSpacing = 12)` of the dismiss button then the confirm button, in `DialogTokens.ActionLabelTextColor` (`Primary`) and `ActionLabelTextFont` (LabelLarge) | `DatePickerDialog.android.kt:105-118` |
 | Constants | `RecommendedSizeForAccessibility = 48.dp`, `MonthYearHeight = 56.dp`, `DatePickerHorizontalPadding = 12.dp`, `DatePickerModeTogglePadding = PaddingValues(end = 12.dp, bottom = 12.dp)`, `DatePickerTitlePadding = PaddingValues(start = 24.dp, end = 12.dp, top = 16.dp)`, `DatePickerHeadlinePadding = PaddingValues(start = 24.dp, end = 12.dp, bottom = 12.dp)`, `YearsVerticalPadding = 16.dp` | `:2293-2301` |
@@ -310,7 +310,8 @@ consulting `SelectableDates` for the day *and* its year, because material3 disab
 unselectable year, and forced off for an outside cell.
 `day_content_description` assembles what a cell announces, today's word first.
 
-`DatePicker` draws the docked variant: a `Column` at least `CONTAINER_WIDTH` (360) wide on
+`DatePicker` draws the **modal** variant (the docked one is `DockedDatePicker`, which has no title and no
+headline): a `Column` at least `CONTAINER_WIDTH` (360) wide on
 `surface_container_high`, a header of the title (`LabelLarge`, `OnSurfaceVariant`) over the headline
 (`HeadlineLarge`, `OnSurfaceVariant`, one line) with the divider below them, and a body of the month
 navigation (56 high: the year menu button at its start and, while the year panel is closed, the two chevrons
@@ -348,14 +349,17 @@ is a plain transparent `Pill` `Surface` holding the label and the dropdown glyph
 `TextButton` and clears its elevation and border; the 8 dp between text and glyph is
 `ButtonSmallTokens.IconLabelSpace`.
 
-The modal variant, `DatePickerDialog`, is that docked picker in a dialog: winia opens the centred modal overlay
-`BasicAlertDialog` opens, with the surface's own geometry — `width(CONTAINER_WIDTH)` and
+The modal variant, `DatePickerDialog`, is that modal picker in a dialog: winia opens the centred modal overlay
+`BasicAlertDialog` provides, with the surface's own geometry — `width(CONTAINER_WIDTH)` and
 `max_height(MODAL_CONTAINER_HEIGHT)` on the wrapper, no content padding, shape 28 (`CONTAINER_CORNER`), filled
 with `colors.container` — and the action row under the content (`Row` at `MODAL_BUTTONS_SPACING` 8, padded 8
 bottom and 6 end, inside `WiniaTheme::with_content_color(Primary)` and `ProvideTextStyle(LabelLarge)`).
-Measured on the fixture: the dialog is `360 × 568` exactly, which is the docked picker's 512 plus the action
-row's 56 — material3's `ContainerHeight` is the number that content happens to reach. The content defaults to a
-`DatePicker` over the dialog's state and `DatePickerDialog::content` replaces it.
+Measured on the fixture: the dialog is `360 × 568` exactly, matching material3's `ContainerHeight`. winia
+applies that number as a `max_height` cap rather than a fixed height, so a shorter content column collapses
+instead of being padded out; whether the 568 the fixture sees is the content reaching it or the cap holding
+it is not established here. The content defaults to a `DatePicker` over the dialog's state — carrying the
+dialog's own `DatePickerColors`, as material3 threads one set from `DatePickerDialog.kt:51-61` into
+`DatePicker.kt:172` — and `DatePickerDialog::content` replaces it.
 
 Two deviations there. material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog collapses
 when the input mode is shorter than the calendar; winia has no weights, so the content and the action row follow
@@ -411,7 +415,22 @@ settle". material3 hands it a layout provider whose `calculateApproachOffset` re
 2. The snap animation runs on `animationState.copy(value = 0f)` (`:150-158`) — the value resets to the
    current offset but the FLING's velocity is carried in, so the gesture's momentum continues into the
    settle.
-3. The spec is `spring(stiffness = StiffnessMediumLow)` (400), not a tween.
+3. The spec is **not** a tween and **not** `StiffnessMediumLow`. material3 hands `snapFlingBehavior`
+   `MotionSchemeKeyTokens.DefaultEffects` (`DatePicker.kt:744`), which resolves through
+   `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
+   `spring(dampingRatio = SpringDefaultEffectsDamping, stiffness = SpringDefaultEffectsStiffness)`, and
+   `StandardMotionTokens.kt:22-23` puts those at **1.0 and 1600.0** (the expressive scheme is the same).
+   winia uses those. It previously used foundation's `StiffnessMediumLow` = 400 — a value this document
+   and the code comment both attributed to material3 while citing the material3 source for it, which is
+   how a four-times-softer settle survived review.
+
+Also unlike the decay path, **a release is never filtered out before the snap runs.** Compose calls
+`performFling` on every release (`Scrollable.kt:857-881`) and always computes a snap offset from it.
+winia had two velocity floors in the way — 50 px/s at the call site and 1 px/s inside `fling_with_boundary`
+— both written for the decay, and both of which a snap has no use for since it has no decay phase to
+suppress. A drag carried past halfway and then let go with the finger nearly still fell through both and
+came to rest between two months permanently: nothing else ever snaps the list back. Both floors now step
+aside when a `SnapSpec` is configured.
 
 The first version of this did all three differently, and each was visible:
 
@@ -420,6 +439,8 @@ The first version of this did all three differently, and each was visible:
 | ran a free exponential decay first, then snapped to the nearest boundary of wherever it stopped | with 2412 pages a hard flick banked thousands of pixels of decay | a flick jumped most of a year, and the DIRECTION came from where the decay happened to run out rather than from the gesture |
 | no velocity threshold | a nudge and a flick were the same rule | a small push could not settle back on the month it started from |
 | a 300 ms tween from rest | the list stopped dead, then moved again | two visible motions — "not smooth" |
+| the wrong spring: 400 instead of material3's 1600 | four times softer, settling visibly slower than the picker it was ported from | the flick arrived, then kept creeping |
+| kept the decay's 50 px/s / 1 px/s release floors | a slow drag released at rest never entered the fling at all | the calendar rested between two months and stayed there |
 
 Measured after the fix, driving the debug server with real pointer drags (`tmp/probe_swipe.py`):
 
@@ -505,9 +526,11 @@ empty — it is following both.
 anyone draws them; `month_grid` takes a `show_outside_month` flag and the two callers pass opposite values.
 `DayCell::is_outside_month` carries the fact, `is_enabled` is forced off for it regardless of
 `SelectableDates`, and `day_cell` draws it dimmed. `the_docked_grid_draws_the_neighbouring_months_days_and_the_modal_one_does_not`
-pins the split by counting drawn day labels: September 2026 gives 42 for the docked grid and 30 for the
-modal one, a difference of exactly the 2 leading and 10 trailing slots. Turning the modal call to `true`
-makes it report 42 and go red.
+pins the split by counting day cells in the composed tree and splitting them on whether the cell's `Surface`
+is clickable: the docked grid has inert outside cells and the modal grid has none, while the two agree on
+the number of choosable ones. It counts rather than reads labels, because a month page is a `LazyRow` now —
+42 drawn labels for one page is not a number the tree can be asked for. Flipping the modal call to `true`
+puts inert cells on the modal side and goes red.
 
 Measured on the running demo, comparing an outside day against an in-month day in the same row:
 outside label peak luma 114.0, in-month 229.0, container 43.7 — an implied alpha of
@@ -548,7 +571,7 @@ both are childless `BoxLayout`s, so the slot measures identically.
 were re-run.
 
 
-A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, six tests in all): the dialog is an
+A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, one test): the dialog is an
 overlay, measures 360 × 568, a tap on the today cell moves the selection the page reads out, the dismiss button
 closes it and the page's button re-opens it. The overlay entry outlives the state that closes it while the
 dialog's exit motion plays, so that test polls `overlay_count` rather than reading it once — the same wait the
@@ -576,3 +599,50 @@ test red: `date_picker_selects_the_day_that_is_tapped`.
 
 Next: the input mode — `DatePicker(state, displayMode = Input)`, the header's mode toggle, and the
 `DateInputContent` the public picker switches to (material3 1.5 has no public `DateInput`).
+
+## Known gaps
+
+Found in review, verified against `target/compose-src`, deliberately NOT fixed in the pass that found them.
+Each is a real divergence, not a guess.
+
+### Accessibility
+
+- **Day and year cells carry no role or state.** `day_cell` and `year_cell` set a content description and
+  nothing else. Compose builds each cell on `Surface(selected, onClick)` and then adds
+  `role = Role.Button` with `mergeDescendants = true` (`DatePicker.kt:2013-2016`, `:2149-2152`), so the
+  node also carries `selected`, `enabled` and a click action. winia's `Surface` contributes no semantics of
+  its own, and `Surface::selectable` adds none either. A screen reader announces a named region, not a
+  button.
+- **The header headline announces nothing.** Compose gives it both `liveRegion = LiveRegionMode.Polite` and
+  `contentDescription = headlineDescription` (`DatePicker.kt:719-728`), so picking a date is spoken. winia's
+  headline carries no semantics config. `SemanticsConfig::live_region` already exists.
+- **The nav buttons claim a live region they do not set.** The comment above the month/year nav button says
+  Compose "makes it a polite live region, so a reader announces the month as the arrows move it"
+  (`DatePicker.kt:2205-2216`), and the code sets only the content description. Compose sets
+  `liveRegion = Polite` plus the description on that `Text` (`DatePicker.kt:2208-2214`), inside a `TextButton`
+  that supplies the button role and click action.
+- **The weekday label's description is on the wrong node.** It hangs off the inner `Text` — a glyph-sized
+  node — so its reported a11y bounds are far smaller than the 48 dp cell, and the inner text keeps its own
+  `"S"` where Compose's is cleared. Compose puts the config on the 48 dp `Box` with `clearAndSetSemantics`
+  (`DatePicker.kt:1803-1819`).
+
+### State and API surface
+
+- **`remember_date_picker_state` exposes none of Compose's five parameters**
+  (`initialSelectedDateMillis`, `initialDisplayedMonthMillis`, `yearRange`, `initialDisplayMode`,
+  `selectableDates` — `DatePicker.kt:368-374`). A hoisted picker cannot be given an initial selection,
+  displayed month, year range or date policy without hand-rolling `DatePickerState::with(..)` plus a
+  `remember`, which is what both fixtures do.
+- **`selectable_dates` is frozen at construction.** Compose holds it in a `mutableStateOf`
+  (`DatePicker.kt:1133`) and re-applies the caller's instance every composition (`:386-389`), so a policy
+  closing over state stays live. winia's is captured when the state is built and a grid goes stale.
+- **Small things worth a pass**: `horizontalScrollAxisRange = 0..0` on the months list so AT traverses days
+  instead of scrolling months (`DatePicker.kt:1726-1729`); `paneTitle` on the year panel (`:1634`);
+  `PlainTooltip` on the month arrows (`:2281-2289`); `CHECK_PATH` is a public constant nothing draws, and
+  `month_list` marks the displayed month with a fill only; `MODE_TOGGLE_PADDING` and `CONTAINER_HEIGHT` are
+  public and unused, the dialog using a duplicate `MODAL_CONTAINER_HEIGHT`; `step_displayed_month` is now
+  reachable only from tests since both pickers' arrows drive the list, so `step_arrow`'s doc still
+  describing them as calling it is stale; the headline row uses `SpaceBetween` where Compose uses `Start`
+  whenever there is no mode toggle (`DatePicker.kt:1373-1378`); and the header height is pinned to exactly
+  120 where Compose applies it as a `defaultMinSize` minimum (`DatePicker.kt:1680-1685`), so a long locale
+  title clips.
