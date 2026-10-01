@@ -19,6 +19,37 @@ AlertDialog::new(visible)
 `BasicAlertDialog` is the same dialog with arbitrary content instead of the slots (Compose's
 `BasicAlertDialog`); `AlertDialog` delegates to it, as `AlertDialogImpl` does.
 
+**The action row is a TEXT BUTTON, never a filled one.** The specs page's basic-dialog anatomy calls the
+element "Button label text" and the full-screen variant's "Text button"; its colour role is Primary.
+`AlertDialogImpl` says the same in code — it provides `DialogTokens.ActionLabelTextColor` to the row and
+notes that a TextButton "will not consume this provided content color value, and will use their own
+defined or default colors" (`AlertDialog.kt:283-288`). So both the confirm and the dismiss slot want
+`Button::new().style(ButtonStyle::Text)`; the dialog supplies the layout and its two default colours, not
+the button style.
+
+### Composing it: pass `visible`, do not wrap it in `if`
+
+An overlay is released by its owner recording `active = false`, and an owner that simply **stops composing
+it** counts as "skipped" and is KEPT — `composer.rs::record_overlay_active` and `app.rs::sync_overlays` both
+say so, and the map is cleared every frame (`composer.rs:2817`) so a frame with no record reads as "keep, as
+last frame". So the shape is:
+
+```rust
+AlertDialog::new(is_open)   // composed EVERY frame; `visible` carries open/closed
+```
+
+and **not**
+
+```rust
+if is_open { AlertDialog::new(true).build(ctx) }   // pins the overlay on screen
+```
+
+The failure is quiet and asymmetric, which is what makes it worth writing down: with the `if`, Escape still
+closes the dialog — that path calls `begin_overlay_close` directly and never consults the registrar — while
+every button inside it runs its handler, flips the caller's state, and leaves the dialog sitting there.
+Measured on this demo with probe prints in the confirm slot: the click FIRED and the overlay count stayed
+at 1. The date-picker fixtures and demo compose their dialog unconditionally for the same reason.
+
 Slots are `Fn`, not `FnOnce`: an overlay composes its content on every frame the dialog is up
 (the same bound `ModalBottomSheet`'s content uses), so a callback that moves out of a slot needs
 a fresh clone per call — `clone!` inside the slot body.
@@ -29,7 +60,7 @@ a fresh clone per call — `clone!` inside the slot body.
 |---|---|---|
 | `ContainerShape` (`CornerExtraLarge`) | 28dp | container corners (the same radius the bottom sheet's expanded shape uses) |
 | `ContainerColor` | `SurfaceContainerHigh` | container |
-| `TonalElevation` | 0dp | flat by default — see the deviations |
+| `TonalElevation` | 0dp | flat by default — see the deviations and "Tonal overlay" below |
 | `IconColor` / `IconSize` | `Secondary` / 24dp | the icon slot |
 | `HeadlineColor` / `HeadlineFont` | `OnSurface` / `HeadlineSmall` | the title |
 | `SupportingTextColor` / `SupportingTextFont` | `OnSurfaceVariant` / `BodyMedium` | the text |
@@ -39,6 +70,35 @@ a fresh clone per call — `clone!` inside the slot body.
 | `textPadding` | 24dp | below the text |
 | `DialogMinWidth` / `DialogMaxWidth` | 280dp / 560dp | the width clamp |
 | button spacing | 8dp | both axes of the action row |
+
+## Tonal overlay (on `Surface`, not on the dialog)
+
+**Tonal overlay** is how Material 3 gives a raised surface its colour shift: instead of (or alongside) a
+shadow, a `Surface` with a `tonalElevation` has `surfaceTint` blended over its own colour, more the higher the
+elevation. M3 dialogs look "raised" this way.
+
+`Surface::tonal_elevation` used to be a placeholder that did nothing. It now works, with Compose's rule
+(`ColorScheme.kt:1540-1547`, `:1125-1129`):
+
+- The tint applies **only when the surface's colour is exactly `theme.surface`** and tonal elevation is on.
+  A surface with any other colour is left untouched — that is Compose's gate, verbatim.
+- The blend is Compose's formula, character for character: `alpha = ((4.5 · ln(elev + 1)) + 2) / 100`, then
+  `surfaceTint(alpha)` over `surface`. winia composites it with the existing `Color::overlay` (the same
+  alpha lerp the state layers use).
+- `WiniaTheme::with_tonal_elevation_enabled(false, …)` suppresses it for a subtree — winia's
+  `LocalTonalElevationEnabled` (`ColorScheme.kt:1556`).
+
+Over the published `ElevationTokens` levels that is `1dp → 5.1%`, `3dp → 8.2%`, `6dp → 10.8%`.
+
+**This does not change any dialog.** Every M3 dialog's container is `surfaceContainerHigh`/`surfaceVariant`,
+never `surface`, so the gate excludes them all — which is exactly why Compose's own `AlertDialog` gets
+nothing from its `tonalElevation` parameter either. The capability lives on `Surface` because that is where
+Compose puts it, and `Card`/`Menu` are the surfaces that actually sit on `surface`.
+
+Five tests in `ui::surface` pin it: the tint and the formula (with the Level2 8.24% alpha checked against the
+published value, not just against the formula's own output), the non-`surface` colours staying untouched, zero
+elevation and the switch each doing nothing, the content colour still following the UNTINTED base colour, and
+the tint reaching the rendered pixels.
 
 ## Layout
 
@@ -79,36 +139,69 @@ rounded corners; the node still starts at the padding, so nothing else moves.
 `confirm_button` is a slot like the rest, so a dialog without one builds (Compose's two-action
 overload requires it; its `content` overload is `BasicAlertDialog` here).
 
+The surface publishes `role = Dialog`, which is winia's landing for Compose's
+`Modifier.semantics { paneTitle = dialogPaneDescription }` on the dialog Box (`AlertDialog.kt:171`) and
+what `accessibility.rs` maps to the Pane UIA control type. A caller's own modifier still wins — it is
+applied after ours.
+
+`DialogProperties` is exposed as its three cross-platform parts, each flat on the builder (Compose groups
+them, but the group holds nothing winia acts on differently):
+
+| Compose field | winia | default |
+|---|---|---|
+| `dismissOnClickOutside` | `dismiss_on_outside` | true |
+| `dismissOnBackPress` | `dismiss_on_back_press` | true |
+| `isFocusable` | `focusable` (drives the overlay's `focus_scope`) | true |
+| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | — | Android-window concepts with no counterpart in a desktop overlay; deliberately not stubbed |
+
+`dismiss_on_back_press(false)` still SWALLOWS Escape rather than letting it through — the page behind the
+scrim must not react to a key this dialog kept, and that is what Compose does
+(`BasicEdgeToEdgeDialog.android.kt:225-236`: the key is consumed, only `onDismissRequest` is skipped).
+Pinned by `app::overlay_close_tests::escape_respects_dismiss_on_back_press`, which drives `escape_key`
+itself rather than only reading the flag.
+
 Built on the existing `Dialog` overlay, so modality, the scrim, outside-click dismissal and
 Escape come from the overlay path (`app.rs`), and the enter/exit motion is
 `OverlayAnimSpec::default_enter()/default_exit()` (scale 0.8 + fade, 200ms) — the same motion
 the framework's `Dialog` uses. The overlay is registered only while `visible`; no rising-edge
 state is needed on top of that, because the enter animation runs on registration and
 `sync_overlays` composes the current frame's content closure (the piece `ModalBottomSheet` needs
-an edge for is its own sheet slide, which a dialog has none of).
+an edge for is its own sheet slide, which a dialog has none of) — and see "Composing it" above for why
+`visible` has to be an argument rather than a surrounding `if`.
 
-Tests (8) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
-`dismiss_on_outside` flag reaching the overlay; the 280 floor and the 560 cap; the slot order
+Tests (10) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
+`dismiss_on_outside`, `dismiss_on_back_press` and `focusable` flags reaching the overlay, each with
+Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap; the slot order
 with its 16/16/24 paddings; the title centring with an icon and start-alignment without one; the
 button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
 above the dismiss; and the over-sized-slot overflow above.
 
+The escape gate itself is tested at the key path, not just on the flag:
+`app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
+consumed and closes the first, and is consumed but closes neither when `dismiss_on_back_press` is false.
+
 ## Deviations from Compose
 
-- **No `tonalElevation` parameter.** Compose's `AlertDialogImpl` renders a `Surface` with
-  `tonalElevation` (default 0) and no shadow elevation, so the CONTENT is flat.
-  (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere in the alert-dialog
-  implementations — what it belongs to is not demonstrable, so nothing here claims it.) winia has no
-  tonal overlay at all (`surface.rs` keeps the field as a placeholder), so the parameter would
-  be a silent no-op — the same defect an earlier review found in `sheet_container_color`. The
-  default (0) is what you get.
+- **No `tonalElevation` parameter — and it would be a no-op here anyway.** Compose's `AlertDialogImpl`
+  renders a `Surface` with `tonalElevation` (default 0) and no shadow elevation, so the CONTENT is flat.
+  winia's `Surface` DOES now implement tonal overlay (the tint, the elevation formula, and the
+  `LocalTonalElevationEnabled` switch — see the next section), but Compose's gate
+  (`ColorScheme.applyTonalElevation`, `ColorScheme.kt:1540-1547`) tints **only when the background colour
+  is exactly `surface`**, and a dialog's container is `surfaceContainerHigh`. So an AlertDialog gains
+  nothing from `tonalElevation` in Compose either, and exposing the parameter here would be a parameter
+  that provably does nothing. (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere in the
+  alert-dialog implementations — what it belongs to is not demonstrable, so nothing here claims it.)
+  The default (0) is what you get.
 - **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack
   when the *caller* imposes a height, which puts the action row at the bottom of that height;
   winia's `layout_weight` has no `fill` flag and would stretch the node, so it is omitted and the
   slack stays BELOW the buttons instead (the column stacks from the top). A dialog sizes to its
   content by default, so this only shows with a caller-imposed height.
-- **No `DialogProperties` object.** `dismiss_on_outside` is exposed directly; the other
-  properties (platform-specific, e.g. `usePlatformDefaultWidth`) have no winia counterpart.
+- **No `DialogProperties` object** — the three cross-platform fields are flat on the builder
+  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped. The Android-only
+  `usePlatformDefaultWidth` / `decorFitsSystemWindows` are deliberately absent: they describe the platform
+  window, and winia's overlay has no such concept to configure. See the table under "Structure and
+  behaviour" for which is which.
 - The tests find the dialog's nodes through `Modifier::test_tag` and a real overlay layout (the
   registered overlay's content is composed in its own `Composer`, as the app does), so they
   check the geometry the user sees rather than the builder's fields.

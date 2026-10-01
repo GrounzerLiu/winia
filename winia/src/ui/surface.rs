@@ -3,9 +3,9 @@
 //! 对标 Compose `Surface` 的职责（源码注释原文）：
 //! 1. **Clipping**——按 `shape` 裁剪子节点
 //! 2. **Borders**——`shape` 有边框则绘制
-//! 3. **Background**——按 `shape` 填充 `color`（`surface` 色叠加 tonal overlay；
-//!    winia 简化：tonal 叠加由主题 surface 色直接决定，如需应用 `tonal_elevation`
-//!    可在后续扩展）
+//! 3. **Background**——按 `shape` 填充 `color`（`surface` 色叠加 tonal overlay：
+//!    仅当底色恰好等于 `theme.surface` 且 `tonal_elevation > 0`、且 tonal 开关打开时，
+//!    才按 Compose `ColorScheme.applyTonalElevation` 把 `surface_tint` 叠上去）
 //! 4. **Content color**——`content_color` 作为子内容（Text/Icon）默认色；未设时
 //!    按主题匹配（`color == theme.surface` → `on_surface`，否则保持上层值）
 //! 5. Blocking touch propagation behind the surface
@@ -22,6 +22,18 @@ use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::interaction::MutableInteractionSource;
 use crate::ui::checkbox::ToggleableState;
 use std::sync::Arc;
+
+/// `ColorScheme.surfaceColorAtElevation`（Compose `ColorScheme.kt:1125-1129`）——按 elevation 把
+/// `surfaceTint` 叠在 `surface` 上。公式与 Compose 逐字一致：`alpha = ((4.5·ln(elev+1)) + 2) / 100`，
+/// 再 `surfaceTint(alpha).compositeOver(surface)`；winia 用 `Color::overlay` 做同一个 alpha 合成。
+/// elevation 为 0 时原样返回 `surface`。
+fn surface_color_at_elevation(theme: crate::ui::theme::ThemeColors, elevation: f32) -> Color {
+    if elevation <= 0.0 {
+        return theme.surface;
+    }
+    let alpha = ((4.5 * (elevation + 1.0).ln()) + 2.0) / 100.0;
+    theme.surface.overlay(theme.surface_tint, alpha)
+}
 
 /// 边框描边（对齐 Compose `BorderStroke(width, color)`——winia 用 (f32, Color) 表达；
 /// shape 在绘制时传入）。为与 Compose Surface 参数名一致，此处用 `border: Option<Border>`。
@@ -175,11 +187,26 @@ impl Surface {
         let theme = crate::ui::theme::WiniaTheme::colors();
         let shape = self.shape;
         // 默认背景 = theme.surface（Compose 默认 `colorScheme.surface`）
-        let color = self.color.unwrap_or(theme.surface);
+        let base_color = self.color.unwrap_or(theme.surface);
+        // tonal overlay（对标 Compose `ColorScheme.applyTonalElevation` / `surfaceColorAtElevation`）：
+        // **仅当底色恰好等于 theme.surface 且 tonal 开关打开时**才把 `surface_tint` 按 elevation 叠上去
+        // （`ColorScheme.kt:1540-1547`, `:1125-1129`）。底色不是 surface（如对话框的
+        // surfaceContainerHigh）则不上色——这正是 Compose 的行为，也是 AlertDialog 传了
+        // `tonalElevation` 也是空转的原因。
+        let color = if self.tonal_elevation > 0.0
+            && base_color == theme.surface
+            && crate::ui::theme::WiniaTheme::tonal_elevation_enabled()
+        {
+            surface_color_at_elevation(theme, self.tonal_elevation)
+        } else {
+            base_color
+        };
         // 内容色：显式传入优先；否则按主题匹配——color==theme.surface→on_surface，
-        // 否则保持上层 content_color()（Compose 语义：非标准色时沿用父 Surface 内容色）
+        // 否则保持上层 content_color()（Compose 语义：非标准色时沿用父 Surface 内容色）。
+        // NOTE：判据用 base_color（未经 tint 的原始底色），与 Compose 的
+        // `applyTonalElevation` 一致——它比较的也是传入的 backgroundColor。
         let content_color = self.content_color.unwrap_or_else(|| {
-            if color == theme.surface {
+            if base_color == theme.surface {
                 theme.on_surface
             } else {
                 crate::ui::theme::WiniaTheme::content_color()
@@ -265,4 +292,198 @@ impl Surface {
 
 impl Default for Surface {
     fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::composer::Composer;
+    use crate::layout::Constraints;
+    use crate::ui::theme::{ThemeColors, WiniaTheme};
+
+    /// Compose a surface under `theme` (and optionally with the tonal toggle) and return the colour its
+    /// background modifier actually resolves to — the painted value, read through the same
+    /// `Background { color_fn }` the renderer evaluates (`render.rs:436`).
+    fn painted_background(
+        theme: ThemeColors,
+        tonal_enabled: bool,
+        build: impl FnOnce(&mut ComposeCtx) -> Surface,
+    ) -> Color {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme, ctx, |ctx| {
+                WiniaTheme::with_tonal_elevation_enabled(tonal_enabled, ctx, |ctx| {
+                    build(ctx).build(ctx, |_| {});
+                });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+        composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    _ => None,
+                })
+            })
+            .expect("a surface paints a background")
+    }
+
+    /// Compose's published alphas, from `alpha = ((4.5·ln(elev+1)) + 2) / 100` over the
+    /// `ElevationTokens` levels (`ElevationTokens.kt:25-29`).
+    fn compose_alpha(elevation: f32) -> f32 {
+        ((4.5 * (elevation + 1.0).ln()) + 2.0) / 100.0
+    }
+
+    #[test]
+    fn a_surface_at_a_tonal_elevation_is_tinted_toward_the_surface_tint() {
+        // Level2 = 3dp (`ElevationTokens.kt:27`), which is the menu's own shadow elevation.
+        let theme = ThemeColors::default_light();
+        let level = 3.0f32;
+        let painted = painted_background(theme.clone(), true, |_| {
+            Surface::new().tonal_elevation(level)
+        });
+        assert_eq!(
+            painted,
+            theme.surface.overlay(theme.surface_tint, compose_alpha(level)),
+            "Level2 tints surface by the formula's alpha"
+        );
+        // And the formula is the documented one, not just self-consistent: 3dp lands at 8.24%.
+        assert!(
+            (compose_alpha(level) - 0.0824).abs() < 0.0005,
+            "the Level2 alpha is ~8.24%, got {}",
+            compose_alpha(level)
+        );
+        assert_ne!(painted, theme.surface, "a tinted surface differs from plain surface");
+    }
+
+    #[test]
+    fn tonal_elevation_does_nothing_when_the_color_is_not_surface() {
+        // Compose's `applyTonalElevation` gate (`ColorScheme.kt:1542`): only a background that IS
+        // `surface` is tinted. This is why an AlertDialog — whose container is
+        // `surfaceContainerHigh` — gains nothing from a `tonalElevation`.
+        let theme = ThemeColors::default_light();
+        for color in [
+            theme.surface_container_high,
+            theme.surface_container_highest,
+            theme.primary,
+        ] {
+            let painted = painted_background(theme.clone(), true, |_| {
+                Surface::new().color(color).tonal_elevation(3.0)
+            });
+            assert_eq!(
+                painted, color,
+                "a non-surface background is left alone (Compose does the same)"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_elevation_and_the_tonal_switch_both_leave_the_color_alone() {
+        let theme = ThemeColors::default_light();
+
+        let plain = painted_background(theme.clone(), true, |_| Surface::new());
+        assert_eq!(plain, theme.surface, "no elevation leaves surface as it is");
+
+        let zero = painted_background(theme.clone(), true, |_| {
+            Surface::new().tonal_elevation(0.0)
+        });
+        assert_eq!(zero, theme.surface, "an explicit zero is the same as none");
+
+        let off = painted_background(theme.clone(), false, |_| {
+            Surface::new().tonal_elevation(3.0)
+        });
+        assert_eq!(
+            off, theme.surface,
+            "LocalTonalElevationEnabled = false suppresses the tint for the subtree"
+        );
+    }
+
+    #[test]
+    fn an_explicit_content_colour_still_follows_the_untinted_base_colour() {
+        // The content-colour rule compares the BASE colour (`color == surface`), not the tinted one, so
+        // raising the elevation does not silently change the content colour a surface hands down.
+        let theme = ThemeColors::default_light();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                Surface::new()
+                    .tonal_elevation(3.0)
+                    .build(ctx, |ctx| {
+                        assert_eq!(
+                            WiniaTheme::content_color(),
+                            theme.on_surface,
+                            "a tinted surface still provides on_surface"
+                        );
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+    }
+
+    #[test]
+    fn the_tint_reaches_the_rendered_pixels() {
+        // The modifier assertions above read what the surface ASKED for. This one reads what it PAINTS:
+        // a 100x100 tinted surface rendered at its centre, against the same surface flat, so the two
+        // differ by exactly the tint's alpha ramp and not by anything the layout did.
+        use skia_safe::{Color as SkColor, surfaces};
+
+        fn centre_pixel(theme: ThemeColors, tonal_enabled: bool, elevation: f32) -> (u8, u8, u8) {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme, ctx, |ctx| {
+                    WiniaTheme::with_tonal_elevation_enabled(tonal_enabled, ctx, |ctx| {
+                        Surface::new()
+                            .modifier(Modifier::new().size(100.0, 100.0))
+                            .tonal_elevation(elevation)
+                            .build(ctx, |_| {});
+                    });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((400, 300)).expect("surface");
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::TRANSPARENT);
+            let root = composer.layout_root_idx().expect("root");
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            let pixmap = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pixmap.pixels::<[u8; 4]>().expect("pixels");
+            let p = px[50 * 400 + 50];
+            // `raster_n32_premul` is BGRA in memory — read it back as RGB (the convention the other
+            // ui pixel tests use, e.g. `badge.rs:423`).
+            (p[2], p[1], p[0])
+        }
+
+        let theme = ThemeColors::default_light();
+        let flat = centre_pixel(theme.clone(), true, 0.0);
+        let tinted = centre_pixel(theme.clone(), true, 3.0);
+        let suppressed = centre_pixel(theme.clone(), false, 3.0);
+
+        assert_eq!(flat, (theme.surface.r, theme.surface.g, theme.surface.b));
+        assert_ne!(tinted, flat, "the elevation tints the painted pixels");
+        assert_eq!(
+            suppressed, flat,
+            "and the tonal switch puts them back to flat surface"
+        );
+        // The ramp: each channel moves from surface toward surface_tint by the formula's alpha. Compared
+        // with a small tolerance because this reads the RASTERISER's output — Skia composites in
+        // premultiplied space and rounds there, while `Color::overlay` is the exact float lerp the
+        // modifier carries (asserted exactly in the test above). One unit of drift is expected.
+        let alpha = compose_alpha(3.0);
+        for (flat_c, tint_c, tinted_c, name) in [
+            (theme.surface.r, theme.surface_tint.r, tinted.0, "r"),
+            (theme.surface.g, theme.surface_tint.g, tinted.1, "g"),
+            (theme.surface.b, theme.surface_tint.b, tinted.2, "b"),
+        ] {
+            let expected =
+                (flat_c as f32 * (1.0 - alpha) + tint_c as f32 * alpha).round() as i32;
+            assert!(
+                (tinted_c as i32 - expected).abs() <= 1,
+                "channel {name} ramps from surface toward surface_tint at alpha {alpha}: \
+                 expected ~{expected}, painted {}",
+                tinted_c
+            );
+        }
+    }
 }

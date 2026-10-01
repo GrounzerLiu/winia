@@ -366,6 +366,11 @@ static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> = LazyLock::new(
 static LOCAL_CONTENT_COLOR: LazyLock<CompositionLocal<Color>> =
     LazyLock::new(|| CompositionLocal::new(|| Color::BLACK));
 
+/// tonal overlay 总开关（对标 Compose `LocalTonalElevationEnabled`，`ColorScheme.kt:1556`）——
+/// 默认开；`Surface` 据此决定 `tonal_elevation` 是否真的上色。
+static LOCAL_TONAL_ELEVATION_ENABLED: LazyLock<CompositionLocal<bool>> =
+    LazyLock::new(|| CompositionLocal::new(|| true));
+
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════
@@ -679,11 +684,25 @@ impl WiniaTheme {
         LOCAL_CONTENT_COLOR.provides(color, || content(ctx));
     }
 
+    /// 在子树中开关 tonal overlay（对标 Compose `LocalTonalElevationEnabled`）。关闭后子树内所有
+    /// `Surface` 的 `tonal_elevation` 都不再上色（Compose `ColorScheme.kt:1556`）。
+    pub fn with_tonal_elevation_enabled(
+        enabled: bool,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        LOCAL_TONAL_ELEVATION_ENABLED.provides(enabled, || content(ctx));
+    }
+
+    /// 当前子树是否启用 tonal overlay（默认开——对标 Compose `LocalTonalElevationEnabled`）。
+    pub(crate) fn tonal_elevation_enabled() -> bool {
+        LOCAL_TONAL_ELEVATION_ENABLED.current()
+    }
+
     /// 读取当前子树主题色。
     pub fn colors() -> ThemeColors {
         LOCAL_COLORS.current()
     }
-
     /// 读取当前布局方向（Ltr 或 Rtl）。
     pub fn direction() -> LayoutDirection {
         LOCAL_DIRECTION.current()

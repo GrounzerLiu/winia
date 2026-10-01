@@ -7,8 +7,9 @@
 //!   is `0.dp` and `AlertDialogImpl` passes no shadow elevation, so the CONTENT is flat.
 //!   (`DialogTokens.ContainerElevation` = `Level3` is referenced nowhere in the alert-dialog
 //!   implementations, so what it belongs to is not demonstrable — nothing here claims it.)
-//!   winia has no tonal overlay at all (see `surface.rs`), which is why `tonal_elevation` is not
-//!   exposed rather than accepted and ignored.
+//!   winia's `Surface` implements the tint (see `surface.rs`), but Compose's gate only tints a surface
+//!   whose colour is EXACTLY `surface`, and this container is `surfaceContainerHigh` — so `tonal_elevation`
+//!   is not exposed here because exposing it would be a parameter that provably does nothing.
 //! - **Width**: `DialogMinWidth` = 280dp .. `DialogMaxWidth` = 560dp, i.e. the content's own
 //!   width clamped into that range (Compose's `sizeIn`). This is what `Modifier::max_width`
 //!   was added for; `min_width` alone would let a long title grow the dialog to the window.
@@ -104,6 +105,8 @@ pub struct BasicAlertDialog {
     visible: bool,
     on_dismiss_request: Option<Arc<dyn Fn() + Send + Sync>>,
     dismiss_on_outside: bool,
+    dismiss_on_back_press: bool,
+    focusable: bool,
     shape: Option<Shape>,
     container_color: Option<Color>,
     content_padding: f32,
@@ -117,6 +120,8 @@ impl BasicAlertDialog {
             visible,
             on_dismiss_request: None,
             dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            focusable: true,
             shape: None,
             container_color: None,
             content_padding: DIALOG_CONTAINER_PADDING,
@@ -154,6 +159,28 @@ impl BasicAlertDialog {
     /// default true).
     pub fn dismiss_on_outside(mut self, v: bool) -> Self {
         self.dismiss_on_outside = v;
+        self
+    }
+
+    /// Whether Escape / the back press dismisses (Compose
+    /// `DialogProperties.dismissOnBackPress`, default true).
+    ///
+    /// False still SWALLOWS the key rather than letting it through: the page behind the scrim must not
+    /// react to an Escape this dialog kept, and that is what Compose does
+    /// (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    pub fn dismiss_on_back_press(mut self, v: bool) -> Self {
+        self.dismiss_on_back_press = v;
+        self
+    }
+
+    /// Whether the dialog can take the keyboard while it is up (Compose
+    /// `DialogProperties.isFocusable`, default true).
+    ///
+    /// False leaves Tab and the keyboard with the page behind the scrim — for a dialog that is really a
+    /// transient notice with nothing to focus. A non-focusable dialog is also skipped by the
+    /// "topmost focus scope" test (`app.rs::focus_scope_is_open`), so a lower dialog does not inherit it.
+    pub fn focusable(mut self, v: bool) -> Self {
+        self.focusable = v;
         self
     }
 
@@ -213,8 +240,9 @@ impl BasicAlertDialog {
             modal: true,
             // A dialog owns the keyboard while it is up: Tab works inside the dialog, and the page
             // behind the scrim cannot be reached.
-            focus_scope: true,
+            focus_scope: self.focusable,
             dismiss_on_outside: self.dismiss_on_outside,
+            dismiss_on_back_press: self.dismiss_on_back_press,
             click_passthrough: false,
             // An alert dialog is centred, so there is nothing to fit around the anchor.
             fit_around_anchor: false,
@@ -230,6 +258,15 @@ impl BasicAlertDialog {
                     .max_width(DIALOG_MAX_WIDTH)
                     .background(container, shape)
                     .clip(shape)
+                    // `role = Dialog` is winia's landing for Compose's
+                    // `Modifier.semantics { paneTitle = dialogPaneDescription }` on the dialog Box
+                    // (`AlertDialog.kt:171`): it is what tells a screen reader the overlay opened as a
+                    // dialog pane, and `accessibility.rs` maps the role to the Pane UIA control type.
+                    // A caller's own modifier still wins — it is applied after this one.
+                    .semantics(
+                        crate::semantics::SemanticsConfig::new()
+                            .role(crate::semantics::SemanticsRole::Dialog),
+                    )
                     // `AlertDialogDefaults.dialogPadding` — on the surface, so the background
                     // covers it and the slots lay out inside it.
                     .padding(content_padding);
@@ -256,6 +293,8 @@ pub struct AlertDialog {
     visible: bool,
     on_dismiss_request: Option<Arc<dyn Fn() + Send + Sync>>,
     dismiss_on_outside: bool,
+    dismiss_on_back_press: bool,
+    focusable: bool,
     icon: Option<Box<dyn Fn(&mut ComposeCtx)>>,
     title: Option<Box<dyn Fn(&mut ComposeCtx)>>,
     text: Option<Box<dyn Fn(&mut ComposeCtx)>>,
@@ -276,6 +315,8 @@ impl AlertDialog {
             visible,
             on_dismiss_request: None,
             dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            focusable: true,
             icon: None,
             title: None,
             text: None,
@@ -327,9 +368,25 @@ impl AlertDialog {
         self
     }
 
-    /// Whether clicking outside dismisses (default true).
+    /// Whether clicking outside dismisses (Compose `DialogProperties.dismissOnClickOutside`,
+    /// default true).
     pub fn dismiss_on_outside(mut self, v: bool) -> Self {
         self.dismiss_on_outside = v;
+        self
+    }
+
+    /// Whether Escape / the back press dismisses (Compose
+    /// `DialogProperties.dismissOnBackPress`, default true). False still swallows the key rather than
+    /// letting the page behind react to it.
+    pub fn dismiss_on_back_press(mut self, v: bool) -> Self {
+        self.dismiss_on_back_press = v;
+        self
+    }
+
+    /// Whether the dialog takes the keyboard while it is up (Compose
+    /// `DialogProperties.isFocusable`, default true).
+    pub fn focusable(mut self, v: bool) -> Self {
+        self.focusable = v;
         self
     }
 
@@ -397,6 +454,8 @@ impl AlertDialog {
 
         let mut dialog = BasicAlertDialog::new(self.visible)
             .dismiss_on_outside(self.dismiss_on_outside)
+            .dismiss_on_back_press(self.dismiss_on_back_press)
+            .focusable(self.focusable)
             .modifier(self.modifier)
             .dismiss_handler(self.on_dismiss_request)
             .content(move |ctx| {
@@ -617,6 +676,46 @@ mod tests {
         assert!(
             matches!(overlays[0].position, PopupPosition::Center),
             "centred in the window"
+        );
+    }
+
+    /// `DialogProperties.dismissOnBackPress` and `isFocusable` reach the overlay, and both default to
+    /// what Compose defaults them to (true).
+    #[test]
+    fn the_dialog_properties_reach_the_overlay() {
+        let mut plain = compose_dialog(AlertDialog::new(true).title(fixed_slot("t", 100.0, 20.0)));
+        let overlays = plain.take_overlays();
+        assert!(overlays[0].dismiss_on_back_press, "dismissOnBackPress defaults true");
+        assert!(overlays[0].focus_scope, "isFocusable defaults true");
+
+        let mut off = compose_dialog(
+            AlertDialog::new(true)
+                .title(fixed_slot("t", 100.0, 20.0))
+                .dismiss_on_back_press(false)
+                .focusable(false),
+        );
+        let overlays = off.take_overlays();
+        assert!(!overlays[0].dismiss_on_back_press, "the flag is forwarded");
+        assert!(!overlays[0].focus_scope, "and so is isFocusable");
+    }
+
+    /// The dialog publishes `role = Dialog`, which is winia's landing for Compose's `paneTitle`
+    /// semantics (`AlertDialog.kt:171`) and what maps to the Pane UIA control type.
+    #[test]
+    fn the_dialog_publishes_the_dialog_role() {
+        let mut c = compose_dialog(AlertDialog::new(true).title(fixed_slot("t", 100.0, 20.0)));
+        let inner = lay_out_overlay(&mut c);
+        // The role rides the surface, which is the column carrying the background — not the overlay's
+        // root node, which is the caller's modifier wrapper around it.
+        let role = inner
+            .arena_nodes()
+            .iter()
+            .map(|node| node.modifier.semantics_config().role_value())
+            .find(|role| role.is_some());
+        assert_eq!(
+            role,
+            Some(Some(crate::semantics::SemanticsRole::Dialog)),
+            "the dialog surface must announce itself as a dialog pane"
         );
     }
 

@@ -192,6 +192,7 @@ impl ModalBottomSheet {
             // page behind the scrim cannot be reached.
             focus_scope: true,
             dismiss_on_outside: true,
+            dismiss_on_back_press: true,
             click_passthrough: false,
             // A modal sheet is anchored to the window edge by its own layout, not fitted around an anchor.
             fit_around_anchor: false,

@@ -1,7 +1,8 @@
 //! AlertDialog demo — Material 3 alert dialogs.
 //!
 //! Shows: the two-action dialog (confirm + dismiss), a one-action dialog, an icon above the
-//! title, a long body that stops at the 560dp maximum width, and a custom container colour.
+//! title, a long body that stops at the 560dp maximum width, and a case that exercises the
+//! `DialogProperties` knobs with a custom shape and colour and both dismissal routes off.
 //! The buttons really open and close, so the overlay's lifetime (and the scrim's dismissal)
 //! can be driven by hand.
 //!
@@ -19,7 +20,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-/// Which dialog is open, if any.
+/// Which dialog is open, if any. Every case shares ONE dialog; this only picks its content.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Open {
     None,
@@ -27,6 +28,8 @@ enum Open {
     OneAction,
     WithIcon,
     LongBody,
+    /// `DialogProperties` knobs: a square container, a custom colour, and both dismissal routes off.
+    Custom,
 }
 
 #[composable]
@@ -44,6 +47,7 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                 ("One action", Open::OneAction),
                 ("Icon above the title", Open::WithIcon),
                 ("Long body (560dp maximum)", Open::LongBody),
+                ("Custom shape, colour, non-dismissible", Open::Custom),
             ] {
                 Button::new()
                     .on_click({
@@ -59,156 +63,137 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
         });
 
-    match open.get() {
-        Open::None => {}
-        Open::TwoAction => {
-            AlertDialog::new(true)
-                .on_dismiss_request({
-                    clone!(open);
-                    move || open.set(Open::None)
-                })
-                .title(|ctx| {
-                    Text::new("Discard draft?").build(ctx);
-                })
-                .text(|ctx| {
-                    Text::new("Your draft will be deleted. This cannot be undone.").build(ctx);
-                })
-                .confirm_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("Discard").build(ctx);
-                            });
-                    }
-                })
-                .dismiss_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .style(ButtonStyle::Text)
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("Cancel").build(ctx);
-                            });
-                    }
-                })
-                .build(ctx);
-        }
-        Open::OneAction => {
-            AlertDialog::new(true)
-                .on_dismiss_request({
-                    clone!(open);
-                    move || open.set(Open::None)
-                })
-                .title(|ctx| {
-                    Text::new("Saved").build(ctx);
-                })
-                .text(|ctx| {
-                    Text::new("Your changes are in the cloud.").build(ctx);
-                })
-                .confirm_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("OK").build(ctx);
-                            });
-                    }
-                })
-                .build(ctx);
-        }
-        Open::WithIcon => {
-            AlertDialog::new(true)
-                .on_dismiss_request({
-                    clone!(open);
-                    move || open.set(Open::None)
-                })
-                .icon({
-                    let accent = theme.secondary;
-                    move |ctx| {
-                        // A filled circle stands in for an icon font. The slot is 24dp
-                        // (`AlertDialogDefaults::icon_size`).
-                        Stack::new()
-                            .modifier(
-                                Modifier::new()
-                                    .size(
-                                        AlertDialogDefaults::icon_size(),
-                                        AlertDialogDefaults::icon_size(),
-                                    )
-                                    .background(accent, Shape::Circle),
-                            )
-                            .build(ctx, |_| {});
-                    }
-                })
-                .title(|ctx| {
-                    Text::new("Location access").build(ctx);
-                })
-                .text(|ctx| {
-                    Text::new("Allow Winia to use your location while the app is open?").build(ctx);
-                })
-                .confirm_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("Allow").build(ctx);
-                            });
-                    }
-                })
-                .dismiss_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .style(ButtonStyle::Text)
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("Not now").build(ctx);
-                            });
-                    }
-                })
-                .build(ctx);
-        }
-        Open::LongBody => {
-            AlertDialog::new(true)
-                .on_dismiss_request({
-                    clone!(open);
-                    move || open.set(Open::None)
-                })
-                .title(|ctx| {
-                    Text::new("Terms of service").build(ctx);
-                })
-                .text(|ctx| {
-                    Text::new(
-                        "This paragraph is deliberately long, so the dialog stops at its 560dp \
-                         maximum width instead of growing to the window: the content's own width \
-                         is clamped into the 280..560dp range the Material 3 spec defines for \
-                         dialogs, and the text wraps inside it.",
-                    )
-                    .build(ctx);
-                })
-                .confirm_button({
-                    clone!(open);
-                    move |ctx| {
-                        let o = open.clone();
-                        Button::new()
-                            .on_click(move || o.set(Open::None))
-                            .build(ctx, |ctx| {
-                                Text::new("Accept").build(ctx);
-                            });
-                    }
-                })
-                .build(ctx);
-        }
-    }
+    // ONE dialog, composed every frame, with `visible` carrying whether it is up.
+    //
+    // This is the contract, and breaking it is invisible until a button stops working. An overlay is
+    // released by its owner recording `active = false`; a registrar that simply STOPS composing it is
+    // treated as "skipped" and KEPT (`composer.rs::record_overlay_active`, `app.rs::sync_overlays`).
+    // A `match` that only composes the dialog in the open case therefore pins it on screen: Escape
+    // still closed it (that path calls `begin_overlay_close` directly), while Discard and Cancel ran
+    // their handlers and set the state to `Open::None` — and left the dialog sitting there. Measured
+    // with probe prints in the confirm slot: the click FIRED, and `overlays` stayed at 1.
+    let current = open.get();
+    let custom = current == Open::Custom;
+    let accent = theme.secondary;
+
+    AlertDialog::new(current != Open::None)
+        .on_dismiss_request({
+            clone!(open);
+            move || open.set(Open::None)
+        })
+        .shape(if custom {
+            Shape::rounded(8.0)
+        } else {
+            AlertDialogDefaults::shape()
+        })
+        .container_color(if custom {
+            theme.secondary_container
+        } else {
+            AlertDialogDefaults::container_color(&theme)
+        })
+        .title_content_color(if custom {
+            theme.on_secondary_container
+        } else {
+            AlertDialogDefaults::title_color(&theme)
+        })
+        .text_content_color(if custom {
+            theme.on_secondary_container
+        } else {
+            AlertDialogDefaults::text_color(&theme)
+        })
+        // Both `DialogProperties` dismissal flags, off only in the custom case. Escape is still
+        // SWALLOWED either way — the page behind must not react to a key this dialog kept.
+        .dismiss_on_outside(!custom)
+        .dismiss_on_back_press(!custom)
+        .focusable(!custom)
+        .icon(move |ctx| {
+            if current != Open::WithIcon {
+                return;
+            }
+            // A filled circle stands in for an icon font. The slot is 24dp
+            // (`AlertDialogDefaults::icon_size`).
+            Stack::new()
+                .modifier(
+                    Modifier::new()
+                        .size(
+                            AlertDialogDefaults::icon_size(),
+                            AlertDialogDefaults::icon_size(),
+                        )
+                        .background(accent, Shape::Circle),
+                )
+                .build(ctx, |_| {});
+        })
+        .title(move |ctx| {
+            let title = match current {
+                Open::OneAction => "Saved",
+                Open::WithIcon => "Location access",
+                Open::LongBody => "Terms of service",
+                Open::Custom => "Dismissible only by its button",
+                _ => "Discard draft?",
+            };
+            Text::new(title).build(ctx);
+        })
+        .text(move |ctx| {
+            let body = match current {
+                Open::OneAction => "Your changes are in the cloud.",
+                Open::WithIcon => "Allow Winia to use your location while the app is open?",
+                Open::LongBody => {
+                    "This paragraph is deliberately long, so the dialog stops at its 560dp maximum \
+                     width instead of growing to the window: the content's own width is clamped into \
+                     the 280..560dp range the Material 3 spec defines for dialogs, and the text wraps \
+                     inside it."
+                }
+                Open::Custom => {
+                    "Neither the scrim nor Escape closes this one — both DialogProperties flags are \
+                     off, and the dialog does not take the keyboard either."
+                }
+                _ => "Your draft will be deleted. This cannot be undone.",
+            };
+            Text::new(body).build(ctx);
+        })
+        .confirm_button({
+            clone!(open);
+            move |ctx| {
+                let label = match current {
+                    Open::OneAction => "Ok",
+                    Open::WithIcon => "Allow",
+                    Open::LongBody => "Accept",
+                    Open::Custom => "Close it",
+                    _ => "Discard",
+                };
+                let o = open.clone();
+                // The action row is a TEXT BUTTON, never a filled one. The basic dialog's anatomy on the
+                // specs page calls it "Button label text" (the full-screen variant says "Text button"),
+                // and its colour role is Primary for the label. `AlertDialogImpl` says the same: it
+                // provides `ActionLabelTextColor` to the row and notes that a TextButton "will not
+                // consume this provided content color value, and will use their own defined or default
+                // colors" (`AlertDialog.kt:283-288`).
+                Button::new()
+                    .style(ButtonStyle::Text)
+                    .on_click(move || o.set(Open::None))
+                    .build(ctx, |ctx| {
+                        Text::new(label).build(ctx);
+                    });
+            }
+        })
+        .dismiss_button({
+            clone!(open);
+            move |ctx| {
+                let label = if current == Open::WithIcon {
+                    "Not now"
+                } else {
+                    "Cancel"
+                };
+                let o = open.clone();
+                Button::new()
+                    .style(ButtonStyle::Text)
+                    .on_click(move || o.set(Open::None))
+                    .build(ctx, |ctx| {
+                        Text::new(label).build(ctx);
+                    });
+            }
+        })
+        .build(ctx);
 }
 
 fn main() {

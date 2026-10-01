@@ -401,6 +401,13 @@ pub struct OverlayDesc {
     /// Whether an outside click triggers `on_dismiss_request` (non-modal Popup
     /// default true).
     pub(crate) dismiss_on_outside: bool,
+    /// Whether Escape (the back press) triggers `on_dismiss_request` — Compose's
+    /// `DialogProperties.dismissOnBackPress` (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    ///
+    /// When false the key is still CONSUMED, exactly as Compose consumes it and only skips
+    /// `onDismissRequest`: the page behind the scrim must not start reacting to an Escape the
+    /// dialog swallowed. Default true, so every overlay that predates this is unchanged.
+    pub(crate) dismiss_on_back_press: bool,
     /// When overlay content is hit, **pass through to the main tree** without
     /// consuming the event — used by Tooltip: when a tooltip covers its anchor,
     /// clicking the anchor must still work (otherwise the tooltip blocks the
@@ -573,6 +580,7 @@ impl Popup {
             // keeps it there while it lasts); it does not grab focus the moment it floats up.
             focus_scope: false,
             dismiss_on_outside: self.dismiss_on_outside,
+            dismiss_on_back_press: true,
             click_passthrough: false,
             // A popup keeps winia's historic placement (below the anchor, no fitting).
             fit_around_anchor: false,
@@ -711,6 +719,7 @@ impl Dialog {
             // A dialog owns the keyboard while it is up (see `OverlayDesc::focus_scope`).
             focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
+            dismiss_on_back_press: true,
             click_passthrough: false,
             // A dialog is centred (`PopupPosition::Center`), so there is nothing to fit around.
             fit_around_anchor: false,
@@ -1054,6 +1063,7 @@ impl DropdownMenu {
                 // `popupPropertiesForAnchorType`: an editable anchor's menu must NOT take the keyboard.
                 focus_scope: self.focus_scope,
                 dismiss_on_outside: true,
+                dismiss_on_back_press: true,
                 click_passthrough: false,
                 // material3's `DropdownMenuPositionProvider`: a menu fits itself around the anchor, so a
                 // menu taller than the space below it ends up above or against the window edge instead of

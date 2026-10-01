@@ -240,6 +240,9 @@ struct OverlayWindow {
     /// Whether this overlay owns the keyboard while it is open (see
     /// [`crate::ui::overlay::OverlayDesc::focus_scope`]).
     focus_scope: bool,
+    /// Whether Escape closes this overlay (Compose's `DialogProperties.dismissOnBackPress`). Copied
+    /// from [`crate::ui::overlay::OverlayDesc::dismiss_on_back_press`] and read by [`PerWindow::escape_key`].
+    dismiss_on_back_press: bool,
     /// Has this overlay already suspended the page's focus? Claiming is a ONE-TIME transition, and
     /// this is what keeps it one: re-running it every frame walked the whole main tree and called
     /// into the IME on every frame of a modal's life.
@@ -459,6 +462,12 @@ impl PerWindow {
             // overlay's own handlers instead (a component that wants Escape can still see it).
             if self.overlays[i].on_dismiss.is_none() {
                 return false;
+            }
+            // `dismissOnBackPress = false` still SWALLOWS the key, exactly as Compose consumes it and
+            // only skips `onDismissRequest` (`BasicEdgeToEdgeDialog.android.kt:225-236`): the page
+            // behind the scrim must not start reacting to an Escape the dialog kept.
+            if !self.overlays[i].dismiss_on_back_press {
+                return true;
             }
             let id = self.overlays[i].id;
             begin_overlay_close(self, id);
@@ -3051,6 +3060,7 @@ impl OverlayWindow {
             anchor_slot: desc.anchor_slot,
             position: desc.position,
             offset: desc.offset,
+            dismiss_on_back_press: desc.dismiss_on_back_press,
             anchor_slide: desc.anchor_slide,
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
@@ -3119,6 +3129,7 @@ impl OverlayWindow {
         self.modal = desc.modal;
         self.focus_scope = desc.focus_scope;
         self.dismiss_on_outside = desc.dismiss_on_outside;
+        self.dismiss_on_back_press = desc.dismiss_on_back_press;
         self.click_passthrough = desc.click_passthrough;
         self.fit_around_anchor = desc.fit_around_anchor;
         self.match_anchor_width = desc.match_anchor_width;
@@ -5297,9 +5308,11 @@ mod window_theme_tests {
 
 #[cfg(test)]
 mod overlay_close_tests {
-    use super::{closing_overlay_is_done, OverlayWindow, CLOSING_DEADLINE};
+    use super::{closing_overlay_is_done, OverlayWindow, PerWindow, CLOSING_DEADLINE};
     use crate::core::composer::Composer;
     use crate::ui::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
+    use crate::ui::theme::ThemeColors;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     /// A closing overlay is dropped when its fade finished — and, failing that, past the deadline. The
@@ -5348,6 +5361,7 @@ mod overlay_close_tests {
             modal: true,
             focus_scope: true,
             dismiss_on_outside: true,
+            dismiss_on_back_press: true,
             click_passthrough: false,
             fit_around_anchor: false,
             match_anchor_width: false,
@@ -5387,6 +5401,58 @@ mod overlay_close_tests {
             "resuming an overlay that was fading out schedules its enter animation again"
         );
         crate::animation::clear_all_animations();
+    }
+
+    /// `DialogProperties.dismissOnBackPress = false` still SWALLOWS Escape — the page behind the scrim
+    /// must not react to a key the dialog kept — but does not close the dialog, which is exactly what
+    /// Compose does (`BasicEdgeToEdgeDialog.android.kt:225-236`).
+    #[test]
+    fn escape_respects_dismiss_on_back_press() {
+        let desc = |dismiss_on_back_press: bool| OverlayDesc {
+            id: 9,
+            anchor_slot: None,
+            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: true,
+            focus_scope: true,
+            dismiss_on_outside: true,
+            dismiss_on_back_press,
+            click_passthrough: false,
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            on_dismiss: Some(Arc::new(|| {})),
+            enter_anim: None,
+            exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
+            content: Box::new(|_| {}),
+            local_snapshot: Vec::new(),
+        };
+
+        // True (the default): the escape starts the close.
+        let light = ThemeColors::default_light();
+        let mut kept = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+        kept.overlays
+            .push(OverlayWindow::new_with_composer(desc(true), Composer::new()));
+        assert!(kept.escape_key(), "escape is consumed");
+        assert!(
+            kept.overlays[0].closing,
+            "and it closes the dialog that opted in"
+        );
+
+        // False: consumed, but nothing closes.
+        let light = ThemeColors::default_light();
+        let mut stubborn = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+        stubborn
+            .overlays
+            .push(OverlayWindow::new_with_composer(desc(false), Composer::new()));
+        assert!(
+            stubborn.escape_key(),
+            "escape is still SWALLOWED so the page behind does not see it"
+        );
+        assert!(
+            !stubborn.overlays[0].closing,
+            "but the dialog that opted out stays open"
+        );
     }
 }
 
