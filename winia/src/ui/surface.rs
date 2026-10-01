@@ -202,8 +202,13 @@ impl Surface {
         // every nested surface in a stack read as flat as its parent.
         let absolute_elevation = crate::ui::theme::WiniaTheme::absolute_tonal_elevation()
             + self.tonal_elevation;
-        let color = if self.tonal_elevation > 0.0
-            && base_color == theme.surface
+        // The gate is the COLOUR and the switch, never this surface's own elevation. Compose's
+        // `applyTonalElevation` has no elevation term at all (`ColorScheme.kt:1540-1547`) — the only
+        // zero-guard is inside `surfaceColorAtElevation` (`ColorScheme.kt:1126`, `if (elevation == 0.dp)
+        // return surface`), and `Surface.kt:106` hands it the ABSOLUTE number. Testing the local value
+        // here therefore left a `Surface(0)` nested in a `Surface(3)` flat while Compose tints it, which
+        // is precisely what `Surface.kt:146-150` says the local exists to prevent.
+        let color = if base_color == theme.surface
             && crate::ui::theme::WiniaTheme::tonal_elevation_enabled()
         {
             surface_color_at_elevation(theme, absolute_elevation)
@@ -424,11 +429,38 @@ mod tests {
                 "surface {depth} should read {elevation}dp"
             );
         }
+
+        // And a surface that adds NOTHING of its own still inherits what is above it. This is the case
+        // the gate used to get wrong: it tested this surface's own elevation, so a `tonal_elevation(0)`
+        // child of a `tonal_elevation(3)` parent painted flat while Compose tints it — the one shape
+        // where "local" and "absolute" disagree.
+        let zero_child = painted_backgrounds(theme.clone(), true, |ctx| {
+            Surface::new().tonal_elevation(3.0).build(ctx, |ctx| {
+                Surface::new().tonal_elevation(0.0).build(ctx, |_| {});
+            });
+        });
+        assert_eq!(zero_child.len(), 2, "both paint, got {zero_child:?}");
+        assert_eq!(
+            zero_child[1], zero_child[0],
+            "a surface that declares no elevation of its own still reads its parent's 3dp"
+        );
+        assert_eq!(
+            zero_child[1],
+            theme.surface.overlay(theme.surface_tint, compose_alpha(3.0)),
+            "and that is the 3dp tint, not a flat surface"
+        );
+
+        // The converse still holds: with nothing above it, an absolute elevation of zero is a no-op,
+        // which is what `ColorScheme.kt:1126` does the deciding for.
+        let zero_root = painted_backgrounds(theme.clone(), true, |ctx| {
+            Surface::new().tonal_elevation(0.0).build(ctx, |_| {});
+        });
+        assert_eq!(zero_root, vec![theme.surface], "a lone 0dp surface paints plain surface");
     }
 
     #[test]
     fn a_surface_at_a_tonal_elevation_is_tinted_toward_the_surface_tint() {
-        // Level2 = 3dp (`ElevationTokens.kt:27`), which is the menu's own shadow elevation.
+        // Level2 = 3dp (`ElevationTokens.kt:26`), which is the menu's own shadow elevation.
         let theme = ThemeColors::default_light();
         let level = 3.0f32;
         let painted = painted_background(theme.clone(), true, |_| {

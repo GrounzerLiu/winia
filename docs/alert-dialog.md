@@ -104,9 +104,12 @@ from its `tonalElevation` parameter, whose default is `0.dp` anyway (`AlertDialo
 parameter, and a caller who passes `ColorScheme.surface` would get the tint. That is why `AlertDialog` does
 not expose `tonalElevation` here — see "Deviations from Compose".
 
-`Card` is not one of the tonal surfaces. Compose's `Card` passes no `tonalElevation` at all, only
-`shadowElevation` (`Card.kt:88-94`, `:149-157`), and its container is `surfaceContainerHighest`
-(`FilledCardTokens.kt:24`) — neither half of the gate. `Menu` does pass one (`Menu.kt:403`), but its default
+`Card` is not one of the tonal surfaces: Compose's `Card` passes no `tonalElevation` at all — the word does
+not occur anywhere in `material3/Card.kt`, and only `shadowElevation` reaches its `Surface`
+(`Card.kt:88-94`, `:149-157`). Its container depends on the variant: the default filled card is
+`surfaceContainerHighest` (`FilledCardTokens.kt:24`), `ElevatedCard` is `surfaceContainerLow`, and
+`OutlinedCard` is plain `surface` — so the last one clears the colour half of the gate and still does not
+tint, because it never asks for an elevation. `Menu` does pass one (`Menu.kt:403`), but its default
 is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
 `Surface` because that is where Compose puts it, not because a stock caller uses it.
 
@@ -216,8 +219,8 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   in the alert-dialog implementations — what it belongs to is not demonstrable, so nothing here claims it.)
 - **Tab goes nowhere when `focusable(false)`.** Compose's non-focusable dialog is a window that never took
   focus, so Tab belongs to whatever is behind it. winia draws the dialog over the live page, but the key
-  path consumes Tab unconditionally (`app.rs:1350-1352`) and `keyboard_scope` finds no arena to move
-  within when no focus-scope overlay is up (`app.rs:3330-3337`), so focus does not reach the page behind.
+  path consumes Tab unconditionally (`app.rs:1360-1362`) and `keyboard_scope` finds no arena to move
+  within when no focus-scope overlay is up (`app.rs:3346`), so focus does not reach the page behind.
   Every other key does fall through (`focus_scope_is_open` is false), so this is Tab only. Not fixed: the
   unconditional consume is load-bearing for every other overlay.
 - **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack

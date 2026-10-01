@@ -183,8 +183,8 @@ impl BasicAlertDialog {
     /// "topmost focus scope" test (`app.rs::focus_scope_is_open`), so a lower dialog does not inherit it.
     ///
     /// ⚠ **Tab is the exception, and it does not behave the way the sentence above implies.** Tab is
-    /// consumed unconditionally by the key path (`app.rs:1350-1352`), and with no focus-scope overlay up
-    /// `keyboard_scope` finds no arena to move within (`app.rs:3330-3337`), so focus goes nowhere at all
+    /// consumed unconditionally by the key path (`app.rs:1360-1362`), and with no focus-scope overlay up
+    /// `keyboard_scope` finds no arena to move within (`app.rs:3346`), so focus goes nowhere at all
     /// rather than reaching the page behind. Compose's window model does not have this case — a
     /// non-focusable dialog is a window that never took focus, and Tab belongs to whatever is behind it.
     /// Recorded in `docs/alert-dialog.md`; not fixed here because the key path's unconditional consume is

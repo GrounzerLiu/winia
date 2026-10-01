@@ -3037,7 +3037,6 @@ impl ScrollState {
         self.fling_with_boundary(velocity, |_| {});
     }
 
-    /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
     /// Whether this container settles its flings on a page boundary — the question a CALLER has to ask
     /// before it decides whether a release is worth starting a fling for at all. Same filter as the
     /// snap branch of [`Self::fling_with_boundary`], so the two can never disagree about what "snapping"
@@ -3046,6 +3045,10 @@ impl ScrollState {
         self.snap.peek().is_some_and(|s| s.step.is_finite() && s.step > 0.0)
     }
 
+    /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
+    ///
+    /// A snapping container takes the snap branch instead of the decay: one spring, launched with the
+    /// gesture's velocity, landing on a page. See [`Self::snaps`] and the note on the velocity floor below.
     pub fn fling_with_boundary(&self, velocity: f32, on_boundary: impl FnOnce(f32) + Send + 'static) {
         if !velocity.is_finite() {
             return;
@@ -3055,9 +3058,11 @@ impl ScrollState {
         // for. A snap must not have that floor: with `calculateApproachOffset` at zero there IS no decay
         // to suppress, so a release at rest has to still run the snap spring — that is the whole
         // behaviour. Compose has no equivalent floor at all: `Scrollable.kt:857-881` calls
-        // `performFling` on every release, and `SnapFlingBehavior.kt:139-158` then always computes a
-        // snap offset, which is how a slow drag past halfway still advances a page and a slow drag
-        // short of it returns to the page it started on.
+        // `performFling` on every drag and trackpad release (the mouse-wheel path returns early at
+        // `:858-860` on `shouldBeTriggeredByMouseWheel` — a flag, not a velocity threshold), and
+        // `SnapFlingBehavior.kt:139-158` then always computes a snap offset, which is how a slow drag
+        // past halfway still advances a page and a slow drag short of it returns to the page it started
+        // on.
         if snapping.is_none() && velocity.abs() < 1.0 {
             return;
         }
@@ -3245,6 +3250,23 @@ mod tests {
         assert_eq!(snap_target(limit, 9000.0, snap, limit), limit);
     }
 
+    /// The snap spec's spring is material3's `DefaultEffects`, not foundation's default. This looks
+    /// like a constant to assert and is: 1600 is what `StandardMotionTokens.kt:23` says, and the
+    /// previous value (400, `StiffnessMediumLow`) was four times softer than the picker it ports.
+    #[test]
+    fn the_snap_spring_is_material3s_default_effects() {
+        match snap_settle() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec.stiffness, 1600.0, "material3's DefaultEffects stiffness");
+                assert_eq!(
+                    spec.damping_ratio, 1.0,
+                    "SpringDefaultEffectsDamping, and Compose's default for a stiffness-only spring"
+                );
+            }
+            other => panic!("a snap settles on a spring, got {other:?}"),
+        }
+    }
+
     /// A snapping fling runs ONE animation that carries the gesture's velocity, so it never stops
     /// between a decay and a settle. `is_scroll_in_progress` is up for the whole of it and comes back
     /// down when the spring lands.
@@ -3285,6 +3307,15 @@ mod tests {
     /// carried more than halfway and then let go with the finger nearly still — under 50 px/s, and
     /// under `fling_with_boundary`'s own 1 px/s floor — reached neither the decay nor the snap, so the
     /// list came to rest between two pages and nothing ever moved it again.
+    /// A snapping list settles even when it is released at rest, and at rest is reachable: the framework
+    /// estimates release velocity over a trailing window, so a drag that stops before the pointer lifts
+    /// produces a near-zero velocity. Before, both velocity floors threw that away and the list came to
+    /// rest between two pages for good — nothing else ever snaps it back.
+    ///
+    /// This covers the floor INSIDE `fling_with_boundary`, which `ScrollState::fling` enters directly.
+    /// The other floor — 50 px/s, at the call site in `app.rs` — is not reachable from here and is not
+    /// claimed by any assertion below; it is covered end to end over the debug server by
+    /// `tmp/probe_slow_release.py`.
     #[test]
     fn a_paged_list_settles_even_when_it_is_released_at_rest() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -3323,7 +3354,7 @@ mod tests {
         assert_eq!(
             settle(200.0, 12.0),
             STEP,
-            "a velocity under the 50 px/s decay floor still snaps — that floor is the decay's, not the snap's"
+            "a gentle release still snaps rather than decaying across pages"
         );
 
         // And the floor still guards what it was written for: without a snap spec, a release below

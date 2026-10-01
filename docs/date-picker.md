@@ -357,9 +357,18 @@ bottom and 6 end, inside `WiniaTheme::with_content_color(Primary)` and `ProvideT
 Measured on the fixture: the dialog is `360 × 568` exactly, matching material3's `ContainerHeight`. winia
 applies that number as a `max_height` cap rather than a fixed height, so a shorter content column collapses
 instead of being padded out; whether the 568 the fixture sees is the content reaching it or the cap holding
-it is not established here. The content defaults to a `DatePicker` over the dialog's state — carrying the
-dialog's own `DatePickerColors`, as material3 threads one set from `DatePickerDialog.kt:51-61` into
-`DatePicker.kt:172` — and `DatePickerDialog::content` replaces it.
+it is not established here. The content defaults to a `DatePicker` over the dialog's state, carrying the
+dialog's own `DatePickerColors`, and `DatePickerDialog::content` replaces it.
+
+That forwarding is a winia convenience rather than a copy of Compose's wiring, and it is worth being
+precise about because the two are easy to confuse. material3's `DatePickerDialog` reads its `colors` in
+exactly one place — `color = colors.containerColor` on its own `Surface` (`DatePickerDialog.android.kt:86`)
+— and then invokes the caller's slot with nothing at all (`:95  Box(Modifier.weight(1f, fill = false)) {
+this@Column.content() }`). A Compose caller nesting a `DatePicker` is expected to pass `colors` down
+themselves; there is no threading to port. winia has no caller for its default content to be anyone but
+itself, so the dialog does it, and `DatePicker::colors` exists for that. Either way the result was wrong
+before: `DatePickerDialog::colors()` reached the surface and stopped, so an overridden dialog showed a
+theme-coloured calendar inside a caller-coloured container.
 
 Two deviations there. material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog collapses
 when the input mode is shorter than the calendar; winia has no weights, so the content and the action row follow

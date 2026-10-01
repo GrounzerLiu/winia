@@ -371,11 +371,17 @@ static LOCAL_CONTENT_COLOR: LazyLock<CompositionLocal<Color>> =
 static LOCAL_TONAL_ELEVATION_ENABLED: LazyLock<CompositionLocal<bool>> =
     LazyLock::new(|| CompositionLocal::new(|| true));
 
-/// 绝对 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation`，`Surface.kt:487`）——每层
+/// 绝对 tonal elevation（对标 Compose `LocalAbsoluteTonalElevation`，`material3/Surface.kt:487`）——每层
 /// `Surface` 把自己的 `tonal_elevation` 加到父层提供的值上再下传，tint 按这个**和**取值。Compose 四个
 /// 重载都是 `LocalAbsoluteTonalElevation.current + tonalElevation`（`Surface.kt:106`、`:211`、`:317`、
 /// `:424`），理由见 `Surface.kt:146-150`：a Surface never appears to have a lower elevation overlay than
 /// its ancestors。默认 0。
+///
+/// ⚠ 与 Compose 的差别不在算术而在**失效语义**：Compose 的 `LocalAbsoluteTonalElevation` 是
+/// `compositionLocalOf`（动态，读者会被失效重算）；winia 的 `CompositionLocal` 是线程局部槽栈，
+/// `provides` 不通知读者（`core/composition_local.rs:150-163`），和既有的 `LOCAL_CONTENT_COLOR` 一样。
+/// 所以一个被跳过（`GroupStatus::Skip`）的内层 `Surface` 会保留它上次组合时的绝对 elevation，而 Compose
+/// 会重算。抬升祖先的 elevation 时才会碰到。
 static LOCAL_ABSOLUTE_TONAL_ELEVATION: LazyLock<CompositionLocal<f32>> =
     LazyLock::new(|| CompositionLocal::new(|| 0.0));
 

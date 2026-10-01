@@ -160,8 +160,11 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
     }
 
     if current != Open::OneAction {
-        // Compose's one-action overload has no dismissButton at all (`AlertDialog.kt:76-108`), so the
-        // "One action" case below must not carry a Cancel next to its Ok.
+        // material3 has NO one-action `AlertDialog` overload, so there is nothing here to copy: the
+        // two-action `expect fun AlertDialog` (`AlertDialog.kt:95`) carries `dismissButton` at `:99`,
+        // and the only overload without one (`:211`) is a deprecated free-content shim with no confirm
+        // button. "One action" is a winia API choice — one action, one button — expressed by leaving the
+        // dismiss slot empty. Attaching it unconditionally is what put a "Cancel" beside the "Ok".
         dialog = dialog.dismiss_button({
             clone!(open);
             move |ctx| {

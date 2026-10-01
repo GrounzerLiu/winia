@@ -206,7 +206,6 @@ impl LazyListState {
     /// Whether there is content before the first visible item (Compose
     /// `LazyListState.canScrollBackward`).
     pub fn can_scroll_backward(&self) -> bool { self.offset.get() > 0.5 }
-
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`, which
     /// callers use to stay off a list that is already moving.
     pub fn is_scrolling(&self) -> bool { self.is_scrolling.get() }
@@ -232,6 +231,14 @@ impl LazyListState {
 
     /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
     /// 滚动，撞到滚动极限立即停止（极限由测量期回写——`fling_limit`）。
+    ///
+    /// ⚠ This is the THIRD velocity floor in the snap story, and the only one not bypassed: it carries
+    /// its own `|v| < 1.0` check and reads no `SnapSpec`, so a paged list released through this entry
+    /// point decays instead of snapping. The pointer path does not come here — `dispatch_nested_scroll_fling`
+    /// calls `ScrollState::fling_with_boundary` on the state the list assembles, and that one snaps. So
+    /// this is a gap for a caller that flings a lazy list directly, not for the gesture. Fixing it means
+    /// routing through the assembled `ScrollState` (or duplicating its filter), which is worth doing when
+    /// something first needs it; the date picker does not.
     pub fn fling(&self, velocity: f32) {
         if !velocity.is_finite() || velocity.abs() < 1.0 {
             return;
@@ -1209,11 +1216,29 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             if animate {
                 // 动画滚动（对齐 Compose animateScrollToItem——spring 收敛）；
                 // push_animatable 内部处理同 state 动画替换（retarget 继承速度）
-                self.is_scroll_in_progress.set(false);
-                crate::animation::push_animatable(
+                //
+                // The flag goes UP for the length of the spring, not down. It is the same state the
+                // drag and fling paths write (`build` hands this clone to the list's ScrollState), and
+                // Compose's guard on a programmatic jump — `!monthsListState.isScrollInProgress` before
+                // `scrollToItem` (`DatePicker.kt:1548-1553`) — depends on it being set while this runs.
+                // Clearing it here left that guard inert for the month arrows: an outside change landing
+                // mid-animation would `scroll_to_item` and `cancel_animation` straight through the motion
+                // the user just asked for.
+                //
+                // The variant whose two early exits both report completion is deliberate: the plain
+                // `push_animatable_with_done` returns WITHOUT firing `done` when the offset is already at
+                // the target (`animation.rs:475-479`), which would leave the flag set with no animation to
+                // clear it. Velocity 0 is right for a jump — nothing was flung.
+                let in_progress = self.is_scroll_in_progress.clone();
+                in_progress.set(true);
+                crate::animation::push_animatable_with_velocity_and_done(
                     self.state.offset.clone(),
                     target.clamp(0.0, max_off),
                     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+                    0.0,
+                    move || {
+                        in_progress.set(false);
+                    },
                 );
             } else {
                 // 立即跳转：取消进行中的 fling + 结束滚动中标记
@@ -1350,6 +1375,40 @@ mod tests {
     use super::*;
     use crate::core::composer::Composer;
     use crate::layout::Constraints;
+
+    /// The "not measured yet" sentinel is `f32::MAX`, which `is_finite()` happily accepts — so the
+    /// obvious test for it answers "yes, you can scroll forward" on a list nobody has laid out. That
+    /// is the trap the ⚠ on [`LazyListState::can_scroll_forward`] warns about, and it is worth pinning:
+    /// Compose's `canScrollForward` starts at `false` (`LazyListState.kt:474`).
+    ///
+    /// A REAL measured limit of `0` is the opposite case and must stay distinguishable — it means the
+    /// content fits and the list genuinely cannot move.
+    #[test]
+    fn an_unmeasured_list_reports_no_room_ahead_but_a_measured_one_does() {
+        let fresh = LazyListState::new();
+        assert_eq!(fresh.fling_limit.peek(), f32::MAX, "the sentinel is f32::MAX, not infinity");
+        assert!(
+            !fresh.can_scroll_forward(),
+            "before the first measure there is no measured limit, so this must not claim room ahead"
+        );
+        assert!(!fresh.can_scroll_backward(), "and it has certainly not been scrolled");
+
+        let measured = LazyListState::new();
+        measured.fling_limit.set(500.0);
+        measured.offset.set(0.0);
+        assert!(measured.can_scroll_forward(), "a measured limit below the offset leaves room ahead");
+
+        measured.offset.set(500.0);
+        assert!(!measured.can_scroll_forward(), "resting at the limit is the end of the list");
+        assert!(measured.can_scroll_backward(), "and there is history behind it");
+
+        let frozen = LazyListState::new();
+        frozen.fling_limit.set(0.0);
+        assert!(
+            !frozen.can_scroll_forward(),
+            "a real limit of 0 means the content fits — not that nothing has been measured yet"
+        );
+    }
 
     // ── IntervalList：定位 / key 映射 ──
     #[test]

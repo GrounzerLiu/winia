@@ -126,8 +126,18 @@ fn today_at(now_millis: i64, offset_millis: i64) -> i64 {
     canonical_millis(now_millis.saturating_add(offset_millis))
 }
 
-/// How far the machine's local zone runs ahead of UTC, in milliseconds.
+/// The system clock, in milliseconds since the epoch — the one place it is read.
 ///
+/// Split out so [`CalendarModel::today_millis`] reads as the composition it is (an instant plus a zone)
+/// rather than as arithmetic buried in a clock call, and so the tests can see what has to meet.
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// How far the machine's local zone runs ahead of UTC, in milliseconds.///
 /// Everything in this module is UTC arithmetic — `canonical_millis` stamps a day boundary and
 /// `civil_from_days` reads one back — so the local zone shows up in exactly one place, and this is it.
 /// The offset is a whole number of minutes by definition (every zone definition is), which is why
@@ -355,11 +365,7 @@ impl CalendarModel {
     /// previous day. So the local offset goes in first, and `canonical_millis` then does the UTC
     /// stamping exactly as it always did.
     pub fn today_millis(&self) -> i64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or(0);
-        today_at(now, local_utc_offset_millis())
+        today_at(now_millis(), local_utc_offset_millis())
     }
 
     /// The month and year as text, `September 2024` — the shape `DatePickerFormatter.formatMonthYear`
@@ -524,7 +530,7 @@ impl DatePickerState {
     }
 
     /// The day the picker outlines as today, at the start of its UTC day. material3 reads the platform clock
-    /// for it (`internal/CalendarModelImpl.android.kt:49-66`); a caller may pin it, and the tests do.
+    /// for it (`internal/CalendarModelImpl.android.kt:49-62`); a caller may pin it, and the tests do.
     pub fn today_millis(&self) -> i64 {
         self.today_millis
     }
@@ -1043,8 +1049,9 @@ pub struct DatePicker {
     state: DatePickerState,
     title: Option<String>,
     /// The colour roles, read from the theme when absent. [`DatePickerDialog`] forwards its own set here
-    /// for its default content, because material3 threads ONE `DatePickerColors` from the dialog down
-    /// into the picker (`DatePickerDialog.kt:57-58` → `DatePicker.kt:172`).
+    /// for its default content — a winia convenience, since material3's dialog uses its `colors` only for
+    /// its own surface (`DatePickerDialog.android.kt:86`) and invokes the caller's slot with nothing
+    /// (`:95`).
     colors: Option<DatePickerColors>,
     modifier: Modifier,
 }
@@ -1062,11 +1069,14 @@ impl DatePicker {
 
     /// The picker's colour roles (`colors`), read from the theme by default.
     ///
-    /// Material3 has no such parameter on `DatePicker` itself — the colours arrive from whatever
-    /// composed it — but winia needs the setter for [`DatePickerDialog`] to hand its own set down. The
-    /// gap it closes was visible: the dialog painted its surface from `colors.container` and then let
-    /// the default content re-derive a fresh set from the theme, so an overridden dialog got a calendar
-    /// in the theme's colours inside a container in the caller's.
+    /// Material3 has no such parameter on `DatePicker` itself — the colours are whatever the composable
+    /// that built it passed (`DatePicker.kt:172` is its own parameter default) — but winia needs the
+    /// setter so [`DatePickerDialog`] can hand its set down. The gap it closes was visible: the dialog
+    /// painted its surface from `colors.container` and then let the default content re-derive a fresh
+    /// set from the theme, so an overridden dialog got a calendar in the theme's colours inside a
+    /// container in the caller's.
+    ///
+    /// This is a winia convenience, not a port of Compose's wiring — see [`DatePickerDialog::build`].
     pub fn colors(mut self, colors: DatePickerColors) -> Self {
         self.colors = Some(colors);
         self
@@ -1257,15 +1267,45 @@ fn sync_month_pages(
 
     let published = ctx.remember(|| State::new(i64::MIN)).get();
     let pending = ctx.remember(|| State::new(None::<usize>)).get();
+    // Consecutive frames spent WAITING — either for a jump this function issued to be picked up, or for
+    // a scroll in flight to finish before the next one.
+    //
+    // Both waits are bounded, and that is not defensive padding. `is_scrolling()` is the same state the
+    // drag, fling, programmatic-jump and cancellation paths all write
+    // (`lazy_column.rs:990,1021` hand it to the list's `ScrollState`), and two of those can leave it set:
+    // `cancel_animation_by_id` and `clear_animations_for_states` drop an animation with `retain`
+    // (`animation.rs:580-583`, `:43-49`), never running its finish callback, and both `drag_scroll_up`
+    // paths return before their reset when the drag's target node has gone (`app.rs:3021`,
+    // `app.rs:3936`). Compose's guard is safe because a single owner maintains that flag with a
+    // guaranteed reset; here it is shared, so an UNBOUNDED wait would turn a leaked flag into a calendar
+    // frozen on a stale month for the life of the window — strictly worse than the gesture cancellation
+    // the guard exists to prevent.
+    // `remember` already hands back a `State<T>`, so the value remembered here is the frame count
+    // itself — not a `State` wrapped in another `State` the way the two above are. And writing it every
+    // frame is free: `set_reactive` compares before notifying (`state.rs:390-393`), so re-setting the
+    // same count dirties nothing and cannot loop the composition.
+    let waited = ctx.remember(|| 0u8);
+    const MAX_WAIT_FRAMES: u8 = 60; // ~1 s at 60 Hz, longer than any settle or spring.
 
     let displayed = state.displayed_month_millis();
     let actual = list.first_visible();
 
     match pending.get() {
         // An outside change is still being carried out. Say nothing until the list arrives; the page
-        // it is leaving is not news.
-        Some(target) if actual != target => return,
-        Some(_) => pending.set(None),
+        // it is leaving is not news. Past the bound, give up on the arrival instead: falling through
+        // lands in the branch below, which republishes wherever the list actually is, so a target the
+        // list can never reach costs a momentary disagreement rather than a dead sync.
+        Some(target) if actual != target => {
+            if waited.get() < MAX_WAIT_FRAMES {
+                waited.set(waited.get() + 1);
+                return;
+            }
+            pending.set(None);
+        }
+        Some(_) => {
+            pending.set(None);
+            waited.set(0);
+        }
         None => {}
     }
 
@@ -1275,20 +1315,26 @@ fn sync_month_pages(
         let target = page_of(displayed);
         if actual == target {
             published.set(displayed);
-        } else if !list.is_scrolling() {
+            waited.set(0);
+        } else if list.is_scrolling() && waited.get() < MAX_WAIT_FRAMES {
+            // A drag or a fling is still running, so this has to wait. Compose guards the same way and
+            // for the same reason — "The DatePicker has other actions that can trigger a scroll and
+            // update the displayedMonthMillis as they do so, hence we check here for isScrollInProgress
+            // and only scroll to the monthIndex when there is none in progress"
+            // (`DatePicker.kt:1545-1547`, guard at `:1548-1553`). Without it `scroll_to_item` calls
+            // `cancel_animation`, so the jump would land by killing the gesture the user was in the
+            // middle of. Leaving `published` alone is what makes this retry: `displayed != published`
+            // still holds next frame.
+            waited.set(waited.get() + 1);
+        } else {
             list.scroll_to_item(target, 0.0);
             pending.set(Some(target));
             published.set(displayed);
+            waited.set(0);
         }
-        // Else a drag or a fling is still running and this has to wait for it. Compose guards the same
-        // way, and for the same reason — its comment is "The DatePicker has other actions that can
-        // trigger a scroll and update the displayedMonthMillis as they do so, hence we check here for
-        // isScrollInProgress and only scroll to the monthIndex when there is none in progress"
-        // (`DatePicker.kt:1546-1553`). Without it `scroll_to_item` calls `cancel_animation`, so the jump
-        // would land by killing the gesture the user was in the middle of. Leaving `published` alone is
-        // what makes this retry: `displayed != published` still holds next frame.
         return;
     }
+    waited.set(0);
 
     // Nothing came from outside, so any difference is the LIST having moved — a swipe, or an arrow's
     // animation partway through. Publish where it is so the nav row and the headline follow.
@@ -1300,7 +1346,7 @@ fn sync_month_pages(
 }
 
 /// The modal date picker's dialog (`DatePickerDialog`, `DatePickerDialog.kt:51-61`; its Android body is
-/// `DatePickerDialog.android.kt:85-118`).
+/// `DatePickerDialog.android.kt:75-114`).
 ///
 /// material3 wraps the picker in a `BasicAlertDialog` whose own surface is
 /// `requiredWidth(ContainerWidth = 360)` and `heightIn(max = ContainerHeight = 568)`, shaped
@@ -1407,10 +1453,14 @@ impl DatePickerDialog {
         let confirm = self.confirm_button;
         let dismiss = self.dismiss_button;
         let content = self.content;
-        // The same set the surface is painted from, handed to the default content too — material3 threads
-        // ONE `DatePickerColors` from the dialog into the picker (`DatePickerDialog.kt:57-58` →
-        // `DatePicker.kt:172`), so a caller overriding the dialog gets the calendar in those colours and
-        // not in a fresh set re-derived from the theme.
+        // The same set the surface is painted from, handed to the default content too. This is a winia
+        // convenience rather than a copy of Compose's wiring: material3's `DatePickerDialog` reads its
+        // `colors` in exactly one place — `color = colors.containerColor` on its own `Surface`
+        // (`DatePickerDialog.android.kt:86`) — and then calls the caller's slot with nothing
+        // (`:95  Box(Modifier.weight(1f, fill = false)) { this@Column.content() }`). A caller nesting a
+        // `DatePicker` is expected to pass `colors` down itself; winia has no caller for its default
+        // content to be anyone but itself, so the dialog does it. Either way the visible result was wrong
+        // before: a caller overriding the dialog got a theme-coloured calendar inside their own container.
         let content_colors = colors.clone();
         let size = Modifier::new()
             .width(DatePickerDefaults::CONTAINER_WIDTH)
@@ -2580,6 +2630,12 @@ mod tests {
 
     /// The live probe behind it: whatever zone this machine is in, the offset has to be one a real zone
     /// could carry. A garbage answer here is the one failure mode `today_at` cannot catch.
+    ///
+    /// This is a SMOKE CHECK, not a regression guard. A probe hard-wired to return 0 satisfies both
+    /// assertions on every machine, and 0 is the correct answer on a UTC machine anyway — so this says
+    /// "the zone lookup returned something legal", nothing more. The arithmetic is pinned separately by
+    /// `today_is_the_local_date_stamped_at_utc_midnight` with synthetic offsets, and the wiring is
+    /// pinned by `today_millis_reads_the_local_day_not_the_utc_one`.
     #[test]
     fn the_local_offset_is_a_whole_number_of_minutes_in_range() {
         let offset = local_utc_offset_millis();
@@ -2587,6 +2643,44 @@ mod tests {
         assert!(
             offset.abs() <= 14 * 3_600_000,
             "offset {offset} is outside the real range of UTC-12..UTC+14"
+        );
+    }
+
+    /// The production call, not the helper: `CalendarModel::today_millis` must be the LOCAL day.
+    ///
+    /// ⚠ This can only bite while the machine is inside the window where its local date and its UTC date
+    /// disagree — eight hours a day at UTC+8, zero on a UTC machine. That is a real limitation, not a
+    /// formality: the clock is read inside the function and there is no seam to move it, so the one
+    /// assertion that distinguishes "applies the offset" from "reads the UTC instant" is only available
+    /// during that window. It is written to be skipped loudly rather than to pass quietly, so a suite run
+    /// that never exercises it says so. The arithmetic is deterministic and covered by the test above;
+    /// this covers the composition.
+    #[test]
+    fn today_millis_reads_the_local_day_not_the_utc_one() {
+        let offset = local_utc_offset_millis();
+        let model = CalendarModel::new(CalendarLocale::default());
+        let answered = model.today_millis();
+
+        if offset == 0 {
+            eprintln!("today_millis_reads_the_local_day_not_the_utc_one: skipped — this machine is UTC, \
+                       where the UTC day IS the local day and the two cannot be told apart");
+            return;
+        }
+        // The two days, read the same way the function does, a moment either side of the call. A
+        // microsecond of clock movement between the three reads is the only slack allowed.
+        let utc_day = canonical_millis(now_millis());
+        let local_day = today_at(now_millis(), offset);
+        if utc_day == local_day {
+            eprintln!(
+                "today_millis_reads_the_local_day_not_the_utc_one: skipped — outside the window where \
+                 this machine's local date and UTC date disagree; rerun within {} hours of local midnight",
+                offset.abs() / 3_600_000
+            );
+            return;
+        }
+        assert_eq!(
+            answered, local_day,
+            "today_millis answered the UTC day ({answered}) while the local date is a different one"
         );
     }
 
