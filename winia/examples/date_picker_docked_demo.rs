@@ -115,8 +115,20 @@ fn docked_demo(ctx: &mut ComposeCtx) {
                                 ),
                         ))
                         .on_dismiss_request({
-                            clone!(open);
-                            move || open.set(false)
+                            // The scrim and Escape both land here, and they have to DISCARD just like the
+                            // Cancel button does. Leaving the selection as the user left it meant the next
+                            // open started from an unconfirmed pick, and a later Ok would then confirm a
+                            // date the user never agreed to in this session.
+                            //
+                            // Measured: with this reduced to `open.set(false)`, picking a day and pressing
+                            // Escape still leaves the date in the state, so reopening captures it as the
+                            // new baseline and Ok writes it into the field
+                            // (`tmp/probe_docked_discard.py`, one assertion red).
+                            clone!(open, baseline, state);
+                            move || {
+                                state.set_selected_date_millis(baseline.get());
+                                open.set(false);
+                            }
                         })
                         .build(ctx, {
                             clone!(open, confirmed, baseline, field_value, state, model);

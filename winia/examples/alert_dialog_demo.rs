@@ -76,7 +76,13 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
     let custom = current == Open::Custom;
     let accent = theme.secondary;
 
-    AlertDialog::new(current != Open::None)
+    // The icon and the dismiss button are OPTIONAL slots, and the difference is not cosmetic: the
+    // content asks `slots.icon.is_some()` to decide whether the title is centred or start-aligned, and
+    // it composes the icon's wrapper — padding bottom and all — whenever the slot is present. Attaching
+    // `.icon(..)` unconditionally and early-returning inside the closure therefore left a 16dp gap and
+    // a centred title in the four cases that have no icon, and the `Stack` wrapper is not something the
+    // closure declining to draw can undo. So the slot is attached only where it is filled.
+    let mut dialog = AlertDialog::new(current != Open::None)
         .on_dismiss_request({
             clone!(open);
             move || open.set(Open::None)
@@ -106,23 +112,6 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
         .dismiss_on_outside(!custom)
         .dismiss_on_back_press(!custom)
         .focusable(!custom)
-        .icon(move |ctx| {
-            if current != Open::WithIcon {
-                return;
-            }
-            // A filled circle stands in for an icon font. The slot is 24dp
-            // (`AlertDialogDefaults::icon_size`).
-            Stack::new()
-                .modifier(
-                    Modifier::new()
-                        .size(
-                            AlertDialogDefaults::icon_size(),
-                            AlertDialogDefaults::icon_size(),
-                        )
-                        .background(accent, Shape::Circle),
-                )
-                .build(ctx, |_| {});
-        })
         .title(move |ctx| {
             let title = match current {
                 Open::OneAction => "Saved",
@@ -145,21 +134,41 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                 }
                 Open::Custom => {
                     "Neither the scrim nor Escape closes this one — both DialogProperties flags are \
-                     off, and the dialog does not take the keyboard either."
+                     off, and the dialog does not take the keyboard either, so pressing Tab leaves \
+                     focus where it was."
                 }
                 _ => "Your draft will be deleted. This cannot be undone.",
             };
             Text::new(body).build(ctx);
-        })
-        .confirm_button({
+        });
+
+    if current == Open::WithIcon {
+        // A filled circle stands in for an icon font. The slot is 24dp
+        // (`AlertDialogDefaults::icon_size`).
+        dialog = dialog.icon(move |ctx| {
+            Stack::new()
+                .modifier(
+                    Modifier::new()
+                        .size(
+                            AlertDialogDefaults::icon_size(),
+                            AlertDialogDefaults::icon_size(),
+                        )
+                        .background(accent, Shape::Circle),
+                )
+                .build(ctx, |_| {});
+        });
+    }
+
+    if current != Open::OneAction {
+        // Compose's one-action overload has no dismissButton at all (`AlertDialog.kt:76-108`), so the
+        // "One action" case below must not carry a Cancel next to its Ok.
+        dialog = dialog.dismiss_button({
             clone!(open);
             move |ctx| {
-                let label = match current {
-                    Open::OneAction => "Ok",
-                    Open::WithIcon => "Allow",
-                    Open::LongBody => "Accept",
-                    Open::Custom => "Close it",
-                    _ => "Discard",
+                let label = if current == Open::WithIcon {
+                    "Not now"
+                } else {
+                    "Cancel"
                 };
                 let o = open.clone();
                 // The action row is a TEXT BUTTON, never a filled one. The basic dialog's anatomy on the
@@ -175,16 +184,22 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                         Text::new(label).build(ctx);
                     });
             }
-        })
-        .dismiss_button({
+        });
+    }
+
+    dialog
+        .confirm_button({
             clone!(open);
             move |ctx| {
-                let label = if current == Open::WithIcon {
-                    "Not now"
-                } else {
-                    "Cancel"
+                let label = match current {
+                    Open::OneAction => "Ok",
+                    Open::WithIcon => "Allow",
+                    Open::LongBody => "Accept",
+                    Open::Custom => "Close it",
+                    _ => "Discard",
                 };
                 let o = open.clone();
+                // The same TEXT BUTTON rule as the dismiss action above.
                 Button::new()
                     .style(ButtonStyle::Text)
                     .on_click(move || o.set(Open::None))
