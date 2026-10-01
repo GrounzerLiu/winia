@@ -78,7 +78,7 @@ shadow, a `Surface` with a `tonalElevation` has `surfaceTint` blended over its o
 elevation. M3 dialogs look "raised" this way.
 
 `Surface::tonal_elevation` used to be a placeholder that did nothing. It now works, with Compose's rule
-(`ColorScheme.kt:1540-1547`, `:1125-1129`):
+(`ColorScheme.kt:1540-1543`, `:1125-1129`):
 
 - The tint applies **only when the surface's colour is exactly `theme.surface`** and tonal elevation is on.
   A surface with any other colour is left untouched — that is Compose's gate, verbatim.
@@ -108,8 +108,11 @@ not expose `tonalElevation` here — see "Deviations from Compose".
 not occur anywhere in `material3/Card.kt`, and only `shadowElevation` reaches its `Surface`
 (`Card.kt:88-94`, `:149-157`). Its container depends on the variant: the default filled card is
 `surfaceContainerHighest` (`FilledCardTokens.kt:24`), `ElevatedCard` is `surfaceContainerLow`, and
-`OutlinedCard` is plain `surface` — so the last one clears the colour half of the gate and still does not
-tint, because it never asks for an elevation. `Menu` does pass one (`Menu.kt:403`), but its default
+`OutlinedCard` is plain `surface` — so the last one *satisfies* the colour half of the gate and still shows
+no tint, because it never passes `tonalElevation`: the absolute elevation stays `0.dp`, and
+`surfaceColorAtElevation` (`ColorScheme.kt:1126`, `if (elevation == 0.dp) return surface`) is a no-op.
+Its per-state numbers (`OutlinedCardTokens.kt:30,34`) are `shadowElevation` only, which does not feed
+`applyTonalElevation`. `Menu` does pass one (`Menu.kt:403`), but its default
 is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
 `Surface` because that is where Compose puts it, not because a stock caller uses it.
 
@@ -211,7 +214,7 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
 
 - **No `tonalElevation` parameter.** Compose exposes one (`AlertDialog.kt:108`, default
   `AlertDialogDefaults.TonalElevation = 0.dp`, `:241`) and forwards it to its `Surface`. With the default
-  container colour the gate (`ColorScheme.applyTonalElevation`, `ColorScheme.kt:1540-1547`) excludes it —
+  container colour the gate (`ColorScheme.applyTonalElevation`, `ColorScheme.kt:1540-1543`) excludes it —
   a dialog's container is `surfaceContainerHigh`, never `surface` — so the default value is a no-op in
   Compose too, and so would be anything else winia accepted here while the container colour is the default.
   It is not a no-op for a caller who also passes `container_color` equal to `theme.surface`, which is why

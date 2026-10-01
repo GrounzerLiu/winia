@@ -429,9 +429,12 @@ settle". material3 hands it a layout provider whose `calculateApproachOffset` re
    `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
    `spring(dampingRatio = SpringDefaultEffectsDamping, stiffness = SpringDefaultEffectsStiffness)`, and
    `StandardMotionTokens.kt:22-23` puts those at **1.0 and 1600.0** (the expressive scheme is the same).
-   winia uses those. It previously used foundation's `StiffnessMediumLow` = 400 — a value this document
-   and the code comment both attributed to material3 while citing the material3 source for it, which is
-   how a four-times-softer settle survived review.
+   winia uses those. It previously used foundation's default
+   (`spring(stiffness = Spring.StiffnessMediumLow)`, `SnapFlingBehavior.kt:238`) while this document and
+   the code comment attributed it to material3 — which is how the wrong spring survived review. The old
+   local constant was 400, but that figure is this repo's prior value, not a quoted Compose fact: the
+   numeric constant lives in `androidx.compose.animation.core`, which `target/compose-src` does not
+   mirror.
 
 Also unlike the decay path, **a release is never filtered out before the snap runs.** Compose calls
 `performFling` on every release (`Scrollable.kt:857-881`) and always computes a snap offset from it.
@@ -448,10 +451,11 @@ The first version of this did all three differently, and each was visible:
 | ran a free exponential decay first, then snapped to the nearest boundary of wherever it stopped | with 2412 pages a hard flick banked thousands of pixels of decay | a flick jumped most of a year, and the DIRECTION came from where the decay happened to run out rather than from the gesture |
 | no velocity threshold | a nudge and a flick were the same rule | a small push could not settle back on the month it started from |
 | a 300 ms tween from rest | the list stopped dead, then moved again | two visible motions — "not smooth" |
-| the wrong spring: 400 instead of material3's 1600 | four times softer, settling visibly slower than the picker it was ported from | the flick arrived, then kept creeping |
+| the wrong spring: foundation's default instead of material3's 1600 | softer, settling visibly slower than the picker it was ported from | the flick arrived, then kept creeping |
 | kept the decay's 50 px/s / 1 px/s release floors | a slow drag released at rest never entered the fling at all | the calendar rested between two months and stayed there |
 
-Measured after the fix, driving the debug server with real pointer drags (`tmp/probe_swipe.py`):
+Measured after the fix, driving the debug server with real pointer drags (a local working script —
+see the note on probes below):
 
 | gesture (276 dp across a 336 dp page) | months moved | label transitions |
 | --- | --- | --- |
@@ -460,6 +464,21 @@ Measured after the fix, driving the debug server with real pointer drags (`tmp/p
 | flick left (3 steps, same distance) | +1 | settled |
 | flick right | −1 | settled |
 | 20 dp nudge | 0 | settled back on the same page |
+| drag 82% of a page, held 0.6 s, released | +1 | settled on the boundary |
+| drag 36% of a page, held 0.6 s, released | 0 | settled back on its own page |
+
+The last two are the release-at-rest case, and they are also the one pair with a **versioned** guard:
+`modifier::tests::a_paged_list_settles_even_when_it_is_released_at_rest` covers the floor inside
+`fling_with_boundary`, `app::release_velocity_floor_tests::a_paged_list_flings_below_the_decay_floor`
+covers the 50 px/s floor at the call site (with `an_ordinary_container_keeps_the_decay_floor` as its
+control), and `winia/src/app.rs` carries both.
+
+**A note on the probes named in this document.** They live under `tmp/`, which this repository's
+`.gitignore` excludes along with `tools/` — deliberately, since they are diagnostic scripts rather than
+product code. So a fresh checkout cannot run them, and a reader should treat the numbers above as the
+durable record and the probe names as provenance for anyone who still has the working tree. Where a
+measured claim has a versioned guard, the guard is named beside it; that is the half a regression can be
+caught by.
 
 ### The two-way sync, and why the frame lag matters
 
@@ -475,8 +494,10 @@ lagging value makes each direction react to the other's past.
 Measured with a debug trace, that is exactly what happened: clicking a month arrow made the picker
 ping-pong between two pages forever, one `scroll_to_item` per frame, each cancelling the animation the last
 one had started — `page=1500 month_index=1520` then `page=1520 month_index=1500`, repeating. Remembering
-what we published instead removed the feedback path, and the arrows now settle with a single transition
-(`tmp/probe_arrow.py`, both directions, both variants).
+what we published instead removed the feedback path, and the arrows now settle with a single transition.
+The versioned guard on the outcome is `ui::date_picker::tests::a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`,
+which pins the OTHER half of the same mechanism — that the wait the guard introduces is bounded, so a
+leaked `is_scrolling` cannot turn into a frozen month.
 
 `pending` is the second piece: the page an outside change asked for. The list side stays quiet until the
 list actually arrives there, so a month picked in the year panel is not overwritten by the page the list is

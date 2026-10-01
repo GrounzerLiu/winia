@@ -1225,10 +1225,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 // mid-animation would `scroll_to_item` and `cancel_animation` straight through the motion
                 // the user just asked for.
                 //
-                // The variant whose two early exits both report completion is deliberate: the plain
-                // `push_animatable_with_done` returns WITHOUT firing `done` when the offset is already at
-                // the target (`animation.rs:475-479`), which would leave the flag set with no animation to
-                // clear it. Velocity 0 is right for a jump — nothing was flung.
+                // The variant whose early exits all report completion is deliberate: the plain
+                // `push_animatable_with_done` has TWO silent early exits — already at the target
+                // (`animation.rs:475-480`), and same-state-same-target dedup when the identical motion is
+                // already running (`animation.rs:491-494`) — and neither fires `done`, which would leave
+                // the flag set with no animation to clear it. The velocity variant reports completion in
+                // both (`animation.rs:195-198`, `:212-215`). Velocity 0 is right for a jump — nothing was
+                // flung.
                 let in_progress = self.is_scroll_in_progress.clone();
                 in_progress.set(true);
                 crate::animation::push_animatable_with_velocity_and_done(
@@ -2713,6 +2716,88 @@ mod tests {
         assert!(
             (end - target).abs() < 5.0,
             "动画应收敛到 scroll_to_item 同一目标 {target}，实际 {end}"
+        );
+    }
+
+    /// A programmatic animated jump RAISES `is_scroll_in_progress` for the length of its spring, rather
+    /// than clearing it as it used to.
+    ///
+    /// Both halves are load-bearing, and each pins a different decision in the measure's `animate`
+    /// branch:
+    ///
+    /// * **Up while it runs.** That flag is the same `State` the drag and fling paths write (`build`
+    ///   hands this clone to the list's `ScrollState`), and it is what `sync_month_pages` reads through
+    ///   `is_scrolling()` for Compose's `!isScrollInProgress` guard (`DatePicker.kt:1548-1553`). Clearing
+    ///   it here left that guard inert: an outside change landing mid-animation would `scroll_to_item`
+    ///   and `cancel_animation` straight through the motion the user had just asked for. Drop the
+    ///   `in_progress.set(true)` and the mid-spring assertion below goes red.
+    /// * **Down again afterwards.** The clearing rides on the animation's completion callback, so a
+    ///   variant that does not always call it would latch the flag on with nothing left to clear it —
+    ///   and a latched flag freezes the month sync (see the bound in `date_picker.rs`). The
+    ///   already-at-target case is the one that distinguishes the variants: plain
+    ///   `push_animatable_with_done` returns WITHOUT firing `done` when the offset already equals the
+    ///   target (`animation.rs:475-480`) and also when an identical motion is already running
+    ///   (`:491-494`), while the velocity variant reports completion in both (`:195-198`, `:212-215`).
+    #[test]
+    fn an_animated_jump_holds_is_scroll_in_progress_for_the_length_of_its_spring() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = LazyListState::new();
+        let items: Arc<Vec<u64>> = Arc::new((0..1000).collect());
+        let (_px, _w) = render_lazy_state(&state, &items);
+        assert!(!state.is_scrolling(), "a list nobody has touched is not scrolling");
+
+        // The target is derived the same way the jump derives it, so the assertion is about the flag
+        // and not about a guessed offset.
+        state.scroll_to_item(500, 0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        let target = state.offset();
+        state.offset.set(0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        assert!(!state.is_scrolling(), "an instantaneous jump has no motion to report");
+
+        state.animate_scroll_to_item(500, 0.0);
+        let (_px, _w) = render_lazy_state(&state, &items);
+        // The measure consumed the request and registered the spring; one `update` has already run, so
+        // the motion is genuinely in flight rather than merely queued.
+        assert!(
+            crate::animation::has_animation_for_state(state.offset.state_id()),
+            "the animated jump must have registered a spring, or the rest of this test is vacuous"
+        );
+        assert!(
+            (state.offset() - target).abs() > 100.0,
+            "and it must not have arrived yet (offset {} of {target}) — otherwise there is no window \
+             for the flag to be up in",
+            state.offset()
+        );
+        assert!(
+            state.is_scrolling(),
+            "an animated jump is a scroll in progress: the flag has to be UP for the length of the \
+             spring, or the `!isScrollInProgress` guard it feeds cannot see the motion it protects"
+        );
+
+        step_animations_until_target(&state, target, 400);
+        assert!(
+            !state.is_scrolling(),
+            "and the flag comes back down when the spring lands — a latched `true` would freeze every \
+             sync that waits on it"
+        );
+
+        // The variant choice, pinned where it is observable: a request for the page the list is already
+        // on runs no animation, so the completion callback fires immediately and the flag is never left
+        // up. With the plain `push_animatable_with_done` the `set(true)` above would have nothing to
+        // clear it and this assertion would hang on `true` forever.
+        let settled = LazyListState::new();
+        let (_px, _w) = render_lazy_state(&settled, &items);
+        settled.animate_scroll_to_item(0, 0.0);
+        let (_px, _w) = render_lazy_state(&settled, &items);
+        assert!(
+            !crate::animation::has_animation_for_state(settled.offset.state_id()),
+            "jumping to the page already on screen registers no motion"
+        );
+        assert!(
+            !settled.is_scrolling(),
+            "and it must not leave the flag up with no animation to bring it down"
         );
     }
 

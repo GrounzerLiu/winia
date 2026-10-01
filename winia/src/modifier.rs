@@ -2980,10 +2980,13 @@ fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
 /// those at **1.0 and 1600.0**. The expressive scheme is the same (`ExpressiveMotionTokens.kt:24-25`), so
 /// the value does not depend on which scheme an app selects.
 ///
-/// This used to be `StiffnessMediumLow` = 400, which is the *foundation* `rememberSnapFlingBehavior`
-/// default, not material3's — roughly four times softer, and it settled visibly slower than the picker
-/// it was ported from. `SpringSpec::default()`'s damping ratio is already 1.0, matching
-/// `SpringDefaultEffectsDamping` and Compose's `DampingRatioNoBouncy`.
+/// This used to be foundation's `rememberSnapFlingBehavior` default
+/// (`spring(stiffness = Spring.StiffnessMediumLow)`, `SnapFlingBehavior.kt:238`), not material3's — the
+/// old constant (400) sits well below this one, and the settle visibly lagged the picker it was ported
+/// from. The "400" figure itself cannot be sourced from `target/compose-src` (the numeric constant lives
+/// in `androidx.compose.animation.core`, which is not mirrored — only the use site is), so it is kept
+/// here as the prior local value, not as a quoted Compose fact. `SpringSpec::default()`'s damping ratio
+/// is already 1.0, matching `SpringDefaultEffectsDamping` and Compose's `DampingRatioNoBouncy`.
 fn snap_settle() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
         stiffness: 1600.0,
@@ -3251,8 +3254,9 @@ mod tests {
     }
 
     /// The snap spec's spring is material3's `DefaultEffects`, not foundation's default. This looks
-    /// like a constant to assert and is: 1600 is what `StandardMotionTokens.kt:23` says, and the
-    /// previous value (400, `StiffnessMediumLow`) was four times softer than the picker it ports.
+    /// like a constant to assert and is: 1600 is what `StandardMotionTokens.kt:23` says. (The numeric
+    /// value of foundation's `StiffnessMediumLow` is not mirrored in `target/compose-src`, so the test
+    /// pins what this repo uses, not the size of the gap.)
     #[test]
     fn the_snap_spring_is_material3s_default_effects() {
         match snap_settle() {
@@ -3307,15 +3311,16 @@ mod tests {
     /// carried more than halfway and then let go with the finger nearly still — under 50 px/s, and
     /// under `fling_with_boundary`'s own 1 px/s floor — reached neither the decay nor the snap, so the
     /// list came to rest between two pages and nothing ever moved it again.
-    /// A snapping list settles even when it is released at rest, and at rest is reachable: the framework
-    /// estimates release velocity over a trailing window, so a drag that stops before the pointer lifts
-    /// produces a near-zero velocity. Before, both velocity floors threw that away and the list came to
-    /// rest between two pages for good — nothing else ever snaps it back.
+    ///
+    /// A release at rest is reachable rather than theoretical: the framework estimates release velocity
+    /// over a trailing window, so a drag that stops before the pointer lifts produces a near-zero
+    /// velocity.
     ///
     /// This covers the floor INSIDE `fling_with_boundary`, which `ScrollState::fling` enters directly.
     /// The other floor — 50 px/s, at the call site in `app.rs` — is not reachable from here and is not
-    /// claimed by any assertion below; it is covered end to end over the debug server by
-    /// `tmp/probe_slow_release.py`.
+    /// claimed by any assertion below; it is guarded by
+    /// `app::release_velocity_floor_tests::a_paged_list_flings_below_the_decay_floor`, with
+    /// `an_ordinary_container_keeps_the_decay_floor` as its control, and driven end to end on the demo.
     #[test]
     fn a_paged_list_settles_even_when_it_is_released_at_rest() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());

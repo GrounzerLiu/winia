@@ -355,7 +355,7 @@ impl CalendarModel {
     }
 
     /// Today at the start of its UTC day, from the system clock — material3's `CalendarModel.today`
-    /// (`internal/CalendarModelImpl.android.kt:49-62`).
+    /// (`internal/CalendarModelImpl.android.kt:48-62`; the clock itself is read at `:50`).
     ///
     /// Compose reads `LocalDate.now()` and only THEN stamps it at UTC midnight
     /// (`.atTime(MIDNIGHT).atZone(utcTimeZoneId)`), so the DATE it rings is the user's local calendar
@@ -530,7 +530,7 @@ impl DatePickerState {
     }
 
     /// The day the picker outlines as today, at the start of its UTC day. material3 reads the platform clock
-    /// for it (`internal/CalendarModelImpl.android.kt:49-62`); a caller may pin it, and the tests do.
+    /// for it (`internal/CalendarModelImpl.android.kt:48-62`); a caller may pin it, and the tests do.
     pub fn today_millis(&self) -> i64 {
         self.today_millis
     }
@@ -1229,6 +1229,14 @@ fn month_pages(
         .build(ctx);
 }
 
+/// How long [`sync_month_pages`] will wait on something before it stops waiting: for a jump it issued
+/// to be picked up, or for a scroll in flight to finish first.
+///
+/// ~1 s at 60 Hz, longer than any settle or spring. It is a module-level constant rather than a local
+/// so the test can name the same number the code uses — see
+/// `a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`, which is the guard on this bound.
+const MAX_WAIT_FRAMES: u8 = 60;
+
 /// material3's two-way sync between the page list and `displayedMonthMillis`, in one place:
 /// `LaunchedEffect(monthIndex)` scrolls the list when the month changes from OUTSIDE it
 /// (`DatePicker.kt:1544-1554`), and `snapshotFlow { firstVisibleItemIndex }` writes the list's page
@@ -1272,7 +1280,7 @@ fn sync_month_pages(
     //
     // Both waits are bounded, and that is not defensive padding. `is_scrolling()` is the same state the
     // drag, fling, programmatic-jump and cancellation paths all write
-    // (`lazy_column.rs:990,1021` hand it to the list's `ScrollState`), and two of those can leave it set:
+    // (`lazy_column.rs:997,1028` hand it to the list's `ScrollState`), and two of those can leave it set:
     // `cancel_animation_by_id` and `clear_animations_for_states` drop an animation with `retain`
     // (`animation.rs:580-583`, `:43-49`), never running its finish callback, and both `drag_scroll_up`
     // paths return before their reset when the drag's target node has gone (`app.rs:3021`,
@@ -1285,7 +1293,6 @@ fn sync_month_pages(
     // frame is free: `set_reactive` compares before notifying (`state.rs:390-393`), so re-setting the
     // same count dirties nothing and cannot loop the composition.
     let waited = ctx.remember(|| 0u8);
-    const MAX_WAIT_FRAMES: u8 = 60; // ~1 s at 60 Hz, longer than any settle or spring.
 
     let displayed = state.displayed_month_millis();
     let actual = list.first_visible();
@@ -2580,6 +2587,85 @@ fn docked_action_row(
 mod tests {
     use super::*;
 
+    /// The bound on [`sync_month_pages`]'s two waits, and the reason it exists.
+    ///
+    /// `is_scrolling()` is NOT a flag with one owner — it is the same `State` the drag, fling,
+    /// programmatic-jump and cancellation paths all write, and at least two of those can leave it set:
+    /// `cancel_animation_by_id` / `clear_animations_for_states` drop an animation with `retain` and never
+    /// run its finish callback (`animation.rs:580-583`, `:43-49`), and both `drag_scroll_up` paths return
+    /// before their reset when the drag's target node has gone (`app.rs:3021`, `app.rs:3936`). Compose's
+    /// guard is safe because a single owner maintains that flag with a guaranteed reset; here it is
+    /// shared, so an unbounded wait would turn ONE leaked flag into a month label frozen for the life of
+    /// the window — strictly worse than the gesture cancellation the guard exists to prevent.
+    ///
+    /// The observable is `jump_request`: the jump is issued through `scroll_to_item`, which parks the
+    /// request for the measure to consume, and a bare `compose` never measures — so the request is still
+    /// sitting there to be read. Two things are asserted, and both matter: that the deferral happens at
+    /// all (a sync that barged in immediately would cancel the gesture it is guarding), and that it ENDS
+    /// (which is the anti-freeze half).
+    #[test]
+    fn a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever() {
+        let list = LazyListState::new();
+        let model = CalendarModel::new(CalendarLocale::default());
+        let state = DatePickerState::with(
+            CalendarLocale::default(),
+            DatePickerStateInit {
+                initial_displayed_month_millis: Some(millis(2024, 9, 1)),
+                today_millis: Some(millis(2024, 9, 5)),
+                ..Default::default()
+            },
+        );
+        let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
+        // A gesture that never finishes. `first_visible` stays 0, so the sync is asked to take the list
+        // to September 2024's page (1496) and can never see it arrive.
+        list.is_scrolling.set(true);
+        assert_ne!(
+            state.displayed_month_millis(),
+            model.plus_months(first_month, list.first_visible() as i64).start_utc_time_millis,
+            "the test is vacuous unless the state's month differs from the page the list is on"
+        );
+
+        let mut composer = crate::core::composer::Composer::new();
+        let mut deferred = 0usize;
+        let mut issued_on = None;
+        for frame in 1..=(MAX_WAIT_FRAMES as usize + 4) {
+            composer.compose(|ctx| {
+                sync_month_pages(ctx, &state, &model, &list, first_month);
+            });
+            if list.jump_request.peek().is_some() {
+                issued_on = Some(frame);
+                break;
+            }
+            deferred += 1;
+        }
+
+        let issued_on = issued_on.expect(
+            "the sync never gave up waiting: a leaked `is_scrolling` would freeze the month forever",
+        );
+        assert!(
+            issued_on > 1,
+            "the sync must defer at least a frame before giving up — it waited {deferred} frame(s) \
+             and then jumped on frame {issued_on}, which is the gesture cancellation the guard prevents"
+        );
+        assert_eq!(
+            issued_on,
+            MAX_WAIT_FRAMES as usize + 1,
+            "the deferral ends exactly at the bound, not early and not late"
+        );
+
+        // And the flag is still the input, not the output: a list that reports it is idle jumps on the
+        // very first frame.
+        let idle = LazyListState::new();
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            sync_month_pages(ctx, &state, &model, &idle, first_month);
+        });
+        assert!(
+            idle.jump_request.peek().is_some(),
+            "an idle list is taken to the month immediately — the wait is only for a scroll in flight"
+        );
+    }
+
     #[test]
     fn the_epoch_is_a_thursday() {
         // 1970-01-01 is the reference point of the whole module, and Thursday is 4 when Monday is 1.
@@ -2588,7 +2674,7 @@ mod tests {
     }
 
     /// "Today" is the LOCAL calendar date, stamped at UTC midnight — Compose's `LocalDate.now()` then
-    /// `.atTime(MIDNIGHT).atZone(utcTimeZoneId)` (`CalendarModelImpl.android.kt:49-62`). Reading the UTC
+    /// `.atTime(MIDNIGHT).atZone(utcTimeZoneId)` (`CalendarModelImpl.android.kt:48-62`). Reading the UTC
     /// instant directly rings the previous day for every user whose local date has already rolled over.
     #[test]
     fn today_is_the_local_date_stamped_at_utc_midnight() {

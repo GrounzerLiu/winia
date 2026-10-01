@@ -6072,6 +6072,120 @@ mod nested_scroll_chain_tests {
     }
 }
 
+/// The release-velocity floor at the fling call site, and the exception a paged list gets from it.
+mod release_velocity_floor_tests {
+    use super::dispatch_nested_scroll_fling;
+    use crate::layout::node::LayoutNode;
+    use crate::layout::{Point, Size};
+    use crate::modifier::{Modifier, ScrollState, SnapSpec};
+    use crate::nested_scroll::ScrollVelocity;
+
+    const STEP: f32 = 336.0;
+    /// Below the 50 px/s floor the call site uses for the DECAY, and below the snap's own 400 dp/s
+    /// threshold too — so the snap that runs here is the "settle on the nearer page" branch, which is
+    /// the one a slow drag-and-release needs.
+    const GENTLE: f32 = 12.0;
+
+    /// A root with one scrollable child, mid-page so the snap has somewhere to go.
+    ///
+    /// The offset matters: at an exact page boundary the snap target equals the current offset and the
+    /// spring is never registered (`push_animatable_with_velocity_and_done` short-circuits on
+    /// `peek() == target`), which would make a `has_animation` assertion vacuous.
+    fn tree(snap: Option<SnapSpec>, offset: f32) -> (Vec<LayoutNode>, ScrollState) {
+        let scroll = ScrollState::new();
+        scroll.offset.set(offset);
+        scroll.fling_limit.set(STEP * 9.0);
+        scroll.snap.set(snap);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .size(400.0, STEP),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(400.0, 600.0);
+        nodes[1].measured_size = Size::new(400.0, STEP);
+        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[1].scroll_viewport_height = STEP;
+        nodes[1].scroll_content_height = STEP * 10.0;
+        nodes[0].children.push(1);
+        (nodes, scroll)
+    }
+
+    fn snap_spec() -> SnapSpec {
+        SnapSpec { step: STEP, min_fling_velocity: 400.0 }
+    }
+
+    /// A paged list released below the 50 px/s floor still flings — because its whole motion is the
+    /// snap spring, and the floor was written for a decay it does not run.
+    ///
+    /// This is the half no unit test reached before: `ScrollState::fling` enters `fling_with_boundary`
+    /// directly and never crosses this call site, so the existing
+    /// `a_paged_list_settles_even_when_it_is_released_at_rest` is green whether or not the bypass here
+    /// exists. Without `|| ss.snaps()`, the release below is dropped before any fling starts and the
+    /// list comes to rest between two pages with nothing left to snap it back.
+    #[test]
+    fn a_paged_list_flings_below_the_decay_floor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        // Mid-page, so the nearer-page snap target is a real move.
+        let (mut nodes, scroll) = tree(Some(snap_spec()), STEP * 0.6);
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
+
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "a paging list released at {GENTLE} px/s must still run its snap spring — the 50 px/s \
+             floor is the decay's, and this list has no decay phase"
+        );
+
+        // And it is the SNAP that ran, not a decay: one page, on the boundary.
+        let mut frames = 0;
+        while crate::animation::has_animation_for_state(scroll.offset.state_id()) && frames < 400 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            frames += 1;
+        }
+        let end = scroll.offset.get();
+        assert!(
+            (end / STEP - (end / STEP).round()).abs() < 1e-3,
+            "the gentle release settled at {end}, which is not a page boundary — a decay would stop \
+             wherever the friction ran out"
+        );
+        assert!(
+            end >= STEP,
+            "and it advanced to the nearer page ahead ({end} should be at least one page in)"
+        );
+    }
+
+    /// The control, and the reason the test above is about the exception rather than about the number:
+    /// the SAME velocity on a container with no snap spec is still dropped by the floor, so a plain
+    /// scroll view does not bank a fling out of the tail of a slow drag.
+    #[test]
+    fn an_ordinary_container_keeps_the_decay_floor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let (mut nodes, scroll) = tree(None, STEP * 0.6);
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
+
+        assert!(
+            !crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "without a snap spec a {GENTLE} px/s release must start nothing — the 50 px/s floor still \
+             guards the decay, which is what it was written for"
+        );
+        assert_eq!(scroll.offset.get(), STEP * 0.6, "and the offset is untouched");
+
+        // The floor is a floor, not a wall: the same container released fast does fling.
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: 900.0 });
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "a fast release on an ordinary container still flings"
+        );
+    }
+}
+
 /// 拖拽滚动目标复现（用户报告：鼠标在外层内容上按下拖拽，内层却滚动了）。
 /// 构造与 nested_scroll_demo 同几何的树：外层 scroll 视口 536（y=184..720），
 /// 内层 scroll 视口 180（内容流 y=296，视觉 480..660，scroll_viewport 已设）。

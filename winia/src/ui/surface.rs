@@ -190,7 +190,7 @@ impl Surface {
         let base_color = self.color.unwrap_or(theme.surface);
         // tonal overlay（对标 Compose `ColorScheme.applyTonalElevation` / `surfaceColorAtElevation`）：
         // **仅当底色恰好等于 theme.surface 且 tonal 开关打开时**才把 `surface_tint` 按 elevation 叠上去
-        // （`ColorScheme.kt:1540-1547`, `:1125-1129`）。底色不是 surface（如对话框的
+        // （`ColorScheme.kt:1540-1543`, `:1125-1129`）。底色不是 surface（如对话框的
         // surfaceContainerHigh）则不上色——这正是 Compose 的行为，也是 AlertDialog 传了
         // `tonalElevation` 也是空转的原因。
         //
@@ -203,7 +203,7 @@ impl Surface {
         let absolute_elevation = crate::ui::theme::WiniaTheme::absolute_tonal_elevation()
             + self.tonal_elevation;
         // The gate is the COLOUR and the switch, never this surface's own elevation. Compose's
-        // `applyTonalElevation` has no elevation term at all (`ColorScheme.kt:1540-1547`) — the only
+        // `applyTonalElevation` has no elevation term at all (`ColorScheme.kt:1540-1543`) — the only
         // zero-guard is inside `surfaceColorAtElevation` (`ColorScheme.kt:1126`, `if (elevation == 0.dp)
         // return surface`), and `Surface.kt:106` hands it the ABSOLUTE number. Testing the local value
         // here therefore left a `Surface(0)` nested in a `Surface(3)` flat while Compose tints it, which
