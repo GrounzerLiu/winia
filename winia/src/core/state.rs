@@ -1,10 +1,13 @@
-//! 响应式状态系统 — 类似 Jetpack Compose 的 MutableState
+//! Reactive state system — winia's analogue of Jetpack Compose's `MutableState`.
 //!
-//! 核心概念:
-//! - State<T>: 可观察的值容器，读时自动追踪依赖，写时通知重组
-//! - 基于 thread-local 的依赖追踪，无需显式传递 CompositionContext
-//! - 通过 PartialEq 去重，避免无效重组
-//! - 通知走 StateSignal（按读取订阅的 Composer）+ notify_version
+//! The core ideas:
+//! - `State<T>` is an observable value cell: a read inside a compose or layout pass
+//!   records a dependency, a write schedules the work that read implies.
+//! - Dependency tracking runs through thread-local buffers, so no `CompositionContext`
+//!   has to be threaded through a call that only wants to read a value.
+//! - Writes dedupe on `PartialEq`, so writing an equal value costs nothing.
+//! - Notification goes through `StateSignal`, which fans out to the Composers that
+//!   actually read the value. There is no second delivery channel.
 
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -326,10 +329,6 @@ impl<T> Clone for RawState<T> {
 }
 
 impl<T> RawState<T> {
-    pub(crate) fn take_notify_version(&self) -> u32 {
-        self.inner.notify_version.swap(0, Ordering::AcqRel)
-    }
-
     pub(crate) fn id(&self) -> u32 {
         self.inner.public_id
     }
@@ -343,7 +342,6 @@ impl<T> RawState<T> {
     }
 
     pub(crate) fn notify(&self, wake: bool) {
-        self.inner.notify_version.fetch_add(1, Ordering::Release);
         self.inner.signal.notify(wake);
     }
 }
@@ -356,7 +354,6 @@ impl<T: 'static> RawState<T> {
             signal: StateSignal::new(id),
             public_id,
             value: RwLock::new(value),
-            notify_version: Default::default(),
         });
         Self { inner }
     }
@@ -499,10 +496,6 @@ macro_rules! impl_handle_common {
 
             pub(crate) fn signal_id(&self) -> StateId {
                 self.0.signal_id()
-            }
-
-            pub(crate) fn take_notify_version(&self) -> u32 {
-                self.0.take_notify_version()
             }
 
             pub(crate) fn from_raw(raw: RawState<T>) -> Self {
@@ -694,8 +687,6 @@ struct StateInner<T> {
     /// Internal Composer routing uses `signal.id()` exclusively.
     public_id: u32,
     value: RwLock<T>,
-    /// 通知版本号——每次 set/update 自增，compose 消费后归零
-    notify_version: AtomicU32,
 }
 
 // Internal routing IDs are 64-bit; the public animation compatibility ID
@@ -754,10 +745,6 @@ impl<T: 'static> State<T> {
 }
 
 impl<T: Clone + 'static> State<T> {
-    pub(crate) fn take_notify_version(&self) -> u32 {
-        self.raw.take_notify_version()
-    }
-
     /// Read a snapshot of the current value.
     ///
     /// When called inside a composition context (a Composer executing a
@@ -777,45 +764,14 @@ impl<T: Clone + 'static> State<T> {
 impl<T: PartialEq + 'static> State<T> {
     /// Set a new value. Equal values (via PartialEq) skip notification,
     /// avoiding useless recomposition.
+    ///
+    /// This is the only write `State` offers, and it means the one thing: recompose
+    /// and wake. Every narrower scheduling decision belongs to a handle —
+    /// `Backchannel` (write only), `Animating` (recompose, no wake), `Visual` (write
+    /// only, draw layer) — so a site states what it wants by what type it holds
+    /// rather than by which setter it calls.
     pub fn set(&self, value: T) {
         self.raw.set_reactive(value);
-    }
-
-    /// Write-back without notify/recompose. For internal markers whose change
-    /// needs no reactivity (e.g. Window `created_id`: read naturally next
-    /// frame; notifying mid-compose would avalanche keys / collapse the tree).
-    ///
-    /// Deprecated: prefer an explicit `Backchannel` handle (see
-    /// `docs/state-handles.md`). Emits a compile warning on use.
-    #[deprecated(note = "use Backchannel::set; see docs/state-handles.md")]
-    pub fn set_silent(&self, value: T) {
-        self.raw.set_backchannel(value);
-    }
-
-    /// Set + notify (schedule recomposition) but **skip waking the event
-    /// loop** (bypass WAKE_FN).
-    ///
-    /// Animation-engine only: ticks are already frame-driven by
-    /// `request_redraw`; waking per tick would spin recomposition.
-    ///
-    /// Deprecated: prefer an explicit `Animating` handle (see
-    /// `docs/state-handles.md`). Emits a compile warning on use.
-    #[deprecated(note = "use Animating::set; see docs/state-handles.md")]
-    pub fn set_no_wake(&self, value: T) {
-        self.raw.set_animating(value);
-    }
-
-    /// Write without recomposition.
-    ///
-    /// Draw-layer animation only: alpha/scale/color changes repaint via the
-    /// animation engine's per-frame `request_redraw` and never schedule
-    /// `notify -> mark_dirty -> recompose` (matches Compose `graphicsLayer`).
-    ///
-    /// Deprecated: prefer an explicit `Visual` handle (see
-    /// `docs/state-handles.md`). Emits a compile warning on use.
-    #[deprecated(note = "use Visual::set; see docs/state-handles.md")]
-    pub fn set_visual(&self, value: T) {
-        self.raw.set_visual(value);
     }
 }
 
