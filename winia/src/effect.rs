@@ -214,7 +214,10 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
     rx: tokio::sync::watch::Receiver<T>,
     initial: T,
 ) -> State<T> {
-    let state: State<T> = ctx.remember(|| State::new(initial.clone())).get();
+    // `remember` already returns a `State<T>`, so the slot holds the value itself. The `State::new`
+    // wrapper it replaced only added a layer: the outer handle was written once at init and read once
+    // per frame, so it could never invalidate anything the inner one did not.
+    let state: State<T> = ctx.remember(|| initial.clone());
     let s = state.clone();
     let started: State<bool> = ctx.remember(|| false);
     if !started.get() {

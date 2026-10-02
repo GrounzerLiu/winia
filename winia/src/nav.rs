@@ -951,11 +951,14 @@ impl<K: NavKey> NavTransition<K> {
     /// 创建（首帧 current = 初始场景）
     fn init(ctx: &mut ComposeCtx, initial_key: u64) -> Self {
         Self {
-            current_key: ctx.remember(move || State::new(initial_key)).get(),
-            previous: ctx.remember(|| State::new(None)).get(),
-            forward: ctx.remember(|| State::new(true)).get(),
+            // `remember` returns the `State` itself — these slots hold the values, not a `State`
+            // wrapping another `State`. `host_id` below still needs `.get()`, but for the other
+            // reason: its field is a plain `u64`, so the handle has to be unwrapped once.
+            current_key: ctx.remember(move || initial_key),
+            previous: ctx.remember(|| None),
+            forward: ctx.remember(|| true),
             // 初值 0 = 无过渡（渲染层以此判定静置归位；导航时 detect 复位 1.0）
-            progress: ctx.remember(|| State::new(0.0)).get(),
+            progress: ctx.remember(|| 0.0),
             active_spec: ctx.remember_backchannel(|| None),
             host_id: ctx.remember(next_nav_host_id).get(),
         }
@@ -1083,7 +1086,7 @@ impl<K: NavKey> NavTransition<K> {
         // 时 progress 不保证为 0（无过渡必须归位）
         let active = prev.is_some();
         // 容器宽度（fill_max_size 层的测量宽）——首帧测量先于渲染，peek 即得真值
-        let width = ctx.remember(|| State::new(0.0f32)).get();
+        let width = ctx.remember(|| 0.0f32);
         // 渲染单个过渡层（graphics_layer 动画闭包——每帧 peek progress/width 零重组）
         let render_layer = |ctx: &mut ComposeCtx, scene: &dyn Scene<K>, is_prev: bool| {
             let progress = self.progress.clone();

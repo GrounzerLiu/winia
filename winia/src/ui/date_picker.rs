@@ -1105,7 +1105,7 @@ impl DatePicker {
         let title = self.title.clone();
         // material3 keeps the year panel's visibility in a `rememberSaveable` inside the picker
         // (`DatePicker.kt:1557`). winia keeps it in a remembered `State`, so a toggle recomposes the picker.
-        let year_panel_open = ctx.remember(|| State::new(false)).get();
+        let year_panel_open = ctx.remember(|| false);
         // The panel's row list, which the toggle scrolls to the row above the displayed year.
         let year_rows = ctx.remember(LazyListState::new).get();
         // The paged month list. Its position IS the displayed month (see `sync_month_pages`), so the
@@ -1116,9 +1116,6 @@ impl DatePicker {
         let month_rows = ctx.remember(LazyListState::new).get();
         // The page the month arrows have already asked for but the list has not reached, so a press
         // during the animation continues from it instead of restating it (see `arrow_target`).
-        //
-        // `remember` returns `State<T>` itself, so the value here is the `Option<usize>` — not a
-        // `State` wrapped in another `State` (the shape `published`/`pending` above are stuck with).
         let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year, so a page index converts to a month by
         // counting from here — the same reference `month_pages` composes against.
@@ -1281,8 +1278,8 @@ fn sync_month_pages(
     };
     let month_of = |page: usize| model.plus_months(first_month, page as i64).start_utc_time_millis;
 
-    let published = ctx.remember(|| State::new(i64::MIN)).get();
-    let pending = ctx.remember(|| State::new(None::<usize>)).get();
+    let published = ctx.remember(|| i64::MIN);
+    let pending = ctx.remember(|| None::<usize>);
     // Consecutive frames spent WAITING — either for a jump this function issued to be picked up, or for
     // a scroll in flight to finish before the next one.
     //
@@ -1296,10 +1293,9 @@ fn sync_month_pages(
     // guaranteed reset; here it is shared, so an UNBOUNDED wait would turn a leaked flag into a calendar
     // frozen on a stale month for the life of the window — strictly worse than the gesture cancellation
     // the guard exists to prevent.
-    // `remember` already hands back a `State<T>`, so the value remembered here is the frame count
-    // itself — not a `State` wrapped in another `State` the way the two above are. And writing it every
-    // frame is free: `set_reactive` compares before notifying (`state.rs:390-393`), so re-setting the
-    // same count dirties nothing and cannot loop the composition.
+    // `remember` hands back a `State<T>`, so this slot holds the count itself. Writing it every frame is
+    // free: `set_reactive` compares before notifying (`state.rs:390-393`), so re-setting the same count
+    // dirties nothing and cannot loop the composition.
     let waited = ctx.remember(|| 0u8);
 
     let displayed = state.displayed_month_millis();
@@ -2292,14 +2288,13 @@ impl DockedDatePicker {
         let month = model.month_of_millis(self.state.displayed_month_millis());
         let state = self.state.clone();
         // Which inline panel replaces the weekday row and the grid, if any.
-        let panel = ctx.remember(|| State::new(DockedPanel::Calendar)).get();
+        let panel = ctx.remember(|| DockedPanel::Calendar);
         // The year list's scroll state, parked here so reopening the panel keeps its position.
         let year_rows = ctx.remember(LazyListState::new).get();
         // The paged month list, its position being the displayed month (see `sync_month_pages`), which
         // seeds it with `scroll_to_item` — see the note in `DatePicker::build`.
         let month_rows = ctx.remember(LazyListState::new).get();
         // The page the arrows have asked for but not reached — see the note in `DatePicker::build`.
-        // `remember` hands back the `State` itself, so this is not a `State<State<..>>`.
         let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year — see the note in `DatePicker::build`.
         let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
