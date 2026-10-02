@@ -274,16 +274,39 @@ expose a public `remember_handle` is an open decision — see §7.5.
 
 ### 7.5 Remaining (step 3 + deferred)
 
-- Delete `State::set_silent / set_no_wake / set_visual`, `notify_version /
-  take_notify_version`, and the `State` alias; rename internals to
-  `RawState (pub(crate))`; narrow `PartialEq` to signal-id identity.
+Landed in step 3's first pass:
+
+- `State::set_silent / set_no_wake / set_visual` deleted. `set_no_wake` and
+  `set_visual` had no callers at all; `set_silent` had four, all on
+  `AnchoredDraggableState::dragging`, which is now a `Backchannel<bool>` — the
+  flag is read by `is_dragging` for logic and by no composable, which is what
+  the write-only semantics were for. `State` has one setter left, and it means
+  one thing.
+- `notify_version` / `take_notify_version` deleted. Nothing read the counter:
+  `take_notify_version` had four definitions and no callers, while every notify
+  did a `fetch_add` on it. That was an atomic RMW on a shared cache line per
+  state write, buying nothing. The revision counter that IS load-bearing —
+  `StateSignal::revision`, read by the subscribe handshake — is a different
+  field and is untouched (pinned by the two `revision_handshake_*` tests in
+  `state.rs`).
+- `PartialEq` was already narrowed to signal-id identity, so that item was
+  carried here by mistake.
+
+Still open:
+
 - `Modifier` dynamic channels restricted to `Visual`-derived peek closures
-  (constructor signatures, not comments).
+  (constructor signatures, not comments). This changes a public signature, so
+  it is its own piece of work.
 - `DerivedValue`: extend `impl_derived_arith` to `Dp / Offset / Size` and
   re-key operators from `&State<f32>` to `&Reactive<f32>`.
 - Decide whether `ComposeCtx` exposes a public `remember_handle`, which would let
   the handle-shaped sites in §7.4 drop their `.get()`. Not urgent — the layer is
   inert and costs one `StateInner` per instance — but it is the only reason those
   spellings are unavoidable.
+- Reconsider what step 3 called "remove the `State` alias". There is no alias:
+  `State<T>` (`state.rs:687`) and `Reactive<T>` (`state.rs:457`) are two
+  newtypes over the same `RawState<T>`, and `ctx.remember` hands out `State<T>`.
+  Collapsing them is a public-surface migration for the whole crate, not a
+  cleanup — it needs its own branch and its own plan.
 - Deferred (separate item): the `changed`-allowlist gap for
   `TextField::read_only`-class fields (docked-filter root cause from §1).

@@ -103,10 +103,13 @@ pub fn set(&self, value: T);                    // T: 'static
   nobody: the next frame reads the value. Writing them where recomposition
   was intended silently drops the update — this is why the type boundary
   exists (misuse must fail to compile, not fail at runtime).
-- Deprecated shims on `State` (`set_silent`, `set_no_wake`, `set_visual`)
-  forward to the matching handle primitive and emit compile warnings.
-  New code must take the handle instead. No production callers remain; the
-  shims are removed in step 3 of `docs/state-handles.md`.
+- `State` has exactly one setter. `set_silent` / `set_no_wake` / `set_visual`
+  were deprecated shims that forwarded to the matching handle primitive; they
+  are gone. Their last caller, `AnchoredDraggableState::dragging`, holds a
+  `Backchannel<bool>` now — a flag read by `is_dragging` for logic and by no
+  composable, which is what it was always asking for. A site states its
+  scheduling by the handle it holds, and `State::set` has one reading left:
+  recompose and wake.
 
 ## 5. Framework sources: where handles come from
 
