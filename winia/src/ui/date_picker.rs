@@ -232,6 +232,8 @@ pub struct CalendarLocale {
     /// The twelve abbreviated month names, January first, for the docked picker's compact month
     /// button (the M3 specs docked figure notes "Aug", not "August").
     pub month_names_short: [String; 12],
+    /// How the input mode's text field writes and reads a date.
+    pub date_input_format: DateInputFormat,
 }
 
 impl Default for CalendarLocale {
@@ -268,6 +270,7 @@ impl Default for CalendarLocale {
             weekday_names: WEEKDAYS.map(|(full, narrow)| (full.to_string(), narrow.to_string())),
             month_names: MONTHS.map(|name| name.to_string()),
             month_names_short: MONTHS_SHORT.map(|name| name.to_string()),
+            date_input_format: DateInputFormat::default(),
         }
     }
 }
@@ -282,6 +285,148 @@ impl CalendarLocale {
             names.push(self.weekday_names[(start + index) % 7].clone());
         }
         names
+    }
+
+    /// How the input field writes and reads a date (`getDateInputFormat`,
+    /// `CalendarModel.kt:100`).
+    pub fn date_input_format(&self) -> &DateInputFormat {
+        &self.date_input_format
+    }
+}
+
+/// The order the input field's three fields appear in, read off the pattern
+/// (`DateInputFormat`'s pattern is always exactly one `yyyy`, one `MM` and one
+/// `dd`, so the order is the only thing the locale actually decides).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateInputFieldOrder {
+    /// `dd/MM/yyyy` — the pattern en-GB and most of Europe use.
+    DayMonthYear,
+    /// `MM/dd/yyyy` — the pattern en-US uses.
+    MonthDayYear,
+    /// `yyyy/MM/dd` — the pattern ja-JP and zh-CN use.
+    YearMonthDay,
+}
+
+/// How the input field writes and reads a date: a pattern over `d`, `M` and `y` plus the one
+/// character separating them (`DateInputFormat`, `CalendarModel.kt:277`).
+///
+/// material3 derives this from the platform locale's best date-time pattern for the `yMd`
+/// skeleton. winia has no locale database, so like [`CalendarLocale`]'s names this is data —
+/// [`CalendarLocale::default`] is en-US (`MM/dd/yyyy`), and a caller wanting another ordering
+/// builds one with [`DateInputFormat::from_pattern`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateInputFormat {
+    pattern_with_delimiters: String,
+    delimiter: char,
+}
+
+impl Default for DateInputFormat {
+    fn default() -> Self {
+        // The en-US best pattern for the `yMd` skeleton: `MM/dd/yyyy`.
+        Self::from_pattern("MM/dd/yyyy").expect("MM/dd/yyyy is a valid input pattern")
+    }
+}
+
+impl DateInputFormat {
+    /// Build a format from a locale pattern such as `M/d/yyyy`, `dd.MM.yyyy` or `yyyy/MM/dd`.
+    ///
+    /// Cleans the pattern the way material3 does (`datePatternAsInputFormat`,
+    /// `CalendarModel.kt:296-315`): drop everything that is not a `d`, `M` or `y` field or a
+    /// `/ - .` delimiter, widen each field to two digits for day and month and four for year, and
+    /// take the delimiter from the first separator that survives.
+    ///
+    /// A run of the same letter is **one** field however wide the locale wrote it, so this takes a
+    /// locale pattern (`M/d/yyyy`) and an already-normalized one (`MM/dd/yyyy`) alike — a
+    /// deviation from Compose's regex, whose `d{1,2}` counts characters and would read the
+    /// normalized form as two day fields. Returns `None` when what is left is not exactly one day,
+    /// one month and one year, or when no delimiter is present: a pattern without a separator has
+    /// nowhere to put one, and the visual transformation keys off the two delimiter offsets.
+    ///
+    /// Not ported: Compose's `.replace("My", "M/y")` for the Kako locale, whose pattern spells one
+    /// combined year-month field. winia has no locale database, so no locale needs it yet.
+    pub fn from_pattern(pattern: &str) -> Option<Self> {
+        const DELIMITERS: [char; 3] = ['/', '-', '.'];
+        let delimiter = pattern.chars().find(|c| DELIMITERS.contains(c))?;
+
+        let mut pattern_with_delimiters = String::with_capacity(10);
+        let mut fields: Vec<char> = Vec::with_capacity(3);
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                'd' | 'M' | 'y' => {
+                    while chars.peek() == Some(&c) {
+                        chars.next();
+                    }
+                    fields.push(c);
+                    pattern_with_delimiters.push_str(match c {
+                        'd' => "dd",
+                        'M' => "MM",
+                        _ => "yyyy",
+                    });
+                }
+                c if DELIMITERS.contains(&c) => pattern_with_delimiters.push(c),
+                _ => {}
+            }
+        }
+        let names_each_field_once = fields.len() == 3
+            && fields.contains(&'d')
+            && fields.contains(&'M')
+            && fields.contains(&'y');
+        if !names_each_field_once {
+            return None;
+        }
+        Some(Self { pattern_with_delimiters, delimiter })
+    }
+
+    /// The pattern as the field displays it in its placeholder, `MM/dd/yyyy`.
+    pub fn pattern_with_delimiters(&self) -> &str {
+        &self.pattern_with_delimiters
+    }
+
+    /// The separator, `/` or `-` or `.`.
+    pub fn delimiter(&self) -> char {
+        self.delimiter
+    }
+
+    /// The same pattern with the separators dropped, `MMddyyyy`. This is what the field
+    /// actually holds; the separators exist only in the transformed text
+    /// (`DateInputFormat.patternWithoutDelimiters`, `CalendarModel.kt:279`).
+    pub fn pattern_without_delimiters(&self) -> String {
+        self.pattern_with_delimiters.replace(self.delimiter, "")
+    }
+
+    /// The digit count a full entry has, always 8.
+    pub fn pattern_length(&self) -> usize {
+        self.pattern_without_delimiters().len()
+    }
+
+    /// Which field comes first, taken from where each letter sits in the pattern.
+    pub fn field_order(&self) -> DateInputFieldOrder {
+        let pattern = self.pattern_without_delimiters();
+        let day = pattern.find('d').unwrap_or(0);
+        let month = pattern.find('M').unwrap_or(0);
+        if day < month {
+            DateInputFieldOrder::DayMonthYear
+        } else if pattern.find('y').unwrap_or(0) < day {
+            DateInputFieldOrder::YearMonthDay
+        } else {
+            DateInputFieldOrder::MonthDayYear
+        }
+    }
+
+    /// The index of the first delimiter in [`DateInputFormat::pattern_with_delimiters`], which
+    /// the visual transformation uses to decide where the first separator goes.
+    pub fn first_delimiter_offset(&self) -> usize {
+        self.pattern_with_delimiters
+            .find(self.delimiter)
+            .expect("a format is built from a pattern that had a delimiter")
+    }
+
+    /// The index of the last delimiter in [`DateInputFormat::pattern_with_delimiters`].
+    pub fn last_delimiter_offset(&self) -> usize {
+        self.pattern_with_delimiters
+            .rfind(self.delimiter)
+            .expect("a format is built from a pattern that had a delimiter")
     }
 }
 
@@ -352,6 +497,56 @@ impl CalendarModel {
     /// The start of the UTC day `millis` falls in.
     pub fn canonical_millis(&self, millis: i64) -> i64 {
         canonical_millis(millis)
+    }
+
+    /// The locale's input format (`getDateInputFormat`, `CalendarModel.kt:100`).
+    pub fn date_input_format(&self) -> &DateInputFormat {
+        self.locale.date_input_format()
+    }
+
+    /// Read `digits` — the delimiter-free pattern's text — as a date, or `None` when it is not
+    /// one (`CalendarModel.parse`, `CalendarModel.kt:209`).
+    ///
+    /// `digits` holds no separators and, by the caller in
+    /// [`crate::ui::date_picker`], exactly [`DateInputFormat::pattern_length`] of them; anything
+    /// shorter or longer is not a complete entry and has no answer here. The fields are cut at
+    /// the positions the pattern puts them in, so `dd/MM/yyyy` and `yyyy/MM/dd` read the same
+    /// digits into different dates.
+    pub fn parse(&self, digits: &str, format: &DateInputFormat) -> Option<CalendarDate> {
+        if digits.len() != format.pattern_length() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let order = format.field_order();
+        let (year_digits, month, day) = match order {
+            DateInputFieldOrder::MonthDayYear => {
+                (&digits[4..8], digits[0..2].parse().ok()?, digits[2..4].parse().ok()?)
+            }
+            DateInputFieldOrder::DayMonthYear => {
+                (&digits[4..8], digits[2..4].parse().ok()?, digits[0..2].parse().ok()?)
+            }
+            DateInputFieldOrder::YearMonthDay => {
+                (&digits[0..4], digits[4..6].parse().ok()?, digits[6..8].parse().ok()?)
+            }
+        };
+        let year: i32 = year_digits.parse().ok()?;
+        CalendarDate::new(year, month, day)
+    }
+
+    /// Write `millis` as the digits a full entry holds, in the format's field order
+    /// (`CalendarModel.formatWithPattern`, `CalendarModel.kt:195`).
+    ///
+    /// The result is the delimiter-free text the field stores; the separators are added by the
+    /// visual transformation on the way to the screen.
+    pub fn format_with_pattern(&self, millis: i64, format: &DateInputFormat) -> String {
+        let date = self.canonical_date(millis);
+        let month = format!("{:02}", date.month);
+        let day = format!("{:02}", date.day);
+        let year = format!("{:04}", date.year);
+        match format.field_order() {
+            DateInputFieldOrder::MonthDayYear => format!("{month}{day}{year}"),
+            DateInputFieldOrder::DayMonthYear => format!("{day}{month}{year}"),
+            DateInputFieldOrder::YearMonthDay => format!("{year}{month}{day}"),
+        }
     }
 
     /// Today at the start of its UTC day, from the system clock — material3's `CalendarModel.today`
@@ -2699,6 +2894,135 @@ fn docked_action_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A locale whose input format orders the fields a particular way.
+    fn locale_with_input_format(pattern: &str) -> CalendarLocale {
+        CalendarLocale {
+            date_input_format: DateInputFormat::from_pattern(pattern)
+                .unwrap_or_else(|| panic!("{pattern} is a valid input pattern")),
+            ..CalendarLocale::default()
+        }
+    }
+
+    /// A locale format pattern is widened to two-digit day and month and a four-digit year, and
+    /// everything that is not `d`, `M`, `y` or a separator is dropped — the cleanup
+    /// `datePatternAsInputFormat` does (`CalendarModel.kt:296-315`).
+    #[test]
+    fn a_locale_pattern_is_normalized_into_an_input_format() {
+        let cases = [
+            ("M/d/yyyy", "MM/dd/yyyy", '/'),
+            ("dd.MM.yyyy", "dd.MM.yyyy", '.'),
+            ("y/M/d", "yyyy/MM/dd", '/'),
+            ("yyyy-MM-dd", "yyyy-MM-dd", '-'),
+            ("d/M/yy", "dd/MM/yyyy", '/'),
+        ];
+        for (locale_pattern, expected, delimiter) in cases {
+            let format = DateInputFormat::from_pattern(locale_pattern).expect(locale_pattern);
+            assert_eq!(format.pattern_with_delimiters(), expected, "{locale_pattern}");
+            assert_eq!(format.delimiter(), delimiter, "{locale_pattern}");
+            assert_eq!(format.pattern_length(), 8, "{locale_pattern}");
+        }
+    }
+
+    /// A pattern that does not name each field exactly once, or that carries no separator, has
+    /// no input format: there would be nowhere to put a separator and no way to cut the digits.
+    #[test]
+    fn a_pattern_that_cannot_name_three_fields_yields_no_format() {
+        for pattern in ["MM/dd", "MM/dd/yyyy/yyyy", "dd/MM", "", "HH:mm", "dMy"] {
+            assert!(
+                DateInputFormat::from_pattern(pattern).is_none(),
+                "{pattern} should not become an input format"
+            );
+        }
+    }
+
+    /// The field order is what the locale decides, and the delimiters sit where the pattern puts
+    /// them — both of which the visual transformation and the parser key off.
+    #[test]
+    fn the_field_order_and_delimiter_offsets_come_off_the_pattern() {
+        let cases = [
+            ("MM/dd/yyyy", DateInputFieldOrder::MonthDayYear, 2, 5),
+            ("dd/MM/yyyy", DateInputFieldOrder::DayMonthYear, 2, 5),
+            ("yyyy/MM/dd", DateInputFieldOrder::YearMonthDay, 4, 7),
+            ("dd.MM.yyyy", DateInputFieldOrder::DayMonthYear, 2, 5),
+        ];
+        for (pattern, order, first, last) in cases {
+            let format = DateInputFormat::from_pattern(pattern).expect(pattern);
+            assert_eq!(format.field_order(), order, "{pattern}");
+            assert_eq!(format.first_delimiter_offset(), first, "{pattern}");
+            assert_eq!(format.last_delimiter_offset(), last, "{pattern}");
+            assert_eq!(format.pattern_without_delimiters().len(), 8, "{pattern}");
+        }
+    }
+
+    /// The same digits read through three orderings are three different dates, which is the whole
+    /// point of the pattern carrying the order.
+    #[test]
+    fn the_same_digits_read_into_three_different_dates() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let march_first = CalendarDate::new(2024, 3, 1).expect("2024-03-01 is a date");
+
+        let us = model.date_input_format().clone();
+        assert_eq!(us.field_order(), DateInputFieldOrder::MonthDayYear);
+        assert_eq!(model.parse("03012024", &us), Some(march_first));
+        assert_eq!(model.format_with_pattern(march_first.start_of_day_millis(), &us), "03012024");
+
+        let gb = DateInputFormat::from_pattern("dd/MM/yyyy").expect("dd/MM/yyyy");
+        assert_eq!(gb.field_order(), DateInputFieldOrder::DayMonthYear);
+        assert_eq!(model.parse("01032024", &gb), Some(march_first));
+        assert_eq!(model.format_with_pattern(march_first.start_of_day_millis(), &gb), "01032024");
+
+        let jp = DateInputFormat::from_pattern("yyyy/MM/dd").expect("yyyy/MM/dd");
+        assert_eq!(jp.field_order(), DateInputFieldOrder::YearMonthDay);
+        assert_eq!(model.parse("20240301", &jp), Some(march_first));
+        assert_eq!(model.format_with_pattern(march_first.start_of_day_millis(), &jp), "20240301");
+    }
+
+    /// Every day of a leap February round-trips through every field order: this is the property
+    /// the field falls back on when the user edits the selection, not just the placeholder.
+    #[test]
+    fn a_leap_day_round_trips_through_every_field_order() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let leap_day = CalendarDate::new(2024, 2, 29).expect("2024 is a leap year");
+        for pattern in ["MM/dd/yyyy", "dd/MM/yyyy", "yyyy/MM/dd"] {
+            let format = DateInputFormat::from_pattern(pattern).expect(pattern);
+            let digits = model.format_with_pattern(leap_day.start_of_day_millis(), &format);
+            assert_eq!(digits.len(), 8, "{pattern}");
+            assert_eq!(model.parse(&digits, &format), Some(leap_day), "{pattern}");
+        }
+    }
+
+    /// An incomplete or non-numeric entry has no answer, and so does a complete one that names a
+    /// day its month does not have. This is the first of the validator's three checks.
+    #[test]
+    fn parsing_refuses_partial_non_numeric_and_impossible_dates() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let us = model.date_input_format();
+        for digits in ["", "0", "03", "030", "03012", "0301202", "030120242"] {
+            assert_eq!(model.parse(digits, us), None, "{digits:?} is incomplete");
+        }
+        for digits in [" 3012024", "03-012024", "0301202a", "０３０１"] {
+            assert_eq!(model.parse(digits, us), None, "{digits:?} is not digits");
+        }
+        // 2024-02-30, 2023-02-29 (not a leap year), month 13, day 0.
+        for digits in ["02302024", "02292023", "13312024", "00012024"] {
+            assert_eq!(model.parse(digits, us), None, "{digits:?} is not a date");
+        }
+        // The same day the month does have, one field-order over, is not a rescue.
+        let gb = DateInputFormat::from_pattern("dd/MM/yyyy").expect("dd/MM/yyyy");
+        assert_eq!(model.parse("30022024", &gb), None);
+    }
+
+    /// Dates before the epoch keep their sign-free four-digit year, because the year is written
+    /// and read as exactly four digits.
+    #[test]
+    fn a_date_before_the_epoch_keeps_a_four_digit_year() {
+        let model = CalendarModel::new(CalendarLocale::default());
+        let us = model.date_input_format().clone();
+        let digits = model.format_with_pattern(0, &us);
+        assert_eq!(digits, "01011970");
+        assert_eq!(model.parse(&digits, &us), CalendarDate::new(1970, 1, 1));
+    }
 
     /// The month arrows step one page per press, in BOTH directions, however fast the presses come.
     ///
