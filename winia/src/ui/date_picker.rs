@@ -549,6 +549,11 @@ pub const DATE_RANGE_PATH: &str = "M9 11H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2z
 /// The input field's padding, 24 dp at each end (`InputTextFieldPadding`, `DateInput.kt:441`).
 pub const INPUT_TEXT_FIELD_PADDING: f32 = 24.0;
 
+/// How long the entry field waits before taking focus for itself, material3's
+/// `MotionTokens.DurationMedium2` (`DateInput.kt:259-266`). Long enough for the picker's own
+/// entrance motion to have finished, so the caret does not arrive mid-animation.
+pub const MODAL_MODE_SWITCH_FOCUS_DELAY_MS: u64 = 300;
+
 /// The test tag on the date entry field, so a UI test can click and type into it without having to
 /// find the field by its geometry.
 pub const INPUT_FIELD_TEST_TAG: &str = "date-picker-input-field";
@@ -592,6 +597,22 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
             // this field just filled in wholesale.
             effect_text.set(TextFieldValue::new(effect_model.format_with_pattern(millis, &effect_format)));
             effect_error.set(String::new());
+        }
+    });
+
+    // The field asks for focus once it is showing, but not straight away: the picker has just
+    // animated in, and a caret that arrives mid-motion is a caret the user never chose. Compose
+    // waits `MotionTokens.DurationMedium2` for the same reason
+    // (`LaunchedEffect(Unit) { delay(...); focusRequester?.requestFocus() }`, `DateInput.kt:259-266`).
+    let focus = ctx.remember(|| crate::modifier::FocusRequester::new()).get();
+    let effect_focus = focus.clone();
+    LaunchedEffect::new(()).build(ctx, move |_scope| {
+        async move {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                MODAL_MODE_SWITCH_FOCUS_DELAY_MS,
+            ))
+            .await;
+            effect_focus.request_focus();
         }
     });
 
@@ -670,6 +691,7 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
             Modifier::new()
                 .test_tag(INPUT_FIELD_TEST_TAG)
                 .semantics(field_semantics)
+                .focus_requester(focus.clone())
                 .padding_start(INPUT_TEXT_FIELD_PADDING)
                 .padding_end(INPUT_TEXT_FIELD_PADDING)
                 .padding_bottom(bottom),
@@ -1335,9 +1357,14 @@ impl DatePickerDefaults {
         DEFAULT_YEAR_RANGE
     }
 
-    /// The default title (`DatePicker.kt:654`). material3's wording comes from resources this checkout does not
-    /// carry, so winia supplies its own English.
+    /// The default title while the picker shows a calendar (`DatePicker.kt:654`). material3's wording comes from
+    /// resources this checkout does not carry, so winia supplies its own English.
     pub const TITLE: &'static str = "Select date";
+
+    /// The default title while the picker shows the entry field (`DatePicker.kt:654`, `DateInputTitle`).
+    /// Compose names the mode from the title as well as the headline, so a field that asks for a
+    /// date is not headed "Select date".
+    pub const INPUT_TITLE: &'static str = "Enter date";
 
     /// The headline while nothing is selected (`DatePicker.kt:704`).
     pub const HEADLINE: &'static str = "No date selected";
@@ -1627,6 +1654,10 @@ pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 
 pub struct DatePicker {
     state: DatePickerState,
     title: Option<String>,
+    /// Whether `title` is still material3's default. Compose hands the title a lambda that names the
+    /// mode (`title = { if (displayMode == Input) DateInputTitle else DatePickerTitle }`,
+    /// `DatePicker.kt:654`), so the default follows the mode while a caller's own title does not.
+    title_is_default: bool,
     /// The colour roles, read from the theme when absent. [`DatePickerDialog`] forwards its own set here
     /// for its default content — a winia convenience, since material3's dialog uses its `colors` only for
     /// its own surface (`DatePickerDialog.android.kt:86`) and invokes the caller's slot with nothing
@@ -1641,6 +1672,7 @@ impl DatePicker {
         Self {
             state,
             title: Some(DatePickerDefaults::TITLE.to_string()),
+            title_is_default: true,
             colors: None,
             modifier: Modifier::new(),
         }
@@ -1665,6 +1697,7 @@ impl DatePicker {
     /// the divider (`DatePicker.kt:1680-1685`, `:1392-1394`).
     pub fn title(mut self, title: Option<impl Into<String>>) -> Self {
         self.title = title.map(Into::into);
+        self.title_is_default = false;
         self
     }
 
@@ -1682,6 +1715,7 @@ impl DatePicker {
         let month = model.month_of_millis(self.state.displayed_month_millis());
         let state = self.state.clone();
         let title = self.title.clone();
+        let title_is_default = self.title_is_default;
         // material3 keeps the year panel's visibility in a `rememberSaveable` inside the picker
         // (`DatePicker.kt:1557`). winia keeps it in a remembered `State`, so a toggle recomposes the picker.
         let year_panel_open = ctx.remember(|| false);
@@ -1748,6 +1782,13 @@ impl DatePicker {
             .modifier(container)
             .arrangement(Arrangement::Start)
             .build(ctx, |ctx| {
+                // Compose's default title names the mode it is asking about (`DatePicker.kt:654`), so the
+                // default follows the mode while a title the caller supplied stands on its own.
+                let title = if title_is_default && display_mode == DisplayMode::Input {
+                    Some(DatePickerDefaults::INPUT_TITLE.to_string())
+                } else {
+                    title.clone()
+                };
                 header(ctx, &state, title.as_deref(), &colors, display_mode, on_toggle_display_mode);
                 Column::new()
                     .modifier(
@@ -4889,16 +4930,40 @@ mod tests {
     /// task into. The task is never driven here — nothing in these assertions depends on the effect
     /// having run, and driving it would only race the assertions.
     fn compose_picker(state: &DatePickerState) -> crate::core::composer::Composer {
+        compose_picker_with(|ctx| DatePicker::new(state.clone()).build(ctx))
+    }
+
+    /// Compose `content` inside a runtime, the way the app's own frame loop does.
+    ///
+    /// The entry field spawns a `LaunchedEffect` to ask for focus once it is showing, and spawning
+    /// needs an entered runtime; a test that composes the picker directly has to provide one. The
+    /// runtime is entered but never driven: what these helpers assert is what got composed, and
+    /// letting the spawned task run would race that against the assertions.
+    fn compose_picker_with(content: impl FnOnce(&mut ComposeCtx)) -> crate::core::composer::Composer {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
         let mut composer = crate::core::composer::Composer::new();
-        composer.compose(|ctx| DatePicker::new(state.clone()).build(ctx));
+        composer.compose(content);
         composer
     }
 
     /// The composed text the modal picker puts on screen, in the order it composed it.
     fn composed_texts(state: &DatePickerState) -> Vec<String> {
-        let composer = compose_picker(state);
+        composed_texts_with_title(state, None)
+    }
+
+    /// The texts a picker composes when its title is set explicitly, the way a caller's own title
+    /// reaches the header. `None` leaves the default in place.
+    fn composed_texts_with_title(state: &DatePickerState, title: Option<&str>) -> Vec<String> {
+        let state = state.clone();
+        let title = title.map(str::to_string);
+        let composer = compose_picker_with(|ctx| {
+            let mut picker = DatePicker::new(state);
+            if let Some(title) = title {
+                picker = picker.title(Some(title));
+            }
+            picker.build(ctx);
+        });
         let mut out = Vec::new();
         for node in composer.arena_nodes() {
             for element in node.modifier.elements() {
@@ -4989,6 +5054,43 @@ mod tests {
             !texts.contains(&DATE_INPUT_HEADLINE.to_string()),
             "the mode's own wording should be replaced once something is entered"
         );
+    }
+
+    /// The title names the mode as well as the headline does: a field that asks for a date is not
+    /// headed "Select date" (`DatePicker.kt:654`). A title the caller supplied is left alone —
+    /// only the default follows the mode.
+    #[test]
+    fn the_default_title_names_the_mode_and_a_supplied_one_does_not() {
+        let state = picker();
+        assert!(composed_texts(&state).contains(&DatePickerDefaults::TITLE.to_string()));
+        assert!(!composed_texts(&state).contains(&DatePickerDefaults::INPUT_TITLE.to_string()));
+
+        state.set_display_mode(DisplayMode::Input);
+        let texts = composed_texts(&state);
+        assert!(
+            texts.contains(&DatePickerDefaults::INPUT_TITLE.to_string()),
+            "the entry field should be headed by the input title, got {texts:?}"
+        );
+        assert!(
+            !texts.contains(&DatePickerDefaults::TITLE.to_string()),
+            "the calendar title should give way to the input title"
+        );
+
+        state.set_display_mode(DisplayMode::Picker);
+        let texts = composed_texts(&state);
+        assert!(texts.contains(&DatePickerDefaults::TITLE.to_string()));
+        assert!(!texts.contains(&DatePickerDefaults::INPUT_TITLE.to_string()));
+
+        // A caller's own title stands in both modes.
+        let custom = "Pick a day off";
+        let mut owned = state.clone();
+        owned.set_display_mode(DisplayMode::Input);
+        let texts = composed_texts_with_title(&owned, Some(custom));
+        assert!(
+            texts.contains(&custom.to_string()),
+            "a supplied title should survive the mode switch, got {texts:?}"
+        );
+        assert!(!texts.contains(&DatePickerDefaults::INPUT_TITLE.to_string()));
     }
 
     /// The content descriptions the modal picker composes.

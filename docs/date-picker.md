@@ -711,3 +711,79 @@ Each is a real divergence, not a guess.
   whenever there is no mode toggle (`DatePicker.kt:1373-1378`); and the header height is pinned to exactly
   120 where Compose applies it as a `defaultMinSize` minimum (`DatePicker.kt:1680-1685`), so a long locale
   title clips.
+
+## Input mode
+
+`DisplayMode::Input` swaps the calendar for a text field the user types a date into. It exists on the
+modal picker only; `DockedDatePicker` is calendar-only, as in Material 3. The swap happens where the
+build path reads the mode, and the header's toggle writes it — before that, `set_display_mode` stored a
+value nothing read and switching did nothing at all.
+
+The entry is eight digits with the locale's delimiters between them. What the user sees is ten
+characters; what the field holds is eight. `DateVisualTransformation` owns the difference in both
+directions.
+
+| Piece | Where | Material 3 |
+| --- | --- | --- |
+| `DateInputFormat`, `DateInputFieldOrder` | `date_picker.rs` (locale-driven) | `DateInput.kt:392` |
+| `CalendarModel::parse`, `format_with_pattern` | `date_picker.rs` | `CalendarModel.kt` |
+| `DatePickerState::validate_date_input` | `date_picker.rs` | `DateInputValidator`, `DateInput.kt:282-358` |
+| `DateVisualTransformation`, `DateOffsetMapping` | `date_picker.rs` | `DateInput.kt:392-439` |
+| `date_input_content` | `date_picker.rs` | `DateInputContent`, `DateInput.kt:59-113` |
+| `display_mode_toggle` | `date_picker.rs` | `DisplayModeToggleButton`, `DatePicker.kt:1402-1424` |
+
+The pattern belongs to `CalendarLocale` rather than to a platform locale lookup: winia carries no
+locale database, so a caller that wants a locale supplies one whose input format carries its own
+pattern.
+
+Both of the header's own strings follow the mode, not just the headline: the title reads
+`Enter date` while the field is showing, because a field that asks for a date is not headed
+`Select date` (`DatePicker.kt:654`). Only the default follows — a title the caller passes stands in
+both modes, which is why `DatePicker` remembers whether its title is still the default rather than
+comparing the string.
+
+Validation runs in Compose's order, so a real date outside `yearRange` reports the range rather than
+the pattern, and a date the policy refuses reports the policy:
+
+1. the digits do not parse — `Date does not match expected pattern: MM/DD/YYYY`
+2. the year is outside the range — `Date out of expected year range 1900 - 2100`
+3. the date is not selectable — `Date not allowed: {date}`
+
+A refused entry is refused as a whole: it is drawn, it is announced through `SemanticsState::error`,
+and it does not become the selection. A shorter entry is not judged at all — it clears the error and
+leaves the selection empty, so a half-typed date never looks like a rejected one.
+
+### Deliberate deviations
+
+- **Offset mapping is one position looser than Compose's.** `DateInput.kt:413-420` branches on
+  `<= firstDelimiterOffset - 1` and `<= secondDelimiterOffset - 1`, which is one too tight: for
+  `MM/dd/yyyy` its forward map puts typed offset 4 at displayed offset 5, and its backward map reads
+  that 5 as 3, so the caret jumps back a character the moment it crosses a delimiter. Winia branches
+  on the offsets themselves, which makes each side the exact inverse of the other at every position.
+  Backward to forward stays non-bijective on purpose: a delimiter is zero-width in the stored text,
+  so both sides of one belong at the same offset. `every_caret_position_maps_to_the_same_digit_both_ways`
+  pins this.
+- **No animated mode switch.** Compose runs the two modes through `AnimatedContent` with a 48 dp
+  parallax and a clipped `SizeTransform` (`DatePicker.kt:1457-1524`). winia swaps them and resizes at
+  once.
+- **No soft-keyboard hints.** Compose sets `KeyboardType.Number`, `autoCorrectEnabled = false` and
+  `ImeAction.Done` (`DateInput.kt:163-227`). winia has no IME hint channel at all — no
+  `ImeAction`, no keyboard type — and no autocorrect to switch off, so the three have no target. The
+  field refuses non-digits on entry, which is the part a user notices on a desktop.
+- **Focus after the switch is requested but not yet reachable by key.** The field asks for focus
+  300 ms after it appears, Material 3's `MotionTokens.DurationMedium2` (`DateInput.kt:259-266`), and
+  the request does land: `focused_tags()` reports `date-picker-input-field` without any click. A key
+  typed straight after it, with no click in between, still does not reach the field, so the UI tests
+  click first. Where that key goes is not yet pinned down.
+
+### Still open
+
+- The modal container keeps its full 568 dp in input mode, leaving most of the dialog empty. Compose
+  caps it with `heightIn(max = 568)` (`DatePickerDialog.android.kt`), which lets the dialog shrink to
+  its content; the composed tree reports the dialog surface as auto-height, so the height is coming
+  from somewhere the tree does not show.
+- `remember_date_picker_state` still takes only a locale, against Compose's five parameters.
+- `selectable_dates` is frozen when the state is built; Compose re-reads the caller's policy every
+  composition.
+- Day and year cells contribute no `Role.Button`, `selected` or `enabled`; the headline's
+  `headlineDescription` and the toggle's polite live region are done, the rest are not.
