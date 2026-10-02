@@ -32,7 +32,9 @@ use crate::ui::layout_components::{Column, Row, Spacer, Stack};
 use crate::ui::overlay::ExposedDropdownMenuDefaults;
 use crate::ui::scrollbar::LazyScrollbar;
 use crate::ui::surface::{Surface, SurfaceBorder};
+use crate::effect::LaunchedEffect;
 use crate::ui::text::{ProvideTextStyle, Text};
+use crate::ui::text_field::{TextField, TextFieldValue};
 use crate::ui::text_transformation::{OffsetMapping, TransformedText, VisualTransformation};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
@@ -534,6 +536,154 @@ impl OffsetMapping for DateOffsetMapping {
             self.date_format_length
         }
     }
+}
+
+/// Material Icons `edit` (24 dp) — the mode toggle while the calendar is showing
+/// (`DisplayModeToggleButton`, `DatePicker.kt:1413`).
+pub const EDIT_PATH: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
+
+/// Material Icons `date_range` (24 dp) — the mode toggle while the text field is showing
+/// (`DatePicker.kt:1420`).
+pub const DATE_RANGE_PATH: &str = "M9 11H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2zm2-7h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11z";
+
+/// The input field's padding, 24 dp at each end (`InputTextFieldPadding`, `DateInput.kt:441`).
+pub const INPUT_TEXT_FIELD_PADDING: f32 = 24.0;
+
+/// The bottom padding the field carries only while no error is showing, so an error appearing as
+/// supporting text does not make the container jump (`InputTextNonErroneousBottomPadding`,
+/// `DateInput.kt:445`).
+pub const INPUT_TEXT_NON_ERROROUS_BOTTOM_PADDING: f32 = 16.0;
+
+/// The modal date picker's text entry half: one outlined field that takes the date as digits and
+/// offers the locale's pattern as its placeholder (`DateInputContent`, `DateInput.kt:59-113`).
+///
+/// The field holds the eight digits with no delimiters — [`DateVisualTransformation`] is what puts
+/// them on screen — and [`DatePickerState::validate_date_input`] is what decides whether an entry
+/// may become the selection. An entry that is not complete, or that fails a check, leaves the
+/// selection empty rather than committing something the field itself calls wrong.
+#[composable]
+pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
+    let model = state.calendar_model().clone();
+    let format = model.date_input_format().clone();
+    let pattern = format.pattern_with_delimiters().to_uppercase();
+    let selected = state.selected_date_millis();
+
+    let text: State<TextFieldValue> = ctx.remember(|| TextFieldValue::new(""));
+    let error: State<String> = ctx.remember(|| String::new());
+
+    // A selection made outside the field — the calendar, the initial value — rewrites the digits,
+    // exactly as `LaunchedEffect(initialDateMillis)` does (`DateInput.kt:238-258`).
+    let effect_selected = selected;
+    let effect_model = model.clone();
+    let effect_format = format.clone();
+    let effect_text = text.clone();
+    let effect_error = error.clone();
+    LaunchedEffect::new(selected).build(ctx, move |_scope| {
+        async move {
+            let Some(millis) = effect_selected else { return };
+            // `TextFieldValue::new` puts the caret at the end, which is the right place for a value
+            // this field just filled in wholesale.
+            effect_text.set(TextFieldValue::new(effect_model.format_with_pattern(millis, &effect_format)));
+            effect_error.set(String::new());
+        }
+    });
+
+    // Anything that is not a digit, or that runs past a full entry, is refused outright: the field
+    // keeps what it had (`DateInput.kt:166-169`). A shorter entry clears the error and empties the
+    // selection without being judged; a full one is parsed and judged, and only commits if it
+    // passes (`DateInput.kt:171-200`).
+    let on_value_change_model = model.clone();
+    let on_value_change_format = format.clone();
+    let on_value_change_text = text.clone();
+    let on_value_change_error = error.clone();
+    let on_value_change_state = state.clone();
+
+    let message = error.get();
+    let is_error = !message.trim().is_empty();
+
+    let transformation: Arc<dyn VisualTransformation> =
+        Arc::new(DateVisualTransformation::new(&format));
+
+    let label_pattern = pattern.clone();
+        let mut field = TextField::new(text.clone())
+        .outlined()
+        .single_line(true)
+        .visual_transformation(transformation)
+        .label(move |ctx| {
+            Text::new(DATE_INPUT_LABEL)
+                .modifier(Modifier::new().semantics(
+                    crate::semantics::SemanticsConfig::new()
+                        // The label names the field and the shape it wants, so a reader says what to
+                        // type before the user types it (`DateInput.kt:93-98`).
+                        .content_description(format!("{DATE_INPUT_LABEL}, {label_pattern}")),
+                ))
+                .build(ctx);
+        })
+        .placeholder(move |ctx| {
+            Text::new(pattern.clone()).build(ctx);
+        })
+        .on_value_change(move |value| {
+            let digits = value.text.trim().to_string();
+            let width = on_value_change_format.pattern_length();
+            if digits.len() > width || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return;
+            }
+            on_value_change_text.set(value);
+            if digits.is_empty() || digits.len() < width {
+                on_value_change_error.set(String::new());
+                on_value_change_state.set_selected_date_millis(None);
+                return;
+            }
+            let parsed = on_value_change_model.parse(&digits, &on_value_change_format);
+            let message = on_value_change_state.validate_date_input(parsed);
+            on_value_change_error.set(message.clone());
+            // Commit only what the validator passed, so the calendar never shows a date the field
+            // is currently calling wrong.
+            let millis = if message.is_empty() { parsed.map(|d| d.start_of_day_millis()) } else { None };
+            on_value_change_state.set_selected_date_millis(millis);
+        })
+        .is_error(is_error);
+    if is_error {
+        field = field.supporting_text(message);
+    }
+    // The error's own line of supporting text brings its own padding, so the bottom padding is only
+    // there to keep the container the same height either way (`DateInput.kt:152-162`).
+    let bottom = if is_error { 0.0 } else { INPUT_TEXT_NON_ERROROUS_BOTTOM_PADDING };
+    field
+        .modifier(
+            Modifier::new()
+                .padding_start(INPUT_TEXT_FIELD_PADDING)
+                .padding_end(INPUT_TEXT_FIELD_PADDING)
+                .padding_bottom(bottom),
+        )
+        .build(ctx);
+}
+
+/// The button that moves between the calendar and the text field
+/// (`DisplayModeToggleButton`, `DatePicker.kt:1401-1425`).
+///
+/// Neither icon is auto-mirrored: material3 gives `Icon` no `autoMirrored`, and the pair means
+/// "edit" and "calendar" rather than a direction.
+fn display_mode_toggle(
+    ctx: &mut ComposeCtx,
+    display_mode: DisplayMode,
+    on_toggle: impl Fn() + Send + Sync + 'static,
+    color: Color,
+) {
+    let (path, description) = match display_mode {
+        DisplayMode::Picker => (EDIT_PATH, SWITCH_TO_INPUT_MODE_DESCRIPTION),
+        DisplayMode::Input => (DATE_RANGE_PATH, SWITCH_TO_CALENDAR_MODE_DESCRIPTION),
+    };
+    IconButton::new()
+        .on_click(on_toggle)
+        .build(ctx, |ctx| {
+            Icon::svg_path(path)
+                .tint(color)
+                .modifier(Modifier::new().semantics(
+                    crate::semantics::SemanticsConfig::new().content_description(description),
+                ))
+                .build(ctx);
+        });
 }
 
 /// The calendar model: date arithmetic plus the locale the picker formats and lays out with.
@@ -1173,6 +1323,14 @@ impl DatePickerDefaults {
     /// The headline while nothing is selected (`DatePicker.kt:704`).
     pub const HEADLINE: &'static str = "No date selected";
 
+    /// What the headline announces for a selection, given the verbose date
+    /// (`m3c_date_picker_headline_description`).
+    pub const HEADLINE_DESCRIPTION: &'static str = "Current selection: {1}";
+
+    /// What the headline announces when nothing is selected, in either mode
+    /// (`m3c_date_picker_no_selection_description`, `m3c_date_input_no_input_description`).
+    pub const NO_SELECTION_DESCRIPTION: &'static str = "None";
+
     /// `DatePickerModalTokens.ContainerWidth`: the container's minimum width.
     pub const CONTAINER_WIDTH: f32 = 360.0;
 
@@ -1522,6 +1680,20 @@ impl DatePicker {
         // Page 0 is the January of the range's first year, so a page index converts to a month by
         // counting from here — the same reference `month_pages` composes against.
         let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
+        // `SwitchableDateEntryContent` reads the mode here and hands the toggle to the header
+        // (`DatePicker.kt:1432`, `:1467-1480`). Reading it registers this slot as a reader, so the
+        // calendar and the text field replace each other rather than both being composed.
+        let display_mode = state.display_mode();
+        let on_toggle_display_mode = {
+            let state = state.clone();
+            move || {
+                let next = match state.display_mode() {
+                    DisplayMode::Picker => DisplayMode::Input,
+                    DisplayMode::Input => DisplayMode::Picker,
+                };
+                state.set_display_mode(next);
+            }
+        };
         let on_toggle_year_panel = {
             let year_panel_open = year_panel_open.clone();
             let year_rows = year_rows.clone();
@@ -1557,7 +1729,7 @@ impl DatePicker {
             .modifier(container)
             .arrangement(Arrangement::Start)
             .build(ctx, |ctx| {
-                header(ctx, &state, title.as_deref(), &colors);
+                header(ctx, &state, title.as_deref(), &colors, display_mode, on_toggle_display_mode);
                 Column::new()
                     .modifier(
                         Modifier::new()
@@ -1566,6 +1738,14 @@ impl DatePicker {
                     )
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
+                        // `SwitchableDateEntryContent` picks between the two by the state's display
+                        // mode (`DatePicker.kt:1432`). Before this, `set_display_mode(DisplayMode::Input)`
+                        // stored a value nothing read and the modal picker stayed a calendar; the
+                        // mode toggle in the header is what reaches it now.
+                        if display_mode == DisplayMode::Input {
+                            date_input_content(ctx, &state);
+                            return;
+                        }
                         let open = year_panel_open.get();
                         sync_month_pages(ctx, &state, &model, &month_rows, first_month, &month_step_in_flight);
                         months_navigation(
@@ -1939,12 +2119,36 @@ impl DatePickerDialog {
 
 /// The header: the title over the headline, with the divider below them
 /// (`DateEntryContainer` and `DatePickerHeader`, `DatePicker.kt:1365-1396`, `:1671-1698`).
-fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, colors: &DatePickerColors) {
+fn header(
+    ctx: &mut ComposeCtx,
+    state: &DatePickerState,
+    title: Option<&str>,
+    colors: &DatePickerColors,
+    display_mode: DisplayMode,
+    on_toggle_display_mode: impl Fn() + Send + Sync + 'static,
+) {
     let model = state.calendar_model();
+    // material3's headline says what is selected in either mode, and names the mode's own wording
+    // when nothing is (`DatePickerHeadline`, `DatePicker.kt:701-717`). The description carries the
+    // verbose date for a reader, falling back to the mode's own "nothing" wording.
     let headline = state
         .selected_date_millis()
         .map(|millis| model.format_date(millis, false))
-        .unwrap_or_else(|| DatePickerDefaults::HEADLINE.to_string());
+        .unwrap_or_else(|| match display_mode {
+            DisplayMode::Picker => DatePickerDefaults::HEADLINE.to_string(),
+            DisplayMode::Input => DATE_INPUT_HEADLINE.to_string(),
+        });
+    let headline_description = state
+        .selected_date_millis()
+        .map(|millis| model.format_date(millis, true))
+        .unwrap_or_else(|| DatePickerDefaults::NO_SELECTION_DESCRIPTION.to_string());
+    let headline_description = match display_mode {
+        DisplayMode::Picker => format_string(
+            DatePickerDefaults::HEADLINE_DESCRIPTION,
+            &[&headline_description],
+        ),
+        DisplayMode::Input => format_string(DATE_INPUT_HEADLINE_DESCRIPTION, &[&headline_description]),
+    };
     // material3 gives the header a *minimum* height of 120 dp and lets its content grow past it; winia
     // stretches an auto-height child to fill the space its parent offers, which with `SpaceBetween` would push
     // the title and the headline apart, so the header's height is exact here.
@@ -1988,10 +2192,27 @@ fn header(ctx: &mut ComposeCtx, state: &DatePickerState, title: Option<&str>, co
                                 Modifier::new()
                                     .padding_start(DatePickerDefaults::TITLE_START_PADDING)
                                     .padding_end(DatePickerDefaults::TITLE_END_PADDING)
-                                    .padding_bottom(DatePickerDefaults::HEADLINE_BOTTOM_PADDING),
+                                    .padding_bottom(DatePickerDefaults::HEADLINE_BOTTOM_PADDING)
+                                    // The headline announces both what it reads and which mode it is
+                                    // in, politely rather than assertively, so a selection made in
+                                    // the calendar or typed in the field is picked up either way
+                                    // (`DatePicker.kt:722-725`).
+                                    .semantics(
+                                        crate::semantics::SemanticsConfig::new()
+                                            .content_description(headline_description)
+                                            .live_region(
+                                                crate::semantics::LiveRegionMode::Polite,
+                                            ),
+                                    ),
                             )
                             .build(ctx);
                     });
+                    display_mode_toggle(
+                        ctx,
+                        display_mode,
+                        on_toggle_display_mode,
+                        headline_color,
+                    );
                 });
             // material3 draws the divider when a title, a headline or a mode toggle is present
             // (`DatePicker.kt:1392-1394`); a headline is always composed here.
@@ -4643,6 +4864,146 @@ mod tests {
                 &data[..data.len().min(24)]
             );
         }
+    }
+
+    /// Compose the modal picker with a runtime entered, which `LaunchedEffect` needs to spawn its
+    /// task into. The task is never driven here — nothing in these assertions depends on the effect
+    /// having run, and driving it would only race the assertions.
+    fn compose_picker(state: &DatePickerState) -> crate::core::composer::Composer {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _guard = rt.enter();
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| DatePicker::new(state.clone()).build(ctx));
+        composer
+    }
+
+    /// The composed text the modal picker puts on screen, in the order it composed it.
+    fn composed_texts(state: &DatePickerState) -> Vec<String> {
+        let composer = compose_picker(state);
+        let mut out = Vec::new();
+        for node in composer.arena_nodes() {
+            for element in node.modifier.elements() {
+                if let crate::modifier::ModifierElement::TextContent { content, .. } = element {
+                    out.push(content.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// The icon paths the modal picker composes.
+    fn composed_icon_paths(state: &DatePickerState) -> Vec<String> {
+        let composer = compose_picker(state);
+        let mut out = Vec::new();
+        for node in composer.arena_nodes() {
+            for element in node.modifier.elements() {
+                if let crate::modifier::ModifierElement::DrawIcon { spec, .. } = element {
+                    if let crate::ui::icon::IconSource::SvgPath { data, .. } = &spec.source {
+                        out.push(data.to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `DisplayMode::Input` has to change what the picker composes. This is the guard on the
+    /// original defect: `set_display_mode(DisplayMode::Input)` stored a value, and the whole crate
+    /// had nothing that read it, so the picker stayed a calendar and the mode was a silent no-op.
+    /// Both directions are asserted because either half alone would pass a picker that simply
+    /// ignored the state and always drew the calendar.
+    #[test]
+    fn the_display_mode_decides_whether_the_picker_composes_a_calendar_or_a_field() {
+        let state = picker();
+        assert_eq!(state.display_mode(), DisplayMode::Picker);
+
+        let calendar = composed_texts(&state);
+        assert!(
+            !calendar.is_empty(),
+            "the picker composes no text at all, so this test would pass vacuously"
+        );
+        assert!(
+            composed_icon_paths(&state).iter().any(|path| path == EDIT_PATH),
+            "the calendar half composes no edit icon for the mode toggle, so the toggle is unreachable"
+        );
+
+        state.set_display_mode(DisplayMode::Input);
+        let input = composed_texts(&state);
+        assert!(
+            input.iter().any(|text| text == DATE_INPUT_HEADLINE),
+            "the input half has no {DATE_INPUT_HEADLINE:?} headline, got {input:?}"
+        );
+        assert!(
+            input.iter().any(|text| text == DATE_INPUT_LABEL),
+            "the input half has no {DATE_INPUT_LABEL:?} field label, got {input:?}"
+        );
+        assert!(
+            composed_icon_paths(&state).iter().any(|path| path == DATE_RANGE_PATH),
+            "the input half still offers the edit icon, so the toggle cannot go back"
+        );
+
+        state.set_display_mode(DisplayMode::Picker);
+        assert_eq!(composed_texts(&state), calendar, "the mode did not go back to the calendar");
+    }
+
+    /// The headline names the mode's own wording when nothing is selected, and says the same thing
+    /// either way once something is — material3 changes the word, not the fact
+    /// (`DatePickerHeadline`, `DatePicker.kt:701-717`).
+    #[test]
+    fn the_headline_names_the_mode_when_nothing_is_selected() {
+        let state = picker();
+        assert!(composed_texts(&state).contains(&DatePickerDefaults::HEADLINE.to_string()));
+
+        state.set_display_mode(DisplayMode::Input);
+        assert!(composed_texts(&state).contains(&DATE_INPUT_HEADLINE.to_string()));
+
+        let selected = CalendarDate::new(2024, 3, 1).expect("2024-03-01 is a date");
+        state.set_selected_date_millis(Some(selected.start_of_day_millis()));
+        let headline = CalendarModel::new(CalendarLocale::default())
+            .format_date(selected.start_of_day_millis(), false);
+        let texts = composed_texts(&state);
+        assert!(
+            texts.contains(&headline),
+            "a selection should name the date in either mode, got {texts:?}"
+        );
+        assert!(
+            !texts.contains(&DATE_INPUT_HEADLINE.to_string()),
+            "the mode's own wording should be replaced once something is entered"
+        );
+    }
+
+    /// The content descriptions the modal picker composes.
+    fn composed_content_descriptions(state: &DatePickerState) -> Vec<String> {
+        let composer = compose_picker(state);
+        let mut out = Vec::new();
+        for node in composer.arena_nodes() {
+            for element in node.modifier.elements() {
+                if let crate::modifier::ModifierElement::Semantics(config) = element {
+                    if let Some(description) = config.content_description_value() {
+                        out.push(description.to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The field names its shape to whoever is not looking at it: the label carries the locale's
+    /// pattern in its description, so a reader hears what to type before anything is typed
+    /// (`DateInput.kt:93-98`).
+    ///
+    /// This reads the label's description rather than the placeholder because the placeholder is
+    /// focus-gated — an unfocused field that has a label keeps the label sitting in the input slot
+    /// instead (`text_field.rs:1094-1101`) — and a compose-only test has no focus to give it.
+    #[test]
+    fn the_input_field_names_the_locales_pattern_on_its_label() {
+        let state = DatePickerState::new(locale_with_input_format("dd.MM.yyyy"));
+        state.set_display_mode(DisplayMode::Input);
+        let descriptions = composed_content_descriptions(&state);
+        assert!(
+            descriptions.iter().any(|d| d == "Date, DD.MM.YYYY"),
+            "the field label does not name the locale's pattern, got {descriptions:?}"
+        );
     }
 
     /// The half-open pixel box an ink mask covers, `(left, top, right, bottom)`, or `(0, 0, 0, 0)` when nothing
