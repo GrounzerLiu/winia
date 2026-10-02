@@ -29,10 +29,10 @@ struct Item {
 #[composable]
 fn hc_demo(ctx: &mut ComposeCtx) {
     // 可变数据（State<Arc<Vec<Item>>>）——「前部插入」按钮更新它
-    let items_state = ctx.remember(|| State::new(Arc::new(make_items(0, 100)))).get();
+    let items_state = ctx.remember(|| Arc::new(make_items(0, 100)));
     let state = ctx.remember(|| LazyListState::new()).get();
     // NEW 项起始 key（每次插入递增——避免重复 key 触发 rebuild panic）
-    let new_key_base = ctx.remember(|| State::new(0u64)).get();
+    let new_key_base = ctx.remember(|| 0u64);
     // 高/矮项混合：让高度缓存有实际意义（48 / 96 交替）
     // 项高 = 48 + (id % 3 == 0) ? 48 : 0  → 每 3 项一项加倍高
 

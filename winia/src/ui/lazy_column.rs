@@ -836,11 +836,11 @@ impl<A: LazyAxis> LazyList<A> {
         let total = intervals.total();
 
         // 跨帧 remember：高度缓存 / 视口高 / 滚动中标记 / fling 极限
-        let cache = ctx.remember(|| crate::core::state::State::new(ItemHeightCache::default())).get();
-        let viewport = ctx.remember(|| crate::core::state::State::new(600.0f32)).get();
+        let cache = ctx.remember(ItemHeightCache::default);
+        let viewport = ctx.remember(|| 600.0f32);
         let is_scrolling = state.is_scrolling.clone();
-        let content_height = ctx.remember(|| crate::core::state::Backchannel::new(0.0f32)).get();
-        let fling_limit = ctx.remember(|| crate::core::state::Backchannel::new(f32::MAX)).get();
+        let content_height = ctx.remember_backchannel(|| 0.0f32);
+        let fling_limit = ctx.remember_backchannel(|| f32::MAX);
         let snap_paging = self.snap_paging;
         ctx.changed(&snap_paging);
         let fill_items = self.fill_items;
@@ -848,7 +848,7 @@ impl<A: LazyAxis> LazyList<A> {
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
-        let data_sig = ctx.remember(|| crate::core::state::State::new(0u64)).get();
+        let data_sig = ctx.remember(|| 0u64);
 
         // 当前数据全局 index → item key（供 policy 写 key 视图 + 数据变化迁移）。
         // 无 key 工厂的段（items_plain）用索引自身作 key——同 key 段内容替换

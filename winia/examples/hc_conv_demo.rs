@@ -25,7 +25,7 @@ struct Item {
 
 #[composable]
 fn conv_demo(ctx: &mut ComposeCtx) {
-    let viewport_h = ctx.remember(|| State::new(400.0f32)).get();
+    let viewport_h = ctx.remember(|| 400.0f32);
     let state = ctx.remember(|| LazyListState::new()).get();
 
     Column::new()
