@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::time::Instant;
-use crate::core::state::State;
+use crate::core::state::{Backchannel, State};
 
 /// Velocity sample horizon (ms): drag deltas older than this are treated as
 /// hold-still (velocity 0) — cf. Compose VelocityTracker horizon (~100ms).
@@ -178,7 +178,10 @@ pub struct AnchoredDraggableState<T: Clone + PartialEq + Eq + Ord + 'static> {
     /// takes over. A flag of its own rather than `drag_target.is_some()`: `animate_to` sets
     /// that too (for `target_value`'s sake) and it stays set after the tween ends, so the
     /// combination cannot tell a finger from a finished animation.
-    dragging: State<bool>,
+    /// A Backchannel, not a State: this flag is read by `is_dragging` for logic and by no
+    /// composable, so a write must not notify anyone. The type says so at every call site —
+    /// the flag was a `State` written through the deprecated `set_silent` shim.
+    dragging: Backchannel<bool>,
 }
 
 impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
@@ -193,7 +196,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
             last_velocity: State::new(0.0),
             last_drag: State::new(None),
             velocity_threshold_dp: DEFAULT_VELOCITY_THRESHOLD_DP,
-            dragging: State::new(false),
+            dragging: Backchannel::new(false),
         }
     }
 
@@ -286,9 +289,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
         if self.anchors.get().is_empty() {
             return;
         }
-        // Silent: this flag is read by `is_dragging` for logic, never by a composable
-        // that should re-run for it.
-        self.dragging.set_silent(true);
+        self.dragging.set(true);
         let off = self.offset.get();
         let base = if off.is_nan() { 0.0 } else { off };
         let min = self.anchors.get().min_position();
@@ -415,7 +416,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 吸附到指定目标（动画 tween——Compose SnapAnimationSpec）
     fn settle_to(&self, target: &T) {
-        self.dragging.set_silent(false);
+        self.dragging.set(false);
         let pos = self.anchors.get().position_of(target);
         if pos.is_nan() {
             return;
@@ -441,7 +442,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 程序化吸附到目标（动画）
     pub fn animate_to(&self, target: T) {
-        self.dragging.set_silent(false);
+        self.dragging.set(false);
         let pos = self.anchors.get().position_of(&target);
         if pos.is_nan() {
             // 无此锚点：仅更新值（Compose 语义）
@@ -461,7 +462,7 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
 
     /// 程序化瞬移到目标（无动画）
     pub fn snap_to(&self, target: T) {
-        self.dragging.set_silent(false);
+        self.dragging.set(false);
         let pos = self.anchors.get().position_of(&target);
         if pos.is_nan() {
             self.settled_value.set(target.clone());
