@@ -180,7 +180,7 @@ code can write `.size(&alpha * 200.0 + 50.0, 30.0)` and have the whole
 expression re-evaluate when `alpha` changes. Each operator builds a new
 `DerivedValue` closing over the previous one — chains stay lazy. (Extending
 the operators to `Dp / Offset / Size` is tracked in `docs/state-handles.md`
-§7.4.)
+§7.5.)
 
 ## 7. `StateList` / `StateMap`: observable collections
 

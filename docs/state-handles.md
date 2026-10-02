@@ -229,7 +229,50 @@ re-key operators from `&State<f32>` to `&Reactive<f32>`.
   warnings) and `cargo run` (exit 0). Zero `Runtime::new` and zero
   value-style `{ clone!(x); x }` remain under `winia/examples/`.
 
-### 7.4 Remaining (step 3 + deferred)
+### 7.4 The four `remember` shapes (`bfc1c17` + `f029a33`)
+
+`ctx.remember` hands back a `State<T>` — it wraps the init closure itself
+(`composer.rs:306`, delegating to `Slot::remember` at `composer.rs:938`). So
+`ctx.remember(|| State::new(x)).get()` builds a `State<State<T>>`: an outer slot
+whose value is an inner handle, unwrapped once.
+
+It works, and that is exactly why it survived review: the outer handle is consumed
+by `.get()` on the spot, so it is structurally unreachable afterwards and can
+never be written — a notification it could not make is one the inner handle
+already makes. The extra layer is pure overhead: one more `StateInner` plus a
+`StateSignal` (a `Mutex<Vec<Subscriber>>` and an `AtomicU64` revision) per
+instance, and one more dependency edge in the enclosing scope that can never
+fire. In a container that instantiates per row, that is a real cost.
+
+Pick the spelling that matches the semantics you want:
+
+| You want | Write | Not this |
+|---|---|---|
+| `State<T>` — recompose + wake (the default) | `ctx.remember(\|\| x)` | `ctx.remember(\|\| State::new(x)).get()` |
+| `Backchannel<T>` — write only, no notify (measure / layout write-back) | `ctx.remember_backchannel(\|\| x)` | `ctx.remember(\|\| Backchannel::new(x)).get()` |
+| `Animating<T>` — recompose, no wake (animation ticks) | `ctx.remember_animating(\|\| x)` | `ctx.remember(\|\| Animating::new(x)).get()` |
+| `Visual<T>` — draw-layer write, no recompose | `ctx.remember_visual(\|\| x)` | `ctx.remember(\|\| Visual::new(x)).get()` |
+
+`bfc1c17` converted nine sites of the first shape (`effect.rs`, `nav.rs`,
+`ui/date_picker.rs`) and its message claimed nothing else was affected. A review
+of that commit found eight more it had missed; `f029a33` converted them — five in
+`LazyList::build` (`ui/lazy_column.rs`: the item height cache, the viewport
+height, the data signature, and the two write-back slots) and three under
+`winia/examples/`. Two of the five turned out to be row 2 rather than row 1:
+`content_height` and `fling_limit` became `remember_backchannel(|| …)`, because a
+measure-write-back slot wanted the Backchannel scheduling all along and the outer
+`State` was never what it was asking for.
+
+**A fifth shape, and why it stays.** A handle that is none of the four —
+`LazyListState`, `ScrollState`, `MutableInteractionSource`, `DatePickerState` —
+has no direct spelling today: `remember_handle` exists on `SlotTable`
+(`composer.rs:953`) and `Composer` (`composer.rs:1487`) but is not exposed on
+`ComposeCtx`. Those sites keep `ctx.remember(|| Handle::new()).get()`, and that
+is correct rather than pending: `ctx.remember(|| Handle::new())` returns
+`State<Handle>`, not `Handle`. Do not tidy them. Whether `ComposeCtx` should
+expose a public `remember_handle` is an open decision — see §7.5.
+
+### 7.5 Remaining (step 3 + deferred)
 
 - Delete `State::set_silent / set_no_wake / set_visual`, `notify_version /
   take_notify_version`, and the `State` alias; rename internals to
@@ -238,5 +281,9 @@ re-key operators from `&State<f32>` to `&Reactive<f32>`.
   (constructor signatures, not comments).
 - `DerivedValue`: extend `impl_derived_arith` to `Dp / Offset / Size` and
   re-key operators from `&State<f32>` to `&Reactive<f32>`.
+- Decide whether `ComposeCtx` exposes a public `remember_handle`, which would let
+  the handle-shaped sites in §7.4 drop their `.get()`. Not urgent — the layer is
+  inert and costs one `StateInner` per instance — but it is the only reason those
+  spellings are unavoidable.
 - Deferred (separate item): the `changed`-allowlist gap for
   `TextField::read_only`-class fields (docked-filter root cause from §1).
