@@ -507,6 +507,41 @@ There is no "current page" field anywhere. The list's position IS the displayed 
 swipe and an arrow press indistinguishable and lets arrow enablement come from the list rather than being
 recomputed from the year range.
 
+### Stepping from the page in flight, and the asymmetry that made it necessary
+
+**A deliberate step past Compose.** In Compose every arrow press reads `firstVisibleItemIndex ± 1`
+(`DatePicker.kt:1569-1592`), and that index is the page whose span still contains the pixel offset — so
+*during a forward animation it names the page being left*. A press then asks for the page already in
+flight; the request is a no-op retarget and the press is lost. material3 knows: both handlers are wrapped
+in `catch (_: IllegalArgumentException)` with the comment "the user clicked the 'next' arrow fast while
+the list was still animating" (`:1571-1587`).
+
+The swallow is one press for one page, which would be fine. What is not is that it is **one-directional**.
+Scrolling backward flips the anchor the moment the offset leaves the old page's span, so `anchor - 1`
+names a genuinely new page and the press lands; scrolling forward keeps naming the old page until the whole
+page has moved, so `anchor + 1` does not. Reported from the demo and measured there — three presses 120 ms
+apart:
+
+| direction | presses | took effect |
+| --- | --- | --- |
+| `prev` | 3 | 2 |
+| `next` | 3 | 0 |
+
+winia therefore steps from **the page the arrows last requested** (`arrow_target`), not from the anchor,
+and remembers that page until `sync_month_pages` sees the list arrive on it. Each press is worth exactly
+one page in both directions, and with nothing in flight the rule degrades to the anchor — so isolated
+presses behave exactly as before. Measured after the fix, same gesture: `prev` 6/6 and `next` 6/6 at
+120 ms; `prev` 5/5 and `next` 5/5 at 60 ms; and three settled presses still move `[+1, +1, +1]` and
+`[-1, -1, -1]`.
+
+The guard is `ui::date_picker::tests::a_second_press_during_the_animation_steps_again_in_both_directions`,
+which asserts the whole trajectory of targets (101/102/103 forward, 99/98/97 back) rather than a final
+state — a fix that landed on the right page while skipping one would pass a last-value check.
+
+The pager's derived anchor is not part of what gets drawn, so reading it from outside needs a probe:
+`WINIA_DP_PAGE_PROBE=<tag>` makes the demo compose a `page:N off:M` readout (`DockedDatePicker::page_probe`),
+which is how the numbers above were taken. Off by default, so the demo itself is unchanged.
+
 ### One framework change this needed
 
 `LazyList`'s measure leaves the main axis unbounded so items wrap to their content, which is wrong for a

@@ -1114,6 +1114,12 @@ impl DatePicker {
         // seeded by that sync's `scroll_to_item`, which is the anchor-authoritative jump: a
         // constructor cannot do it, because the pixel offset it needs comes from the measure.
         let month_rows = ctx.remember(LazyListState::new).get();
+        // The page the month arrows have already asked for but the list has not reached, so a press
+        // during the animation continues from it instead of restating it (see `arrow_target`).
+        //
+        // `remember` returns `State<T>` itself, so the value here is the `Option<usize>` — not a
+        // `State` wrapped in another `State` (the shape `published`/`pending` above are stuck with).
+        let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year, so a page index converts to a month by
         // counting from here — the same reference `month_pages` composes against.
         let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
@@ -1162,7 +1168,7 @@ impl DatePicker {
                     .arrangement(Arrangement::Start)
                     .build(ctx, |ctx| {
                         let open = year_panel_open.get();
-                        sync_month_pages(ctx, &state, &model, &month_rows, first_month);
+                        sync_month_pages(ctx, &state, &model, &month_rows, first_month, &month_step_in_flight);
                         months_navigation(
                             ctx,
                             &state,
@@ -1171,6 +1177,7 @@ impl DatePicker {
                             on_toggle_year_panel,
                             &colors,
                             &month_rows,
+                            &month_step_in_flight,
                         );
                         if open {
                             year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
@@ -1263,6 +1270,7 @@ fn sync_month_pages(
     model: &CalendarModel,
     list: &LazyListState,
     first_month: i64,
+    step_in_flight: &State<Option<usize>>,
 ) {
     let range = state.year_range();
     let page_of = |month_millis: i64| {
@@ -1323,6 +1331,8 @@ fn sync_month_pages(
         if actual == target {
             published.set(displayed);
             waited.set(0);
+            // An outside change moved the list; whatever an arrow had asked for is superseded.
+            step_in_flight.set(None);
         } else if list.is_scrolling() && waited.get() < MAX_WAIT_FRAMES {
             // A drag or a fling is still running, so this has to wait. Compose guards the same way and
             // for the same reason — "The DatePicker has other actions that can trigger a scroll and
@@ -1349,6 +1359,13 @@ fn sync_month_pages(
     if landed != displayed {
         state.set_displayed_month_millis(landed);
         published.set(landed);
+    }
+    // The arrows' in-flight page is released once the list actually stands on it: from then on the
+    // anchor names the same page, so the two agree and the memory has nothing left to add. It is also
+    // released by any motion the arrows did not ask for — a swipe, or an outside jump — so a later
+    // press steps from where the list really is rather than from a request the user has overridden.
+    if step_in_flight.get() == Some(actual) {
+        step_in_flight.set(None);
     }
 }
 
@@ -1600,6 +1617,7 @@ fn months_navigation(
     on_toggle_year_panel: impl Fn() + Send + Sync + 'static,
     colors: &DatePickerColors,
     list: &LazyListState,
+    step_in_flight: &State<Option<usize>>,
 ) {
     let text = state.calendar_model().format_month_year(month.start_utc_time_millis);
     let navigation_color = colors.navigation_content;
@@ -1625,12 +1643,26 @@ fn months_navigation(
                     .arrangement(Arrangement::Start)
                     .alignment(Alignment::Center)
                     .build(ctx, |ctx| {
+                        // The last page the list can show, so a forward step cannot ask past the end
+                        // and leave the arrow's own request stranded above the clamp.
+                        let last_page = CalendarModel::number_of_months_in_range(&state.year_range())
+                            .saturating_sub(1) as usize;
                         let back = list.clone();
-                        let back_page = list.first_visible();
-                        step_arrow(ctx, move || back.animate_scroll_to_item(back_page.saturating_sub(1), 0.0), list.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
+                        let back_flight = step_in_flight.clone();
+                        let back_anchor = list.first_visible();
+                        step_arrow(ctx, move || {
+                            let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
+                            back_flight.set(Some(target));
+                            back.animate_scroll_to_item(target, 0.0);
+                        }, list.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
                         let forward = list.clone();
-                        let forward_page = list.first_visible();
-                        step_arrow(ctx, move || forward.animate_scroll_to_item(forward_page + 1, 0.0), list.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
+                        let forward_flight = step_in_flight.clone();
+                        let forward_anchor = list.first_visible();
+                        step_arrow(ctx, move || {
+                            let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
+                            forward_flight.set(Some(target));
+                            forward.animate_scroll_to_item(target, 0.0);
+                        }, list.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
                     });
             }
         });
@@ -1676,6 +1708,38 @@ fn step_arrow(
                 .auto_mirror(true)
                 .build(ctx);
         });
+}
+
+/// Which page a month arrow should step to, given where the list is and where it is already going.
+///
+/// The arrows step **one page from the page already in flight**, not from the anchor. That distinction
+/// is the whole of a reported asymmetry: the anchor (`first_visible`) is the page whose span still
+/// contains the pixel offset, so while a forward spring runs it names the page being LEFT — `anchor + 1`
+/// then keeps naming the page already being animated to, the request is deduplicated as "already going
+/// there", and every press during the animation is swallowed. Scrolling backward flips the anchor as
+/// soon as the offset leaves the old page's span, so `anchor - 1` names a genuinely new page and every
+/// press lands. Measured on the docked demo, three presses 120 ms apart: `prev` advanced 2 months,
+/// `next` advanced 0.
+///
+/// `in_flight` is the last page an arrow asked for, and is cleared once the list arrives (`sync_month_pages`
+/// clears it), so a press during the motion continues from the target and a press after it starts from the
+/// anchor again. Either way each press is worth exactly one page.
+///
+/// Clamped to `[0, last_page]`: an arrow is disabled at the ends, but the in-flight page can be past the
+/// end for the frame between the request and the measure that clamps it.
+///
+/// **Deliberately beyond Compose, and the reason is recorded here rather than in the docs alone.** Compose
+/// reads `firstVisibleItemIndex ± 1` at the press (`DatePicker.kt:1569-1592`) and therefore swallows a
+/// press during a forward animation too — material3 wraps both handlers in
+/// `catch (_: IllegalArgumentException)` for exactly that (`:1571-1587`). One press for one page is fine;
+/// one DIRECTION swallowing and the other not is not, and that is what the asymmetry above amounts to.
+fn arrow_target(anchor: usize, in_flight: Option<usize>, forward: bool, last_page: usize) -> usize {
+    let from = in_flight.unwrap_or(anchor);
+    if forward {
+        from.saturating_add(1).min(last_page)
+    } else {
+        from.saturating_sub(1)
+    }
 }
 
 /// The year menu button: the "September 2024" text and a dropdown arrow, the control that opens the year panel
@@ -2169,6 +2233,15 @@ pub struct DockedDatePicker {
     on_confirm: Option<Arc<dyn Fn() + Send + Sync>>,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     modifier: Modifier,
+    /// A tag for a readout node reporting the pager's derived anchor, or `None`.
+    ///
+    /// Diagnostic only, and behind a caller-supplied tag rather than always on: the anchor
+    /// (`LazyListState::first_visible`) is written back inside the measure every frame and is not part
+    /// of what gets drawn, so a probe outside the process cannot read it — the tree shows positions,
+    /// which is the pixel offset the anchor is derived FROM. The month arrows compute their target as
+    /// `anchor ± 1`, so anything that goes wrong asymmetrically between the two directions lives here,
+    /// and this is the only way to see it.
+    page_probe: Option<String>,
 }
 
 impl DockedDatePicker {
@@ -2179,6 +2252,7 @@ impl DockedDatePicker {
             on_confirm: None,
             on_dismiss: None,
             modifier: Modifier::new(),
+            page_probe: None,
         }
     }
 
@@ -2200,6 +2274,16 @@ impl DockedDatePicker {
         self
     }
 
+    /// Compose a readout of the pager's derived anchor under `tag`, for a probe outside the process.
+    ///
+    /// Diagnostic only — see [`DockedDatePicker::page_probe`]. The node carries `page:N`, where `N` is
+    /// `LazyListState::first_visible` for the month list on the frame it was composed, and is marked
+    /// `test_tag(tag)` so a debug-server probe can find it.
+    pub fn page_probe(mut self, tag: impl Into<String>) -> Self {
+        self.page_probe = Some(tag.into());
+        self
+    }
+
     /// Composes the picker.
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
@@ -2214,6 +2298,9 @@ impl DockedDatePicker {
         // The paged month list, its position being the displayed month (see `sync_month_pages`), which
         // seeds it with `scroll_to_item` — see the note in `DatePicker::build`.
         let month_rows = ctx.remember(LazyListState::new).get();
+        // The page the arrows have asked for but not reached — see the note in `DatePicker::build`.
+        // `remember` hands back the `State` itself, so this is not a `State<State<..>>`.
+        let month_step_in_flight = ctx.remember(|| None::<usize>);
         // Page 0 is the January of the range's first year — see the note in `DatePicker::build`.
         let first_month = model.month_of(*state.year_range().start(), 1).start_utc_time_millis;
         let on_confirm = self.on_confirm.clone();
@@ -2241,9 +2328,26 @@ impl DockedDatePicker {
                         // Only while the calendar is the panel on show: an inline month or year list
                         // covers the pages, and the year panel is exactly what moves the month.
                         if current == DockedPanel::Calendar {
-                            sync_month_pages(ctx, &state, &model, &month_rows, first_month);
+                            sync_month_pages(ctx, &state, &model, &month_rows, first_month, &month_step_in_flight);
                         }
-                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows, &month_rows);
+                        // Diagnostic readout of the anchor the arrows compute their target from, plus
+                        // the pixel offset it is derived from. It sits before the navigation row so its
+                        // text is composed on every frame — `first_visible()` only moves when the
+                        // measure writes it back, and a probe reading the tree needs the value of the
+                        // frame it just asked about. The offset comes along because the anchor alone
+                        // cannot tell "the spring has not arrived" from "it arrived and the anchor did
+                        // not move".
+                        if let Some(tag) = self.page_probe.as_deref() {
+                            Text::new(format!(
+                                "page:{} off:{:.0}",
+                                month_rows.first_visible(),
+                                month_rows.offset()
+                            ))
+                            .font_size(8.0)
+                            .modifier(Modifier::new().test_tag(tag))
+                            .build(ctx);
+                        }
+                        docked_navigation(ctx, &state, &month, current, &panel, &colors, &year_rows, &month_rows, &month_step_in_flight);
                         // The inline lists crossfade in and out of the calendar's place (material3
                         // swaps its year overlay with expand + fade; a full-bleed fade reads the same
                         // here and never moves the action row).
@@ -2330,6 +2434,7 @@ fn docked_navigation(
     colors: &DatePickerColors,
     year_rows: &LazyListState,
     month_rows: &LazyListState,
+    month_step_in_flight: &State<Option<usize>>,
 ) {
     let navigation_color = colors.navigation_content;
     let months_open = current == DockedPanel::Months;
@@ -2354,9 +2459,17 @@ fn docked_navigation(
                 .arrangement(Arrangement::Start)
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
+                    // The last page the list can show, so a forward step cannot ask past the end.
+                    let last_page = CalendarModel::number_of_months_in_range(&state.year_range())
+                        .saturating_sub(1) as usize;
                     let back = month_rows.clone();
-                    let back_page = month_rows.first_visible();
-                    step_arrow(ctx, move || back.animate_scroll_to_item(back_page.saturating_sub(1), 0.0), month_rows.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    let back_flight = month_step_in_flight.clone();
+                    let back_anchor = month_rows.first_visible();
+                    step_arrow(ctx, move || {
+                        let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
+                        back_flight.set(Some(target));
+                        back.animate_scroll_to_item(target, 0.0);
+                    }, month_rows.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                     let panel_toggle = panel.clone();
                     let is_open = months_open;
                     // Abbreviated month ("Sep", not "September") — the M3 specs docked figure.
@@ -2376,8 +2489,13 @@ fn docked_navigation(
                         MONTH_MENU_TAG,
                     );
                     let forward = month_rows.clone();
-                    let forward_page = month_rows.first_visible();
-                    step_arrow(ctx, move || forward.animate_scroll_to_item(forward_page + 1, 0.0), month_rows.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    let forward_flight = month_step_in_flight.clone();
+                    let forward_anchor = month_rows.first_visible();
+                    step_arrow(ctx, move || {
+                        let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
+                        forward_flight.set(Some(target));
+                        forward.animate_scroll_to_item(target, 0.0);
+                    }, month_rows.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                 });
             // Year group: step arrows around the year; the button swaps in the year list.
             Row::new()
@@ -2587,6 +2705,70 @@ fn docked_action_row(
 mod tests {
     use super::*;
 
+    /// The month arrows step one page per press, in BOTH directions, however fast the presses come.
+    ///
+    /// The asymmetry this pins was reported from the demo: three presses 120 ms apart on `prev`
+    /// advanced two months, the same three on `next` advanced none. The cause is that `first_visible`
+    /// names the page whose span still contains the offset, so during a forward animation it is the page
+    /// being LEFT — `anchor + 1` then names the page already in flight, the request deduplicates against
+    /// it, and the press is lost. Backward flips the anchor the moment the offset leaves the old page,
+    /// so `anchor - 1` names something new.
+    ///
+    /// Stepping from the page already REQUESTED removes the direction from the outcome. Each case below
+    /// asserts the whole trajectory of targets, not just the last one: a fix that happened to land on
+    /// the right page while skipping one would pass a final-state check.
+    #[test]
+    fn a_second_press_during_the_animation_steps_again_in_both_directions() {
+        const LAST: usize = 2411;
+
+        // Three presses during one animation, starting from page 100. Forward: 101, 102, 103.
+        let mut in_flight = None;
+        let mut targets = Vec::new();
+        for _ in 0..3 {
+            let t = arrow_target(100, in_flight, true, LAST);
+            in_flight = Some(t);
+            targets.push(t);
+        }
+        assert_eq!(
+            targets,
+            vec![101, 102, 103],
+            "three forward presses during one animation must be three pages, not one repeated target"
+        );
+
+        // And backward, from the same anchor: 99, 98, 97.
+        let mut in_flight = None;
+        let mut targets = Vec::new();
+        for _ in 0..3 {
+            let t = arrow_target(100, in_flight, false, LAST);
+            in_flight = Some(t);
+            targets.push(t);
+        }
+        assert_eq!(targets, vec![99, 98, 97], "and the two directions must agree in shape");
+
+        // A press after the motion is honoured falls back to the anchor, which by then agrees with the
+        // in-flight page — the sync clears the memory when the list arrives, so this is the same answer
+        // either way rather than a stale one.
+        assert_eq!(
+            arrow_target(103, None, true, LAST),
+            104,
+            "with nothing in flight a press steps from where the list actually is"
+        );
+    }
+
+    /// The ends. An arrow is disabled there, but a step must still be well-defined rather than wrapping.
+    #[test]
+    fn the_arrow_targets_clamp_at_both_ends_of_the_range() {
+        assert_eq!(arrow_target(0, None, false, 10), 0, "no page before the first");
+        assert_eq!(arrow_target(0, Some(0), false, 10), 0, "nor from an in-flight request at the start");
+        assert_eq!(arrow_target(10, None, true, 10), 10, "no page past the last");
+        assert_eq!(
+            arrow_target(10, Some(10), true, 10),
+            10,
+            "nor from an in-flight request at the end — the request cannot climb past the clamp"
+        );
+        assert_eq!(arrow_target(usize::MAX, None, false, 10), usize::MAX - 1, "a step down never wraps");
+    }
+
     /// The bound on [`sync_month_pages`]'s two waits, and the reason it exists.
     ///
     /// `is_scrolling()` is NOT a flag with one owner — it is the same `State` the drag, fling,
@@ -2628,9 +2810,10 @@ mod tests {
         let mut composer = crate::core::composer::Composer::new();
         let mut deferred = 0usize;
         let mut issued_on = None;
+        let in_flight = State::new(None::<usize>);
         for frame in 1..=(MAX_WAIT_FRAMES as usize + 4) {
             composer.compose(|ctx| {
-                sync_month_pages(ctx, &state, &model, &list, first_month);
+                sync_month_pages(ctx, &state, &model, &list, first_month, &in_flight);
             });
             if list.jump_request.peek().is_some() {
                 issued_on = Some(frame);
@@ -2658,7 +2841,7 @@ mod tests {
         let idle = LazyListState::new();
         let mut composer = crate::core::composer::Composer::new();
         composer.compose(|ctx| {
-            sync_month_pages(ctx, &state, &model, &idle, first_month);
+            sync_month_pages(ctx, &state, &model, &idle, first_month, &State::new(None::<usize>));
         });
         assert!(
             idle.jump_request.peek().is_some(),

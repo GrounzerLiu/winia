@@ -28,6 +28,17 @@ use winia::ui::overlay::{OverlayAnimSpec, Popup, PopupPosition};
 #[path = "common/settings.rs"]
 mod settings;
 
+/// The tag the pager's anchor readout should carry, or `None` for a normal run.
+///
+/// `first_visible_index` is written back inside the list's measure every frame and is not part of what
+/// gets drawn, so a probe outside the process cannot read it — the tree reports positions, which is the
+/// pixel offset the anchor is derived from rather than the anchor. The month arrows build their target
+/// as `anchor ± 1`, so anything that goes wrong asymmetrically between the two directions lives in that
+/// number, and this switch is the only way to see it. Set `WINIA_DP_PAGE_PROBE=dp-page-probe`.
+fn page_probe_tag() -> Option<String> {
+    std::env::var("WINIA_DP_PAGE_PROBE").ok().filter(|v| !v.is_empty())
+}
+
 #[composable]
 fn docked_demo(ctx: &mut ComposeCtx) {
     let open = ctx.remember(|| false);
@@ -133,7 +144,14 @@ fn docked_demo(ctx: &mut ComposeCtx) {
                         .build(ctx, {
                             clone!(open, confirmed, baseline, field_value, state, model);
                             move |ctx| {
-                                DockedDatePicker::new(state.clone())
+                                let mut picker = DockedDatePicker::new(state.clone());
+                                // A probe switch for the pager's derived anchor — see
+                                // `page_probe_tag`. Off unless the env var is set, so the demo the
+                                // user looks at is unchanged.
+                                if let Some(tag) = page_probe_tag() {
+                                    picker = picker.page_probe(tag);
+                                }
+                                picker
                                     .on_confirm({
                                         clone!(open, confirmed, field_value, state, model);
                                         move || {

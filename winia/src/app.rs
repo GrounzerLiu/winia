@@ -6073,6 +6073,7 @@ mod nested_scroll_chain_tests {
 }
 
 /// The release-velocity floor at the fling call site, and the exception a paged list gets from it.
+#[cfg(test)]
 mod release_velocity_floor_tests {
     use super::dispatch_nested_scroll_fling;
     use crate::layout::node::LayoutNode;
