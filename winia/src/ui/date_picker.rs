@@ -33,6 +33,7 @@ use crate::ui::overlay::ExposedDropdownMenuDefaults;
 use crate::ui::scrollbar::LazyScrollbar;
 use crate::ui::surface::{Surface, SurfaceBorder};
 use crate::ui::text::{ProvideTextStyle, Text};
+use crate::ui::text_transformation::{OffsetMapping, TransformedText, VisualTransformation};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -430,6 +431,111 @@ impl DateInputFormat {
     }
 }
 
+/// Writes the format's delimiters into a date entry as it is typed, so the field shows
+/// `03/01/2024` while what it holds is the eight digits `03012024`
+/// (`DateVisualTransformation`, `DateInput.kt:392-439`).
+///
+/// The delimiters are inserted as the user types and are never part of the stored text, which is
+/// why the offsets have to be translated both ways: a caret sitting after the fifth displayed
+/// character is after the fourth typed one.
+#[derive(Clone, Debug)]
+pub struct DateVisualTransformation {
+    /// Where the first delimiter goes in the delimited pattern, `MM/dd/yyyy` → 2.
+    first_delimiter_offset: usize,
+    /// Where the second goes, `MM/dd/yyyy` → 5.
+    second_delimiter_offset: usize,
+    /// The digit count, always 8.
+    date_format_length: usize,
+    delimiter: char,
+}
+
+impl DateVisualTransformation {
+    /// A transformation for `format`.
+    pub fn new(format: &DateInputFormat) -> Self {
+        Self {
+            first_delimiter_offset: format.first_delimiter_offset(),
+            second_delimiter_offset: format.last_delimiter_offset(),
+            date_format_length: format.pattern_length(),
+            delimiter: format.delimiter(),
+        }
+    }
+}
+
+impl VisualTransformation for DateVisualTransformation {
+    fn filter(&self, text: &str) -> TransformedText {
+        // A longer entry is cut at a full field's width, which is the same width the field's
+        // `onValueChange` accepts; the two never disagree, so this is belt and braces.
+        let trimmed = if text.len() > self.date_format_length {
+            &text[..self.date_format_length]
+        } else {
+            text
+        };
+        let mut transformed = String::with_capacity(self.date_format_length + 2);
+        for (index, c) in trimmed.chars().enumerate() {
+            transformed.push(c);
+            if index + 1 == self.first_delimiter_offset
+                || index + 2 == self.second_delimiter_offset
+            {
+                transformed.push(self.delimiter);
+            }
+        }
+        TransformedText {
+            text: transformed,
+            offset_mapping: Arc::new(DateOffsetMapping {
+                first_delimiter_offset: self.first_delimiter_offset,
+                second_delimiter_offset: self.second_delimiter_offset,
+                date_format_length: self.date_format_length,
+            }),
+        }
+    }
+}
+
+/// Moves a caret between the digits a date entry holds and the digits it shows
+/// (`DateVisualTransformation`'s offset translator, `DateInput.kt:401-421`).
+#[derive(Clone, Copy, Debug)]
+struct DateOffsetMapping {
+    first_delimiter_offset: usize,
+    second_delimiter_offset: usize,
+    date_format_length: usize,
+}
+
+impl OffsetMapping for DateOffsetMapping {
+    fn original_to_transformed(&self, offset: usize) -> usize {
+        if offset < self.first_delimiter_offset {
+            offset
+        } else if offset < self.second_delimiter_offset {
+            offset + 1
+        } else if offset <= self.date_format_length {
+            offset + 2
+        } else {
+            // Past a full entry there is nothing more to show; clamp rather than run off the end.
+            self.date_format_length + 2
+        }
+    }
+
+    /// Deliberate deviation from `DateInput.kt:413-420`, and the whole point of the round-trip
+    /// test. Compose's branches are `<= firstDelimiterOffset - 1` and `<= secondDelimiterOffset - 1`,
+    /// which is one too tight: for `MM/dd/yyyy` it sends displayed offset 5 — the caret just after
+    /// `01` — back to 3, while its own forward map puts typed offset 4 at displayed 5. Typing the
+    /// day therefore moves the caret one character back as soon as the caret crosses the second
+    /// delimiter. Using `<= firstDelimiterOffset` and `<= secondDelimiterOffset` makes each side
+    /// the inverse of the other for every position, and puts both sides of a delimiter — which is
+    /// zero-width in the stored text — on the same offset, which is where a caret there belongs.
+    ///
+    /// Forward is unchanged; it already inverts correctly.
+    fn transformed_to_original(&self, offset: usize) -> usize {
+        if offset <= self.first_delimiter_offset {
+            offset
+        } else if offset <= self.second_delimiter_offset {
+            offset - 1
+        } else if offset <= self.date_format_length + 1 {
+            offset - 2
+        } else {
+            self.date_format_length
+        }
+    }
+}
+
 /// The calendar model: date arithmetic plus the locale the picker formats and lays out with.
 #[derive(Clone, Debug)]
 pub struct CalendarModel {
@@ -812,6 +918,46 @@ impl DatePickerState {
     pub fn selectable_dates_arc(&self) -> Arc<dyn SelectableDates> {
         self.selectable_dates.clone()
     }
+
+    /// Run the input field's checks on what the user typed, returning the message to show under the
+    /// field, or an empty string when the entry is good (`DateInputValidator.validate`,
+    /// `DateInput.kt:313-357`).
+    ///
+    /// The three checks are in material3's order, and the order is load-bearing: a complete entry
+    /// that names no date reports the pattern, a named date outside `year_range` reports the range
+    /// rather than the policy, and only a date the range accepts is put to the policy. An empty
+    /// return means the selection may be committed.
+    ///
+    /// `date` is [`CalendarModel::parse`]'s answer for the typed digits, so `None` covers both an
+    /// incomplete entry and one that names no real date — material3 cannot tell those apart here
+    /// either, because the caller only reaches this once the entry is a full field's width.
+    pub fn validate_date_input(&self, date: Option<CalendarDate>) -> String {
+        let Some(date) = date else {
+            return format_string(
+                DATE_INPUT_INVALID_FOR_PATTERN,
+                &[&self
+                    .model
+                    .date_input_format()
+                    .pattern_with_delimiters()
+                    .to_uppercase()],
+            );
+        };
+        if !self.year_range.contains(&date.year) {
+            return format_string(
+                DATE_INPUT_INVALID_YEAR_RANGE,
+                &[&self.year_range.start().to_string(), &self.year_range.end().to_string()],
+            );
+        }
+        if !self.selectable_dates.is_selectable_year(date.year)
+            || !self.selectable_dates.is_selectable_date(date.start_of_day_millis())
+        {
+            return format_string(
+                DATE_INPUT_INVALID_NOT_ALLOWED,
+                &[&self.model.format_date(date.start_of_day_millis(), false)],
+            );
+        }
+        String::new()
+    }
 }
 
 /// The state a picker composes with, remembered across recompositions
@@ -829,6 +975,67 @@ pub const MAX_CALENDAR_ROWS: u32 = 6;
 
 /// The word a today cell announces (`DatePickerTodayDescription`).
 pub const TODAY_DESCRIPTION: &str = "Today";
+
+/// The mode toggle's content description while the calendar is showing, which is the button that
+/// moves to text entry (`m3c_date_picker_switch_to_input_mode`).
+pub const SWITCH_TO_INPUT_MODE_DESCRIPTION: &str = "Switch to text input mode";
+
+/// The mode toggle's content description while the text field is showing
+/// (`m3c_date_picker_switch_to_calendar_mode`).
+pub const SWITCH_TO_CALENDAR_MODE_DESCRIPTION: &str = "Switch to calendar input mode";
+
+/// The input field's floating label (`m3c_date_input_label`).
+pub const DATE_INPUT_LABEL: &str = "Date";
+
+/// The header headline while the input field is showing and nothing is entered
+/// (`m3c_date_input_headline`).
+pub const DATE_INPUT_HEADLINE: &str = "Entered date";
+
+/// What the header headline announces while the input field is showing, given what is entered
+/// (`m3c_date_input_headline_description`).
+pub const DATE_INPUT_HEADLINE_DESCRIPTION: &str = "Entered date: {}";
+
+/// What the header headline announces while the input field is showing and nothing is entered
+/// (`m3c_date_input_no_input_description`).
+pub const DATE_INPUT_NO_INPUT_DESCRIPTION: &str = "None";
+
+/// The entry is complete but names no date (`m3c_date_input_invalid_for_pattern`).
+pub const DATE_INPUT_INVALID_FOR_PATTERN: &str = "Date does not match expected pattern: {1}";
+
+/// The entry's year falls outside the picker's year range (`m3c_date_input_invalid_year_range`).
+pub const DATE_INPUT_INVALID_YEAR_RANGE: &str = "Date out of expected year range {1} - {2}";
+
+/// The entry is a date the policy refuses (`m3c_date_input_invalid_not_allowed`).
+pub const DATE_INPUT_INVALID_NOT_ALLOWED: &str = "Date not allowed: {1}";
+
+/// Substitute `{1}`, `{2}`, … from `args` in order — what Kotlin's `String.format` does, and
+/// therefore what material3's `formatString` calls do (`DateInput.kt:319`).
+///
+/// The placeholders are one-based and numbered because the templates come from a string resource,
+/// where they are `%1$s` and it is the resource system, not the caller, that decides the order. A
+/// bare `{}` spelling would not survive two arguments: `replace` rewrites every occurrence alike,
+/// so `{} - {}` filled from one value comes out as `1900 - 1900`.
+fn format_string(template: &str, args: &[&str]) -> String {
+    let mut out = String::with_capacity(template.len() + 16);
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return out;
+        };
+        match after[..close].parse::<usize>() {
+            Ok(index) => out.push_str(args.get(index.wrapping_sub(1)).copied().unwrap_or("")),
+            // Not a placeholder: copy the brace pair through untouched. `close` indexes into
+            // `after`, which starts one past the `{`, so the `}` sits one further along again.
+            Err(_) => out.push_str(&rest[open..open + close + 2]),
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// One day in a month grid, with the flags the cell paints from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3022,6 +3229,201 @@ mod tests {
         let digits = model.format_with_pattern(0, &us);
         assert_eq!(digits, "01011970");
         assert_eq!(model.parse(&digits, &us), CalendarDate::new(1970, 1, 1));
+    }
+
+    /// A picker with everything at its defaults: 1900..=2100, every date selectable.
+    fn picker() -> DatePickerState {
+        DatePickerState::new(CalendarLocale::default())
+    }
+
+    /// The three checks run in material3's order and each says what it has to say. The order is
+    /// the point of the first two cases: an unparseable entry never reaches the range check, and a
+    /// date outside the range is reported as the range rather than as the policy refusing it.
+    #[test]
+    fn the_input_field_reports_pattern_range_and_policy_failures_apart() {
+        let state = picker();
+
+        assert_eq!(
+            state.validate_date_input(None),
+            "Date does not match expected pattern: MM/DD/YYYY"
+        );
+
+        let outside = CalendarDate::new(1800, 5, 4).expect("1800-05-04 is a date");
+        assert_eq!(
+            state.validate_date_input(Some(outside)),
+            "Date out of expected year range 1900 - 2100"
+        );
+
+        assert_eq!(state.validate_date_input(CalendarDate::new(2024, 3, 1)), "");
+    }
+
+    /// The year range's two ends land in their own slots. A formatter that filled both with one
+    /// value would still look plausible on a single-year range, so this uses a wide one.
+    #[test]
+    fn the_year_range_message_names_both_ends() {
+        let message = picker().validate_date_input(CalendarDate::new(1800, 5, 4));
+        assert_eq!(message, "Date out of expected year range 1900 - 2100");
+        assert!(message.contains("1900"), "{message}");
+        assert!(message.contains("2100"), "{message}");
+    }
+
+    /// A policy that refuses a day is told so by name and date, not by a generic failure.
+    #[test]
+    fn a_refused_day_is_named_rather_than_reported_as_a_range_problem() {
+        struct OnlyWeekdays;
+        impl SelectableDates for OnlyWeekdays {
+            fn is_selectable_date(&self, utc_time_millis: i64) -> bool {
+                // 2024-03-01 is a Friday; 2024-03-02 a Saturday.
+                date_of_millis(utc_time_millis).day != 2
+            }
+        }
+        let state = DatePickerState::with(
+            CalendarLocale::default(),
+            DatePickerStateInit {
+                selectable_dates: Arc::new(OnlyWeekdays),
+                ..DatePickerStateInit::default()
+            },
+        );
+        assert_eq!(state.validate_date_input(CalendarDate::new(2024, 3, 1)), "");
+        let refused = state.validate_date_input(CalendarDate::new(2024, 3, 2));
+        assert_eq!(refused, "Date not allowed: Mar 2, 2024");
+    }
+
+    /// A year the policy refuses stops every date in it, even a day the policy would otherwise
+    /// allow — material3 checks `isSelectableYear` in the same condition (`DateInput.kt:330-333`).
+    #[test]
+    fn a_year_the_policy_refuses_stops_every_date_in_it() {
+        struct NotTwentyTwentyFour;
+        impl SelectableDates for NotTwentyTwentyFour {
+            fn is_selectable_year(&self, year: i32) -> bool {
+                year != 2024
+            }
+        }
+        let state = DatePickerState::with(
+            CalendarLocale::default(),
+            DatePickerStateInit {
+                selectable_dates: Arc::new(NotTwentyTwentyFour),
+                ..DatePickerStateInit::default()
+            },
+        );
+        // Every March date would otherwise pass, so only the year check can reject this.
+        let refused = state.validate_date_input(CalendarDate::new(2024, 3, 1));
+        assert_eq!(refused, "Date not allowed: Mar 1, 2024");
+        assert_eq!(state.validate_date_input(CalendarDate::new(2025, 3, 1)), "");
+    }
+
+    /// The pattern message carries the locale's own pattern, uppercased, so a reader knows what
+    /// shape was expected — and a non-en-US locale says its own.
+    #[test]
+    fn the_pattern_message_names_the_locales_own_pattern() {
+        let state = DatePickerState::new(locale_with_input_format("yyyy/MM/dd"));
+        assert_eq!(
+            state.validate_date_input(None),
+            "Date does not match expected pattern: YYYY/MM/DD"
+        );
+    }
+
+    /// The substitution Compose relies on: two arguments fill their own slots, a missing one
+    /// leaves an empty hole instead of panicking, and text that only looks like a placeholder
+    /// passes through.
+    #[test]
+    fn format_string_fills_numbered_placeholders_in_order() {
+        assert_eq!(format_string("a {1} b {2} c", &["1", "2"]), "a 1 b 2 c");
+        assert_eq!(format_string("{2} then {1}", &["first", "second"]), "second then first");
+        assert_eq!(format_string("{1} only", &[]), " only");
+        assert_eq!(format_string("no placeholders", &["x"]), "no placeholders");
+        assert_eq!(format_string("{name} stays", &["x"]), "{name} stays");
+        // One-based, as `%1$s` is: `{0}` is out of range and fills nothing.
+        assert_eq!(format_string("{1} {0} {2}", &["a", "b"]), "a  b");
+        assert_eq!(format_string("unclosed {1", &["a"]), "unclosed {1");
+    }
+
+    /// The delimiters appear as the digits are typed, one after the field they close, and a full
+    /// entry shows the pattern exactly.
+    #[test]
+    fn the_visual_transformation_writes_the_delimiters_as_the_digits_arrive() {
+        let format = DateInputFormat::from_pattern("MM/dd/yyyy").expect("MM/dd/yyyy");
+        let transformation = DateVisualTransformation::new(&format);
+        let shown = |digits: &str| transformation.filter(digits).text;
+        assert_eq!(shown(""), "");
+        assert_eq!(shown("0"), "0");
+        assert_eq!(shown("03"), "03/");
+        assert_eq!(shown("030"), "03/0");
+        assert_eq!(shown("0301"), "03/01/");
+        assert_eq!(shown("030120"), "03/01/20");
+        assert_eq!(shown("03012024"), "03/01/2024");
+        // A longer entry is cut at a full field's width rather than pushing the end out.
+        assert_eq!(shown("03012024999"), "03/01/2024");
+    }
+
+    /// A non-default field order puts its delimiters where its own pattern does: `yyyy/MM/dd`
+    /// closes a four-digit year first, so the first separator lands after the fourth digit and
+    /// the display is two characters longer before it appears.
+    #[test]
+    fn the_visual_transformation_follows_the_locale_field_order() {
+        let cases = [
+            ("MM/dd/yyyy", "03012024", "03/01/2024", [(2, "03/"), (4, "03/01/")]),
+            ("dd/MM/yyyy", "01032024", "01/03/2024", [(2, "01/"), (4, "01/03/")]),
+            ("yyyy/MM/dd", "20240301", "2024/03/01", [(4, "2024/"), (6, "2024/03/")]),
+            ("dd.MM.yyyy", "01032024", "01.03.2024", [(2, "01."), (4, "01.03.")]),
+        ];
+        for (pattern, digits, full, prefixes) in cases {
+            let format = DateInputFormat::from_pattern(pattern).expect(pattern);
+            let transformation = DateVisualTransformation::new(&format);
+            assert_eq!(transformation.filter(digits).text, full, "{pattern}");
+            for (width, prefix) in prefixes {
+                assert_eq!(
+                    transformation.filter(&digits[..width]).text,
+                    prefix,
+                    "{pattern} at {width} digits"
+                );
+            }
+        }
+    }
+
+    /// Every caret position maps to the position of the same digit both ways, and past the end
+    /// both clamp. This is the whole contract of the two methods: get one wrong and the caret
+    /// jumps a character as soon as it crosses a delimiter.
+    #[test]
+    fn every_caret_position_maps_to_the_same_digit_both_ways() {
+        let format = DateInputFormat::from_pattern("MM/dd/yyyy").expect("MM/dd/yyyy");
+        let transformation = DateVisualTransformation::new(&format);
+        let mapping = transformation.filter("03012024").offset_mapping;
+
+        // Caret before each digit: typed offset -> shown offset -> back.
+        for original in 0..=8 {
+            let shown = mapping.original_to_transformed(original);
+            assert!(shown <= 10, "{original} -> {shown} ran past the end");
+            assert_eq!(mapping.transformed_to_original(shown), original, "offset {original}");
+        }
+        // The exact pairs, so a change in one direction cannot hide behind the round trip.
+        let pairs = [(0, 0), (1, 1), (2, 3), (3, 4), (4, 5), (5, 7), (6, 8), (7, 9), (8, 10)];
+        for (original, shown) in pairs {
+            assert_eq!(mapping.original_to_transformed(original), shown, "forward {original}");
+            assert_eq!(mapping.transformed_to_original(shown), original, "back {shown}");
+        }
+        // Past the entry, both directions clamp to its end rather than walking off.
+        assert_eq!(mapping.original_to_transformed(9), 10);
+        assert_eq!(mapping.original_to_transformed(200), 10);
+        assert_eq!(mapping.transformed_to_original(11), 8);
+        assert_eq!(mapping.transformed_to_original(200), 8);
+    }
+
+    /// The offsets are read off the pattern, so the year-first order's mapping is not the
+    /// month-first one's shifted — it is a different function.
+    #[test]
+    fn the_year_first_order_maps_its_own_offsets() {
+        let format = DateInputFormat::from_pattern("yyyy/MM/dd").expect("yyyy/MM/dd");
+        let mapping = DateVisualTransformation::new(&format).filter("20240301").offset_mapping;
+        let pairs = [(0, 0), (3, 3), (4, 5), (6, 7), (7, 9), (8, 10)];
+        for (original, shown) in pairs {
+            assert_eq!(mapping.original_to_transformed(original), shown, "forward {original}");
+            assert_eq!(mapping.transformed_to_original(shown), original, "back {shown}");
+        }
+        for original in 0..=8 {
+            let shown = mapping.original_to_transformed(original);
+            assert_eq!(mapping.transformed_to_original(shown), original, "offset {original}");
+        }
     }
 
     /// The month arrows step one page per press, in BOTH directions, however fast the presses come.
