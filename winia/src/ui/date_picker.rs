@@ -549,6 +549,13 @@ pub const DATE_RANGE_PATH: &str = "M9 11H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2z
 /// The input field's padding, 24 dp at each end (`InputTextFieldPadding`, `DateInput.kt:441`).
 pub const INPUT_TEXT_FIELD_PADDING: f32 = 24.0;
 
+/// The test tag on the date entry field, so a UI test can click and type into it without having to
+/// find the field by its geometry.
+pub const INPUT_FIELD_TEST_TAG: &str = "date-picker-input-field";
+
+/// The test tag on the mode toggle in the header.
+pub const MODE_TOGGLE_TEST_TAG: &str = "date-picker-mode-toggle";
+
 /// The bottom padding the field carries only while no error is showing, so an error appearing as
 /// supporting text does not make the container jump (`InputTextNonErroneousBottomPadding`,
 /// `DateInput.kt:445`).
@@ -604,6 +611,15 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     let transformation: Arc<dyn VisualTransformation> =
         Arc::new(DateVisualTransformation::new(&format));
 
+    // The message is the field's error semantics as well as its supporting text, so a reader is
+    // told what is wrong rather than left to find it on the screen (`DateInput.kt:211-214`).
+    let field_semantics = if is_error {
+        crate::semantics::SemanticsConfig::new()
+            .state(crate::semantics::SemanticsState::new().error(message.clone()))
+    } else {
+        crate::semantics::SemanticsConfig::new()
+    };
+
     let label_pattern = pattern.clone();
         let mut field = TextField::new(text.clone())
         .outlined()
@@ -652,6 +668,8 @@ pub fn date_input_content(ctx: &mut ComposeCtx, state: &DatePickerState) {
     field
         .modifier(
             Modifier::new()
+                .test_tag(INPUT_FIELD_TEST_TAG)
+                .semantics(field_semantics)
                 .padding_start(INPUT_TEXT_FIELD_PADDING)
                 .padding_end(INPUT_TEXT_FIELD_PADDING)
                 .padding_bottom(bottom),
@@ -676,6 +694,7 @@ fn display_mode_toggle(
     };
     IconButton::new()
         .on_click(on_toggle)
+        .modifier(Modifier::new().test_tag(MODE_TOGGLE_TEST_TAG))
         .build(ctx, |ctx| {
             Icon::svg_path(path)
                 .tint(color)
@@ -1143,7 +1162,7 @@ pub const DATE_INPUT_HEADLINE: &str = "Entered date";
 
 /// What the header headline announces while the input field is showing, given what is entered
 /// (`m3c_date_input_headline_description`).
-pub const DATE_INPUT_HEADLINE_DESCRIPTION: &str = "Entered date: {}";
+pub const DATE_INPUT_HEADLINE_DESCRIPTION: &str = "Entered date: {1}";
 
 /// What the header headline announces while the input field is showing and nothing is entered
 /// (`m3c_date_input_no_input_description`).

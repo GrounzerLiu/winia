@@ -85,12 +85,18 @@ impl SemanticsRole {
 /// A node's accessibility state. Every field is optional: `None` means "nothing to say", which is
 /// not the same as `Some(false)` — a node that never mentions selection must not be announced as
 /// unselected (Compose's semantics keys behave the same way).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SemanticsState {
     selected: Option<bool>,
     checked: Option<ToggleableState>,
     expanded: Option<bool>,
     enabled: Option<bool>,
+    /// What is wrong with the value, in the words the field itself uses — Compose's
+    /// `SemanticsProperties.error`, which a text field sets to its supporting text when that text
+    /// is an error. A reader announces it in place of the value rather than making the user find
+    /// the message on the screen. `None` means the value is not in error, which is different from
+    /// being in error with nothing to say.
+    error: Option<String>,
     /// A progress value with its range — Compose's `ProgressBarRangeInfo`. `None` on an
     /// indeterminate indicator: there IS no value, which is different from a value of zero, and a
     /// screen reader should say "in progress" rather than "0 percent".
@@ -130,6 +136,20 @@ impl SemanticsState {
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = Some(enabled);
         self
+    }
+
+    /// What is wrong with this node's value, in the words the node itself uses — Compose's
+    /// `SemanticsProperties.error`. A text field sets it to the message it draws under itself, so a
+    /// reader announces the problem in place of the value instead of leaving the user to find the
+    /// message on the screen.
+    pub fn error(mut self, message: impl Into<String>) -> Self {
+        self.error = Some(message.into());
+        self
+    }
+
+    /// The error message, if this node is in error.
+    pub fn error_value(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// A progress value and the range it sits in — what a screen reader announces as a percentage,
@@ -172,6 +192,7 @@ impl SemanticsState {
             && self.checked.is_none()
             && self.expanded.is_none()
             && self.enabled.is_none()
+            && self.error.is_none()
             && self.progress.is_none()
     }
 
@@ -183,6 +204,7 @@ impl SemanticsState {
             checked: self.checked.or(fallback.checked),
             expanded: self.expanded.or(fallback.expanded),
             enabled: self.enabled.or(fallback.enabled),
+            error: self.error.or(fallback.error),
             progress: self.progress.or(fallback.progress),
         }
     }
@@ -241,7 +263,7 @@ impl SemanticsConfig {
     }
 
     pub fn state_value(&self) -> SemanticsState {
-        self.state
+        self.state.clone()
     }
 
     pub fn merges_descendants(&self) -> bool {
@@ -627,10 +649,14 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
         for child in children_of {
             collect(nodes, child, child_x, child_y, &mut absorbed);
         }
+        // Every absorbed descendant's state is folded in, not just the first one that says
+        // something. Taking only the first loses whatever the rest declared: a dialog holding a
+        // toggle (`enabled`) and an entry field in error would report the toggle's state and drop
+        // the error, and the reader would never hear what is wrong with the value.
         let absorbed_state = absorbed
             .iter()
-            .map(|child| child.state)
-            .find(|state| !state.is_unspecified())
+            .map(|child| child.state.clone())
+            .reduce(|merged, next| next.or(merged))
             .unwrap_or_default();
         let absorbed_role = absorbed.iter().find_map(|child| child.role);
         out.push(SemanticsNode {
@@ -795,6 +821,11 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
     }
     if let Some((current, min, max)) = node.state.progress_value() {
         state.push(format!("\"progress\":{{\"value\":{current},\"min\":{min},\"max\":{max}}}"));
+    }
+    if let Some(message) = node.state.error_value() {
+        // `json_string` already quotes and escapes; quoting it again would make the whole
+        // snapshot unparseable, which reads from the debug channel as no answer at all.
+        state.push(format!("\"error\":{}", json_string(message)));
     }
     out.push_str(&format!(
         "{{{}}},\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",

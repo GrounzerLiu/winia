@@ -3857,3 +3857,248 @@ fn date_picker_selects_the_day_that_is_tapped() {
     app.tap(cx, cy);
     app.expect_text_timeout("selected: Sep 5, 2024", Duration::from_secs(5));
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_date_picker_input：真实窗口 Input 模式交互
+// ═══════════════════════════════════════════════════════════════
+
+/// The header toggle swaps the picker between the calendar and the text field, and the state says
+/// which one it is on.
+///
+/// This is the guard on the defect the mode existed but nothing reached: `set_display_mode` wrote a
+/// value the build path never read, so the picker stayed a calendar and the mode was a silent
+/// no-op. Both directions are checked because a picker that ignored the state and always drew a
+/// calendar would pass the calendar half alone.
+#[test]
+fn the_date_picker_mode_toggle_swaps_the_calendar_for_the_entry_field() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    assert_eq!(app.overlay_count(), 1, "the modal picker is an overlay");
+    // The calendar's own month navigation is gone: the field replaced it.
+    assert!(
+        !app.overlay_texts().iter().any(|text| text == "2024"),
+        "input mode still composes the month navigation: {:?}",
+        app.overlay_texts()
+    );
+
+    let toggle = app
+        .find_tag_in_overlay("date-picker-mode-toggle")
+        .expect("the mode toggle");
+    app.tap(toggle.0 + toggle.2 / 2.0, toggle.1 + toggle.3 / 2.0);
+    app.expect_text_timeout("mode: picker", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("2024", Duration::from_secs(5));
+
+    app.tap(toggle.0 + toggle.2 / 2.0, toggle.1 + toggle.3 / 2.0);
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    assert!(
+        app.find_tag_in_overlay("date-picker-input-field").is_some(),
+        "the field is back after the second toggle"
+    );
+}
+
+/// Click a tagged node inside an overlay entry. [`UiTest::click_tag`] only looks in the main tree,
+/// and a modal picker's own tree lives in the overlay.
+fn click_overlay_tag(app: &mut UiTest, tag: &str) {
+    app.refresh();
+    let (x, y, w, h) = app
+        .find_tag_in_overlay(tag)
+        .unwrap_or_else(|| panic!("no overlay tag `{tag}`"));
+    app.click(x + w / 2.0, y + h / 2.0);
+    std::thread::sleep(Duration::from_millis(120));
+}
+
+/// Digits typed into the field become the selection, and the delimiters the field draws never reach
+/// what it holds — the field is given the eight digits `03122024`, shows `03/12/2024`, and the
+/// selection is March 12, 2024. The entry the field opened with has to be cleared first, because
+/// the field refuses anything past a full entry's width rather than growing.
+#[test]
+fn typing_digits_into_the_date_field_selects_that_date() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    // The field opens on the initial selection, already written out as digits.
+    app.expect_overlay_text_timeout("09/10/2024", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+
+    for key in ["0", "3", "1", "2", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("selected: Mar 12, 2024", Duration::from_secs(5));
+    // Ten characters shown, eight held: the two delimiters are the visual transformation's work.
+    app.expect_overlay_text_timeout("03/12/2024", Duration::from_secs(5));
+}
+
+/// Wait for some node to publish this error message.
+///
+/// The walk is recursive because a clickable container — a dialog, whose scrim dismisses it —
+/// claims its whole subtree as children rather than sitting above it (`semantics.rs:645`), and a
+/// modal picker is exactly that. The answer is `{"main":[…],"overlays":[…]}` and the picker's tree
+/// is an overlay, so both sides are walked.
+fn expect_semantics_error(app: &mut UiTest, expected: &str) {
+    fn carries(items: &[serde_json::Value], expected: &str) -> bool {
+        items.iter().any(|node| {
+            node.get("state")
+                .and_then(|state| state.get("error"))
+                .and_then(|error| error.as_str())
+                == Some(expected)
+                || carries(
+                    node.get("children")
+                        .and_then(|children| children.as_array())
+                        .map_or(&[][..], Vec::as_slice),
+                    expected,
+                )
+        })
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        let found = app.semantics().is_some_and(|snapshot| {
+            let main = snapshot
+                .get("main")
+                .and_then(|main| main.as_array())
+                .is_some_and(|items| carries(items, expected));
+            let overlays = snapshot
+                .get("overlays")
+                .and_then(|overlays| overlays.as_array())
+                .is_some_and(|entries| {
+                    entries.iter().filter_map(|entry| entry.get("tree")).any(|tree| {
+                        tree.as_array().is_some_and(|items| carries(items, expected))
+                    })
+                });
+            main || overlays
+        });
+        if found {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no node published the error `{expected}` within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How many pixels in the band under the date field carry material3's `error` role.
+///
+/// The field draws its supporting text inside its own visual rather than as a child node, so no tree
+/// names it — the pixels are where it actually is. `error` is the one red in the picker, so counting
+/// red in that band is counting the message. Sampled a row at a time because supporting text is a
+/// thin line of glyphs and a single scan line can miss it.
+fn error_pixels_below_field(app: &mut UiTest) -> usize {
+    app.refresh();
+    let (x, y, w, h) = app
+        .find_tag_in_overlay("date-picker-input-field")
+        .expect("the date field");
+    let mut points = Vec::new();
+    for row in 0..14 {
+        let py = y + h + 1.0 + row as f32 * 1.5;
+        for column in 0..90 {
+            points.push((x + 2.0 + column as f32 * (w - 4.0) / 90.0, py));
+        }
+    }
+    app.pixels_at_logical(&points)
+        .into_iter()
+        .flatten()
+        .filter(|(r, g, b, _)| *r > 120 && *r > *g + 50 && *r > *b + 50)
+        .count()
+}
+
+/// An entry the validator refuses is reported under the field and does not become the selection.
+/// `13312024` names month 13, which is not a month, so it parses to nothing; the pattern message is
+/// what Compose gives for an entry that is a full field's width and still names no date
+/// (`DateInput.kt:171-200`).
+#[test]
+fn an_unparseable_entry_is_reported_and_does_not_become_the_selection() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    assert_eq!(
+        error_pixels_below_field(&mut app),
+        0,
+        "a field with no error is drawing one"
+    );
+
+    for key in ["1", "3", "3", "1", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    assert!(
+        error_pixels_below_field(&mut app) > 20,
+        "the refused entry is not drawn under the field at all"
+    );
+    expect_semantics_error(&mut app, "Date does not match expected pattern: MM/DD/YYYY");
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+}
+
+/// A full entry naming a real date outside the picker's year range is refused too, and the message
+/// is the range's rather than the pattern's — the ordering of `DateInputValidator.validate` is what
+/// makes it so. `01051800` is January 5, 1800: a date, well below the default 1900..=2100 range, so
+/// the year check is the only one that can refuse it.
+#[test]
+fn a_date_outside_the_year_range_is_reported_too() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    for key in ["0", "1", "0", "5", "1", "8", "0", "0"] {
+        app.key(key);
+    }
+    assert!(
+        error_pixels_below_field(&mut app) > 20,
+        "the out-of-range entry is not drawn under the field at all"
+    );
+    expect_semantics_error(&mut app, "Date out of expected year range 1900 - 2100");
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+}
+
+/// An entry the field accepts carries no error, so the semantics tree has to say "not in error"
+/// rather than stay silent — a reader has to be able to tell an invalid value from a valid one
+/// nobody mentioned.
+#[test]
+fn a_field_with_no_error_says_nothing_about_one() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("09/10/2024", Duration::from_secs(5));
+    assert!(
+        !app.overlay_texts().iter().any(|text| text.starts_with("Date ")),
+        "a valid entry left an error message behind: {:?}",
+        app.overlay_texts()
+    );
+}
+
+#[test]
+fn zz_probe_error_semantics() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 { app.key("Backspace"); }
+    for k in ["1", "3", "3", "1", "2", "0", "2", "4"] { app.key(k); }
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+    let snap = app.semantics_until(Duration::from_secs(3), |_| true).map(|s| s.to_string()).unwrap_or_default();
+    let d: serde_json::Value = serde_json::from_str(&snap).unwrap();
+    fn walk(items: &[serde_json::Value], out: &mut Vec<String>) {
+        for n in items {
+            let st = n.get("state").cloned().unwrap_or(serde_json::Value::Null);
+            if st.as_object().map_or(false, |o| !o.is_empty()) {
+                out.push(format!("role={:?} state={}", n.get("role"), st));
+            }
+            if let Some(cs) = n.get("children").and_then(|c| c.as_array()) { walk(cs, out); }
+        }
+    }
+    let mut out = Vec::new();
+    for o in d.get("overlays").and_then(|o| o.as_array()).cloned().unwrap_or_default() {
+        if let Some(tree) = o.get("tree").and_then(|t| t.as_array()) { walk(tree, &mut out); }
+    }
+    eprintln!("STATES: {}", out.join(" ||| "));
+}
