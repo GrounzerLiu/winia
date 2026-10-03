@@ -38,7 +38,7 @@ use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::state::State;
 use crate::layout::node::{
-    scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
+    scroll_offset_for_node, LayoutNode, PaintDisposition,
 };
 use crate::modifier::{Modifier, ModifierElement};
 use crate::graphics::{Shape};
@@ -5687,7 +5687,8 @@ mod tier0_tests {
     /// between (the zero-recomposition promise in miniature).
     #[test]
     fn flight_measure_frame_reaches_the_parent_layout() {
-        use crate::layout::node::{FlightMeasure, FlightMeasureFrame, Size};
+        use crate::layout::node::Size;
+        use crate::transition::{FlightMeasure, FlightMeasureFrame};
         let _g = lock_serial();
         let frame_state = State::new(FlightMeasureFrame::IDLE);
         let mut composer = Composer::new();
@@ -7281,7 +7282,7 @@ mod tier0_tests {
     /// namespaced by `FlightKey`; this pins the WRITE side.
     #[test]
     fn writer_never_clobbers_another_flights_override() {
-        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        use crate::transition::{FlightMeasure, FlightMeasureFrame};
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
@@ -7354,7 +7355,7 @@ mod tier0_tests {
     /// never measured).
     #[test]
     fn teardown_reaches_a_slot_that_left_the_tree() {
-        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        use crate::transition::{FlightMeasure, FlightMeasureFrame};
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();
@@ -7725,7 +7726,7 @@ mod tier0_tests {
     /// baseline half, dropping the guard fails the no-phantom-flight half.
     #[test]
     fn morph_detector_skips_the_decision_but_updates_the_baseline() {
-        use crate::layout::node::{FlightMeasure, FlightMeasureFrame};
+        use crate::transition::{FlightMeasure, FlightMeasureFrame};
         let _g = lock_serial();
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();

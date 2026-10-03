@@ -8,6 +8,7 @@ use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
 use super::constraints::Constraints;
+use crate::transition::{FlightMeasure, FlightMeasureFrame};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 全局节点 ID 生成器
@@ -2625,36 +2626,6 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys);
 }
 
-/// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
-/// / `PlaceHolderSize`). The coordinator rewrites the frame every frame and
-/// re-seeds the node's slot key into the layout invalidation set, so the layout
-/// actually descends into it (a folded parent never would); reading the frame
-/// during measure registers a LAYOUT dependency as well.
-#[derive(Clone)]
-pub(crate) struct FlightMeasure {
-    pub frame: crate::runtime::state::State<FlightMeasureFrame>,
-    /// Identity of the flight that owns this override. Flight ids are
-    /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
-    /// override is written onto a PEER's node, so the composer id is part of the
-    /// key — otherwise an unrelated peer flight with the same number could clear
-    /// it. Teardown AND writes must match it: slot keys are positional identities
-    /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
-    /// newer flight's override.
-    pub owner: crate::transition::FlightKey,
-}
-
-/// One frame of that override; `None` on a field means "no override there".
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) struct FlightMeasureFrame {
-    /// Tight constraints the child content is measured at — Compose
-    /// `RemeasureToBounds`: the subtree re-lays-out at the animated size
-    /// instead of being scaled into it.
-    pub content: Option<Size>,
-    /// Size reported to the PARENT — Compose `PlaceHolderSize::AnimatedSize`
-    /// reports the animated size so siblings reflow; `ContentSize` keeps the
-    /// target size so the surrounding layout holds still.
-    pub reported: Option<Size>,
-}
 
 impl FlightMeasureFrame {
     pub(crate) const IDLE: Self = Self { content: None, reported: None };

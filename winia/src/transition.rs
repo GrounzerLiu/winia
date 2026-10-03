@@ -8,7 +8,7 @@
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
 use crate::layout::node::{
-    scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
+    scroll_offset_for_node, LayoutNode, PaintDisposition, Size,
 };
 use crate::graphics::{ContentScale, ImageAlignment};
 use crate::graphics::{Color, GraphicsLayerParams};
@@ -967,4 +967,35 @@ pub(crate) fn arc_center(sx: f32, sy: f32, ex: f32, ey: f32, t: f32, below: bool
     };
     let ang = HALF_PI * frac;
     (cx + a * ang.sin(), cy + b * ang.cos())
+}
+
+/// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
+/// / `PlaceHolderSize`). The coordinator rewrites the frame every frame and
+/// re-seeds the node's slot key into the layout invalidation set, so the layout
+/// actually descends into it (a folded parent never would); reading the frame
+/// during measure registers a LAYOUT dependency as well.
+#[derive(Clone)]
+pub(crate) struct FlightMeasure {
+    pub frame: crate::runtime::state::State<FlightMeasureFrame>,
+    /// Identity of the flight that owns this override. Flight ids are
+    /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
+    /// override is written onto a PEER's node, so the composer id is part of the
+    /// key — otherwise an unrelated peer flight with the same number could clear
+    /// it. Teardown AND writes must match it: slot keys are positional identities
+    /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
+    /// newer flight's override.
+    pub owner: crate::transition::FlightKey,
+}
+
+/// One frame of that override; `None` on a field means "no override there".
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct FlightMeasureFrame {
+    /// Tight constraints the child content is measured at — Compose
+    /// `RemeasureToBounds`: the subtree re-lays-out at the animated size
+    /// instead of being scaled into it.
+    pub content: Option<Size>,
+    /// Size reported to the PARENT — Compose `PlaceHolderSize::AnimatedSize`
+    /// reports the animated size so siblings reflow; `ContentSize` keeps the
+    /// target size so the surrounding layout holds still.
+    pub reported: Option<Size>,
 }
