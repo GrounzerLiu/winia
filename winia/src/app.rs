@@ -1961,7 +1961,6 @@ impl AppState {
                         // The same helper the real key path calls — see `PerWindow::escape_key`.
                         pw.escape_key();
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                        handled = true;
                     } else if key == "Tab" {
                         // The SAME helper the real key path calls: this branch used to keep its own
                         // copy of the traversal rule, which silently went stale the moment the rule

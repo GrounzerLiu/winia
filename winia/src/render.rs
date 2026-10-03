@@ -1563,7 +1563,6 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
         // Outlined/Text 无背景元素时仍按胶囊裁剪）优先；否则从链上最近的
         // Background/Border 推断（通用 clickable + ripple 保持可用）
-        let mut clipped = false;
         if *bounded {
             let clip_shape = (*shape).or_else(|| {
                 node.modifier.elements().iter().rev().find_map(|el| match el {
@@ -1625,7 +1624,6 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
-            clipped = true;
         } else {
             // unbounded：前景裁剪到背景圆（直径=对角线，节点中心）
             let r = diagonal / 2.0;
@@ -1640,7 +1638,6 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 None,
                 Some(false),
             );
-            clipped = true;
         }
 
         // ── 状态层：节点中心实心圆（半径=对角线/2，旧版 draw_circle）──
@@ -1689,9 +1686,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             );
         }
 
-        if clipped {
-            canvas.restore();
-        }
+        canvas.restore();
     }
 }
 

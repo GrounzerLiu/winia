@@ -250,7 +250,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
         cancel_animation_by_id(sid);
     }
-    let mut inherited_velocity = 0.0f32;
+    let inherited_velocity;
     // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
     let spec = if T::supports_spring() {
         spec

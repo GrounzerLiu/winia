@@ -3918,6 +3918,7 @@ mod scope_tests {
 /// A policy that reads a state AFTER measuring its children — the "parent post-child read" whose slot
 /// attribution the doc's open item is about.
 #[derive(Debug)]
+#[allow(dead_code)] // the tests below are its only users
 struct PostChildReadPolicy {
     handle: State<f32>,
 }
