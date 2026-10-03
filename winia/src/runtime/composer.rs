@@ -298,9 +298,6 @@ impl<'a> ComposeCtx<'a> {
         self.composer.lifecycle.clone()
     }
 
-    pub(crate) fn focus_window(&self, window_id: u64) -> crate::modifier::FocusWindowGuard {
-        self.composer.focus_window(window_id)
-    }
 
     /// 在组合中记住一个状态。初次调用时执行 init 创建 State，后续重组时返回上次的同一个 State 实例。
     pub fn remember<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> State<T> {

@@ -888,11 +888,6 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         !done
     }
 
-    /// 立即跳转到目标值（无动画）
-    pub fn snap_to(&mut self, value: T) {
-        self.anim_state = None;
-        self.state.set(value);
-    }
 }
 
 // ═══════════════════════════════════════════════════════════

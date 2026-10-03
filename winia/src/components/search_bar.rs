@@ -1248,38 +1248,6 @@ mod tests {
         assert!(quarter > 0.25, "emphasized-decelerate runs ahead of linear, got {quarter}");
     }
 
-    /// Why the panel body declares the query as a parameter — measured, and NOT covered by a test here.
-    ///
-    /// The body lives in a `start_restartable_group`, and a group only re-enters when its declared
-    /// parameters change: `pending_params` empty makes `params_equal` trivially true, so the group Skips and
-    /// its content closure never runs again. `core::composer::tests::group_without_declared_params_reenters_or_skips`
-    /// pins that mechanism directly.
-    ///
-    /// A SearchBar-level test of this was written and DELETED: composing the panel body through
-    /// `take_overlays` re-entered the group every frame, so removing `ctx.changed(&query_now)` still passed
-    /// it — a test that cannot fail is worse than none. The behaviour is verified against the running demo
-    /// instead: with the declaration, typing "bl" left 3 rows (Blackberry, Blueberry) out of 34, and without
-    /// it the list kept its first, unfiltered rows.
-    ///
-    /// First text content in the tree, for assertions about what a composed subtree shows.
-    fn first_text(composer: &Composer) -> String {
-        let Some(root) = composer.layout_root_idx() else { return String::new() };
-        let nodes = composer.arena_nodes();
-        let mut found = String::new();
-        let mut stack = vec![root];
-        while let Some(i) = stack.pop() {
-            for el in nodes[i].modifier.elements() {
-                if let crate::modifier::ModifierElement::TextContent { content, .. } = el {
-                    if !content.is_empty() {
-                        found = content.clone();
-                        return found;
-                    }
-                }
-            }
-            stack.extend(nodes[i].children.iter().copied());
-        }
-        found
-    }
 
     /// The results subtree actually carries the faded graphics layer: measured on a real composition, the
     /// node wrapping the caller's content reports `alpha` from `content_progress` and the input field above

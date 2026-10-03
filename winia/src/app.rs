@@ -425,24 +425,6 @@ impl PerWindow {
         if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
     }
 
-    /// 清除焦点 + 更新缓存
-    fn clear_focus(&mut self, nodes: &mut Vec<LayoutNode>, root: usize) {
-        crate::layout::node::clear_focus(nodes, root);
-        self.focused_id = None;
-        self.focused_slot_key = None;
-        if let Some(ref sw) = self.skia_window { sw.set_ime_allowed(false); }
-    }
-
-    /// 从当前焦点节点刷新 cached 字段
-    fn refresh_focus(&mut self, nodes: &[LayoutNode], root: usize) {
-        // 如果树中已有焦点节点，直接读取
-        if let Some(fid) = crate::layout::node::get_focus_id(nodes, root) {
-            self.focused_id = Some(fid);
-            self.focused_slot_key = crate::layout::node::find_node_by_id(nodes, root, fid).map(|idx| nodes[idx].slot_key);
-        }
-        // 否则：如果之前有关焦点但树中丢失了（重组后新节点 focus=false），保留 focused_id
-        // （由后续触发的 set_focus_by_id 或 pointer 事件补上树的焦点标记）
-    }
 
     /// Escape: close the topmost overlay, or — with no overlay open — drop the page's focus.
     ///
@@ -5987,9 +5969,6 @@ mod nested_scroll_chain_tests {
         order: std::sync::atomic::AtomicUsize,
     }
     impl Recorder {
-        fn new(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
-            Self { name: name.to_string(), log, global_log: None, order: std::sync::atomic::AtomicUsize::new(0) }
-        }
         fn with_global(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>, global: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
             Self { name: name.to_string(), log, global_log: Some(global), order: std::sync::atomic::AtomicUsize::new(0) }
         }

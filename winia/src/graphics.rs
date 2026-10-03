@@ -472,11 +472,6 @@ struct BlobKey {
     wght: i32,
 }
 
-/// 量化到 0.01：动画连续值命中同一 key（可变字体轴实际离散），
-/// 避免每帧 to_bits 精确键 miss 重建 TextBlob
-fn quant_axis(v: f32) -> i32 {
-    (v * 100.0).round() as i32
-}
 
 #[cfg(any(
     feature = "material-symbols-outlined",

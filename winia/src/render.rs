@@ -2061,28 +2061,6 @@ fn draw_text_field_container(
     }
 }
 
-/// 量文本宽度（label 边框缺口用——一次 layout）
-fn measure_text_width(content: &str, font_size: f32, max_width: f32) -> f32 {
-    if content.is_empty() || max_width <= 0.0 {
-        return 0.0;
-    }
-    let mut para = crate::layout::node::build_plain_paragraph(
-        content,
-        font_size,
-        &crate::graphics::Color::BLACK,
-        crate::text::FontWeight::NORMAL,
-        crate::text::FontSlant::Upright,
-        usize::MAX,
-        crate::text::TextAlign::Left,
-        crate::text::TextOverflow::Clip,
-        true,
-        0.0,
-        None,
-        max_width,
-    );
-    para.layout(max_width);
-    para.max_intrinsic_width()
-}
 
 /// TextField label/支持文本绘制（无布局缓存的独立小段文本——
 /// build_plain_paragraph 每次构建；辅助文本量小，开销可接受）

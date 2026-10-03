@@ -329,15 +329,6 @@ impl MutableInteractionSource {
         self.focused.peek()
     }
 
-    /// 渲染期 pressed 读取（peek）。
-    pub(crate) fn is_pressed_value(&self) -> bool {
-        self.pressed.peek()
-    }
-
-    /// 渲染期 dragged 读取（peek）。
-    pub(crate) fn is_dragged_value(&self) -> bool {
-        self.dragged.peek()
-    }
 
     /// 一次读取全部状态（与 material3 的 enabled/pressed/hovered/focused 组合一致）
     pub fn state(&self, enabled: bool) -> ComponentState {

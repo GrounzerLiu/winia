@@ -229,9 +229,6 @@ impl StateSignal {
         self.id
     }
 
-    pub(crate) fn current_revision(&self) -> u64 {
-        self.revision.load(Ordering::Acquire)
-    }
 
     fn new(id: StateId) -> Arc<Self> {
         Arc::new(Self {
@@ -718,9 +715,6 @@ impl<T: 'static> State<T> {
         Self { raw }
     }
 
-    pub(crate) fn into_reactive(self) -> Reactive<T> {
-        Reactive::from_raw(self.raw)
-    }
 
     pub fn as_backchannel(&self) -> Backchannel<T>
     where
@@ -782,15 +776,6 @@ impl<T: Clone + PartialEq + 'static> State<T> {
         self.raw.update_reactive(f);
     }
 
-    /// Legacy always-notify in-place mutation (pre-handles behavior).
-    /// Prefer `update` (deduped). Kept for call sites that rely on the
-    /// unconditional notify (e.g. wrapping-add pulse counters).
-    pub(crate) fn update_untracked(&self, f: impl FnOnce(&mut T)) {
-        let mut current = self.raw.inner.value.write();
-        f(&mut *current);
-        drop(current);
-        self.raw.notify(true);
-    }
 }
 
 impl<T: 'static> State<T> {
@@ -971,18 +956,12 @@ impl Drop for DependencyFrameGuard {
     }
 }
 
-pub(crate) fn begin_compose_deps() -> DependencyFrameGuard {
-    push_dependency_frame(DepMode::Compose, None)
-}
 
 /// Composer composition entry: subscribe reads to this Composer's queue.
 pub(crate) fn begin_compose_deps_with_queue(queue: Weak<ComposerSubscription>) -> DependencyFrameGuard {
     push_dependency_frame(DepMode::Compose, Some(queue))
 }
 
-pub(crate) fn begin_layout_deps() -> DependencyFrameGuard {
-    push_dependency_frame(DepMode::Layout, None)
-}
 
 /// Begin layout dependency recording for a live Composer subscription.
 pub(crate) fn begin_layout_deps_with_queue(queue: Weak<ComposerSubscription>) -> DependencyFrameGuard {

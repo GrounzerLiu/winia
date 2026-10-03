@@ -2546,9 +2546,6 @@ pub fn get_focus_id(nodes: &[LayoutNode], root: usize) -> Option<u64> {
     None
 }
 
-fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
-    node.modifier.focus_requester_id()
-}
 
 // ── 递归测量引擎 ──
 
