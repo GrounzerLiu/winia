@@ -3810,10 +3810,6 @@ fn date_picker_dialog_is_the_modal_picker() {
         h, 560.0,
         "the modal picker is as tall as its own content (120 + 56 + 48 + 288 + 48)"
     );
-    assert!(
-        h <= 568.0,
-        "the calendar still has to fit the 568 dp cap, got {h}"
-    );
 
     // The same lattice as the docked picker: today is the first row's fifth column, the selection the second
     // row's third (2024-09-01 is a Sunday).
@@ -4092,32 +4088,6 @@ fn a_field_with_no_error_says_nothing_about_one() {
     );
 }
 
-#[test]
-fn zz_probe_error_semantics() {
-    let mut app = UiTest::launch("date_picker_input");
-    app.expect_text_timeout("mode: input", Duration::from_secs(5));
-    click_overlay_tag(&mut app, "date-picker-input-field");
-    for _ in 0..8 { app.key("Backspace"); }
-    for k in ["1", "3", "3", "1", "2", "0", "2", "4"] { app.key(k); }
-    app.expect_text_timeout("selected: none", Duration::from_secs(5));
-    let snap = app.semantics_until(Duration::from_secs(3), |_| true).map(|s| s.to_string()).unwrap_or_default();
-    let d: serde_json::Value = serde_json::from_str(&snap).unwrap();
-    fn walk(items: &[serde_json::Value], out: &mut Vec<String>) {
-        for n in items {
-            let st = n.get("state").cloned().unwrap_or(serde_json::Value::Null);
-            if st.as_object().map_or(false, |o| !o.is_empty()) {
-                out.push(format!("role={:?} state={}", n.get("role"), st));
-            }
-            if let Some(cs) = n.get("children").and_then(|c| c.as_array()) { walk(cs, out); }
-        }
-    }
-    let mut out = Vec::new();
-    for o in d.get("overlays").and_then(|o| o.as_array()).cloned().unwrap_or_default() {
-        if let Some(tree) = o.get("tree").and_then(|t| t.as_array()) { walk(tree, &mut out); }
-    }
-    eprintln!("STATES: {}", out.join(" ||| "));
-}
-
 /// The field asks for focus itself a moment after the modal opens — Compose's delayed
 /// `focusRequester?.requestFocus()` (`DateInput.kt:259-266`, after `DurationMedium2`) — and the keys
 /// that follow arrive on that focus with no click in between.
@@ -4160,6 +4130,10 @@ fn the_entry_field_takes_focus_and_typing_without_a_click() {
 ///
 /// The numbers are the assertion, not a screenshot: before that box existed winia reported the cap
 /// in both modes — measured 568 dp with the field's content ending around 274.
+///
+/// Both figures assume the dialog's DEFAULT content, whose title is what gives the header its 120 dp
+/// (`DatePicker` supplies `DatePickerDefaults::TITLE`); a caller's `.title(None)` drops the header to
+/// 44 and the dialog with it, so this test would have to be re-derived for such a caller.
 #[test]
 fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     let mut app = UiTest::launch("date_picker_input");
@@ -4168,9 +4142,10 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     let (_, _, _, input_h) = app
         .find_tag_in_overlay("dpi-dialog")
         .expect("the dialog carries dpi-dialog");
-    assert!(
-        input_h < 320.0,
-        "the entry field should collapse the dialog, got {input_h}"
+    // 120 dp header + the outlined field's 56 + its 16 dp bottom inset + the 48 dp action row.
+    assert_eq!(
+        input_h, 240.0,
+        "the entry field's content should decide the dialog's height"
     );
 
     app.click_overlay_tag("date-picker-mode-toggle");
@@ -4179,12 +4154,11 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     let (_, _, _, picker_h) = app
         .find_tag_in_overlay("dpi-dialog")
         .expect("the dialog carries dpi-dialog");
-    assert!(
-        picker_h > input_h + 200.0,
-        "the calendar should be far taller than the field: {picker_h} vs {input_h}"
-    );
-    assert!(
-        picker_h <= 568.0,
-        "the calendar still has to fit the 568 dp cap, got {picker_h}"
+    // 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month + 48 dp action row.
+    // The 568 dp cap is a MAXIMUM, so this content lands 8 dp short of it rather than being padded
+    // out — asserting the exact number is what stops a stretch creeping back in unnoticed.
+    assert_eq!(
+        picker_h, 560.0,
+        "the calendar's own content should decide the dialog's height"
     );
 }

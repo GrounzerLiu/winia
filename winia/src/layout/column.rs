@@ -188,6 +188,77 @@ mod tests {
         assert_eq!(placements[0].size.height, 470.0, "500 less the sibling's 30");
     }
 
+    /// The `fill = false` collapse does NOT survive a spreading arrangement, and that is worth
+    /// pinning where someone changing `SpaceBetween` will see it.
+    ///
+    /// winia's `SpaceBetween` (and `SpaceAround`/`SpaceEvenly`) stretches a container to the main
+    /// axis its parent offers — a deliberate deviation from Compose, whose `SpaceBetween` only
+    /// distributes leftover space and never grows the container to its maximum. So the space a
+    /// non-filling child saves is spent on the gap before its next sibling instead of shortening the
+    /// column: the same two children as the test above come out the full 500 tall, with the sibling
+    /// pushed to the bottom. material3's date picker dialog is the worked example — it needs both
+    /// the `weight(1f, fill = false)` box AND `Arrangement::Start` here, where the source says
+    /// `SpaceBetween` (`DatePickerDialog.android.kt:89-95`).
+    #[test]
+    fn a_non_filling_weight_does_not_shrink_a_space_between_container() {
+        let mut nodes = vec![make_weighted(20.0, false), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new()
+            .arrangement(Arrangement::SpaceBetween)
+            .measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(0.0, 100.0, 0.0, 500.0),
+            );
+        assert_eq!(
+            size.height, 500.0,
+            "a spreading arrangement still takes the parent's whole main axis"
+        );
+        assert_eq!(
+            placements[1].position.y, 470.0,
+            "the saved space became the gap, not a shorter column"
+        );
+    }
+
+    /// Records where "the share is a MAXIMUM" stops being true, so that closing the gap cannot pass
+    /// unnoticed. This is NOT the behaviour to want: Compose clamps the child to its share
+    /// (`constraints.constrain(targetConstraints)` under `enforceIncoming = true`), while winia's
+    /// `size`/`height` raise min and max together and override the incoming maximum before flex runs.
+    ///
+    /// Measured before writing this: the column reports its own 500 dp bound, the child takes 600 dp
+    /// anyway, and the sibling is pushed to y = 600 — out of the column it belongs to. A `fill = true`
+    /// child asking for the same 600 dp is placed in its 470 dp share instead, which is why the flag
+    /// is what decides this.
+    #[test]
+    fn an_oversized_non_filling_weight_overflows_its_share() {
+        use crate::modifier::Modifier;
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .layout_weight_fill(1.0, false)
+                    .size(100.0, 600.0),
+            ),
+            make_leaf(100.0, 30.0),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(size.height, 500.0, "the column still reports its own bound");
+        assert_eq!(
+            placements[0].size.height, 600.0,
+            "the child kept its own size rather than being clamped to the 470 dp share"
+        );
+        assert_eq!(
+            placements[1].position.y, 600.0,
+            "and the sibling fell outside the column"
+        );
+    }
+
     #[test]
     fn test_column_simple() {
         let column = ColumnLayout::new();
@@ -261,5 +332,34 @@ mod tests {
         let (_size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod zz_probe2 {
+    use super::*;
+    #[test]
+    fn zz_probe_oversized_weighted_child() {
+        use crate::modifier::Modifier;
+        // The share is 500-30 = 470; the child declares 600.
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().layout_weight_fill(1.0, false).size(100.0, 600.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 30.0)),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new()
+            .measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 500.0));
+        println!("ZZ2 fill=false size(600): container {}, child {} at y={}, sibling y={}",
+                 size.height, placements[0].size.height, placements[0].position.y, placements[1].position.y);
+
+        let mut nodes2 = vec![
+            LayoutNode::leaf(Modifier::new().layout_weight(1.0).size(100.0, 600.0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 30.0)),
+        ];
+        let children2: Vec<usize> = (0..nodes2.len()).collect();
+        let (size2, p2) = ColumnLayout::new()
+            .measure(&mut nodes2, &[], &children2, Constraints::new(0.0, 100.0, 0.0, 500.0));
+        println!("ZZ2 fill=true  size(600): container {}, child {} at y={}, sibling y={}",
+                 size2.height, p2[0].size.height, p2[0].position.y, p2[1].position.y);
     }
 }

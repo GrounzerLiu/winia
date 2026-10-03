@@ -522,9 +522,16 @@ struct DialogSlots {
 /// Each slot is wrapped in its own box so it can carry the slot's bottom padding and
 /// cross-axis alignment; the Column itself belongs to [`BasicAlertDialog`].
 ///
-/// Deviation: Compose gives the text `weight(1f, fill = false)` so it absorbs the slack when
-/// the CALLER imposes a height. winia's `layout_weight` has no `fill` flag and would stretch
-/// the node, so it is omitted — an alert dialog sizes to its content here.
+/// Deviation: Compose wraps the text slot in `Box(Modifier.weight(1f, fill = false))`
+/// (`AlertDialog.kt:350`) so it takes the slack when the CALLER imposes a height — and is clamped
+/// to that share rather than pushing the action row out of view. winia omits the weight and sizes
+/// to its content, so an imposed height leaves the slack below the buttons instead.
+///
+/// The reason this note used to give — that `Modifier::layout_weight` had no `fill` flag, so a
+/// weight could only stretch the node — is no longer true: `Modifier::layout_weight_fill(weight,
+/// fill)` exists and `layout_weight_fill(1.0, false)` on this slot is what would match Compose. It
+/// waits for its own verification because the difference only appears under an imposed height,
+/// which no fixture exercises today.
 fn alert_dialog_content(
     ctx: &mut ComposeCtx,
     slots: &DialogSlots,

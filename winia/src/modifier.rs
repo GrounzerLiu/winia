@@ -691,11 +691,33 @@ pub(crate) enum ModifierElement {
     /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
     /// tight to its share and the parent keeps that share (`ColumnScope.weight`'s documented
     /// behaviour). With `fill = false` the child is measured with its share as the MAXIMUM and the
-    /// parent keeps the size the child actually asked for, so a short child leaves the container
-    /// free to be shorter. That is the half material3's date picker dialog depends on to collapse
-    /// in input mode — `DatePickerDialog.android.kt:95` wraps its content in
-    /// `Box(Modifier.weight(1f, fill = false))`, commented "Fill is false to support collapsing the
-    /// dialog's height when switching to input mode".
+    /// parent keeps the size the child actually asked for. That is the half material3's date picker
+    /// dialog depends on to collapse in input mode — `DatePickerDialog.android.kt:95` wraps its
+    /// content in `Box(Modifier.weight(1f, fill = false))`, commented "Fill is false to support
+    /// collapsing the dialog's height when switching to input mode".
+    ///
+    /// ⚠ The collapse only happens under `Arrangement::Start`/`End`/`Center`. A `SpaceBetween`,
+    /// `SpaceAround` or `SpaceEvenly` container stretches to the main axis its parent offers
+    /// (winia's deliberate deviation from Compose, pinned by `layout/row.rs` and `layout/flex.rs`),
+    /// and a saving the child makes is then spent on the gap before its next sibling instead of
+    /// shortening the container. Measured: a `fill = false` child of 20 dp beside a 30 dp sibling
+    /// in a column offered 500 dp comes out 500 dp tall with the sibling at y = 470 under
+    /// `SpaceBetween`, against 50 dp under `Start`. Compose has no such interaction — its
+    /// `SpaceBetween` distributes leftover space but never grows the container to its maximum — so a
+    /// pattern copied from material3 that relies on the collapse has to use `Start` here.
+    ///
+    /// ⚠ "The share is a MAXIMUM" holds for the constraints this hands the child, not for the child's
+    /// own `size`/`width`/`height`: those resolve through `resolved_size` into
+    /// `Constraints::tighten_*`, which raises min and max together and overrides the incoming maximum
+    /// (`layout/node.rs` reads it before flex computes anything). So a `fill = false` child asking for
+    /// MORE than its share is not clamped — measured: a column offered 500 dp with a
+    /// `layout_weight_fill(1.0, false).size(100, 600)` child and a 30 dp sibling comes out 500 dp tall
+    /// with the first child at 600 dp and the sibling pushed to y = 600, i.e. out of the column. With
+    /// `fill = true` the same child is placed in its 470 dp share instead. Compose clamps in both
+    /// cases (`constraints.constrain(targetConstraints)` under `enforceIncoming = true`), so this is a
+    /// winia divergence that predates the flag — pinned by
+    /// `layout/column.rs`'s `an_oversized_non_filling_weight_overflows_its_share` so that fixing it
+    /// cannot pass unnoticed.
     LayoutWeight { weight: f32, fill: bool },
     /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
     AspectRatio { ratio: f32, match_height_first: bool },
@@ -1304,8 +1326,10 @@ impl Modifier {
     /// 布局权重，是否填满自己的份额（对标 Compose `Modifier.weight(weight, fill)`）。
     ///
     /// With `fill = false` the share becomes the child's MAXIMUM main-axis size instead of an exact
-    /// one, and the parent uses the size the child measured — so a child shorter than its share
-    /// lets the container be shorter too. See [`ModifierElement::LayoutWeight`].
+    /// one, and the parent uses the size the child measured, so a child shorter than its share lets
+    /// the container be shorter too — **under `Arrangement::Start`/`End`/`Center`**. A container
+    /// using `SpaceBetween`, `SpaceAround` or `SpaceEvenly` stretches to the main axis its parent
+    /// offers whatever this flag says; [`ModifierElement::LayoutWeight`] has the measurement.
     pub fn layout_weight_fill(self, weight: f32, fill: bool) -> Self {
         self.push(ModifierElement::LayoutWeight { weight, fill })
     }

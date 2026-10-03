@@ -777,8 +777,11 @@ leaves the selection empty, so a half-typed date never looks like a rejected one
   `focused_tags()` reports `date-picker-input-field` with no click, and keys typed straight after it
   reach the field — eight Backspaces clear the selection and a full entry commits one. Only a real
   window can show where a key lands, so `the_entry_field_takes_focus_and_typing_without_a_click`
-  measures it there. (An earlier note here said the key did not arrive; that reading came from a
-  fixture binary built before the focus work, and the test above is what disproved it.)
+  measures it there. An earlier note here said the key did not arrive; nothing between that reading
+  and this one touched key or focus routing, and `UiTest::launch` only checks that
+  `target/debug/fixture_all.exe` exists rather than rebuilding it, so the likeliest explanation is a
+  fixture binary older than the focus work. That is an inference, not a measurement — what is
+  measured is that the current build delivers the keys, and the test is what holds it there.
 
 ### The dialog is its content
 
@@ -801,11 +804,16 @@ Measured on the fixture, the dialog's rect (`find_tag_in_overlay` on `dpi-dialog
 | Input | 360 × 568 (the cap, with the content ending around y = 274) | 360 × 240 |
 | Picker | 360 × 568 | 360 × 560 |
 
-`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both numbers.
+`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both numbers exactly, so a stretch creeping back
+into either mode fails rather than passing under a loose bound. Both assume the dialog's default
+content: the title is what gives the header its 120 dp, and a caller passing `.title(None)` drops the
+header to 44 and the dialog with it.
 
 One deviation rides along: the dialog's `Column` uses `Arrangement::Start` where the source says
-`SpaceBetween`. winia's `SpaceBetween` stretches a container to the main axis its parent offers — a
-deliberate deviation its `Arrangement` documentation and `layout/row.rs` tests pin — which is the one thing
+`SpaceBetween`. winia's `SpaceBetween` stretches a container to the main axis its parent offers — pinned
+by `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and by
+`layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container`, measured here
+rather than documented on the `Arrangement` variants themselves — which is the one thing
 that would hold this dialog at the cap regardless of the box. In Compose the column here is content +
 buttons, so its leftover space is zero and `SpaceBetween` places exactly as `Start` does; the switch keeps
 winia's own semantics for that arrangement intact instead of widening them for one dialog.

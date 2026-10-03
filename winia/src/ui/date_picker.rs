@@ -1473,8 +1473,18 @@ impl DatePickerDefaults {
     pub const YEAR_PANEL_HEIGHT: f32 =
         Self::ACCESSIBLE_SIZE * (MAX_CALENDAR_ROWS as f32 + 1.0) - Self::DIVIDER_THICKNESS;
 
-    /// `DatePickerModalTokens.ContainerHeight` (568): the height the modal picker's dialog is capped at
-    /// (`DatePickerDialog.android.kt:92`). The docked picker's 512 plus the action row's 56 reach it exactly.
+    /// `DatePickerModalTokens.ContainerHeight` (568): the height the modal picker's dialog is capped
+    /// at — a MAXIMUM, not the height it takes (`DatePickerDialog.android.kt:84
+    /// heightIn(max = ...)`).
+    ///
+    /// The calendar's own content is 512: a 120 dp header over the 56 dp month navigation, 48 dp
+    /// weekday row and 288 dp month. The action row adds 48, a 40 dp button under
+    /// [`Self::MODAL_BUTTONS_BOTTOM_PADDING`]. So the dialog lands on 560, 8 short of the cap — which
+    /// is exactly why material3 wraps its content in a `weight(1f, fill = false)` box
+    /// (`DatePickerDialog.android.kt:95`) rather than filling the cap. This comment used to say the
+    /// "docked picker's 512 plus the action row's 56 reach it exactly": the row is 48, and the 568 a
+    /// fixture reported was the cap holding because winia stretched the column. `docs/date-picker.md`
+    /// has the measurement and the fix.
     pub const MODAL_CONTAINER_HEIGHT: f32 = 568.0;
 
     /// `DialogButtonsPadding`'s bottom (`DatePickerDialog.android.kt:113`).
@@ -2146,8 +2156,11 @@ impl DatePickerDialog {
                 // (`:93-94`) — while the calendar's own height is what fills the cap in picker mode.
                 //
                 // `Arrangement::Start`, not the source's `SpaceBetween`: winia's SpaceBetween
-                // stretches a container to the main axis its parent offers (a deliberate deviation
-                // its docs and tests pin), which is the one thing that would hold this dialog at the
+                // stretches a container to the main axis its parent offers (a deviation pinned by
+                // `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and
+                // `layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container`
+                // — the `Arrangement` variants carry no doc of their own), which is the one thing
+                // that would hold this dialog at the
                 // full cap. In Compose the Column here is content + buttons, so its leftover space is
                 // zero and SpaceBetween places exactly as Start does.
                 Column::new()
