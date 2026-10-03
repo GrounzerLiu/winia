@@ -1676,8 +1676,8 @@ struct LayoutTransactionSnapshot {
 struct LayoutNodeTransactionState {
     idx: usize,
     focused: bool,
-    measured_size: crate::layout::node::Size,
-    position: crate::layout::node::Point,
+    measured_size: crate::unit::Size,
+    position: crate::unit::Offset,
     scroll_viewport_height: f32,
     scroll_viewport_width: f32,
     scroll_content_height: f32,
@@ -3905,13 +3905,13 @@ mod scope_tests {
     struct TestPolicy;
     impl crate::layout::node::MeasurePolicy for TestPolicy {
         fn measure(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, policies: &[Box<dyn MeasurePolicy>], children: &[usize], constraints: crate::layout::constraints::Constraints)
-            -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+            -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
             let mut h = 0.0f32;
             for &c in children {
                 let (s, _) = crate::layout::node::measure_node(nodes, policies, c, constraints);
                 h += s.height;
             }
-            (crate::layout::node::Size::new(0.0, h), Vec::new())
+            (crate::unit::Size::new(0.0, h), Vec::new())
         }
         fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], _placements: &[crate::layout::node::Placement]) {
             let _ = (nodes, children);
@@ -3933,7 +3933,7 @@ impl crate::layout::node::MeasurePolicy for PostChildReadPolicy {
         policies: &[Box<dyn MeasurePolicy>],
         children: &[usize],
         constraints: crate::layout::constraints::Constraints,
-    ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+    ) -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
         let mut h = 0.0f32;
         for &c in children {
             let (s, _) = crate::layout::node::measure_node(nodes, policies, c, constraints);
@@ -3941,7 +3941,7 @@ impl crate::layout::node::MeasurePolicy for PostChildReadPolicy {
         }
         // The read that must be attributed to THIS node, not to the last child measured.
         let extra = self.handle.get();
-        (crate::layout::node::Size::new(extra, h), Vec::new())
+        (crate::unit::Size::new(extra, h), Vec::new())
     }
 
     fn place(

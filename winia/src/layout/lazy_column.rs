@@ -18,7 +18,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{Point, Size};
+use crate::unit::{Offset, Size};
 use crate::modifier::Modifier;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ pub trait LazyAxis: sealed_axis::Sealed + 'static {
     fn with_main_exact(c: Constraints, v: f32) -> Constraints;
     /// (cross, main) → position
     #[doc(hidden)]
-    fn point(cross: f32, main: f32) -> Point;
+    fn point(cross: f32, main: f32) -> Offset;
     /// (cross, main) → size
     #[doc(hidden)]
     fn size(cross: f32, main: f32) -> Size;
@@ -87,7 +87,7 @@ impl LazyAxis for VerticalAxis {
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: c.min_width, max_width: c.max_width, min_height: v, max_height: v }
     }
-    fn point(cross: f32, main: f32) -> Point { Point::new(cross, main) }
+    fn point(cross: f32, main: f32) -> Offset { Offset::new(cross, main) }
     fn size(cross: f32, main: f32) -> Size { Size::new(cross, main) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().vertical_scroll(state)
@@ -111,7 +111,7 @@ impl LazyAxis for HorizontalAxis {
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: v, max_width: v, min_height: c.min_height, max_height: c.max_height }
     }
-    fn point(cross: f32, main: f32) -> Point { Point::new(main, cross) }
+    fn point(cross: f32, main: f32) -> Offset { Offset::new(main, cross) }
     fn size(cross: f32, main: f32) -> Size { Size::new(main, cross) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().horizontal_scroll(state)
@@ -1132,7 +1132,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         policies: &[Box<dyn crate::layout::node::MeasurePolicy>],
         children: &[usize],
         constraints: crate::layout::constraints::Constraints,
-    ) -> (crate::layout::node::Size, Vec<crate::layout::node::Placement>) {
+    ) -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
         // 视口主轴尺寸：有限约束直接用（回写缓存）；无界（父内容驱动——Column 无
         // 固定高度时给子节点 f32::MAX；⚠ is_finite() 对 f32::MAX 也返回 true，
         // 必须用框架惯例 `< f32::MAX` 判定）回退缓存值，避免视口

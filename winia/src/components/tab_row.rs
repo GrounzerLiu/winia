@@ -30,8 +30,9 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use crate::layout::node::{
-    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point, Size,
+    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
 };
 use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
@@ -475,7 +476,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             let content_width = (natural_widths[i].min(tab_width) - HORIZONTAL_TEXT_PADDING * 2.0)
                 .max(MIN_INDICATOR_WIDTH);
             positions.push(TabPosition::new(x, tab_width, content_width));
-            placements.push(Placement { size, position: Point::new(x, 0.0) });
+            placements.push(Placement { size, position: Offset::new(x, 0.0) });
         }
 
         // 分隔线
@@ -485,7 +486,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
         );
         placements.push(Placement {
             size: Size::new(row_width, div_size.height),
-            position: Point::new(0.0, tab_row_height - div_size.height),
+            position: Offset::new(0.0, tab_row_height - div_size.height),
         });
 
         // 指示条
@@ -527,7 +528,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             // and paint on top of the caller's indicator.
             placements.push(Placement {
                 size: Size::new(0.0, 0.0),
-                position: Point::new(0.0, tab_row_height),
+                position: Offset::new(0.0, tab_row_height),
             });
             return (Size::new(row_width, tab_row_height), placements);
         }
@@ -550,7 +551,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
 
         placements.push(Placement {
             size: Size::new(current_w, indicator_h),
-            position: Point::new(current_off, tab_row_height - indicator_h),
+            position: Offset::new(current_off, tab_row_height - indicator_h),
         });
 
         (Size::new(row_width, tab_row_height), placements)
@@ -914,11 +915,11 @@ impl MeasurePolicy for TabLayoutPolicy {
             };
             placements.push(Placement {
                 size: icon_size,
-                position: Point::new(icon_x, icon_y),
+                position: Offset::new(icon_x, icon_y),
             });
             placements.push(Placement {
                 size: text_size,
-                position: Point::new(text_x, text_y),
+                position: Offset::new(text_x, text_y),
             });
         } else if has_icon && has_text && content_sizes.len() >= 2 {
             // text+icon：icon 上、text 下，垂直居中排列，均水平居中
@@ -928,11 +929,11 @@ impl MeasurePolicy for TabLayoutPolicy {
             let start_y = (tab_height - total_h) / 2.0;
             placements.push(Placement {
                 size: icon_size,
-                position: Point::new((tab_width - icon_size.width) / 2.0, start_y),
+                position: Offset::new((tab_width - icon_size.width) / 2.0, start_y),
             });
             placements.push(Placement {
                 size: text_size,
-                position: Point::new((tab_width - text_size.width) / 2.0, start_y + icon_size.height),
+                position: Offset::new((tab_width - text_size.width) / 2.0, start_y + icon_size.height),
             });
         } else if has_icon || has_text {
             // 单元素：水平 + 垂直居中
@@ -940,19 +941,19 @@ impl MeasurePolicy for TabLayoutPolicy {
                 let y = (tab_height - size.height) / 2.0;
                 placements.push(Placement {
                     size,
-                    position: Point::new((tab_width - size.width) / 2.0, y),
+                    position: Offset::new((tab_width - size.width) / 2.0, y),
                 });
             }
         } else {
             for &size in content_sizes.iter() {
-                placements.push(Placement { size, position: Point::new(0.0, 0.0) });
+                placements.push(Placement { size, position: Offset::new(0.0, 0.0) });
             }
         }
 
         // ripple leaf：全尺寸覆盖（填满整个 tab slot）
         placements.push(Placement {
             size: Size::new(tab_width, tab_height),
-            position: Point::new(0.0, 0.0),
+            position: Offset::new(0.0, 0.0),
         });
 
         (Size::new(tab_width, tab_height), placements)
@@ -1318,7 +1319,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
                     + tab_measurements[..i].iter().map(|(w, _, _)| w).sum::<f32>()
             };
             positions.push(TabPosition::new(left, width, content_width));
-            placements.push(Placement { size, position: Point::new(left, 0.0) });
+            placements.push(Placement { size, position: Offset::new(left, 0.0) });
         }
 
         // 分隔线（内容全宽）
@@ -1328,7 +1329,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         );
         placements.push(Placement {
             size: Size::new(layout_width, div_size.height),
-            position: Point::new(0.0, layout_height - div_size.height),
+            position: Offset::new(0.0, layout_height - div_size.height),
         });
 
         // 指示条（与固定版同：居中于 slot，双 State 动画）
@@ -1358,7 +1359,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             // and paint on top of the caller's indicator.
             placements.push(Placement {
                 size: Size::new(0.0, 0.0),
-                position: Point::new(0.0, layout_height),
+                position: Offset::new(0.0, layout_height),
             });
             // Scroll-into-view still runs: the selected tab is centred whether or not the caller draws
             // the bar (it is the one that needs the offsets recorded by the measure).
@@ -1381,7 +1382,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
 
         placements.push(Placement {
             size: Size::new(current_w, indicator_h),
-            position: Point::new(current_off, layout_height - indicator_h),
+            position: Offset::new(current_off, layout_height - indicator_h),
         });
 
         self.scroll_selected_into_view(&positions, layout_width, is_rtl);

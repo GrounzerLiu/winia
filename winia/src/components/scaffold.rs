@@ -3,7 +3,8 @@
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier};
 use crate::graphics::{Shape};
@@ -100,10 +101,10 @@ impl MeasurePolicy for ScaffoldLayoutPolicy {
         (
             Size::new(width, height),
             vec![
-                Placement { size: top_size, position: Point::new(0.0, 0.0) },
-                Placement { size: bottom_size, position: Point::new(0.0, height - bottom.height) },
-                Placement { size: content, position: Point::new(content_x, content_y) },
-                Placement { size: fab_size, position: Point::new(fab_x, fab_y) },
+                Placement { size: top_size, position: Offset::new(0.0, 0.0) },
+                Placement { size: bottom_size, position: Offset::new(0.0, height - bottom.height) },
+                Placement { size: content, position: Offset::new(content_x, content_y) },
+                Placement { size: fab_size, position: Offset::new(fab_x, fab_y) },
             ],
         )
     }
@@ -123,7 +124,7 @@ mod tests {
     #[test]
     fn reserves_top_bottom_and_positions_fab_overlay() {
         let c=layout(Scaffold::new(|ctx,p| leaf(ctx, Modifier::new().fill_max_size().test_tag("content"))).top_bar(|ctx| leaf(ctx,Modifier::new().size(360.0,64.0).test_tag("top"))).bottom_bar(|ctx| leaf(ctx,Modifier::new().size(360.0,80.0).test_tag("bottom"))).floating_action_button(|ctx| leaf(ctx,Modifier::new().size(56.0,56.0).test_tag("fab"))).content_padding(ScaffoldContentPadding::new(0.0,0.0,0.0,0.0)),LayoutDirection::Ltr);
-        let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let r=&n[root]; let content=&n[r.children[2]]; let fab=&n[r.children[3]]; assert_eq!(content.position,Point::new(0.0,64.0)); assert_eq!(content.measured_size.height,496.0); assert_eq!(fab.position,Point::new(288.0,488.0));
+        let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let r=&n[root]; let content=&n[r.children[2]]; let fab=&n[r.children[3]]; assert_eq!(content.position,Offset::new(0.0,64.0)); assert_eq!(content.measured_size.height,496.0); assert_eq!(fab.position,Offset::new(288.0,488.0));
     }
 
     #[test]

@@ -162,6 +162,8 @@ pub struct Offset {
 }
 
 impl Offset {
+    pub const ZERO: Offset = Offset { x: 0.0, y: 0.0 };
+
     pub fn new(x: f32, y: f32) -> Self { Offset { x, y } }
 }
 

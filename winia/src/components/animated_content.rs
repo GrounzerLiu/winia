@@ -26,7 +26,8 @@ use crate::animation::{push_animatable, AnimationSpec};
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::layout::{MeasurePolicy, Placement, Size};
+use crate::layout::{MeasurePolicy, Placement};
+use crate::unit::{Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{GraphicsLayerParams};
 
@@ -75,7 +76,7 @@ impl MeasurePolicy for ContentSizePolicy {
             Size::new(constraints.constrain_width(w), constraints.constrain_height(h)),
             vec![Placement {
                 size: Size::new(child_size.0, child_size.1),
-                position: crate::layout::node::Point::new(0.0, 0.0),
+                position: crate::unit::Offset::new(0.0, 0.0),
             }],
         )
     }

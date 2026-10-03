@@ -1137,9 +1137,9 @@ fn scene_alpha_for_end(nodes: &[LayoutNode], idx: usize, leaving_end: bool) -> O
 /// `PlaceHolderSize`), shared by the Tier 0 and Tier 1 writers.
 fn placeholder_frame(
     remeasure: bool,
-    animated: crate::layout::node::Size,
+    animated: crate::unit::Size,
     placeholder: PlaceHolderSize,
-    target_size: Option<crate::layout::node::Size>,
+    target_size: Option<crate::unit::Size>,
 ) -> FlightMeasureFrame {
     FlightMeasureFrame {
         // RemeasureToBounds: animated fixed constraints → the subtree reflows.
@@ -1165,9 +1165,9 @@ fn animated_size(
     end: &SharedBounds,
     p: f32,
     path: PathMotion,
-) -> crate::layout::node::Size {
+) -> crate::unit::Size {
     let l = lerp_flight_rect(start, end, p, path);
-    crate::layout::node::Size::new(l.width, l.height)
+    crate::unit::Size::new(l.width, l.height)
 }
 
 
@@ -1712,7 +1712,7 @@ impl Composer {
         // transition-layer owned.
         {
             let n = &mut self.arena.nodes[src_idx];
-            n.position = crate::layout::node::Point::new(b.x - ox, b.y - oy);
+            n.position = crate::unit::Offset::new(b.x - ox, b.y - oy);
             n.parent_id = None;
         }
         self.transition_layer.push(src_idx);
@@ -3012,7 +3012,7 @@ impl Composer {
                 /// `PlaceHolderSize`) and its natural size.
                 resize: ResizeMode,
                 placeholder: PlaceHolderSize,
-                target_size: crate::layout::node::Size,
+                target_size: crate::unit::Size,
                 /// Peer target's corner kind (Compose percent vs fixed).
                 radius_to_auto: bool,
             }
@@ -5687,7 +5687,7 @@ mod tier0_tests {
     /// between (the zero-recomposition promise in miniature).
     #[test]
     fn flight_measure_frame_reaches_the_parent_layout() {
-        use crate::layout::node::Size;
+        use crate::unit::Size;
         use crate::transition::{FlightMeasure, FlightMeasureFrame};
         let _g = lock_serial();
         let frame_state = State::new(FlightMeasureFrame::IDLE);
@@ -6094,7 +6094,7 @@ mod tier0_tests {
         let marked = marked_in(&composer)[0];
         assert_eq!(
             composer.arena_nodes()[marked].content_box(),
-            crate::layout::node::Size::new(210.0, 130.0),
+            crate::unit::Size::new(210.0, 130.0),
             "mid-flight the content box is the animated size"
         );
 
@@ -6109,12 +6109,12 @@ mod tier0_tests {
         );
         assert_eq!(
             nodes[marked].content_box(),
-            crate::layout::node::Size::new(300.0, 200.0),
+            crate::unit::Size::new(300.0, 200.0),
             "the natural size comes back on the next pass"
         );
         assert_eq!(
             nodes[marked].measured_size,
-            crate::layout::node::Size::new(300.0, 200.0),
+            crate::unit::Size::new(300.0, 200.0),
             "…and the parent sees it too"
         );
         crate::animation::clear_all_animations();
@@ -6785,7 +6785,7 @@ mod tier0_tests {
         );
         assert_eq!(
             b.arena_nodes()[tidx].measured_size,
-            crate::layout::node::Size::new(300.0, 160.0),
+            crate::unit::Size::new(300.0, 160.0),
             "…and the peer's resting size comes back"
         );
         crate::animation::clear_all_animations();
@@ -6890,7 +6890,7 @@ mod tier0_tests {
         frame(&mut a, &mut b);
         assert_eq!(
             b.arena_nodes()[tidx].measured_size,
-            crate::layout::node::Size::new(300.0, 160.0),
+            crate::unit::Size::new(300.0, 160.0),
             "…and the surviving node re-measures at its natural size"
         );
         crate::animation::clear_all_animations();
@@ -7376,8 +7376,8 @@ mod tier0_tests {
         let owner = FlightKey { cid: composer.composer_id, id: 7 };
         composer.arena.nodes[marked].flight_measure = Some(FlightMeasure {
             frame: State::new(FlightMeasureFrame {
-                content: Some(crate::layout::node::Size::new(200.0, 90.0)),
-                reported: Some(crate::layout::node::Size::new(200.0, 90.0)),
+                content: Some(crate::unit::Size::new(200.0, 90.0)),
+                reported: Some(crate::unit::Size::new(200.0, 90.0)),
             }),
             owner,
         });
@@ -7563,11 +7563,11 @@ mod tier0_tests {
     #[test]
     fn restored_node_keeps_its_content_box() {
         let mut node = crate::layout::node::LayoutNode::default();
-        node.measured_size = crate::layout::node::Size::new(300.0, 200.0);
-        node.flight_content_size = Some(crate::layout::node::Size::new(210.0, 130.0));
+        node.measured_size = crate::unit::Size::new(300.0, 200.0);
+        node.flight_content_size = Some(crate::unit::Size::new(210.0, 130.0));
         assert_eq!(
             node.content_box(),
-            crate::layout::node::Size::new(210.0, 130.0),
+            crate::unit::Size::new(210.0, 130.0),
             "precondition: the content box wins over the placeholder size"
         );
 
@@ -7575,7 +7575,7 @@ mod tier0_tests {
         restored.restore_layout(&node);
         assert_eq!(
             restored.content_box(),
-            crate::layout::node::Size::new(210.0, 130.0),
+            crate::unit::Size::new(210.0, 130.0),
             "the restore carries the content box"
         );
     }
@@ -7586,7 +7586,7 @@ mod tier0_tests {
     /// percent->percent and a per-corner shape (`TopRoundedRect`).
     #[test]
     fn corner_endpoints_are_exact_for_every_shape_pair() {
-        use crate::layout::node::Size;
+        use crate::unit::Size;
         use crate::modifier::Modifier;
         use crate::transition::{SharedBounds, TransitionRole, TransitionVisual};
 
@@ -7757,20 +7757,20 @@ mod tier0_tests {
         // A flight now OWNS this node's size: override attached, layout changed. No
         // compose, so the mutated tree is what the next poll sees.
         let mut measure_state = State::new(FlightMeasureFrame {
-            content: Some(crate::layout::node::Size::new(300.0, 160.0)),
-            reported: Some(crate::layout::node::Size::new(300.0, 160.0)),
+            content: Some(crate::unit::Size::new(300.0, 160.0)),
+            reported: Some(crate::unit::Size::new(300.0, 160.0)),
         });
         {
             let n = &mut composer.arena.nodes[idx];
-            n.measured_size = crate::layout::node::Size::new(300.0, 160.0);
+            n.measured_size = crate::unit::Size::new(300.0, 160.0);
             n.flight_measure = Some(FlightMeasure {
                 frame: measure_state.clone(),
                 owner: FlightKey { cid: composer.composer_id, id: 9 },
             });
         }
         measure_state.set(FlightMeasureFrame {
-            content: Some(crate::layout::node::Size::new(300.0, 160.0)),
-            reported: Some(crate::layout::node::Size::new(300.0, 160.0)),
+            content: Some(crate::unit::Size::new(300.0, 160.0)),
+            reported: Some(crate::unit::Size::new(300.0, 160.0)),
         });
         composer.poll_shared_flights();
 

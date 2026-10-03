@@ -28,7 +28,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::input::{KbEvent};
 use crate::graphics::{Shape};
@@ -572,7 +573,7 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
             let x = thumb_center_x(*v, row_w, self.min, self.max) - SLIDER_THUMB_WIDTH / 2.0;
             placements.push(Placement {
                 size: thumb_size,
-                position: Point::new(x, cy - SLIDER_THUMB_HEIGHT / 2.0),
+                position: Offset::new(x, cy - SLIDER_THUMB_HEIGHT / 2.0),
             });
         }
         (Size::new(row_w, height), placements)

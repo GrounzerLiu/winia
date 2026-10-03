@@ -6,6 +6,7 @@
 //! 重组（SurfaceResized → request_recomposition），尺寸类随之刷新。
 
 use std::cell::{Cell, RefCell};
+use crate::unit::Size;
 use std::sync::{Arc, Mutex};
 
 use crate::runtime::state::{Backchannel, State};

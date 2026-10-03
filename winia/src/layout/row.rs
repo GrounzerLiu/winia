@@ -10,6 +10,7 @@
 //! 实现委托到 `flex::measure_flex::<HorizontalAxis>()`。
 
 use super::constraints::Constraints;
+use crate::unit::Size;
 use super::flex;
 use super::node::*;
 

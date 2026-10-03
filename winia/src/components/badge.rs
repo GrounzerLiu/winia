@@ -11,7 +11,8 @@
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::measure_node;
 use crate::modifier::{Modifier};
@@ -176,13 +177,13 @@ impl MeasurePolicy for BadgedBoxPolicy {
         let placements = vec![
             Placement {
                 size: anchor_size,
-                position: Point::new(0.0, 0.0),
+                position: Offset::new(0.0, 0.0),
             },
             Placement {
                 size: badge_size,
                 // 徽章左下角距锚点右上角 (off_x, off_y)：
                 // x = 锚点右缘 - off_x；y = -徽章高 + off_y（徽章可越出锚点顶部）
-                position: Point::new(width - off_x, -badge_size.height + off_y),
+                position: Offset::new(width - off_x, -badge_size.height + off_y),
             },
         ];
         (Size::new(width, height), placements)

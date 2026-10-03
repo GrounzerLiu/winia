@@ -20,7 +20,8 @@ use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size as LayoutSize};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset};
 use crate::modifier::Modifier;
 use crate::unit::Size;
 
@@ -95,7 +96,7 @@ impl MeasurePolicy for SizePolicy {
         policies: &[Box<dyn MeasurePolicy>],
         children: &[usize],
         constraints: Constraints,
-    ) -> (LayoutSize, Vec<Placement>) {
+    ) -> (Size, Vec<Placement>) {
         // 测量子内容（取最大宽高——Stack 语义）
         let mut child_w = 0.0f32;
         let mut child_h = 0.0f32;
@@ -104,7 +105,7 @@ impl MeasurePolicy for SizePolicy {
             let (size, _) = measure_node(nodes, policies, c, constraints);
             child_w = child_w.max(size.width);
             child_h = child_h.max(size.height);
-            placements.push(Placement { size, position: Point::ZERO });
+            placements.push(Placement { size, position: Offset::ZERO });
         }
         // 目标变化 → 启动尺寸动画（首帧 Snap 直接跳转）
         let goal = Size::new(child_w, child_h);
@@ -124,7 +125,7 @@ impl MeasurePolicy for SizePolicy {
         if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
             eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
         }
-        (LayoutSize::new(cur.width, cur.height), placements)
+        (Size::new(cur.width, cur.height), placements)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {

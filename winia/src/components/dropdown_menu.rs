@@ -1,5 +1,6 @@
 //! `DropdownMenu` and the exposed variant — the menu component, which lives here rather than in
 //! `overlay.rs` because it is a COMPONENT that uses the overlay runtime, not part of it.
+use crate::unit::Size;
 
 use crate::components::{Icon, Text};
 use crate::composable;

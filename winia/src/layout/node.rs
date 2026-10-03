@@ -8,6 +8,7 @@ use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use crate::transition::{FlightMeasure, FlightMeasureFrame};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -25,40 +26,6 @@ pub enum LayoutDirection {
     Rtl,
 }
 
-// ── Size ──
-
-/// 2D 尺寸
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Size {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Size {
-    pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
-
-    pub fn new(width: f32, height: f32) -> Self {
-        Size { width, height }
-    }
-}
-
-// ── Point ──
-
-/// 2D 位置
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Point {
-    pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
-
-    pub fn new(x: f32, y: f32) -> Self {
-        Point { x, y }
-    }
-}
-
 // ── Placement ──
 
 /// 子节点在父节点中的放置结果（测量阶段产出尺寸，布局阶段产出位置）
@@ -67,7 +34,7 @@ pub struct Placement {
     /// 分配给子节点的尺寸
     pub size: Size,
     /// 子节点在父节点中的位置
-    pub position: Point,
+    pub position: Offset,
 }
 
 // ── Arrangement ──
@@ -222,7 +189,7 @@ pub struct LayoutNode {
     pub id: u64,
     pub modifier: Modifier,
     pub measured_size: Size,
-    pub position: Point,
+    pub position: Offset,
     /// The alignment lines this node reports, as offsets from its own top edge — Compose's
     /// `Measured[alignmentLine]`.
     ///
@@ -446,7 +413,7 @@ impl LayoutNode {
             has_image_content: modifier_has_image(&modifier),
             modifier,
             measured_size: Size::ZERO,
-            position: Point::ZERO,
+            position: Offset::ZERO,
             alignment_lines: Vec::new(),
             children: Vec::new(),
             measure_policy,
@@ -531,7 +498,7 @@ impl Default for LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             modifier: Modifier::new(),
             measured_size: Size::ZERO,
-            position: Point::ZERO,
+            position: Offset::ZERO,
             alignment_lines: Vec::new(),
             has_image_content: false,
             children: Vec::new(),
@@ -1675,7 +1642,7 @@ mod tests {
     fn test_hit_test_basic() {
         let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 100.0))];
         nodes[0].measured_size = Size::new(100.0, 100.0);
-        nodes[0].position = Point::new(0.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
 
         let path = hit_test(&nodes, 0, 50.0, 50.0);
         assert_eq!(path, vec![0]);
@@ -1693,8 +1660,8 @@ mod tests {
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
         nodes[2].measured_size = Size::new(40.0, 40.0);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[2].position = Point::new(30.0, 30.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[2].position = Offset::new(30.0, 30.0);
         nodes[0].children = vec![1, 2];
 
         // (40,40) 同时落在 leaf1 与 leaf2 内——上层（后画 leaf2）优先
@@ -1727,8 +1694,8 @@ mod tests {
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
         nodes[2].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[2].position = Point::new(0.0, 0.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[2].position = Offset::new(0.0, 0.0);
         nodes[0].children = vec![1, 2];
         nodes[0].children_have_z = true;
 
@@ -1809,7 +1776,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 100.0);
         nodes[1].measured_size = Size::new(50.0, 30.0);
-        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
         // 点击子节点
@@ -1825,7 +1792,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 100.0);
         nodes[1].measured_size = Size::new(50.0, 30.0);
-        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
         // 点击父节点但不在子节点范围内
@@ -1848,7 +1815,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 60.0);
-        nodes[1].position = Point::new(0.0, 100.0);
+        nodes[1].position = Offset::new(0.0, 100.0);
         nodes[0].children.push(1);
 
         // 渲染时画布 translate(0, -50) → 子节点视觉顶边在场景 y=50
@@ -1883,8 +1850,8 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
         ];
-        nodes[0].position = Point::new(10.0, 20.0);
-        nodes[1].position = Point::new(30.0, 40.0);
+        nodes[0].position = Offset::new(10.0, 20.0);
+        nodes[1].position = Offset::new(30.0, 40.0);
         nodes[0].children.push(1);
 
         let (lx, ly) = scene_to_node_local(&nodes, &[0, 1], 1, 45.0, 62.0);
@@ -1902,9 +1869,9 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
         ];
-        nodes[0].position = Point::new(0.0, 0.0);
-        nodes[1].position = Point::new(50.0, 100.0);
-        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
+        nodes[1].position = Offset::new(50.0, 100.0);
+        nodes[2].position = Offset::new(100.0, 0.0);
         nodes[0].children.push(1);
         nodes[1].children.push(2);
 
@@ -1922,9 +1889,9 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
             LayoutNode::leaf(Modifier::new().size(20.0, 20.0).focusable()),
         ];
-        nodes[0].position = Point::new(0.0, 0.0);
-        nodes[1].position = Point::new(50.0, 100.0);
-        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
+        nodes[1].position = Offset::new(50.0, 100.0);
+        nodes[2].position = Offset::new(100.0, 0.0);
         // 测试不执行 measure——显式设置测量尺寸（与 scene_to_node_local 系列一致）
         nodes[0].measured_size = Size::new(300.0, 300.0);
         nodes[1].measured_size = Size::new(200.0, 200.0);

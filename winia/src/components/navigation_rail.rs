@@ -38,7 +38,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout};
 use crate::components::icon_button::IconButton;
 use crate::components::icon::Icon;
@@ -510,22 +511,22 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
         let mut placements = Vec::with_capacity(children.len());
         placements.push(Placement {
             size: indicator_size,
-            position: Point::new((container_w - indicator_size.width) / 2.0, indicator_y),
+            position: Offset::new((container_w - indicator_size.width) / 2.0, indicator_y),
         });
         placements.push(Placement {
             size: icon_size,
-            position: Point::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
+            position: Offset::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
         });
         if let Some(label) = label_size {
             placements.push(Placement {
                 size: label,
-                position: Point::new((container_w - label.width) / 2.0, label_y + offset),
+                position: Offset::new((container_w - label.width) / 2.0, label_y + offset),
             });
         }
         // ripple：恒定全尺寸、跟随指示器动画位置，z 序最上层
         placements.push(Placement {
             size: ripple_size,
-            position: Point::new((container_w - ripple_size.width) / 2.0, indicator_y),
+            position: Offset::new((container_w - ripple_size.width) / 2.0, indicator_y),
         });
 
         (Size::new(container_w, height), placements)
@@ -1104,7 +1105,7 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
             }
             placements.push(Placement {
                 size,
-                position: Point::new(x, y),
+                position: Offset::new(x, y),
             });
             y += size.height + RAIL_VERTICAL_PADDING;
         }
@@ -1447,12 +1448,12 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         let top_v_pad = ((min_h - top_content_h) / 2.0).max(INDICATOR_V_PADDING_WITH_LABEL);
         let top_height = top_content_h + top_v_pad * 2.0;
         let cx = container_w / 2.0;
-        let top_icon = Point::new(cx - icon_size.width / 2.0, top_v_pad);
-        let top_label = Point::new(
+        let top_icon = Offset::new(cx - icon_size.width / 2.0, top_v_pad);
+        let top_label = Offset::new(
             cx - label_size.width / 2.0,
             top_v_pad + icon_size.height + INDICATOR_V_PADDING_WITH_LABEL + ITEM_ICON_LABEL_GAP,
         );
-        let top_pill = Point::new(cx - top_total_w / 2.0, top_v_pad - INDICATOR_V_PADDING_WITH_LABEL);
+        let top_pill = Offset::new(cx - top_total_w / 2.0, top_v_pad - INDICATOR_V_PADDING_WITH_LABEL);
 
         // ── Start 端点放置 ──
         // androidx 展开态内容起始对齐（IndicatorExpandedPadding.horizontal =
@@ -1461,24 +1462,24 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         // 偏移越大 → 展开动画中图标向右漂移，androidx 行为是图标横向不动）
         let start_icon_x = WIDE_INDICATOR_H_PADDING * 2.0; // 胶囊(16) + 胶囊内边距(16)
         let start_height = min_h.max(start_ind_h);
-        let start_icon = Point::new(start_icon_x, (start_height - icon_size.height) / 2.0);
-        let start_label = Point::new(
+        let start_icon = Offset::new(start_icon_x, (start_height - icon_size.height) / 2.0);
+        let start_label = Offset::new(
             start_icon_x + icon_size.width + ITEM_ICON_LABEL_GAP,
             (start_height - label_size.height) / 2.0,
         );
-        let start_pill = Point::new(WIDE_INDICATOR_H_PADDING, (start_height - start_ind_h) / 2.0);
+        let start_pill = Offset::new(WIDE_INDICATOR_H_PADDING, (start_height - start_ind_h) / 2.0);
 
         // ── lerp 合成 ──
         let height = top_height + (start_height - top_height) * p;
-        let icon_pos = Point::new(
+        let icon_pos = Offset::new(
             top_icon.x + (start_icon.x - top_icon.x) * p,
             top_icon.y + (start_icon.y - top_icon.y) * p,
         );
-        let label_pos = Point::new(
+        let label_pos = Offset::new(
             top_label.x + (start_label.x - top_label.x) * p,
             top_label.y + (start_label.y - top_label.y) * p,
         );
-        let pill_pos = Point::new(
+        let pill_pos = Offset::new(
             top_pill.x + (start_pill.x - top_pill.x) * p,
             top_pill.y + (start_pill.y - top_pill.y) * p,
         );

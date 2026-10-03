@@ -35,7 +35,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
@@ -309,7 +310,7 @@ impl MeasurePolicy for NavigationBarLayoutPolicy {
             } else {
                 width - x - item_w
             };
-            placements.push(Placement { size, position: Point::new(px, 0.0) });
+            placements.push(Placement { size, position: Offset::new(px, 0.0) });
             x += item_w + NAVIGATION_BAR_ITEM_SPACING;
         }
         (Size::new(width, height), placements)
@@ -616,18 +617,18 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             // 彩色胶囊：居中（宽随 progress 收拢/展开）
             placements.push(Placement {
                 size: indicator_size,
-                position: Point::new(
+                position: Offset::new(
                     (container_w - indicator_size.width) / 2.0,
                     (height - indicator_h) / 2.0,
                 ),
             });
             placements.push(Placement {
                 size: icon_size,
-                position: Point::new(icon_x, (height - icon_size.height) / 2.0),
+                position: Offset::new(icon_x, (height - icon_size.height) / 2.0),
             });
             placements.push(Placement {
                 size: label_size,
-                position: Point::new(
+                position: Offset::new(
                     icon_x + icon_size.width + START_ICON_TO_LABEL_PADDING,
                     (height - label_size.height) / 2.0,
                 ),
@@ -635,7 +636,7 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
             // ripple：居中、恒定全尺寸——最后放置（z 序最上层，状态层覆盖胶囊）
             placements.push(Placement {
                 size: ripple_size,
-                position: Point::new(
+                position: Offset::new(
                     (container_w - ripple_size.width) / 2.0,
                     (height - indicator_h) / 2.0,
                 ),
@@ -705,24 +706,24 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
         let mut placements = Vec::with_capacity(children.len());
         placements.push(Placement {
             size: indicator_size,
-            position: Point::new((container_w - indicator_size.width) / 2.0, indicator_y),
+            position: Offset::new((container_w - indicator_size.width) / 2.0, indicator_y),
         });
         placements.push(Placement {
             size: icon_size,
-            position: Point::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
+            position: Offset::new((container_w - icon_size.width) / 2.0, selected_icon_y + offset),
         });
         // label：alwaysShowLabel=false 且 progress=0 时 alpha 已为 0——照常放置即可
         if let Some(label) = label_size {
             placements.push(Placement {
                 size: label,
-                position: Point::new((container_w - label.width) / 2.0, label_y + offset),
+                position: Offset::new((container_w - label.width) / 2.0, label_y + offset),
             });
         }
         // ripple：恒定全尺寸、跟随指示器的动画位置（始终是"胶囊当前所在
         // 完整矩形"——未选中悬浮时状态层与可见图标对齐），z 序最上层
         placements.push(Placement {
             size: ripple_size,
-            position: Point::new((container_w - ripple_size.width) / 2.0, indicator_y),
+            position: Offset::new((container_w - ripple_size.width) / 2.0, indicator_y),
         });
 
         (Size::new(container_w, height), placements)
@@ -938,17 +939,17 @@ mod tests {
         let content_w = NAVIGATION_BAR_ICON_SIZE + START_ICON_TO_LABEL_PADDING + label_w;
         let icon_x = (120.0 - content_w) / 2.0;
         // 全部垂直居中
-        assert_eq!(icon.position, Point::new(icon_x, (NAVIGATION_BAR_HEIGHT - 24.0) / 2.0));
+        assert_eq!(icon.position, Offset::new(icon_x, (NAVIGATION_BAR_HEIGHT - 24.0) / 2.0));
         assert_eq!(
             label.position,
-            Point::new(icon_x + NAVIGATION_BAR_ICON_SIZE + START_ICON_TO_LABEL_PADDING, (NAVIGATION_BAR_HEIGHT - label.measured_size.height) / 2.0)
+            Offset::new(icon_x + NAVIGATION_BAR_ICON_SIZE + START_ICON_TO_LABEL_PADDING, (NAVIGATION_BAR_HEIGHT - label.measured_size.height) / 2.0)
         );
         // 指示器：宽 = contentW + leading+trailing(2x16)，高 = max(24,labelH)+2x8 = 40，居中
         assert_eq!(indicator.measured_size.width, content_w + H_INDICATOR_HORIZONTAL_PADDING * 2.0);
         assert_eq!(indicator.measured_size.height, NAVIGATION_BAR_H_INDICATOR_HEIGHT);
         assert_eq!(
             indicator.position,
-            Point::new((120.0 - indicator.measured_size.width) / 2.0, (NAVIGATION_BAR_HEIGHT - NAVIGATION_BAR_H_INDICATOR_HEIGHT) / 2.0)
+            Offset::new((120.0 - indicator.measured_size.width) / 2.0, (NAVIGATION_BAR_HEIGHT - NAVIGATION_BAR_H_INDICATOR_HEIGHT) / 2.0)
         );
         // ripple：恒定全尺寸、与选中态胶囊重合（Constraints.fixed(totalW, h)）
         assert_eq!(ripple_node.measured_size, indicator.measured_size);

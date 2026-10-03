@@ -4136,7 +4136,7 @@ mod node_track_tests {
     #[test]
     fn node_track_pointer_bubble_receives_local_coords() {
         use crate::layout::node::LayoutNode;
-        use crate::layout::{Point, Size};
+        use crate::unit::{Offset, Size};
         let pre_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let event_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut nodes = vec![LayoutNode::leaf(
@@ -4147,7 +4147,7 @@ mod node_track_tests {
             }),
         )];
         nodes[0].measured_size = Size::new(100.0, 100.0);
-        nodes[0].position = Point::new(10.0, 20.0);
+        nodes[0].position = Offset::new(10.0, 20.0);
         let path = vec![0];
         let ev = PointerEvent {
             event_type: PointerEventType::Move,

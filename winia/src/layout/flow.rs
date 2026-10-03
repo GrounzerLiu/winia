@@ -11,6 +11,7 @@
 //! - 无 intrinsic（winia 无 intrinsic 体系）
 
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use super::flex::FlexAxis;
 use super::node::*;
 
@@ -114,7 +115,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     let mut placements: Vec<Placement> = vec![
         Placement {
             size: Size::ZERO,
-            position: Point::new(0.0, 0.0),
+            position: Offset::new(0.0, 0.0),
         };
         n
     ];
@@ -346,9 +347,9 @@ mod tests {
         );
         assert_eq!(size.width, 90.0, "wrap 下容器宽 = 最宽行 90");
         assert_eq!(size.height, 40.0, "两行 × 20 高");
-        assert_eq!(placements[0].position, Point::new(0.0, 0.0));
-        assert_eq!(placements[2].position, Point::new(60.0, 0.0));
-        assert_eq!(placements[3].position, Point::new(0.0, 20.0), "第 4 个换行");
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0));
+        assert_eq!(placements[2].position, Offset::new(60.0, 0.0));
+        assert_eq!(placements[3].position, Offset::new(0.0, 20.0), "第 4 个换行");
     }
 
     #[test]
@@ -396,7 +397,7 @@ mod tests {
             Constraints::new(0.0, 100.0, 0.0, f32::MAX),
         );
         assert_eq!(size.height, 40.0, "两行");
-        assert_eq!(placements[2].position, Point::new(0.0, 20.0));
+        assert_eq!(placements[2].position, Offset::new(0.0, 20.0));
     }
 
     #[test]
@@ -464,7 +465,7 @@ mod tests {
         );
         assert_eq!(size.height, 90.0, "wrap 下容器高 = 最高列 90");
         assert_eq!(size.width, 40.0, "两列 × 20 宽");
-        assert_eq!(placements[3].position, Point::new(20.0, 0.0), "第 4 个换列");
+        assert_eq!(placements[3].position, Offset::new(20.0, 0.0), "第 4 个换列");
     }
 
     // ── follow-up（独立 review P1/P2）──
@@ -481,7 +482,7 @@ mod tests {
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = policy.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(size.height, 40.0, "无界 + max2 → 两行");
-        assert_eq!(placements[2].position, Point::new(0.0, 20.0));
+        assert_eq!(placements[2].position, Offset::new(0.0, 20.0));
     }
 
     #[test]
@@ -497,7 +498,7 @@ mod tests {
             Constraints::new(0.0, 100.0, 0.0, f32::MAX),
         );
         assert_eq!(size.height, 40.0, "两行");
-        assert_eq!(placements[1].position, Point::new(0.0, 20.0));
+        assert_eq!(placements[1].position, Offset::new(0.0, 20.0));
     }
 
     #[test]
@@ -513,8 +514,8 @@ mod tests {
             Constraints::new(0.0, 100.0, 0.0, f32::MAX),
         );
         assert_eq!(size.width, 100.0, "行宽钳到约束宽");
-        assert_eq!(placements[0].position, Point::new(0.0, 0.0), "超宽首项不换行");
-        assert_eq!(placements[1].position, Point::new(0.0, 20.0), "次项换行");
+        assert_eq!(placements[0].position, Offset::new(0.0, 0.0), "超宽首项不换行");
+        assert_eq!(placements[1].position, Offset::new(0.0, 20.0), "次项换行");
     }
 
     #[test]

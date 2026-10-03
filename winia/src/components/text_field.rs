@@ -418,7 +418,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         policies: &[Box<dyn crate::layout::MeasurePolicy>],
         children: &[usize],
         constraints: crate::layout::Constraints,
-    ) -> (crate::layout::Size, Vec<crate::layout::Placement>) {
+    ) -> (crate::unit::Size, Vec<crate::layout::Placement>) {
         use crate::layout::node::measure_node;
         use crate::modifier::ModifierElement;
         let role_of = |idx: usize| -> TextFieldSlotRole {
@@ -441,24 +441,24 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     let (s, _) = measure_node(nodes, policies, c, icon_c);
                     leading_w = s.width;
                     // 贴内容区左端（容器左 padding 12 提供 M3 图标距边 12dp）
-                    placements.push(crate::layout::Placement { size: s, position: crate::layout::Point::new(0.0, 0.0) });
+                    placements.push(crate::layout::Placement { size: s, position: crate::unit::Offset::new(0.0, 0.0) });
                 }
                 TextFieldSlotRole::Trailing => {
                     let (s, _) = measure_node(nodes, policies, c, icon_c);
                     trailing_w = s.width;
-                    placements.push(crate::layout::Placement { size: s, position: crate::layout::Point::new(0.0, 0.0) });
+                    placements.push(crate::layout::Placement { size: s, position: crate::unit::Offset::new(0.0, 0.0) });
                 }
                 TextFieldSlotRole::Prefix => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
                     prefix_w = s.width;
-                    placements.push(crate::layout::Placement { size: s, position: crate::layout::Point::new(0.0, 0.0) });
+                    placements.push(crate::layout::Placement { size: s, position: crate::unit::Offset::new(0.0, 0.0) });
                 }
                 TextFieldSlotRole::Suffix => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
                     suffix_w = s.width;
-                    placements.push(crate::layout::Placement { size: s, position: crate::layout::Point::new(0.0, 0.0) });
+                    placements.push(crate::layout::Placement { size: s, position: crate::unit::Offset::new(0.0, 0.0) });
                 }
-                _ => placements.push(crate::layout::Placement { size: crate::layout::Size::ZERO, position: crate::layout::Point::new(0.0, 0.0) }),
+                _ => placements.push(crate::layout::Placement { size: crate::unit::Size::ZERO, position: crate::unit::Offset::new(0.0, 0.0) }),
             }
         }
         // 第二轮：input——剩余宽 = **容器实际宽**（constraints.max_width 是
@@ -476,7 +476,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         // 撑宽容器）。⚠ 循环依赖：input 测量需要 input_w → 用 min 起步
         let mut width = constraints.min_width;
         let mut input_w = (width - left - prefix_w - AFFIX_GAP - suffix_w - right).max(0.0);
-        let mut input_size = crate::layout::Size::ZERO;
+        let mut input_size = crate::unit::Size::ZERO;
         let mut input_pos_x = 0.0f32;
         for (i, &c) in children.iter().enumerate() {
             if roles[i] == TextFieldSlotRole::Input {
@@ -486,7 +486,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 // 强制最小尺寸：高 ≥ token 行高、宽 ≥ 1（渲染进入 +
                 // 光标绘制在内容起点）。
                 let line_h = self.line_height;
-                let s = crate::layout::Size::new(
+                let s = crate::unit::Size::new(
                     if s.width < 1.0 { 1.0 } else { s.width },
                     if s.height < line_h { line_h } else { s.height },
                 );
@@ -497,7 +497,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 // size below), so input y=0 is already centered. (Variants: M3 lower
                 // text zone semantics, also y=0.)
                 let input_y = 0.0;
-                placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, input_y) };
+                placements[i] = crate::layout::Placement { size: s, position: crate::unit::Offset::new(input_pos_x, input_y) };
                 break;
             }
         }
@@ -540,7 +540,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                             None => 0.0,
                         };
                     let y = expanded_y + (float_y - expanded_y) * progress;
-                    placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, y) };
+                    placements[i] = crate::layout::Placement { size: s, position: crate::unit::Offset::new(input_pos_x, y) };
                 }
                 TextFieldSlotRole::Placeholder => {
                     let (s, _) = measure_node(nodes, policies, c, text_c(constraints.max_width));
@@ -551,14 +551,14 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     } else {
                         0.0
                     };
-                    placements[i] = crate::layout::Placement { size: s, position: crate::layout::Point::new(input_pos_x, ph_y) };
+                    placements[i] = crate::layout::Placement { size: s, position: crate::unit::Offset::new(input_pos_x, ph_y) };
                 }
                 TextFieldSlotRole::Leading => {
                     // Bare fields: center in measured content height (constraint max is
                     // screen-sized under loose parents).
                     // Variants: center in container (constraint-derived, usually tight).
                     if self.variant.is_none() {
-                        placements[i].position = crate::layout::Point::new(
+                        placements[i].position = crate::unit::Offset::new(
                             0.0,
                             ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
                         );
@@ -572,7 +572,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // f32::MAX（有限但巨大）——降级见 text_field_content_height
                     let content_h = text_field_content_height(&constraints, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
-                    placements[i].position = crate::layout::Point::new(
+                    placements[i].position = crate::unit::Offset::new(
                         0.0,
                         container_center - placements[i].size.height / 2.0,
                     );
@@ -580,7 +580,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 TextFieldSlotRole::Trailing => {
                     // Bare fields: same measured-height centering as Leading above.
                     if self.variant.is_none() {
-                        placements[i].position = crate::layout::Point::new(
+                        placements[i].position = crate::unit::Offset::new(
                             (width - placements[i].size.width).max(0.0),
                             ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
                         );
@@ -588,7 +588,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     }
                     let content_h = text_field_content_height(&constraints, self.supporting_h, input_size.height);
                     let container_center = (content_h + self.pad_bottom - self.pad_top) / 2.0;
-                    placements[i].position = crate::layout::Point::new(
+                    placements[i].position = crate::unit::Offset::new(
                         (width - placements[i].size.width).max(0.0),
                         container_center - placements[i].size.height / 2.0,
                     );
@@ -597,21 +597,21 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                     // Bare: center in measured content (input itself centered).
                     // Variants: with input text same vertical position.
                     if self.variant.is_none() {
-                        placements[i].position = crate::layout::Point::new(left, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
+                        placements[i].position = crate::unit::Offset::new(left, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
                     } else {
-                        placements[i].position = crate::layout::Point::new(left, (input_size.height - placements[i].size.height).max(0.0) / 2.0);
+                        placements[i].position = crate::unit::Offset::new(left, (input_size.height - placements[i].size.height).max(0.0) / 2.0);
                     }
                 }
                 TextFieldSlotRole::Suffix => {
                     if self.variant.is_none() {
-                        placements[i].position = crate::layout::Point::new(
+                        placements[i].position = crate::unit::Offset::new(
                             (width - right - placements[i].size.width).max(0.0),
                             ((bare_content_h - placements[i].size.height) / 2.0).max(0.0),
                         );
                     } else {
                         // M3：suffix 右端 = trailing 左端（无间距）；与输入文本
                         // 间距 2dp（PrefixSuffixTextPadding——由 input_w 预留）
-                        placements[i].position = crate::layout::Point::new(
+                        placements[i].position = crate::unit::Offset::new(
                             (width - right - placements[i].size.width).max(0.0),
                             (input_size.height - placements[i].size.height).max(0.0) / 2.0,
                         );
@@ -619,7 +619,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 }
                 TextFieldSlotRole::Input => {
                     if self.variant.is_none() {
-                        placements[i].position = crate::layout::Point::new(input_pos_x, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
+                        placements[i].position = crate::unit::Offset::new(input_pos_x, ((bare_content_h - placements[i].size.height) / 2.0).max(0.0));
                     }
                 }
             }
@@ -633,7 +633,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         // 节点总高缺 supporting 20px → 指示线/边框上移 → 穿过末行文字
         let width = constraints.constrain_width(input_size.width + left + prefix_w + AFFIX_GAP + suffix_w + right);
         let height = constraints.constrain_height(input_size.height + self.supporting_h);
-        (crate::layout::Size::new(width, height), placements)
+        (crate::unit::Size::new(width, height), placements)
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::Placement]) {

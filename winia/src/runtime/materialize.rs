@@ -4,6 +4,7 @@
 //! - `collect_desc_tree`（SlotTable）产出 `DescNode` 树（保留在 composer.rs——需访问 slot 私有字段）
 //! - 本模块消费 DescNode → arena 树（Skip 恢复 / 节点复用 / 降级重建）
 //! - `collect_layout_index` / `collect_node_keys`：物化后的 arena 收集（slot_key → 节点索引）
+use crate::unit::Size;
 
 use crate::runtime::composer::Composer;
 use crate::layout::node::NodeArena;

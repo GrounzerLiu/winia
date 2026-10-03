@@ -23,7 +23,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
-use crate::layout::node::{measure_node, Placement, Point, Size};
+use crate::layout::node::{measure_node, Placement};
+use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::layout::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
@@ -394,7 +395,7 @@ impl MeasurePolicy for SuiteMorphPolicy {
             let (size, _) = measure_node(nodes, policies, child, loose);
             let sw = size.width * if self.axis == MorphAxis::Width { p } else { 1.0 };
             let sh = size.height * if self.axis == MorphAxis::Height { p } else { 1.0 };
-            placements.push(Placement { size, position: Point::new(0.0, 0.0) });
+            placements.push(Placement { size, position: Offset::new(0.0, 0.0) });
             out = Size::new(sw.min(c.max_width), sh.min(c.max_height));
         }
         (out, placements)

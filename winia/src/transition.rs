@@ -8,13 +8,14 @@
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
 use crate::layout::node::{
-    scroll_offset_for_node, LayoutNode, PaintDisposition, Size,
+    scroll_offset_for_node, LayoutNode, PaintDisposition,
 };
 use crate::graphics::{ContentScale, ImageAlignment};
 use crate::graphics::{Color, GraphicsLayerParams};
 use crate::modifier::{Modifier, ModifierElement};
 use crate::graphics::{Shape};
 use crate::runtime::state::State;
+use crate::unit::Size;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -856,7 +857,7 @@ pub(crate) struct ActiveFlight {
     /// The target's natural (resting) size in its own layout, captured the
     /// frame the end resolves — the `ContentSize` answer, and the size the
     /// parent keeps seeing while the flight runs.
-    pub target_size: Option<crate::layout::node::Size>,
+    pub target_size: Option<crate::unit::Size>,
     /// Per-frame layout override handed to the target node.
     pub measure: State<FlightMeasureFrame>,
     /// Endpoint owner composers (Phase 4 Tier1). Equal ⟺ Tier0, driven by the

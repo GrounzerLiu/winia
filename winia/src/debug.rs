@@ -5,6 +5,7 @@
 //!         echo r | ./app              # 截图请求
 //! WebSocket: ws://127.0.0.1:9998（可用环境变量 WINIA_DEBUG_PORT 覆盖——UI 测试并行隔离）
 //!         wscat -c ws://localhost:9998 → 输入 c 190 130
+use crate::unit::Size;
 
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;

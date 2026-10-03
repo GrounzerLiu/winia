@@ -54,7 +54,8 @@ use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::layout::box_layout::BoxLayout;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{Alignment, MeasurePolicy, Placement, Size};
+use crate::layout::node::{Alignment, MeasurePolicy, Placement};
+use crate::unit::{Size};
 use crate::modifier::Modifier;
 
 /// The scope handed to `BoxWithConstraints` content: what the box was measured with.

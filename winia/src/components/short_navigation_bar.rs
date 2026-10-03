@@ -16,7 +16,8 @@
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
@@ -236,7 +237,7 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
             } else {
                 width - x - item_w
             };
-            placements.push(Placement { size, position: Point::new(px, 0.0) });
+            placements.push(Placement { size, position: Offset::new(px, 0.0) });
             x += item_w + NAVIGATION_BAR_ITEM_SPACING;
         }
         (Size::new(width, height), placements)

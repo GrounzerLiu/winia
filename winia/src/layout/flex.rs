@@ -5,6 +5,7 @@
 //! 编译期泛型参数，消除两处 ~140 行的重复代码。
 
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use super::node::*;
 
 // ── FlexAxis trait ──
@@ -53,7 +54,7 @@ pub(crate) trait FlexAxis {
 
     // ── 值构造 ──
     fn size(main: f32, cross: f32) -> Size;
-    fn point(main: f32, cross: f32) -> Point;
+    fn point(main: f32, cross: f32) -> Offset;
 
     // ── RTL ──
     /// RTL 镜像时的容器宽度（x 轴范围）——水平主轴用行自身测量宽度，
@@ -98,7 +99,7 @@ impl FlexAxis for VerticalAxis {
     }
 
     #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(cross, main) }
-    #[inline] fn point(main: f32, cross: f32) -> Point { Point::new(cross, main) }
+    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(cross, main) }
 
     #[inline]
     fn rtl_container_width(_measured_main: f32, cross_size: f32) -> f32 {
@@ -142,7 +143,7 @@ impl FlexAxis for HorizontalAxis {
     }
 
     #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(main, cross) }
-    #[inline] fn point(main: f32, cross: f32) -> Point { Point::new(main, cross) }
+    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(main, cross) }
 
     #[inline]
     fn rtl_container_width(measured_main: f32, _cross_size: f32) -> f32 {

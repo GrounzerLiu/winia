@@ -31,9 +31,9 @@
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use crate::layout::node::{
-    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point,
-    Size,
+    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
 };
 use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
@@ -337,7 +337,7 @@ impl SplitButtonPolicy {
             };
             placements.push(Placement {
                 size: Size::new(size.width, height),
-                position: Point::new(x, (height - size.height) / 2.0),
+                position: Offset::new(x, (height - size.height) / 2.0),
             });
             cursor += size.width + self.spacing;
         }
@@ -433,11 +433,11 @@ impl MeasurePolicy for SplitButtonPolicy {
         let placements = vec![
             Placement {
                 size: Size::new(leading_size.width, height),
-                position: Point::new(leading_x, (height - leading_size.height) / 2.0),
+                position: Offset::new(leading_x, (height - leading_size.height) / 2.0),
             },
             Placement {
                 size: Size::new(trailing_size.width, height),
-                position: Point::new(trailing_x, (height - trailing_size.height) / 2.0),
+                position: Offset::new(trailing_x, (height - trailing_size.height) / 2.0),
             },
         ];
         (Size::new(width, height), placements)

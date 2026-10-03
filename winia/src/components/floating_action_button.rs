@@ -9,7 +9,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
@@ -608,7 +609,7 @@ mod tests {
         let icon = child(&nodes, root, 0);
         assert_eq!(
             icon.position,
-            Point::new(
+            Offset::new(
                 (EXTENDED_FAB_COLLAPSED_WIDTH - 24.0) / 2.0,
                 (EXTENDED_FAB_HEIGHT - 24.0) / 2.0,
             ),
@@ -969,11 +970,11 @@ impl MeasurePolicy for ExtendedFabLayoutPolicy {
         let mut placements = Vec::with_capacity(children.len());
         placements.push(Placement {
             size: icon_size,
-            position: Point::new(icon_x, (height - icon_size.height) / 2.0),
+            position: Offset::new(icon_x, (height - icon_size.height) / 2.0),
         });
         placements.push(Placement {
             size: text_size,
-            position: Point::new(text_x, (height - text_size.height) / 2.0),
+            position: Offset::new(text_x, (height - text_size.height) / 2.0),
         });
 
         (Size::new(width, height), placements)

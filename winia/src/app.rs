@@ -5647,7 +5647,7 @@ mod press_target_tests {
 mod pointer_dispatch_coord_tests {
     use super::dispatch_ptr_event;
     use crate::layout::node::{hit_test, scene_to_node_local, LayoutNode};
-    use crate::layout::{Point, Size};
+    use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState};
     use crate::input::{PointerButton, PointerEvent, PointerEventType, PointerKind};
 
@@ -5674,7 +5674,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 60.0);
-        nodes[1].position = Point::new(0.0, 100.0);
+        nodes[1].position = Offset::new(0.0, 100.0);
         nodes[0].children.push(1);
         (nodes, received, container_recv, scroll)
     }
@@ -5779,7 +5779,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(20.0, 30.0);
+        nodes[1].position = Offset::new(20.0, 30.0);
         nodes[0].children.push(1);
         let path = vec![0, 1];
         // 场景 (50,60) → 子本地 (30,30)
@@ -5839,7 +5839,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(20.0, 20.0);
+        nodes[1].position = Offset::new(20.0, 20.0);
         nodes[0].children.push(1);
         // 点内层 (50,50)：命中路径 [0,1]
         let path = hit_test(&nodes, 0, 50.0, 50.0);
@@ -5972,7 +5972,7 @@ mod key_node_dual_track_tests {
 mod nested_scroll_chain_tests {
     use super::dispatch_nested_scroll_delta;
     use crate::layout::node::LayoutNode;
-    use crate::layout::{Point, Size};
+    use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState};
     use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
 
@@ -6037,9 +6037,9 @@ mod nested_scroll_chain_tests {
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(200.0, 200.0);
-        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
         nodes[2].measured_size = Size::new(100.0, 100.0);
-        nodes[2].position = Point::new(0.0, 100.0);
+        nodes[2].position = Offset::new(0.0, 100.0);
         nodes[2].scroll_viewport_height = 100.0;
         nodes[2].scroll_content_height = 200.0; // 可滚动 100
         nodes[0].children.push(1);
@@ -6080,7 +6080,7 @@ mod nested_scroll_chain_tests {
 mod release_velocity_floor_tests {
     use super::dispatch_nested_scroll_fling;
     use crate::layout::node::LayoutNode;
-    use crate::layout::{Point, Size};
+    use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState, SnapSpec};
     use crate::nested_scroll::ScrollVelocity;
 
@@ -6110,7 +6110,7 @@ mod release_velocity_floor_tests {
         ];
         nodes[0].measured_size = Size::new(400.0, 600.0);
         nodes[1].measured_size = Size::new(400.0, STEP);
-        nodes[1].position = Point::new(0.0, 0.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
         nodes[1].scroll_viewport_height = STEP;
         nodes[1].scroll_content_height = STEP * 10.0;
         nodes[0].children.push(1);
@@ -6198,7 +6198,7 @@ mod release_velocity_floor_tests {
 #[cfg(test)]
 mod drag_target_selection_tests {
     use crate::layout::node::{hit_test, LayoutNode};
-    use crate::layout::{Point, Size};
+    use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState};
 
     /// 构造：root(Column) → outer_scroll(0,184,420×536) → [内容0..7, 内层scroll, 内容8..]
@@ -6211,7 +6211,7 @@ mod drag_target_selection_tests {
         nodes[0].measured_size = Size::new(420.0, 720.0);
         // idx 1: 外层 scroll（视口 536，顶部 y=184）
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(outer).size(420.0, 536.0)));
-        nodes[1].position = Point::new(0.0, 184.0);
+        nodes[1].position = Offset::new(0.0, 184.0);
         nodes[1].measured_size = Size::new(420.0, 536.0);
         nodes[1].scroll_viewport_height = 536.0;
         nodes[0].children.push(1); // 外层 scroll 挂到 root
@@ -6219,20 +6219,20 @@ mod drag_target_selection_tests {
         for i in 0..8 {
             let idx = nodes.len();
             nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 37.0)));
-            nodes[idx].position = Point::new(0.0, i as f32 * 37.0);
+            nodes[idx].position = Offset::new(0.0, i as f32 * 37.0);
             nodes[idx].measured_size = Size::new(420.0, 37.0);
             nodes[1].children.push(idx);
         }
         // 内层 scroll：内容流 y = 8*37 = 296，视口 180
         let inner_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(inner).size(420.0, 180.0)));
-        nodes[inner_idx].position = Point::new(0.0, 296.0);
+        nodes[inner_idx].position = Offset::new(0.0, 296.0);
         nodes[inner_idx].measured_size = Size::new(420.0, 180.0);
         nodes[inner_idx].scroll_viewport_height = 180.0;
         // 内层子项：一列（可滚动内容）
         let item_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 32.0)));
-        nodes[item_idx].position = Point::new(0.0, 0.0);
+        nodes[item_idx].position = Offset::new(0.0, 0.0);
         nodes[item_idx].measured_size = Size::new(420.0, 32.0);
         nodes[inner_idx].children.push(item_idx);
         nodes[1].children.push(inner_idx);

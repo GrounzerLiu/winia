@@ -29,7 +29,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
+use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape, TransformOrigin};
 use crate::interaction::MutableInteractionSource;
@@ -359,7 +360,7 @@ impl MeasurePolicy for SegmentedRowPolicy {
             };
             placements.push(Placement {
                 size: Size::new(item_w, height),
-                position: Point::new(x, 0.0),
+                position: Offset::new(x, 0.0),
             });
         }
         (Size::new(total, height), placements)
@@ -778,14 +779,14 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         if self.has_icon {
             let (icon_size, _) = measure_node(nodes, policies, children[0], label_constraints);
             content_h = content_h.max(icon_size.height);
-            placements.push(Placement { size: icon_size, position: Point::new(0.0, 0.0) });
+            placements.push(Placement { size: icon_size, position: Offset::new(0.0, 0.0) });
         }
         let label_index = if self.has_icon { 1 } else { 0 };
         if let Some(&label_child) = children.get(label_index) {
             let (label_size, _) = measure_node(nodes, policies, label_child, label_constraints);
             content_h = content_h.max(label_size.height);
             label_w = label_size.width;
-            placements.push(Placement { size: label_size, position: Point::new(0.0, 0.0) });
+            placements.push(Placement { size: label_size, position: Offset::new(0.0, 0.0) });
         }
         // The icon and the label are one block of `slot + label`; Compose centres that block in the
         // container (`Box(contentAlignment = Center)`), which is what keeps a stretched item's content
@@ -802,7 +803,7 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         let cy = |h: f32| (content_h - h) / 2.0;
         if self.has_icon {
             let icon = placements[0].size;
-            placements[0].position = Point::new(
+            placements[0].position = Offset::new(
                 mirrored(block_x, icon.width),
                 self.pad_v + cy(icon.height),
             );
@@ -811,7 +812,7 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
             // The label's animated slot offset keeps its meaning: it slides AWAY from the icon as the
             // check appears, which is +x in LTR and −x in RTL.
             let x = block_x + SegmentedButtonDefaults::ICON_SLOT + offset;
-            p.position = Point::new(
+            p.position = Offset::new(
                 mirrored(x, p.size.width),
                 self.pad_v + cy(p.size.height),
             );

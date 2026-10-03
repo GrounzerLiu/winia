@@ -6,6 +6,7 @@
 //! that direction of dependency — theme provides, layout reads — is the one that holds.
 
 use crate::runtime::composition_local::CompositionLocal;
+use crate::unit::Size;
 use crate::layout::LayoutDirection;
 use std::sync::LazyLock;
 

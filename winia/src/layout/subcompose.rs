@@ -37,7 +37,8 @@
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composer::Composer;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{LayoutNode, NodeArena, NodeMarks, Size};
+use crate::layout::node::{LayoutNode, NodeArena, NodeMarks};
+use crate::unit::{Size};
 
 thread_local! {
     /// The node index currently being measured, or `None`. Set by `measure_node` around a real

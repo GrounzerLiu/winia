@@ -27,7 +27,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{GraphicsLayerParams};
 pub use crate::animation::visibility::{
@@ -233,7 +234,7 @@ impl MeasurePolicy for VisibilityPolicy {
             let (size, _) = measure_node(nodes, policies, c, constraints);
             max_w = max_w.max(size.width);
             max_h = max_h.max(size.height);
-            placements.push(Placement { size, position: Point::ZERO });
+            placements.push(Placement { size, position: Offset::ZERO });
         }
         self.content_size.set((max_w, max_h));
         let w = if self.expand_h { max_w * p } else { max_w };

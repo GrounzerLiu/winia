@@ -18,7 +18,8 @@
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composer::Composer;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{Alignment, MeasurePolicy, Placement, Size};
+use crate::layout::node::{Alignment, MeasurePolicy, Placement};
+use crate::unit::{Size};
 
 /// A key no real call site can produce (slot keys are mixed hashes).
 const ADOPTED_SLOT_KEY: u64 = u64::MAX;

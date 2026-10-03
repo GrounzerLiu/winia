@@ -3,6 +3,7 @@
 //! 所有子节点获得相同的空间，类似 FrameLayout / Box
 
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use super::node::*;
 use super::node::measure_node;
 
@@ -86,7 +87,7 @@ impl MeasurePolicy for BoxLayout {
                 };
                 Placement {
                     size: Size::new(w, h),
-                    position: Point::new(x, y),
+                    position: Offset::new(x, y),
                 }
             })
             .collect();
@@ -156,8 +157,8 @@ mod tests {
         // max w=100, h=80 → 居中子节点
         assert_eq!(size, Size::new(100.0, 80.0));
         // 第一个 (50,30) 居中: x=(100-50)/2=25, y=(80-30)/2=25
-        assert_eq!(placements[0].position, Point::new(25.0, 25.0));
+        assert_eq!(placements[0].position, Offset::new(25.0, 25.0));
         // 第二个 (100,80) 居中: x=(100-100)/2=0, y=0
-        assert_eq!(placements[1].position, Point::new(0.0, 0.0));
+        assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
     }
 }

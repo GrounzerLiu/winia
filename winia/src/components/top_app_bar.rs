@@ -3,7 +3,8 @@
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
+use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier, ScrollState};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
@@ -280,7 +281,7 @@ impl MeasurePolicy for TopAppBarLayoutPolicy {
         let nav_x = if self.direction == LayoutDirection::Ltr { TOP_APP_BAR_HORIZONTAL_PADDING } else { width - TOP_APP_BAR_HORIZONTAL_PADDING - nav.width };
         let action_x = if self.direction == LayoutDirection::Ltr { width - TOP_APP_BAR_HORIZONTAL_PADDING - actions.width } else { TOP_APP_BAR_HORIZONTAL_PADDING };
         let slot_y = (TOP_APP_BAR_HEIGHT - TOP_APP_BAR_ICON_SLOT_SIZE) / 2.0;
-        (Size::new(width, height), vec![Placement { size: nav, position: Point::new(nav_x, slot_y) }, Placement { size: title, position: Point::new(title_x, title_y) }, Placement { size: subtitle, position: Point::new(subtitle_x, subtitle_y) }, Placement { size: actions, position: Point::new(action_x, slot_y) }])
+        (Size::new(width, height), vec![Placement { size: nav, position: Offset::new(nav_x, slot_y) }, Placement { size: title, position: Offset::new(title_x, title_y) }, Placement { size: subtitle, position: Offset::new(subtitle_x, subtitle_y) }, Placement { size: actions, position: Offset::new(action_x, slot_y) }])
     }
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) { for (i, &child) in children.iter().enumerate() { nodes[child].position = placements[i].position; nodes[child].measured_size = placements[i].size; } }
 }
