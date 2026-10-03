@@ -21,7 +21,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 use winia::runtime::composer::ComposeCtx;
-use winia::modifier::Shape;
+use winia::graphics::Shape;
 use winia::overlay::{
     DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults,
     MenuItemColors,
@@ -57,7 +57,7 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
             move |ctx| {
                 Text::new(format!("上次选择: {}", picked_text.get()))
                     .font_size(14.0)
-                    .color(winia::modifier::Color::from_argb(255, 120, 120, 120))
+                    .color(winia::graphics::Color::from_argb(255, 120, 120, 120))
                     .build(ctx);
 
                 // ── 1. Plain menu: material3 defaults ──
@@ -182,11 +182,11 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                         {
                             clone!(styled_open, picked);
                             move |ctx| {
-                                let accent = winia::modifier::Color::from_argb(255, 103, 80, 164);
+                                let accent = winia::graphics::Color::from_argb(255, 103, 80, 164);
                                 // Disabled = the same role at `ListItemDisabled*Opacity` (0.38), the way
                                 // every other component here does it.
-                                let faded = |c: winia::modifier::Color| {
-                                    winia::modifier::Color::from_argb((c.a as f32 * 0.38) as u8, c.r, c.g, c.b)
+                                let faded = |c: winia::graphics::Color| {
+                                    winia::graphics::Color::from_argb((c.a as f32 * 0.38) as u8, c.r, c.g, c.b)
                                 };
                                 let colors = MenuItemColors {
                                     text: accent,
@@ -275,11 +275,11 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                 // item padding and the trailing arrow that material3's `TrailingIcon` rotates 180°.
                 Text::new("6. Exposed dropdown (click the field)")
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
                 Text::new(format!("已选: {}", picked.get()))
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
                 ExposedDropdownMenuBox::new(exposed_open.clone())
                     .on_expanded_change({
@@ -340,7 +340,7 @@ fn dropdown_menu_demo(ctx: &mut ComposeCtx) {
                 Spacer::vertical(220.0).build(ctx);
                 Text::new("↓ this one has no room below it")
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
                 Button::text()
                     .modifier(Modifier::new().width(240.0))

@@ -10,7 +10,7 @@
 use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::LayoutDirection;
-use crate::modifier::Color;
+use crate::graphics::Color;
 use crate::text::{FontWeight, TextStyle};
 use crate::unit::{Sp, TextUnit};
 use material_colors::color::Argb;
@@ -759,7 +759,8 @@ mod tests {
     fn surface_scene(ctx: &mut crate::runtime::composer::ComposeCtx) {
         use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
-        use crate::modifier::{Modifier, Shape};
+        use crate::modifier::{Modifier};
+        use crate::graphics::{Shape};
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
             GroupStatus::Skip => {}

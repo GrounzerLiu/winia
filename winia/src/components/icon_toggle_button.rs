@@ -5,7 +5,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::components::button::ButtonBorder;
 use crate::components::icon_button::{IconButtonDefaults, IconButtonSize, IconButtonStyle};
 use crate::interaction::MutableInteractionSource;

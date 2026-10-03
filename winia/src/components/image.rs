@@ -12,7 +12,8 @@
 use crate::graphics::{ContentScale, ImageAlignment};
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
-use crate::modifier::{ColorFilter, FilterQuality, Modifier, ModifierElement};
+use crate::modifier::{Modifier, ModifierElement};
+use crate::graphics::{ColorFilter, FilterQuality};
 use crate::graphics::IconSource;
 use skia_safe::Rect;
 
@@ -229,7 +230,7 @@ mod tests {
     }
     #[test]
     fn test_image_builder_color_filter_and_quality() {
-        use crate::modifier::{BlendMode, Color};
+        use crate::graphics::{BlendMode, Color};
         let img = Image::file("a.png")
             .color_filter(ColorFilter::Tint { color: Color::RED, blend_mode: BlendMode::SrcIn })
             .filter_quality(FilterQuality::High);

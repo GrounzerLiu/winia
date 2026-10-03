@@ -20,7 +20,8 @@
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::modifier::{Color, Modifier, Shape, SizeValue};
+use crate::modifier::{Modifier, SizeValue};
+use crate::graphics::{Color, Shape};
 use crate::components::text_field::{TextField, TextFieldValue};
 use crate::text::field::{TextFieldColors};
 use std::sync::Arc;
@@ -818,7 +819,7 @@ impl SearchBar {
                                         let cp = state.content_progress.clone();
                                         crate::layout::components::Column::new()
                                             .modifier(Modifier::new().graphics_layer(move || {
-                                                crate::modifier::GraphicsLayerParams {
+                                                crate::graphics::GraphicsLayerParams {
                                                     alpha: cp.get(),
                                                     ..Default::default()
                                                 }
@@ -1436,7 +1437,7 @@ mod tests {
                         crate::modifier::ModifierElement::Background { shape, .. } => Some(shape),
                         _ => None,
                     };
-                    if let Some(crate::modifier::Shape::RoundedRect { corner_radius }) = shape {
+                    if let Some(crate::graphics::Shape::RoundedRect { corner_radius }) = shape {
                         if *corner_radius > 0.5 {
                             found = Some(*corner_radius);
                         }

@@ -21,7 +21,7 @@
 //!
 //! # Fill, not stroke
 //!
-//! A brush fills a shape; the shapes come from the same [`crate::modifier::Shape`] set
+//! A brush fills a shape; the shapes come from the same [`crate::graphics::Shape`] set
 //! `Modifier::background` uses, including the rounded and one-sided variants.
 //!
 //! # Animated brushes
@@ -30,7 +30,7 @@
 //! `background`'s handling of animated colors: read animated `State`s inside the closure and the
 //! gradient moves with them.
 
-use crate::modifier::Color;
+use crate::graphics::Color;
 
 /// How a gradient repeats outside its start/end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

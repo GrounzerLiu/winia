@@ -34,7 +34,8 @@ use crate::layout::node::{
     intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point, Size,
 };
 use crate::layout::LayoutDirection;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::text::TextAlign;
 use crate::theme::WiniaTheme;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -746,20 +747,20 @@ impl Tab {
         // 动态颜色 tint（渲染期 peek 零重组；layout_deps 由 TabLayoutPolicy.measure
         // 读 color_anim.get() 注册——动画帧重测 Tab 节点 → 重绘 → 新色生效）
         let tint_for_icon = color_anim.clone();
-        let icon_tint_modifier = Modifier::new().graphics_layer(move || crate::modifier::GraphicsLayerParams {
-            color_filter: Some(crate::modifier::ColorFilter::Tint {
+        let icon_tint_modifier = Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
+            color_filter: Some(crate::graphics::ColorFilter::Tint {
                 color: tint_for_icon.peek(),
-                blend_mode: crate::modifier::BlendMode::SrcIn,
+                blend_mode: crate::graphics::BlendMode::SrcIn,
             }),
-            ..crate::modifier::GraphicsLayerParams::default()
+            ..crate::graphics::GraphicsLayerParams::default()
         });
         let tint_for_text = color_anim.clone();
-        let text_tint_modifier = Modifier::new().graphics_layer(move || crate::modifier::GraphicsLayerParams {
-            color_filter: Some(crate::modifier::ColorFilter::Tint {
+        let text_tint_modifier = Modifier::new().graphics_layer(move || crate::graphics::GraphicsLayerParams {
+            color_filter: Some(crate::graphics::ColorFilter::Tint {
                 color: tint_for_text.peek(),
-                blend_mode: crate::modifier::BlendMode::SrcIn,
+                blend_mode: crate::graphics::BlendMode::SrcIn,
             }),
-            ..crate::modifier::GraphicsLayerParams::default()
+            ..crate::graphics::GraphicsLayerParams::default()
         });
 
         // 默认 text/icon 版：TabLayoutPolicy
@@ -826,7 +827,7 @@ struct TabLayoutPolicy {
     direction: LayoutDirection,
     /// 颜色动画 State——measure 开头 get() 注册 layout_dep，动画帧重测
     /// Tab 节点 → 触发重绘 → graphics_layer color_filter peek 新色
-    color_anim: State<crate::modifier::Color>,
+    color_anim: State<crate::graphics::Color>,
 }
 
 impl MeasurePolicy for TabLayoutPolicy {

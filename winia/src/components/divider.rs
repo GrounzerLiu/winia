@@ -19,7 +19,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, Modifier};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color};
 use crate::theme::{ThemeColors, WiniaTheme};
 
 /// 默认厚度（`DividerTokens.Thickness = 1dp`）

@@ -77,7 +77,7 @@ Column::new()
             Column::new()
                 .modifier(Modifier::new()
                     .size(120.0, 60.0)
-                    .drop_shadow(Shape::rounded(12.0), winia::modifier::ShadowParams::new(6.0, 4.0, 6.0, Color::from_argb(180, 100, 60, 0), 0.8))
+                    .drop_shadow(Shape::rounded(12.0), winia::graphics::ShadowParams::new(6.0, 4.0, 6.0, Color::from_argb(180, 100, 60, 0), 0.8))
                     .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(12.0)))
                 .build(ctx, |ctx| {
                     Text::new("drop 自定义").color(Color::WHITE).font_size(13.0).build(ctx);

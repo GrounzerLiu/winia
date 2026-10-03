@@ -64,7 +64,7 @@ pub fn render_node_at(
 struct TextParams<'a> {
     content: &'a str,
     font_size: f32,
-    color: &'a crate::modifier::Color,
+    color: &'a crate::graphics::Color,
     font_weight: crate::text::FontWeight,
     font_style: crate::text::FontSlant,
     max_lines: usize,
@@ -87,7 +87,7 @@ struct TextParams<'a> {
 /// → 平移 → 2D/3D 变换 → 平移回。阴影绘制与内容绘制共用。
 fn apply_gl_transform(
     canvas: &Canvas,
-    gl: &crate::modifier::GraphicsLayerParams,
+    gl: &crate::graphics::GraphicsLayerParams,
     x: f32,
     y: f32,
     w: f32,
@@ -116,7 +116,7 @@ fn apply_gl_transform(
 /// （矩阵左乘序与 Compose RenderNode 一致；调用方负责先平移到 pivot）。
 /// 无 3D 旋转时返回 None（走 2D 路径）。
 fn build_gl_3d_matrix(
-    gl: &crate::modifier::GraphicsLayerParams,
+    gl: &crate::graphics::GraphicsLayerParams,
     w: f32,
     h: f32,
 ) -> Option<skia_safe::M44> {
@@ -169,10 +169,10 @@ fn build_gl_3d_matrix(
 fn draw_elevation_shadow(
     canvas: &Canvas,
     rect: Rect,
-    shape: &crate::modifier::Shape,
+    shape: &crate::graphics::Shape,
     elevation: f32,
-    ambient_color: crate::modifier::Color,
-    spot_color: crate::modifier::Color,
+    ambient_color: crate::graphics::Color,
+    spot_color: crate::graphics::Color,
 ) {
     if elevation <= 0.0 || !elevation.is_finite() {
         return;
@@ -216,7 +216,7 @@ fn rrect_left_rounded(rect: Rect, r: f32) -> RRect {
 }
 
 /// `RRect` with an independent radius per corner, in Skia's order (upper-left, upper-right,
-/// lower-right, lower-left) — the render half of [`crate::modifier::Shape::Corners`].
+/// lower-right, lower-left) — the render half of [`crate::graphics::Shape::Corners`].
 fn rrect_corners(rect: Rect, top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> RRect {
     RRect::new_rect_radii(rect, &[
         skia_safe::Vector::new(top_left, top_left),
@@ -226,13 +226,13 @@ fn rrect_corners(rect: Rect, top_left: f32, top_right: f32, bottom_right: f32, b
     ])
 }
 
-fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
+fn shadow_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_safe::Path {
     match shape {
-        crate::modifier::Shape::Rectangle => skia_safe::Path::rect(rect, None),
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
+        crate::graphics::Shape::Rectangle => skia_safe::Path::rect(rect, None),
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None)
         }
-        crate::modifier::Shape::TopRoundedRect { radius } => {
+        crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(rect, &[
                 skia_safe::Vector::new(*radius, *radius),
                 skia_safe::Vector::new(*radius, *radius),
@@ -241,23 +241,23 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
             ]);
             skia_safe::Path::rrect(rr, None)
         }
-        crate::modifier::Shape::RightRoundedRect { radius } => {
+        crate::graphics::Shape::RightRoundedRect { radius } => {
             skia_safe::Path::rrect(rrect_right_rounded(rect, *radius), None)
         }
-        crate::modifier::Shape::LeftRoundedRect { radius } => {
+        crate::graphics::Shape::LeftRoundedRect { radius } => {
             skia_safe::Path::rrect(rrect_left_rounded(rect, *radius), None)
         }
-        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
             skia_safe::Path::rrect(
                 rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
                 None,
             )
         }
-        crate::modifier::Shape::Pill => {
+        crate::graphics::Shape::Pill => {
             let radius = rect.width().min(rect.height()) / 2.0;
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, radius, radius), None)
         }
-        crate::modifier::Shape::Circle => {
+        crate::graphics::Shape::Circle => {
             // Compose's `CircleShape` IS `RoundedCornerShape(50)`: a percent corner
             // evaluated against the box, so a non-square box gives a stadium — not
             // a true circle (which leaves the box mostly unpainted) and not an
@@ -280,8 +280,8 @@ fn shadow_path(rect: Rect, shape: &crate::modifier::Shape) -> skia_safe::Path {
 fn draw_shadow_layer(
     canvas: &Canvas,
     rect: Rect,
-    shape: &crate::modifier::Shape,
-    params: &crate::modifier::ShadowParams,
+    shape: &crate::graphics::Shape,
+    params: &crate::graphics::ShadowParams,
 ) {
     use skia_safe::{BlendMode, Color4f, Paint, PaintStyle, surfaces};
 
@@ -309,11 +309,11 @@ fn draw_shadow_layer(
     mask.set_color(skia_safe::Color::WHITE);
     mask.set_anti_alias(true);
     match shape {
-        crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &mask); }
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
+        crate::graphics::Shape::Rectangle => { sc.draw_rect(local, &mask); }
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
             sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
         }
-        crate::modifier::Shape::TopRoundedRect { radius } => {
+        crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(local, &[
                 skia_safe::Vector::new(*radius, *radius),
                 skia_safe::Vector::new(*radius, *radius),
@@ -322,23 +322,23 @@ fn draw_shadow_layer(
             ]);
             sc.draw_rrect(rr, &mask);
         }
-        crate::modifier::Shape::RightRoundedRect { radius } => {
+        crate::graphics::Shape::RightRoundedRect { radius } => {
             sc.draw_rrect(rrect_right_rounded(local, *radius), &mask);
         }
-        crate::modifier::Shape::LeftRoundedRect { radius } => {
+        crate::graphics::Shape::LeftRoundedRect { radius } => {
             sc.draw_rrect(rrect_left_rounded(local, *radius), &mask);
         }
-        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
             sc.draw_rrect(
                 rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
                 &mask,
             );
         }
-        crate::modifier::Shape::Pill => {
+        crate::graphics::Shape::Pill => {
             let r = local.width().min(local.height()) / 2.0;
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
-        crate::modifier::Shape::Circle => {
+        crate::graphics::Shape::Circle => {
             let r = local.width().min(local.height()) / 2.0;
             sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
         }
@@ -351,11 +351,11 @@ fn draw_shadow_layer(
         stroke.set_style(PaintStyle::Stroke);
         stroke.set_stroke_width(params.spread * 2.0);
         match shape {
-            crate::modifier::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
-            crate::modifier::Shape::RoundedRect { corner_radius } => {
+            crate::graphics::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
+            crate::graphics::Shape::RoundedRect { corner_radius } => {
                 sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
             }
-            crate::modifier::Shape::TopRoundedRect { radius } => {
+            crate::graphics::Shape::TopRoundedRect { radius } => {
                 let rr = RRect::new_rect_radii(local, &[
                     skia_safe::Vector::new(*radius, *radius),
                     skia_safe::Vector::new(*radius, *radius),
@@ -364,23 +364,23 @@ fn draw_shadow_layer(
                 ]);
                 sc.draw_rrect(rr, &stroke);
             }
-            crate::modifier::Shape::RightRoundedRect { radius } => {
+            crate::graphics::Shape::RightRoundedRect { radius } => {
                 sc.draw_rrect(rrect_right_rounded(local, *radius), &stroke);
             }
-            crate::modifier::Shape::LeftRoundedRect { radius } => {
+            crate::graphics::Shape::LeftRoundedRect { radius } => {
                 sc.draw_rrect(rrect_left_rounded(local, *radius), &stroke);
             }
-            crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
                 sc.draw_rrect(
                     rrect_corners(local, *top_left, *top_right, *bottom_right, *bottom_left),
                     &stroke,
                 );
             }
-            crate::modifier::Shape::Pill => {
+            crate::graphics::Shape::Pill => {
                 let r = local.width().min(local.height()) / 2.0;
                 sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
-            crate::modifier::Shape::Circle => {
+            crate::graphics::Shape::Circle => {
                 let r = local.width().min(local.height()) / 2.0;
                 sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
@@ -429,7 +429,7 @@ fn render_modifier_element<'a>(
     el: &'a ModifierElement,
     rect: Rect,
     x: f32, y: f32, w: f32, h: f32,
-    last_background: &mut Option<(crate::modifier::Color, crate::modifier::Shape)>,
+    last_background: &mut Option<(crate::graphics::Color, crate::graphics::Shape)>,
     morph_radii: Option<[(f32, f32); 4]>,
 ) -> Option<TextParams<'a>> {
     match el {
@@ -545,9 +545,9 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                         );
                     }
                     DecodedIcon::Svg { dom, width, height } => {
-                        let cf = spec.tint.map(|c| crate::modifier::ColorFilter::Tint {
+                        let cf = spec.tint.map(|c| crate::graphics::ColorFilter::Tint {
                             color: c,
-                            blend_mode: crate::modifier::BlendMode::SrcIn,
+                            blend_mode: crate::graphics::BlendMode::SrcIn,
                         });
                         draw_svg_dom(canvas, dom, fit_rect(rect, *width, *height), cf.as_ref(), 1.0);
                     }
@@ -567,7 +567,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                     let y = rect.top + (rect.height() - size) / 2.0 + size;
                     let mut paint = Paint::default();
                     paint.set_anti_alias(true);
-                    paint.set_color(skia_color(spec.tint.unwrap_or(crate::modifier::Color::BLACK)));
+                    paint.set_color(skia_color(spec.tint.unwrap_or(crate::graphics::Color::BLACK)));
                     canvas.draw_text_blob(&blob, (x, y), &paint);
                 }
             }
@@ -581,13 +581,13 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
 /// winia `Color` → Skia color. Public because the `Canvas`/`DrawScope` API
 /// (`crate::components::draw_scope`) draws through it too — one conversion for the whole crate rather than a
 /// second copy inside the public drawing surface.
-pub fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
+pub fn skia_color(c: crate::graphics::Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
 }
 
 /// 映射 winia BlendMode → skia BlendMode（同源 29 值）
-fn to_skia_blend_mode(bm: crate::modifier::BlendMode) -> BlendMode {
-    use crate::modifier::BlendMode as BM;
+fn to_skia_blend_mode(bm: crate::graphics::BlendMode) -> BlendMode {
+    use crate::graphics::BlendMode as BM;
     match bm {
         BM::Clear => BlendMode::Clear,
         BM::Src => BlendMode::Src,
@@ -622,8 +622,8 @@ fn to_skia_blend_mode(bm: crate::modifier::BlendMode) -> BlendMode {
 }
 
 /// 映射 winia ColorFilter → skia ColorFilter（Tint/Matrix/Lighting）
-fn to_skia_color_filter(cf: &crate::modifier::ColorFilter) -> Option<skia_safe::ColorFilter> {
-    use crate::modifier::ColorFilter as CF;
+fn to_skia_color_filter(cf: &crate::graphics::ColorFilter) -> Option<skia_safe::ColorFilter> {
+    use crate::graphics::ColorFilter as CF;
     match cf {
         CF::Tint { color, blend_mode } => {
             skia_safe::color_filters::blend(skia_color(*color), to_skia_blend_mode(*blend_mode))
@@ -636,8 +636,8 @@ fn to_skia_color_filter(cf: &crate::modifier::ColorFilter) -> Option<skia_safe::
 }
 
 /// FilterQuality → SamplingOptions（None/Low/Medium/High）
-fn sampling_options_for(q: crate::modifier::FilterQuality) -> SamplingOptions {
-    use crate::modifier::FilterQuality as FQ;
+fn sampling_options_for(q: crate::graphics::FilterQuality) -> SamplingOptions {
+    use crate::graphics::FilterQuality as FQ;
     match q {
         FQ::None => SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
         FQ::Low => SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
@@ -656,8 +656,8 @@ fn draw_image_content(
     content_scale: crate::graphics::ContentScale,
     alignment: crate::graphics::ImageAlignment,
     alpha: f32,
-    color_filter: Option<&crate::modifier::ColorFilter>,
-    filter_quality: crate::modifier::FilterQuality,
+    color_filter: Option<&crate::graphics::ColorFilter>,
+    filter_quality: crate::graphics::FilterQuality,
     direction: crate::layout::LayoutDirection,
 ) {
     let Some(decoded) = crate::graphics::decoded_icon(source) else { return };
@@ -740,7 +740,7 @@ fn draw_svg_dom(
     canvas: &Canvas,
     dom: &RefCell<svg::Dom>,
     dst: Rect,
-    color_filter: Option<&crate::modifier::ColorFilter>,
+    color_filter: Option<&crate::graphics::ColorFilter>,
     alpha: f32,
 ) {
     if dst.width() <= 0.0 || dst.height() <= 0.0 {
@@ -1075,7 +1075,7 @@ fn render_pass1(
         if gl.shadow_elevation > 0.0 {
             canvas.save();
             apply_gl_transform(canvas, &gl, x, y, w, h);
-            let shape = gl.shadow_shape.clone().unwrap_or(crate::modifier::Shape::Rectangle);
+            let shape = gl.shadow_shape.clone().unwrap_or(crate::graphics::Shape::Rectangle);
             draw_elevation_shadow(
                 canvas,
                 rect,
@@ -1096,11 +1096,11 @@ fn render_pass1(
         true
     } else { false };
     let mut blur_radius: Option<f32> = None;
-    let mut clip_shape: Option<crate::modifier::Shape> = None;
+    let mut clip_shape: Option<crate::graphics::Shape> = None;
     // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
     // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
     // 阴影层（预扫描直接绘制——见下方 pre-scan 注释）
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::text::TextAlign, crate::text::TextOverflow, crate::text::FontWeight, crate::text::FontSlant, bool, f32, Option<f32>)> = None;
+    let mut text: Option<(&str, f32, &crate::graphics::Color, usize, crate::text::TextAlign, crate::text::TextOverflow, crate::text::FontWeight, crate::text::FontSlant, bool, f32, Option<f32>)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -1124,7 +1124,7 @@ fn render_pass1(
 
     // 同节点链序中最后绘制的背景（颜色+形状）——边框色与形状都等于它时
     // 跳过描边（合并为纯填充），避免半透明同色双重混合
-    let mut last_background: Option<(crate::modifier::Color, crate::modifier::Shape)> = None;
+    let mut last_background: Option<(crate::graphics::Color, crate::graphics::Shape)> = None;
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } => {
@@ -1272,11 +1272,11 @@ fn render_pass1(
     } else if let Some(ref shape) = clip_shape {
         canvas.save();
         match shape {
-            crate::modifier::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
-            crate::modifier::Shape::RoundedRect { corner_radius } => {
+            crate::graphics::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
+            crate::graphics::Shape::RoundedRect { corner_radius } => {
                 canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
             }
-            crate::modifier::Shape::TopRoundedRect { radius } => {
+            crate::graphics::Shape::TopRoundedRect { radius } => {
                 let rr = RRect::new_rect_radii(rect, &[
                     skia_safe::Vector::new(*radius, *radius),
                     skia_safe::Vector::new(*radius, *radius),
@@ -1285,24 +1285,24 @@ fn render_pass1(
                 ]);
                 canvas.clip_rrect(rr, None, Some(false));
             }
-            crate::modifier::Shape::RightRoundedRect { radius } => {
+            crate::graphics::Shape::RightRoundedRect { radius } => {
                 canvas.clip_rrect(rrect_right_rounded(rect, *radius), None, Some(false));
             }
-            crate::modifier::Shape::LeftRoundedRect { radius } => {
+            crate::graphics::Shape::LeftRoundedRect { radius } => {
                 canvas.clip_rrect(rrect_left_rounded(rect, *radius), None, Some(false));
             }
-            crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
                 canvas.clip_rrect(
                     rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
                     None,
                     Some(false),
                 );
             }
-            crate::modifier::Shape::Pill => {
+            crate::graphics::Shape::Pill => {
                 let r = rect.width().min(rect.height()) / 2.0;
                 canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
             }
-            crate::modifier::Shape::Circle => {
+            crate::graphics::Shape::Circle => {
                 // Circle == Pill (see the fill path): percent-50 corners against
                 // the box, not an ellipse.
                 let r = rect.width().min(rect.height()) / 2.0;
@@ -1450,7 +1450,7 @@ fn render_pass1(
             | ModifierElement::BorderDynamic { shape, .. }
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
-        }).unwrap_or(crate::modifier::Shape::Rectangle);
+        }).unwrap_or(crate::graphics::Shape::Rectangle);
         draw_focus(canvas, rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
     }
 
@@ -1579,14 +1579,14 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             });
             canvas.save();
             match clip_shape {
-                Some(crate::modifier::Shape::RoundedRect { corner_radius }) => {
+                Some(crate::graphics::Shape::RoundedRect { corner_radius }) => {
                     canvas.clip_rrect(
                         skia_safe::RRect::new_rect_xy(rect, corner_radius, corner_radius),
                         None,
                         Some(false),
                     );
                 }
-                Some(crate::modifier::Shape::TopRoundedRect { radius }) => {
+                Some(crate::graphics::Shape::TopRoundedRect { radius }) => {
                     let rr = skia_safe::RRect::new_rect_radii(rect, &[
                         skia_safe::Vector::new(radius, radius),
                         skia_safe::Vector::new(radius, radius),
@@ -1595,7 +1595,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     ]);
                     canvas.clip_rrect(rr, None, Some(false));
                 }
-                Some(crate::modifier::Shape::Pill) => {
+                Some(crate::graphics::Shape::Pill) => {
                     let r = rect.width().min(rect.height()) / 2.0;
                     canvas.clip_rrect(
                         skia_safe::RRect::new_rect_xy(rect, r, r),
@@ -1603,19 +1603,19 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                         Some(false),
                     );
                 }
-                Some(crate::modifier::Shape::Circle) => {
+                Some(crate::graphics::Shape::Circle) => {
                     // Circle == Pill (see the fill path): percent-50 corners, so a
                     // non-square box is a stadium, not an ellipse.
                     let r = rect.width().min(rect.height()) / 2.0;
                     canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
                 }
-                Some(crate::modifier::Shape::RightRoundedRect { radius }) => {
+                Some(crate::graphics::Shape::RightRoundedRect { radius }) => {
                     canvas.clip_rrect(rrect_right_rounded(rect, radius), None, Some(false));
                 }
-                Some(crate::modifier::Shape::LeftRoundedRect { radius }) => {
+                Some(crate::graphics::Shape::LeftRoundedRect { radius }) => {
                     canvas.clip_rrect(rrect_left_rounded(rect, radius), None, Some(false));
                 }
-                Some(crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
+                Some(crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
                     canvas.clip_rrect(
                         rrect_corners(rect, top_left, top_right, bottom_right, bottom_left),
                         None,
@@ -1828,8 +1828,8 @@ fn backdrop_snapshot_irect(
 
 // ── 辅助函数 ──
 
-impl From<&crate::modifier::Color> for Color4f {
-    fn from(c: &crate::modifier::Color) -> Self {
+impl From<&crate::graphics::Color> for Color4f {
+    fn from(c: &crate::graphics::Color) -> Self {
         Color4f::new(
             c.r as f32 / 255.0,
             c.g as f32 / 255.0,
@@ -1841,11 +1841,11 @@ impl From<&crate::modifier::Color> for Color4f {
 
 /// 开放绘制节点用的背景绘制入口（exp/modifier-node 试点：第三方 DrawNode
 /// 无需复刻背景绘制逻辑，直接调此函数；与枚举 Background 同实现）。
-pub fn draw_background_for_node(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
+pub fn draw_background_for_node(canvas: &Canvas, rect: Rect, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
     draw_background(canvas, rect, color, shape);
 }
 
-fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
+fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
     paint.set_anti_alias(true);
@@ -1854,13 +1854,13 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::modifier::Color, 
 
 /// Fill `shape` inside `rect` with an already prepared paint — the one place the shape set is turned
 /// into a draw call, shared by solid backgrounds and brushes.
-fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::modifier::Shape) {
+fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::graphics::Shape) {
     match shape {
-        crate::modifier::Shape::Rectangle => { canvas.draw_rect(rect, paint); }
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
+        crate::graphics::Shape::Rectangle => { canvas.draw_rect(rect, paint); }
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), paint);
         }
-        crate::modifier::Shape::TopRoundedRect { radius } => {
+        crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(rect, &[
                 skia_safe::Vector::new(*radius, *radius),
                 skia_safe::Vector::new(*radius, *radius),
@@ -1869,23 +1869,23 @@ fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::modifi
             ]);
             canvas.draw_rrect(rr, paint);
         }
-        crate::modifier::Shape::RightRoundedRect { radius } => {
+        crate::graphics::Shape::RightRoundedRect { radius } => {
             canvas.draw_rrect(rrect_right_rounded(rect, *radius), paint);
         }
-        crate::modifier::Shape::LeftRoundedRect { radius } => {
+        crate::graphics::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(rect, *radius), paint);
         }
-        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
             canvas.draw_rrect(
                 rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
                 paint,
             );
         }
-        crate::modifier::Shape::Pill => {
+        crate::graphics::Shape::Pill => {
             let r = rect.width().min(rect.height()) / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), &paint);
         }
-        crate::modifier::Shape::Circle => {
+        crate::graphics::Shape::Circle => {
             // Circle == Pill == Compose `RoundedCornerShape(50)`: percent corners
             // against the box, so a non-square box is a stadium. Drawing a true
             // circle left most of a wide box unpainted.
@@ -1895,13 +1895,13 @@ fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::modifi
     }
 }
 
-/// Fill `shape` with a [`crate::brush::Brush`].
+/// Fill `shape` with a [`crate::graphics::Brush`].
 ///
 /// The two absolute cases are resolved here, against the node's rect: a gradient's coordinates are
 /// fractions of the bounds (see the [`crate::brush`] module docs), so a gradient fills any size node.
-fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::brush::Brush, shape: &crate::modifier::Shape) {
+fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::graphics::Brush, shape: &crate::graphics::Shape) {
     match brush {
-        crate::brush::Brush::Solid(color) => draw_background(canvas, rect, color, shape),
+        crate::graphics::Brush::Solid(color) => draw_background(canvas, rect, color, shape),
         _ => {
             let Some(paint) = brush_paint(brush, rect) else { return };
             paint_shape(canvas, rect, &paint, shape);
@@ -1911,24 +1911,24 @@ fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::brush::Brush, shape: &
 
 /// A paint whose shader is `brush`, in the node's `rect` — `None` for a degenerate brush (no colors,
 /// or a zero-length gradient), which paints nothing rather than panicking.
-fn brush_paint(brush: &crate::brush::Brush, rect: Rect) -> Option<Paint> {
+fn brush_paint(brush: &crate::graphics::Brush, rect: Rect) -> Option<Paint> {
     use skia_safe::gradient::{Colors, Gradient, Interpolation};
 
     let (stops, positions, tile, geometry) = match brush {
-        crate::brush::Brush::Solid(_) => return None,
-        crate::brush::Brush::Linear(g) => (
+        crate::graphics::Brush::Solid(_) => return None,
+        crate::graphics::Brush::Linear(g) => (
             g.stops(),
             g.positions_ref(),
             g.tile_mode(),
             (g.from(), g.to(), 0.0),
         ),
-        crate::brush::Brush::Radial(g) => (
+        crate::graphics::Brush::Radial(g) => (
             g.stops(),
             g.positions_ref(),
             g.tile_mode(),
             (g.from(), g.from(), g.radius_value()),
         ),
-        crate::brush::Brush::Sweep(g) => (
+        crate::graphics::Brush::Sweep(g) => (
             g.stops(),
             g.positions_ref(),
             g.tile_mode(),
@@ -1952,14 +1952,14 @@ fn brush_paint(brush: &crate::brush::Brush, rect: Rect) -> Option<Paint> {
     };
     let (from, to, radius) = geometry;
     let shader = match brush {
-        crate::brush::Brush::Linear(_) => {
+        crate::graphics::Brush::Linear(_) => {
             let (start, end) = (absolute(from), absolute(to));
             if start == end {
                 return None; // A zero-length gradient has no direction to run in.
             }
             skia_safe::gradient::shaders::linear_gradient((start, end), &gradient, None)
         }
-        crate::brush::Brush::Radial(_) => {
+        crate::graphics::Brush::Radial(_) => {
             // The radius is a fraction of the SHORTER side, so the gradient reaches the nearest pair
             // of edges whatever the aspect ratio.
             let r = radius * rect.width().min(rect.height());
@@ -1971,13 +1971,13 @@ fn brush_paint(brush: &crate::brush::Brush, rect: Rect) -> Option<Paint> {
         // A full turn, in DEGREES: Skia documents the range as degrees with 0 at the +x axis and the
         // CSS conic-gradient convention (`skia/include/effects/SkGradient.h`, `SweepGradient`). The
         // sweep runs clockwise from 3 o'clock, so `Brush::sweep_gradient` needs no angle options.
-        crate::brush::Brush::Sweep(_) => skia_safe::gradient::shaders::sweep_gradient(
+        crate::graphics::Brush::Sweep(_) => skia_safe::gradient::shaders::sweep_gradient(
             absolute(from),
             (0.0, 360.0),
             &gradient,
             None,
         ),
-        crate::brush::Brush::Solid(_) => return None,
+        crate::graphics::Brush::Solid(_) => return None,
     }?;
 
     let mut paint = Paint::default();
@@ -1986,11 +1986,11 @@ fn brush_paint(brush: &crate::brush::Brush, rect: Rect) -> Option<Paint> {
     Some(paint)
 }
 
-fn skia_tile(tile: crate::brush::BrushTile) -> skia_safe::TileMode {
+fn skia_tile(tile: crate::graphics::BrushTile) -> skia_safe::TileMode {
     match tile {
-        crate::brush::BrushTile::Clamp => skia_safe::TileMode::Clamp,
-        crate::brush::BrushTile::Repeat => skia_safe::TileMode::Repeat,
-        crate::brush::BrushTile::Mirror => skia_safe::TileMode::Mirror,
+        crate::graphics::BrushTile::Clamp => skia_safe::TileMode::Clamp,
+        crate::graphics::BrushTile::Repeat => skia_safe::TileMode::Repeat,
+        crate::graphics::BrushTile::Mirror => skia_safe::TileMode::Mirror,
     }
 }
 
@@ -2008,9 +2008,9 @@ fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
     variant: &crate::text::field::TextFieldVariant,
-    shape: &crate::modifier::Shape,
+    shape: &crate::graphics::Shape,
     colors: &crate::text::field::TextFieldColors,
-    indicator: &crate::modifier::Color,
+    indicator: &crate::graphics::Color,
     focus_p: f32,
     cutout: Option<Rect>,
 ) {
@@ -2068,7 +2068,7 @@ fn measure_text_width(content: &str, font_size: f32, max_width: f32) -> f32 {
     let mut para = crate::layout::node::build_plain_paragraph(
         content,
         font_size,
-        &crate::modifier::Color::BLACK,
+        &crate::graphics::Color::BLACK,
         crate::text::FontWeight::NORMAL,
         crate::text::FontSlant::Upright,
         usize::MAX,
@@ -2093,7 +2093,7 @@ fn draw_text_field_aux_text(
     font_style: crate::text::FontSlant,
     letter_spacing: f32,
     line_height: Option<f32>,
-    color: &crate::modifier::Color,
+    color: &crate::graphics::Color,
     pos: (f32, f32),
     max_width: f32,
 ) {
@@ -2125,7 +2125,7 @@ fn draw_border_morphed(
     canvas: &Canvas,
     x: f32, y: f32, w: f32, h: f32,
     width: f32,
-    color: &crate::modifier::Color,
+    color: &crate::graphics::Color,
     r: [(f32, f32); 4],
 ) {
     let mut paint = Paint::default();
@@ -2144,7 +2144,7 @@ fn draw_border_morphed(
     );
 }
 
-fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::modifier::Color, shape: &crate::modifier::Shape) {
+fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, color: &crate::graphics::Color, shape: &crate::graphics::Shape) {
     let mut paint = Paint::default();
     paint.set_color4f(Color4f::from(color), None);
     paint.set_style(skia_safe::paint::Style::Stroke);
@@ -2153,11 +2153,11 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
     let inset = width / 2.0;
     let sr = Rect::new(x + inset, y + inset, x + w - inset, y + h - inset);
     match shape {
-        crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
+        crate::graphics::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
         }
-        crate::modifier::Shape::TopRoundedRect { radius } => {
+        crate::graphics::Shape::TopRoundedRect { radius } => {
             let r = (*radius - inset).max(0.0);
             let rr = RRect::new_rect_radii(sr, &[
                 skia_safe::Vector::new(r, r),
@@ -2167,13 +2167,13 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
             ]);
             canvas.draw_rrect(rr, &paint);
         }
-        crate::modifier::Shape::RightRoundedRect { radius } => {
+        crate::graphics::Shape::RightRoundedRect { radius } => {
             canvas.draw_rrect(rrect_right_rounded(sr, (*radius - inset).max(0.0)), &paint);
         }
-        crate::modifier::Shape::LeftRoundedRect { radius } => {
+        crate::graphics::Shape::LeftRoundedRect { radius } => {
             canvas.draw_rrect(rrect_left_rounded(sr, (*radius - inset).max(0.0)), &paint);
         }
-        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
             // Same inset rule as the other radii: the border is drawn on the inset rect, so its
             // corners shrink by the stroke's half width (a 1 dp border on a 4 dp inner corner must
             // not paint outside the fill it wraps).
@@ -2188,13 +2188,13 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
                 &paint,
             );
         }
-        crate::modifier::Shape::Pill => {
+        crate::graphics::Shape::Pill => {
             // 路径圆角 = 节点 pill 半径 - inset（不要对 sr 再减一次——
             // 否则外缘在圆角处比背景内缩 1px，边框不像内边框）
             let r = (w.min(h) / 2.0 - inset).max(0.0);
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
-        crate::modifier::Shape::Circle => {
+        crate::graphics::Shape::Circle => {
             let r = sr.width().min(sr.height()) / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
@@ -2206,14 +2206,14 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
 pub(crate) fn draw_focus(
     canvas: &Canvas,
     rect: Rect,
-    shape: &crate::modifier::Shape,
+    shape: &crate::graphics::Shape,
     // Device-space corner radii of the FLIGHT morph, when this node is flying: the ring
     // must use the same corners as the background it surrounds. Resolving the node's own
     // shape instead measures a percent corner (Circle/Pill) on the un-transformed content
     // box, and the flight's `canvas.scale` then stretches it into an ellipse while the
     // background paints `min(lerped)/2`.
     flight_radii: Option<[(f32, f32); 4]>,
-    color: crate::modifier::Color,
+    color: crate::graphics::Color,
     alpha: f32,
     gap: f32,
 ) {
@@ -2269,13 +2269,13 @@ pub(crate) fn draw_focus(
         return;
     }
     match shape {
-        crate::modifier::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
-        crate::modifier::Shape::RoundedRect { corner_radius } => {
+        crate::graphics::Shape::Rectangle => { canvas.draw_rect(sr, &paint); }
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
             // 外扩后圆角同步放大（保持与组件同心）
             let r = (*corner_radius + inset).max(0.0) * scale;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
-        crate::modifier::Shape::TopRoundedRect { radius } => {
+        crate::graphics::Shape::TopRoundedRect { radius } => {
             let r = (*radius + inset).max(0.0) * scale;
             let rr = RRect::new_rect_radii(sr, &[
                 skia_safe::Vector::new(r, r),
@@ -2285,15 +2285,15 @@ pub(crate) fn draw_focus(
             ]);
             canvas.draw_rrect(rr, &paint);
         }
-        crate::modifier::Shape::RightRoundedRect { radius } => {
+        crate::graphics::Shape::RightRoundedRect { radius } => {
             let r = (*radius + inset).max(0.0) * scale;
             canvas.draw_rrect(rrect_right_rounded(sr, r), &paint);
         }
-        crate::modifier::Shape::LeftRoundedRect { radius } => {
+        crate::graphics::Shape::LeftRoundedRect { radius } => {
             let r = (*radius + inset).max(0.0) * scale;
             canvas.draw_rrect(rrect_left_rounded(sr, r), &paint);
         }
-        crate::modifier::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
             let grow = |value: f32| (value + inset).max(0.0) * scale;
             canvas.draw_rrect(
                 rrect_corners(
@@ -2306,11 +2306,11 @@ pub(crate) fn draw_focus(
                 &paint,
             );
         }
-        crate::modifier::Shape::Pill => {
+        crate::graphics::Shape::Pill => {
             let r = sr.width().min(sr.height()) / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
-        crate::modifier::Shape::Circle => {
+        crate::graphics::Shape::Circle => {
             let r = sr.width().min(sr.height()) / 2.0;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
@@ -2322,7 +2322,7 @@ fn draw_text_with_selection(
     canvas: &Canvas,
     content: &str,
     font_size: f32,
-    color: &crate::modifier::Color,
+    color: &crate::graphics::Color,
     font_weight: crate::text::FontWeight,
     font_style: crate::text::FontSlant,
     x: f32, y: f32, w: f32,
@@ -2385,7 +2385,7 @@ mod tests {
             crate::text::FontSlant::Upright,
             0.0,
             None,
-            &crate::modifier::Color::from_argb(255, 255, 0, 0),
+            &crate::graphics::Color::from_argb(255, 255, 0, 0),
             (10.0, 10.0),
             100.0,
         );
@@ -2487,7 +2487,7 @@ mod tests {
         assert!((bdx - left as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdx} vs {left}");
         assert!((bdy - top as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdy} vs {top}");
     }
-    use crate::modifier::GraphicsLayerParams;
+    use crate::graphics::GraphicsLayerParams;
 
     #[test]
     fn test_gl_3d_matrix_none_without_3d() {
@@ -2542,10 +2542,10 @@ mod tests {
             draw_elevation_shadow(
                 canvas,
                 rect,
-                &crate::modifier::Shape::Rectangle,
+                &crate::graphics::Shape::Rectangle,
                 elevation,
-                crate::modifier::Color { r: 0, g: 0, b: 0, a: 0x19 },
-                crate::modifier::Color { r: 0, g: 0, b: 0, a: 0x40 },
+                crate::graphics::Color { r: 0, g: 0, b: 0, a: 0x19 },
+                crate::graphics::Color { r: 0, g: 0, b: 0, a: 0x40 },
             );
             let mut paint = Paint::default();
             paint.set_color(Color::WHITE);
@@ -2674,7 +2674,8 @@ mod tests {
         // 的 save_layer + paint color_filter 分支。
         use crate::runtime::composer::Composer;
         use crate::layout::constraints::Constraints;
-        use crate::modifier::{BlendMode, ColorFilter, Modifier, Shape};
+        use crate::modifier::{Modifier};
+        use crate::graphics::{BlendMode, ColorFilter, Shape};
         use skia_safe::{surfaces, Color as SkColor};
 
         let mut c = Composer::new();
@@ -2684,13 +2685,13 @@ mod tests {
                 k,
                 Modifier::new()
                     .size(100.0, 100.0)
-                    .background(crate::modifier::Color::from_argb(255, 255, 255, 255), Shape::Rectangle)
-                    .graphics_layer(crate::modifier::GraphicsLayerParams {
+                    .background(crate::graphics::Color::from_argb(255, 255, 255, 255), Shape::Rectangle)
+                    .graphics_layer(crate::graphics::GraphicsLayerParams {
                         color_filter: Some(ColorFilter::Tint {
-                            color: crate::modifier::Color::from_argb(255, 255, 0, 0),
+                            color: crate::graphics::Color::from_argb(255, 255, 0, 0),
                             blend_mode: BlendMode::SrcIn,
                         }),
-                        ..crate::modifier::GraphicsLayerParams::default()
+                        ..crate::graphics::GraphicsLayerParams::default()
                     }),
             );
             ctx.end_node();

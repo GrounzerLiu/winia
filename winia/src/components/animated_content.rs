@@ -27,7 +27,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::{MeasurePolicy, Placement, Size};
-use crate::modifier::{GraphicsLayerParams, Modifier};
+use crate::modifier::{Modifier};
+use crate::graphics::{GraphicsLayerParams};
 
 /// 内容切换过渡（fade + sizeTransform）
 pub struct AnimatedContent<T> {

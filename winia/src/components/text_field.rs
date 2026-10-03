@@ -248,8 +248,8 @@ fn clipboard_set_text(text: &str) {
 
 
 /// M3 默认禁用降级：基色 × alpha（disabled 色 = onSurface @ alpha）
-fn alpha(c: crate::modifier::Color, a: f32) -> crate::modifier::Color {
-    crate::modifier::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
+fn alpha(c: crate::graphics::Color, a: f32) -> crate::graphics::Color {
+    crate::graphics::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
 }
 
 impl TextFieldColors {
@@ -290,21 +290,21 @@ impl TextFieldColors {
     /// 容器透明、边框 unfocused outline / disabled onSurface@12%、其余同 Filled
     pub fn outlined_from_theme(theme: &crate::theme::ThemeColors) -> Self {
         let mut c = Self::filled_from_theme(theme);
-        c.container = crate::modifier::Color::TRANSPARENT;
+        c.container = crate::graphics::Color::TRANSPARENT;
         c.indicator_unfocused = theme.outline;
         c.indicator_disabled = alpha(theme.on_surface, 0.12);
         c
     }
 
     /// 状态解析（优先级 disabled > error > focused > unfocused——M3 同款）
-    pub fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::modifier::Color {
+    pub fn indicator_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::graphics::Color {
         if !enabled { self.indicator_disabled }
         else if is_error { self.indicator_error }
         else if focused { self.indicator_focused }
         else { self.indicator_unfocused }
     }
 
-    pub fn label_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::modifier::Color {
+    pub fn label_color(&self, enabled: bool, is_error: bool, focused: bool) -> crate::graphics::Color {
         if !enabled { self.label_disabled }
         else if is_error { self.label_error }
         else if focused { self.label_focused }
@@ -323,7 +323,7 @@ fn text_style_line_height(style: &TextStyle, font_size: f32) -> f32 {
         .unwrap_or(font_size * 1.4)
 }
 
-fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress: f32, color: crate::modifier::Color) -> TextStyle {
+fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress: f32, color: crate::graphics::Color) -> TextStyle {
     let progress = progress.clamp(0.0, 1.0);
     let from_size = from.font_size.unwrap_or(16.0.into()).to_logical_px();
     let to_size = to.font_size.unwrap_or(12.0.into()).to_logical_px();
@@ -1474,7 +1474,7 @@ impl TextField {
                 TextFieldVariant::Filled => (16.0, 8.0),
                 _ => (16.0, 16.0),
             };
-            let shape = crate::modifier::Shape::RoundedRect {
+            let shape = crate::graphics::Shape::RoundedRect {
                 corner_radius: 4.0,
             };
             // 支持文本：容器底部外侧 12sp（M3 supporting 色）
@@ -1715,7 +1715,7 @@ impl TextField {
                         let a = alpha.get();
                         let pc = if !self.enabled { colors.disabled_placeholder } else { colors.placeholder };
                         let mut style = typography.body_large.clone();
-                        style.color = Some(crate::modifier::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
+                        style.color = Some(crate::graphics::Color::from_argb((255.0 * a) as u8, pc.r, pc.g, pc.b));
                         ProvideTextStyle(style, ctx, ph);
                         ctx.end_restartable_group();
                     }

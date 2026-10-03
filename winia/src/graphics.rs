@@ -6,9 +6,22 @@
 //! `DrawIcon`/`DrawImage` elements) and `render.rs` (the drawing itself) had to name a component to
 //! describe what they were drawing.
 
-use crate::modifier::Color;
 use crate::runtime::state::State;
 use std::sync::Arc;
+pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
+
+pub mod brush;
+pub mod color;
+pub mod layer;
+pub mod shape;
+
+pub use brush::{Brush, BrushSource, BrushTile, GradientBrush};
+pub use color::{BlendMode, Color, ColorFilter, FilterQuality};
+pub use layer::{
+    BackgroundColor, GraphicsLayerParams, GraphicsLayerSpec, ShadowParams, TransformOrigin,
+};
+pub use shape::Shape;
+
 use skia_safe::{svg, Rect};
 use std::fmt;
 use std::time::{Duration, Instant};

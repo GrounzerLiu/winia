@@ -49,7 +49,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
                      below follows the selection the dialog holds.",
                 )
                 .font_size(12.0)
-                .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                 .build(ctx);
 
                 Button::text()
@@ -81,7 +81,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
                     .unwrap_or_else(|| "selected: No date selected".to_string());
                 Text::new(selected)
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
 
                 // Composed UNCONDITIONALLY, with `visible` carrying the state — as

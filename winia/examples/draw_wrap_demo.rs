@@ -28,7 +28,7 @@ impl winia::modifier::DrawWrapNode for BeforeBlue {
             canvas,
             rect,
             &Color::from_argb(255, 30, 30, 200),
-            &winia::modifier::Shape::Rectangle,
+            &winia::graphics::Shape::Rectangle,
         );
     }
     fn node_key(&self) -> String {
@@ -50,7 +50,7 @@ impl winia::modifier::DrawWrapNode for AfterGreenBar {
             canvas,
             bar,
             &Color::from_argb(255, 30, 200, 30),
-            &winia::modifier::Shape::Rectangle,
+            &winia::graphics::Shape::Rectangle,
         );
     }
     fn node_key(&self) -> String {
@@ -79,7 +79,7 @@ fn draw_wrap_demo(ctx: &mut ComposeCtx) {
                                 .size(120.0, 80.0)
                                 .background(
                                     Color::from_argb(255, 200, 30, 30),
-                                    winia::modifier::Shape::Rectangle,
+                                    winia::graphics::Shape::Rectangle,
                                 ),
                         )
                         .build(ctx);
@@ -92,7 +92,7 @@ fn draw_wrap_demo(ctx: &mut ComposeCtx) {
                                 .size(120.0, 80.0)
                                 .background(
                                     Color::from_argb(255, 200, 30, 30),
-                                    winia::modifier::Shape::Rectangle,
+                                    winia::graphics::Shape::Rectangle,
                                 )
                                 .draw_wrap_node(BeforeBlue),
                         )
@@ -102,7 +102,7 @@ fn draw_wrap_demo(ctx: &mut ComposeCtx) {
                         .modifier(
                             Modifier::new()
                                 .size(140.0, 80.0)
-                                .background(Color::WHITE, winia::modifier::Shape::Rectangle)
+                                .background(Color::WHITE, winia::graphics::Shape::Rectangle)
                                 .draw_wrap_node(AfterGreenBar),
                         )
                         .build(ctx, |ctx| {

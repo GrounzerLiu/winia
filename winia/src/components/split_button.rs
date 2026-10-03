@@ -36,7 +36,8 @@ use crate::layout::node::{
     Size,
 };
 use crate::layout::LayoutDirection;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::components::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use crate::theme::WiniaTheme;

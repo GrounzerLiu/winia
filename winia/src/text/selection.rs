@@ -4,7 +4,7 @@
 //! by the renderer, so it cannot live in the component that provides it. `SelectionContainer` stays
 //! where it is and provides the local declared here.
 
-use crate::modifier::Color;
+use crate::graphics::Color;
 use crate::runtime::composition_local::CompositionLocal;
 use crate::unit::Offset;
 use parking_lot::Mutex;

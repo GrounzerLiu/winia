@@ -105,7 +105,7 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 pub(crate) type TextSnapshot = (
     String,
     crate::text::TextAlign,
-    crate::modifier::Color,
+    crate::graphics::Color,
     f32,
     crate::text::FontWeight,
     crate::text::FontSlant,
@@ -124,7 +124,7 @@ pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
         ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
             Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
         }
-        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::text::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::text::FontWeight::NORMAL, crate::text::FontSlant::Upright, 0, true, 0.0, None, crate::text::TextOverflow::Clip)),
+        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::text::TextAlign::Left, crate::graphics::Color::TRANSPARENT, 0.0, crate::text::FontWeight::NORMAL, crate::text::FontSlant::Upright, 0, true, 0.0, None, crate::text::TextOverflow::Clip)),
         _ => None,
     })
 }
@@ -292,10 +292,10 @@ pub struct LayoutNode {
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
     /// 焦点环颜色（组合期由组件从主题捕获写入——渲染期 CompositionLocal
     /// 已退出，不能读主题；未设置时回退默认蓝色）
-    pub(crate) focus_color: std::cell::Cell<crate::modifier::Color>,
+    pub(crate) focus_color: std::cell::Cell<crate::graphics::Color>,
     /// IME 组合下划线颜色（组合期捕获主题 primary——渲染期不能读
     /// CompositionLocal（Phase 4.2）；未设置时回退默认色）
-    pub(crate) composing_color: std::cell::Cell<crate::modifier::Color>,
+    pub(crate) composing_color: std::cell::Cell<crate::graphics::Color>,
     /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
     /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
     /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
@@ -469,8 +469,8 @@ impl LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
-            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
-            composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
             flight_measure: None,
@@ -557,8 +557,8 @@ impl Default for LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
-            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
-            composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
             flight_measure: None,
@@ -2172,7 +2172,7 @@ mod tests {
             ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         )
     }
 
@@ -2202,7 +2202,7 @@ mod tests {
             crate::graphics::ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         );
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
@@ -2221,7 +2221,7 @@ mod tests {
             crate::graphics::ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         );
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
@@ -2342,7 +2342,7 @@ mod tests {
     /// too; the rest are checked as one set.
     #[test]
     fn text_snapshot_compare_sees_every_field_and_refresh_settles() {
-        fn text_node(content: &str, color: crate::modifier::Color) -> LayoutNode {
+        fn text_node(content: &str, color: crate::graphics::Color) -> LayoutNode {
             LayoutNode::new(
                 Modifier::new().push(crate::modifier::ModifierElement::TextContent {
                     content: content.to_string(),
@@ -2361,8 +2361,8 @@ mod tests {
             )
         }
 
-        let black = crate::modifier::Color::from_argb(255, 0, 0, 0);
-        let transparent = crate::modifier::Color::from_argb(0, 0, 0, 0);
+        let black = crate::graphics::Color::from_argb(255, 0, 0, 0);
+        let transparent = crate::graphics::Color::from_argb(0, 0, 0, 0);
         let mut node = text_node("hello", black);
 
         // Never materialized: nothing to compare against, and the caller must be told so.
@@ -3217,7 +3217,7 @@ fn measure_node_inner(
 pub(crate) fn build_plain_paragraph(
     content: &str,
     font_size: f32,
-    color: &crate::modifier::Color,
+    color: &crate::graphics::Color,
     font_weight: crate::text::FontWeight,
     font_style: crate::text::FontSlant,
     max_lines: usize,
@@ -3582,7 +3582,7 @@ mod intrinsic_tests {
         Modifier::new().push(ModifierElement::TextContent {
             content: content.to_string(),
             font_size: 14.0,
-            color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+            color: crate::graphics::Color::from_argb(255, 0, 0, 0),
             font_weight: crate::text::FontWeight::NORMAL,
             font_style: crate::text::FontSlant::Upright,
             max_lines: usize::MAX,

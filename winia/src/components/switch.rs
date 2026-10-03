@@ -14,7 +14,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -1177,7 +1178,7 @@ mod tests {
         let circle_px = at(ccx as usize, ccy as usize);
         let expect_track = if checked { theme.primary } else { theme.surface_container_highest };
         let expect_circle = if checked { theme.on_primary } else { theme.outline };
-        let near = |a: &[u8; 4], c: &crate::modifier::Color| -> bool {
+        let near = |a: &[u8; 4], c: &crate::graphics::Color| -> bool {
             // raster_n32_premul = BGRA 字节序
             (a[2] as i32 - c.r as i32).abs() <= 6
                 && (a[1] as i32 - c.g as i32).abs() <= 6
@@ -1223,10 +1224,10 @@ mod tests {
         let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
         let mut custom_colors = SwitchColors::from_theme(&theme);
-        custom_colors.checked_track = crate::modifier::Color::from_argb(255, 46, 125, 50);
-        custom_colors.checked_thumb = crate::modifier::Color::WHITE;
-        custom_colors.unchecked_track = crate::modifier::Color::from_argb(255, 224, 224, 224);
-        custom_colors.unchecked_thumb = crate::modifier::Color::from_argb(255, 100, 100, 100);
+        custom_colors.checked_track = crate::graphics::Color::from_argb(255, 46, 125, 50);
+        custom_colors.checked_thumb = crate::graphics::Color::WHITE;
+        custom_colors.unchecked_track = crate::graphics::Color::from_argb(255, 224, 224, 224);
+        custom_colors.unchecked_thumb = crate::graphics::Color::from_argb(255, 100, 100, 100);
         custom_colors.unchecked_border = custom_colors.unchecked_thumb;
         let scene_custom = custom_colors.clone();
         let scene = crate::compose!(|ctx: &mut ComposeCtx| {

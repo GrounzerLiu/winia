@@ -11,7 +11,13 @@ use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::layout::LayoutDirection;
+use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 use crate::interaction::MutableInteractionSource;
+use crate::graphics::{
+    BackgroundColor, BlendMode, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
+    GraphicsLayerSpec, ShadowParams, Shape, TransformOrigin,
+};
+
 
 // ── Dimension ──
 
@@ -204,122 +210,9 @@ impl From<crate::unit::Px> for Dimension {
 
 // ── Shape ──
 
-/// 形状描述（用于 background / border / clip）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Shape {
-    /// 矩形（可带圆角）
-    RoundedRect { corner_radius: f32 },
-    /// 仅顶部圆角（对齐 M3 BottomSheet 顶部 28dp——底部直角贴屏）
-    TopRoundedRect { radius: f32 },
-    /// Rounded on the two RIGHT corners only (upper-right + lower-right), left edge
-    /// square. Geometric rather than direction-resolved: a modal navigation drawer
-    /// docks at the leading edge and rounds the side facing the content, so an LTR
-    /// drawer picks this one and its RTL counterpart picks [`Shape::LeftRoundedRect`].
-    /// (Compose reaches the same pair through a single `CornerLargeEnd` token whose
-    /// side follows the layout direction; a winia `Shape` carries no direction.)
-    RightRoundedRect { radius: f32 },
-    /// Mirror of [`Shape::RightRoundedRect`] — rounded on the two LEFT corners only.
-    LeftRoundedRect { radius: f32 },
-    /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
-    /// Button 默认形状；宽高变化时自动跟随）
-    Pill,
-    /// Percent-50 corner, i.e. Compose's `CircleShape` == `RoundedCornerShape(50)`: on a
-    /// square box that is a circle, and on a NON-square box a stadium that fills the whole
-    /// box (identical to `Pill`). A true inscribed circle was the old behaviour and was
-    /// wrong against Compose.
-    Circle,
-    /// A rectangle with an independent radius per corner, Compose's
-    /// `RoundedCornerShape(topStart, topEnd, bottomEnd, bottomStart)`. Geometric rather than
-    /// direction-resolved, like [`Shape::RightRoundedRect`] and [`Shape::LeftRoundedRect`]: a
-    /// caller that wants start/end semantics resolves the direction itself (material3's split
-    /// button does; `SplitButtonDefaults` reads it from `WiniaTheme::direction`).
-    ///
-    /// The radii are pixels of *this* box, so a caller that needs Compose's `CornerFull` — a
-    /// percent-50 corner, which is half the SHORT side — computes `height / 2` for a button that
-    /// is wider than it is tall. Feeding a percent-shaped corner as a fixed radius keeps
-    /// `Shape::Pill`'s behaviour only while that holds, which is why the split button derives it
-    /// from its own container height.
-    Corners {
-        top_left: f32,
-        top_right: f32,
-        bottom_right: f32,
-        bottom_left: f32,
-    },
-    /// 直角矩形
-    Rectangle,
-}
-
-impl Shape {
-    pub fn rounded(corner_radius: f32) -> Self {
-        Shape::RoundedRect { corner_radius }
-    }
-
-    pub fn top_rounded(radius: f32) -> Self {
-        Shape::TopRoundedRect { radius }
-    }
-
-    /// Rounded on the two right corners (see [`Shape::RightRoundedRect`]).
-    pub fn right_rounded(radius: f32) -> Self {
-        Shape::RightRoundedRect { radius }
-    }
-
-    /// Rounded on the two left corners (see [`Shape::LeftRoundedRect`]).
-    pub fn left_rounded(radius: f32) -> Self {
-        Shape::LeftRoundedRect { radius }
-    }
-
-    /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）
-    pub fn pill() -> Self {
-        Shape::Pill
-    }
-
-    /// Per-corner radii, in the order Compose's `RoundedCornerShape` takes them
-    /// (top-start, top-end, bottom-end, bottom-start) but in GEOMETRIC corners — see
-    /// [`Shape::Corners`].
-    pub fn corners(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
-        Shape::Corners { top_left, top_right, bottom_right, bottom_left }
-    }
-}
 
 // ── Color (占位) ──
 
-/// 颜色（占位，后续由 skia Color 或 material theme 替代）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl Color {
-    pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
-    pub const BLACK: Color = Color { r: 0, g: 0, b: 0, a: 255 };
-    pub const WHITE: Color = Color { r: 255, g: 255, b: 255, a: 255 };
-    pub const RED: Color = Color { r: 255, g: 0, b: 0, a: 255 };
-    pub const GREEN: Color = Color { r: 0, g: 255, b: 0, a: 255 };
-    pub const BLUE: Color = Color { r: 0, g: 0, b: 255, a: 255 };
-
-    pub fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
-        Color { r, g, b, a }
-    }
-}
-
-impl Color {
-    /// 状态层叠加（对标 Material3 state layer）：
-    /// 把 `overlay` 以 `alpha` 透明度叠到当前颜色上——hover 8% / press/focus 12% /
-    /// drag 16% 的近似实现（Material3 的容器状态层）。
-    pub fn overlay(&self, overlay: Color, alpha: f32) -> Color {
-        let a = alpha.clamp(0.0, 1.0);
-        let lerp = |b: u8, o: u8| (b as f32 * (1.0 - a) + o as f32 * a).round() as u8;
-        Color::from_argb(
-            self.a,
-            lerp(self.r, overlay.r),
-            lerp(self.g, overlay.g),
-            lerp(self.b, overlay.b),
-        )
-    }
-}
 
 // ── Modifier ──
 
@@ -421,43 +314,6 @@ pub struct PointerEvent {
 
 // ── 图片绘制类型（ColorFilter / FilterQuality / BlendMode——对齐 Compose ui.graphics）──
 
-/// 混合模式（对标 Compose `BlendMode`，与 skia 同源 29 值——
-/// 渲染期映射 `skia_safe::BlendMode`）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendMode {
-    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
-    SrcATop, DstATop, Xor, Plus, Modulate, Screen, Overlay, Darken, Lighten,
-    ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Multiply,
-    Hue, Saturation, Color, Luminosity,
-}
-
-/// 颜色滤镜（对标 Compose `ColorFilter`——Image/Icon 渲染期挂到 paint）
-#[derive(Debug, Clone, PartialEq)]
-pub enum ColorFilter {
-    /// 染色（对标 `ColorFilter.tint`——默认 SrcIn 保留形状 alpha）
-    Tint { color: Color, blend_mode: BlendMode },
-    /// 颜色矩阵（20 值行主序——对标 `ColorFilter.colorMatrix`）
-    Matrix([f32; 20]),
-    /// 光照效果（像素 × multiply + add——对标 `ColorFilter.lighting`）
-    Lighting { multiply: Color, add: Color },
-}
-
-/// 采样质量（对标 Compose `FilterQuality`）——缩放位图时的过滤策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterQuality {
-    /// 最近邻（无过滤——像素风/精确采样）
-    None,
-    /// 双线性（默认——缩小放大平滑）
-    Low,
-    /// 双线性 + 最近 mipmap（缩小更平滑）
-    Medium,
-    /// 三线性（双线性 + 线性 mipmap——最高质量）
-    High,
-}
-
-impl Default for FilterQuality {
-    fn default() -> Self { Self::Low }
-}
 
 // ── ModifierElement ──
 
@@ -750,7 +606,7 @@ pub(crate) enum ModifierElement {
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
-        brush_fn: Arc<dyn Fn() -> crate::brush::Brush + Send + Sync>,
+        brush_fn: Arc<dyn Fn() -> crate::graphics::Brush + Send + Sync>,
         shape: Shape,
     },
     /// 边框
@@ -780,7 +636,7 @@ pub(crate) enum ModifierElement {
         cursor_color: Color,
         /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
         /// CAM16-UCS 插值；渲染期 peek 读取）
-        indicator_color: crate::runtime::state::State<crate::modifier::Color>,
+        indicator_color: crate::runtime::state::State<crate::graphics::Color>,
         /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
         focus_progress: crate::runtime::state::State<f32>,
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
@@ -1519,7 +1375,7 @@ impl Modifier {
         })
     }
 
-    /// Fill the node with a [`crate::brush::Brush`] — a gradient, or a solid color chosen at
+    /// Fill the node with a [`crate::graphics::Brush`] — a gradient, or a solid color chosen at
     /// runtime (Compose `Modifier.background(brush, shape)`).
     ///
     /// ```ignore
@@ -1534,7 +1390,7 @@ impl Modifier {
     /// bounds — see the module docs on [`crate::brush`] for why that differs from Compose.
     pub fn background_brush(
         self,
-        brush: impl Into<crate::brush::BrushSource>,
+        brush: impl Into<crate::graphics::BrushSource>,
         shape: impl Into<Shape>,
     ) -> Self {
         let source = brush.into();
@@ -1549,7 +1405,7 @@ impl Modifier {
         mut self,
         content: String,
         font_size: f32,
-        color: crate::modifier::Color,
+        color: crate::graphics::Color,
         font_weight: crate::text::FontWeight,
         font_style: crate::text::FontSlant,
         max_lines: usize,
@@ -1570,7 +1426,7 @@ impl Modifier {
         mut self,
         content: String,
         font_size: f32,
-        color: crate::modifier::Color,
+        color: crate::graphics::Color,
         font_weight: crate::text::FontWeight,
         font_style: crate::text::FontSlant,
         max_lines: usize,
@@ -1647,7 +1503,7 @@ impl Modifier {
         is_error: bool,
         read_only: bool,
         cursor_color: Color,
-        indicator_color: crate::runtime::state::State<crate::modifier::Color>,
+        indicator_color: crate::runtime::state::State<crate::graphics::Color>,
         focus_progress: crate::runtime::state::State<f32>,
         offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
         supporting: Option<SupportingVisual>,
@@ -1869,7 +1725,7 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// **静态用法**：
     /// ```
     /// # use winia::prelude::*;
-    /// # use winia::modifier::GraphicsLayerParams;
+    /// # use winia::graphics::GraphicsLayerParams;
     /// let _m = Modifier::new().graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() });
     /// ```
     ///
@@ -2829,73 +2685,6 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
 
 // ── ScrollState ──
 
-// Skia's native shadow utility consumes the alpha directly. These values match
-// the low-opacity ambient/spot defaults used by Skia's shadow examples.
-const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x20 };
-const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x50 };
-
-/// 图形层变换参数
-///
-/// ⚠ 只影响**绘制**（外观），不参与布局与命中测试（对标 Compose
-/// graphicsLayer：命中区域始终是布局 bounds）。命中测试唯一考虑的
-/// 位移是 scroll（布局层）；此处变换（translation/scale/rotate/
-/// rotationX/Y/camera）不会改变可点击区域或按压点本地坐标。
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphicsLayerParams {
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub alpha: f32,
-    pub translation_x: f32,
-    pub translation_y: f32,
-    pub rotation_z: f32,
-    /// 变换原点（pivot 分数——0..1，相对节点宽高）——对标 Compose
-    /// `transformOrigin`（默认 Center——scale/rotate 绕中心）
-    pub transform_origin: TransformOrigin,
-    /// 裁剪到节点 bounds（对标 Compose graphicsLayer `clip`；
-    /// `Modifier.alpha` 便捷版默认 clip=true）
-    pub clip: bool,
-    /// 绕 X 轴 3D 旋转（度——带 cameraDistance 透视）
-    pub rotation_x: f32,
-    /// 绕 Y 轴 3D 旋转（度——带 cameraDistance 透视）
-    pub rotation_y: f32,
-    /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
-    pub camera_distance: f32,
-    /// 图层阴影高度（逻辑 px——>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，
-    /// 对标 Compose graphicsLayer.shadowElevation）
-    pub shadow_elevation: f32,
-    /// 图层阴影形状（None = 矩形）
-    pub shadow_shape: Option<Shape>,
-    /// 环境光阴影颜色（默认约 10% 黑，对标 Compose ambientShadowColor）。
-    pub ambient_shadow_color: Color,
-    /// 投射光阴影颜色（默认约 25% 黑，对标 Compose spotShadowColor）。
-    pub spot_shadow_color: Color,
-    /// 颜色滤镜（对标 Compose graphicsLayer `colorFilter`——渲染期 saveLayer
-    /// paint 挂 color filter，层内所有内容被染色；Text/Icon 用 `Tint` 做动态颜色动画）
-    pub color_filter: Option<ColorFilter>,
-}
-
-impl Default for GraphicsLayerParams {
-    fn default() -> Self {
-        Self {
-            scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
-            translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
-            transform_origin: TransformOrigin::CENTER,
-            clip: false,
-            rotation_x: 0.0, rotation_y: 0.0,
-            camera_distance: 8.0,
-            shadow_elevation: 0.0,
-            shadow_shape: None,
-            ambient_shadow_color: DEFAULT_AMBIENT_SHADOW_COLOR,
-            spot_shadow_color: DEFAULT_SPOT_SHADOW_COLOR,
-            color_filter: None,
-        }
-    }
-}
-
-/// 变换原点（对标 Compose `TransformOrigin`）——pivot 分数坐标，
-/// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct TransformOrigin(pub f32, pub f32);
 
 /// TextField 支持文本绘制参数（画在容器底部外侧 4dp）
 #[derive(Clone, Debug)]
@@ -2915,68 +2704,6 @@ impl SupportingVisual {
     }
 }
 
-/// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。
-/// 绘制对齐 DropShadowPainter：扩边画布 → 形状路径（模糊）画进离屏 mask →
-/// 颜色 SrcIn 着色 → 按 offset 平移到画布。
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct ShadowParams {
-    /// 模糊半径（逻辑 px，对标 radius）
-    pub radius: f32,
-    /// 扩展半径（阴影比形状大多少——超出部分另画 stroke，对标 spread）
-    pub spread: f32,
-    /// 阴影偏移（对标 offset）
-    pub offset_x: f32,
-    pub offset_y: f32,
-    /// 阴影颜色（对标 color，默认黑）
-    pub color: Color,
-    /// 独立透明度 0-1（对标 alpha）
-    pub alpha: f32,
-}
-
-impl ShadowParams {
-    /// 便捷构造（radius/offset/color/alpha；spread=0）
-    pub fn new(radius: f32, offset_x: f32, offset_y: f32, color: Color, alpha: f32) -> Self {
-        Self { radius, spread: 0.0, offset_x, offset_y, color, alpha }
-    }
-}
-
-impl Default for ShadowParams {
-    fn default() -> Self {
-        Self {
-            radius: 0.0,
-            spread: 0.0,
-            offset_x: 0.0,
-            offset_y: 0.0,
-            color: Color::from_argb(255, 0, 0, 0),
-            alpha: 1.0,
-        }
-    }
-}
-
-impl TransformOrigin {
-    /// 中心（Compose 默认）
-    pub const CENTER: Self = Self(0.5, 0.5);
-    /// 左上角
-    pub const TOP_LEFT: Self = Self(0.0, 0.0);
-    /// 右下角
-    pub const BOTTOM_RIGHT: Self = Self(1.0, 1.0);
-}
-
-impl Default for TransformOrigin {
-    fn default() -> Self {
-        Self::CENTER
-    }
-}
-
-/// 背景色规格：静态 `Color` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<BackgroundColor>` 统一 `background()` 入口——传 `Color` 或闭包均可。
-pub struct BackgroundColor(pub(crate) Arc<dyn Fn() -> Color + Send + Sync>);
-
-impl From<Color> for BackgroundColor {
-    fn from(color: Color) -> Self {
-        Self(Arc::new(move || color))
-    }
-}
 
 impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     fn from(f: F) -> Self {
@@ -2984,11 +2711,6 @@ impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     }
 }
 
-impl From<crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: crate::runtime::state::DerivedValue<Color>) -> Self {
-        Self(Arc::new(move || d.get()))
-    }
-}
 
 impl From<&crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
     fn from(d: &crate::runtime::state::DerivedValue<Color>) -> Self {
@@ -2997,15 +2719,6 @@ impl From<&crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
     }
 }
 
-/// 图形层规格：静态 `GraphicsLayerParams` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<GraphicsLayerSpec>` 统一 `graphics_layer()` 入口。
-pub struct GraphicsLayerSpec(pub(crate) Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync>);
-
-impl From<GraphicsLayerParams> for GraphicsLayerSpec {
-    fn from(params: GraphicsLayerParams) -> Self {
-        Self(Arc::new(move || params.clone()))
-    }
-}
 
 impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for GraphicsLayerSpec {
     fn from(f: F) -> Self {

@@ -5,7 +5,8 @@
 //! component. The component keeps `TextField`, `TextFieldDefaults` and the constructors that turn a
 //! `WiniaTheme` into a `TextFieldColors` — the design-system half.
 
-use crate::modifier::{Color, ModifierElement};
+use crate::modifier::{ModifierElement};
+use crate::graphics::{Color};
 
 /// 容器变体（对齐 material3 TextField（Filled）/ OutlinedTextField）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,40 +21,40 @@ pub enum TextFieldVariant {
 /// 状态优先级 disabled > error > focused > unfocused）
 #[derive(Debug, Clone)]
 pub struct TextFieldColors {
-    pub text: crate::modifier::Color,
-    pub disabled_text: crate::modifier::Color,
+    pub text: crate::graphics::Color,
+    pub disabled_text: crate::graphics::Color,
     /// 容器背景（Filled 用；Outlined 为透明）
-    pub container: crate::modifier::Color,
+    pub container: crate::graphics::Color,
     /// 光标（正常；error 时用 error_cursor）
-    pub cursor: crate::modifier::Color,
-    pub error_cursor: crate::modifier::Color,
+    pub cursor: crate::graphics::Color,
+    pub error_cursor: crate::graphics::Color,
     /// 指示线/边框
-    pub indicator_focused: crate::modifier::Color,
-    pub indicator_unfocused: crate::modifier::Color,
-    pub indicator_disabled: crate::modifier::Color,
-    pub indicator_error: crate::modifier::Color,
+    pub indicator_focused: crate::graphics::Color,
+    pub indicator_unfocused: crate::graphics::Color,
+    pub indicator_disabled: crate::graphics::Color,
+    pub indicator_error: crate::graphics::Color,
     /// label
-    pub label_focused: crate::modifier::Color,
-    pub label_unfocused: crate::modifier::Color,
-    pub label_disabled: crate::modifier::Color,
-    pub label_error: crate::modifier::Color,
+    pub label_focused: crate::graphics::Color,
+    pub label_unfocused: crate::graphics::Color,
+    pub label_disabled: crate::graphics::Color,
+    pub label_error: crate::graphics::Color,
     /// placeholder
-    pub placeholder: crate::modifier::Color,
-    pub disabled_placeholder: crate::modifier::Color,
+    pub placeholder: crate::graphics::Color,
+    pub disabled_placeholder: crate::graphics::Color,
     /// 支持文本
-    pub supporting: crate::modifier::Color,
-    pub disabled_supporting: crate::modifier::Color,
-    pub error_supporting: crate::modifier::Color,
+    pub supporting: crate::graphics::Color,
+    pub disabled_supporting: crate::graphics::Color,
+    pub error_supporting: crate::graphics::Color,
     /// 前置图标（focused/unfocused onSurfaceVariant、disabled 38%、error 不变）
-    pub leading_icon_focused: crate::modifier::Color,
-    pub leading_icon_disabled: crate::modifier::Color,
+    pub leading_icon_focused: crate::graphics::Color,
+    pub leading_icon_disabled: crate::graphics::Color,
     /// 后置图标（trailing——error 态 error 色）
-    pub trailing_icon_focused: crate::modifier::Color,
-    pub trailing_icon_disabled: crate::modifier::Color,
-    pub trailing_icon_error: crate::modifier::Color,
+    pub trailing_icon_focused: crate::graphics::Color,
+    pub trailing_icon_disabled: crate::graphics::Color,
+    pub trailing_icon_error: crate::graphics::Color,
     /// 前后缀文本（onSurfaceVariant、disabled 38%）
-    pub affix: crate::modifier::Color,
-    pub disabled_affix: crate::modifier::Color,
+    pub affix: crate::graphics::Color,
+    pub disabled_affix: crate::graphics::Color,
 }
 
 /// TextField 容器子节点角色（text-field-v2 容器化——TextFieldLayout
@@ -119,7 +120,7 @@ pub(crate) fn text_field_visual_color(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
     idx: usize,
-) -> Option<crate::modifier::Color> {
+) -> Option<crate::graphics::Color> {
     use crate::modifier::ModifierElement;
     let mut cur = Some(idx);
     while let Some(i) = cur {

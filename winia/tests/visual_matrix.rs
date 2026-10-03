@@ -6,7 +6,8 @@
 use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::constraints::Constraints;
 use winia::layout::LayoutDirection;
-use winia::modifier::{Color, Modifier, ScrollState};
+use winia::modifier::{Modifier, ScrollState};
+use winia::graphics::{Color};
 use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
@@ -89,22 +90,22 @@ fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe:
         WiniaTheme::with_theme_typography_and_direction(theme, typography, direction, ctx, |ctx| {
             Scaffold::new(|ctx, _| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::modifier::Shape::Rectangle).test_tag("scaffold-content"));
+                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::graphics::Shape::Rectangle).test_tag("scaffold-content"));
                 ctx.end_node();
             })
             .top_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::modifier::Shape::Rectangle).test_tag("scaffold-top"));
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::graphics::Shape::Rectangle).test_tag("scaffold-top"));
                 ctx.end_node();
             })
             .bottom_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::modifier::Shape::Rectangle).test_tag("scaffold-bottom"));
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::graphics::Shape::Rectangle).test_tag("scaffold-bottom"));
                 ctx.end_node();
             })
             .floating_action_button(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::modifier::Shape::Circle).test_tag("scaffold-fab"));
+                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::graphics::Shape::Circle).test_tag("scaffold-fab"));
                 ctx.end_node();
             })
             .build(ctx);

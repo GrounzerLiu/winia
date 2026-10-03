@@ -40,7 +40,7 @@ pub trait AnimationInstance: Send {
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 /// Color 动画列表（与 f32 动画分开，避免类型擦除）
-static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::modifier::Color>>>> =
+static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::graphics::Color>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Drop all animations owned by a Composer. State IDs remain globally unique,
@@ -280,8 +280,8 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
 }
 
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
-pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate::modifier::Color, spec: AnimationSpec) {
-    use crate::modifier::Color;
+pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
+    use crate::graphics::Color;
     if state.peek() == target {
         // 与 push_animatable 相同：存在目标不同的旧颜色动画时必须取消，
         // 否则旧动画会把值继续拉向旧目标
@@ -1024,9 +1024,9 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     pub fn animate_color(
         &mut self,
         ctx: &mut ComposeCtx,
-        target_fn: impl Fn(&T) -> crate::modifier::Color,
+        target_fn: impl Fn(&T) -> crate::graphics::Color,
         label: &'static str,
-    ) -> State<crate::modifier::Color> {
+    ) -> State<crate::graphics::Color> {
         self.animate(ctx, target_fn, label)
     }
 
@@ -1168,11 +1168,11 @@ impl InfiniteTransition {
     pub fn animate_color(
         &mut self,
         ctx: &mut ComposeCtx,
-        from: crate::modifier::Color,
-        to: crate::modifier::Color,
+        from: crate::graphics::Color,
+        to: crate::graphics::Color,
         spec: InfiniteRepeatableSpec,
-    ) -> crate::runtime::state::Visual<crate::modifier::Color> {
-        let state: State<crate::modifier::Color> = ctx.remember(|| from);
+    ) -> crate::runtime::state::Visual<crate::graphics::Color> {
+        let state: State<crate::graphics::Color> = ctx.remember(|| from);
         self.push_id(state.state_id());
         let visual = state.into_visual();
         crate::animation::push_infinite_visual(visual.clone(), from, to, spec);
@@ -1336,7 +1336,7 @@ impl AnimatableValue for f32 {
     fn supports_spring() -> bool { true }
 }
 
-impl AnimatableValue for crate::modifier::Color {
+impl AnimatableValue for crate::graphics::Color {
     /// CAM16-UCS 色彩空间插值（人眼感知均匀）+ alpha 单独线性插值
     /// （cam16_ucs 忽略 alpha，需要手动插值保持透明度动画正确）
     fn lerp(&self, to: &Self, t: f32) -> Self {
@@ -1558,7 +1558,7 @@ pub(crate) mod tests {
     #[test]
     fn color_lerp_uses_cam16_and_preserves_alpha() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::modifier::Color;
+        use crate::graphics::Color;
         // 蓝 → 红，alpha 128 → 255
         let from = Color::from_argb(128, 33, 150, 243);
         let to = Color::from_argb(255, 255, 82, 82);
@@ -1577,7 +1577,7 @@ pub(crate) mod tests {
     #[test]
     fn infinite_color_reverse_cycles() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::modifier::Color;
+        use crate::graphics::Color;
         let state = State::new(Color::RED);
         let mut inf = Infinite {
             state: state.clone().into_visual(),
@@ -1630,11 +1630,11 @@ pub(crate) mod tests {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // 推入 f32 + Color + 无限 Color 三种动画
         let s1 = State::new(0.0f32);
-        let s2 = State::new(crate::modifier::Color::RED);
-        let s3 = State::new(crate::modifier::Color::BLUE);
+        let s2 = State::new(crate::graphics::Color::RED);
+        let s3 = State::new(crate::graphics::Color::BLUE);
         push_animatable(s1.clone(), 10.0, AnimationSpec::Tween(TweenSpec::default()));
-        push_animatable_color(s2.clone(), crate::modifier::Color::GREEN, AnimationSpec::Tween(TweenSpec::default()));
-        push_infinite(s3.clone(), crate::modifier::Color::BLUE, crate::modifier::Color::RED,
+        push_animatable_color(s2.clone(), crate::graphics::Color::GREEN, AnimationSpec::Tween(TweenSpec::default()));
+        push_infinite(s3.clone(), crate::graphics::Color::BLUE, crate::graphics::Color::RED,
             InfiniteRepeatableSpec::restart(Duration::from_millis(50)));
         assert!(is_animating(), "animations should be registered");
 
@@ -1892,10 +1892,10 @@ pub(crate) mod tests {
     fn animate_value_as_state_color_reaches_target() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
-        let from = crate::modifier::Color::from_argb(255, 0, 0, 0);
-        let to = crate::modifier::Color::from_argb(255, 255, 255, 255);
-        let value: std::cell::RefCell<Option<State<crate::modifier::Color>>> = std::cell::RefCell::new(None);
-        let mut recompose = |composer: &mut Composer, t: crate::modifier::Color| {
+        let from = crate::graphics::Color::from_argb(255, 0, 0, 0);
+        let to = crate::graphics::Color::from_argb(255, 255, 255, 255);
+        let value: std::cell::RefCell<Option<State<crate::graphics::Color>>> = std::cell::RefCell::new(None);
+        let mut recompose = |composer: &mut Composer, t: crate::graphics::Color| {
             composer.compose(|ctx| {
                 let v = crate::animation::animate_value_as_state(
                     ctx,

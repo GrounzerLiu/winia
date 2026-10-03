@@ -2169,7 +2169,7 @@ mod tests {
     /// 5 个 section：sticky header（红色背景 + HEAD n 文本）后跟 19 个普通项。
     /// header 全局 index = n*20；普通项 key = 200 + n*19 + i（全列表唯一）。
     fn sticky_build(ctx: &mut ComposeCtx, state: LazyListState) {
-        use crate::modifier::{Color, Shape};
+        use crate::graphics::{Color, Shape};
         let mut lb = LazyColumn::new()
             .state(state)
             .modifier(Modifier::new().fill_max_width().fill_max_height());
@@ -2216,7 +2216,7 @@ mod tests {
 
     /// 带 content_padding 的 5 sections 红底 sticky 列表（header 全局 index = n*20）
     fn sticky_build_padded(ctx: &mut ComposeCtx, state: LazyListState, pad: f32) {
-        use crate::modifier::{Color, Shape};
+        use crate::graphics::{Color, Shape};
         let mut lb = LazyColumn::new()
             .state(state)
             .content_padding(pad, 0.0)

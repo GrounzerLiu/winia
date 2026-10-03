@@ -748,12 +748,12 @@ impl Default for Dialog { fn default() -> Self { Self::new(false) } }
 /// variants are the same roles at `ListItemDisabled*Opacity` (0.38).
 #[derive(Clone, PartialEq)]
 pub struct MenuItemColors {
-    pub text: crate::modifier::Color,
-    pub leading_icon: crate::modifier::Color,
-    pub trailing_icon: crate::modifier::Color,
-    pub disabled_text: crate::modifier::Color,
-    pub disabled_leading_icon: crate::modifier::Color,
-    pub disabled_trailing_icon: crate::modifier::Color,
+    pub text: crate::graphics::Color,
+    pub leading_icon: crate::graphics::Color,
+    pub trailing_icon: crate::graphics::Color,
+    pub disabled_text: crate::graphics::Color,
+    pub disabled_leading_icon: crate::graphics::Color,
+    pub disabled_trailing_icon: crate::graphics::Color,
 }
 
 impl MenuItemColors {
@@ -770,15 +770,15 @@ impl MenuItemColors {
         }
     }
 
-    pub fn text_color(&self, enabled: bool) -> crate::modifier::Color {
+    pub fn text_color(&self, enabled: bool) -> crate::graphics::Color {
         if enabled { self.text } else { self.disabled_text }
     }
 
-    pub fn leading_icon_color(&self, enabled: bool) -> crate::modifier::Color {
+    pub fn leading_icon_color(&self, enabled: bool) -> crate::graphics::Color {
         if enabled { self.leading_icon } else { self.disabled_leading_icon }
     }
 
-    pub fn trailing_icon_color(&self, enabled: bool) -> crate::modifier::Color {
+    pub fn trailing_icon_color(&self, enabled: bool) -> crate::graphics::Color {
         if enabled { self.trailing_icon } else { self.disabled_trailing_icon }
     }
 }
@@ -808,12 +808,12 @@ impl MenuDefaults {
     }
 
     /// `MenuDefaults.shape` — `MenuTokens.ContainerShape` (`CornerExtraSmall`, 4dp).
-    pub fn shape() -> crate::modifier::Shape {
-        crate::modifier::Shape::RoundedRect { corner_radius: 4.0 }
+    pub fn shape() -> crate::graphics::Shape {
+        crate::graphics::Shape::RoundedRect { corner_radius: 4.0 }
     }
 
     /// `MenuDefaults.containerColor` — `MenuTokens.ContainerColor` (`surfaceContainer`).
-    pub fn container_color() -> crate::modifier::Color {
+    pub fn container_color() -> crate::graphics::Color {
         crate::theme::WiniaTheme::colors().surface_container
     }
 
@@ -832,8 +832,8 @@ impl MenuDefaults {
 /// components (which keep their own copy of this constant; this is the menu's).
 const DISABLED_ALPHA: f32 = 0.38;
 
-fn with_alpha_factor(color: crate::modifier::Color, factor: f32) -> crate::modifier::Color {
-    crate::modifier::Color::from_argb(
+fn with_alpha_factor(color: crate::graphics::Color, factor: f32) -> crate::graphics::Color {
+    crate::graphics::Color::from_argb(
         ((color.a as f32 * factor).round().min(255.0)) as u8,
         color.r,
         color.g,
@@ -894,8 +894,8 @@ pub struct DropdownMenu {
     /// taking the keyboard so the text field keeps the caret and the IME.
     focus_scope: bool,
     offset: (f32, f32),
-    shape: Option<crate::modifier::Shape>,
-    container_color: Option<crate::modifier::Color>,
+    shape: Option<crate::graphics::Shape>,
+    container_color: Option<crate::graphics::Color>,
     tonal_elevation: f32,
     shadow_elevation: Option<f32>,
     border: Option<crate::components::surface::SurfaceBorder>,
@@ -965,13 +965,13 @@ impl DropdownMenu {
     }
 
     /// M3 `shape` — `MenuDefaults.shape` (CornerExtraSmall, 4dp) when unset.
-    pub fn shape(mut self, shape: impl Into<crate::modifier::Shape>) -> Self {
+    pub fn shape(mut self, shape: impl Into<crate::graphics::Shape>) -> Self {
         self.shape = Some(shape.into());
         self
     }
 
     /// M3 `containerColor` — `MenuDefaults.containerColor` (`surfaceContainer`) when unset.
-    pub fn container_color(mut self, color: crate::modifier::Color) -> Self {
+    pub fn container_color(mut self, color: crate::graphics::Color) -> Self {
         self.container_color = Some(color);
         self
     }
@@ -1660,7 +1660,7 @@ impl DropdownMenuItem {
                     &interaction,
                     text_color,
                     true,
-                    crate::modifier::Shape::Rectangle,
+                    crate::graphics::Shape::Rectangle,
                 )
                 // No focus RING: material3's menu items mark focus with a state layer, not an outline, and
                 // winia draws the ring around any focused node by default (`render.rs`). The highlight is
@@ -1698,7 +1698,7 @@ impl DropdownMenuItem {
         let leading_color = colors.leading_icon_color(self.enabled);
         let trailing_color = colors.trailing_icon_color(self.enabled);
         let icon_box = |ctx: &mut crate::runtime::composer::ComposeCtx,
-                        color: crate::modifier::Color,
+                        color: crate::graphics::Color,
                         content: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>| {
             crate::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
                 crate::layout::Column::new()
@@ -1907,7 +1907,7 @@ mod tests {
         assert!(
             matches!(
                 MenuDefaults::shape(),
-                crate::modifier::Shape::RoundedRect { corner_radius } if corner_radius == 4.0
+                crate::graphics::Shape::RoundedRect { corner_radius } if corner_radius == 4.0
             ),
             "MenuDefaults.shape = MenuTokens.ContainerShape = CornerExtraSmall (4dp), got {:?}",
             MenuDefaults::shape()
@@ -1985,7 +1985,7 @@ mod tests {
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             crate::components::icon::Icon::svg_path(data)
-                .tint(crate::modifier::Color::BLACK)
+                .tint(crate::graphics::Color::BLACK)
                 .size(24.0)
                 .build(ctx);
         });

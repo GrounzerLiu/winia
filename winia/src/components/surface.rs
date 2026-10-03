@@ -18,7 +18,8 @@
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::selection::ToggleableState;
 use std::sync::Arc;
@@ -238,7 +239,7 @@ impl Surface {
         // - clip：`clip(shape)`
         let mut modifier = Modifier::new();
         if shadow_elevation > 0.0 {
-            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation,
                 shadow_shape: Some(shape),
                 ..Default::default()

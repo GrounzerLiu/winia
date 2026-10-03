@@ -55,7 +55,8 @@
 
 use std::sync::Arc;
 
-use crate::modifier::{Color, DrawWrapNode, Modifier};
+use crate::modifier::{DrawWrapNode, Modifier};
+use crate::graphics::{Color};
 use skia_safe::{Canvas as SkCanvas, Paint, Path, Rect as SkRect, RRect};
 
 /// The drawing surface handed to a [`Canvas`] / [`draw_behind`] / [`draw_with_content`] closure.
@@ -507,7 +508,7 @@ mod tests {
     fn draw_with_content_paints_over_the_nodes_own_background() {
         let modifier = Modifier::new()
             .size(100.0, 100.0)
-            .background(Color::WHITE, crate::modifier::Shape::Rectangle);
+            .background(Color::WHITE, crate::graphics::Shape::Rectangle);
         let md = draw_with_content(
             modifier,
             |_scope| {},

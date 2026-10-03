@@ -8,7 +8,8 @@ use crate::debug_log;
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
-use crate::modifier::{Color, Modifier, ModifierElement};
+use crate::modifier::{Modifier, ModifierElement};
+use crate::graphics::{Color};
 use crate::unit::TextUnit;
 use crate::text::{FontSlant, FontWeight, TextAlign, TextOverflow, TextStyle};
 use std::sync::LazyLock;
@@ -113,7 +114,7 @@ impl Text {
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
 
     /// 设置背景色和形状（委托到 Modifier::background）
-    pub fn background(mut self, color: Color, shape: impl Into<crate::modifier::Shape>) -> Self {
+    pub fn background(mut self, color: Color, shape: impl Into<crate::graphics::Shape>) -> Self {
         self.modifier = self.modifier.background(color, shape);
         self
     }

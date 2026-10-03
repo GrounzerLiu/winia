@@ -655,7 +655,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// 设置当前节点的焦点环颜色（组合期调用——主题色在此捕获；
     /// 渲染期 CompositionLocal 已退出，不能读主题）
-    pub fn set_current_node_focus_color(&mut self, color: crate::modifier::Color) {
+    pub fn set_current_node_focus_color(&mut self, color: crate::graphics::Color) {
         // 组合/布局分离：组合期没有 arena 节点——写入当前 slot 的 desc，
         // 物化时应用到节点（与 set_current_node_registrar 同一通道）
         if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
@@ -665,7 +665,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// 设置当前节点的 IME 组合下划线颜色（组合期调用——主题 primary 在此捕获；
     /// 渲染期 CompositionLocal 已退出，不能读主题，Phase 4.2）
-    pub fn set_current_node_composing_color(&mut self, color: crate::modifier::Color) {
+    pub fn set_current_node_composing_color(&mut self, color: crate::graphics::Color) {
         if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
             desc.composing_color = Some(color);
         }
@@ -685,7 +685,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
-    pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
+    pub fn animate_color_as_state(&mut self, target: crate::graphics::Color, spec: crate::animation::AnimationSpec) -> State<crate::graphics::Color> {
         let slot_key = self.next_remember_key();
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
             crate::runtime::state::Animating::new(target)
@@ -865,10 +865,10 @@ struct NodeDesc {
     registrar: Option<crate::text::selection::SelectionRegistrar>,
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
-    focus_color: Option<crate::modifier::Color>,
+    focus_color: Option<crate::graphics::Color>,
     /// IME 组合下划线颜色（组合期 set_current_node_composing_color 写入——
     /// 物化时应用；渲染期不能读 CompositionLocal（Phase 4.2），组合期捕获主题 primary）
-    composing_color: Option<crate::modifier::Color>,
+    composing_color: Option<crate::graphics::Color>,
     /// 光标（TextField）——组合期写入，物化时应用（node_stack 已废弃——
     /// 组合期无 arena 节点，直接写节点会静默失效）
     cursor_index: Option<usize>,
@@ -6087,7 +6087,7 @@ fn test_text_content_change_remeasures() {
                     let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
                         content: text.to_string(),
                         font_size: 14.0,
-                        color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+                        color: crate::graphics::Color::from_argb(255, 0, 0, 0),
                         font_weight: crate::text::FontWeight::NORMAL,
                         font_style: crate::text::FontSlant::Upright,
                         max_lines: usize::MAX,
@@ -6151,7 +6151,7 @@ fn test_text_style_change_remeasures() {
                         content: "hello".to_string(),
                         font_size: 14.0,
                         // The only thing that differs between the two frames.
-                        color: crate::modifier::Color::from_argb(alpha, 0, 0, 0),
+                        color: crate::graphics::Color::from_argb(alpha, 0, 0, 0),
                         font_weight: crate::text::FontWeight::NORMAL,
                         font_style: crate::text::FontSlant::Upright,
                         max_lines: usize::MAX,
@@ -6912,7 +6912,7 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
                 let modifier = Modifier::new().push(crate::modifier::ModifierElement::TextContent {
                     content: "plain".to_string(),
                     font_size: 14.0,
-                    color: crate::modifier::Color::from_argb(255, 0, 0, 0),
+                    color: crate::graphics::Color::from_argb(255, 0, 0, 0),
                     font_weight: crate::text::FontWeight::NORMAL,
                     font_style: crate::text::FontSlant::Upright,
                     max_lines: usize::MAX,

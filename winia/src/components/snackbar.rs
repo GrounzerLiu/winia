@@ -21,7 +21,8 @@ use std::sync::Arc;
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::theme::WiniaTheme;
 
 /// Snackbar 显示时长（对标 Compose `SnackbarDuration`）

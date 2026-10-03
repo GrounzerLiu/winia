@@ -23,7 +23,7 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::animation::push_animatable;
-use crate::modifier::GraphicsLayerParams;
+use crate::graphics::GraphicsLayerParams;
 use std::any::Any;
 use std::collections::HashMap;
 

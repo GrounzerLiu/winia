@@ -5,7 +5,8 @@
 
 use winia::runtime::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
-use winia::modifier::{Modifier, Color, Shape};
+use winia::modifier::{Modifier};
+use winia::graphics::{Color, Shape};
 use winia::components::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
 use winia::render;
 
@@ -338,7 +339,7 @@ fn blue() -> Color {
 }
 
 /// Draw one `w`x`h` node filled with `brush` — a value or a closure, as the modifier takes.
-fn brush_scene(brush: impl Into<winia::brush::BrushSource>, w: f32, h: f32) -> skia_safe::Surface {
+fn brush_scene(brush: impl Into<winia::graphics::BrushSource>, w: f32, h: f32) -> skia_safe::Surface {
     let brush = brush.into();
     let (mut surface, _) = render_ui(w, h, winia::app_root!(move |ctx| {
         use winia::layout::components::Column;

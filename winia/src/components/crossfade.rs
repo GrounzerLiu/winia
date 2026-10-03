@@ -25,7 +25,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::box_layout::BoxLayout;
-use crate::modifier::{GraphicsLayerParams, Modifier};
+use crate::modifier::{Modifier};
+use crate::graphics::{GraphicsLayerParams};
 
 /// 内容切换过渡（顺序淡入淡出）
 pub struct Crossfade<T> {

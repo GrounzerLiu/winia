@@ -221,7 +221,7 @@ fn section5(ctx: &mut ComposeCtx) {
             .size(40.0, 40.0)
             .graphics_layer({
                 clone!(pulse);
-                move || winia::modifier::GraphicsLayerParams {
+                move || winia::graphics::GraphicsLayerParams {
                     alpha: pulse.peek(),
                     ..Default::default()
                 }

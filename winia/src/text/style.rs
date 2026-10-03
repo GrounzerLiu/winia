@@ -7,7 +7,7 @@
 //!
 //! The `Text` component re-exports nothing: it imports from here.
 
-use crate::modifier::Color;
+use crate::graphics::Color;
 use crate::unit::TextUnit;
 
 // ═══════════════════════════════════════════════════════════

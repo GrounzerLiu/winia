@@ -13,7 +13,8 @@
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
-use crate::modifier::{Modifier, ModifierElement, RichSpanStyle, Color};
+use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::graphics::{Color};
 use crate::text::InlineDrawable;
 use crate::components::text::{LOCAL_TEXT_STYLE};
 use crate::text::{FontWeight, FontSlant, TextStyle};
@@ -570,7 +571,7 @@ impl Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modifier::Color;
+    use crate::graphics::Color;
 
     struct TestCtx {
         content: String,

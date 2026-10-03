@@ -40,7 +40,8 @@ use crate::runtime::state::State;
 use crate::layout::node::{
     scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
 };
-use crate::modifier::{Modifier, ModifierElement, Shape};
+use crate::modifier::{Modifier, ModifierElement};
+use crate::graphics::{Shape};
 use crate::components::animated_visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
@@ -3471,7 +3472,7 @@ mod tier0_tests {
     use crate::runtime::composer::ComposeCtx;
     use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
-    use crate::modifier::Color;
+    use crate::graphics::Color;
     use crate::nav::{NavBackStack, NavDisplay, NavEntry};
     use crate::layout::Column;
     use crate::layout::Row;

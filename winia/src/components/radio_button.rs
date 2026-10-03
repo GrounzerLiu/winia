@@ -14,7 +14,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;

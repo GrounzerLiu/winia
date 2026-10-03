@@ -31,7 +31,8 @@
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::{Alignment, LayoutDirection};
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::theme::WiniaTheme;
 use std::sync::Arc;

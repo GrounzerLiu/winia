@@ -13,7 +13,7 @@ use crate::text::{IndexBiMap, ParagraphBuilder};
 pub fn build_plain_paragraph(
     text: &str,
     font_size: f32,
-    color: crate::modifier::Color,
+    color: crate::graphics::Color,
     width: f32,
 ) -> Paragraph {
     let fc = crate::text::font::get_font_collection();

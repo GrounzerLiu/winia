@@ -58,7 +58,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
 
                 Text::new("Docked date picker (click the calendar button)")
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
 
                 // ── Anchor: a form field with a calendar button, wrapped in an explicit group ──
@@ -189,7 +189,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
                     .unwrap_or_else(|| String::from("(none)"));
                 Text::new(format!("Confirmed: {status}"))
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
             }
         });

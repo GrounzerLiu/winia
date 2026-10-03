@@ -28,7 +28,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
-use crate::modifier::{GraphicsLayerParams, Modifier};
+use crate::modifier::{Modifier};
+use crate::graphics::{GraphicsLayerParams};
 pub use crate::animation::visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
@@ -112,7 +113,7 @@ impl AnimatedVisibility {
                 params.scale_x = s;
                 params.scale_y = s;
                 params.transform_origin =
-                    crate::modifier::TransformOrigin(cfg.transform_origin.0, cfg.transform_origin.1);
+                    crate::graphics::TransformOrigin(cfg.transform_origin.0, cfg.transform_origin.1);
             }
             if let Some((dir, offset)) = cfg.slide {
                 let dist = match offset {
@@ -162,7 +163,7 @@ impl AnimatedVisibility {
         let modifier = if want_clip {
             Modifier::new()
                 .graphics_layer(gfx)
-                .clip(crate::modifier::Shape::Rectangle)
+                .clip(crate::graphics::Shape::Rectangle)
         } else {
             Modifier::new().graphics_layer(gfx)
         };

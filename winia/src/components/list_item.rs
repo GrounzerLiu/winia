@@ -3,7 +3,8 @@
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Alignment, BoxLayout};
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use crate::components::text::{ProvideTextStyle};

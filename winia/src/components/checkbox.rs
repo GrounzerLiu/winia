@@ -12,7 +12,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -725,7 +726,7 @@ mod tests {
         let _g = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let fill = crate::modifier::Color::from_argb(96, 40, 80, 220);
+        let fill = crate::graphics::Color::from_argb(96, 40, 80, 220);
         let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             Checkbox::new(true)

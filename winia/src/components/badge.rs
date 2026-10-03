@@ -14,7 +14,8 @@ use crate::composable;
 use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::measure_node;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::theme::WiniaTheme;
 
 /// 小徽章尺寸（`BadgeTokens.Size = 6dp`）

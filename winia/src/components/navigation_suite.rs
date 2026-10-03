@@ -24,7 +24,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement, Point, Size};
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::layout::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
 use crate::components::navigation_bar::NavigationItemIconPosition;
 use crate::components::short_navigation_bar::{ShortNavigationBar, ShortNavigationBarArrangement, ShortNavigationBarItem};
@@ -241,7 +242,7 @@ impl NavigationSuiteScaffold {
         let content_modifier = Modifier::new()
             .fill_max_width()
             .fill_max_height()
-            .background(theme.background, crate::modifier::Shape::Rectangle);
+            .background(theme.background, crate::graphics::Shape::Rectangle);
 
         match suite_type {
             NavigationSuiteType::None => {

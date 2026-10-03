@@ -5,7 +5,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
-use crate::modifier::{Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Shape};
 use crate::theme::WiniaTheme;
 
 pub const SCAFFOLD_FAB_MARGIN: f32 = 16.0;

@@ -10,7 +10,8 @@ mod settings;
 
 use winia::runtime::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{GraphicsLayerParams, Modifier, Shape};
+use winia::modifier::{Modifier};
+use winia::graphics::{GraphicsLayerParams, Shape};
 
 #[composable]
 fn graphics_layer_ui(ctx: &mut ComposeCtx) {

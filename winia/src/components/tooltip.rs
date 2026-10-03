@@ -178,7 +178,7 @@ impl Tooltip {
 fn plain_tooltip_content(ctx: &mut ComposeCtx, text: &str) {
     ctx.key(0, |ctx| {
         let theme = crate::theme::WiniaTheme::colors();
-        let shape = crate::modifier::Shape::RoundedRect { corner_radius: 8.0 };
+        let shape = crate::graphics::Shape::RoundedRect { corner_radius: 8.0 };
         let m = Modifier::new()
             .background(theme.inverse_surface, shape)
             .padding(8.0)

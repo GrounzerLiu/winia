@@ -32,10 +32,10 @@ pub(crate) struct DescNode {
     /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
     pub(crate) registrar: Option<crate::text::selection::SelectionRegistrar>,
     /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
-    pub(crate) focus_color: Option<crate::modifier::Color>,
+    pub(crate) focus_color: Option<crate::graphics::Color>,
     /// IME 组合下划线颜色（物化时写入节点——组合期捕获主题 primary，渲染期
     /// 不能读 CompositionLocal，Phase 4.2）
-    pub(crate) composing_color: Option<crate::modifier::Color>,
+    pub(crate) composing_color: Option<crate::graphics::Color>,
     /// 光标（TextField）——组合期写入 desc，物化时应用到节点
     pub(crate) cursor_index: Option<usize>,
     pub(crate) cursor_visible: Option<bool>,
@@ -232,8 +232,8 @@ fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
     n.cursor_index.set(0);
     n.cursor_visible.set(false);
     n.display_focused.set(false);
-    n.focus_color.set(crate::modifier::Color::TRANSPARENT);
-    n.composing_color.set(crate::modifier::Color::TRANSPARENT);
+    n.focus_color.set(crate::graphics::Color::TRANSPARENT);
+    n.composing_color.set(crate::graphics::Color::TRANSPARENT);
     n.focused = false;
 }
 

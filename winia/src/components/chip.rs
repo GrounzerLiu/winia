@@ -13,7 +13,8 @@
 //! + onSecondaryContainer + 0 边框，unselected = transparent + outline 边框。
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::modifier::{Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Shape};
 use crate::components::text::ProvideTextStyle;
 
 // ═══════════════════════════════════════════════════════════
@@ -23,22 +24,22 @@ use crate::components::text::ProvideTextStyle;
 /// Chip 配色（Assist/Suggestion——非选择型；对标 material3 ChipColors）。
 #[derive(Debug, Clone, Copy)]
 pub struct ChipColors {
-    pub container: crate::modifier::Color,
-    pub label: crate::modifier::Color,
-    pub leading_icon: crate::modifier::Color,
-    pub trailing_icon: crate::modifier::Color,
-    pub disabled_container: crate::modifier::Color,
-    pub disabled_label: crate::modifier::Color,
+    pub container: crate::graphics::Color,
+    pub label: crate::graphics::Color,
+    pub leading_icon: crate::graphics::Color,
+    pub trailing_icon: crate::graphics::Color,
+    pub disabled_container: crate::graphics::Color,
+    pub disabled_label: crate::graphics::Color,
 }
 
 impl ChipColors {
     pub fn new(
-        container: crate::modifier::Color,
-        label: crate::modifier::Color,
-        leading_icon: crate::modifier::Color,
-        trailing_icon: crate::modifier::Color,
-        disabled_container: crate::modifier::Color,
-        disabled_label: crate::modifier::Color,
+        container: crate::graphics::Color,
+        label: crate::graphics::Color,
+        leading_icon: crate::graphics::Color,
+        trailing_icon: crate::graphics::Color,
+        disabled_container: crate::graphics::Color,
+        disabled_label: crate::graphics::Color,
     ) -> Self {
         Self { container, label, leading_icon, trailing_icon, disabled_container, disabled_label }
     }
@@ -52,32 +53,32 @@ impl ChipColors {
 /// 对标 material3 SelectableChipColors）。
 #[derive(Debug, Clone, Copy)]
 pub struct SelectableChipColors {
-    pub container: crate::modifier::Color,
-    pub label: crate::modifier::Color,
-    pub leading_icon: crate::modifier::Color,
-    pub trailing_icon: crate::modifier::Color,
-    pub selected_container: crate::modifier::Color,
-    pub selected_label: crate::modifier::Color,
-    pub selected_leading_icon: crate::modifier::Color,
-    pub selected_trailing_icon: crate::modifier::Color,
-    pub disabled_container: crate::modifier::Color,
-    pub disabled_label: crate::modifier::Color,
-    pub disabled_selected_container: crate::modifier::Color,
+    pub container: crate::graphics::Color,
+    pub label: crate::graphics::Color,
+    pub leading_icon: crate::graphics::Color,
+    pub trailing_icon: crate::graphics::Color,
+    pub selected_container: crate::graphics::Color,
+    pub selected_label: crate::graphics::Color,
+    pub selected_leading_icon: crate::graphics::Color,
+    pub selected_trailing_icon: crate::graphics::Color,
+    pub disabled_container: crate::graphics::Color,
+    pub disabled_label: crate::graphics::Color,
+    pub disabled_selected_container: crate::graphics::Color,
 }
 
 impl SelectableChipColors {
     pub fn new(
-        container: crate::modifier::Color,
-        label: crate::modifier::Color,
-        leading_icon: crate::modifier::Color,
-        trailing_icon: crate::modifier::Color,
-        selected_container: crate::modifier::Color,
-        selected_label: crate::modifier::Color,
-        selected_leading_icon: crate::modifier::Color,
-        selected_trailing_icon: crate::modifier::Color,
-        disabled_container: crate::modifier::Color,
-        disabled_label: crate::modifier::Color,
-        disabled_selected_container: crate::modifier::Color,
+        container: crate::graphics::Color,
+        label: crate::graphics::Color,
+        leading_icon: crate::graphics::Color,
+        trailing_icon: crate::graphics::Color,
+        selected_container: crate::graphics::Color,
+        selected_label: crate::graphics::Color,
+        selected_leading_icon: crate::graphics::Color,
+        selected_trailing_icon: crate::graphics::Color,
+        disabled_container: crate::graphics::Color,
+        disabled_label: crate::graphics::Color,
+        disabled_selected_container: crate::graphics::Color,
     ) -> Self {
         Self {
             container, label, leading_icon, trailing_icon,
@@ -108,12 +109,12 @@ impl ChipDefaults {
     /// 文字 + primary icon
     pub fn chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
         ChipColors {
-            container: crate::modifier::Color::TRANSPARENT,
+            container: crate::graphics::Color::TRANSPARENT,
             label: theme.on_surface_variant,
             leading_icon: theme.primary,
             trailing_icon: theme.on_surface_variant,
-            disabled_container: crate::modifier::Color::TRANSPARENT,
-            disabled_label: crate::modifier::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            disabled_container: crate::graphics::Color::TRANSPARENT,
+            disabled_label: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
         }
     }
 
@@ -122,7 +123,7 @@ impl ChipDefaults {
     /// + 0 边框（有填充即无边框）
     pub fn selectable_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
         SelectableChipColors {
-            container: crate::modifier::Color::TRANSPARENT,
+            container: crate::graphics::Color::TRANSPARENT,
             label: theme.on_surface_variant,
             leading_icon: theme.primary,
             trailing_icon: theme.on_surface_variant,
@@ -130,9 +131,9 @@ impl ChipDefaults {
             selected_label: theme.on_secondary_container,
             selected_leading_icon: theme.on_secondary_container,
             selected_trailing_icon: theme.on_secondary_container,
-            disabled_container: crate::modifier::Color::TRANSPARENT,
-            disabled_label: crate::modifier::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
-            disabled_selected_container: crate::modifier::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            disabled_container: crate::graphics::Color::TRANSPARENT,
+            disabled_label: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            disabled_selected_container: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
         }
     }
 
@@ -321,11 +322,11 @@ fn build_chip(
     ctx: &mut ComposeCtx,
     modifier: Modifier,
     enabled: bool,
-    container: crate::modifier::Color,
-    border_color: crate::modifier::Color,
+    container: crate::graphics::Color,
+    border_color: crate::graphics::Color,
     border_width: f32,
     shape: Shape,
-    content_color: crate::modifier::Color,
+    content_color: crate::graphics::Color,
     on_click: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
     content: impl FnOnce(&mut ComposeCtx),
 ) {

@@ -19,7 +19,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::effect::LaunchedEffect;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{MaterialShapes, Morph, MorphToPath, RoundedPolygon};
 use std::sync::LazyLock;
@@ -412,7 +413,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
-    use crate::modifier::Color;
+    use crate::graphics::Color;
 
     #[test]
     fn default_is_uncontained() {
@@ -581,7 +582,7 @@ mod tests {
         let theme = ThemeColors::default_light();
         let mk = |contained: bool| LoadingIndicatorNode {
             is_contained: contained,
-            container_shape: crate::modifier::Shape::Circle,
+            container_shape: crate::graphics::Shape::Circle,
             indicator_color: theme.primary,
             container_color: theme.secondary_container,
             morph_progress: State::new(0.0),
@@ -594,7 +595,7 @@ mod tests {
         // 动画值变化 → 相等（不进 key）
         let moved = LoadingIndicatorNode {
             is_contained: true,
-            container_shape: crate::modifier::Shape::Circle,
+            container_shape: crate::graphics::Shape::Circle,
             indicator_color: theme.primary,
             container_color: theme.secondary_container,
             morph_progress: State::new(0.7),
@@ -634,7 +635,7 @@ mod tests {
             .size(40.0, 40.0)
             .draw_node(LoadingIndicatorNode {
                 is_contained: false,
-                container_shape: crate::modifier::Shape::Circle,
+                container_shape: crate::graphics::Shape::Circle,
                 indicator_color: theme.primary,
                 container_color: Color::TRANSPARENT,
                 morph_progress: State::new(0.0),

@@ -20,7 +20,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, KbEvent, KbEventType, Modifier};
+use crate::modifier::{KbEvent, KbEventType, Modifier};
+use crate::graphics::{Color};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -686,7 +687,7 @@ pub(crate) fn draw_thumb(
         // For a centre line 8 from the thumb centre: gap = 8 - thumb half width (2) - 1.5 = 4.5.
         let end_gap = SLIDER_THUMB_WIDTH / 2.0 + SLIDER_THUMB_GAP;
         let ring_gap = end_gap - SLIDER_THUMB_WIDTH / 2.0 - 1.5;
-        crate::render::draw_focus(canvas, ring_rect, &crate::modifier::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
+        crate::render::draw_focus(canvas, ring_rect, &crate::graphics::Shape::Pill, None, thumb_c, focus_alpha, ring_gap);
     }
 }
 

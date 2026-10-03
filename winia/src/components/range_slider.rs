@@ -29,7 +29,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
-use crate::modifier::{KbEvent, Modifier, Shape};
+use crate::modifier::{KbEvent, Modifier};
+use crate::graphics::{Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::components::slider::{
     SLIDER_ACTIVE_THUMB_WIDTH, SLIDER_THUMB_GAP, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
@@ -680,7 +681,7 @@ mod tests {
         (a.0 - b.0).abs() <= 8 && (a.1 - b.1).abs() <= 8 && (a.2 - b.2).abs() <= 8
     }
 
-    fn rgb(c: crate::modifier::Color) -> (i32, i32, i32) {
+    fn rgb(c: crate::graphics::Color) -> (i32, i32, i32) {
         (c.r as i32, c.g as i32, c.b as i32)
     }
 
@@ -767,7 +768,7 @@ mod tests {
         });
         // The disabled colors carry an alpha, so what the surface shows is that color composited
         // over the white background — the composited value is what this pins.
-        let over_white = |c: crate::modifier::Color, a: f32| {
+        let over_white = |c: crate::graphics::Color, a: f32| {
             (
                 (c.r as f32 * a + 255.0 * (1.0 - a)) as i32,
                 (c.g as f32 * a + 255.0 * (1.0 - a)) as i32,
@@ -956,7 +957,7 @@ mod tests {
             "the source drives the ring, so it must be part of the key"
         );
         let mut recolored = node(false, true, src.clone());
-        recolored.colors.thumb_color = crate::modifier::Color::from_argb(255, 1, 2, 3);
+        recolored.colors.thumb_color = crate::graphics::Color::from_argb(255, 1, 2, 3);
         assert_ne!(base_key, recolored.node_key(), "colors");
     }
 

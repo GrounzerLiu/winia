@@ -18,7 +18,8 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{MeasurePolicy, Placement, Point, Size};
 use crate::layout::LayoutDirection;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::MutableInteractionSource;
 use crate::components::navigation_bar::{
     NavigationBarItem, NavigationBarItemColors, NavigationItemIconPosition, NAVIGATION_BAR_HEIGHT,

@@ -13,7 +13,8 @@
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::BoxLayout;
-use crate::modifier::{Modifier, Shape, SizeValue};
+use crate::modifier::{Modifier, SizeValue};
+use crate::graphics::{Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 use std::fmt;
@@ -100,35 +101,35 @@ impl ButtonSize {
 /// 按状态取色（禁用：M3 token——容器 OnSurface@10/12%、内容 OnSurface(Variant)@38%）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonColors {
-    pub container: crate::modifier::Color,
-    pub content: crate::modifier::Color,
-    pub disabled_container: crate::modifier::Color,
-    pub disabled_content: crate::modifier::Color,
+    pub container: crate::graphics::Color,
+    pub content: crate::graphics::Color,
+    pub disabled_container: crate::graphics::Color,
+    pub disabled_content: crate::graphics::Color,
 }
 
 impl ButtonColors {
     pub fn new(
-        container: crate::modifier::Color,
-        content: crate::modifier::Color,
-        disabled_container: crate::modifier::Color,
-        disabled_content: crate::modifier::Color,
+        container: crate::graphics::Color,
+        content: crate::graphics::Color,
+        disabled_container: crate::graphics::Color,
+        disabled_content: crate::graphics::Color,
     ) -> Self {
         Self { container, content, disabled_container, disabled_content }
     }
 
     /// 按启用状态取容器色
-    pub fn container_color(&self, enabled: bool) -> crate::modifier::Color {
+    pub fn container_color(&self, enabled: bool) -> crate::graphics::Color {
         self.container_color_for(&ComponentState { enabled, ..ComponentState::idle() })
     }
 
     /// 按启用状态取内容（文字）色
-    pub fn content_color(&self, enabled: bool) -> crate::modifier::Color {
+    pub fn content_color(&self, enabled: bool) -> crate::graphics::Color {
         self.content_color_for(&ComponentState { enabled, ..ComponentState::idle() })
     }
 
     /// 状态化容器色——仅区分 enabled/disabled（与 material3 ButtonColors 一致；
     /// hover/focus/press 视觉由 indication（ripple）状态层绘制，避免双重叠加）。
-    pub fn container_color_for(&self, state: &ComponentState) -> crate::modifier::Color {
+    pub fn container_color_for(&self, state: &ComponentState) -> crate::graphics::Color {
         if !state.enabled {
             self.disabled_container
         } else {
@@ -137,13 +138,13 @@ impl ButtonColors {
     }
 
     /// 状态化内容色（内容色仅区分 enabled/disabled——与 material3 ButtonColors 一致）
-    pub fn content_color_for(&self, state: &ComponentState) -> crate::modifier::Color {
+    pub fn content_color_for(&self, state: &ComponentState) -> crate::graphics::Color {
         if state.enabled { self.content } else { self.disabled_content }
     }
 
     /// 从主题按 style 生成默认色（Compose ButtonDefaults.buttonColors 对标）
     pub fn from_theme(theme: &crate::theme::ThemeColors, style: ButtonStyle) -> Self {
-        use crate::modifier::Color;
+        use crate::graphics::Color;
         let (container, content) = match style {
             ButtonStyle::Filled => (theme.primary, theme.on_primary),
             ButtonStyle::Elevated => (theme.surface_container_low, theme.primary),
@@ -240,11 +241,11 @@ impl Default for ButtonStyle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonBorder {
     pub width: f32,
-    pub color: crate::modifier::Color,
+    pub color: crate::graphics::Color,
 }
 
 impl ButtonBorder {
-    pub fn new(width: f32, color: crate::modifier::Color) -> Self {
+    pub fn new(width: f32, color: crate::graphics::Color) -> Self {
         Self { width, color }
     }
 
@@ -256,7 +257,7 @@ impl ButtonBorder {
         let color = if enabled {
             c
         } else {
-            crate::modifier::Color::from_argb(
+            crate::graphics::Color::from_argb(
                 (c.a as f32 * 0.10) as u8,
                 c.r,
                 c.g,
@@ -628,7 +629,7 @@ impl Button {
         // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
         // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Button shape）
         if let Some(anim) = elevation_anim {
-            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: anim.get(),
                 shadow_shape: Some(shape),
                 ..Default::default()
@@ -770,11 +771,11 @@ mod tests {
 
     #[test]
     fn test_button_border() {
-        let b = ButtonBorder::new(2.0, crate::modifier::Color::RED);
+        let b = ButtonBorder::new(2.0, crate::graphics::Color::RED);
         assert_eq!(b.width, 2.0);
         let btn = Button::new().border(b);
         assert_eq!(btn.get_border(), Some(b));
-        assert_eq!(btn.get_border().unwrap().color, crate::modifier::Color::RED);
+        assert_eq!(btn.get_border().unwrap().color, crate::graphics::Color::RED);
     }
 
     #[test]
@@ -796,8 +797,8 @@ mod tests {
     #[test]
     fn button_default_colors_match_m3_tokens() {
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
-        let alpha = |c: crate::modifier::Color, a: f32| {
-            crate::modifier::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
+        let alpha = |c: crate::graphics::Color, a: f32| {
+            crate::graphics::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
         };
         let f = ButtonColors::from_theme(&theme, ButtonStyle::Filled);
         assert_eq!(f.container, theme.primary);
@@ -946,7 +947,7 @@ mod tests {
 
     #[test]
     fn test_button_colors_state_resolution() {
-        use crate::modifier::Color;
+        use crate::graphics::Color;
         let colors = ButtonColors::new(
             Color::RED,
             Color::WHITE,

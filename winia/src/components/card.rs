@@ -11,7 +11,8 @@
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 
@@ -74,7 +75,7 @@ impl CardColors {
     /// 直乘近似——Filled 取 SurfaceVariant@38%，Elevated/Outlined 容器不变
     /// （M3：Elevated 为 Surface@38% 叠 Surface、Outlined 无 disabled 容器变化）。
     pub fn from_theme(theme: &crate::theme::ThemeColors, style: CardStyle) -> Self {
-        use crate::modifier::Color;
+        use crate::graphics::Color;
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
         match style {
             // FilledCardTokens: Container=SurfaceContainerHighest, Disabled=SurfaceVariant@38%
@@ -406,7 +407,7 @@ impl Card {
         // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
         // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Card shape）
         if let Some(anim) = elevation_anim {
-            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: anim.get(),
                 shadow_shape: Some(shape),
                 ..Default::default()

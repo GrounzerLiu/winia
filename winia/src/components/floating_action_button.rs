@@ -11,7 +11,8 @@ use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::BoxLayout;
-use crate::modifier::{Color, Modifier, Shape};
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -362,7 +363,7 @@ impl FloatingActionButton {
             .size(size, size)
             .background(container, shape);
         if let Some(anim) = elevation_anim {
-            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: anim.get(),
                 shadow_shape: Some(shape),
                 ..Default::default()
@@ -838,7 +839,7 @@ impl ExtendedFloatingActionButton {
 
         let mut modifier = Modifier::new().background(container, shape);
         if let Some(elev) = elevation_value {
-            modifier = modifier.graphics_layer(move || crate::modifier::GraphicsLayerParams {
+            modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: elev,
                 shadow_shape: Some(shape),
                 ..Default::default()
@@ -870,7 +871,7 @@ impl ExtendedFloatingActionButton {
                 // 文本槽：透明度随进度淡入淡出（FastEffects 近似 stiffness200 淡入）
                 let alpha_progress = progress.clone();
                 let text_alpha = Modifier::new().graphics_layer(move || {
-                    crate::modifier::GraphicsLayerParams {
+                    crate::graphics::GraphicsLayerParams {
                         alpha: alpha_progress.peek(),
                         ..Default::default()
                     }
