@@ -31,6 +31,24 @@ pub(crate) trait FlexAxis {
     /// when true and only a MAXIMUM when false — `createConstraints(mainAxisMin = if
     /// (parentData.fill) childMainAxisSize else 0, mainAxisMax = childMainAxisSize,
     /// isPrioritizing = true)` (`RowColumnMeasurePolicy.kt:195-207`).
+    ///
+    /// Two things in that call are deliberately not modelled, both checked against the source:
+    ///
+    /// - `isPrioritizing = true` selects `Constraints.fitPrioritizingWidth/Height` instead of a plain
+    ///   `Constraints(...)`, and that function is about BIT PACKING, not layout: Compose's
+    ///   `Constraints` is a value class over a `Long` with 18 bits for its larger dimension and 13 for
+    ///   the smaller (262,143 and 8,191), so the main axis is granted the large budget and the cross
+    ///   axis is clamped to what is left ("The width is granted as much space as it needs or caps the
+    ///   size to 18 bits. The height is given the remaining space" — `ui-unit` `Constraints.kt:275-313`).
+    ///   winia's `Constraints` is four `f32`s with no packing, so there is no budget to prioritise and
+    ///   the flag has nothing to mean. It is not a semantics difference to align.
+    /// - Compose quantises a weighted child's share to integer pixels and hands the rounding error to
+    ///   the earliest children — `weightUnitSpace = remainingToTarget / totalWeight`, then
+    ///   `childMainAxisSize = max(0, (weightUnitSpace * weight).fastRoundToInt() + remainderUnit)` with
+    ///   `remainderUnit = remainder.sign` decremented per child (`:169-193`). winia allocates
+    ///   `remaining * weight / total_weight` as an `f32` and never rounds, so its children fill the
+    ///   axis exactly in logical pixels where Compose fills it exactly in device pixels. Matching the
+    ///   rounding would mean moving the whole lay-out to integers, against winia's float model.
     fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints;
 
     // ── 值构造 ──
