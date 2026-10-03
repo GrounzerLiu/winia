@@ -8,10 +8,6 @@
 //! 字体与码点表来源：<https://github.com/google/material-design-icons>
 //! （Apache License 2.0，见本目录 NOTICE）。
 
-use skia_safe::font_arguments::variation_position::Coordinate;
-use skia_safe::font_arguments::VariationPosition;
-use skia_safe::{Font, FontArguments, FontMgr, FourByteTag, TextBlob, Typeface};
-use std::sync::OnceLock;
 
 #[cfg(feature = "material-symbols-outlined")]
 mod outlined;

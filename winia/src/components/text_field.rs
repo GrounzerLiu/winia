@@ -4,7 +4,6 @@
 //! （KeyCommand/KeyMapping/UndoManager 语义）
 
 use crate::text::field::{
-    offset_mapping_for_node, text_field_show_cursor, text_field_visual_color,
     TextFieldColors, TextFieldSlotRole, TextFieldVariant,
 };
 use crate::runtime::composer::ComposeCtx;
@@ -12,7 +11,7 @@ use crate::runtime::state::State;
 use crate::modifier::Modifier;
 use crate::composable;
 use crate::components::text::{ProvideTextStyle};
-use crate::text::{FontWeight, TextStyle};
+use crate::text::TextStyle;
 use crate::theme::WiniaTheme;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -1919,6 +1918,8 @@ impl Default for TextField {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::FontWeight;
+    use crate::text::field::text_field_show_cursor;
     use crate::runtime::composer::Composer;
     use crate::modifier::ModifierElement;
 
@@ -2817,7 +2818,7 @@ mod tests {
             });
             let root = composer.layout_root_idx().unwrap();
             let nodes = composer.arena_nodes();
-            super::text_field_show_cursor(nodes, root, root)
+            text_field_show_cursor(nodes, root, root)
         }
 
         assert!(

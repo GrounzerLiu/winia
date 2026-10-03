@@ -31,20 +31,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use crate::animation::{
-    push_animatable, AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec,
+    push_animatable, AnimatableValue, AnimationSpec, TweenSpec,
 };
 use crate::runtime::composer::Composer;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
 use crate::runtime::state::State;
 use crate::layout::node::{
-    scroll_offset_for_node, LayoutNode, PaintDisposition,
+    LayoutNode, PaintDisposition,
 };
 use crate::modifier::{Modifier, ModifierElement};
-use crate::graphics::{Shape};
-use crate::components::animated_visibility::{
-    ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
-};
+use crate::components::animated_visibility::VisibilityTransition;
 
 // ═══════════════════════════════════════════════════════════
 // SharedBounds — exact animatable rect
@@ -632,6 +629,7 @@ impl Modifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::SpringSpec;
 
     #[test]
     fn bounds_lerp_endpoints_and_midpoint() {
@@ -3469,6 +3467,10 @@ impl Composer {
 #[cfg(test)]
 mod tier0_tests {
     use super::*;
+    use crate::animation::SpringSpec;
+    use crate::animation::visibility::SlideDirection;
+    use crate::animation::visibility::SlideOffset;
+    use crate::graphics::Shape;
     use crate::runtime::composer::ComposeCtx;
     use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;

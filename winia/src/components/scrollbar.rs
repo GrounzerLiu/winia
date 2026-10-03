@@ -27,7 +27,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
-use crate::graphics::{Color, Shape};
+use crate::graphics::Color;
 use crate::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 

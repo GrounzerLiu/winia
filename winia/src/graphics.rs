@@ -28,7 +28,6 @@ use std::time::{Duration, Instant};
 use std::sync::LazyLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use parking_lot::Mutex;
 
 /// 路径填充规则（写入包裹 SVG 的 fill-rule 属性——不自行解析路径）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

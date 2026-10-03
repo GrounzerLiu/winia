@@ -4,7 +4,6 @@
 //! They lived in `modifier.rs`, which made the crate's most-used type (`Color` appears in over
 //! 1,700 places) a member of the modifier chain rather than of the drawing layer it describes.
 
-use std::sync::Arc;
 
 /// 颜色（占位，后续由 skia Color 或 material theme 替代）
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -52,7 +52,6 @@
 //! 4. `draw_with_content`'s "content" is the node the modifier is attached to: on a container its
 //!    children, on a leaf its own background/border/text. That is the position
 //!    `DrawWrapNode::draw_after` occupies in the framework's own pipeline.
-use crate::unit::Size;
 
 use std::sync::Arc;
 

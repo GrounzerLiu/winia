@@ -3,9 +3,7 @@
 //! 单阶段深度遍历：节点级修饰符（阴影/背景/边框/文本/子节点）按序绘制；
 //! BackdropBlur 在节点自身内容绘制前即时 snapshot→blur→画回（见
 //! `draw_backdrop_blur`）——语义对齐 Compose：只模糊"位于其下"的内容。
-use crate::unit::Size;
 
-use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;

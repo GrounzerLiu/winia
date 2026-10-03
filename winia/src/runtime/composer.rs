@@ -15,7 +15,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::any::Any;

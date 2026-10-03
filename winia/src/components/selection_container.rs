@@ -1,15 +1,10 @@
 //! SelectionContainer — 文本选中容器（对齐 Jetpack Compose）
 
-use crate::runtime::composition_local::CompositionLocal;
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::layout::BoxLayout;
 use crate::runtime::composer::GroupStatus;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 
 

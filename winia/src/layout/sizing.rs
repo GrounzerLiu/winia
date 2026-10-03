@@ -2,7 +2,6 @@
 //! the dynamic `SizeValue` that evaluates per frame, and `IntrinsicSize`.
 
 use std::sync::Arc;
-use crate::unit::Px;
 
 /// 尺寸值，用于 Modifier 和 Layout
 ///

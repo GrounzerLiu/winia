@@ -16,7 +16,6 @@
 //! - Enter in single-line field → `on_search(query)` (IME Search equivalent);
 //!   callers conventionally deactivate inside on_search. Esc → deactivate.
 //! - No system Back on desktop: Esc substitutes (documented divergence).
-use crate::unit::Size;
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};

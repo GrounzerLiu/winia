@@ -39,7 +39,7 @@ use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::components::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
-use crate::interaction::{ComponentState, MutableInteractionSource};
+use crate::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 

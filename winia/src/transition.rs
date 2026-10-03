@@ -6,18 +6,16 @@
 //! the composables and the `Modifier` builders and imports what is below from here.
 
 use crate::animation::visibility::VisibilityTransition;
-use crate::animation::{AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
+use crate::animation::{AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec};
 use crate::layout::node::{
-    scroll_offset_for_node, LayoutNode, PaintDisposition,
+    scroll_offset_for_node, LayoutNode,
 };
 use crate::graphics::{ContentScale, ImageAlignment};
-use crate::graphics::{Color, GraphicsLayerParams};
 use crate::modifier::{Modifier, ModifierElement};
 use crate::graphics::{Shape};
 use crate::runtime::state::State;
 use crate::unit::Size;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Flight rect in window-logical pixels: origin + size.
 ///

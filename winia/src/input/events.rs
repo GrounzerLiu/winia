@@ -3,7 +3,6 @@
 //! These are the shapes a hit test and a key dispatch hand around; they lived in `modifier.rs`,
 //! which put the input vocabulary inside the chain that reacts to it.
 
-use winit::keyboard::Key;
 
 #[derive(Debug, Clone)]
 pub struct KbEvent {

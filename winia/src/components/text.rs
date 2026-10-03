@@ -4,11 +4,10 @@
 //! - ProvideTextStyle 为子树设置默认文字样式
 //! - 单独参数（font_size 等）优先级高于 style 参数
 
-use crate::debug_log;
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
-use crate::modifier::{Modifier, ModifierElement};
+use crate::modifier::Modifier;
 use crate::graphics::{Color};
 use crate::unit::TextUnit;
 use crate::text::{FontSlant, FontWeight, TextAlign, TextOverflow, TextStyle};
@@ -210,6 +209,7 @@ impl Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modifier::ModifierElement;
 
     #[test]
     fn test_text_defaults() {

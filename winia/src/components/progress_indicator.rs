@@ -24,7 +24,6 @@
 //!
 //! 架构：同 Slider —— `Modifier::draw()` 自定义 Canvas 绘制；indeterminate 动画
 //! 用 `remember_infinite_transition`（帧驱动在 app.rs）。
-use crate::unit::Size;
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;

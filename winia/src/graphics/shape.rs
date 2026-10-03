@@ -1,6 +1,5 @@
 //! `Shape` — how a background, border or clip is outlined (Compose's `graphics.Shape`).
 
-use super::Color;
 
 /// 形状描述（用于 background / border / clip）
 #[derive(Debug, Clone, Copy, PartialEq)]

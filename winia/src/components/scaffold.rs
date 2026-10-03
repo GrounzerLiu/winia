@@ -7,8 +7,6 @@ use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier};
-use crate::graphics::{Shape};
-use crate::theme::WiniaTheme;
 
 pub const SCAFFOLD_FAB_MARGIN: f32 = 16.0;
 
@@ -114,6 +112,7 @@ impl MeasurePolicy for ScaffoldLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::WiniaTheme;
     use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
     use crate::layout::Dimension;

@@ -10,14 +10,13 @@ use std::sync::Arc;
 use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::layout::LayoutDirection;
 use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
-use crate::input::{KbEvent, PointerButton, PointerEvent, PointerEventType, PointerKind};
+use crate::input::{KbEvent, PointerEvent};
 use crate::layout::{Dimension, IntrinsicSize, SizeValue};
-use crate::text::{DecoMode, DecoStyle, FontEdge, FontHint, RichSpanStyle};
+use crate::text::RichSpanStyle;
 use crate::interaction::MutableInteractionSource;
 use crate::graphics::{
-    BackgroundColor, BlendMode, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
+    BackgroundColor, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
     GraphicsLayerSpec, ShadowParams, Shape, TransformOrigin,
 };
 
@@ -1700,7 +1699,7 @@ impl Modifier {
     }
 
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => *v,
@@ -1753,7 +1752,7 @@ impl Modifier {
     /// 解析 Size 元素的尺寸（静态/动态单轴独立解析）——返回 (width, height) 解析值，
     /// None 表示该轴不约束（Auto/Fill）。
     pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         // 合并所有 Size 元素（链序：后 push 的外层胜出——非 None 覆盖）。
         // ⚠ 不能只返回第一个：`width(300).height(dyn)` 是两个 Size 元素，
         // 只取第一个会丢 height（min_lines 动态高度失效的根因）
@@ -1786,7 +1785,7 @@ impl Modifier {
     /// 该轴无最小约束。动态值在布局期求值（State::get 注册 layout_dep——
     /// 动画可驱动 min 尺寸，只重测不重组）。
     pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1820,7 +1819,7 @@ impl Modifier {
     /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
     /// and collapse that away, so the measure pipeline replays the order with this instead.
     pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1850,7 +1849,7 @@ impl Modifier {
     /// axis with no cap. Dynamic values are evaluated during layout (a `State::get` registers
     /// a layout dependency, so an animation can drive the cap without recomposing).
     pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1988,7 +1987,7 @@ impl Modifier {
     /// pipeline together with `Modifier::width/height(IntrinsicSize)` — see
     /// [`Modifier::intrinsic_width_request`].
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{current_density, Dp};
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -3608,6 +3607,9 @@ mod param_eq_tests {
 #[cfg(test)]
 mod node_track_tests {
     use super::*;
+    use crate::input::PointerButton;
+    use crate::input::PointerEventType;
+    use crate::input::PointerKind;
     use crate::runtime::composer::Composer;
 
     /// 试点绘制节点：Background(color, shape) 的 node 等价物（第三方可照抄）。

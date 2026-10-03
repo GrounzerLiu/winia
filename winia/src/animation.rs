@@ -18,14 +18,15 @@ pub use visibility::{
 };
 
 use crate::runtime::state::{State, StateId};
-use crate::runtime::composer::Composer;
 use std::time::{Duration, Instant};
 
 // ═══════════════════════════════════════════════════════════
 // 活跃动画管理（全局注册表，避开 Composer 字段修改）
 // ═══════════════════════════════════════════════════════════
 
-use std::sync::{Arc, Mutex, LazyLock};
+#[allow(unused_imports)] // the file-scope `#[test]` functions below build interpolators in an Arc
+use std::sync::Arc;
+use std::sync::{Mutex, LazyLock};
 
 /// 动画实例 trait（擦除类型后存储在全局列表）
 pub trait AnimationInstance: Send {
@@ -281,7 +282,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
 
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
 pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
-    use crate::graphics::Color;
+    
     if state.peek() == target {
         // 与 push_animatable 相同：存在目标不同的旧颜色动画时必须取消，
         // 否则旧动画会把值继续拉向旧目标
@@ -1358,6 +1359,8 @@ pub(crate) mod tests {
     // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
     pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
     use super::*;
+    use std::sync::Arc;
+    use crate::runtime::composer::Composer;
     use std::time::Duration;
 
     /// 模拟一帧 16.7ms，步进 n 帧推进弹簧
@@ -2226,6 +2229,8 @@ pub(crate) mod tests {
 #[cfg(test)]
 mod repeated_tests {
     use super::*;
+    use std::sync::Arc;
+    use crate::runtime::composer::Composer;
 
     /// 反复动画循环：多次 push 目标 + update 步进——最终收敛到最新目标。
     /// 验证动画引擎在反复触发（点击循环）时值正确（旧动画移除/去重无双驱动）。

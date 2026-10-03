@@ -1,6 +1,5 @@
 use crate::text::Paragraph;
 use skia_safe::textlayout::TextDirection;
-use skia_safe::Point;
 
 pub struct TextLayout<'a> {
     paragraph: &'a Paragraph,

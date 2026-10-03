@@ -1,16 +1,8 @@
 //! `DropdownMenu` and the exposed variant — the menu component, which lives here rather than in
 //! `overlay.rs` because it is a COMPONENT that uses the overlay runtime, not part of it.
-use crate::unit::Size;
 
-use crate::components::{Icon, Text};
 use crate::composable;
-use crate::graphics::{Color, Shape};
-use crate::layout::{Column, Spacer};
-use crate::modifier::Modifier;
-use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::{Backchannel, State};
-use crate::theme::WiniaTheme;
+use crate::overlay::{next_overlay_id, OverlayAnimSpec, PopupPosition};
 use std::sync::Arc;
 
 /// material3's `MenuVerticalMargin` (`material/Menu.kt`): the clearance a dropdown menu keeps from the top

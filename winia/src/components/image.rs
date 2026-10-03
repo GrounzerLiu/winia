@@ -12,10 +12,9 @@
 use crate::graphics::{ContentScale, ImageAlignment};
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
-use crate::modifier::{Modifier, ModifierElement};
+use crate::modifier::Modifier;
 use crate::graphics::{ColorFilter, FilterQuality};
 use crate::graphics::IconSource;
-use skia_safe::Rect;
 
 
 impl Default for ContentScale {

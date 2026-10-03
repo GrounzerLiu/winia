@@ -10,21 +10,14 @@
 //! 所有 SVG 渲染统一走 Skia 内置 `svg::Dom`（不自研路径解析）：
 //! 裸 path 数据会被包成最小 `<svg viewBox="0 0 24 24">` 文档后交给 Dom。
 
-use crate::graphics::{AxisValue, IconSource, IconSpec, PathFillType, SymbolAxes, decoded_icon};
+use crate::graphics::{IconSource, IconSpec, SymbolAxes};
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color};
-use crate::theme::{ThemeColors, WiniaTheme};
-use skia_safe::svg;
-use std::collections::HashMap;
-use std::cell::RefCell;
-use std::time::{Duration, Instant};
-use std::fmt;
-use std::sync::{Arc, LazyLock};
-use parking_lot::Mutex;
+use crate::theme::WiniaTheme;
+use std::sync::Arc;
 
 // Tint（三态：Auto 单色源染主题色 / 多色源不染；可显式覆盖）
 // ─────────────────────────────────────────────────────────────────────────
@@ -229,6 +222,7 @@ impl Icon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::ThemeColors;
 
 
 

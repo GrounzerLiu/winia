@@ -3295,7 +3295,7 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
 /// 使用 Skia ParagraphBuilder 构建带 U+FFFC 占位符的段落，
 /// 对每个片段应用对应的样式后缓存 Paragraph 和 drawables 供渲染复用。
 fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
-    use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline};
+    use skia_safe::textlayout::{ParagraphStyle, PlaceholderAlignment, TextBaseline};
     
     
     let fc = crate::text::font::get_font_collection();

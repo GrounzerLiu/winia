@@ -27,7 +27,6 @@ use crate::components::navigation_bar::{
     NAVIGATION_BAR_ITEM_SPACING,
 };
 use crate::theme::WiniaTheme;
-use std::sync::Arc;
 
 /// ShortNavigationBar 的 item 排布（对齐 androidx ShortNavigationBarArrangement）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
