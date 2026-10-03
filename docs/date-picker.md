@@ -354,10 +354,12 @@ The modal variant, `DatePickerDialog`, is that modal picker in a dialog: winia o
 `max_height(MODAL_CONTAINER_HEIGHT)` on the wrapper, no content padding, shape 28 (`CONTAINER_CORNER`), filled
 with `colors.container` — and the action row under the content (`Row` at `MODAL_BUTTONS_SPACING` 8, padded 8
 bottom and 6 end, inside `WiniaTheme::with_content_color(Primary)` and `ProvideTextStyle(LabelLarge)`).
-Measured on the fixture: the dialog is `360 × 568` exactly, matching material3's `ContainerHeight`. winia
-applies that number as a `max_height` cap rather than a fixed height, so a shorter content column collapses
-instead of being padded out; whether the 568 the fixture sees is the content reaching it or the cap holding
-it is not established here. The content defaults to a `DatePicker` over the dialog's state, carrying the
+Measured on the fixture: the dialog is `360 × 560` — the picker's own content, not the cap. That number is
+the 120 dp header, 56 dp month navigation, 48 dp weekday row and 288 dp month, then the action row's 40 dp
+button under its 8 dp inset. winia applies `CONTAINER_HEIGHT` as a `max_height` cap rather than a fixed
+height, so a shorter content column collapses instead of being padded out; the 568 the fixture used to report
+was the cap holding, not the content reaching it, and the two were only told apart once the box below had a
+size of its own to report. See "The dialog is its content" below. The content defaults to a `DatePicker` over the dialog's state, carrying the
 dialog's own `DatePickerColors`, and `DatePickerDialog::content` replaces it.
 
 That forwarding is a winia convenience rather than a copy of Compose's wiring, and it is worth being
@@ -637,7 +639,7 @@ were re-run.
 
 
 A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, one test): the dialog is an
-overlay, measures 360 × 568, a tap on the today cell moves the selection the page reads out, the dismiss button
+overlay, measures 360 × 560, a tap on the today cell moves the selection the page reads out, the dismiss button
 closes it and the page's button re-opens it. The overlay entry outlives the state that closes it while the
 dialog's exit motion plays, so that test polls `overlay_count` rather than reading it once — the same wait the
 popup test uses.
@@ -770,18 +772,46 @@ leaves the selection empty, so a half-typed date never looks like a rejected one
   `ImeAction.Done` (`DateInput.kt:163-227`). winia has no IME hint channel at all — no
   `ImeAction`, no keyboard type — and no autocorrect to switch off, so the three have no target. The
   field refuses non-digits on entry, which is the part a user notices on a desktop.
-- **Focus after the switch is requested but not yet reachable by key.** The field asks for focus
-  300 ms after it appears, Material 3's `MotionTokens.DurationMedium2` (`DateInput.kt:259-266`), and
-  the request does land: `focused_tags()` reports `date-picker-input-field` without any click. A key
-  typed straight after it, with no click in between, still does not reach the field, so the UI tests
-  click first. Where that key goes is not yet pinned down.
+- **The field takes focus by itself, and the keys that follow land on it.** The field asks for focus
+  300 ms after it appears, Material 3's `MotionTokens.DurationMedium2` (`DateInput.kt:259-266`);
+  `focused_tags()` reports `date-picker-input-field` with no click, and keys typed straight after it
+  reach the field — eight Backspaces clear the selection and a full entry commits one. Only a real
+  window can show where a key lands, so `the_entry_field_takes_focus_and_typing_without_a_click`
+  measures it there. (An earlier note here said the key did not arrive; that reading came from a
+  fixture binary built before the focus work, and the test above is what disproved it.)
+
+### The dialog is its content
+
+material3 wraps the dialog's content in `Box(Modifier.weight(1f, fill = false))`
+(`DatePickerDialog.android.kt:95`) and says why: "Fill is false to support collapsing the dialog's height
+when switching to input mode". The box's share is a MAXIMUM rather than the exact size a weight normally
+hands out, so the box reports whatever the picker asks for and the column ends up content + buttons.
+
+winia had no `fill` on a weight at all — `Modifier::layout_weight` always took the whole share — so the
+dialog could only ever be as tall as the `CONTAINER_HEIGHT` cap. `Modifier::layout_weight_fill(weight, fill)`
+is that missing half: with `fill = false` the share becomes the child's main-axis maximum and the parent
+keeps the child's own measurement. The measure half is `FlexAxis::build_phase2`, matching Compose's
+`createConstraints(mainAxisMin = if (parentData.fill) childMainAxisSize else 0, mainAxisMax =
+childMainAxisSize, isPrioritizing = true)` (`RowColumnMeasurePolicy.kt:195-207`).
+
+Measured on the fixture, the dialog's rect (`find_tag_in_overlay` on `dpi-dialog`):
+
+| Mode | Before | After |
+| --- | --- | --- |
+| Input | 360 × 568 (the cap, with the content ending around y = 274) | 360 × 240 |
+| Picker | 360 × 568 | 360 × 560 |
+
+`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both numbers.
+
+One deviation rides along: the dialog's `Column` uses `Arrangement::Start` where the source says
+`SpaceBetween`. winia's `SpaceBetween` stretches a container to the main axis its parent offers — a
+deliberate deviation its `Arrangement` documentation and `layout/row.rs` tests pin — which is the one thing
+that would hold this dialog at the cap regardless of the box. In Compose the column here is content +
+buttons, so its leftover space is zero and `SpaceBetween` places exactly as `Start` does; the switch keeps
+winia's own semantics for that arrangement intact instead of widening them for one dialog.
 
 ### Still open
 
-- The modal container keeps its full 568 dp in input mode, leaving most of the dialog empty. Compose
-  caps it with `heightIn(max = 568)` (`DatePickerDialog.android.kt`), which lets the dialog shrink to
-  its content; the composed tree reports the dialog surface as auto-height, so the height is coming
-  from somewhere the tree does not show.
 - `remember_date_picker_state` still takes only a locale, against Compose's five parameters.
 - `selectable_dates` is frozen when the state is built; Compose re-reads the caller's policy every
   composition.
