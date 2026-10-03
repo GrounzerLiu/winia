@@ -9,7 +9,7 @@
 //! harness reads through `overlay_texts()` / `*_overlay_tag`.
 
 use winia::prelude::*;
-use winia::overlay::{
+use winia::components::dropdown_menu::{
     DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
     ExposedDropdownMenuDefaults,
 };

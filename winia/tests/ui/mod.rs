@@ -14,7 +14,7 @@
 //! 每进程独立管道（测试天然并行隔离）。
 //!
 //! 注意：UI 测试需要图形环境（真实窗口）。
-use crate::unit::Size;
+use winia::unit::Size;
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
