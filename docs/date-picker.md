@@ -695,14 +695,16 @@ Each is a real divergence, not a guess.
 
 ### State and API surface
 
-- **`remember_date_picker_state` exposes none of Compose's five parameters**
-  (`initialSelectedDateMillis`, `initialDisplayedMonthMillis`, `yearRange`, `initialDisplayMode`,
-  `selectableDates` — `DatePicker.kt:368-374`). A hoisted picker cannot be given an initial selection,
-  displayed month, year range or date policy without hand-rolling `DatePickerState::with(..)` plus a
-  `remember`, which is what both fixtures do.
-- **`selectable_dates` is frozen at construction.** Compose holds it in a `mutableStateOf`
-  (`DatePicker.kt:1133`) and re-applies the caller's instance every composition (`:386-389`), so a policy
-  closing over state stays live. winia's is captured when the state is built and a grid goes stale.
+- **`remember_date_picker_state` takes Compose's parameters** (`initialSelectedDateMillis`,
+  `initialDisplayedMonthMillis`, `yearRange`, `initialDisplayMode`, `selectableDates` —
+  `DatePicker.kt:368-374`), out of a `DatePickerStateInit` since Rust has no default arguments, plus
+  the locale Compose takes from the platform. A hoisted picker can be given an initial selection,
+  displayed month, year range or date policy without hand-rolling `DatePickerState::with(..)`.
+- **`selectable_dates` is live.** Compose holds it in a `mutableStateOf` (`DatePicker.kt:1133`) and
+  re-applies the caller's instance every composition (`:384-389` — the `.apply` at the end of
+  `rememberDatePickerState`), so a policy closing over state stays live. winia stores it in a `State`
+  and `remember_date_picker_state` writes it back each composition, so the two agree: the initial
+  values are taken once and the policy is not.
 - **Small things worth a pass**: `horizontalScrollAxisRange = 0..0` on the months list so AT traverses days
   instead of scrolling months (`DatePicker.kt:1726-1729`); `paneTitle` on the year panel (`:1634`);
   `PlainTooltip` on the month arrows (`:2281-2289`); `CHECK_PATH` is a public constant nothing draws, and
@@ -826,8 +828,5 @@ exactly as material3 writes it, and the box is the only thing that decides the h
 
 ### Still open
 
-- `remember_date_picker_state` still takes only a locale, against Compose's five parameters.
-- `selectable_dates` is frozen when the state is built; Compose re-reads the caller's policy every
-  composition.
 - Day and year cells contribute no `Role.Button`, `selected` or `enabled`; the headline's
   `headlineDescription` and the toggle's polite live region are done, the rest are not.

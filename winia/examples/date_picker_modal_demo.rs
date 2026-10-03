@@ -24,7 +24,7 @@ use letclone::clone;
 use winia::composable;
 use winia::core::composer::ComposeCtx;
 use winia::prelude::*;
-use winia::ui::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerDialog};
+use winia::ui::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerStateInit, DatePickerDialog};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
@@ -36,7 +36,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
     let dialog_open = ctx.remember(|| false);
     // The selection as it stood when the dialog opened, so Cancel can put it back.
     let baseline = ctx.remember(|| None::<i64>);
-    let state = remember_date_picker_state(ctx, CalendarLocale::default());
+    let state = remember_date_picker_state(ctx, CalendarLocale::default(), DatePickerStateInit::default());
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(24.0))

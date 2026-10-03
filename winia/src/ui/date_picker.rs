@@ -965,7 +965,27 @@ pub struct DatePickerState {
     year_range: RangeInclusive<i32>,
     locale: CalendarLocale,
     model: CalendarModel,
-    selectable_dates: Arc<dyn SelectableDates>,
+    /// A `State`, because the policy is LIVE: Compose's `rememberDatePickerState` ends with
+    /// `rememberSaveable(...).apply { this.selectableDates = selectableDates }`
+    /// (`DatePicker.kt:384-389`, where the property is `by mutableStateOf`), so a caller whose
+    /// policy changed between compositions has it taken up without recreating the state. The
+    /// initial values are the ones taken once.
+    selectable_dates: State<SelectableDatesHandle>,
+}
+
+/// A state's policy handle.
+///
+/// `State::set` dedups on `PartialEq`, and a caller hands the SAME `Arc` back every composition, so
+/// comparing by pointer says "unchanged" without calling into the user's [`SelectableDates`] — and a
+/// fresh allocation says "changed", which is what Compose's `mutableStateOf` does for a policy
+/// object with no `equals` of its own.
+#[derive(Clone)]
+pub struct SelectableDatesHandle(Arc<dyn SelectableDates>);
+
+impl PartialEq for SelectableDatesHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl DatePickerState {
@@ -1003,7 +1023,7 @@ impl DatePickerState {
             year_range: init.year_range,
             locale,
             model,
-            selectable_dates: init.selectable_dates,
+            selectable_dates: State::new(SelectableDatesHandle(init.selectable_dates)),
         }
     }
 
@@ -1099,15 +1119,15 @@ impl DatePickerState {
         &self.model
     }
 
-    /// Which dates and years are selectable.
-    pub fn selectable_dates(&self) -> &dyn SelectableDates {
-        self.selectable_dates.as_ref()
+    /// Which dates and years are selectable, as the live policy stands now.
+    pub fn selectable_dates(&self) -> Arc<dyn SelectableDates> {
+        self.selectable_dates.get().0
     }
 
-    /// The same roles as [`Self::selectable_dates`], but cloneable — for a lazy item closure, which has
-    /// to own what it captures (`'static`) and so cannot borrow out of the state.
-    pub fn selectable_dates_arc(&self) -> Arc<dyn SelectableDates> {
-        self.selectable_dates.clone()
+    /// Replaces the policy — what `remember_date_picker_state` does on every composition, the way
+    /// Compose's `apply { this.selectableDates = selectableDates }` does.
+    pub fn set_selectable_dates(&self, policy: Arc<dyn SelectableDates>) {
+        self.selectable_dates.set(SelectableDatesHandle(policy));
     }
 
     /// Run the input field's checks on what the user typed, returning the message to show under the
@@ -1139,8 +1159,9 @@ impl DatePickerState {
                 &[&self.year_range.start().to_string(), &self.year_range.end().to_string()],
             );
         }
-        if !self.selectable_dates.is_selectable_year(date.year)
-            || !self.selectable_dates.is_selectable_date(date.start_of_day_millis())
+        let policy = self.selectable_dates.get().0;
+        if !policy.is_selectable_year(date.year)
+            || !policy.is_selectable_date(date.start_of_day_millis())
         {
             return format_string(
                 DATE_INPUT_INVALID_NOT_ALLOWED,
@@ -1156,8 +1177,18 @@ impl DatePickerState {
 pub fn remember_date_picker_state(
     ctx: &mut crate::core::composer::ComposeCtx,
     locale: CalendarLocale,
+    init: DatePickerStateInit,
 ) -> DatePickerState {
-    ctx.remember(|| DatePickerState::new(locale)).get()
+    // Compose's `rememberDatePickerState` takes the five parameters this reads out of `init`
+    // (`DatePicker.kt:368-374`) — the locale is the one part of winia's signature with no Compose
+    // counterpart, because Compose takes it from the platform.
+    //
+    // The `.apply` at the end of Compose's version is not decoration: the initial values are taken
+    // once, but the SELECTABLE DATES are written back on every composition, so a caller whose policy
+    // changed has it taken up without recreating the state. Hence the write after the `remember`.
+    let state = ctx.remember(|| DatePickerState::with(locale, init.clone())).get();
+    state.set_selectable_dates(init.selectable_dates);
+    state
 }
 
 /// The rows a month grid always draws, whether or not the month needs them (`MaxCalendarRows`,
@@ -1656,7 +1687,7 @@ pub const CHEVRON_RIGHT_PATH: &str = "M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 
 /// (`DatePicker`, `DatePicker.kt:168-237`).
 ///
 /// ```ignore
-/// let state = remember_date_picker_state(ctx, CalendarLocale::default());
+/// let state = remember_date_picker_state(ctx, CalendarLocale::default(), DatePickerStateInit::default());
 /// DatePicker::new(state).build(ctx);
 /// ```
 ///
@@ -1863,7 +1894,7 @@ fn month_pages(
     let page_count = CalendarModel::number_of_months_in_range(&range) as usize;
     let today = state.today_millis();
     let selected = state.selected_date_millis();
-    let selectable = state.selectable_dates_arc();
+    let selectable = state.selectable_dates();
     let list_state = list.clone();
     let list_model = model.clone();
     let list_state_for_pages = state.clone();
@@ -3413,6 +3444,63 @@ fn docked_action_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compose's `rememberDatePickerState` ends with `apply { this.selectableDates =
+    /// selectableDates }` (`DatePicker.kt:384-389`, the property being `by mutableStateOf`), so the
+    /// policy is LIVE while the initial values are the ones taken once.
+    ///
+    /// Both halves are asserted on purpose: a test that only looked at the second composition would
+    /// pass if the state were rebuilt from scratch, and one that only looked at the first would pass
+    /// if the policy were frozen at construction.
+    #[test]
+    fn remember_date_picker_state_takes_a_new_policy_but_keeps_its_initial_values() {
+        struct RefusesEpoch;
+        impl SelectableDates for RefusesEpoch {
+            fn is_selectable_date(&self, utc_time_millis: i64) -> bool {
+                utc_time_millis != 0
+            }
+        }
+
+        let mut composer = crate::core::composer::Composer::new();
+        let mut seen: Option<DatePickerState> = None;
+        let mut frame = |composer: &mut crate::core::composer::Composer,
+                         policy: Arc<dyn SelectableDates>,
+                         seen: &mut Option<DatePickerState>| {
+            composer.compose(|ctx| {
+                let state = remember_date_picker_state(
+                    ctx,
+                    CalendarLocale::default(),
+                    DatePickerStateInit {
+                        initial_selected_date_millis: Some(0),
+                        selectable_dates: policy.clone(),
+                        ..DatePickerStateInit::default()
+                    },
+                );
+                *seen = Some(state);
+            });
+        };
+
+        frame(&mut composer, Arc::new(AllDates), &mut seen);
+        let first = seen.clone().expect("a state");
+        assert!(
+            first.selectable_dates().is_selectable_date(0),
+            "the first composition's policy is the one in force"
+        );
+        assert_eq!(first.selected_date_millis(), Some(0), "and its initial selection");
+
+        // A NEW Arc, which is what a caller building its policy inline hands over.
+        frame(&mut composer, Arc::new(RefusesEpoch), &mut seen);
+        let second = seen.clone().expect("a state");
+        assert!(
+            !second.selectable_dates().is_selectable_date(0),
+            "the second composition's policy is taken up, not the one remembered with"
+        );
+        assert_eq!(
+            second.selected_date_millis(),
+            Some(0),
+            "while the initial values stay the ones taken at construction"
+        );
+    }
 
     /// A locale whose input format orders the fields a particular way.
     fn locale_with_input_format(pattern: &str) -> CalendarLocale {

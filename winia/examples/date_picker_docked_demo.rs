@@ -19,7 +19,7 @@ use winia::core::composer::{ComposeCtx, GroupStatus};
 use winia::layout::BoxLayout;
 use winia::prelude::*;
 use winia::ui::date_picker::{
-    remember_date_picker_state, CalendarLocale, DockedDatePicker, CALENDAR_MONTH_PATH,
+    remember_date_picker_state, CalendarLocale, DatePickerStateInit, DockedDatePicker, CALENDAR_MONTH_PATH,
 };
 use winia::ui::icon::Icon;
 use winia::ui::overlay::{OverlayAnimSpec, Popup, PopupPosition};
@@ -45,7 +45,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
     let confirmed = ctx.remember(|| None::<i64>);
     let baseline = ctx.remember(|| None::<i64>);
     let field_value = ctx.remember(|| TextFieldValue::new(""));
-    let picker_state = remember_date_picker_state(ctx, CalendarLocale::default());
+    let picker_state = remember_date_picker_state(ctx, CalendarLocale::default(), DatePickerStateInit::default());
 
     Column::new()
         .spacing(16.0)
