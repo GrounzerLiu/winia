@@ -18,8 +18,8 @@
 
 use crate::animation::{AnimationSpec, TweenSpec};
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::layout::{Alignment, Arrangement};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::alert_dialog::{AlertDialogDefaults, BasicAlertDialog};
@@ -1175,7 +1175,7 @@ impl DatePickerState {
 /// The state a picker composes with, remembered across recompositions
 /// (`rememberDatePickerState`, `DatePicker.kt:368-390`).
 pub fn remember_date_picker_state(
-    ctx: &mut crate::core::composer::ComposeCtx,
+    ctx: &mut crate::runtime::composer::ComposeCtx,
     locale: CalendarLocale,
     init: DatePickerStateInit,
 ) -> DatePickerState {
@@ -3461,9 +3461,9 @@ mod tests {
             }
         }
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let mut seen: Option<DatePickerState> = None;
-        let mut frame = |composer: &mut crate::core::composer::Composer,
+        let mut frame = |composer: &mut crate::runtime::composer::Composer,
                          policy: Arc<dyn SelectableDates>,
                          seen: &mut Option<DatePickerState>| {
             composer.compose(|ctx| {
@@ -3928,7 +3928,7 @@ mod tests {
             "the test is vacuous unless the state's month differs from the page the list is on"
         );
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let mut deferred = 0usize;
         let mut issued_on = None;
         let in_flight = State::new(None::<usize>);
@@ -3960,7 +3960,7 @@ mod tests {
         // And the flag is still the input, not the output: a list that reports it is idle jumps on the
         // very first frame.
         let idle = LazyListState::new();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             sync_month_pages(ctx, &state, &model, &idle, first_month, &State::new(None::<usize>));
         });
@@ -4867,7 +4867,7 @@ mod tests {
         /// `(choosable day cells, inert day cells)`. A day label is one numeric text in 1..=31; it is a
         /// leaf, so its `Surface` is two levels up — past the centring `Stack` — and that `Surface` is
         /// clickable exactly when the day can be chosen.
-        fn day_cells(composer: &crate::core::composer::Composer) -> (usize, usize) {
+        fn day_cells(composer: &crate::runtime::composer::Composer) -> (usize, usize) {
             let nodes = composer.arena_nodes();
             // `LayoutNode` stores children but not a parent, so invert it to walk up from a leaf.
             let mut parent = vec![usize::MAX; nodes.len()];
@@ -4910,7 +4910,7 @@ mod tests {
             (choosable, inert)
         }
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             let mut state = DatePickerState::new(CalendarLocale::default());
             state.set_displayed_month_millis(month.start_utc_time_millis);
@@ -4918,7 +4918,7 @@ mod tests {
         });
         let (docked_choosable, docked_inert) = day_cells(&composer);
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             let mut state = DatePickerState::new(CalendarLocale::default());
             state.set_displayed_month_millis(month.start_utc_time_millis);
@@ -4951,7 +4951,7 @@ mod tests {
     /// direction reaching the node's `layout_direction` and `draw_icon`'s mirror test — rather than a
     /// modifier bolted on for the test. `auto_mirror` is on, which is what the arrow tests are about.
     fn render_glyph_in(data: &str, direction: crate::layout::LayoutDirection) -> Vec<bool> {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(ThemeColors::default_light(), direction, ctx, |ctx| {
                 Icon::svg_path(data)
@@ -5009,7 +5009,7 @@ mod tests {
         use crate::modifier::ModifierElement;
         use crate::ui::icon::IconSource;
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             let state = DatePickerState::new(CalendarLocale::default());
             DockedDatePicker::new(state).build(ctx);
@@ -5048,7 +5048,7 @@ mod tests {
     /// Compose the modal picker with a runtime entered, which `LaunchedEffect` needs to spawn its
     /// task into. The task is never driven here — nothing in these assertions depends on the effect
     /// having run, and driving it would only race the assertions.
-    fn compose_picker(state: &DatePickerState) -> crate::core::composer::Composer {
+    fn compose_picker(state: &DatePickerState) -> crate::runtime::composer::Composer {
         compose_picker_with(|ctx| DatePicker::new(state.clone()).build(ctx))
     }
 
@@ -5058,10 +5058,10 @@ mod tests {
     /// needs an entered runtime; a test that composes the picker directly has to provide one. The
     /// runtime is entered but never driven: what these helpers assert is what got composed, and
     /// letting the spawned task run would race that against the assertions.
-    fn compose_picker_with(content: impl FnOnce(&mut ComposeCtx)) -> crate::core::composer::Composer {
+    fn compose_picker_with(content: impl FnOnce(&mut ComposeCtx)) -> crate::runtime::composer::Composer {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(content);
         composer
     }

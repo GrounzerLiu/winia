@@ -1,7 +1,7 @@
 //! IconButton 组件 — 对标 material3 `IconButton` / `FilledIconButton` /
 //! `FilledTonalIconButton` / `OutlinedIconButton`
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn content_color_propagates_to_subtree() {
         // with_content_color 覆盖子树内容色（Icon tint Auto 的取值来源）
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_content_color(Color::RED, ctx, |ctx| {
                 assert_eq!(WiniaTheme::content_color(), Color::RED);
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn theme_default_content_color_is_on_surface() {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::light(ctx, |ctx| {
                 let theme = WiniaTheme::colors();
@@ -475,7 +475,7 @@ mod tests {
     fn filled_button_icon_tint_resolves_to_content_color() {
         // 集成：Filled IconButton 内容中的 Icon（tint Auto）应解析为 on_primary
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 IconButton::filled()
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn disabled_icon_button_has_no_interaction_elements() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             IconButton::new()
                 .enabled(false)

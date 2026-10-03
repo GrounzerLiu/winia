@@ -5,7 +5,7 @@
 //! - 本模块消费 DescNode → arena 树（Skip 恢复 / 节点复用 / 降级重建）
 //! - `collect_layout_index` / `collect_node_keys`：物化后的 arena 收集（slot_key → 节点索引）
 
-use crate::core::composer::Composer;
+use crate::runtime::composer::Composer;
 use crate::layout::node::NodeArena;
 
 /// 组合产物描述树节点（物化输入）。
@@ -94,7 +94,7 @@ pub(crate) fn materialize(composer: &mut Composer) {
         && composer.prev_node_by_key.is_empty()
         && composer.arena.root.is_some()
     {
-        crate::core::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
+        crate::runtime::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
     }
     composer.arena.root = None;
     // Size the arena before building into it: `alloc` pushes, and a node `Vec` growing 0 → 4000 does it

@@ -6,8 +6,8 @@
 
 use crate::debug_log;
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::composition_local::CompositionLocal;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composition_local::CompositionLocal;
 use crate::modifier::{Color, Modifier, ModifierElement};
 use crate::unit::TextUnit;
 use crate::text::{FontSlant, FontWeight, TextAlign, TextOverflow, TextStyle};
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn provide_text_style_inherits_and_builder_overrides_typography() {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             ProvideTextStyle(
                 TextStyle::new()
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn test_text_content_full_carries_typography() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Text::new("styled").letter_spacing(1.5).line_height(30.0).build(ctx);
         });
@@ -322,7 +322,7 @@ mod tests {
     fn test_measured_height_scales_with_font_size() {
         use crate::modifier::ModifierElement;
         let measure = |font_size: f32| {
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 Text::new("Name").font_size(font_size).build(ctx);
             });

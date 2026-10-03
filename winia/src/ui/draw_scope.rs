@@ -299,7 +299,7 @@ impl Canvas {
         self
     }
 
-    pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, draw: impl Fn(&DrawScope) + Send + Sync + 'static) {
+    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, draw: impl Fn(&DrawScope) + Send + Sync + 'static) {
         let key = ctx.next_key();
         let draw = Arc::new(draw);
         let node = CanvasNode { draw };
@@ -400,7 +400,7 @@ impl DrawWrapNode for WithContentNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
     use skia_safe::surfaces;
 

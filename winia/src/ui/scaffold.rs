@@ -1,7 +1,7 @@
 //! Compose-style page scaffold with top/bottom bars, content, and FAB overlay.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
@@ -112,7 +112,7 @@ impl MeasurePolicy for ScaffoldLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
     use crate::modifier::Dimension;
 

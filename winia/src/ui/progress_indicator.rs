@@ -25,7 +25,7 @@
 //! 架构：同 Slider —— `Modifier::draw()` 自定义 Canvas 绘制；indeterminate 动画
 //! 用 `remember_infinite_transition`（帧驱动在 app.rs）。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
@@ -484,10 +484,10 @@ pub(crate) struct LinearIndeterminateNode {
     pub(crate) cap: ProgressIndicatorStrokeCap,
     pub(crate) gap: f32,
     /// 无限动画 4 条线进度（渲染期 peek，不进 key）
-    pub(crate) fh: crate::core::state::Visual<f32>,
-    pub(crate) ft: crate::core::state::Visual<f32>,
-    pub(crate) sh: crate::core::state::Visual<f32>,
-    pub(crate) st: crate::core::state::Visual<f32>,
+    pub(crate) fh: crate::runtime::state::Visual<f32>,
+    pub(crate) ft: crate::runtime::state::Visual<f32>,
+    pub(crate) sh: crate::runtime::state::Visual<f32>,
+    pub(crate) st: crate::runtime::state::Visual<f32>,
 }
 
 impl crate::modifier::DrawNode for LinearIndeterminateNode {
@@ -913,9 +913,9 @@ pub(crate) struct CircularIndeterminateNode {
     pub(crate) color: Color,
     pub(crate) cap: ProgressIndicatorStrokeCap,
     pub(crate) stroke_width: f32,
-    pub(crate) global: crate::core::state::Visual<f32>,
-    pub(crate) additional: crate::core::state::Visual<f32>,
-    pub(crate) progress_anim: crate::core::state::Visual<f32>,
+    pub(crate) global: crate::runtime::state::Visual<f32>,
+    pub(crate) additional: crate::runtime::state::Visual<f32>,
+    pub(crate) progress_anim: crate::runtime::state::Visual<f32>,
 }
 
 impl crate::modifier::DrawNode for CircularIndeterminateNode {
@@ -940,7 +940,7 @@ impl crate::modifier::DrawNode for CircularIndeterminateNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
 
     // ── 纯函数：gap/stop 几何 ──
@@ -1077,7 +1077,7 @@ mod tests {
         // 验证 keyframes 无限动画能注册进全局动画表并被清理
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::animation::push_infinite;
-        let state = crate::core::state::State::new(0.0f32);
+        let state = crate::runtime::state::State::new(0.0f32);
         push_infinite(state.clone(), 0.0, 1.0, linear_first_line_head_spec());
         assert!(crate::animation::has_animation_for_state(state.state_id()));
         // 更新一帧：Restart 模式下 t≈0 → 曲线起点 0
@@ -1399,10 +1399,10 @@ mod tests {
         let mk = |color: Color, track_color: Color, cap: ProgressIndicatorStrokeCap, gap: f32| {
             LinearIndeterminateNode {
                 color, track_color, cap, gap,
-                fh: crate::core::state::Visual::new(0.1),
-                ft: crate::core::state::Visual::new(0.2),
-                sh: crate::core::state::Visual::new(0.3),
-                st: crate::core::state::Visual::new(0.4),
+                fh: crate::runtime::state::Visual::new(0.1),
+                ft: crate::runtime::state::Visual::new(0.2),
+                sh: crate::runtime::state::Visual::new(0.3),
+                st: crate::runtime::state::Visual::new(0.4),
             }
         };
         let base = mk(color, track, ProgressIndicatorStrokeCap::Round, 4.0);
@@ -1454,10 +1454,10 @@ mod tests {
         };
         let node_mod = Modifier::new().size(240.0, 4.0).draw_node(LinearIndeterminateNode {
             color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
-            fh: crate::core::state::Visual::new(0.6),
-            ft: crate::core::state::Visual::new(0.2),
-            sh: crate::core::state::Visual::new(0.9),
-            st: crate::core::state::Visual::new(0.5),
+            fh: crate::runtime::state::Visual::new(0.6),
+            ft: crate::runtime::state::Visual::new(0.2),
+            sh: crate::runtime::state::Visual::new(0.9),
+            st: crate::runtime::state::Visual::new(0.5),
         });
         // 旧闭包逐行复刻（同参 draw_linear_indeterminate）
         let enum_mod = Modifier::new().size(240.0, 4.0).draw(move |canvas, rect| {
@@ -1470,10 +1470,10 @@ mod tests {
         // node_key 可调试观测（具名可观测——匿名闭包无此能力）
         let probe = LinearIndeterminateNode {
             color, track_color: track, cap: ProgressIndicatorStrokeCap::Round, gap: 4.0,
-            fh: crate::core::state::Visual::new(0.0),
-            ft: crate::core::state::Visual::new(0.0),
-            sh: crate::core::state::Visual::new(0.0),
-            st: crate::core::state::Visual::new(0.0),
+            fh: crate::runtime::state::Visual::new(0.0),
+            ft: crate::runtime::state::Visual::new(0.0),
+            sh: crate::runtime::state::Visual::new(0.0),
+            st: crate::runtime::state::Visual::new(0.0),
         };
         assert!(probe.node_key().starts_with("linear-indeterminate:"), "key 应有具名前缀，实际 {}", probe.node_key());
     }
@@ -1487,10 +1487,10 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let color = ProgressIndicatorDefaults::indicator_color(&theme);
         let track = ProgressIndicatorDefaults::track_color(&theme);
-        let fh = crate::core::state::Visual::new(0.0f32);
-        let ft = crate::core::state::Visual::new(0.0f32);
-        let sh = crate::core::state::Visual::new(0.0f32);
-        let st = crate::core::state::Visual::new(0.0f32);
+        let fh = crate::runtime::state::Visual::new(0.0f32);
+        let ft = crate::runtime::state::Visual::new(0.0f32);
+        let sh = crate::runtime::state::Visual::new(0.0f32);
+        let st = crate::runtime::state::Visual::new(0.0f32);
         // 注册真实无限动画（与 build 侧同 spec），推进 5 帧
         crate::animation::push_infinite_visual(fh.clone(), 0.0, 1.0, linear_first_line_head_spec());
         crate::animation::push_infinite_visual(ft.clone(), 0.0, 1.0, linear_first_line_tail_spec());
@@ -1554,22 +1554,22 @@ mod tests {
         // circular indeterminate：静态三参进 key，动画三值不进
         let ibase = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
-            global: crate::core::state::Visual::new(10.0),
-            additional: crate::core::state::Visual::new(20.0),
-            progress_anim: crate::core::state::Visual::new(0.5),
+            global: crate::runtime::state::Visual::new(10.0),
+            additional: crate::runtime::state::Visual::new(20.0),
+            progress_anim: crate::runtime::state::Visual::new(0.5),
         };
         let imoved = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Round, stroke_width: 4.0,
-            global: crate::core::state::Visual::new(999.0),
-            additional: crate::core::state::Visual::new(888.0),
-            progress_anim: crate::core::state::Visual::new(0.1),
+            global: crate::runtime::state::Visual::new(999.0),
+            additional: crate::runtime::state::Visual::new(888.0),
+            progress_anim: crate::runtime::state::Visual::new(0.1),
         };
         assert_eq!(ibase.node_key(), imoved.node_key(), "circular 无限动画值不应进 key");
         let iother = CircularIndeterminateNode {
             color, cap: ProgressIndicatorStrokeCap::Butt, stroke_width: 4.0,
-            global: crate::core::state::Visual::new(10.0),
-            additional: crate::core::state::Visual::new(20.0),
-            progress_anim: crate::core::state::Visual::new(0.5),
+            global: crate::runtime::state::Visual::new(10.0),
+            additional: crate::runtime::state::Visual::new(20.0),
+            progress_anim: crate::runtime::state::Visual::new(0.5),
         };
         assert_ne!(ibase.node_key(), iother.node_key(), "circular cap 应进 key");
     }
@@ -1624,9 +1624,9 @@ mod tests {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let primary = ProgressIndicatorDefaults::indicator_color(&theme);
-        let stop: crate::core::state::State<bool> = crate::core::state::State::new(true);
+        let stop: crate::runtime::state::State<bool> = crate::runtime::state::State::new(true);
         let mut composer = Composer::new();
-        let make_scene = |stop: crate::core::state::State<bool>, theme: ThemeColors| {
+        let make_scene = |stop: crate::runtime::state::State<bool>, theme: ThemeColors| {
             move |ctx: &mut ComposeCtx| {
                 let s = stop.get();
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {

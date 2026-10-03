@@ -8,7 +8,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use crate::core::state::{Backchannel, State};
+use crate::runtime::state::{Backchannel, State};
 
 /// Per-Composer adaptive window context. The public adaptive API resolves the
 /// context active during compose/layout, so interleaved windows do not share a
@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn nested_composers_keep_adaptive_context_isolated() {
         reset_window_size_state();
-        let mut outer = crate::core::composer::Composer::new();
-        let mut inner = crate::core::composer::Composer::new();
+        let mut outer = crate::runtime::composer::Composer::new();
+        let mut inner = crate::runtime::composer::Composer::new();
 
         outer.compose(|_| {
             set_window_size(500.0, 700.0);

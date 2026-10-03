@@ -23,8 +23,8 @@
 //! 无 LazyList 适配（LazyListState 另有 first_visible 锚点模型——后续加）。
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
@@ -571,7 +571,7 @@ impl LazyScrollbar {
             scroll_pulse: self.state.scroll_pulse.clone(),
             // The scrollbar drives its OWN drag, not the list's: it reads the list's offset but writes
             // its dragging state here, so it must not pick up the list's paging snap.
-            snap: crate::core::state::Backchannel::new(None),
+            snap: crate::runtime::state::Backchannel::new(None),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse)
             .then(self.modifier);
@@ -656,7 +656,7 @@ impl HorizontalLazyScrollbar {
             fling_limit: self.state.fling_limit.clone(),
             scroll_pulse: self.state.scroll_pulse.clone(),
             // As above: the scrollbar's own drag must not inherit the list's paging snap.
-            snap: crate::core::state::Backchannel::new(None),
+            snap: crate::runtime::state::Backchannel::new(None),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
             .then(self.modifier);
@@ -967,7 +967,7 @@ mod tests {
     /// LaunchedEffect（fade）需 tokio 上下文——测试内建 Runtime（对标 loading）。
     #[test]
     fn vertical_scrollbar_follows_scroll_state() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::theme::{ThemeColors, WiniaTheme};
         use crate::modifier::ScrollState;
@@ -1032,7 +1032,7 @@ mod tests {
     /// fling_limit 回写后 thumb 出现，offset.set 后 thumb key 跟随。
     #[test]
     fn lazy_scrollbar_follows_lazy_list_state() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::lazy_column::LazyListState;
         use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -1094,7 +1094,7 @@ mod tests {
     /// 则反向（与正向 offset=0 同 key）——锁定"条跟内容走"。
     #[test]
     fn lazy_reverse_mirror() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::lazy_column::LazyListState;
         use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -1206,7 +1206,7 @@ mod tests {
     /// fling_limit 回写后 thumb 出现，offset.set 后 thumb key 跟随。
     #[test]
     fn horizontal_lazy_scrollbar_follows_lazy_list_state() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::lazy_column::LazyListState;
         use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -1268,7 +1268,7 @@ mod tests {
     /// `is_lazy_scroll_reverse`（否则 render 无镜像，条与内容反走）。
     #[test]
     fn horizontal_lazy_reverse_mirror() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::lazy_column::LazyListState;
         use crate::ui::theme::{ThemeColors, WiniaTheme};

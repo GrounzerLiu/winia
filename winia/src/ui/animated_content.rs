@@ -24,8 +24,8 @@
 
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::{MeasurePolicy, Placement, Size};
 use crate::modifier::{GraphicsLayerParams, Modifier};
 
@@ -40,7 +40,7 @@ pub struct AnimatedContent<T> {
 #[derive(Debug)]
 struct ContentSizePolicy {
     prev_size: State<Option<(f32, f32)>>,
-    last_size: crate::core::state::Backchannel<Option<(f32, f32)>>,
+    last_size: crate::runtime::state::Backchannel<Option<(f32, f32)>>,
     progress: State<f32>,
 }
 
@@ -181,8 +181,8 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
-    use crate::core::state::State;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
 

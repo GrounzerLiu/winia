@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use crate::core::composer::{ComposeCtx, Composer};
+use crate::runtime::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
 use crate::debug_log;
@@ -68,8 +68,8 @@ pub(crate) struct PerWindow {
     ///   dependents (suite scaffolds reading `window_size()`) dirty for recompose.
     /// - `window_size_backchannel`: per-frame sync without notify (replaces the
     ///   old silent write on the shared State — same value, Backchannel write).
-    window_size_state: std::cell::RefCell<Option<crate::core::state::State<(f32, f32)>>>,
-    window_size_backchannel: std::cell::RefCell<Option<crate::core::state::Backchannel<(f32, f32)>>>,
+    window_size_state: std::cell::RefCell<Option<crate::runtime::state::State<(f32, f32)>>>,
+    window_size_backchannel: std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
     /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
@@ -185,7 +185,7 @@ pub(crate) struct PerWindow {
 /// 渲染定位在主树之上（模态遮罩 + 内容）
 struct OverlayWindow {
     id: u64,
-    composer: crate::core::composer::Composer,
+    composer: crate::runtime::composer::Composer,
     anchor_slot: Option<u64>,
     position: crate::ui::overlay::PopupPosition,
     offset: (f32, f32),
@@ -202,7 +202,7 @@ struct OverlayWindow {
     content: Box<dyn Fn(&mut ComposeCtx)>,
     /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
     /// 时重放（overlay 独立 Composer 继承主树主题/方向/排版）
-    local_snapshot: crate::core::composition_local::LocalSnapshot,
+    local_snapshot: crate::runtime::composition_local::LocalSnapshot,
     /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
     screen_pos: (f32, f32),
     /// The anchor's window rect `(x, y, w, h)`, resolved each layout pass (the only pass that knows it).
@@ -217,7 +217,7 @@ struct OverlayWindow {
     /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
     /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
     /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
-    progress: Option<crate::core::state::Animating<f32>>,
+    progress: Option<crate::runtime::state::Animating<f32>>,
     /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
     enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
     /// 退出动画规格（None = 瞬时消失）
@@ -705,7 +705,7 @@ impl PerWindow {
         // Start the frame with no stale request: a request raised on a frame whose convergence hit its
         // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
         // compose the frame did not need.
-        let _ = crate::core::composer::take_compose_after_layout();
+        let _ = crate::runtime::composer::take_compose_after_layout();
         // 循环 compose 直到没有新的 pending state
         let mut any_composed = self.recompose_until_stable();
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
@@ -722,7 +722,7 @@ impl PerWindow {
         // frames). The cap keeps a policy that asks on every pass from spinning the frame.
         let mut frame_passes: u8 = 1;
         for _ in 0..8 {
-            if !crate::core::composer::take_compose_after_layout() {
+            if !crate::runtime::composer::take_compose_after_layout() {
                 break;
             }
             any_composed |= self.recompose_until_stable();
@@ -755,12 +755,12 @@ impl PerWindow {
         // overlay counterparts, drive active Tier1, free unmatched stashes.
         // Main composer first by convention (Tier1 flights live in its map).
         {
-            let mut all: Vec<&mut crate::core::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
+            let mut all: Vec<&mut crate::runtime::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
             all.push(&mut self.composer);
             for ov in self.overlays.iter_mut() {
                 all.push(&mut ov.composer);
             }
-            crate::core::composer::Composer::poll_cross_flights(&mut all);
+            crate::runtime::composer::Composer::poll_cross_flights(&mut all);
         }
         // A flight that attached its layout override for the FIRST time this frame left the
         // entering end's parent stale WITHIN the frame: the override can only be attached by
@@ -2192,7 +2192,7 @@ impl AppState {
                 composer.compose(|ctx| init(ctx));
                 // 临时 composer：compose 内部已 take_deps（注册到其 slot_deps）——
                 // 此处再 take 是防御性空操作（缓冲已空），确保 DEP_MODE 复位
-                crate::core::state::take_deps();
+                crate::runtime::state::take_deps();
                 // The temporary initialization Composer is not an active
                 // window owner; its lifecycle state is dropped with it.
             }
@@ -3093,7 +3093,7 @@ impl OverlayWindow {
             // progress is driven only when an enter or exit spec exists (0->1
             // enter, 1->0 exit); otherwise None means always visible (instant).
             progress: (desc.enter_anim.is_some() || desc.exit_anim.is_some())
-                .then(|| crate::core::state::Animating::new(0.0)),
+                .then(|| crate::runtime::state::Animating::new(0.0)),
             enter_anim: desc.enter_anim,
             exit_anim: desc.exit_anim,
             closing: false,
@@ -3168,7 +3168,7 @@ impl OverlayWindow {
                 crate::animation::cancel_animation_by_id(old.state_id());
             }
             self.progress = (self.enter_anim.is_some() || self.exit_anim.is_some())
-                .then(|| crate::core::state::Animating::new(0.0));
+                .then(|| crate::runtime::state::Animating::new(0.0));
             // Update is the reuse path — overlay is already visible; progress=0
             // would render as apply(0) hidden. If the new spec has no enter
             // animation, keep it fully visible (Backchannel-equivalent direct
@@ -3617,7 +3617,7 @@ fn layout_overlays(pw: &mut PerWindow) {
         // overlay's own layout, is what scopes it to this composer: an overlay that asks nothing leaves
         // the flag clear for the next one, so nothing is consumed on another tree's behalf.
         for _ in 0..8 {
-            crate::core::composition_local::with_snapshot(&snap, || {
+            crate::runtime::composition_local::with_snapshot(&snap, || {
                 ov.composer.recompose(|ctx| (ov.content)(ctx));
             });
             // An overlay that fits itself around its anchor also keeps material3's
@@ -3641,7 +3641,7 @@ fn layout_overlays(pw: &mut PerWindow) {
                 crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height)
             };
             ov.composer.layout(constraints);
-            if !crate::core::composer::take_compose_after_layout() {
+            if !crate::runtime::composer::take_compose_after_layout() {
                 break;
             }
         }
@@ -5325,7 +5325,7 @@ mod window_theme_tests {
 #[cfg(test)]
 mod overlay_close_tests {
     use super::{closing_overlay_is_done, OverlayWindow, PerWindow, CLOSING_DEADLINE};
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::ui::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
     use crate::ui::theme::ThemeColors;
     use std::sync::Arc;
@@ -5540,7 +5540,7 @@ mod frame_throttle_tests {
             .build()
             .unwrap();
         let _guard = rt.enter();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         composer.compose(crate::compose!(|ctx| {
@@ -6314,7 +6314,7 @@ mod drag_target_selection_tests {
     /// 在 move 阶段定位节点——key 漂移会滚错目标）。
     #[test]
     fn scroll_slot_keys_stable_across_recompose() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::{Column, Text};
         let mut composer = Composer::new();
@@ -6384,7 +6384,7 @@ mod drag_target_selection_tests {
     /// 滚动容器，measured_size 必须精确为 180（内容再多也不撑开）。
     #[test]
     fn scroll_container_height_clamps_to_fixed_height() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::{Column, Text};
         let mut composer = Composer::new();
@@ -6412,7 +6412,7 @@ mod drag_target_selection_tests {
     /// scroll 容器无固定高度 + 无限父约束：随内容撑开（clamp 是 no-op）。
     #[test]
     fn scroll_container_grows_with_unbounded_parent() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::ui::{Column, Text};
         let mut composer = Composer::new();
@@ -6457,7 +6457,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     debug::set_event_loop_proxy(proxy.clone());
     let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
-    crate::core::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
+    crate::runtime::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
     debug::start_stdin_channel();
     debug::start_ws_server();
     let state = AppState {

@@ -15,8 +15,8 @@
 //! 4. The cross-frame half: an adopted subtree, parented under its component's node and marked reused,
 //!    survives the next frame's compose and still paints.
 
-use crate::core::composer::ComposeCtx;
-use crate::core::composer::Composer;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composer::Composer;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{Alignment, MeasurePolicy, Placement, Size};
 

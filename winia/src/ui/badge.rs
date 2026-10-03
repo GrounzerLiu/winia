@@ -9,7 +9,7 @@
 //!   （Compose BadgeOffset / BadgeWithContent*Offset）；
 //! - 徽章宽 > 6dp 视为有内容（Compose `badgePlaceable.width > BadgeTokens.Size`）。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::constraints::Constraints;
@@ -278,7 +278,7 @@ mod tests {
 
     fn render_badged_box(badge_content: bool) -> BadgeScene {
         let theme = light_theme();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 if badge_content {
@@ -355,10 +355,10 @@ mod tests {
     fn badge_content_recomposes_when_state_read_inside_content_closure() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let theme = light_theme();
-        let count = crate::core::state::State::new(3i32);
+        let count = crate::runtime::state::State::new(3i32);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
 
-        let make_scene = |count: crate::core::state::State<i32>,
+        let make_scene = |count: crate::runtime::state::State<i32>,
                           hits: std::sync::Arc<AtomicUsize>,
                           theme: crate::ui::theme::ThemeColors| {
             move |ctx: &mut ComposeCtx| {
@@ -381,7 +381,7 @@ mod tests {
             }
         };
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(make_scene(count.clone(), hits.clone(), theme.clone()));
         assert_eq!(hits.load(Ordering::SeqCst), 1, "首次组合执行一次");
 
@@ -400,7 +400,7 @@ mod tests {
     fn render_badge_px(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = light_theme();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
@@ -474,7 +474,7 @@ mod tests {
     fn badged_box_badge_visible_on_render() {
         // 渲染级验证：BadgedBox 的徽章确实画出来（右上角有 Error 像素）
         let theme = light_theme();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 BadgedBox::new(|ctx| {

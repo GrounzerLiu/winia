@@ -34,8 +34,8 @@
 //! component's own key. It is a working facility, not an optimized one, and it is deliberately not
 //! used by any shipped component yet.
 
-use crate::core::composer::ComposeCtx;
-use crate::core::composer::Composer;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composer::Composer;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, NodeArena, NodeMarks, Size};
 
@@ -334,7 +334,7 @@ fn adopt_one(
     let parent_key = arena.nodes[parent].slot_key;
     for i in 0..=adopted_root - node_base {
         let idx = node_base + i;
-        arena.nodes[idx].slot_key = crate::core::composer::mix_key(parent_key, i as u64 + 1);
+        arena.nodes[idx].slot_key = crate::runtime::composer::mix_key(parent_key, i as u64 + 1);
     }
     // Record the subtree's measurements BEFORE the inner arena is dropped: they are relative to the
     // subtree root, so they survive the arena being reshuffled (the base moves, the offsets do not).
@@ -410,7 +410,7 @@ fn measurements_from(nodes: &[LayoutNode]) -> Vec<(usize, Size)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::node::{Alignment, MeasurePolicy, Placement};
     use skia_safe::surfaces;
 
@@ -590,7 +590,7 @@ mod tests {
                     // the evidence that the composition itself did.
                     static NEXT_COMPOSITION: std::sync::atomic::AtomicU64 =
                         std::sync::atomic::AtomicU64::new(1);
-                    let marker: crate::core::state::State<u64> = ctx.remember(|| {
+                    let marker: crate::runtime::state::State<u64> = ctx.remember(|| {
                         NEXT_COMPOSITION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     });
                     let v = marker.get();

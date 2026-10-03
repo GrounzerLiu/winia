@@ -22,7 +22,7 @@
 
 use letclone::clone;
 use winia::composable;
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::prelude::*;
 use winia::ui::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerStateInit, DatePickerDialog};
 

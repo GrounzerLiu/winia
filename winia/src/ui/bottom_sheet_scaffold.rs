@@ -19,8 +19,8 @@
 //! - Dragging: `on_drag`/`drag_end` feed `SheetState` directly.
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::unit::Dp;
 use crate::ui::sheet_state::{SheetState, SheetValue};
@@ -325,7 +325,7 @@ impl Default for BottomSheetScaffold {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::ui::sheet_state::SheetValue;
     use crate::unit::Density;

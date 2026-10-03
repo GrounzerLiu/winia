@@ -862,7 +862,7 @@ fn json_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::ui::button::Button;
     use crate::ui::checkbox::TriStateCheckbox;
@@ -874,7 +874,7 @@ mod tests {
     use crate::modifier::Modifier;
 
     /// Compose a tree and return its semantics elements.
-    fn tree_of(build: impl FnOnce(&mut crate::core::composer::ComposeCtx)) -> Vec<SemanticsNode> {
+    fn tree_of(build: impl FnOnce(&mut crate::runtime::composer::ComposeCtx)) -> Vec<SemanticsNode> {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::light(ctx, |ctx| build(ctx));

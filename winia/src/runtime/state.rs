@@ -1037,7 +1037,7 @@ pub(crate) fn register_dependency(
     // 依赖注册目标：scope 栈非空 → 最内层 scope（组合 scope 内、组件外的读取）；
     // 否则 → 当前 slot key（组件内 build 的读取）
     let mut registration = None;
-    crate::core::composer::with_active_scope(|key| {
+    crate::runtime::composer::with_active_scope(|key| {
         registration = record_dep(signal, key);
     });
     registration

@@ -16,7 +16,7 @@
 //!
 //! 架构：同 Slider/ProgressIndicator —— `Modifier::draw()` 自定义 Canvas 绘制，无交互。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
@@ -275,7 +275,7 @@ fn skia_color(c: Color) -> skia_safe::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
 
     // ── 默认值 ──

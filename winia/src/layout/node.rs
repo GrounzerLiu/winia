@@ -328,7 +328,7 @@ pub struct LayoutNode {
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
     /// Whether this node's OWN measure policy subcomposed content (`ui::subcompose`), recorded by
-    /// [`crate::core::composer::Composer::park_subcomposition`] at the moment it parked the composition.
+    /// [`crate::runtime::composer::Composer::park_subcomposition`] at the moment it parked the composition.
     ///
     /// It is one of the two ways `Composer::compose`'s compose-end seeding recognizes a node that has to
     /// be re-measured (the other asks the policy, which covers a node that was just REBUILT and has not
@@ -2017,7 +2017,7 @@ mod tests {
     #[test]
     fn min_width_dynamic_state() {
         // 动态 min（动画）：measure 期 get() 注册布局依赖——值变化重测生效
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let s = State::new(58.0);
         let m = Modifier::new().min_width(&s);
         let mut nodes = vec![LayoutNode::leaf(m)];
@@ -2099,7 +2099,7 @@ mod tests {
         // A dynamic cap is re-resolved on re-measure, like the min counterpart's. (The
         // dependency registration happens in the same `SizeValue::Dynamic` path; this test pins
         // the re-resolution, not the registration — it marks the nodes dirty itself.)
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let s = State::new(200.0);
         let mut nodes = vec![
             LayoutNode::new(Modifier::new().max_width(&s), Some(0)),
@@ -2630,7 +2630,7 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
 /// during measure registers a LAYOUT dependency as well.
 #[derive(Clone)]
 pub(crate) struct FlightMeasure {
-    pub frame: crate::core::state::State<FlightMeasureFrame>,
+    pub frame: crate::runtime::state::State<FlightMeasureFrame>,
     /// Identity of the flight that owns this override. Flight ids are
     /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
     /// override is written onto a PEER's node, so the composer id is part of the
@@ -2675,7 +2675,7 @@ struct ActiveSlotKeyGuard(u64);
 
 impl Drop for ActiveSlotKeyGuard {
     fn drop(&mut self) {
-        crate::core::composer::set_active_slot_key(self.0);
+        crate::runtime::composer::set_active_slot_key(self.0);
     }
 }
 
@@ -2739,8 +2739,8 @@ fn measure_node_inner(
     // silently stops tracking the state. Measured before this guard existed: a parent's post-child
     // read landed on a slot that was neither the parent's nor its last child's
     // (`test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent`).
-    let displaced_key = crate::core::composer::active_slot_key();
-    crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
+    let displaced_key = crate::runtime::composer::active_slot_key();
+    crate::runtime::composer::set_active_slot_key(nodes[idx].slot_key);
     let _restore_key = ActiveSlotKeyGuard(displaced_key);
 
     // Flight layout contract (Compose `ResizeMode` / `PlaceHolderSize`), read
@@ -3278,7 +3278,7 @@ pub(crate) fn build_plain_paragraph(
         };
         text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
     }
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
     let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
@@ -3361,7 +3361,7 @@ fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
     use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline};
     
     
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
 
     for el in node.modifier.elements() {
         if let ModifierElement::RichTextContent { content, drawables, drawable_ranges, spans } = el {

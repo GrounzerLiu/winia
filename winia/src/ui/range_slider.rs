@@ -25,7 +25,7 @@
 //!   through Tab alone.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
@@ -442,7 +442,7 @@ impl RangeSlider {
 #[derive(Debug)]
 pub(crate) struct RangeSliderTrackNode {
     /// Track width write-back (read by the tap/drag pixel↔value conversion).
-    pub(crate) track_width: crate::core::state::Backchannel<f32>,
+    pub(crate) track_width: crate::runtime::state::Backchannel<f32>,
     pub(crate) colors: SliderColors,
     pub(crate) enabled: bool,
     pub(crate) value: RangeValue,
@@ -589,7 +589,7 @@ impl MeasurePolicy for RangeSliderLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::modifier::{DrawNode, ModifierElement};
     use crate::ui::theme::ThemeColors;
     use std::sync::atomic::{AtomicI32, Ordering};
@@ -909,7 +909,7 @@ mod tests {
     fn range_slider_track_node_key_covers_all_visual_params() {
         let colors = SliderDefaults::slider_colors(&ThemeColors::light_from_seed(0x6750A4));
         let node = |v: RangeValue, min: f32, max: f32, steps: i32| RangeSliderTrackNode {
-            track_width: crate::core::state::Backchannel::new(0.0),
+            track_width: crate::runtime::state::Backchannel::new(0.0),
             colors,
             enabled: true,
             value: v,

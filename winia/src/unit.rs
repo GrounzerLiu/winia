@@ -356,7 +356,7 @@ impl From<Px> for TextUnit {
 // LOCAL_DENSITY — CompositionLocal（对标 Compose LocalDensity）
 // ═══════════════════════════════════════════════════════════
 
-use crate::core::composition_local::CompositionLocal;
+use crate::runtime::composition_local::CompositionLocal;
 
 static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> = LazyLock::new(|| {
     CompositionLocal::new(|| Density::standard())

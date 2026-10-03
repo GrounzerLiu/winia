@@ -16,7 +16,7 @@ pub fn build_plain_paragraph(
     color: crate::modifier::Color,
     width: f32,
 ) -> Paragraph {
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
     let mut ts = TextStyle::new();
     ts.set_font_size(font_size);
     ts.set_color(crate::render::skia_color(color));

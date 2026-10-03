@@ -20,7 +20,7 @@ use winia::prelude::*;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
 mod settings;
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::modifier::Shape;
 use winia::ui::overlay::{
     DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults,

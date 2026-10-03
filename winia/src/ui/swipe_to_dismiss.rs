@@ -19,8 +19,8 @@
 //! vertical drag belongs to the list, a horizontal one to the row (see `app::gesture_move`).
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::layout::Alignment;
 use crate::modifier::Modifier;
 use crate::ui::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};

@@ -2,7 +2,7 @@
 //!
 //! compose + layout 后检查节点的 position、size、children 关系。
 
-use winia::core::composer::Composer;
+use winia::runtime::composer::Composer;
 use winia::layout::constraints::Constraints;
 use winia::modifier::Modifier;
 use winia::ui::{Text, Column, Row};

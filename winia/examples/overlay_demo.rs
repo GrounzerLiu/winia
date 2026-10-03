@@ -9,7 +9,7 @@ use winia::prelude::*;
 mod settings;
 
 use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 
 #[composable]

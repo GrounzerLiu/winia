@@ -29,10 +29,10 @@ use std::sync::{LazyLock, Mutex};
 use crate::animation::{
     push_animatable, AnimatableValue, AnimationSpec, KeyframesSpec, SpringSpec, TweenSpec,
 };
-use crate::core::composer::Composer;
-use crate::core::composer::ComposeCtx;
-use crate::core::composition_local::CompositionLocal;
-use crate::core::state::State;
+use crate::runtime::composer::Composer;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::composition_local::CompositionLocal;
+use crate::runtime::state::State;
 use crate::layout::node::{
     scroll_offset_for_node, FlightMeasure, FlightMeasureFrame, LayoutNode, PaintDisposition,
 };
@@ -4404,8 +4404,8 @@ impl Composer {
 #[cfg(test)]
 mod tier0_tests {
     use super::*;
-    use crate::core::composer::ComposeCtx;
-    use crate::core::state::State;
+    use crate::runtime::composer::ComposeCtx;
+    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::modifier::Color;
     use crate::nav::{NavBackStack, NavDisplay, NavEntry};

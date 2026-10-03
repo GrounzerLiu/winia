@@ -42,8 +42,8 @@
 //!   [`ModalNavigationDrawer::scrim_color`].
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::anchored_draggable::AnchoredDraggableState;
@@ -845,7 +845,7 @@ fn scrim(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     fn comp() -> Composer {
         Composer::new()
@@ -863,7 +863,7 @@ mod tests {
     /// animation out from under a test running on another thread.
     struct AnimGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
-        states: Vec<crate::core::state::StateId>,
+        states: Vec<crate::runtime::state::StateId>,
     }
 
     impl AnimGuard {

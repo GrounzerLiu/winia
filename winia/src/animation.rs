@@ -12,8 +12,8 @@
 
 pub mod interpolator;
 
-use crate::core::state::{State, StateId};
-use crate::core::composer::Composer;
+use crate::runtime::state::{State, StateId};
+use crate::runtime::composer::Composer;
 use std::time::{Duration, Instant};
 
 // ═══════════════════════════════════════════════════════════
@@ -98,7 +98,7 @@ impl InfiniteRepeatableSpec {
 
 /// 无限循环动画实例（永远运行，直到被移除）——泛型统一（f32/Color 共用）。
 struct Infinite<T: AnimatableValue> {
-    state: crate::core::state::Visual<T>,
+    state: crate::runtime::state::Visual<T>,
     from: T,
     to: T,
     spec: InfiniteRepeatableSpec,
@@ -146,7 +146,7 @@ pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
 /// `push_infinite` 的 Visual-handle 入口（InfiniteTransition 已持有 Visual
 /// 时避免 State round-trip）。
 pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
-    visual: crate::core::state::Visual<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
+    visual: crate::runtime::state::Visual<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
 ) {
     let sid = visual.state_id();
     if has_animation_for_state(sid) { return; } // 跨列表去重
@@ -221,12 +221,12 @@ pub fn push_animatable_with_velocity_and_done<
     anim.on_finish(done);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// `push_animatable` 的 Animating-handle 入口（调用方已持有 Animating
 /// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
-pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::core::state::Animating<T>, target: T, spec: AnimationSpec) {
+pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::runtime::state::Animating<T>, target: T, spec: AnimationSpec) {
     let sid = state.state_id();
     if state.peek() == target {
         // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
@@ -271,7 +271,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     // 唤醒事件循环启动推进轮次（渲染中注册——渲染后 Wait 休眠会卡住动画）
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
@@ -310,7 +310,7 @@ pub fn push_animatable_color(state: State<crate::modifier::Color>, target: crate
     anim.update();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
     // 唤醒事件循环启动推进轮次（同 push_animatable）
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// 指数衰减动画规格（对标 Compose exponentialDecay）——无目标值，
@@ -364,7 +364,7 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     // 唤醒事件循环启动推进轮次（同 push_animatable）
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// fling 惯性滚动：指数衰减 + 边界 clamp（撞边界立即停——对齐 Compose fling
@@ -417,7 +417,7 @@ fn push_fling_internal(
     anim.animate_decay(initial_velocity, spec);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// `animateIntAsState`（对标 Compose）——target 变化时自动从当前值动画到新值，
@@ -496,7 +496,7 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     anim.animate_to(target, spec);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
-    crate::core::state::wake_loop();
+    crate::runtime::state::wake_loop();
 }
 
 /// 实现 AnimationInstance for Animatable<f32>
@@ -577,7 +577,7 @@ pub fn cancel_animation<T: 'static>(state: &State<T>) {
 
 /// Cancel by raw StateId (for `Animating`/`Visual` handles that share the
 /// same signal but are not `State<T>`).
-pub fn cancel_animation_by_id(sid: crate::core::state::StateId) {
+pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != sid);
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
@@ -594,7 +594,7 @@ pub fn is_animating() -> bool {
 
 /// 可动画化的单一值
 pub(crate) struct Animatable<T: Clone + 'static> {
-    state: crate::core::state::Animating<T>,
+    state: crate::runtime::state::Animating<T>,
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
     on_finish: Option<Box<dyn FnOnce() + Send>>,
@@ -623,7 +623,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         Self::from_animating(state.into_animating())
     }
 
-    pub fn from_animating(state: crate::core::state::Animating<T>) -> Self {
+    pub fn from_animating(state: crate::runtime::state::Animating<T>) -> Self {
         Self { state, anim_state: None, on_finish: None, on_boundary: None, clamp: None }
     }
 
@@ -970,7 +970,7 @@ fn compute_spring_displacement(
 // updateTransition
 // ═══════════════════════════════════════════════════════════
 
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 
 pub struct Transition<T: Clone + PartialEq + 'static> {
     target: T,
@@ -1130,7 +1130,7 @@ impl InfiniteTransition {
         from: f32,
         to: f32,
         spec: InfiniteRepeatableSpec,
-    ) -> crate::core::state::Visual<f32> {
+    ) -> crate::runtime::state::Visual<f32> {
         let state: State<f32> = ctx.remember(|| from);
         self.push_id(state.state_id());
         let visual = state.into_visual();
@@ -1149,7 +1149,7 @@ impl InfiniteTransition {
         default_from: f32,
         to: f32,
         spec: InfiniteRepeatableSpec,
-    ) -> crate::core::state::Visual<f32> {
+    ) -> crate::runtime::state::Visual<f32> {
         let state: State<f32> = ctx.remember(|| default_from);
         let start = state.peek();
         let range = to - default_from;
@@ -1166,7 +1166,7 @@ impl InfiniteTransition {
         from: crate::modifier::Color,
         to: crate::modifier::Color,
         spec: InfiniteRepeatableSpec,
-    ) -> crate::core::state::Visual<crate::modifier::Color> {
+    ) -> crate::runtime::state::Visual<crate::modifier::Color> {
         let state: State<crate::modifier::Color> = ctx.remember(|| from);
         self.push_id(state.state_id());
         let visual = state.into_visual();
@@ -1747,7 +1747,7 @@ pub(crate) mod tests {
         // 回归：Spring 渐近收敛——done 时 Animatable 必须写出精确目标值
         // （修复前返回 to+残余位移——AnimatedVisibility 的 exit 完成检测
         //   progress<0.001 会因残余位移卡住/误判）
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let st = State::new(1.0f32);
         let mut anim = Animatable::new(st.clone());
         anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
@@ -2092,7 +2092,7 @@ pub(crate) mod tests {
     #[test]
     fn push_retarget_inherits_velocity() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let st = State::new(0.0f32);
         push_decay(st.clone(), 1000.0, DecaySpec::default());
         // 推进 5 帧（update_animations 驱动全局表）
@@ -2128,7 +2128,7 @@ pub(crate) mod tests {
         // finishedListener（对标 Compose）：动画完成帧触发一次
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let st = State::new(0.0f32);
         let mut anim = Animatable::new(st.clone());
         let fired = Arc::new(AtomicBool::new(false));
@@ -2148,13 +2148,13 @@ pub(crate) mod tests {
     fn scroll_with_animation_no_dup_key() {
         use std::cell::RefCell;
         let _g = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scroll = RefCell::new(None::<crate::modifier::ScrollState>);
-        let page = RefCell::new(None::<crate::core::state::State<u32>>);
+        let page = RefCell::new(None::<crate::runtime::state::State<u32>>);
         let frame_parity = RefCell::new(std::rc::Rc::new(std::cell::Cell::new(false)));
         let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
 
-        let scene = |composer: &mut crate::core::composer::Composer| {
+        let scene = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
                 crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     crate::ui::Column::new()
@@ -2232,7 +2232,7 @@ mod repeated_tests {
     #[test]
     fn repeated_animation_cycles_converge() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let state = crate::core::state::State::new(40.0f32);
+        let state = crate::runtime::state::State::new(40.0f32);
 
         // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
@@ -2253,7 +2253,7 @@ mod repeated_tests {
     #[test]
     fn mid_flight_retarget_switches() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let state = crate::core::state::State::new(40.0f32);
+        let state = crate::runtime::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(1000),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
@@ -2288,7 +2288,7 @@ mod repeated_tests {
         assert_eq!(<i32 as AnimatableValue>::from_f32(3.7), 4);
         assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
         // 动画收敛：0 → 100（Tween）
-        let state = crate::core::state::State::new(0i32);
+        let state = crate::runtime::state::State::new(0i32);
         push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec {
             duration: std::time::Duration::from_millis(200),
             interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
@@ -2303,7 +2303,7 @@ mod repeated_tests {
     #[test]
     fn transition_animate_generic_value() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let mut captured = None;
         composer.compose(|ctx| {
             let mut t = ctx.update_transition(3.0f32, AnimationSpec::Tween(TweenSpec::default()), "t");
@@ -2318,7 +2318,7 @@ mod repeated_tests {
         // animate_value is the Compose-named twin of the generic animate<U>.
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let mut captured = None;
         composer.compose(|ctx| {
             let mut t = ctx.update_transition(10i32, AnimationSpec::Tween(TweenSpec::default()), "t");
@@ -2335,12 +2335,12 @@ mod repeated_tests {
         // call — flip the parent, the child re-maps and animates to the new value.
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
-        let mut composer = crate::core::composer::Composer::new();
-        let parent = crate::core::state::State::new(1i32);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let parent = crate::runtime::state::State::new(1i32);
         let child_val = std::cell::RefCell::new(None);
-        let build = |composer: &mut crate::core::composer::Composer,
+        let build = |composer: &mut crate::runtime::composer::Composer,
                      child_val: &std::cell::RefCell<
-            Option<crate::core::state::State<f32>>,
+            Option<crate::runtime::state::State<f32>>,
         >| {
             let p = parent.clone();
             composer.compose(|ctx| {
@@ -2381,11 +2381,11 @@ mod repeated_tests {
 fn test_infinite_transition_auto_dispose() {
     // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
     let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    use crate::core::composer::{Composer, GroupStatus};
+    use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
     use crate::modifier::Modifier;
-    use crate::core::state::State;
+    use crate::runtime::state::State;
     use std::time::Duration;
 
     // 清空全局动画表（跨测试并行隔离）
@@ -2440,11 +2440,11 @@ fn test_infinite_transition_auto_dispose() {
 fn test_infinite_transition_manual_dispose_idempotent() {
     // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
     let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    use crate::core::composer::{Composer, GroupStatus};
+    use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
     use crate::modifier::Modifier;
-    use crate::core::state::State;
+    use crate::runtime::state::State;
     use std::time::Duration;
 
     // 清空全局动画表（跨测试并行隔离）

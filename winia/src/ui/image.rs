@@ -10,7 +10,7 @@
 //! - SVG 来源与位图统一走 `content_scale_rect`（完整缩放/对齐/RTL + clipToBounds）。
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::modifier::{ColorFilter, FilterQuality, Modifier, ModifierElement};
 use crate::ui::icon::IconSource;
 use skia_safe::Rect;

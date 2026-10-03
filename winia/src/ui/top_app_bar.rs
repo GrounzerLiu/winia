@@ -1,7 +1,7 @@
 //! Material 3 TopAppBar with a single moving title slot.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
@@ -215,7 +215,7 @@ impl TopAppBar {
                 )),
             )
         } else {
-            crate::core::state::State::new(target_container)
+            crate::runtime::state::State::new(target_container)
         };
         let rendered_container = container_color.clone();
         let root_modifier = Modifier::new().fill_max_width().height(height).background(move || rendered_container.peek(), Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
@@ -286,7 +286,7 @@ impl MeasurePolicy for TopAppBarLayoutPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::*; use crate::core::composer::Composer;
+    use super::*; use crate::runtime::composer::Composer;
     fn layout(bar: TopAppBar, w: f32) -> Composer { let mut c = Composer::new(); c.compose(|ctx| bar.build(ctx)); c.layout(Constraints::new(0.0, w, 0.0, 200.0)); c }
     fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new().size(w, h)); ctx.end_node(); }
     #[test] fn variants_have_expected_heights() { for (bar,h) in [(TopAppBar::new(|_| {}),64.),(TopAppBar::center_aligned(|_| {}),64.),(TopAppBar::medium(|_| {}),112.),(TopAppBar::large(|_| {}),152.)] { let c=layout(bar,400.); assert_eq!(c.arena_nodes()[c.layout_root_idx().unwrap()].measured_size.height,h); } }

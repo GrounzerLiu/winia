@@ -11,7 +11,7 @@
 //! 提供程序化控制：`show`/`hide`/`expand`/`partial_expand`；拖拽增量经
 //! `drag_delta` 喂入，结束经 `settle`/`settle_with_velocity` 吸附。
 
-use crate::core::state::State;
+use crate::runtime::state::State;
 use crate::ui::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
 
 /// Sheet 值（对标 Compose `SheetValue`）
@@ -200,7 +200,7 @@ impl SheetState {
 
     /// offset 的 State 引用（供 `Modifier::offset_y(state)` 布局跟随——
     /// 布局位置与渲染一致，hit_test 命中正确）
-    pub fn offset_state(&self) -> crate::core::state::State<f32> {
+    pub fn offset_state(&self) -> crate::runtime::state::State<f32> {
         self.anchored.offset_state()
     }
 

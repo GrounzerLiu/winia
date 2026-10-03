@@ -11,7 +11,7 @@
 //! ```
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier, Shape, SizeValue};
 use crate::interaction::{ComponentState, MutableInteractionSource};
@@ -663,8 +663,8 @@ impl Button {
 
         // content 闭包自动成为组合 scope（与 Column 一致）
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
+            crate::runtime::composer::GroupStatus::Skip => {}
+            crate::runtime::composer::GroupStatus::Enter => {
                 // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
                 // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
                 // 取按钮内容色（如 Filled 内图标自动 on_primary）
@@ -726,7 +726,7 @@ impl fmt::Debug for Button {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     #[test]
     fn test_button_defaults() {
@@ -824,7 +824,7 @@ mod tests {
 
     #[test]
     fn test_button_dynamic_padding_and_min_size() {
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let pad = State::new(10.0);
         let btn = Button::new()
             .content_padding((&pad, 4.0, &pad, 4.0))
@@ -901,7 +901,7 @@ mod tests {
     #[test]
     fn outlined_border_width_follows_size_variant() {
         // 端到端：XLarge Outlined 按钮物化节点的 Border 宽度应为 3
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Button::outlined()
                 .size(ButtonSize::XLarge)

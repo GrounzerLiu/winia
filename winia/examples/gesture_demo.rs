@@ -2,7 +2,7 @@
 //! 测试 Compose 风格 click 检测 + on_pointer_event 完整生命周期
 
 use letclone::clone;
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
 use winia::ui::text::Text;

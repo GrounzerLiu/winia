@@ -7,8 +7,8 @@
 //! });
 //! ```
 
-use crate::core::composition_local::CompositionLocal;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composition_local::CompositionLocal;
+use crate::runtime::composer::ComposeCtx;
 use crate::layout::LayoutDirection;
 use crate::modifier::Color;
 use crate::text::{FontWeight, TextStyle};
@@ -189,8 +189,8 @@ static SYSTEM_THEME_DARK: std::sync::atomic::AtomicI8 = std::sync::atomic::Atomi
 /// makes a window's composer wake at all when the mode changes (each window composes in its own composer,
 /// and a composer with nothing pending is never asked to redraw). The atomic above stays for the callers
 /// that ask outside a composition (`is_system_dark_theme` from the app loop).
-static SYSTEM_THEME_STATE: std::sync::LazyLock<crate::core::state::Reactive<u8>> =
-    std::sync::LazyLock::new(|| crate::core::state::Reactive::new(system_theme_mode()));
+static SYSTEM_THEME_STATE: std::sync::LazyLock<crate::runtime::state::Reactive<u8>> =
+    std::sync::LazyLock::new(|| crate::runtime::state::Reactive::new(system_theme_mode()));
 /// How many times the SYSTEM theme may have changed. A window records the epoch it last resolved at and
 /// re-resolves when it moves — per WINDOW state, deliberately: a single process-wide "pending" flag is
 /// consumed by whichever window renders first, which left every other window on its old palette.
@@ -238,7 +238,7 @@ pub fn set_system_dark_mode(mode: Option<bool>) {
         SYSTEM_THEME_STATE.set(value);
         SYSTEM_THEME_EPOCH.fetch_add(1, Ordering::Relaxed);
         THEME_REDRAW_ALL.store(true, Ordering::Relaxed);
-        crate::core::state::wake_loop();
+        crate::runtime::state::wake_loop();
     }
 }
 
@@ -665,7 +665,7 @@ impl WiniaTheme {
         // providers inside one composer must not share the memory of what they last provided.
         const NAMESPACE: u64 = 0x7769_6E69_6174_6865; // "winia the(me)"
         let prev = ctx.remember_backchannel_at_key(ctx.position_key(NAMESPACE), || {
-            crate::core::state::Backchannel::new((colors, typography.clone(), direction))
+            crate::runtime::state::Backchannel::new((colors, typography.clone(), direction))
         });
         let resolved = (colors, typography.clone(), direction);
         if prev.get() != resolved {
@@ -756,8 +756,8 @@ mod tests {
 
     /// A `surface`-filled 40×40 leaf under a param-less wrapper group — the smallest shape that shows both
     /// whether a theme reached the tree and whether an unmarked wrapper kept the colors it composed with.
-    fn surface_scene(ctx: &mut crate::core::composer::ComposeCtx) {
-        use crate::core::composer::GroupStatus;
+    fn surface_scene(ctx: &mut crate::runtime::composer::ComposeCtx) {
+        use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
         use crate::modifier::{Modifier, Shape};
         let key = ctx.next_key();
@@ -778,7 +778,7 @@ mod tests {
     }
 
     /// B channel of the centre pixel of `surface_scene` drawn into a 40×40 raster (BGRA).
-    fn centre_pixel(composer: &mut crate::core::composer::Composer) -> i32 {
+    fn centre_pixel(composer: &mut crate::runtime::composer::Composer) -> i32 {
         use crate::layout::constraints::Constraints;
         composer.layout(Constraints::new(0.0, 40.0, 0.0, 40.0));
         let mut surface = skia_safe::surfaces::raster_n32_premul((40, 40)).unwrap();
@@ -801,9 +801,9 @@ mod tests {
     #[test]
     fn a_theme_change_reaches_an_idle_subtree_by_itself() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
-        let scene = |ctx: &mut crate::core::composer::ComposeCtx| {
+        let scene = |ctx: &mut crate::runtime::composer::ComposeCtx| {
             WiniaTheme::auto(ctx, surface_scene);
         };
 
@@ -842,7 +842,7 @@ mod tests {
     #[test]
     fn a_local_change_reaches_a_reader_that_declared_nothing() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::core::composer::{Composer, ComposeCtx, GroupStatus};
+        use crate::runtime::composer::{Composer, ComposeCtx, GroupStatus};
         use crate::layout::BoxLayout;
         use crate::layout::LayoutDirection;
         use crate::modifier::Modifier;
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn a_window_content_follows_its_cell() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         set_system_dark_mode(Some(false));
         // What `Window::build` samples, while the application's own theme node is in scope.
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn a_window_content_follows_published_typography_and_direction() {
         let _serial = THEME_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         let custom = Typography { body_large: TextStyle::new().font_size(23.0), ..Typography::default() };
         // What `Window::build` samples, from inside the theme nodes that wrap it.
@@ -1063,7 +1063,7 @@ mod tests {
     /// provide ends.
     #[test]
     fn a_theme_provide_records_its_spec_for_its_content_only() {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let inside = std::cell::RefCell::new(None);
         let after = std::cell::RefCell::new(None);
         composer.compose(|ctx| {
@@ -1101,7 +1101,7 @@ mod tests {
             body_large: TextStyle::new().font_size(20.0),
             ..Typography::default()
         };
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             let default = WiniaTheme::typography();
             WiniaTheme::with_typography(custom.clone(), ctx, |ctx| {
@@ -1113,7 +1113,7 @@ mod tests {
 
     #[test]
     fn legacy_theme_keeps_bare_text_default_size() {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::light(ctx, |ctx| {
                 Text::new("unchanged").build(ctx);

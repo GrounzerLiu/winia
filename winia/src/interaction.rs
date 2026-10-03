@@ -10,7 +10,7 @@
 //! 差异（有意简化，文档化）：Compose 的 Press/Release/Cancel 带交互实例身份以支持
 //! 多指/多交互并存；Winia 每窗口单活动指针，布尔标志足够，多指支持留待指针管道升级。
 
-use crate::core::state::State;
+use crate::runtime::state::State;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -39,9 +39,9 @@ pub(crate) struct RippleLayer {
     /// 按压点（节点本地坐标——渲染时加布局原点即画布坐标）
     pub(crate) center: (f32, f32),
     /// 扩散进度 0..1（500ms Tween 驱动）
-    pub(crate) progress: crate::core::state::State<f32>,
+    pub(crate) progress: crate::runtime::state::State<f32>,
     /// 当前透明度（按下 0.10；释放后 300ms 淡出到 0）
-    pub(crate) opacity: crate::core::state::State<f32>,
+    pub(crate) opacity: crate::runtime::state::State<f32>,
     /// 释放后淡出中（防重复触发淡出）
     pub(crate) fading: bool,
 }
@@ -51,8 +51,8 @@ impl RippleLayer {
         Self {
             id,
             center,
-            progress: crate::core::state::State::new(0.0),
-            opacity: crate::core::state::State::new(RIPPLE_OPACITY),
+            progress: crate::runtime::state::State::new(0.0),
+            opacity: crate::runtime::state::State::new(RIPPLE_OPACITY),
             fading: false,
         }
     }
@@ -102,10 +102,10 @@ pub struct MutableInteractionSource {
     /// 层 id 计数器
     next_layer_id: Arc<std::sync::atomic::AtomicU64>,
     /// hover/focus 状态层透明度（动画驱动——避免状态切换生硬跳变）
-    hover_opacity: crate::core::state::State<f32>,
-    focus_opacity: crate::core::state::State<f32>,
+    hover_opacity: crate::runtime::state::State<f32>,
+    focus_opacity: crate::runtime::state::State<f32>,
     /// 焦点环透明度（聚焦 0→1 淡入、失焦 1→0 淡出——独立于状态层）
-    focus_indicator_alpha: crate::core::state::State<f32>,
+    focus_indicator_alpha: crate::runtime::state::State<f32>,
 }
 
 /// 身份比较：同一交互源实例（跨 clone 稳定）——供 Modifier 参数相等判断
@@ -137,9 +137,9 @@ impl MutableInteractionSource {
             dragged: State::new(false),
             ripple_layers: Arc::new(Mutex::new(Vec::new())),
             next_layer_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            hover_opacity: crate::core::state::State::new(0.0),
-            focus_opacity: crate::core::state::State::new(0.0),
-            focus_indicator_alpha: crate::core::state::State::new(0.0),
+            hover_opacity: crate::runtime::state::State::new(0.0),
+            focus_opacity: crate::runtime::state::State::new(0.0),
+            focus_indicator_alpha: crate::runtime::state::State::new(0.0),
         }
     }
 
@@ -244,7 +244,7 @@ impl MutableInteractionSource {
     }
 
     /// 状态层透明度动画（hover/focus 过渡平滑——参考旧版 500ms Tween）
-    fn animate_state_layer(&self, state: &crate::core::state::State<f32>, target: f32) {
+    fn animate_state_layer(&self, state: &crate::runtime::state::State<f32>, target: f32) {
         crate::animation::push_animatable(
             state.clone(),
             target,
@@ -354,7 +354,7 @@ impl MutableInteractionSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     #[test]
     fn test_source_transitions() {

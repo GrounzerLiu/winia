@@ -3,12 +3,12 @@
 //! 架构对标 Jetpack Compose，基于 winit + skia-safe。
 //!
 //! # 核心模块
-//! - [`core`]: 运行时核心（State, ComposeCtx, Composer）
+//! - [`runtime`]: 运行时核心（State, ComposeCtx, Composer）
 //! - `modifier`: 链式 Modifier 系统（待实现）
 //! - `layout`: 布局引擎（待实现）
 //! - `ui`: UI 组件（待实现）
 
-pub mod core;
+pub mod runtime;
 pub mod unit;
 pub mod anim_trace;
 /// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。
@@ -22,7 +22,6 @@ macro_rules! debug_log {
 }
 
 pub mod brush;
-pub mod font;
 pub mod icon;
 pub mod modifier;
 pub mod interaction;
@@ -88,20 +87,20 @@ pub mod debug {
 }
 
 // 公开核心类型
-pub use core::composer::{ComposeCtx, Composer};
-pub use core::state::{
+pub use runtime::composer::{ComposeCtx, Composer};
+pub use runtime::state::{
     Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
 };
 // Observable collections: `mutableStateListOf` / `mutableStateMapOf`.
-pub use core::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
+pub use runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
 pub use nested_scroll::{NestedScrollConnection, NestedScrollDispatcher, NestedScrollSource, ScrollDelta, ScrollVelocity};
 pub use winia_macros::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
 
 /// Prelude: 使用 Winia 时通常需要的所有导入
 pub mod prelude {
-    pub use crate::core::composer::ComposeCtx;
-    pub use crate::core::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
-    pub use crate::core::state::{
+    pub use crate::runtime::composer::ComposeCtx;
+    pub use crate::runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
+    pub use crate::runtime::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
     };
     pub use crate::brush::{Brush, BrushTile};

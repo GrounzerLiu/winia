@@ -15,7 +15,7 @@
 //!    selection from when the popup opened and closes.
 use letclone::clone;
 use winia::composable;
-use winia::core::composer::{ComposeCtx, GroupStatus};
+use winia::runtime::composer::{ComposeCtx, GroupStatus};
 use winia::layout::BoxLayout;
 use winia::prelude::*;
 use winia::ui::date_picker::{

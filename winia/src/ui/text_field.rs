@@ -3,8 +3,8 @@
 //! 参考：旧版 winia v1 的 text_field 实现 + Compose Foundation 1.11.4 源码
 //! （KeyCommand/KeyMapping/UndoManager 语义）
 
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::modifier::Modifier;
 use crate::composable;
 use crate::ui::text::{ProvideTextStyle};
@@ -423,7 +423,7 @@ fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress: f32, color
 pub(crate) struct TextFieldLayout {
     /// label 悬浮动画进度（0 = 展开 / 1 = 悬浮）——measure 期 peek 注册
     /// layout_dep，位置随动画每帧重测
-    pub(crate) label_progress: crate::core::state::State<f32>,
+    pub(crate) label_progress: crate::runtime::state::State<f32>,
     /// 容器视觉变体（决定悬浮 label 的锚点——M3 specs）：
     /// - Filled：label 顶在容器 8dp（悬浮区 8..24，中心 16）
     /// - Outlined：label 中心跨边框线（容器顶 0）
@@ -464,7 +464,7 @@ fn text_field_content_height(constraints: &crate::layout::Constraints, supportin
 
 impl TextFieldLayout {
     pub(crate) fn new(
-        label_progress: crate::core::state::State<f32>,
+        label_progress: crate::runtime::state::State<f32>,
         variant: Option<TextFieldVariant>,
         pad_top: f32,
         pad_bottom: f32,
@@ -2065,7 +2065,7 @@ impl Default for TextField {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::modifier::ModifierElement;
 
     fn find_text_content(modifier: &Modifier) -> Option<String> {
@@ -2631,7 +2631,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let s = crate::core::state::State::new(0.0f32);
+        let s = crate::runtime::state::State::new(0.0f32);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen2 = seen.clone();
         composer.compose(|ctx| {
@@ -2665,7 +2665,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let value = crate::runtime::state::State::new(TextFieldValue::new(""));
         let focus_src = crate::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         // 首帧：未聚焦（label 展开，progress 目标 0）
@@ -2726,7 +2726,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let value = crate::runtime::state::State::new(TextFieldValue::new(""));
         let focus_src = crate::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
@@ -2779,7 +2779,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let value = crate::runtime::state::State::new(TextFieldValue::new(""));
         let focus_src = crate::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
@@ -2830,7 +2830,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let value = crate::runtime::state::State::new(TextFieldValue::new(""));
         let focus_src = crate::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
@@ -2881,7 +2881,7 @@ mod tests {
             .unwrap();
         let _guard = rt.enter();
         let mut composer = Composer::new();
-        let value = crate::core::state::State::new(TextFieldValue::new(""));
+        let value = crate::runtime::state::State::new(TextFieldValue::new(""));
         let focus_src = crate::interaction::MutableInteractionSource::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();

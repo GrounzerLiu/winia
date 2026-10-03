@@ -5,8 +5,8 @@
 //! semantics are different from a fixed-size FAB.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
@@ -435,7 +435,7 @@ impl Default for FloatingActionButton {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::ui::Text;
 
     fn child<'a>(nodes: &'a [LayoutNode], parent: usize, index: usize) -> &'a LayoutNode {

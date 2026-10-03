@@ -1,5 +1,5 @@
 //! 临时探针：scaffold_demo 结构下 bottom bar 区域是否被内容侵入
-use winia::core::composer::{ComposeCtx, Composer};
+use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;

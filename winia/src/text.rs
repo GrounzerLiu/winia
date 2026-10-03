@@ -1,6 +1,7 @@
 //! 文本处理基础设施 — 索引映射、Paragraph 封装、TextLayout、内联元素
 
 pub mod style;
+pub mod font;
 mod index_bimap;
 mod paragraph;
 mod paragraph_builder;

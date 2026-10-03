@@ -32,8 +32,8 @@
 //! 无 label 时退化为垂直模式的圆形指示器（TopIconOrIconOnlyMeasurePolicy）
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
@@ -738,7 +738,7 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
         let key = ctx.next_key();

@@ -18,8 +18,8 @@
 //! - No system Back on desktop: Esc substitutes (documented divergence).
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape, SizeValue};
 use crate::ui::text_field::{TextField, TextFieldColors, TextFieldValue};
 use std::sync::Arc;
@@ -1036,7 +1036,7 @@ impl Default for DockedSearchBar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
 
     /// Compose needs a tokio runtime (TextField coroutine scope) — same helper

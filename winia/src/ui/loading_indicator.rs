@@ -15,8 +15,8 @@
 use crate::animation::interpolator;
 use crate::animation::{InfiniteRepeatableSpec, SpringSpec, TweenSpec};
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::effect::LaunchedEffect;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
@@ -236,7 +236,7 @@ pub(crate) struct LoadingIndicatorNode {
     pub(crate) morph_progress: State<f32>,
     pub(crate) morph_index: State<usize>,
     pub(crate) morph_rotation_target: State<f32>,
-    pub(crate) global_rotation: crate::core::state::Visual<f32>,
+    pub(crate) global_rotation: crate::runtime::state::Visual<f32>,
 }
 
 impl crate::modifier::DrawNode for LoadingIndicatorNode {
@@ -410,7 +410,7 @@ fn skia_color(c: Color) -> skia_safe::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::modifier::Color;
 
@@ -587,7 +587,7 @@ mod tests {
             morph_progress: State::new(0.0),
             morph_index: State::new(0usize),
             morph_rotation_target: State::new(90.0),
-            global_rotation: crate::core::state::Visual::new(10.0),
+            global_rotation: crate::runtime::state::Visual::new(10.0),
         };
         assert_eq!(mk(true).node_key(), mk(true).node_key());
         assert_ne!(mk(true).node_key(), mk(false).node_key(), "is_contained 应进 key");
@@ -600,7 +600,7 @@ mod tests {
             morph_progress: State::new(0.7),
             morph_index: State::new(2usize),
             morph_rotation_target: State::new(180.0),
-            global_rotation: crate::core::state::Visual::new(300.0),
+            global_rotation: crate::runtime::state::Visual::new(300.0),
         };
         assert_eq!(mk(true).node_key(), moved.node_key(), "morph/旋转动画值不应进 key");
     }
@@ -640,7 +640,7 @@ mod tests {
                 morph_progress: State::new(0.0),
                 morph_index: State::new(0usize),
                 morph_rotation_target: State::new(90.0),
-                global_rotation: crate::core::state::Visual::new(0.0),
+                global_rotation: crate::runtime::state::Visual::new(0.0),
             });
         let enum_mod = crate::modifier::Modifier::new()
             .size(40.0, 40.0)

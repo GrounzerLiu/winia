@@ -11,7 +11,7 @@
 //!   变体——交互反馈由 ripple/state layer 承担）；
 //! - `onClick = null` → 不可交互（不挂 clickable），与 Compose 语义一致。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
@@ -333,7 +333,7 @@ mod tests {
 
     fn render_radio(selected: bool, enabled: bool, colors: RadioButtonColors) -> RenderScene {
         use skia_safe::{Color as SkColor, surfaces};
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             RadioButton::new(selected)
                 .enabled(enabled)
@@ -462,8 +462,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // 状态切换驱动：点击回调里翻转 selected
-        let sel = crate::core::state::State::new(true);
-        let mut composer = crate::core::composer::Composer::new();
+        let sel = crate::runtime::state::State::new(true);
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             let s = sel.clone();
             RadioButton::new(sel.get())

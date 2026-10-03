@@ -9,7 +9,7 @@
 //! 内容 = 顶部对齐 Column（对标 M3 Surface { Column(content) }）；内容色经
 //! `WiniaTheme::with_content_color` 下传（Icon tint Auto 自动取卡片内容色）。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};

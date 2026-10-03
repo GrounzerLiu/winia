@@ -46,7 +46,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::core::state::State;
+use crate::runtime::state::State;
 
 // ═══════════════════════════════════════════════════════════
 // Snapshots
@@ -496,7 +496,7 @@ impl<K: Clone + Eq + Hash + 'static, V: Clone + 'static> StateMap<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::{ComposeCtx, Composer};
+    use crate::runtime::composer::{ComposeCtx, Composer};
     use crate::layout::Constraints;
 
     /// Compose a scene, run the layout pass, and count how many times the reader ran — plus what it
@@ -511,7 +511,7 @@ mod tests {
         runs: &std::rc::Rc<std::cell::Cell<usize>>,
         seen: &std::rc::Rc<std::cell::RefCell<Vec<i32>>>,
     ) {
-        use crate::core::composer::GroupStatus;
+        use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
         use crate::modifier::Modifier;
 
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn a_map_mutation_reaches_a_reader() {
-        use crate::core::composer::GroupStatus;
+        use crate::runtime::composer::GroupStatus;
         use crate::layout::BoxLayout;
         use crate::modifier::Modifier;
 

@@ -83,54 +83,54 @@ impl From<crate::unit::Px> for SizeValue {
     fn from(v: crate::unit::Px) -> Self { SizeValue::Static(Dimension::Px(v)) }
 }
 
-impl From<crate::core::state::State<f32>> for SizeValue {
-    fn from(s: crate::core::state::State<f32>) -> Self {
+impl From<crate::runtime::state::State<f32>> for SizeValue {
+    fn from(s: crate::runtime::state::State<f32>) -> Self {
         SizeValue::Dynamic(Arc::new(move || s.get()))
     }
 }
 
-impl From<&crate::core::state::State<f32>> for SizeValue {
-    fn from(s: &crate::core::state::State<f32>) -> Self {
+impl From<&crate::runtime::state::State<f32>> for SizeValue {
+    fn from(s: &crate::runtime::state::State<f32>) -> Self {
         let s = s.clone();
         SizeValue::Dynamic(Arc::new(move || s.get()))
     }
 }
 
-impl From<crate::core::state::Animating<f32>> for SizeValue {
-    fn from(s: crate::core::state::Animating<f32>) -> Self {
+impl From<crate::runtime::state::Animating<f32>> for SizeValue {
+    fn from(s: crate::runtime::state::Animating<f32>) -> Self {
         SizeValue::Dynamic(Arc::new(move || s.get()))
     }
 }
 
-impl From<&crate::core::state::Animating<f32>> for SizeValue {
-    fn from(s: &crate::core::state::Animating<f32>) -> Self {
+impl From<&crate::runtime::state::Animating<f32>> for SizeValue {
+    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
         let s = s.clone();
         SizeValue::Dynamic(Arc::new(move || s.get()))
     }
 }
 
-impl From<crate::core::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: crate::core::state::DerivedValue<f32>) -> Self {
+impl From<crate::runtime::state::DerivedValue<f32>> for SizeValue {
+    fn from(d: crate::runtime::state::DerivedValue<f32>) -> Self {
         SizeValue::Dynamic(Arc::new(move || d.get()))
     }
 }
 
-impl From<&crate::core::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: &crate::core::state::DerivedValue<f32>) -> Self {
+impl From<&crate::runtime::state::DerivedValue<f32>> for SizeValue {
+    fn from(d: &crate::runtime::state::DerivedValue<f32>) -> Self {
         let d = d.clone();
         SizeValue::Dynamic(Arc::new(move || d.get()))
     }
 }
 
-impl From<&crate::core::state::State<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::core::state::State<crate::unit::Dp>) -> Self {
+impl From<&crate::runtime::state::State<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::runtime::state::State<crate::unit::Dp>) -> Self {
         let s = s.clone();
         SizeValue::Dynamic(Arc::new(move || s.get().value()))
     }
 }
 
-impl From<&crate::core::state::Animating<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::core::state::Animating<crate::unit::Dp>) -> Self {
+impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::runtime::state::Animating<crate::unit::Dp>) -> Self {
         let s = s.clone();
         SizeValue::Dynamic(Arc::new(move || s.get().value()))
     }
@@ -780,9 +780,9 @@ pub(crate) enum ModifierElement {
         cursor_color: Color,
         /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
         /// CAM16-UCS 插值；渲染期 peek 读取）
-        indicator_color: crate::core::state::State<crate::modifier::Color>,
+        indicator_color: crate::runtime::state::State<crate::modifier::Color>,
         /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
-        focus_progress: crate::core::state::State<f32>,
+        focus_progress: crate::runtime::state::State<f32>,
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
         /// None = 恒等）
         offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
@@ -875,7 +875,7 @@ pub(crate) enum ModifierElement {
     VerticalScroll { state: ScrollState },
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
-    LazyScroll { content_height: crate::core::state::Backchannel<f32>, reverse: bool },
+    LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
@@ -1647,8 +1647,8 @@ impl Modifier {
         is_error: bool,
         read_only: bool,
         cursor_color: Color,
-        indicator_color: crate::core::state::State<crate::modifier::Color>,
-        focus_progress: crate::core::state::State<f32>,
+        indicator_color: crate::runtime::state::State<crate::modifier::Color>,
+        focus_progress: crate::runtime::state::State<f32>,
         offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
         supporting: Option<SupportingVisual>,
     ) -> Self {
@@ -2045,7 +2045,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
 
     /// 水平滚动
     /// 标记为 lazy 滚动容器（LazyColumn 内部使用——内容总高 State）
-    pub fn lazy_scroll(self, content_height: crate::core::state::Backchannel<f32>) -> Self {
+    pub fn lazy_scroll(self, content_height: crate::runtime::state::Backchannel<f32>) -> Self {
         self.push(ModifierElement::LazyScroll { content_height, reverse: false })
     }
 
@@ -2317,7 +2317,7 @@ impl Modifier {
     }
 
     /// lazy 列表内容高度 State（如果有 LazyScroll modifier）
-    pub fn lazy_scroll_content_height(&self) -> Option<&crate::core::state::Backchannel<f32>> {
+    pub fn lazy_scroll_content_height(&self) -> Option<&crate::runtime::state::Backchannel<f32>> {
         for el in &self.elements {
             if let ModifierElement::LazyScroll { content_height, .. } = el {
                 return Some(content_height);
@@ -2984,14 +2984,14 @@ impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     }
 }
 
-impl From<crate::core::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: crate::core::state::DerivedValue<Color>) -> Self {
+impl From<crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
+    fn from(d: crate::runtime::state::DerivedValue<Color>) -> Self {
         Self(Arc::new(move || d.get()))
     }
 }
 
-impl From<&crate::core::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: &crate::core::state::DerivedValue<Color>) -> Self {
+impl From<&crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
+    fn from(d: &crate::runtime::state::DerivedValue<Color>) -> Self {
         let d = d.clone();
         Self(Arc::new(move || d.get()))
     }
@@ -3017,9 +3017,9 @@ impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for Graphic
 #[derive(Debug, Clone)]
 pub struct ScrollState {
     /// 当前偏移
-    pub offset: crate::core::state::State<f32>,
+    pub offset: crate::runtime::state::State<f32>,
     /// 是否正在滚动
-    pub is_scroll_in_progress: crate::core::state::State<bool>,
+    pub is_scroll_in_progress: crate::runtime::state::State<bool>,
     /// How far a fling may travel: written back by the layout as `content height - viewport height`, or
     /// `f32::MAX` while that is still unknown.
     ///
@@ -3028,14 +3028,14 @@ pub struct ScrollState {
     /// exactly fitted still flinged: a drag was correctly clamped by the node's own `content - viewport`,
     /// but the momentum after the release was not (measured on a three-item menu: a drag that moved
     /// nothing left the offset at 74).
-    pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
+    pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
-    pub(crate) scroll_pulse: crate::core::state::State<u64>,
+    pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
     /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
-    pub(crate) snap: crate::core::state::Backchannel<Option<SnapSpec>>,
+    pub(crate) snap: crate::runtime::state::Backchannel<Option<SnapSpec>>,
 }
 
 /// How a PAGED list's fling settles, written back by the list's measure and read by
@@ -3110,11 +3110,11 @@ fn snap_settle() -> crate::animation::AnimationSpec {
 impl ScrollState {
     pub fn new() -> Self {
         ScrollState {
-            offset: crate::core::state::State::new(0.0),
-            is_scroll_in_progress: crate::core::state::State::new(false),
-            fling_limit: crate::core::state::Backchannel::new(f32::MAX),
-            scroll_pulse: crate::core::state::State::new(0),
-            snap: crate::core::state::Backchannel::new(None),
+            offset: crate::runtime::state::State::new(0.0),
+            is_scroll_in_progress: crate::runtime::state::State::new(false),
+            fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            scroll_pulse: crate::runtime::state::State::new(0),
+            snap: crate::runtime::state::Backchannel::new(None),
         }
     }
 
@@ -3605,7 +3605,7 @@ mod tests {
     #[test]
     fn test_padding_dynamic_value() {
         // 动态 padding：State 驱动（动画作用于 padding 的机制）
-        let s = crate::core::state::State::new(4.0f32);
+        let s = crate::runtime::state::State::new(4.0f32);
         let m = Modifier::new().padding_start(s.clone());
         let (start, _, _, _) = m.get_padding_sides();
         assert_eq!(start, 4.0);
@@ -3648,7 +3648,7 @@ mod tests {
     #[test]
     fn test_offset_dynamic_animation() {
         // 动态 offset：State 驱动（动画作用于 offset——Compose offset 动画语义）
-        let s = crate::core::state::State::new(0.0f32);
+        let s = crate::runtime::state::State::new(0.0f32);
         let m = Modifier::new().offset(s.clone(), 10.0);
         assert_eq!(m.get_offset(), Some((0.0, 10.0)));
         s.set(50.0);
@@ -4175,7 +4175,7 @@ mod param_eq_tests {
     /// 尺寸未变化不重复回调，约束变化引发新尺寸时再次回调
     #[test]
     fn on_size_changed_reports_and_dedups() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let reported: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>> = Default::default();
         let mut composer = Composer::new();
         {
@@ -4212,7 +4212,7 @@ mod param_eq_tests {
 #[cfg(test)]
 mod node_track_tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     /// 试点绘制节点：Background(color, shape) 的 node 等价物（第三方可照抄）。
     #[derive(Debug)]
@@ -4493,7 +4493,7 @@ mod node_track_tests {
         // holds black text; parent after paints an opaque overlay rect. Sampled pixels
         // inside the overlay must show the overlay color, not text-darkened pixels —
         // i.e. after runs after the children recursion in render_pass1.
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use skia_safe::surfaces;
         let overlay = Color::from_argb(255, 30, 200, 30);
         #[derive(Debug)]
@@ -4597,7 +4597,7 @@ mod node_track_tests {
         // future RippleNode migration needs): enum ripple pressed to mid-expand, after
         // paints an opaque bar over the press point. The press pixel must show the bar
         // color, not the ripple color.
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::interaction::MutableInteractionSource;
         use skia_safe::surfaces;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -4857,7 +4857,7 @@ mod node_track_tests {
 
     #[test]
     fn node_track_layout_transform_applies_and_folds() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         // 约束 max 400：node 提 min_w=200 → 叶子宽应为 200（tighten 生效）
         let mut composer = Composer::new();
         composer.compose(|ctx| {
@@ -4894,8 +4894,8 @@ mod node_track_tests {
 
     #[test]
     fn node_track_layout_node_state_driven_remeasures() {
-        use crate::core::composer::Composer;
-        use crate::core::state::State;
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
         // 动态值在 transform 内 get → 注册布局依赖 → set 后重测（与 SizeValue::Dynamic 同）
         #[derive(Debug)]
         struct DynMinNode {
@@ -4942,7 +4942,7 @@ mod node_track_tests {
     /// 依赖）或动画引擎 Animating 写 + request_redraw。node 无特殊通道，老实跟枚举一致。
     #[derive(Debug)]
     struct TestStatefulBgNode {
-        color_state: crate::core::state::State<Color>,
+        color_state: crate::runtime::state::State<Color>,
     }
 
     impl DrawNode for TestStatefulBgNode {
@@ -4961,7 +4961,7 @@ mod node_track_tests {
 
     #[test]
     fn node_track_stateful_draw_follows_state() {
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use skia_safe::surfaces;
         let red = Color::from_argb(255, 200, 30, 30);
         let blue = Color::from_argb(255, 30, 30, 200);
@@ -5048,7 +5048,7 @@ mod node_track_tests {
     /// their plain tree-order loops for every node that does not use the feature.
     #[test]
     fn children_have_z_is_recorded_by_the_layout_pass() {
-        use crate::core::composer::{Composer, GroupStatus};
+        use crate::runtime::composer::{Composer, GroupStatus};
         use crate::layout::BoxLayout;
         use crate::layout::constraints::Constraints;
 

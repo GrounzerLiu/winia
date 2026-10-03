@@ -2672,7 +2672,7 @@ mod tests {
         // 完整渲染路径回归：graphics_layer color_filter(Tint SrcIn) 必须
         // 经 saveLayer paint 染色层内内容（白背景 → 红）——render_pass1
         // 的 save_layer + paint color_filter 分支。
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::constraints::Constraints;
         use crate::modifier::{BlendMode, ColorFilter, Modifier, Shape};
         use skia_safe::{surfaces, Color as SkColor};

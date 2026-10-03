@@ -153,7 +153,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
     ///
     /// A state-fed provider therefore has to do two things: read the state inside a **scope**
     /// (`#[composable]` function, or a container's restartable group), and call
-    /// [`crate::core::composer::ComposeCtx::mark_subtree_dirty`] when the value it is about to
+    /// [`crate::runtime::composer::ComposeCtx::mark_subtree_dirty`] when the value it is about to
     /// provide differs from the previous frame's. The read marks the scope (so the provider itself
     /// re-runs), and the marking re-enters every reader inside it. `WiniaTheme::provide_resolved` is
     /// the worked example: it remembers what it last provided, and dirties its subtree when the

@@ -4,7 +4,7 @@
 //! `#[composable_keyed]` 只注入 RAII scope guard，**不做** remember/next_key
 //! 编译期替换——裸 ctx 调用必须用 `keyed_stmt!` 标记获得语句级稳定 base，
 //! 否则运行期 fail-fast panic（见下方 negative test）。
-use winia::core::composer::Composer;
+use winia::runtime::composer::Composer;
 use winia::prelude::*;
 
 #[composable_keyed]

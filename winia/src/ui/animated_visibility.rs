@@ -24,8 +24,8 @@
 
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::modifier::{GraphicsLayerParams, Modifier};
@@ -418,7 +418,7 @@ struct VisibilityPolicy {
     expand_from_h: ExpandFromH,
     /// Measured content size write-back (for Fraction slide offsets —
     /// Backchannel write, render-time peek; zero recompose).
-    content_size: crate::core::state::Backchannel<(f32, f32)>,
+    content_size: crate::runtime::state::Backchannel<(f32, f32)>,
 }
 
 impl std::fmt::Debug for VisibilityPolicy {
@@ -493,8 +493,8 @@ impl MeasurePolicy for VisibilityPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
-    use crate::core::state::State;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::ui::layout_components::Column;
 
@@ -681,7 +681,7 @@ mod tests {
             expand_from,
             expand_h,
             expand_from_h,
-            content_size: crate::core::state::Backchannel::new((0.0, 0.0)),
+            content_size: crate::runtime::state::Backchannel::new((0.0, 0.0)),
         };
         let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(120.0, 60.0))];
         let policies: Vec<Box<dyn MeasurePolicy>> = Vec::new();

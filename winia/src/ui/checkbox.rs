@@ -9,7 +9,7 @@
 //!   各自缩放动画近似 `checkDrawFraction` + `crossCenterGravitation` 过渡；
 //! - `Checkbox` 内部委托 `TriStateCheckbox(state = ToggleableState(checked))`。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
@@ -538,7 +538,7 @@ mod tests {
         for (checked, expect) in [(false, true), (true, false)] {
             let received = Arc::new(AtomicBool::new(false));
             let cb = received.clone();
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 Checkbox::new(checked)
                     .on_checked_change(move |v| cb.store(v, Ordering::Relaxed))
@@ -565,7 +565,7 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let clicks = Arc::new(AtomicUsize::new(0));
         let c = clicks.clone();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             TriStateCheckbox::new(ToggleableState::Indeterminate)
                 .on_click(move || {
@@ -591,7 +591,7 @@ mod tests {
     fn disabled_checkbox_has_no_interaction_elements() {
         use crate::modifier::ModifierElement;
         for state in [ToggleableState::Off, ToggleableState::On, ToggleableState::Indeterminate] {
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 TriStateCheckbox::new(state)
                     .enabled(false)
@@ -616,7 +616,7 @@ mod tests {
     fn checked_checkmark_icon_tint_resolves_to_on_primary() {
         // 集成：On 时勾号/横线图标 tint = on_primary
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 Checkbox::new(true).on_checked_change(|_| {}).build(ctx);
@@ -655,8 +655,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let build_scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| true);
@@ -664,7 +664,7 @@ mod tests {
                 Checkbox::new(c.get()).on_checked_change(|_| {}).build(ctx);
             });
         };
-        let mut render = |composer: &mut crate::core::composer::Composer| -> Vec<u8> {
+        let mut render = |composer: &mut crate::runtime::composer::Composer| -> Vec<u8> {
             composer.compose(build_scene);
             composer.compose(build_scene);
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -726,7 +726,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let fill = crate::modifier::Color::from_argb(96, 40, 80, 220);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             Checkbox::new(true)
                 .enabled(false)
@@ -794,11 +794,11 @@ mod tests {
     fn parent_tri_state_follows_children() {
         use std::cell::RefCell;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
         let parent_states = RefCell::new(Vec::new());
 
-        let build = |composer: &mut crate::core::composer::Composer| {
+        let build = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
                 crate::ui::Column::new().build(ctx, |ctx| {
                     let c1 = ctx.remember(|| true);
@@ -856,13 +856,13 @@ mod tests {
     fn parent_tri_state_follows_click() {
         use std::cell::RefCell;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
         let parent_states = RefCell::new(Vec::new());
         // 记录子项 Checkbox 的 Clickable 回调（按出现顺序——子项1/2/3）
         let clickables = RefCell::new(Vec::new());
 
-        let build = |composer: &mut crate::core::composer::Composer| {
+        let build = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
                 crate::ui::Column::new().build(ctx, |ctx| {
                     let c1 = ctx.remember(|| true);
@@ -928,7 +928,7 @@ mod tests {
         use skia_safe::{Color, surfaces};
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let clickables = RefCell::new(Vec::new());
         let parent_box_pos = RefCell::new(None::<(f32, f32, f32, f32)>);
 
@@ -960,7 +960,7 @@ mod tests {
             });
         };
         // 渲染一次 + 记录全选位置 + 收集 Clickable
-        let mut render = |composer: &mut crate::core::composer::Composer| -> Vec<u8> {
+        let mut render = |composer: &mut crate::runtime::composer::Composer| -> Vec<u8> {
             composer.compose(build_scene);
             composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
             // 全选 = 第一个 40x40 节点（Column 直接子级里找）
@@ -1041,7 +1041,7 @@ mod tests {
         use std::cell::RefCell;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let clickables = RefCell::new(Vec::new());
         let parent_states = RefCell::new(Vec::new());
 
@@ -1105,9 +1105,9 @@ mod tests {
     #[test]
     fn macroized_column_content_state_notify_enters_column() {
         use std::cell::RefCell;
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = RefCell::new(None::<crate::core::state::State<bool>>);
-        let scene = |composer: &mut crate::core::composer::Composer| {
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
+        let scene = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
                 crate::ui::Column::new().build(ctx, |ctx| {
                     let c3 = ctx.remember(|| false);

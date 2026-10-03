@@ -22,8 +22,8 @@
 
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::box_layout::BoxLayout;
 use crate::modifier::{GraphicsLayerParams, Modifier};
 
@@ -92,8 +92,8 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
-    use crate::core::state::State;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
 

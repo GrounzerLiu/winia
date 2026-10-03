@@ -14,7 +14,7 @@
 //! ⚠ 与 Compose 差异：winia 组合为命令式（build 直接注册节点），无 Compose 的
 //! LazyLayout 测量期组合——这里用"组合期预估 + 测量期校正"两阶段模型。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
@@ -126,61 +126,61 @@ impl LazyAxis for HorizontalAxis {
 #[derive(Debug, Clone)]
 pub struct LazyListState {
     /// 像素滚动偏移（挂 vertical_scroll modifier——滚动输入通道）
-    pub offset: crate::core::state::State<f32>,
+    pub offset: crate::runtime::state::State<f32>,
     /// 最近已知的第一个可见项 key（数据变化后按 key 校正位置）
-    pub(crate) last_known_first_key: crate::core::state::State<Option<u64>>,
+    pub(crate) last_known_first_key: crate::runtime::state::State<Option<u64>>,
     /// 上次 build 见到的 total——**状态级**守卫（非组合级 remember）：
     /// 外部持有 state 跨 Composer 复用时，组合级 remember 会每帧误触发 key 校正
     /// （实测：第二次 render 把 offset=2000 拉回 0）。放这里与 LazyListState
     /// 同生命周期，只有数据真的变化（total 变）才校正。
-    pub(crate) known_total: crate::core::state::State<usize>,
+    pub(crate) known_total: crate::runtime::state::State<usize>,
     /// 程序化跳转请求 (index, offset-in-item, animate)——锚点权威（对齐 Compose
     /// `requestPositionAndForgetLastKnownKey`：scroll position 就是锚点，
     /// 测量从锚点开始组合；像素 offset 由测量期从缓存推导，不做反推）。
     /// 首次测量消费后清空。animate = 动画滚动（spring，对齐 animateScrollToItem）。
-    pub(crate) jump_request: crate::core::state::State<Option<(usize, f32, bool)>>,
+    pub(crate) jump_request: crate::runtime::state::State<Option<(usize, f32, bool)>>,
     /// How far a fling may travel: written back during measure as `content height - viewport height`,
     /// or `f32::MAX` while that is still unknown. A REAL `0` means the content fits and the list cannot
     /// move — see `ScrollState::fling_limit`, which had the same "0 means unknown" conflation.
     ///
     /// 同 crate 的 scrollbar.rs 可见（scrollbar 侧读，content = limit + viewport）。
-    pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
+    pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
     /// 的 scrollbar.rs 可见）。
-    pub(crate) scroll_pulse: crate::core::state::State<u64>,
+    pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`. This is
     /// not a flag of its own: `build` hands this same state to the `ScrollState` the list assembles as
     /// its `is_scroll_in_progress` (`:983`, `:1014`), so it is whatever the drag and fling paths last
     /// wrote. The getter exists because a caller has to be able to ASK, which is Compose's
     /// `!isScrollInProgress` guard on `LaunchedEffect(monthIndex)` (`DatePicker.kt:1548-1553`) — without
     /// it a sync that scrolls the list cancels the gesture that was already moving it.
-    pub(crate) is_scrolling: crate::core::state::State<bool>,
+    pub(crate) is_scrolling: crate::runtime::state::State<bool>,
     /// The paging snap configuration, written back by the measure pass when `snap_paging` is on and
     /// every measured item fills the viewport; `None` means no snapping. Lives beside `fling_limit` for
     /// the same reason — the ScrollState `build` assembles is shared with the measure policy, and this
     /// is the one that tells a finished fling where to land.
-    pub(crate) snap: crate::core::state::Backchannel<Option<crate::modifier::SnapSpec>>,
+    pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::modifier::SnapSpec>>,
     /// 派生：第一个可见项索引（每次 build 后更新）
-    pub first_visible_index: crate::core::state::State<usize>,
+    pub first_visible_index: crate::runtime::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
-    pub first_visible_offset: crate::core::state::State<f32>,
+    pub first_visible_offset: crate::runtime::state::State<f32>,
 }
 
 impl LazyListState {
     pub fn new() -> Self {
         Self {
-            offset: crate::core::state::State::new(0.0),
-            last_known_first_key: crate::core::state::State::new(None),
-            known_total: crate::core::state::State::new(usize::MAX),
-            jump_request: crate::core::state::State::new(None),
-            fling_limit: crate::core::state::Backchannel::new(f32::MAX),
-            scroll_pulse: crate::core::state::State::new(0),
-            snap: crate::core::state::Backchannel::new(None),
-            is_scrolling: crate::core::state::State::new(false),
-            first_visible_index: crate::core::state::State::new(0),
-            first_visible_offset: crate::core::state::State::new(0.0),
+            offset: crate::runtime::state::State::new(0.0),
+            last_known_first_key: crate::runtime::state::State::new(None),
+            known_total: crate::runtime::state::State::new(usize::MAX),
+            jump_request: crate::runtime::state::State::new(None),
+            fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            scroll_pulse: crate::runtime::state::State::new(0),
+            snap: crate::runtime::state::Backchannel::new(None),
+            is_scrolling: crate::runtime::state::State::new(false),
+            first_visible_index: crate::runtime::state::State::new(0),
+            first_visible_offset: crate::runtime::state::State::new(0.0),
         }
     }
 
@@ -1088,11 +1088,11 @@ impl<A: LazyAxis> LazyList<A> {
 /// 轴无关（`A: LazyAxis` 决定主轴方向——LazyColumn/LazyRow 共用）。
 pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub axis: PhantomData<A>,
-    pub cache: crate::core::state::State<ItemHeightCache>,
-    pub viewport: crate::core::state::State<f32>,
-    pub content_height: crate::core::state::Backchannel<f32>,
-    pub fling_limit: crate::core::state::Backchannel<f32>,
-    pub is_scroll_in_progress: crate::core::state::State<bool>,
+    pub cache: crate::runtime::state::State<ItemHeightCache>,
+    pub viewport: crate::runtime::state::State<f32>,
+    pub content_height: crate::runtime::state::Backchannel<f32>,
+    pub fling_limit: crate::runtime::state::Backchannel<f32>,
+    pub is_scroll_in_progress: crate::runtime::state::State<bool>,
     pub spacing: f32,
     pub total: usize,
     /// 主轴内容内边距 (before, after)
@@ -1309,7 +1309,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             let composed_start = self.globals.iter().copied().min().unwrap_or(usize::MAX);
             let composed_end = self.globals.iter().copied().max().map_or(0, |m| m + 1);
             if need_end > composed_end || need_start < composed_start {
-                crate::core::composer::request_compose_after_layout();
+                crate::runtime::composer::request_compose_after_layout();
             }
         }
 
@@ -1376,7 +1376,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
 
     /// The "not measured yet" sentinel is `f32::MAX`, which `is_finite()` happily accepts — so the
@@ -1620,7 +1620,7 @@ mod tests {
         for _ in 0..8 {
             composer.compose(&scene);
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
-            if !crate::core::composer::take_compose_after_layout() {
+            if !crate::runtime::composer::take_compose_after_layout() {
                 break;
             }
         }
@@ -2887,7 +2887,7 @@ mod tests {
     /// request exists to keep at one pass.
     #[test]
     fn the_window_that_misses_its_viewport_asks_for_a_same_frame_compose() {
-        use crate::core::composer::take_compose_after_layout;
+        use crate::runtime::composer::take_compose_after_layout;
         let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
         // A `Fn` (not the `FnOnce` `compose` takes) so the same content can run on both passes.
         let build = |ctx: &mut ComposeCtx| {
@@ -3012,7 +3012,7 @@ mod tests {
     /// comment because a regression would come back as exactly those numbers.
     #[test]
     fn the_coverage_estimate_keeps_every_scroll_frame_at_one_pass() {
-        use crate::core::composer::take_compose_after_layout;
+        use crate::runtime::composer::take_compose_after_layout;
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..400).collect());
         let build = {
@@ -3166,7 +3166,7 @@ mod tests {
                     // compose again, exactly as the frame handler does. Bounded, and it stops as soon as
                     // the measure stops asking.
                     for _ in 0..8 {
-                        if !crate::core::composer::take_compose_after_layout() {
+                        if !crate::runtime::composer::take_compose_after_layout() {
                             break;
                         }
                         composer.compose(|ctx| {

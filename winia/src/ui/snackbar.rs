@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::theme::WiniaTheme;
 
@@ -449,7 +449,7 @@ mod tests {
     /// SnackbarHost 组合期渲染：show 后树中出现 message + action；dismiss 后消失
     #[test]
     fn snackbar_host_renders_and_hides() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         let mut composer = Composer::new();
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn snackbar_host_keeps_content_during_exit_animation() {
         use std::time::Duration;
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let host = SnackbarHostState::new();
         let mut composer = Composer::new();

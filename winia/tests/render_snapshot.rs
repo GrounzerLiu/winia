@@ -3,7 +3,7 @@
 //! 验证 compose → layout → render 端到端正确性。所有断言均为语义级
 //!（允许 ±10 颜色容差），不依赖像素精确匹配。
 
-use winia::core::composer::{Composer, ComposeCtx};
+use winia::runtime::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
 use winia::modifier::{Modifier, Color, Shape};
 use winia::ui::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};

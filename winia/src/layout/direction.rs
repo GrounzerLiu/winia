@@ -5,7 +5,7 @@
 //! depend on the design system. `WiniaTheme` PROVIDES it (a theme is a natural place to set it), and
 //! that direction of dependency — theme provides, layout reads — is the one that holds.
 
-use crate::core::composition_local::CompositionLocal;
+use crate::runtime::composition_local::CompositionLocal;
 use crate::layout::LayoutDirection;
 use std::sync::LazyLock;
 

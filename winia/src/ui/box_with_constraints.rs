@@ -50,8 +50,8 @@
 //! for — the box has no way to tell "the content would compose the same" and skip the work, where
 //! Compose's subcomposition is skipped when nothing it depends on changed.
 
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::layout::box_layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{Alignment, MeasurePolicy, Placement, Size};
@@ -271,7 +271,7 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::node::MeasurePolicy;
 
     /// The scope's own semantics: the four bounds, the dimension helpers, `is_measured`, and the `_dp`
@@ -475,7 +475,7 @@ mod tests {
             out
         }
 
-        let cap = crate::core::state::State::new(200.0f32);
+        let cap = crate::runtime::state::State::new(200.0f32);
         let setter = cap.clone();
         let build = || {
             let cap = cap.clone();

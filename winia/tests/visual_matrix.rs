@@ -3,7 +3,7 @@
 //! The matrix deliberately uses explicit theme/direction inputs and semantic pixel
 //! checks instead of platform-dependent golden images.
 
-use winia::core::composer::{ComposeCtx, Composer};
+use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::constraints::Constraints;
 use winia::layout::LayoutDirection;
 use winia::modifier::{Color, Modifier, ScrollState};

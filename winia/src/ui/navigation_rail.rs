@@ -35,8 +35,8 @@
 //! - Expanded 宽轨已实现（见本文件后半部分）；组件文档：docs/navigation-rail.md
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout};
@@ -541,7 +541,7 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
 
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
         let key = ctx.next_key();

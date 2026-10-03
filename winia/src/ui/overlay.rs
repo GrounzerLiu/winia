@@ -440,12 +440,12 @@ pub struct OverlayDesc {
     /// Compose `AnimatedVisibility(exit = ...)`).
     pub(crate) exit_anim: Option<OverlayAnimSpec>,
     /// Overlay content (independent composition unit).
-    pub(crate) content: Box<dyn Fn(&mut crate::core::composer::ComposeCtx)>,
+    pub(crate) content: Box<dyn Fn(&mut crate::runtime::composer::ComposeCtx)>,
     /// CompositionLocal snapshot captured at registration time (inside the main
     /// tree's `provides`) — replayed when the overlay's dedicated Composer
     /// recomposes, so `WiniaTheme::colors()` etc. inherit the main tree's theme.
-    /// Filled automatically by [`crate::core::composer::ComposeCtx::open_overlay`].
-    pub(crate) local_snapshot: crate::core::composition_local::LocalSnapshot,
+    /// Filled automatically by [`crate::runtime::composer::ComposeCtx::open_overlay`].
+    pub(crate) local_snapshot: crate::runtime::composition_local::LocalSnapshot,
 }
 
 /// Allocate a top-level overlay id (used via `remember` during composition —
@@ -560,7 +560,7 @@ impl Popup {
     /// `build` always executes (even when `visible=false`) — records
     /// `active=false` for `sync` to delete.
     #[composable]
-    pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
+    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
@@ -706,7 +706,7 @@ impl Dialog {
     /// `build` always executes (even when `visible=false`) — records
     /// `active=false` for `sync` to delete.
     #[composable]
-    pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx, content: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static) {
+    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx, content: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static) {
         let id = ctx.remember(|| next_overlay_id());
         ctx.record_overlay_active(id.get(), self.visible);
         if !self.visible {
@@ -876,7 +876,7 @@ const DROPDOWN_ITEM_HORIZONTAL_PADDING: f32 = 12.0;
 ///         });
 /// ```
 pub struct DropdownMenu {
-    expanded: crate::core::state::State<bool>,
+    expanded: crate::runtime::state::State<bool>,
     on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     /// M3 `modifier` — applied to the menu's own container (the surface), so a caller can tag it or
     /// adjust it. Appended outside the internal modifier, like every other component here.
@@ -901,7 +901,7 @@ pub struct DropdownMenu {
 }
 
 impl DropdownMenu {
-    pub fn new(expanded: crate::core::state::State<bool>) -> Self {
+    pub fn new(expanded: crate::runtime::state::State<bool>) -> Self {
         Self {
             expanded,
             on_dismiss: None,
@@ -998,9 +998,9 @@ impl DropdownMenu {
     #[composable]
     pub fn build(
         self,
-        ctx: &mut crate::core::composer::ComposeCtx,
-        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx),
-        menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        anchor: impl FnOnce(&mut crate::runtime::composer::ComposeCtx),
+        menu: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
     ) {
         let expanded = self.expanded.get(); // Registers dependency — changes trigger recomposition.
         // Anchor container (regular composition — lives in the main tree; the menu
@@ -1009,8 +1009,8 @@ impl DropdownMenu {
         let modifier = crate::modifier::Modifier::new();
         let id = ctx.remember(|| next_overlay_id());
         match ctx.start_restartable_group(anchor_key, modifier, crate::layout::box_layout::BoxLayout::new()) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
+            crate::runtime::composer::GroupStatus::Skip => {}
+            crate::runtime::composer::GroupStatus::Enter => {
                 anchor(ctx);
             }
         }
@@ -1217,8 +1217,8 @@ impl ExposedDropdownMenuDefaults {
     /// })
     /// ```
     pub fn trailing_icon(
-        ctx: &mut crate::core::composer::ComposeCtx,
-        expanded: crate::core::state::State<bool>,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        expanded: crate::runtime::state::State<bool>,
         modifier: crate::modifier::Modifier,
     ) {
         let open = expanded.get();
@@ -1260,7 +1260,7 @@ impl ExposedDropdownMenuDefaults {
 ///         |ctx| { DropdownMenuItem::new("选项 A").build(ctx); });
 /// ```
 pub struct ExposedDropdownMenuBox {
-    expanded: crate::core::state::State<bool>,
+    expanded: crate::runtime::state::State<bool>,
     on_expanded_change: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     enabled: bool,
     anchor_type: ExposedDropdownMenuAnchorType,
@@ -1270,7 +1270,7 @@ pub struct ExposedDropdownMenuBox {
 }
 
 impl ExposedDropdownMenuBox {
-    pub fn new(expanded: crate::core::state::State<bool>) -> Self {
+    pub fn new(expanded: crate::runtime::state::State<bool>) -> Self {
         Self {
             expanded,
             on_expanded_change: None,
@@ -1314,9 +1314,9 @@ impl ExposedDropdownMenuBox {
     #[composable]
     pub fn build(
         self,
-        ctx: &mut crate::core::composer::ComposeCtx,
-        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx) + 'static,
-        menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        anchor: impl FnOnce(&mut crate::runtime::composer::ComposeCtx) + 'static,
+        menu: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
     ) {
         self.build_inner(
             ctx,
@@ -1338,9 +1338,9 @@ impl ExposedDropdownMenuBox {
     #[composable]
     pub fn build_with_anchor_modifier(
         self,
-        ctx: &mut crate::core::composer::ComposeCtx,
-        anchor: impl FnOnce(&mut crate::core::composer::ComposeCtx, crate::modifier::Modifier) + 'static,
-        menu: impl Fn(&mut crate::core::composer::ComposeCtx) + 'static,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+        anchor: impl FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier) + 'static,
+        menu: impl Fn(&mut crate::runtime::composer::ComposeCtx) + 'static,
     ) {
         self.build_inner(ctx, true, Box::new(anchor), Box::new(menu));
     }
@@ -1350,10 +1350,10 @@ impl ExposedDropdownMenuBox {
     #[composable]
     fn build_inner(
         self,
-        ctx: &mut crate::core::composer::ComposeCtx,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
         element_anchor: bool,
-        anchor: Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx, crate::modifier::Modifier)>,
-        menu: Box<dyn Fn(&mut crate::core::composer::ComposeCtx) + 'static>,
+        anchor: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx, crate::modifier::Modifier)>,
+        menu: Box<dyn Fn(&mut crate::runtime::composer::ComposeCtx) + 'static>,
     ) {
         let expanded = self.expanded.clone();
         let editable = matches!(
@@ -1536,9 +1536,9 @@ pub struct DropdownMenuItem {
     interaction_source: Option<crate::interaction::MutableInteractionSource>,
     /// M3 `leadingIcon: @Composable (() -> Unit)? = null` — winia's slot convention is a boxed `FnOnce`,
     /// as in `ListItem::leading_content`.
-    leading_icon: Option<Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>>,
+    leading_icon: Option<Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>>,
     /// M3 `trailingIcon: @Composable (() -> Unit)? = null`.
-    trailing_icon: Option<Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>>,
+    trailing_icon: Option<Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>>,
 }
 
 impl DropdownMenuItem {
@@ -1599,7 +1599,7 @@ impl DropdownMenuItem {
     /// label starts 12dp after it.
     pub fn leading_icon(
         mut self,
-        content: impl FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync + 'static,
+        content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync + 'static,
     ) -> Self {
         self.leading_icon = Some(Box::new(content));
         self
@@ -1608,7 +1608,7 @@ impl DropdownMenuItem {
     /// M3 `trailingIcon` — same box and tinting on the other side, with 12dp between the label and it.
     pub fn trailing_icon(
         mut self,
-        content: impl FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync + 'static,
+        content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync + 'static,
     ) -> Self {
         self.trailing_icon = Some(Box::new(content));
         self
@@ -1616,7 +1616,7 @@ impl DropdownMenuItem {
 
     /// `#[composable]`: same contract as Popup/Dialog (marks a composition unit).
     #[composable]
-    pub fn build(self, ctx: &mut crate::core::composer::ComposeCtx) {
+    pub fn build(self, ctx: &mut crate::runtime::composer::ComposeCtx) {
         // M3 geometry (`Menu.kt:439-447`): `sizeIn(minWidth 112dp, maxWidth 280dp, minHeight 48dp)` with
         // `padding(contentPadding)` (horizontal 12dp, vertical 0 by default), and `fillMaxWidth()` so every
         // row spans the menu's width. No per-item background and no per-item corner radius: the MENU's
@@ -1696,9 +1696,9 @@ impl DropdownMenuItem {
         let has_trailing = trailing_icon.is_some();
         let leading_color = colors.leading_icon_color(self.enabled);
         let trailing_color = colors.trailing_icon_color(self.enabled);
-        let icon_box = |ctx: &mut crate::core::composer::ComposeCtx,
+        let icon_box = |ctx: &mut crate::runtime::composer::ComposeCtx,
                         color: crate::modifier::Color,
-                        content: Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>| {
+                        content: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>| {
             crate::ui::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
                 crate::ui::Column::new()
                     .modifier(crate::modifier::Modifier::new().min_width(24.0))
@@ -1753,7 +1753,7 @@ mod tests {
     /// `(217,211,219)` state layer), so a pixel probe of it is a rounding artefact away from lying.
     #[test]
     fn a_menu_item_carries_a_ripple_and_no_focus_ring() {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             DropdownMenuItem::new("A").build(ctx);
         });
@@ -1981,7 +1981,7 @@ mod tests {
 
     /// The 24x24 ink mask of an arrow drawn through the real `Icon` pipeline (node -> render -> pixels).
     fn render_arrow(data: &str) -> Vec<bool> {
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             crate::ui::icon::Icon::svg_path(data)
                 .tint(crate::modifier::Color::BLACK)

@@ -29,7 +29,7 @@
 //! (scale 0.8 + fade, 200ms) come from there.
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::layout::{Alignment, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
@@ -619,7 +619,7 @@ fn alert_dialog_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::ui::layout_components::Stack;
 

@@ -3,7 +3,7 @@
 //! 这些是用户面组件，内部使用 layout 模块的 MeasurePolicy
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, FlowRowLayout, FlowColumnLayout, MeasurePolicy};
 use crate::modifier::Modifier;
 
@@ -314,7 +314,7 @@ impl Spacer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::ui::theme::{ThemeColors, WiniaTheme};
 

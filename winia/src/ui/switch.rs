@@ -11,7 +11,7 @@
 //!   回 16×16 还是保持 28×28；
 //! - 拖拽：容器跟随手指（2..22），释放按中点 12 判定切换。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
@@ -512,7 +512,7 @@ mod tests {
         for (checked, expect) in [(false, true), (true, false)] {
             let received = Arc::new(AtomicBool::new(false));
             let cb = received.clone();
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 Switch::new(checked)
                     .on_checked_change(move |v| cb.store(v, Ordering::Relaxed))
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn disabled_switch_has_no_interaction_elements() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Switch::new(false)
                 .enabled(false)
@@ -560,7 +560,7 @@ mod tests {
     fn ripple_on_handle_container_unbounded() {
         // 波纹在 Handle 容器（28×28）上、unbounded；与 clickable（轨道）不同节点
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Switch::new(false)
                 .on_checked_change(|_| {})
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn drag_gesture_attached_when_interactable() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Switch::new(false)
                 .on_checked_change(|_| {})
@@ -627,14 +627,14 @@ mod tests {
         // 关闭状态下按下 → 圆 28；拖动期间 drag_active 覆盖 → 仍 28
         use crate::modifier::ModifierElement;
         use std::sync::Arc;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Switch::new(false)
                 .on_checked_change(|_| {})
                 .build(ctx, |_| {});
         });
         composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
-        let circle_size = |c: &crate::core::composer::Composer| -> f32 {
+        let circle_size = |c: &crate::runtime::composer::Composer| -> f32 {
             c.arena_nodes()
                 .iter()
                 .find_map(|n| {
@@ -679,8 +679,8 @@ mod tests {
     fn rapid_toggle_text_matches_final_state() {
         // 快速连续更新（多次 set 后才 compose）：文本内容必须等于最终状态
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
-        let checked = crate::core::state::State::new(true);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let checked = crate::runtime::state::State::new(true);
         let scene = |ctx: &mut ComposeCtx| {
             let c2 = checked.clone();
             Switch::new(checked.get())
@@ -717,10 +717,10 @@ mod tests {
         // 必须强制重测（否则 cached_paragraph 旧内容 → 渲染画旧文本，
         // 即 demo“当前 已开启/已关闭”不同步问题）
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         // 用 ctx.remember 创建（带 owner 队列）——外部 State 的 set 不通知
         // composer（notify pushed=false），测不到真实重组路径
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let scene = |ctx: &mut ComposeCtx| {
             let c = ctx.remember(|| true);
             holder.replace(Some(c.clone()));
@@ -728,7 +728,7 @@ mod tests {
                 crate::ui::Text::new(if c.get() { "aaaaaaaaaa" } else { "bb" }).build(ctx);
             });
         };
-        let text_width = |composer: &crate::core::composer::Composer| -> f32 {
+        let text_width = |composer: &crate::runtime::composer::Composer| -> f32 {
             composer
                 .arena_nodes()
                 .iter()
@@ -767,8 +767,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let build_scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
@@ -783,7 +783,7 @@ mod tests {
                 });
             });
         };
-        let mut render_text_region = |composer: &mut crate::core::composer::Composer| -> (Vec<u8>, f32, f32, f32, f32) {
+        let mut render_text_region = |composer: &mut crate::runtime::composer::Composer| -> (Vec<u8>, f32, f32, f32, f32) {
             composer.compose(build_scene);
             // 模拟真实 recompose_layout_render 的循环：动画注册会产生 pending state，
             // 同帧会再 compose 一次（第二次物化可能覆盖第一次设置的 dirty）
@@ -869,15 +869,15 @@ mod tests {
         let _g = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
-        let c = crate::core::state::State::new(true);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let c = crate::runtime::state::State::new(true);
         let scene = |ctx: &mut ComposeCtx| {
             let c2 = c.clone();
             Switch::new(c.get())
                 .on_checked_change(move |v| c2.update(|s| *s = v))
                 .build(ctx, |_| {});
         };
-        let frame = |composer: &mut crate::core::composer::Composer| {
+        let frame = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
             for _ in 0..20 {
@@ -951,8 +951,8 @@ mod tests {
         let _g = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let scene = |ctx: &mut ComposeCtx| {
             let c = ctx.remember(|| false);
             holder.replace(Some(c.clone()));
@@ -964,7 +964,7 @@ mod tests {
                 crate::ui::Text::new(if c.get() { "已开启" } else { "已关闭" }).build(ctx);
             });
         };
-        let frame = |composer: &mut crate::core::composer::Composer, steps: usize| {
+        let frame = |composer: &mut crate::runtime::composer::Composer, steps: usize| {
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
             for _ in 0..steps {
@@ -972,7 +972,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(5));
             }
         };
-        let click = |composer: &mut crate::core::composer::Composer| {
+        let click = |composer: &mut crate::runtime::composer::Composer| {
             // 与运行时 up 顺序一致：先 detect_click（on_click），后 gesture_up（drag_end）
             let mut on_click: Option<Arc<dyn Fn() + Send + Sync>> = None;
             let mut drag_start: Option<Arc<dyn Fn((f32, f32)) + Send + Sync>> = None;
@@ -1058,8 +1058,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
@@ -1077,13 +1077,13 @@ mod tests {
                 });
             });
         };
-        let frame = |composer: &mut crate::core::composer::Composer| {
+        let frame = |composer: &mut crate::runtime::composer::Composer| {
             // 与真实帧循环一致：先推进动画，再 compose，再 layout
             crate::animation::update_animations();
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 200.0));
         };
-        let click = |composer: &mut crate::core::composer::Composer| {
+        let click = |composer: &mut crate::runtime::composer::Composer| {
             let src = src_holder.borrow().clone().unwrap();
             src.emit_press();
             let mut on_click: Option<Arc<dyn Fn() + Send + Sync>> = None;
@@ -1219,8 +1219,8 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
         let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
         let mut custom_colors = SwitchColors::from_theme(&theme);
         custom_colors.checked_track = crate::modifier::Color::from_argb(255, 46, 125, 50);
@@ -1267,12 +1267,12 @@ mod tests {
                 });
             });
         });
-        let frame = |composer: &mut crate::core::composer::Composer| {
+        let frame = |composer: &mut crate::runtime::composer::Composer| {
             crate::animation::update_animations();
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 300.0));
         };
-        let click = |composer: &mut crate::core::composer::Composer, switch_no: usize| {
+        let click = |composer: &mut crate::runtime::composer::Composer, switch_no: usize| {
             let src = src_holder.borrow().clone().unwrap();
             src.emit_press();
             let mut on_click: Option<Arc<dyn Fn() + Send + Sync>> = None;
@@ -1427,7 +1427,7 @@ mod tests {
     fn thumb_content_icon_tint_resolves() {
         // 集成：thumbContent 内 Icon（tint Auto）解析为 icon_color
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 Switch::new(true)

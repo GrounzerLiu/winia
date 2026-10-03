@@ -17,8 +17,8 @@
 //!   无法内嵌 remember 持有动画 State——容器组件在组合期创建 State（机制等价）
 
 use crate::animation::{push_animatable, AnimationSpec};
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size as LayoutSize};
 use crate::modifier::Modifier;
@@ -78,7 +78,7 @@ struct SizePolicy {
     size: State<Size>,
     /// 上次目标尺寸（None = 首帧——直接跳转无动画）——Backchannel 而非
     /// RefCell：policy 实例每次 build 重建，跨重组保留且不触发通知
-    target: crate::core::state::Backchannel<Option<Size>>,
+    target: crate::runtime::state::Backchannel<Option<Size>>,
     spec: AnimationSpec,
 }
 
@@ -138,8 +138,8 @@ impl MeasurePolicy for SizePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
-    use crate::core::state::State;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
 

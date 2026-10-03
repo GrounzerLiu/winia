@@ -17,7 +17,7 @@
 //! （DrawNode）挂载——具名类型（调试树可见）、`node_key` 精确 Skip、
 //! 绘制参数结构体化可单测。原 `Modifier::draw` 匿名闭包已替换。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, KbEvent, KbEventType, Modifier};
@@ -443,7 +443,7 @@ pub(crate) fn handle_key(
 #[derive(Debug)]
 pub(crate) struct SliderTrackNode {
     /// 轨道宽度回写（tap/drag 像素↔值换算读此值）。
-    pub(crate) track_width: crate::core::state::Backchannel<f32>,
+    pub(crate) track_width: crate::runtime::state::Backchannel<f32>,
     /// 绘制用交互源（渲染期读焦点/波纹状态——peek，不注册依赖）。
     pub(crate) interaction: MutableInteractionSource,
     pub(crate) colors: SliderColors,
@@ -896,7 +896,7 @@ mod tests {
     fn render_slider_px(build: impl FnOnce(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
@@ -1038,7 +1038,7 @@ mod tests {
         use std::sync::atomic::{AtomicI32, Ordering};
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let got = Arc::new(AtomicI32::new(-1));
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             let g = got.clone();
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
@@ -1080,7 +1080,7 @@ mod tests {
     fn thumb_centered_when_embedded_offsets() {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 // 外层容器：size(300, 300) 把 slider 推到 (50, 100)
@@ -1092,8 +1092,8 @@ mod tests {
                     Modifier::new().offset(50.0, 100.0),
                     crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Start),
                 ) {
-                    crate::core::composer::GroupStatus::Skip => {}
-                    crate::core::composer::GroupStatus::Enter => {
+                    crate::runtime::composer::GroupStatus::Skip => {}
+                    crate::runtime::composer::GroupStatus::Enter => {
                         Slider::new(0.5)
                             .value_range(0.0, 1.0)
                             .on_value_change(|_| {})
@@ -1138,7 +1138,7 @@ mod tests {
     fn drag_interaction_narrows_thumb() {
         use skia_safe::{Color as SkColor, surfaces};
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let src = MutableInteractionSource::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
@@ -1149,7 +1149,7 @@ mod tests {
                     .build(ctx);
             });
         };
-        let render = |composer: &mut crate::core::composer::Composer| -> usize {
+        let render = |composer: &mut crate::runtime::composer::Composer| -> usize {
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
             let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
@@ -1213,7 +1213,7 @@ mod tests {
         use skia_safe::{Color as SkColor, surfaces};
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let src = MutableInteractionSource::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
@@ -1224,7 +1224,7 @@ mod tests {
                     .build(ctx);
             });
         };
-        let render = |composer: &mut crate::core::composer::Composer| -> Vec<[u8; 4]> {
+        let render = |composer: &mut crate::runtime::composer::Composer| -> Vec<[u8; 4]> {
             composer.compose(scene);
             composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
             let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
@@ -1272,7 +1272,7 @@ mod tests {
     // ── exp/modifier-node 首个真实迁移验证 ──
     #[test]
     fn slider_track_node_key_covers_all_visual_params() {
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use crate::modifier::DrawNode;
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let colors = SliderDefaults::slider_colors(&theme);
@@ -1280,7 +1280,7 @@ mod tests {
         colors2.thumb_color = Color::from_argb(255, 1, 2, 3);
         // 同一 interaction 源（换源单独测——每次 new 源 id 不同）
         let shared_src = MutableInteractionSource::new();
-        let shared_tw = crate::core::state::Backchannel::new(300.0);
+        let shared_tw = crate::runtime::state::Backchannel::new(300.0);
         #[allow(clippy::too_many_arguments)]
         let mk = |value: f32, enabled: bool, thumb_active: bool, colors: SliderColors,
                   min: f32, max: f32, steps: i32| {
@@ -1316,7 +1316,7 @@ mod tests {
         );
         // 换源 → 不等（重建绑定）
         let other = SliderTrackNode {
-            track_width: crate::core::state::Backchannel::new(300.0),
+            track_width: crate::runtime::state::Backchannel::new(300.0),
             interaction: MutableInteractionSource::new(), // 新源 id 不同
             colors,
             enabled: true,
@@ -1334,7 +1334,7 @@ mod tests {
     fn slider_track_node_visible_in_debug_tree() {
         // 调试树应含 node(slidertrack:...) 条目（具名可观测——匿名闭包无此能力）。
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 Slider::new(0.5).on_value_change(|_| {}).build(ctx);

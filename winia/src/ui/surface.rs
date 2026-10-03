@@ -16,7 +16,7 @@
 //! 面板（BottomSheet）用 `Surface` 承载 anchoredDraggable + nestedScroll（对齐
 //! Compose：`Surface { .nestedScroll(...).anchoredDraggable(...) }`）。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
@@ -319,7 +319,7 @@ impl Default for Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
     use crate::ui::theme::{ThemeColors, WiniaTheme};
 

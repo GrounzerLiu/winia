@@ -1,7 +1,7 @@
 //! Material 3 ListItem with one, two, and three-line slot layouts.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Alignment, BoxLayout};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
@@ -189,7 +189,7 @@ impl ListItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
 
     fn layout_item(item: ListItem, width: f32) -> Composer {

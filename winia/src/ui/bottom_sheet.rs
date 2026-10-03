@@ -26,8 +26,8 @@
 
 use std::sync::Arc;
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::ui::sheet_state::{SheetState, SheetValue};

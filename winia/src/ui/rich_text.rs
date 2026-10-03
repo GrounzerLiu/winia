@@ -12,7 +12,7 @@
 //! ```
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::modifier::{Modifier, ModifierElement, RichSpanStyle, Color};
 use crate::text::InlineDrawable;
 use crate::ui::text::{LOCAL_TEXT_STYLE};

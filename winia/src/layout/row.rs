@@ -237,7 +237,7 @@ mod tests {
         use crate::ui::text::Text;
 
         let lines = |aligned: bool| -> (f32, f32) {
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 Row::new().build(ctx, |ctx| {
                     let small = Text::new("small").font_size(12.0);
@@ -291,7 +291,7 @@ mod tests {
         use crate::ui::layout_components::Row;
         use crate::ui::text::Text;
 
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             Row::new().build(ctx, |ctx| {
                 Text::new("BIG")

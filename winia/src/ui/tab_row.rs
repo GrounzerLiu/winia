@@ -27,8 +27,8 @@
 //! - 无 TabIndicatorScope 自定义指示器 API（当前内部固定）
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{
     intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point, Size,
@@ -1442,7 +1442,7 @@ impl ScrollableTabRowLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
     use crate::ui::layout_components::Row;
     use crate::ui::text::Text;
@@ -1967,7 +1967,7 @@ mod tests {
     #[test]
     fn tab_row_indicator_animates_on_selected_change() {
         // 动画推进：selected 0→1 → 步进 update_animations → offset 单调变化并收敛到新 target
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use std::time::{Duration, Instant};
         // 动画注册表全局共享——持串行锁防并行 clear/竞态（与 lazy_column/animated_size 同）
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -2158,7 +2158,7 @@ mod tests {
     #[test]
     fn scrollable_tab_row_scrolls_selected_into_view() {
         // 选中变化 → ScrollableTabData 触发居中滚动（offset 动画推进）
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use std::time::{Duration, Instant};
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -2301,7 +2301,7 @@ mod tests {
     fn scrollable_tab_row_rtl_scrolls_selected_into_view() {
         // RTL：选中变化 → 居中滚动（target 绕 available 镜像：
         // offset_rtl = available - offset_ltr——首帧不滚、第二帧起动画推进）
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use std::time::{Duration, Instant};
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 

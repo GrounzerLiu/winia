@@ -26,7 +26,7 @@
 //!   parameters here are ours while the behavior is the source's.
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
@@ -741,7 +741,7 @@ impl SegmentedButton {
 /// their contents do not reads as a mistake next to them.
 #[derive(Debug)]
 struct SegmentedButtonContentPolicy {
-    slot_offset: crate::core::state::State<f32>,
+    slot_offset: crate::runtime::state::State<f32>,
     /// Where the offset is heading: `0` with an icon, `-slot / 2` without one.
     target_offset: f32,
     /// Whether the icon child is present at all (a hidden, uncomposed icon still reserves the slot).
@@ -834,7 +834,7 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::LayoutDirection;
     use crate::ui::text::Text;
     use crate::ui::theme::ThemeColors;

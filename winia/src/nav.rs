@@ -18,9 +18,9 @@
 //!   的 ContentTransform——`NavEnter`/`NavExit` 原语成对组合，默认 fade；
 //!   graphics_layer 渲染期 peek 零重组）。
 
-use crate::core::state::State;
+use crate::runtime::state::State;
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::animation::push_animatable;
 use crate::modifier::GraphicsLayerParams;
@@ -49,7 +49,7 @@ use std::collections::HashMap;
 pub(crate) struct EntryStateScope {
     pool: std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>,
     key: u64,
-    counter: crate::core::state::Backchannel<u32>,
+    counter: crate::runtime::state::Backchannel<u32>,
     /// 过渡滑出层（previous）用只读作用域：命中返回现存槽，miss **不入池**。
     /// 滑出期间旧页内容每帧重跑，若照常 miss→insert 会把刚被 removeState
     /// 清理的槽重新插回（下次 pop 才再清）——破坏 Nav3 removeState 语义。
@@ -58,10 +58,10 @@ pub(crate) struct EntryStateScope {
 
 /// entry 状态作用域 CompositionLocal——NavDisplay 渲染 entry 时 provides，
 /// `remember_entry_state` 读 current（try_current 区分作用域内外）
-static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<EntryStateScope>> =
+static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<EntryStateScope>> =
     std::sync::LazyLock::new(|| {
         // default 不可达（try_current 不调 default）——占位
-        crate::core::composition_local::CompositionLocal::new(|| {
+        crate::runtime::composition_local::CompositionLocal::new(|| {
             panic!("ENTRY_STATE_SCOPE 无默认值——必须经 NavDisplay 提供")
         })
     });
@@ -357,9 +357,9 @@ impl ResultEventBus {
 /// 结果总线 CompositionLocal——NavDisplay 渲染 entry 时 provides（对标 Nav3
 /// `LocalResultEventBus` + `ResultEventBusNavEntryDecorator`）；entry 内容经
 /// [`result_event_bus`] 读取。try_current 区分作用域内外。
-static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<ResultEventBus>> =
+static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<ResultEventBus>> =
     std::sync::LazyLock::new(|| {
-        crate::core::composition_local::CompositionLocal::new(|| {
+        crate::runtime::composition_local::CompositionLocal::new(|| {
             panic!("RESULT_EVENT_BUS_SCOPE 无默认值——必须经 NavDisplay 提供")
         })
     });
@@ -409,8 +409,8 @@ pub fn nav_is_draining() -> bool {
 /// ```
 pub fn result_event_bus_consume<T: Clone + PartialEq + 'static>(
     key: &str,
-) -> crate::core::state::State<Option<T>> {
-    let stored: crate::core::state::State<Option<T>> = remember_entry_state(|| None);
+) -> crate::runtime::state::State<Option<T>> {
+    let stored: crate::runtime::state::State<Option<T>> = remember_entry_state(|| None);
     if nav_is_draining() {
         return stored;
     }
@@ -421,9 +421,9 @@ pub fn result_event_bus_consume<T: Clone + PartialEq + 'static>(
 }
 
 /// draining 渲染标记作用域（NavDisplay 的 render_entry 按 draining 参数 provides）
-static DRAINING_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<bool>> =
+static DRAINING_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<bool>> =
     std::sync::LazyLock::new(|| {
-        crate::core::composition_local::CompositionLocal::new(|| false)
+        crate::runtime::composition_local::CompositionLocal::new(|| false)
     });
 
 /// Identity for one `NavDisplay` instance, used to namespace the scenes it publishes.
@@ -922,7 +922,7 @@ struct NavTransition<K: NavKey> {
     /// 过渡启动时固化的规格快照（对标 Nav3 在过渡启动时求值 transitionSpec——
     /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
     /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
-    active_spec: crate::core::state::Backchannel<Option<NavTransitionSpec>>,
+    active_spec: crate::runtime::state::Backchannel<Option<NavTransitionSpec>>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -2157,7 +2157,7 @@ mod tests {
         struct MyMeta { id: u32 }
 
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         composer.compose(|ctx| {
             NavDisplay::new(&bs, |ctx, key| match key {
@@ -2274,7 +2274,7 @@ mod tests {
 
     #[test]
     fn nav_display_renders_top_entry() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2340,7 +2340,7 @@ mod tests {
     /// ListDetail 双栏 Scene：栈 ≥2 时同时渲染 list（倒数第二）与 detail（栈顶）
     #[test]
     fn list_detail_scene_renders_both_entries() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2431,7 +2431,7 @@ mod tests {
     /// （固定组合 key——对标 Nav3 SaveableStateHolder 的 contentKey 状态保持）
     #[test]
     fn remember_state_decorator_preserves_entry_state() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2519,7 +2519,7 @@ mod tests {
     /// `transition_spec_fade_and_none` 覆盖。
     #[test]
     fn transition_midframe_renders_both_pages() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2598,7 +2598,7 @@ mod tests {
             Home,
             About,
         }
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<DialogRoute>::with_initial(DialogRoute::Home);
         let mut composer = Composer::new();
@@ -2662,7 +2662,7 @@ mod tests {
         enum DialogRoute {
             About,
         }
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<DialogRoute>::new(); // 空栈开始
         let mut composer = Composer::new();
@@ -2720,7 +2720,7 @@ mod tests {
     /// 若无 draining，滑出 12 帧会把计数累加进重插的槽，重进首帧远大于 1）
     #[test]
     fn pop_slideout_does_not_repollute_entry_state_pool() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2786,7 +2786,7 @@ mod tests {
     /// 同 contentKey 多实例时弹出其一不清理（"最后一个实例"语义）
     #[test]
     fn content_key_shares_state_across_routes() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2885,7 +2885,7 @@ mod tests {
     /// ExitTransition.None）瞬时切换——无旧页、无动画
     #[test]
     fn transition_spec_fade_and_none() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2963,7 +2963,7 @@ mod tests {
     /// 切瞬切符合平台惯例）；切换后单帧即稳态、可反复切换
     #[test]
     fn scene_strategy_switch_converges() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3052,7 +3052,7 @@ mod tests {
     /// （<2 条返回 None 落空）、SinglePane 兜底——验证链序与回退语义
     #[test]
     fn scene_strategy_chain_priority_and_fallback() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         /// 三栏场景：一列渲染全部 entries（自定义 Scene 形态）
         struct TriPaneScene<K: NavKey> { entries: Vec<NavEntry<K>> }
@@ -3148,7 +3148,7 @@ mod tests {
     /// （若覆盖失效回退默认 fade，旧页会保留一整个过渡期）
     #[test]
     fn entry_transition_override_wins_over_display_default() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3238,7 +3238,7 @@ mod tests {
     /// 求值与 `SlideAndFade*` 原语分支：中间帧双页同树、完成后旧页移除
     #[test]
     fn transition_shared_axis_midframe() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3300,7 +3300,7 @@ mod tests {
     /// `pop_transition_spec`（none——瞬时单页）；两个 setter 必须独立生效
     #[test]
     fn transition_specs_selected_per_direction() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3363,7 +3363,7 @@ mod tests {
     /// 原 scene 内容；scene_key/entries 透传；链式应用（外层后加入）
     #[test]
     fn scene_decorator_wraps_content() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         /// 记录式装饰器——在 scene 内容前追加一行文本（模拟底部导航栏）
         struct BannerDecorator { label: &'static str }

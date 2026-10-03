@@ -28,8 +28,8 @@
 //!   `DefaultEffects` spring: that spec's numbers are not in the extracted sources (`MotionScheme
 //!   KeyTokens.kt` lists the keys only), so no value is invented.
 
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{
     intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement, Point,
@@ -270,8 +270,8 @@ impl SplitButtonLayout {
         let key = ctx.next_key();
         let policy = SplitButtonPolicy { spacing: self.spacing, direction };
         match ctx.start_restartable_group(key, self.modifier, policy) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
+            crate::runtime::composer::GroupStatus::Skip => {}
+            crate::runtime::composer::GroupStatus::Enter => {
                 // Colors and typography are passed through untouched: only the direction is pinned.
                 WiniaTheme::with_theme_typography_and_direction(
                     WiniaTheme::colors(),
@@ -1055,7 +1055,7 @@ mod tests {
 
     // ── Layout (the measure policy material3 writes) ──
 
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::ui::text::Text;
     use crate::ui::theme::ThemeColors;
 
@@ -1859,8 +1859,8 @@ mod tests {
                 let key = ctx.next_key();
                 let policy = SplitButtonPolicy { spacing: 2.0, direction: LayoutDirection::Ltr };
                 match ctx.start_restartable_group(key, Modifier::new(), policy) {
-                    crate::core::composer::GroupStatus::Skip => {}
-                    crate::core::composer::GroupStatus::Enter => {
+                    crate::runtime::composer::GroupStatus::Skip => {}
+                    crate::runtime::composer::GroupStatus::Enter => {
                         SplitButtonDefaults::leading_button(|| {}).build(ctx, |ctx| {
                             Text::new("Add").build(ctx);
                         });

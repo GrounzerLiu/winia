@@ -2,12 +2,12 @@
 //!
 //! 不涉及渲染，纯测试 compose → layout 在 state 变更后的行为。
 
-use winia::core::composer::Composer;
-use winia::core::state::State;
+use winia::runtime::composer::Composer;
+use winia::runtime::state::State;
 use winia::layout::constraints::Constraints;
 use winia::modifier::Modifier;
 use winia::ui::{Text, Column};
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 
 fn compose_and_layout(composer: &mut Composer, w: f32, h: f32, ui: impl FnOnce(&mut ComposeCtx)) {
     composer.compose(|ctx| ui(ctx));

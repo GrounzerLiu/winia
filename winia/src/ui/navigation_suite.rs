@@ -20,8 +20,8 @@
 //! WideNavigationRail 的 header（套件内建 rail 暂无 header 槽，后续版本补）。
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement, Point, Size};
 use crate::modifier::{Color, Modifier, Shape};
@@ -434,7 +434,7 @@ fn render_bar_item(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
     use crate::modifier::Modifier as M;
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn window_size_state_drives_suite_type() {
         crate::ui::adaptive::reset_window_size_state();
-        let size = crate::core::state::State::new((500.0f32, 700.0f32));
+        let size = crate::runtime::state::State::new((500.0f32, 700.0f32));
         crate::ui::adaptive::set_window_size_state(size.clone());
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
         size.set((1000.0, 700.0));

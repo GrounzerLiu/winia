@@ -14,13 +14,13 @@
 //! - `.visible(State<bool>)` 外部控制合并（hover 或外部 true 都显示）
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::modifier::Modifier;
 
 /// 提示框（对齐 Compose `TooltipBox`）。
 pub struct Tooltip {
     /// 外部可见性控制（None = 仅 hover 触发）
-    external_visible: Option<crate::core::state::State<bool>>,
+    external_visible: Option<crate::runtime::state::State<bool>>,
     /// 内容：None = 文本 Plain 样式；Some = 自定义内容闭包
     text: Option<String>,
     content: Option<Box<dyn Fn(&mut ComposeCtx) + 'static>>,
@@ -57,7 +57,7 @@ impl Tooltip {
     }
 
     /// 外部可见性控制（与 hover 合并：任一 true 显示）
-    pub fn visible(mut self, v: crate::core::state::State<bool>) -> Self {
+    pub fn visible(mut self, v: crate::runtime::state::State<bool>) -> Self {
         self.external_visible = Some(v);
         self
     }

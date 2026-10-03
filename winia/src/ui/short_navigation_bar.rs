@@ -14,7 +14,7 @@
 //! - 容器高 80（TallContainerHeight）、surfaceContainer 底色、item 间距 8、RTL 镜像
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{MeasurePolicy, Placement, Point, Size};
 use crate::layout::LayoutDirection;
@@ -257,7 +257,7 @@ impl MeasurePolicy for ShortNavigationBarLayoutPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::layout::node::LayoutNode;
     use crate::modifier::Modifier as M;
 

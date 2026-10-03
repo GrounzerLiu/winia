@@ -9,7 +9,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Shape};
 use winia::interaction::MutableInteractionSource;

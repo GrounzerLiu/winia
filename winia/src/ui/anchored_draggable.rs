@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::time::Instant;
-use crate::core::state::{Backchannel, State};
+use crate::runtime::state::{Backchannel, State};
 
 /// Velocity sample horizon (ms): drag deltas older than this are treated as
 /// hold-still (velocity 0) — cf. Compose VelocityTracker horizon (~100ms).

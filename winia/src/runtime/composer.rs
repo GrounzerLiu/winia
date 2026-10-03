@@ -9,7 +9,7 @@
 //! - 重组调度: 批处理状态变化，在下一帧重组
 //! - Key 管理: 全局唯一 key 计数器
 
-use crate::core::state::{ComposerSubscription, State, StateId, StateSignal};
+use crate::runtime::state::{ComposerSubscription, State, StateId, StateSignal};
 use crate::ui::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
@@ -314,10 +314,10 @@ impl<'a> ComposeCtx<'a> {
     pub fn remember_backchannel<T: Clone + 'static>(
         &mut self,
         init: impl FnOnce() -> T,
-    ) -> crate::core::state::Backchannel<T> {
+    ) -> crate::runtime::state::Backchannel<T> {
         let slot_key = self.next_remember_key();
         self.composer.slot_table.remember_handle(slot_key, || {
-            crate::core::state::Backchannel::new(init())
+            crate::runtime::state::Backchannel::new(init())
         })
     }
 
@@ -326,10 +326,10 @@ impl<'a> ComposeCtx<'a> {
     pub fn remember_animating<T: Clone + PartialEq + 'static>(
         &mut self,
         init: impl FnOnce() -> T,
-    ) -> crate::core::state::Animating<T> {
+    ) -> crate::runtime::state::Animating<T> {
         let slot_key = self.next_remember_key();
         self.composer.slot_table.remember_handle(slot_key, || {
-            crate::core::state::Animating::new(init())
+            crate::runtime::state::Animating::new(init())
         })
     }
 
@@ -338,10 +338,10 @@ impl<'a> ComposeCtx<'a> {
     pub fn remember_visual<T: Clone + 'static>(
         &mut self,
         init: impl FnOnce() -> T,
-    ) -> crate::core::state::Visual<T> {
+    ) -> crate::runtime::state::Visual<T> {
         let slot_key = self.next_remember_key();
         self.composer.slot_table.remember_handle(slot_key, || {
-            crate::core::state::Visual::new(init())
+            crate::runtime::state::Visual::new(init())
         })
     }
 
@@ -351,7 +351,7 @@ impl<'a> ComposeCtx<'a> {
         // ⚠ 捕获 CompositionLocal 快照（主树 provides 内——Theme 等）——
         // overlay 独立 Composer 在 provides 弹栈后 recompose，读不到主树
         // 隐式上下文；快照重放让 overlay 继承主树主题/方向/排版。
-        desc.local_snapshot = crate::core::composition_local::capture();
+        desc.local_snapshot = crate::runtime::composition_local::capture();
         self.composer.overlays.push(desc);
     }
 
@@ -370,13 +370,13 @@ impl<'a> ComposeCtx<'a> {
     /// lookup panics outside a `#[composable]`/keyed context, which a provider cannot require, since
     /// `WiniaTheme::provide_resolved` also runs from a window's per-frame wrapper.
     ///
-    /// The caller owns key uniqueness: use [`crate::core::composer::mix_key`] over the position's
+    /// The caller owns key uniqueness: use [`crate::runtime::composer::mix_key`] over the position's
     /// identity so two providers in one composer never share a slot.
     pub fn remember_backchannel_at_key<T: Clone + 'static>(
         &mut self,
         key: u64,
-        init: impl FnOnce() -> crate::core::state::Backchannel<T>,
-    ) -> crate::core::state::Backchannel<T> {
+        init: impl FnOnce() -> crate::runtime::state::Backchannel<T>,
+    ) -> crate::runtime::state::Backchannel<T> {
         self.composer.slot_table.remember_handle(key, init)
     }
 
@@ -688,11 +688,11 @@ impl<'a> ComposeCtx<'a> {
     pub fn animate_color_as_state(&mut self, target: crate::modifier::Color, spec: crate::animation::AnimationSpec) -> State<crate::modifier::Color> {
         let slot_key = self.next_remember_key();
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
-            crate::core::state::Animating::new(target)
+            crate::runtime::state::Animating::new(target)
         });
         self.composer.animation_state_ids.insert(handle.state_id());
         crate::animation::push_animatable_color(
-            crate::core::state::State::from_raw(handle.as_raw().clone()),
+            crate::runtime::state::State::from_raw(handle.as_raw().clone()),
             target,
             spec,
         );
@@ -725,10 +725,10 @@ impl<'a> ComposeCtx<'a> {
         &mut self,
         target: T,
         spec: crate::animation::AnimationSpec,
-    ) -> crate::core::state::Animating<T> {
+    ) -> crate::runtime::state::Animating<T> {
         let slot_key = self.next_remember_key();
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
-            crate::core::state::Animating::new(target.clone())
+            crate::runtime::state::Animating::new(target.clone())
         });
         self.composer.animation_state_ids.insert(handle.state_id());
         crate::animation::push_animatable_handle(handle.clone(), target, spec);
@@ -789,14 +789,14 @@ impl<'a> ComposeCtx<'a> {
                 self.composer.compose_count,
                 base,
                 c,
-                crate::core::composer::mix_key(base, c as u64),
+                crate::runtime::composer::mix_key(base, c as u64),
                 STMT_STACK.with(|s| s.borrow().last().copied())
             );
         }
         // key = fnv(base, 序号)——全 64 位混合，不丢身份熵。⚠ 不能用
         // (base << 32) | c（左移丢弃 base 高 32 位）或 base 高 32 位 | c
         // （丢弃 base 低 32 位 → 身份只剩 2^32 空间——checkbox 循环子项碰撞）。
-        crate::core::composer::mix_key(base, c as u64)
+        crate::runtime::composer::mix_key(base, c as u64)
     }
 
     /// 开始一个布局节点（叶子组件如 Text 使用）
@@ -1185,14 +1185,14 @@ impl SlotTable {
     /// and then walking a descriptor tree for a subtree where nothing had changed.
     pub(crate) fn collect_desc_tree(
         &mut self,
-        out: &mut Vec<crate::core::materialize::DescNode>,
+        out: &mut Vec<crate::runtime::materialize::DescNode>,
         arena: &crate::layout::node::NodeArena,
         prev: &mut crate::layout::node::SlotKeyMap<usize>,
         reused: &mut crate::layout::node::NodeMarks,
     ) -> (usize, usize) {
         fn rec(
             slot: &mut Slot,
-            out: &mut Vec<crate::core::materialize::DescNode>,
+            out: &mut Vec<crate::runtime::materialize::DescNode>,
             in_skip: bool,
             depth: usize,
             ctx: &mut ClaimCtx,
@@ -1203,7 +1203,7 @@ impl SlotTable {
                 return;
             }
             if let Some(desc) = slot.desc.take() {
-                let mut node = crate::core::materialize::DescNode {
+                let mut node = crate::runtime::materialize::DescNode {
                     key: desc.key,
                     skip: false,
                     modifier: desc.modifier,
@@ -1235,7 +1235,7 @@ impl SlotTable {
                 let claimed = SlotTable::try_claim_skipped_subtree(slot, ctx);
                 let sm = slot.skip_modifier.take();
                 let sp = slot.skip_policy.take();
-                let mut node = crate::core::materialize::DescNode {
+                let mut node = crate::runtime::materialize::DescNode {
                     key: slot.key,
                     skip: true,
                     claimed,
@@ -1654,7 +1654,7 @@ struct LayoutTransactionSnapshot {
     free_nodes: Vec<usize>,
     free_policies: Vec<usize>,
     node_state: Vec<LayoutNodeTransactionState>,
-    scroll_limits: Vec<(crate::core::state::Backchannel<f32>, f32)>,
+    scroll_limits: Vec<(crate::runtime::state::Backchannel<f32>, f32)>,
 }
 
 /// The state a layout frame can change on a node that already existed.
@@ -2041,7 +2041,7 @@ pub struct Composer {
     /// 本帧确认移除的 slot_key（compose 末尾回收未复用节点时收集——layout_deps 死 key 清理用）
     removed_slot_keys: HashSet<u64>,
     /// 本 Composer 实例的 pending state 通知队列
-    pending_states: Arc<crate::core::state::ComposerSubscription>,
+    pending_states: Arc<crate::runtime::state::ComposerSubscription>,
     /// `ComposeCtx::changed` 暂存的参数（start_slot 时写入新 slot 的 params）
     ///
     /// Doubles as a RECYCLING buffer: `commit_pending_params` swaps it with the slot's previous vector,
@@ -2150,7 +2150,7 @@ impl Composer {
     }
 
     pub fn new() -> Self {
-        let pending_states = crate::core::state::ComposerSubscription::new();
+        let pending_states = crate::runtime::state::ComposerSubscription::new();
         Self {
             slot_table: SlotTable::new(),
             current_group_key: 0,
@@ -2338,7 +2338,7 @@ impl Composer {
         *counter += 1;
         // key = fnv(base, 序号)——全 64 位混合，不丢身份熵（拼接方案把身份
         // 截到 32 位，2^32 碰撞空间——dup-key 根因）
-        crate::core::composer::mix_key(base, c as u64)
+        crate::runtime::composer::mix_key(base, c as u64)
     }
 
     /// 开始一个组合 scope（无 LayoutNode 的作用域节点——组合代码重跑的失效单位）。
@@ -2371,7 +2371,7 @@ impl Composer {
     /// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
     /// 由 compose 末尾调用（layout 只测量）。实现拆到 core/materialize.rs（SRP）。
     pub fn materialize(&mut self) {
-        crate::core::materialize::materialize(self);
+        crate::runtime::materialize::materialize(self);
     }
 
     /// Hands this frame's declared parameters to the slot being started, and takes the slot's previous
@@ -2880,14 +2880,14 @@ impl Composer {
         // earlier rather than adding it.
         if self.prev_node_by_key.is_empty() {
             if let Some(root_idx) = self.arena.root {
-                crate::core::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
+                crate::runtime::materialize::collect_node_keys(&self.arena, root_idx, &mut self.prev_node_by_key);
             }
         }
 
         // Begin an isolated dependency frame. State::get() writes to its active
         // buffer, while nested Composer calls temporarily own their own frame.
         // The frame remains open through materialization and modifier reads.
-        let mut dependency_frame = crate::core::state::begin_compose_deps_with_queue(
+        let mut dependency_frame = crate::runtime::state::begin_compose_deps_with_queue(
             std::sync::Arc::downgrade(&self.pending_states),
         );
 
@@ -2966,7 +2966,7 @@ impl Composer {
         // endpoint present was pruned to `[2]`). Order is load-bearing: after the retention
         // above (a flight ghost is a legitimate root and must keep its subtree) and before the
         // prev drain below (a stale listing's node still has to be reclaimed by it).
-        crate::core::materialize::prune_stale_child_links(self);
+        crate::runtime::materialize::prune_stale_child_links(self);
         // 物化后：注册 modifier 中引用的 State 依赖（scroll 等——组合期 arena 空）。
         // 必须在 take_deps() 之前执行——其中 State::get() 依赖 DEP_MODE=Compose
         //（begin_compose_deps 后未复位）；先复位则 scroll 依赖被静默丢弃（滚动不刷新）
@@ -2974,7 +2974,7 @@ impl Composer {
             register_modifier_deps_recursive(&self.arena, root_idx);
         }
         // 依赖注册（组合期 + modifier 期收集的 State 依赖 → 按 slot 收敛）。
-        let recorded = crate::core::state::take_deps();
+        let recorded = crate::runtime::state::take_deps();
         self.reconcile_compose_deps(recorded, &live_compose_keys);
         // Commit only after the read graph is reconciled. If content/materialize
         // panics first, the guard restores the outer dependency frame and rolls
@@ -3125,7 +3125,7 @@ impl Composer {
         // 物化只在 compose 末尾（完整分离：组合完成即建树）——layout 只测量。
         // 单独调 layout（无 compose）时树为空——measure 无操作（无害）
         // 开始布局期依赖记录（measure 中 State::get → 两段式分流）
-        let mut dependency_frame = crate::core::state::begin_layout_deps_with_queue(
+        let mut dependency_frame = crate::runtime::state::begin_layout_deps_with_queue(
             Arc::downgrade(&self.pending_states),
         );
         begin_layout_measure_tracking();
@@ -3148,7 +3148,7 @@ impl Composer {
             );
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）+ dirty 冒泡
             self.prev_node_by_key.clear();
-            crate::core::materialize::collect_layout_index(
+            crate::runtime::materialize::collect_layout_index(
                 &mut self.arena,
                 root_idx,
                 &mut self.prev_node_by_key,
@@ -3159,7 +3159,7 @@ impl Composer {
             self.prev_node_by_key.clear();
         }
 
-        let recorded = crate::core::state::take_deps();
+        let recorded = crate::runtime::state::take_deps();
         let measured_keys = take_layout_measure_keys();
         // A Composer with no root has no live layout readers. Clear the forward
         // graph before rebuilding the reverse index so direct layout() calls
@@ -3804,7 +3804,7 @@ mod scope_tests {
     #[test]
     fn test_scope_dependency_invalidation() {
         let mut composer = Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<f32>>);
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<f32>>);
 
         let compose_once = |composer: &mut Composer| {
             composer.compose(|ctx| {
@@ -3838,7 +3838,7 @@ mod scope_tests {
     #[test]
     fn test_scope_group_pairing() {
         let mut composer = Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
 
         let compose_both = |composer: &mut Composer| {
             composer.compose(|ctx| {
@@ -3874,7 +3874,7 @@ mod scope_tests {
     #[test]
     fn test_node_dependency_precedence() {
         let mut composer = Composer::new();
-        let holder = std::cell::RefCell::new(None::<crate::core::state::State<f32>>);
+        let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<f32>>);
 
         let compose_once = |composer: &mut Composer| {
             composer.compose(|ctx| {
@@ -5070,7 +5070,7 @@ fn test_layout_dep_survives_const_fold() {
 #[test]
 fn test_overlay_composer_invalidated_by_main_tree_state() {
     let mut main = Composer::new();
-    let holder = std::cell::RefCell::new(None::<crate::core::state::State<Vec<String>>>);
+    let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<Vec<String>>>);
     main.compose(|ctx| {
         let items = ctx.remember(|| vec!["a".to_string()]);
         *holder.borrow_mut() = Some(items.clone());
@@ -6070,7 +6070,7 @@ fn test_key_stable_across_skip_enter() {
 #[test]
 fn test_text_content_change_remeasures() {
     let mut composer = Composer::new();
-    let holder = std::cell::RefCell::new(None::<crate::core::state::State<String>>);
+    let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<String>>);
 
     // 模拟 TextField：外部 value State（依赖注册在容器 scope）+ TextContent leaf
     let build = |composer: &mut Composer, text: &str| {
@@ -6135,7 +6135,7 @@ fn test_text_content_change_remeasures() {
 #[test]
 fn test_text_style_change_remeasures() {
     let mut composer = Composer::new();
-    let holder = std::cell::RefCell::new(None::<crate::core::state::State<String>>);
+    let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<String>>);
 
     let build = |composer: &mut Composer, alpha: u8| {
         composer.compose(|ctx| {
@@ -6335,8 +6335,8 @@ fn test_stmt_seq_inherits_outer_iteration_position() {
                     let _g = ctx.enter_stmt(6);
                     let k = ctx.next_key();
                     match ctx.start_restartable_group(k, Modifier::new(), crate::layout::BoxLayout::new()) {
-                        crate::core::composer::GroupStatus::Skip => {}
-                        crate::core::composer::GroupStatus::Enter => {
+                        crate::runtime::composer::GroupStatus::Skip => {}
+                        crate::runtime::composer::GroupStatus::Enter => {
                             // content 内语句（仅 Enter 执行）——继承外层迭代位置
                             let _g2 = ctx.enter_stmt(7);
                             let _ = ctx.next_key();
@@ -6659,7 +6659,7 @@ fn test_arena_recycles_freed_slots() {
     use crate::ui::layout_components::Column;
     use crate::ui::text::Text;
     let mut composer = Composer::new();
-    let show = crate::core::state::State::new(true);
+    let show = crate::runtime::state::State::new(true);
     let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
 
     // 帧 1：show=true——含 extra 分支（3 个 Text）
@@ -6712,7 +6712,7 @@ fn test_materialize_structure_change_window_insert() {
     // 结构变化回归：if 分支插入（Window 场景）——slot 树重建——物化树应完整
     let mut composer = Composer::new();
     // show 必须经 remember 创建（owner queue 绑定——notify 定向推送本 Composer）
-    let mut show: Option<crate::core::state::State<bool>> = None;
+    let mut show: Option<crate::runtime::state::State<bool>> = None;
 
     // 帧1：false（无 Window 分支）
     composer.compose(|ctx| {
@@ -7196,7 +7196,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
     let leaf0_key = composer.arena_nodes()[composer.arena_nodes()[old_root].children[0]].slot_key;
 
     // 手动构造 Skip desc：root 只有 1 子（缓存 2 子——签名不等）
-    let desc = crate::core::materialize::DescNode {
+    let desc = crate::runtime::materialize::DescNode {
         key: old_root_key,
         skip: true,
         claimed: None,
@@ -7215,7 +7215,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
             ime_callback: None,
         composing_range: None,
         direction: crate::layout::LayoutDirection::Ltr,
-        children: vec![crate::core::materialize::DescNode {
+        children: vec![crate::runtime::materialize::DescNode {
             key: leaf0_key,
             skip: true,
         claimed: None,
@@ -7238,7 +7238,7 @@ fn test_skip_recovery_sig_mismatch_direct() {
         }],
     };
     composer.arena.root = None; // 模拟新帧物化开始
-    let new_root = crate::core::materialize::materialize_node(&mut composer, desc, None).unwrap();
+    let new_root = crate::runtime::materialize::materialize_node(&mut composer, desc, None).unwrap();
 
     // 断言：签名不等 → 重建（new_root != old_root）而非恢复缓存
     assert_ne!(new_root, old_root, "签名不等应重建而非恢复缓存");
@@ -7397,8 +7397,8 @@ fn test_app_root_stable_keys_across_structure_change() {
         *show_holder.borrow_mut() = Some(show.clone());
         let root_key = ctx.next_key();
         match ctx.start_restartable_group(root_key, Modifier::new(), crate::layout::BoxLayout::new()) {
-            crate::core::composer::GroupStatus::Skip => {}
-            crate::core::composer::GroupStatus::Enter => {
+            crate::runtime::composer::GroupStatus::Skip => {}
+            crate::runtime::composer::GroupStatus::Enter => {
                 // A 组件（if 分支包裹——结构变化场景）
                 if show.get() {
                     let k = ctx.next_key();
@@ -7459,9 +7459,9 @@ fn test_app_root_stable_keys_across_structure_change() {
 #[test]
 fn test_conditional_branch_remember_does_not_drift_siblings() {
     let mut composer = Composer::new();
-    let show = crate::core::state::State::new(true);
-    let a_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
-    let c_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
+    let show = crate::runtime::state::State::new(true);
+    let a_holder = std::cell::RefCell::new(None::<crate::runtime::state::State<i32>>);
+    let c_holder = std::cell::RefCell::new(None::<crate::runtime::state::State<i32>>);
 
     let build = |composer: &mut Composer| {
         composer.compose(crate::compose!(|ctx| {
@@ -7503,8 +7503,8 @@ fn test_conditional_branch_remember_does_not_drift_siblings() {
 #[test]
 fn test_same_stmt_remember_count_change_resets() {
     let mut composer = Composer::new();
-    let show_extra = crate::core::state::State::new(true);
-    let first_holder = std::cell::RefCell::new(None::<crate::core::state::State<i32>>);
+    let show_extra = crate::runtime::state::State::new(true);
+    let first_holder = std::cell::RefCell::new(None::<crate::runtime::state::State<i32>>);
 
     let build = |composer: &mut Composer| {
         composer.compose(crate::compose!(|ctx| {
@@ -7549,7 +7549,7 @@ mod derived_expression_tests {
 
     #[test]
     fn a_derived_value_reenters_its_reader_only_when_it_changes() {
-        let source = crate::core::state::State::new(0.0f32);
+        let source = crate::runtime::state::State::new(0.0f32);
         let owner_enters = Rc::new(Cell::new(0usize));
         let reader_enters = Rc::new(Cell::new(0usize));
         let source_in = source.clone();
@@ -7624,7 +7624,7 @@ mod derived_expression_tests {
     /// when the value it was built from changed in the scope above it.
     #[test]
     fn a_group_that_declares_nothing_keeps_what_it_was_built_with() {
-        let source = crate::core::state::State::new(0.0f32);
+        let source = crate::runtime::state::State::new(0.0f32);
         let enters = Rc::new(Cell::new(0usize));
         let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
         let source_in = source.clone();

@@ -12,7 +12,7 @@
 //! onSurfaceVariant 文字 + primary icon；Filter/Input：selected = secondaryContainer
 //! + onSecondaryContainer + 0 边框，unselected = transparent + outline 边框。
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::modifier::{Modifier, Shape};
 use crate::ui::text::ProvideTextStyle;
 
@@ -381,7 +381,7 @@ fn build_chip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::runtime::composer::Composer;
     use crate::ui::theme::Typography;
     use crate::text::{FontWeight, TextStyle};
     use crate::unit::{Sp, TextUnit};

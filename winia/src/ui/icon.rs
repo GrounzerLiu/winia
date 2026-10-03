@@ -11,8 +11,8 @@
 //! 裸 path 数据会被包成最小 `<svg viewBox="0 0 24 24">` 文档后交给 Dom。
 
 use crate::composable;
-use crate::core::composer::{ComposeCtx, GroupStatus};
-use crate::core::state::State;
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
@@ -87,15 +87,15 @@ impl From<State<f32>> for AxisValue {
     }
 }
 
-impl From<&crate::core::state::Animating<f32>> for AxisValue {
-    fn from(s: &crate::core::state::Animating<f32>) -> Self {
+impl From<&crate::runtime::state::Animating<f32>> for AxisValue {
+    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
         let s = s.clone();
         AxisValue::Dynamic(Arc::new(move || s.get()))
     }
 }
 
-impl From<crate::core::state::Animating<f32>> for AxisValue {
-    fn from(s: crate::core::state::Animating<f32>) -> Self {
+impl From<crate::runtime::state::Animating<f32>> for AxisValue {
+    fn from(s: crate::runtime::state::Animating<f32>) -> Self {
         AxisValue::Dynamic(Arc::new(move || s.get()))
     }
 }

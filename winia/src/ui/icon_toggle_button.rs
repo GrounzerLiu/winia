@@ -2,7 +2,7 @@
 //! `FilledIconToggleButton` / `FilledTonalIconToggleButton` /
 //! `OutlinedIconToggleButton`
 
-use crate::core::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
@@ -425,7 +425,7 @@ mod tests {
     fn checked_content_color_propagates_to_icon() {
         // 集成：Filled checked 内 Icon（tint Auto）解析为 on_primary
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 IconToggleButton::filled(true)
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn disabled_toggle_has_no_interaction_elements() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             IconToggleButton::new(false)
                 .enabled(false)
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn outlined_checked_has_no_border_element() {
         use crate::modifier::ModifierElement;
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             IconToggleButton::outlined(true)
                 .on_checked_change(|_| {})
@@ -501,7 +501,7 @@ mod tests {
         for (checked, expect) in [(false, true), (true, false)] {
             let received = Arc::new(AtomicBool::new(false));
             let cb = received.clone();
-            let mut composer = crate::core::composer::Composer::new();
+            let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 IconToggleButton::new(checked)
                     .on_checked_change(move |v| cb.store(v, Ordering::Relaxed))
