@@ -3929,6 +3929,32 @@ fn wait_for_one_overlay(app: &mut UiTest) {
     }
 }
 
+/// The rect of a tagged overlay node, read only once two consecutive refreshes agree on it.
+///
+/// The page's own text is not a synchronisation point for the overlay: the readout updates from the
+/// state while the overlay's tree is published by its own layout a frame later, so a single read
+/// right after a mode switch can still see the previous frame's dialog (measured: this test failed
+/// under a full-suite run and passed alone). Waiting for the value to STOP changing keeps the exact
+/// assertion below meaningful — a poll that waited for the expected value would pass on any
+/// transient that happened to end up there.
+fn settled_overlay_rect(app: &mut UiTest, tag: &str) -> (f32, f32, f32, f32) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut previous = None;
+    loop {
+        app.refresh();
+        let rect = app.find_tag_in_overlay(tag);
+        if rect.is_some() && rect == previous {
+            return rect.expect("checked above");
+        }
+        previous = rect;
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the overlay's `{tag}` never settled"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Click a tagged node inside an overlay entry. [`UiTest::click_tag`] only looks in the main tree,
 /// and a modal picker's own tree lives in the overlay.
 fn click_overlay_tag(app: &mut UiTest, tag: &str) {
@@ -4160,10 +4186,9 @@ fn the_entry_field_takes_focus_and_typing_without_a_click() {
 fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     let mut app = UiTest::launch("date_picker_input");
     app.expect_text_timeout("mode: input", Duration::from_secs(5));
-    app.refresh();
-    let (_, _, _, input_h) = app
-        .find_tag_in_overlay("dpi-dialog")
-        .expect("the dialog carries dpi-dialog");
+    // Settled, not read once: the overlay's tree is published by its own layout, which can lag the
+    // page's readout by a frame.
+    let (_, _, _, input_h) = settled_overlay_rect(&mut app, "dpi-dialog");
     // 120 dp header + the outlined field's 56 + its 16 dp bottom inset + the 48 dp action row.
     assert_eq!(
         input_h, 240.0,
@@ -4172,10 +4197,7 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
 
     app.click_overlay_tag("date-picker-mode-toggle");
     app.expect_text_timeout("mode: picker", Duration::from_secs(5));
-    app.refresh();
-    let (_, _, _, picker_h) = app
-        .find_tag_in_overlay("dpi-dialog")
-        .expect("the dialog carries dpi-dialog");
+    let (_, _, _, picker_h) = settled_overlay_rect(&mut app, "dpi-dialog");
     // 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month + 48 dp action row.
     // The 568 dp cap is a MAXIMUM, so this content lands 8 dp short of it rather than being padded
     // out — asserting the exact number is what stops a stretch creeping back in unnoticed.
