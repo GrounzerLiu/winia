@@ -188,19 +188,22 @@ mod tests {
         assert_eq!(placements[0].size.height, 470.0, "500 less the sibling's 30");
     }
 
-    /// The `fill = false` collapse does NOT survive a spreading arrangement, and that is worth
-    /// pinning where someone changing `SpaceBetween` will see it.
+    /// A spreading arrangement does not grow a content-sized container: the same two children as the
+    /// test above come out at their own 50 dp, and the sibling sits directly under the first rather
+    /// than at the parent's bottom.
     ///
-    /// winia's `SpaceBetween` (and `SpaceAround`/`SpaceEvenly`) stretches a container to the main
-    /// axis its parent offers — a deliberate deviation from Compose, whose `SpaceBetween` only
-    /// distributes leftover space and never grows the container to its maximum. So the space a
-    /// non-filling child saves is spent on the gap before its next sibling instead of shortening the
-    /// column: the same two children as the test above come out the full 500 tall, with the sibling
-    /// pushed to the bottom. material3's date picker dialog is the worked example — it needs both
-    /// the `weight(1f, fill = false)` box AND `Arrangement::Start` here, where the source says
-    /// `SpaceBetween` (`DatePickerDialog.android.kt:89-95`).
+    /// This is Compose's rule — `mainAxisLayoutSize = max((fixedSpace + weightedSpace)
+    /// .fastCoerceAtLeast(0), mainAxisMin)` (`RowColumnMeasurePolicy.kt:252`) never consults
+    /// `mainAxisMax`, so a container with no explicit size hugs its content and SpaceBetween has no
+    /// leftover to distribute. winia used to grow the container to the offered maximum instead; the
+    /// pair of tests here is what pins which of the two it does.
+    ///
+    /// It also makes the date picker dialog's collapse work: a `weight(1f, fill = false)` box can only
+    /// shorten the column if the arrangement leaves the size alone (`DatePickerDialog.android.kt:89-95`
+    /// writes `SpaceBetween` there, and winia's dialog uses `Start` — after this alignment the two
+    /// place identically).
     #[test]
-    fn a_non_filling_weight_does_not_shrink_a_space_between_container() {
+    fn a_spreading_arrangement_does_not_grow_a_content_sized_container() {
         let mut nodes = vec![make_weighted(20.0, false), make_leaf(100.0, 30.0)];
         let children: Vec<usize> = (0..nodes.len()).collect();
         let (size, placements) = ColumnLayout::new()
@@ -212,12 +215,12 @@ mod tests {
                 Constraints::new(0.0, 100.0, 0.0, 500.0),
             );
         assert_eq!(
-            size.height, 500.0,
-            "a spreading arrangement still takes the parent's whole main axis"
+            size.height, 50.0,
+            "content height, not the 500 dp the parent offered"
         );
         assert_eq!(
-            placements[1].position.y, 470.0,
-            "the saved space became the gap, not a shorter column"
+            placements[1].position.y, 20.0,
+            "with no leftover the sibling follows the content"
         );
     }
 

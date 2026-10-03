@@ -102,7 +102,9 @@ ExposedDropdownMenuBox::new(expanded.clone())
 
 **但这一改暴露出框架级 bug**（`layout/flex.rs`）：主轴剩余空间的判定写成 `A::main_max(constraints).is_finite()`，而 winia 的"无界"哨兵是 `f32::MAX`，**它 `is_finite()` 为真** → 剩余空间 = `f32::MAX` → `Arrangement::Center` 把子节点放到 `170141173319264429905852091742258462720`（实测值），也就是 1.7e38。
 
-**修法**：先解出容器最终的主轴尺寸，再由它算剩余——既让"带 min 的容器"（48dp 项 + 20px 文字）真正有空间可分配，也把哨兵挡在算术之外；SpaceBetween/SpaceAround/SpaceEvenly 语义不变（它们定义在"可用空间"上，仍用有限 max）。
+**Fix**: resolve the container's final main-axis size first and derive the remaining space from it — that lets a container carrying a minimum (a 48 dp item with a 20 px label) really have space to distribute, and keeps the sentinel out of the arithmetic.
+
+Later, the spreading arrangements were aligned with Compose too, so the second half of this note no longer holds: `SpaceBetween`/`SpaceAround`/`SpaceEvenly` do **not** keep using the finite maximum. A container with no explicit size takes its content size, exactly as `RowColumnMeasurePolicy.kt:252` resolves it, and a caller that wants the spreading says so with `fill_max_width` (see `layout/flex.rs`'s `measured_main`).
 
 **证据**：修后文字 `pos:[12,14]` = (48−20)/2 ✓；测试里断言 `上 = 下`，实测 `item=(16,162,48) label=(28,176,20) 上=14 下=14`。
 

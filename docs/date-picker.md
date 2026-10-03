@@ -815,14 +815,14 @@ tolerance is ±0.5 rather than zero. Both figures also assume the dialog's defau
 what gives the header its 120 dp, and a caller passing `.title(None)` drops the header to 44 and the
 dialog with it.
 
-One deviation rides along: the dialog's `Column` uses `Arrangement::Start` where the source says
-`SpaceBetween`. winia's `SpaceBetween` stretches a container to the main axis its parent offers — pinned
-by `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and by
-`layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container`, measured here
-rather than documented on the `Arrangement` variants themselves — which is the one thing
-that would hold this dialog at the cap regardless of the box. In Compose the column here is content +
-buttons, so its leftover space is zero and `SpaceBetween` places exactly as `Start` does; the switch keeps
-winia's own semantics for that arrangement intact instead of widening them for one dialog.
+One deviation was retired rather than kept: the dialog's `Column` used to say `Arrangement::Start` where the
+source says `SpaceBetween`, because winia's `SpaceBetween` stretched a container to the main axis its parent
+offered, and that alone would have held the dialog at the 568 dp cap whatever the `weight(1f, fill = false)`
+box did. The `Arrangement` variants have since been aligned with Compose: a content-sized container no longer
+grows to the maximum its parent offers — `RowColumnMeasurePolicy.kt:252` resolves
+`mainAxisLayoutSize = max((fixedSpace + weightedSpace).fastCoerceAtLeast(0), mainAxisMin)` and never consults
+`mainAxisMax`, and `layout/flex.rs`'s `measured_main` now does the same — so the column says `SpaceBetween`
+exactly as material3 writes it, and the box is the only thing that decides the height.
 
 ### Still open
 

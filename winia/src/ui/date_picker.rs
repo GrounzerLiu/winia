@@ -2156,17 +2156,15 @@ impl DatePickerDialog {
                 // false to support collapsing the dialog's height when switching to input mode"
                 // (`:93-94`) — while the calendar's own height is what fills the cap in picker mode.
                 //
-                // `Arrangement::Start`, not the source's `SpaceBetween`: winia's SpaceBetween
-                // stretches a container to the main axis its parent offers (a deviation pinned by
-                // `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and
-                // `layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container`
-                // — the `Arrangement` variants carry no doc of their own), which is the one thing
-                // that would hold this dialog at the
-                // full cap. In Compose the Column here is content + buttons, so its leftover space is
-                // zero and SpaceBetween places exactly as Start does.
+                // `Arrangement::SpaceBetween` as the source writes it. That only works because a
+                // spreading arrangement no longer grows a content-sized container to the maximum its
+                // parent offers (`layout/flex.rs`'s `measured_main`, aligned with Compose's
+                // `mainAxisLayoutSize = max(fixedSpace + weightedSpace, mainAxisMin)`); before that
+                // alignment this column had to say `Start` to escape the 568 dp cap. The leftover here
+                // is zero either way, so the two place identically.
                 Column::new()
                     .modifier(Modifier::new().fill_max_width())
-                    .arrangement(Arrangement::Start)
+                    .arrangement(Arrangement::SpaceBetween)
                     .alignment(Alignment::End)
                     .build(ctx, |ctx| {
                         Stack::new()

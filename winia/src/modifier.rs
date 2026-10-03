@@ -694,19 +694,11 @@ pub(crate) enum ModifierElement {
     /// parent keeps the size the child actually asked for. That is the half material3's date picker
     /// dialog depends on to collapse in input mode — `DatePickerDialog.android.kt:95` wraps its
     /// content in `Box(Modifier.weight(1f, fill = false))`, commented "Fill is false to support
-    /// collapsing the dialog's height when switching to input mode".
-    ///
-    /// ⚠ The collapse only happens under `Arrangement::Start`/`End`/`Center`. A `SpaceBetween`,
-    /// `SpaceAround` or `SpaceEvenly` container stretches to the main axis its parent offers — the
-    /// `Arrangement::SpaceBetween | SpaceAround | SpaceEvenly` arm of `layout/flex.rs::measure_flex`,
-    /// pinned by `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and
-    /// `layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container` —
-    /// and a saving the child makes is then spent on the gap before its next sibling instead of
-    /// shortening the container. Measured: a `fill = false` child of 20 dp beside a 30 dp sibling
-    /// in a column offered 500 dp comes out 500 dp tall with the sibling at y = 470 under
-    /// `SpaceBetween`, against 50 dp under `Start`. Compose has no such interaction — its
-    /// `SpaceBetween` distributes leftover space but never grows the container to its maximum — so a
-    /// pattern copied from material3 that relies on the collapse has to use `Start` here.
+    /// collapsing the dialog's height when switching to input mode". The arrangement does not matter:
+    /// since the `Arrangement` variants were aligned with Compose (`layout/flex.rs`'s
+    /// `measured_main`), a spreading arrangement no longer grows a content-sized container to the
+    /// maximum its parent offers, so the collapse survives `SpaceBetween` as well — which is what
+    /// material3 itself relies on.
     ///
     /// ⚠ "The share is a MAXIMUM" holds for the constraints this hands the child, not for the child's
     /// own `size`/`width`/`height`: `resolved_size` only REPORTS those numbers, and
@@ -1330,9 +1322,8 @@ impl Modifier {
     ///
     /// With `fill = false` the share becomes the child's MAXIMUM main-axis size instead of an exact
     /// one, and the parent uses the size the child measured, so a child shorter than its share lets
-    /// the container be shorter too — **under `Arrangement::Start`/`End`/`Center`**. A container
-    /// using `SpaceBetween`, `SpaceAround` or `SpaceEvenly` stretches to the main axis its parent
-    /// offers whatever this flag says; [`ModifierElement::LayoutWeight`] has the measurement.
+    /// the container be shorter too. The arrangement is free to be a spreading one as well, because a
+    /// content-sized container no longer grows to the maximum its parent offers.
     pub fn layout_weight_fill(self, weight: f32, fill: bool) -> Self {
         self.push(ModifierElement::LayoutWeight { weight, fill })
     }

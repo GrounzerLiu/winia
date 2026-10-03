@@ -202,7 +202,9 @@ mod tests {
 
     #[test]
     fn test_row_rtl_space_between_mirrors_full_width() {
-        // SpaceBetween 填满容器：镜像基准 = 行测量宽度（100，含 remaining）
+        // SpaceBetween 分配的是容器多余的主轴空间，而宽度由约束给出（min = max = 100），不是这个排列撑
+        // 出来的——这正是 Compose 的行为：`Row(SpaceBetween)` 要靠 `fillMaxWidth()` 才有宽度可分配。
+        // 对齐前后的差别见 `flex.rs` 的 `measured_main`。
         let row = RowLayout::new()
             .direction(LayoutDirection::Rtl)
             .arrangement(Arrangement::SpaceBetween);
@@ -212,9 +214,9 @@ mod tests {
             &mut nodes,
             &[],
             &children,
-            Constraints::new(0.0, 100.0, 0.0, 100.0),
+            Constraints::new(100.0, 100.0, 0.0, 100.0),
         );
-        assert_eq!(size.width, 100.0, "SpaceBetween 填满容器");
+        assert_eq!(size.width, 100.0, "宽度来自约束");
         // LTR 位置：0 / 70（间距 50）；RTL 镜像后：80 / 0
         assert_eq!(placements[0].position.x, 80.0, "第一个子在最右");
         assert_eq!(placements[1].position.x, 0.0, "第二个子在最左");

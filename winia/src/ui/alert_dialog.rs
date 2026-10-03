@@ -529,15 +529,10 @@ struct DialogSlots {
 ///
 /// The reason this note used to give — that `Modifier::layout_weight` had no `fill` flag, so a
 /// weight could only stretch the node — is no longer true: `Modifier::layout_weight_fill(weight,
-/// fill)` exists and `layout_weight_fill(1.0, false)` on this slot is what would match Compose.
-///
-/// Two things have to hold for that to be a one-line change, and only one of them does. The flag is
-/// there; the enclosing column is `Arrangement::Start` (the `Column` here is built by
-/// [`BasicAlertDialog`] with no arrangement), which is what lets a non-filling child shorten it —
-/// under `SpaceBetween` a weighted column would take the whole imposed height whatever the flag says
-/// (`ModifierElement::LayoutWeight` has the measurement). The change still waits for its own
-/// verification, because the difference only appears under an imposed height and no fixture
-/// exercises one today.
+/// fill)` exists and `layout_weight_fill(1.0, false)` on this slot is what would match Compose, on a
+/// column that can now be shortened by it (the `Arrangement` variants no longer grow a content-sized
+/// container to the maximum their parent offers). The change still waits for its own verification,
+/// because the difference only appears under an imposed height and no fixture exercises one today.
 fn alert_dialog_content(
     ctx: &mut ComposeCtx,
     slots: &DialogSlots,
