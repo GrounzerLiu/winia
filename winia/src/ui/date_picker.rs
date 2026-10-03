@@ -2137,19 +2137,38 @@ impl DatePickerDialog {
             .modifier(self.modifier.then(size))
             .content(move |ctx| {
                 // `Column(verticalArrangement = SpaceBetween)`: the content in a `weight(1f, fill = false)` box,
-                // the action row aligned to the end under it (`DatePickerDialog.android.kt:96-111`). winia has no
-                // weights, and the action row is short enough to follow the content directly.
+                // the action row aligned to the end under it (`DatePickerDialog.android.kt:89-111`).
+                //
+                // The box is what lets the dialog be SHORT: its share is the box's MAXIMUM, so the
+                // box reports the size the picker actually asked for and the Column ends up content
+                // + buttons rather than the whole cap. material3 says so in the source — "Fill is
+                // false to support collapsing the dialog's height when switching to input mode"
+                // (`:93-94`) — while the calendar's own height is what fills the cap in picker mode.
+                //
+                // `Arrangement::Start`, not the source's `SpaceBetween`: winia's SpaceBetween
+                // stretches a container to the main axis its parent offers (a deliberate deviation
+                // its docs and tests pin), which is the one thing that would hold this dialog at the
+                // full cap. In Compose the Column here is content + buttons, so its leftover space is
+                // zero and SpaceBetween places exactly as Start does.
                 Column::new()
                     .modifier(Modifier::new().fill_max_width())
-                    .arrangement(Arrangement::SpaceBetween)
+                    .arrangement(Arrangement::Start)
                     .alignment(Alignment::End)
                     .build(ctx, |ctx| {
-                        match content.as_ref() {
-                            Some(content) => content(ctx),
-                            None => DatePicker::new(state.clone())
-                                .colors(content_colors.clone())
-                                .build(ctx),
-                        }
+                        Stack::new()
+                            .modifier(
+                                Modifier::new()
+                                    .fill_max_width()
+                                    .layout_weight_fill(1.0, false),
+                            )
+                            .build(ctx, |ctx| {
+                                match content.as_ref() {
+                                    Some(content) => content(ctx),
+                                    None => DatePicker::new(state.clone())
+                                        .colors(content_colors.clone())
+                                        .build(ctx),
+                                }
+                            });
                         Row::new()
                             .modifier(
                                 Modifier::new()

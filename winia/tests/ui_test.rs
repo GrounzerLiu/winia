@@ -3801,9 +3801,18 @@ fn date_picker_dialog_is_the_modal_picker() {
 
     let (x, y, w, h) = app.find_tag_in_overlay("dpd-dialog").expect("the dialog");
     assert_eq!(w, 360.0, "ContainerWidth is 360 dp");
+    // The dialog is its content, not the cap: the picker's 120 dp header + 56 dp month navigation +
+    // 48 dp weekday row + 288 dp month, then the action row's 40 dp button under an 8 dp inset.
+    // `ContainerHeight` (568) is a MAXIMUM (`DatePickerDialog.android.kt:84 heightIn(max = ...)`,
+    // with `:95`'s `weight(1f, fill = false)` box keeping the dialog free to be shorter), so the
+    // content decides and it lands 8 dp short of the cap.
     assert_eq!(
-        h, 568.0,
-        "the docked picker plus the action row reach ContainerHeight exactly"
+        h, 560.0,
+        "the modal picker is as tall as its own content (120 + 56 + 48 + 288 + 48)"
+    );
+    assert!(
+        h <= 568.0,
+        "the calendar still has to fit the 568 dp cap, got {h}"
     );
 
     // The same lattice as the docked picker: today is the first row's fifth column, the selection the second
@@ -3888,6 +3897,12 @@ fn the_date_picker_mode_toggle_swaps_the_calendar_for_the_entry_field() {
     app.expect_text_timeout("mode: picker", Duration::from_secs(5));
     app.expect_overlay_text_timeout("2024", Duration::from_secs(5));
 
+    // The toggle is looked up again rather than reused: the dialog is only as tall as the mode it
+    // shows, so switching re-centres every node inside it and the coordinates read a moment ago now
+    // point into the calendar (measured: reusing them selected the 7th and left the picker open).
+    let toggle = app
+        .find_tag_in_overlay("date-picker-mode-toggle")
+        .expect("the mode toggle after the switch");
     app.tap(toggle.0 + toggle.2 / 2.0, toggle.1 + toggle.3 / 2.0);
     app.expect_text_timeout("mode: input", Duration::from_secs(5));
     assert!(
@@ -4101,4 +4116,75 @@ fn zz_probe_error_semantics() {
         if let Some(tree) = o.get("tree").and_then(|t| t.as_array()) { walk(tree, &mut out); }
     }
     eprintln!("STATES: {}", out.join(" ||| "));
+}
+
+/// The field asks for focus itself a moment after the modal opens — Compose's delayed
+/// `focusRequester?.requestFocus()` (`DateInput.kt:259-266`, after `DurationMedium2`) — and the keys
+/// that follow arrive on that focus with no click in between.
+///
+/// Only a real window can show where a key lands, which is why this is here and not in the lib
+/// tests: `winit` delivers the key to the window, then the framework routes it to whatever holds
+/// focus in the arena that owns the keyboard.
+#[test]
+fn the_entry_field_takes_focus_and_typing_without_a_click() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    // Nothing is clicked: the picker's own delayed request is the only thing that can focus this.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while app.focused_tags().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        app.focused_tags(),
+        vec!["date-picker-input-field".to_string()],
+        "the entry field should be the one node the picker focused"
+    );
+
+    // Keys go to that focus. A cleared field drops the selection; a full entry commits one.
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+    for key in ["0", "3", "1", "2", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("selected: Mar 12, 2024", Duration::from_secs(5));
+}
+
+/// The dialog is only as tall as the mode it is showing, which is what material3's
+/// `Box(Modifier.weight(1f, fill = false))` is for: the box's share is a MAXIMUM, so the picker's
+/// own height decides and the column ends up content + buttons instead of the whole 568 dp cap
+/// (`DatePickerDialog.android.kt:90-95`, whose comment reads "Fill is false to support collapsing
+/// the dialog's height when switching to input mode").
+///
+/// The numbers are the assertion, not a screenshot: before that box existed winia reported the cap
+/// in both modes — measured 568 dp with the field's content ending around 274.
+#[test]
+fn the_dialog_is_as_tall_as_the_mode_it_shows() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    app.refresh();
+    let (_, _, _, input_h) = app
+        .find_tag_in_overlay("dpi-dialog")
+        .expect("the dialog carries dpi-dialog");
+    assert!(
+        input_h < 320.0,
+        "the entry field should collapse the dialog, got {input_h}"
+    );
+
+    app.click_overlay_tag("date-picker-mode-toggle");
+    app.expect_text_timeout("mode: picker", Duration::from_secs(5));
+    app.refresh();
+    let (_, _, _, picker_h) = app
+        .find_tag_in_overlay("dpi-dialog")
+        .expect("the dialog carries dpi-dialog");
+    assert!(
+        picker_h > input_h + 200.0,
+        "the calendar should be far taller than the field: {picker_h} vs {input_h}"
+    );
+    assert!(
+        picker_h <= 568.0,
+        "the calendar still has to fit the 568 dp cap, got {picker_h}"
+    );
 }

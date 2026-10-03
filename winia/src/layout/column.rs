@@ -143,6 +143,51 @@ mod tests {
         node
     }
 
+    /// A weighted child with a height of its own, the shape material3's date picker dialog uses
+    /// (`Box(Modifier.weight(1f, fill = false))` around a picker that sizes itself).
+    fn make_weighted(height: f32, fill: bool) -> LayoutNode {
+        use crate::modifier::Modifier;
+        LayoutNode::leaf(Modifier::new().layout_weight_fill(1.0, fill).height(height))
+    }
+
+    /// Compose's `weight(weight, fill = false)`: the share is the child's MAXIMUM, and the container
+    /// keeps what the child asked for. This is the half that lets a dialog be shorter than the cap
+    /// it is allowed (`DatePickerDialog.android.kt:90-95`), so it is pinned here rather than only
+    /// through a window.
+    #[test]
+    fn a_weight_that_does_not_fill_keeps_the_childs_own_height() {
+        let mut nodes = vec![make_weighted(20.0, false), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(
+            size.height, 50.0,
+            "the column is content + sibling, not the 500 the parent offered"
+        );
+        assert_eq!(placements[0].size.height, 20.0, "the child keeps its own height");
+        assert_eq!(placements[1].position.y, 20.0, "the sibling follows the content");
+    }
+
+    /// The default `Modifier::layout_weight` still fills: the share is exact, so the same two
+    /// children come out at the parent's whole height.
+    #[test]
+    fn a_weight_that_fills_takes_its_whole_share() {
+        let mut nodes = vec![make_weighted(20.0, true), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(size.height, 500.0, "a filling weight takes the whole bounded axis");
+        assert_eq!(placements[0].size.height, 470.0, "500 less the sibling's 30");
+    }
+
     #[test]
     fn test_column_simple() {
         let column = ColumnLayout::new();

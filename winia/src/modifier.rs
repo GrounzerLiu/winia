@@ -687,7 +687,16 @@ pub(crate) enum ModifierElement {
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
-    LayoutWeight { weight: f32 },
+    ///
+    /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
+    /// tight to its share and the parent keeps that share (`ColumnScope.weight`'s documented
+    /// behaviour). With `fill = false` the child is measured with its share as the MAXIMUM and the
+    /// parent keeps the size the child actually asked for, so a short child leaves the container
+    /// free to be shorter. That is the half material3's date picker dialog depends on to collapse
+    /// in input mode — `DatePickerDialog.android.kt:95` wraps its content in
+    /// `Box(Modifier.weight(1f, fill = false))`, commented "Fill is false to support collapsing the
+    /// dialog's height when switching to input mode".
+    LayoutWeight { weight: f32, fill: bool },
     /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
     AspectRatio { ratio: f32, match_height_first: bool },
     /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
@@ -1286,8 +1295,19 @@ impl Modifier {
     }
 
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
+    ///
+    /// The child occupies its whole share, which is Compose's `weight(weight, fill = true)`.
     pub fn layout_weight(self, weight: f32) -> Self {
-        self.push(ModifierElement::LayoutWeight { weight })
+        self.push(ModifierElement::LayoutWeight { weight, fill: true })
+    }
+
+    /// 布局权重，是否填满自己的份额（对标 Compose `Modifier.weight(weight, fill)`）。
+    ///
+    /// With `fill = false` the share becomes the child's MAXIMUM main-axis size instead of an exact
+    /// one, and the parent uses the size the child measured — so a child shorter than its share
+    /// lets the container be shorter too. See [`ModifierElement::LayoutWeight`].
+    pub fn layout_weight_fill(self, weight: f32, fill: bool) -> Self {
+        self.push(ModifierElement::LayoutWeight { weight, fill })
     }
 
     /// `aspect_ratio(ratio)`（对标 Compose `Modifier.aspectRatio`）——
@@ -2267,8 +2287,19 @@ impl Modifier {
     /// 布局权重（供 Column/Row 使用）
     pub fn get_layout_weight(&self) -> Option<f32> {
         for el in &self.elements {
-            if let ModifierElement::LayoutWeight { weight } = el {
+            if let ModifierElement::LayoutWeight { weight, .. } = el {
                 return Some(*weight);
+            }
+        }
+        None
+    }
+
+    /// Whether a weighted node fills its share. `None` when the node carries no weight; a node
+    /// with a weight but no explicit `fill` reads as `true`, the `Modifier::layout_weight` default.
+    pub fn get_layout_weight_fill(&self) -> Option<bool> {
+        for el in &self.elements {
+            if let ModifierElement::LayoutWeight { fill, .. } = el {
+                return Some(*fill);
             }
         }
         None
@@ -2618,7 +2649,7 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
-            Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
+            Self::LayoutWeight { weight, fill } => f.debug_struct("LayoutWeight").field("weight", weight).field("fill", fill).finish(),
             Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
             Self::RequiredSize { width, height } => f
                 .debug_struct("RequiredSize")
@@ -3725,7 +3756,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
-        (LayoutWeight { weight: aw }, LayoutWeight { weight: bw }) => aw == bw,
+        (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
         (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
             ar == br && am == bm
         }

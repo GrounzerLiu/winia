@@ -26,7 +26,12 @@ pub(crate) trait FlexAxis {
     /// 构造 Constraints：cross 轴用完整父约束，main 轴 min=0, max=remaining
     fn build_phase1(c: &Constraints, main_remaining: f32) -> Constraints;
     /// 构造 Constraints：main 轴固定=allocated，cross 轴: min 由 stretch 决定, max=父约束
-    fn build_phase2(c: &Constraints, allocated: f32, stretch_cross: bool) -> Constraints;
+    ///
+    /// `fill_main` is Compose's `LayoutWeightParentData.fill`: the share is an exact main-axis size
+    /// when true and only a MAXIMUM when false — `createConstraints(mainAxisMin = if
+    /// (parentData.fill) childMainAxisSize else 0, mainAxisMax = childMainAxisSize,
+    /// isPrioritizing = true)` (`RowColumnMeasurePolicy.kt:195-207`).
+    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints;
 
     // ── 值构造 ──
     fn size(main: f32, cross: f32) -> Size;
@@ -65,11 +70,11 @@ impl FlexAxis for VerticalAxis {
     }
 
     #[inline]
-    fn build_phase2(c: &Constraints, allocated: f32, stretch_cross: bool) -> Constraints {
+    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints {
         Constraints {
             min_width: if stretch_cross { c.min_width } else { 0.0 },
             max_width: c.max_width,
-            min_height: allocated,
+            min_height: if fill_main { allocated } else { 0.0 },
             max_height: allocated,
         }
     }
@@ -109,9 +114,9 @@ impl FlexAxis for HorizontalAxis {
     }
 
     #[inline]
-    fn build_phase2(c: &Constraints, allocated: f32, stretch_cross: bool) -> Constraints {
+    fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints {
         Constraints {
-            min_width: allocated,
+            min_width: if fill_main { allocated } else { 0.0 },
             max_width: allocated,
             min_height: if stretch_cross { c.min_height } else { 0.0 },
             max_height: c.max_height,
@@ -153,6 +158,11 @@ pub(crate) fn measure_flex<A: FlexAxis>(
 
     // ── per-child 属性 ──
     let weights: Vec<Option<f32>> = children.iter().map(|&c| nodes[c].modifier.get_layout_weight()).collect();
+    // Compose's `LayoutWeightParentData.fill`. A node with a weight but no explicit flag fills,
+    // which is what `Modifier::layout_weight` has always meant here.
+    let fills: Vec<bool> = children.iter()
+        .map(|&c| nodes[c].modifier.get_layout_weight_fill().unwrap_or(true))
+        .collect();
     let aligns: Vec<Alignment> = children.iter()
         .map(|&c| nodes[c].modifier.get_align_self().unwrap_or(alignment))
         .collect();
@@ -209,13 +219,18 @@ pub(crate) fn measure_flex<A: FlexAxis>(
             // `weight(0) + size(100)` child beside a 50px sibling went from 100@0 / 50@100
             // to 0@0 / 50@0 (overlapping, the row no longer containing its children).
             // Compose rejects `weight <= 0`; we fall back to the child's measurement.
-            allocated_main[i] = if A::main_max(constraints).is_finite() && total_weight > 0.0 {
+            //
+            // `fill = false` also falls back to the child's own measurement, and that is the whole
+            // point of the flag: Compose measures such a child with its share as the MAXIMUM and
+            // then adds the size the child asked for to `weightedSpace`, so a short child leaves the
+            // container short instead of stretching it to the share.
+            allocated_main[i] = if fills[i] && A::main_max(constraints).is_finite() && total_weight > 0.0 {
                 Some(allocated)
             } else {
                 None
             };
             let stretch_cross = alignment == Alignment::Stretch || aligns[i] == Alignment::Stretch;
-            let cc = A::build_phase2(constraints, allocated, stretch_cross);
+            let cc = A::build_phase2(constraints, allocated, fills[i], stretch_cross);
             let (size, _) = measure_node(nodes, policies, c, cc);
             max_cross = max_cross.max(A::cross_size(size));
             child_sizes[i] = size;
