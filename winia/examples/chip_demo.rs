@@ -124,8 +124,8 @@ fn chip_ui(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
-            winia::ui::window::Window::new()
+        winia::theme::WiniaTheme::auto(ctx, |ctx| {
+            winia::app::window::Window::new()
                 // Taller than the cases need on their own: the chrome's top app bar takes 64 px.
                 .size(520.0, 460.0)
                 .title("Chips Demo")

@@ -316,7 +316,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
-    use crate::ui::theme::{ThemeColors, WiniaTheme};
+    use crate::theme::{ThemeColors, WiniaTheme};
 
     /// FlowRow 组合链路集成：content 闭包 4 个固定叶，容器宽 100 → 换行。
     #[test]

@@ -6,14 +6,14 @@ use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
 use winia::ui::text::Text;
-use winia::ui::Window;
+use winia::app::window::Window;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::theme::WiniaTheme;
-use winia::ui::Column;
-use winia::ui::layout_components::Row;
+use winia::theme::WiniaTheme;
+use winia::layout::Column;
+use winia::layout::components::Row;
 use winia::ui::button::{Button, ButtonStyle};
 use winia::app;
 

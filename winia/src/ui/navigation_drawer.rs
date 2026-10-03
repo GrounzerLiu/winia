@@ -46,10 +46,10 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::anchored_draggable::AnchoredDraggableState;
+use crate::overlay::anchored_draggable::AnchoredDraggableState;
 use crate::interaction::MutableInteractionSource;
-use crate::ui::layout_components::{Column, Row, Stack};
-use crate::ui::theme::WiniaTheme;
+use crate::layout::components::{Column, Row, Stack};
+use crate::theme::WiniaTheme;
 use crate::unit::Dp;
 use std::sync::Arc;
 use std::time::Duration;
@@ -158,7 +158,7 @@ impl DrawerState {
     pub fn update_anchors(&self, width: f32, rtl: bool) {
         let closed = if rtl { width } else { -width };
         self.anchored
-            .update_anchors(crate::ui::anchored_draggable::DraggableAnchors::new([
+            .update_anchors(crate::overlay::anchored_draggable::DraggableAnchors::new([
                 (DrawerValue::Open, 0.0),
                 (DrawerValue::Closed, closed),
             ]));
@@ -291,7 +291,7 @@ impl DrawerDefaults {
     }
 
     /// `ModalContainerColor` (`SurfaceContainerLow`).
-    pub fn modal_container_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn modal_container_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.surface_container_low
     }
 
@@ -301,7 +301,7 @@ impl DrawerDefaults {
     }
 
     /// Item colors (`NavigationDrawerItemDefaults.colors()`).
-    pub fn item_colors(theme: &crate::ui::theme::ThemeColors) -> NavigationDrawerItemColors {
+    pub fn item_colors(theme: &crate::theme::ThemeColors) -> NavigationDrawerItemColors {
         NavigationDrawerItemColors {
             selected_container: theme.secondary_container,
             selected_icon: theme.on_secondary_container,
@@ -735,7 +735,7 @@ impl ModalNavigationDrawer {
         // tokens are used as-is. `Dp::to_px` would be the physical value and would
         // size the drawer against the wrong space (at 1.5x a 360dp drawer would try to
         // be 540 logical px wide and simply fill the window).
-        let window_w = crate::ui::window_size().0;
+        let window_w = crate::layout::window_size().0;
         let sheet_w = resolve_sheet_width(
             self.maximum_drawer_width.0,
             self.minimum_drawer_width.0,
@@ -1092,7 +1092,7 @@ mod tests {
     fn a_resize_mid_drag_does_not_cancel_the_gesture() {
         // The offset belongs to the finger while a drag lasts, so a geometry change must
         // not re-align it — that is the P0's failure mode with a narrower trigger.
-        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        crate::layout::adaptive::set_window_size(800.0, 600.0);
         let state = DrawerState::new(DrawerValue::Open);
         let mut c = comp();
         drive_drawer(&mut c, &state);
@@ -1291,7 +1291,7 @@ mod tests {
     fn drive_drawer_sized(c: &mut Composer, state: &DrawerState, w: f32, h: f32) {
         let st = state.clone();
         c.compose(move |ctx| {
-            crate::ui::adaptive::set_window_size(w, h);
+            crate::layout::adaptive::set_window_size(w, h);
             ModalNavigationDrawer::new(|ctx| {
                 crate::ui::Text::new("page").build(ctx);
             })
@@ -1304,7 +1304,7 @@ mod tests {
 
     #[test]
     fn the_sheet_parks_off_the_edge_and_lands_flush_when_opened() {
-        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        crate::layout::adaptive::set_window_size(800.0, 600.0);
         let state = DrawerState::new(DrawerValue::Closed);
         let mut c = comp();
         drive_drawer(&mut c, &state);
@@ -1328,7 +1328,7 @@ mod tests {
         // whenever no animation was running — and a live drag is not an animation — so
         // every drag frame was undone by the next compose and the drawer could not be
         // dragged at all. Every state-level test passed with that bug in place.
-        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        crate::layout::adaptive::set_window_size(800.0, 600.0);
         let state = DrawerState::new(DrawerValue::Open);
         let mut c = comp();
         drive_drawer(&mut c, &state);
@@ -1364,7 +1364,7 @@ mod tests {
         // LOGICAL width, so converting it with the density (physical px) would make a
         // 360dp drawer 540 "logical" px and silently fill a 520-wide window. Measured
         // on the running demo at 1.5x before this was pinned.
-        crate::ui::adaptive::set_window_size(520.0, 620.0);
+        crate::layout::adaptive::set_window_size(520.0, 620.0);
         let state = DrawerState::new(DrawerValue::Closed);
         let mut c = comp();
         let st = state.clone();
@@ -1395,8 +1395,8 @@ mod tests {
         // `reset_window_size_state` clears the State but not the fallback cell that
         // `set_window_size` wrote outside a composer, so restore the size as well —
         // otherwise this thread reports a 520-wide window to whatever test runs next on it.
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(800.0, 600.0);
     }
 
     #[test]
@@ -1409,7 +1409,7 @@ mod tests {
         let mut c = comp();
         let st = state.clone();
         c.compose(move |ctx| {
-            crate::ui::adaptive::set_window_size(800.0, 600.0);
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
             ModalNavigationDrawer::new(|ctx| {
                 crate::ui::Text::new("page").build(ctx);
             })
@@ -1434,12 +1434,12 @@ mod tests {
 
     #[test]
     fn the_rtl_drawer_parks_off_the_trailing_edge() {
-        crate::ui::adaptive::set_window_size(800.0, 600.0);
+        crate::layout::adaptive::set_window_size(800.0, 600.0);
         let state = DrawerState::new(DrawerValue::Closed);
         let mut c = comp();
         let st = state.clone();
         c.compose(move |ctx| {
-            crate::ui::theme::WiniaTheme::with_theme_and_direction(
+            crate::theme::WiniaTheme::with_theme_and_direction(
                 WiniaTheme::colors(),
                 LayoutDirection::Rtl,
                 ctx,
@@ -1462,7 +1462,7 @@ mod tests {
         state.snap_to(DrawerValue::Open);
         let st = state.clone();
         c.compose(move |ctx| {
-            crate::ui::theme::WiniaTheme::with_theme_and_direction(
+            crate::theme::WiniaTheme::with_theme_and_direction(
                 WiniaTheme::colors(),
                 LayoutDirection::Rtl,
                 ctx,

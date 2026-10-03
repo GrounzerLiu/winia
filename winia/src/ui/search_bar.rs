@@ -195,7 +195,7 @@ impl SearchBarDefaults {
     }
 
     /// Default colors from theme (container = surface-container-high-ish, divider = outline).
-    pub fn colors(theme: &crate::ui::theme::ThemeColors) -> SearchBarColors {
+    pub fn colors(theme: &crate::theme::ThemeColors) -> SearchBarColors {
         SearchBarColors {
             container: theme.surface_container_high,
             divider: theme.outline_variant,
@@ -280,8 +280,8 @@ fn content_fade_out_spec() -> crate::animation::AnimationSpec {
 ///
 /// The delay is passed as `delay`, NOT folded into the duration: the overlay's animation must hold for
 /// 100ms and then run the 600ms curve, whereas a 700ms duration would start moving immediately.
-fn docked_enter_spec() -> crate::ui::overlay::OverlayAnimSpec {
-    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+fn docked_enter_spec() -> crate::overlay::OverlayAnimSpec {
+    crate::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
         SEARCH_BAR_EXPAND_MS,
     ))
     .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
@@ -291,8 +291,8 @@ fn docked_enter_spec() -> crate::ui::overlay::OverlayAnimSpec {
 /// Compose `DockedExitTransition` = `fadeOut(AnimationExitFloatSpec) + shrinkVertically(
 /// AnimationExitSizeSpec)`: fade out while shrinking vertically, 350ms with `CubicBezier(0, 1, 0, 1)` and a
 /// 100ms delay (see [`docked_enter_spec`] for why the delay is separate).
-fn docked_exit_spec() -> crate::ui::overlay::OverlayAnimSpec {
-    crate::ui::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
+fn docked_exit_spec() -> crate::overlay::OverlayAnimSpec {
+    crate::overlay::OverlayAnimSpec::expand_fade(std::time::Duration::from_millis(
         SEARCH_BAR_COLLAPSE_MS,
     ))
     .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS))
@@ -359,7 +359,7 @@ pub fn expansion_size(collapsed: (f32, f32), full: (f32, f32), progress: f32) ->
     let c = if collapsed.0 > 0.0 && collapsed.1 > 0.0 {
         collapsed
     } else {
-        (crate::ui::adaptive::window_size().0, SEARCH_BAR_HEIGHT)
+        (crate::layout::adaptive::window_size().0, SEARCH_BAR_HEIGHT)
     };
     (
         expansion_lerp(c.0, full.0, progress),
@@ -574,7 +574,7 @@ impl SearchBar {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + 'static) {
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| SearchBarDefaults::colors(&theme));
         let state = self
             .state
@@ -686,17 +686,17 @@ impl SearchBar {
         // The anchor's coordinates are known only to the layout pass, so this mode is resolved there and the
         // caller supplies just the progress reader.
         let slide_progress = state.progress.clone();
-        crate::ui::overlay::Dialog::new(active)
-            .position(crate::ui::overlay::PopupPosition::TopLeft)
+        crate::overlay::Dialog::new(active)
+            .position(crate::overlay::PopupPosition::TopLeft)
             .anchor_slot(Some(anchor_slot))
-            .anchor_slide(crate::ui::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
+            .anchor_slide(crate::overlay::AnchorSlide::new(std::sync::Arc::new(move || {
                 slide_progress.get()
             })))
             .on_dismiss_request(move || st_dismiss.close())
-            .enter_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+            .enter_animation(Some(crate::overlay::OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
             )))
-            .exit_animation(Some(crate::ui::overlay::OverlayAnimSpec::fade_only(
+            .exit_animation(Some(crate::overlay::OverlayAnimSpec::fade_only(
                 std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
             )))
             .build(ctx, move |ctx| {
@@ -760,7 +760,7 @@ impl SearchBar {
                                     let p = size_prog.clone();
                                     let c = collapsed.clone();
                                     move || {
-                                        let full = crate::ui::adaptive::window_size();
+                                        let full = crate::layout::adaptive::window_size();
                                         expansion_size((c.get().0, c.get().1), full, p.get()).0
                                     }
                                 })),
@@ -768,7 +768,7 @@ impl SearchBar {
                                     let p = size_prog;
                                     let c = collapsed;
                                     move || {
-                                        let full = crate::ui::adaptive::window_size();
+                                        let full = crate::layout::adaptive::window_size();
                                         expansion_size((c.get().0, c.get().1), full, p.get()).1
                                     }
                                 })),
@@ -778,7 +778,7 @@ impl SearchBar {
                                 // `lerp(0, SearchBarVerticalPadding, progress)`), so the input field starts
                                 // flush with the bar and slides down as the panel opens.
                                 let p = prog.clone();
-                                crate::ui::layout_components::Column::new()
+                                crate::layout::components::Column::new()
                                     .modifier(Modifier::new().padding_vertical(
                                         SizeValue::Dynamic(std::sync::Arc::new(move || {
                                             expansion_vertical_padding(p.get())
@@ -815,7 +815,7 @@ impl SearchBar {
                                         // when closing. The input field above deliberately stays on the
                                         // geometry clock — it is the bar the user is typing into.
                                         let cp = state.content_progress.clone();
-                                        crate::ui::layout_components::Column::new()
+                                        crate::layout::components::Column::new()
                                             .modifier(Modifier::new().graphics_layer(move || {
                                                 crate::modifier::GraphicsLayerParams {
                                                     alpha: cp.get(),
@@ -919,7 +919,7 @@ impl DockedSearchBar {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + 'static) {
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         let defaults = SearchBarDefaults::colors(&theme);
         let colors = self.inner.colors.clone().unwrap_or(defaults);
         let state = self
@@ -997,8 +997,8 @@ impl DockedSearchBar {
         // `if !active return` would look like a Skip frame and leak a zombie.
         let container = colors.container;
         let content = Arc::new(content);
-        crate::ui::overlay::Popup::new(active)
-            .position(crate::ui::overlay::PopupPosition::BottomLeft)
+        crate::overlay::Popup::new(active)
+            .position(crate::overlay::PopupPosition::BottomLeft)
             .offset(0.0, SearchBarDefaults::docked_gap())
             .anchor_slot(Some(anchor_slot))
             // Compose's docked transition is `fadeIn(...) + expandVertically(...)` on the way in and

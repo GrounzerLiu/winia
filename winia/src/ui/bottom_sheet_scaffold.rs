@@ -127,7 +127,7 @@ impl BottomSheetScaffold {
         // 平板按 max 宽居中）。Dp(f32::INFINITY) 表 Unspecified 铺满。
         // Same geometry as the modal sheet (and the same unit rule — see the helper).
         let (sheet_w, sheet_pad_x) =
-            crate::ui::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::ui::window_size().0);
+            crate::ui::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::layout::window_size().0);
         let container_color = self.container_color;
 
         // 外层 Stack：主内容底层，片上层
@@ -136,7 +136,7 @@ impl BottomSheetScaffold {
             // 整体背景（对齐 Compose BottomSheetScaffold containerColor）
             root_mod = root_mod.background(cc, Shape::Rectangle);
         }
-        crate::ui::layout_components::Stack::new()
+        crate::layout::components::Stack::new()
             .modifier(root_mod)
             .build(ctx, |ctx| {
                 // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
@@ -144,7 +144,7 @@ impl BottomSheetScaffold {
                 // Same unit rule: `padding_bottom` takes a layout length, so the dp value is
                 // the logical value (the sheet's own height is reported in logical px too).
                 let peek_px_pre = peek.to_logical();
-                crate::ui::layout_components::Stack::new()
+                crate::layout::components::Stack::new()
                     .modifier(Modifier::new().fill_max_size().padding_bottom(peek_px_pre))
                     .build(ctx, |ctx| {
                         content(ctx);
@@ -152,7 +152,7 @@ impl BottomSheetScaffold {
 
                 // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
                 // 用窗口高近似 layoutH（占满时正确），响应式订阅 window_size 以跟随 resize
-                let layout_h = crate::ui::window_size().1;
+                let layout_h = crate::layout::window_size().1;
                 let peek_px = peek.to_logical();
 
                 let st_for_offset = sheet_state.clone();
@@ -198,7 +198,7 @@ impl BottomSheetScaffold {
                     )
                     .background(
                         sheet_container_color.unwrap_or_else(|| {
-                            crate::ui::theme::WiniaTheme::colors().surface_container_low
+                            crate::theme::WiniaTheme::colors().surface_container_low
                         }),
                         cur_shape,
                     )
@@ -207,7 +207,7 @@ impl BottomSheetScaffold {
                         // 在回调内重算 peek/layout，避免闭包固化 + Skip 时 stale
                         move |_w, h| {
                             sheet_h_for_cb.set(h);
-                            let layout = crate::ui::window_size().1;
+                            let layout = crate::layout::window_size().1;
                             let peek_now = peek.to_logical();
                             let s = st_for_anchors.clone();
                             s.update_anchors_scaffold(layout, peek_now, h);
@@ -294,17 +294,17 @@ impl BottomSheetScaffold {
                     .on_drag_end(move || {
                         s_e.settle_with_velocity(s_e.last_velocity());
                     });
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(sheet_mod_with_panel_drag)
                     .build(ctx, |ctx| {
                         if drag_handle {
-                            crate::ui::layout_components::Row::new()
+                            crate::layout::components::Row::new()
                                 .modifier(Modifier::new().fill_max_width().padding_vertical(12.0))
                                 .arrangement(crate::layout::Arrangement::Center)
                                 .build(ctx, |ctx| {
-                                    crate::ui::layout_components::Stack::new()
+                                    crate::layout::components::Stack::new()
                                         .modifier(Modifier::new().size(32.0, 4.0).background(
-                                            crate::ui::theme::WiniaTheme::colors().outline_variant,
+                                            crate::theme::WiniaTheme::colors().outline_variant,
                                             Shape::RoundedRect { corner_radius: 2.0 },
                                         ))
                                         .build(ctx, |_| {});
@@ -346,7 +346,7 @@ mod tests {
         // regression in exactly the site this test is meant to catch.
         crate::unit::with_density(Density::from_density(1.5), || {
             c.compose(move |ctx| {
-                crate::ui::adaptive::set_window_size(480.0, 720.0);
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
                 BottomSheetScaffold::new()
                     .sheet_state(st.clone())
                     .sheet_peek_height(SCAFFOLD_SHEET_PEEK_HEIGHT)
@@ -400,9 +400,9 @@ mod tests {
         let st = state.clone();
         let mut c = Composer::new();
         c.compose(move |ctx| {
-            crate::ui::adaptive::set_window_size(900.0, 720.0);
-            crate::ui::theme::WiniaTheme::with_theme_and_direction(
-                crate::ui::theme::WiniaTheme::colors(),
+            crate::layout::adaptive::set_window_size(900.0, 720.0);
+            crate::theme::WiniaTheme::with_theme_and_direction(
+                crate::theme::WiniaTheme::colors(),
                 crate::layout::LayoutDirection::Rtl,
                 ctx,
                 |ctx| {

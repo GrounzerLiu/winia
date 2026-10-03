@@ -36,7 +36,7 @@ use crate::layout::node::{
 use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::text::TextAlign;
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 // ── Token 常量 ──
@@ -105,32 +105,32 @@ pub struct TabRowDefaults;
 
 impl TabRowDefaults {
     /// 容器色（PrimaryNavigationTabTokens.ContainerColor = Surface）
-    pub fn container_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn container_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.surface
     }
 
     /// Primary 内容色（PrimaryNavigationTabTokens.ActiveLabelTextColor = Primary）
-    pub fn primary_content_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn primary_content_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.primary
     }
 
     /// Secondary 内容色（SecondaryNavigationTabTokens.ActiveLabelTextColor = OnSurface）
-    pub fn secondary_content_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn secondary_content_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.on_surface
     }
 
     /// 分隔线色（DividerTokens.Color = OutlineVariant）
-    pub fn divider_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn divider_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.outline_variant
     }
 
     /// Primary 指示条色（PrimaryNavigationTabTokens.ActiveIndicatorColor = Primary）
-    pub fn primary_indicator_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn primary_indicator_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.primary
     }
 
     /// Secondary 指示条色（Same as Primary 但无 shape）
-    pub fn secondary_indicator_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn secondary_indicator_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.primary
     }
 
@@ -147,12 +147,12 @@ impl TabRowDefaults {
     /// 选中 Tab 内容色（Primary 选中 = Primary，Secondary 选中 = OnSurface）
     /// ⚠ 当前 Tab::build 的选中色走 `self.selected_content_color.unwrap_or(content_color)`
     ///（TabRow 注入的 contentColor），不经由此函数——保留供未来 scrollable/自定义使用。
-    pub fn selected_content_color(theme: &crate::ui::theme::ThemeColors, is_primary: bool) -> Color {
+    pub fn selected_content_color(theme: &crate::theme::ThemeColors, is_primary: bool) -> Color {
         if is_primary { theme.primary } else { theme.on_surface }
     }
 
     /// 未选中 Tab 内容色（InactiveLabelTextColor = OnSurfaceVariant）
-    pub fn unselected_content_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn unselected_content_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.on_surface_variant
     }
 
@@ -515,7 +515,7 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             // `subcompose_overlay`, not `subcompose`: an indicator is drawn ON the row, it does not
             // define the row's size (the tabs do). With the size-defining variant the row's own node
             // became the indicator's box and the whole row stopped painting.
-            crate::ui::subcompose::subcompose_overlay(
+            crate::layout::subcompose::subcompose_overlay(
                 Constraints::new(0.0, row_width, 0.0, tab_row_height),
                 // The scope is CLONED per call: `subcompose` runs its content as `Fn`, and each call
                 // needs its own copy (a Vec of a few floats per measurement).
@@ -1348,7 +1348,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
                 selected_index: self.selected_tab_index,
             };
             // Overlay-shaped here too: the tabs define the row's size, not the indicator.
-            crate::ui::subcompose::subcompose_overlay(
+            crate::layout::subcompose::subcompose_overlay(
                 Constraints::new(0.0, layout_width, 0.0, layout_height),
                 |ctx| slot(ctx, scope.clone()),
             );
@@ -1444,7 +1444,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
-    use crate::ui::layout_components::Row;
+    use crate::layout::components::Row;
     use crate::ui::text::Text;
 
     fn tab_row_layout(
@@ -1454,7 +1454,7 @@ mod tests {
         direction: LayoutDirection,
     ) -> Composer {
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, direction, ctx, |ctx| {
                 let mut row = TabRow::new(selected, move |ctx| {
@@ -1502,7 +1502,7 @@ mod tests {
         let seen: Arc<Mutex<Vec<(usize, TabPosition)>>> = Arc::new(Mutex::new(Vec::new()));
         let seen_in = seen.clone();
         let mut composer = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         composer.compose(move |ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(1, |ctx| {
@@ -1521,7 +1521,7 @@ mod tests {
                         .push((scope.tab_positions().len(), selected.unwrap_or(TabPosition::new(0.0, 0.0, 0.0))));
                     // What a caller draws: the selected tab's own width, centred on it.
                     let pos = scope.selected_position().copied().unwrap_or(TabPosition::new(0.0, 0.0, 0.0));
-                    crate::ui::layout_components::Spacer::vertical(ACTIVE_INDICATOR_HEIGHT)
+                    crate::layout::components::Spacer::vertical(ACTIVE_INDICATOR_HEIGHT)
                         .modifier(
                             crate::modifier::Modifier::new()
                                 .fill_max_width()
@@ -1555,7 +1555,7 @@ mod tests {
     #[test]
     fn a_custom_indicator_replaces_the_default_bar() {
         let mut composer = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         composer.compose(move |ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(0, |ctx| {
@@ -1597,7 +1597,7 @@ mod tests {
         let st_outer = state.clone();
         let st_inner = state.clone();
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(move |ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 ScrollableTabRow::new(1, move |ctx| {
@@ -1691,7 +1691,7 @@ mod tests {
     #[test]
     fn a_tab_row_prices_a_weighted_label_through_the_intrinsics() {
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(0, |ctx| {
@@ -1727,7 +1727,7 @@ mod tests {
     #[test]
     fn a_tab_row_clamps_a_wide_tabs_content_width_into_its_slot() {
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(0, |ctx| {
@@ -1777,7 +1777,7 @@ mod tests {
     fn tab_row_0_tabs_does_not_panic() {
         let mut c = Composer::new();
         c.compose(|ctx| {
-            let colors = crate::ui::theme::ThemeColors::default_light();
+            let colors = crate::theme::ThemeColors::default_light();
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(0, |_| {}).build(ctx);
             });
@@ -1806,7 +1806,7 @@ mod tests {
         // LeadingIconTab：icon 左 + 8dp + text 右（水平排列），整体水平居中
         use crate::ui::icon::{Icon, IconSource};
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 Tab::new(true, || {})
@@ -1854,7 +1854,7 @@ mod tests {
         //（用户实测：Tab Three 切 RTL 后不镜像——Tab 内部布局此前不感知方向）
         use crate::ui::icon::{Icon, IconSource};
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Rtl, ctx, |ctx| {
                 Tab::new(true, || {})
@@ -1894,7 +1894,7 @@ mod tests {
         //（不 panic，渲染结构同内部创建路径）
         use crate::interaction::MutableInteractionSource;
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         let src: MutableInteractionSource = {
             let mut out = None;
             c.compose(|ctx| {
@@ -1922,7 +1922,7 @@ mod tests {
         // P0-1 回归：自定义 content 版 ripple 必须全尺寸覆盖 tab slot
         // （BoxLayout(Center) 测子节点用 loosen——无尺寸则塌缩 0×0）
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
                 TabRow::new(0, |ctx| {
@@ -1974,7 +1974,7 @@ mod tests {
 
         fn make_scene(
             selected: State<usize>,
-            colors: crate::ui::theme::ThemeColors,
+            colors: crate::theme::ThemeColors,
         ) -> impl FnOnce(&mut ComposeCtx) {
             move |ctx: &mut ComposeCtx| {
                 WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
@@ -1994,7 +1994,7 @@ mod tests {
         }
 
         let selected = State::new(0usize);
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
 
         let mut c = Composer::new();
         c.compose(make_scene(selected.clone(), colors.clone()));
@@ -2089,7 +2089,7 @@ mod tests {
         direction: LayoutDirection,
     ) -> (Composer, crate::modifier::ScrollState) {
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         let state = crate::modifier::ScrollState::new();
         let st = state.clone();
         c.compose(|ctx| {
@@ -2165,7 +2165,7 @@ mod tests {
         fn make_scene(
             selected: State<usize>,
             scroll_state: crate::modifier::ScrollState,
-            colors: crate::ui::theme::ThemeColors,
+            colors: crate::theme::ThemeColors,
         ) -> impl FnOnce(&mut ComposeCtx) {
             move |ctx: &mut ComposeCtx| {
                 WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
@@ -2191,7 +2191,7 @@ mod tests {
 
         let selected = State::new(0usize);
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         let scroll_state = crate::modifier::ScrollState::new();
 
         c.compose(make_scene(selected.clone(), scroll_state.clone(), colors.clone()));
@@ -2308,7 +2308,7 @@ mod tests {
         fn make_scene(
             selected: State<usize>,
             scroll_state: crate::modifier::ScrollState,
-            colors: crate::ui::theme::ThemeColors,
+            colors: crate::theme::ThemeColors,
         ) -> impl FnOnce(&mut ComposeCtx) {
             move |ctx: &mut ComposeCtx| {
                 WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Rtl, ctx, |ctx| {
@@ -2334,7 +2334,7 @@ mod tests {
 
         let selected = State::new(0usize);
         let mut c = Composer::new();
-        let colors = crate::ui::theme::ThemeColors::default_light();
+        let colors = crate::theme::ThemeColors::default_light();
         let scroll_state = crate::modifier::ScrollState::new();
 
         c.compose(make_scene(selected.clone(), scroll_state.clone(), colors.clone()));

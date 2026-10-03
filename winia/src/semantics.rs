@@ -866,11 +866,11 @@ mod tests {
     use crate::layout::Constraints;
     use crate::ui::button::Button;
     use crate::ui::checkbox::TriStateCheckbox;
-    use crate::ui::layout_components::{Column, Row};
+    use crate::layout::components::{Column, Row};
     use crate::ui::radio_button::RadioButton;
     use crate::ui::switch::Switch;
     use crate::ui::text::Text;
-    use crate::ui::theme::WiniaTheme;
+    use crate::theme::WiniaTheme;
     use crate::modifier::Modifier;
 
     /// Compose a tree and return its semantics elements.

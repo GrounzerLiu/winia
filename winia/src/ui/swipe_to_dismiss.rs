@@ -23,8 +23,8 @@ use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::layout::Alignment;
 use crate::modifier::Modifier;
-use crate::ui::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
-use crate::ui::layout_components::Stack;
+use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
+use crate::layout::components::Stack;
 use std::sync::Arc;
 
 /// Distance (logical px) a drag must pass for the release to land on the dismiss anchor — Compose

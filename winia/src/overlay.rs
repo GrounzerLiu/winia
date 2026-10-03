@@ -11,6 +11,7 @@
 //!   text selection will follow.
 //! - Single-level popups (nesting will follow).
 
+pub mod anchored_draggable;
 use std::sync::Arc;
 use crate::composable;
 
@@ -569,7 +570,7 @@ impl Popup {
         // Explicit anchor wins; otherwise fall back to prev-sibling capture
         // (None inside build scope — kept for non-composable callers).
         let anchor = self.anchor_slot.or_else(|| ctx.prev_sibling_slot_key());
-        ctx.open_overlay(crate::ui::overlay::OverlayDesc {
+        ctx.open_overlay(crate::overlay::OverlayDesc {
             id: id.get(),
             // Anchor = caller-supplied (see `anchor_slot`); default = last sibling
             // in the current scope — always None inside build's own scope ->
@@ -712,7 +713,7 @@ impl Dialog {
         if !self.visible {
             return; // Closed: do not register an overlay — `sync` deletes on `active=false`.
         }
-        ctx.open_overlay(crate::ui::overlay::OverlayDesc {
+        ctx.open_overlay(crate::overlay::OverlayDesc {
             id: id.get(),
             anchor_slot: self.anchor_slot,
             position: self.position,
@@ -758,7 +759,7 @@ pub struct MenuItemColors {
 impl MenuItemColors {
     /// `MenuDefaults.itemColors()` — from the current theme's roles.
     pub fn defaults() -> Self {
-        let c = crate::ui::theme::WiniaTheme::colors();
+        let c = crate::theme::WiniaTheme::colors();
         Self {
             text: c.on_surface,
             leading_icon: c.on_surface_variant,
@@ -813,7 +814,7 @@ impl MenuDefaults {
 
     /// `MenuDefaults.containerColor` — `MenuTokens.ContainerColor` (`surfaceContainer`).
     pub fn container_color() -> crate::modifier::Color {
-        crate::ui::theme::WiniaTheme::colors().surface_container
+        crate::theme::WiniaTheme::colors().surface_container
     }
 
     /// `MenuDefaults.itemColors()` — the theme's menu item roles.
@@ -1048,7 +1049,7 @@ impl DropdownMenu {
             enter_anim.anchor_pivot = true;
             let mut exit_anim = OverlayAnimSpec::default_exit();
             exit_anim.anchor_pivot = true;
-            ctx.open_overlay(crate::ui::overlay::OverlayDesc {
+            ctx.open_overlay(crate::overlay::OverlayDesc {
                 id: id.get(),
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomLeft,
@@ -1139,7 +1140,7 @@ impl DropdownMenu {
                                 crate::modifier::IntrinsicSize::Max,
                             ))
                             .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
-                        crate::ui::Column::new().modifier(m).build(ctx, |ctx| menu(ctx));
+                        crate::layout::Column::new().modifier(m).build(ctx, |ctx| menu(ctx));
                     });
                 }),
                 local_snapshot: Vec::new(),
@@ -1508,7 +1509,7 @@ impl ExposedDropdownMenuBox {
                     } else {
                         crate::modifier::Modifier::new()
                     };
-                    crate::ui::Column::new()
+                    crate::layout::Column::new()
                         .modifier(modifier)
                         .build(ctx, |ctx| anchor(ctx, anchor_element));
                 },
@@ -1672,7 +1673,7 @@ impl DropdownMenuItem {
         let modifier = modifier.then(self.modifier);
         let text = self.text;
         // M3 typography: `ProvideTextStyle(MaterialTheme.typography.labelLarge)`.
-        let style = crate::ui::theme::WiniaTheme::typography().label_large;
+        let style = crate::theme::WiniaTheme::typography().label_large;
         // The item is material3's `Row(verticalAlignment = Alignment.CenterVertically)` — winia's
         // `Row::alignment(Alignment::Center)` centres on the cross axis. (Fixing the centring is what
         // removed the "asymmetric padding" a screenshot showed: the label used to sit at the item's TOP,
@@ -1699,20 +1700,20 @@ impl DropdownMenuItem {
         let icon_box = |ctx: &mut crate::runtime::composer::ComposeCtx,
                         color: crate::modifier::Color,
                         content: Box<dyn FnOnce(&mut crate::runtime::composer::ComposeCtx) + Send + Sync>| {
-            crate::ui::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
-                crate::ui::Column::new()
+            crate::theme::WiniaTheme::with_content_color(color, ctx, |ctx| {
+                crate::layout::Column::new()
                     .modifier(crate::modifier::Modifier::new().min_width(24.0))
                     .build(ctx, |ctx| content(ctx));
             });
         };
-        crate::ui::Row::new()
+        crate::layout::Row::new()
             .alignment(crate::layout::node::Alignment::Center)
             .modifier(modifier)
             .build(ctx, |ctx| {
                 if let Some(content) = leading_icon {
                     icon_box(ctx, leading_color, content);
                 }
-                crate::ui::Column::new()
+                crate::layout::Column::new()
                     .modifier(
                         crate::modifier::Modifier::new()
                             .layout_weight(1.0)
@@ -1927,7 +1928,7 @@ mod tests {
     /// `MenuDefaults` would draw something else than an unset field does.
     #[test]
     fn menu_defaults_are_what_the_components_resolve_to() {
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         assert_eq!(
             MenuDefaults::container_color(),
             theme.surface_container,
@@ -1947,7 +1948,7 @@ mod tests {
         // The item's own fallback goes through the same accessor, so an unset `colors` and
         // `MenuDefaults.itemColors()` cannot drift.
         assert_eq!(
-            crate::ui::overlay::MenuItemColors::defaults().text,
+            crate::overlay::MenuItemColors::defaults().text,
             colors.text,
             "MenuItemColors::defaults (what an item resolves to) must equal the published default"
         );

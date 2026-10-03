@@ -39,7 +39,7 @@ use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Po
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 // ── Token 常量（androidx-main NavigationBarTokens / NavigationBarVerticalItemTokens /
@@ -106,7 +106,7 @@ impl NavigationBarColors {
     }
 
     /// ContainerColor = ColorSchemeKeyTokens.SurfaceContainer
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self {
+    pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
         Self { container: theme.surface_container }
     }
 }
@@ -143,7 +143,7 @@ impl NavigationBarItemColors {
     /// - indicator = ItemActiveIndicatorColor = SecondaryContainer
     /// - unselectedIcon/Label = ItemInactive* = OnSurfaceVariant
     /// - disabled* = OnSurfaceVariant.copy(alpha = 0.38)
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self {
+    pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
         Self::new(
             theme.on_secondary_container,
             theme.secondary,
@@ -181,11 +181,11 @@ impl NavigationBarItemColors {
 pub struct NavigationBarDefaults;
 
 impl NavigationBarDefaults {
-    pub fn colors(theme: &crate::ui::theme::ThemeColors) -> NavigationBarColors {
+    pub fn colors(theme: &crate::theme::ThemeColors) -> NavigationBarColors {
         NavigationBarColors::from_theme(theme)
     }
 
-    pub fn item_colors(theme: &crate::ui::theme::ThemeColors) -> NavigationBarItemColors {
+    pub fn item_colors(theme: &crate::theme::ThemeColors) -> NavigationBarItemColors {
         NavigationBarItemColors::from_theme(theme)
     }
 
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn item_colors_follow_v0_11_0_tokens() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let c = NavigationBarItemColors::from_theme(&theme);
         assert_eq!(c.selected_icon, theme.on_secondary_container, "ItemActiveIconColor");
         assert_eq!(c.selected_label, theme.secondary, "ItemActiveLabelTextColor(v0_11_0)");
@@ -840,7 +840,7 @@ mod tests {
         let mut rtl = Composer::new();
         rtl.compose(|ctx| {
             WiniaTheme::with_theme_and_direction(
-                crate::ui::theme::ThemeColors::default_light(),
+                crate::theme::ThemeColors::default_light(),
                 LayoutDirection::Rtl,
                 ctx,
                 |ctx| NavigationBar::new(build_items_rtl).build(ctx),
@@ -1003,7 +1003,7 @@ mod tests {
             .expect("ripple 节点应有 ripple");
         assert_eq!(*ripple, Some(Shape::Pill));
         // 背景为动态闭包：progress=1 时输出全 alpha 指示器色
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let color_fn = indicator
             .modifier
             .elements()
@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn unselected_item_hover_shows_state_layer_on_full_pill_rect() {
         let _serial = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let container = theme.surface_container;
         let to_rgba = |c: Color| (c.r, c.g, c.b, c.a);
 

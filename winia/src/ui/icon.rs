@@ -15,7 +15,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use skia_safe::svg;
 use std::collections::HashMap;
 use std::cell::RefCell;

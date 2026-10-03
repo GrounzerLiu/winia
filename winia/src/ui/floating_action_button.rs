@@ -13,7 +13,7 @@ use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Po
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// FAB size variants from the Material 3 token families.

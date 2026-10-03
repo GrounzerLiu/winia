@@ -9,7 +9,7 @@ use crate::modifier::Modifier;
 use crate::composable;
 use crate::ui::text::{ProvideTextStyle};
 use crate::text::{FontWeight, TextStyle};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -300,7 +300,7 @@ impl TextFieldColors {
     /// M3 FilledTextField 默认色（defaultTextFieldColors——1.4.0 tokens）：
     /// text onSurface、container surfaceContainerHighest、indicator/label 按状态、
     /// disabled 全系 onSurface@38%、cursor primary（error → error）
-    pub fn filled_from_theme(theme: &crate::ui::theme::ThemeColors) -> Self {
+    pub fn filled_from_theme(theme: &crate::theme::ThemeColors) -> Self {
         Self {
             text: theme.on_surface,
             disabled_text: alpha(theme.on_surface, 0.38),
@@ -332,7 +332,7 @@ impl TextFieldColors {
 
     /// M3 OutlinedTextField 默认色（defaultOutlinedTextFieldColors）：
     /// 容器透明、边框 unfocused outline / disabled onSurface@12%、其余同 Filled
-    pub fn outlined_from_theme(theme: &crate::ui::theme::ThemeColors) -> Self {
+    pub fn outlined_from_theme(theme: &crate::theme::ThemeColors) -> Self {
         let mut c = Self::filled_from_theme(theme);
         c.container = crate::modifier::Color::TRANSPARENT;
         c.indicator_unfocused = theme.outline;
@@ -1784,7 +1784,7 @@ impl TextField {
                             } else {
                                 colors.leading_icon_focused
                             };
-                            crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
+                            crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| $content(c));
                         }
                         _ => $content(ctx),
                     }
@@ -1904,10 +1904,10 @@ impl TextField {
         // 注册到节点（app.rs 拖动选区定位依赖 node.registrar）
         ctx.set_current_node_registrar(registrar.clone());
         // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
-        ctx.set_current_node_focus_color(crate::ui::theme::WiniaTheme::colors().primary);
+        ctx.set_current_node_focus_color(crate::theme::WiniaTheme::colors().primary);
         // IME 组合下划线颜色：主题 primary（组合期捕获——Phase 4.2：render 阶段
         // 不能读 CompositionLocal，否则自定义主题下下划线用默认色）
-        ctx.set_current_node_composing_color(crate::ui::theme::WiniaTheme::colors().primary);
+        ctx.set_current_node_composing_color(crate::theme::WiniaTheme::colors().primary);
         // IME 预输入回调（旧版风格——直接修改 text 内容）
         {
             let v = value.clone();
@@ -2152,7 +2152,7 @@ mod tests {
 
     #[test]
     fn typography_tokens_reach_input_affix_and_supporting_text() {
-        let custom = crate::ui::theme::Typography {
+        let custom = crate::theme::Typography {
             body_large: TextStyle::new()
                 .font_size(18.0)
                 .line_height(26.0)
@@ -2163,7 +2163,7 @@ mod tests {
                 .line_height(19.0)
                 .letter_spacing(0.6)
                 .font_weight(FontWeight::MEDIUM),
-            ..crate::ui::theme::Typography::default()
+            ..crate::theme::Typography::default()
         };
         let input = find_slot_modifier_with_typography(custom.clone(), TextFieldSlotRole::Input).unwrap();
         assert_eq!(text_content_style(&input).unwrap(), (18.0, FontWeight::BOLD, 0.9, Some(26.0)));
@@ -2185,7 +2185,7 @@ mod tests {
         assert_eq!(supporting.line_height, Some(19.0));
     }
 
-    fn container_modifier_with_typography(typography: crate::ui::theme::Typography, _role: TextFieldSlotRole) -> Option<Modifier> {
+    fn container_modifier_with_typography(typography: crate::theme::Typography, _role: TextFieldSlotRole) -> Option<Modifier> {
         let value = State::new(TextFieldValue::new("value"));
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
@@ -2198,7 +2198,7 @@ mod tests {
         let root = composer.layout_root_idx().unwrap();
         Some(composer.arena_nodes()[root].modifier.clone())
     }
-    fn find_slot_modifier_with_typography(typography: crate::ui::theme::Typography, role: TextFieldSlotRole) -> Option<Modifier> {
+    fn find_slot_modifier_with_typography(typography: crate::theme::Typography, role: TextFieldSlotRole) -> Option<Modifier> {
         let value = State::new(TextFieldValue::new("value"));
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let _guard = rt.enter();
@@ -2742,7 +2742,7 @@ mod tests {
         for _frame in 0..3 {
             let field = mk_field(progress_log.clone());
             composer.compose(|ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     field.build(ctx);
                 });
             });
@@ -2752,7 +2752,7 @@ mod tests {
         for _frame in 0..20 {
             let field = mk_field(progress_log.clone());
             composer.compose(|ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     field.build(ctx);
                 });
             });
@@ -2897,7 +2897,7 @@ mod tests {
                 let field = mk();
                 let sc = scroll2.clone();
                 composer.compose(|ctx| {
-                    crate::ui::Column::new()
+                    crate::layout::Column::new()
                         .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(sc))
                         .build(ctx, |ctx| { field.build(ctx); });
                 });

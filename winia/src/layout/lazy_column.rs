@@ -1588,10 +1588,10 @@ mod tests {
     // ── 组件级像素：懒加载渲染 + 滚动后内容变化 ──
     fn render_lazy_sized(build: impl FnOnce(&mut ComposeCtx), w: f32, h: f32) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let mut composer = Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
-            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
         composer.compose(scene);
         composer.layout(Constraints::new(0.0, w, 0.0, h));
@@ -1612,10 +1612,10 @@ mod tests {
     /// test rendering one pass would assert on a frame that never reaches a screen.
     fn render_lazy(build: impl Fn(&mut ComposeCtx)) -> (Vec<[u8; 4]>, usize) {
         use skia_safe::{Color as SkColor, surfaces};
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let mut composer = Composer::new();
         let scene = |ctx: &mut ComposeCtx| {
-            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx));
         };
         for _ in 0..8 {
             composer.compose(&scene);
@@ -2820,12 +2820,12 @@ mod tests {
     /// 内是否有文本（判断可见项是否被 build 组合覆盖）。
     fn render_lazy_frames_bottom_text(build: impl Fn(&mut ComposeCtx, &LazyListState) + Send, heights: &[f32]) -> bool {
         use skia_safe::{Color as SkColor, surfaces};
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let state = LazyListState::new();
         let mut composer = Composer::new();
         let last_h = *heights.last().unwrap_or(&400.0);
         for &h in heights {
-            composer.compose(|ctx| crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state)));
+            composer.compose(|ctx| crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state)));
             composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
         }
         let mut surface = surfaces::raster_n32_premul((400, last_h as i32)).unwrap();
@@ -3137,7 +3137,7 @@ mod tests {
     /// the fix.
     fn resize_frame_bottom_covered(stable: bool) -> bool {
         use skia_safe::{Color as SkColor, surfaces};
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let state = LazyListState::new();
         let items: Arc<Vec<u64>> = Arc::new((0..200).collect());
         let build = move |ctx: &mut ComposeCtx, _s: &LazyListState| {
@@ -3158,7 +3158,7 @@ mod tests {
             if last {
                 // The resize frame: first the compose+layout the handler does today...
                 composer.compose(|ctx| {
-                    crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
                 });
                 composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
                 if stable {
@@ -3170,14 +3170,14 @@ mod tests {
                             break;
                         }
                         composer.compose(|ctx| {
-                            crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
                         });
                         composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
                     }
                 }
             } else {
                 composer.compose(|ctx| {
-                    crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| build(ctx, &state))
                 });
                 composer.layout(Constraints::new(0.0, 400.0, 0.0, h));
             }

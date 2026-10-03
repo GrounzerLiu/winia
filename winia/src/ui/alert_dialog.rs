@@ -32,8 +32,8 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::{Alignment, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
-use crate::ui::theme::WiniaTheme;
+use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 /// `DialogMinWidth` — the narrowest an alert dialog gets.
@@ -67,27 +67,27 @@ impl AlertDialogDefaults {
     }
 
     /// `ContainerColor` = `SurfaceContainerHigh`.
-    pub fn container_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn container_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.surface_container_high
     }
 
     /// `IconColor` = `Secondary`.
-    pub fn icon_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn icon_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.secondary
     }
 
     /// `HeadlineColor` = `OnSurface`.
-    pub fn title_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn title_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.on_surface
     }
 
     /// `SupportingTextColor` = `OnSurfaceVariant`.
-    pub fn text_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn text_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.on_surface_variant
     }
 
     /// `ActionLabelTextColor` = `Primary`.
-    pub fn button_color(theme: &crate::ui::theme::ThemeColors) -> Color {
+    pub fn button_color(theme: &crate::theme::ThemeColors) -> Color {
         theme.primary
     }
 
@@ -283,10 +283,10 @@ impl BasicAlertDialog {
                 // The caller's modifier is a WRAPPER, as in Compose's
                 // `Box(modifier.sizeIn(...))`: a caller's padding must sit outside the dialog's
                 // background, not eat into it.
-                crate::ui::layout_components::Stack::new()
+                crate::layout::components::Stack::new()
                     .modifier(user_modifier.clone())
                     .build(ctx, |ctx| {
-                        crate::ui::layout_components::Column::new()
+                        crate::layout::components::Column::new()
                             .modifier(surface)
                             .alignment(Alignment::Start)
                             .build(ctx, |ctx| content(ctx));
@@ -541,7 +541,7 @@ fn alert_dialog_content(
     colors: DialogColors,
     styles: &DialogStyles,
 ) {
-    use crate::ui::layout_components::{FlowRow, Stack};
+    use crate::layout::components::{FlowRow, Stack};
     use crate::ui::text::ProvideTextStyle;
 
     // A slot: an inner box carrying the padding and the alignment within the Column.
@@ -621,13 +621,13 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
-    use crate::ui::layout_components::Stack;
+    use crate::layout::components::Stack;
 
     /// Compose an AlertDialog (invisible unless `visible`) and hand back the composer.
     fn compose_dialog(dialog: AlertDialog) -> Composer {
         let mut c = Composer::new();
         c.compose(move |ctx| {
-            crate::ui::adaptive::set_window_size(800.0, 600.0);
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
             dialog.build(ctx);
         });
         c

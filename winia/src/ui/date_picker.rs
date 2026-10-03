@@ -27,16 +27,16 @@ use crate::ui::button::Button;
 use crate::ui::divider::Divider;
 use crate::ui::icon::Icon;
 use crate::ui::icon_button::{IconButton, IconButtonSize};
-use crate::ui::lazy_column::{LazyColumn, LazyListState, LazyRow};
-use crate::ui::layout_components::{Column, Row, Spacer, Stack};
-use crate::ui::overlay::ExposedDropdownMenuDefaults;
+use crate::layout::lazy_column::{LazyColumn, LazyListState, LazyRow};
+use crate::layout::components::{Column, Row, Spacer, Stack};
+use crate::overlay::ExposedDropdownMenuDefaults;
 use crate::ui::scrollbar::LazyScrollbar;
 use crate::ui::surface::{Surface, SurfaceBorder};
 use crate::effect::LaunchedEffect;
 use crate::ui::text::{ProvideTextStyle, Text};
 use crate::ui::text_field::{TextField, TextFieldValue};
 use crate::ui::text_transformation::{OffsetMapping, TransformedText, VisualTransformation};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
@@ -1876,8 +1876,8 @@ impl DatePicker {
 /// The paged month list (material3's `HorizontalMonthsList`, `DatePicker.kt:1700-1761`): one page per
 /// month across the whole year range — `(last - first + 1) * 12`, 2412 for the default range — so the
 /// calendar can be swiped. material3's items are `Box(fillParentMaxWidth())`, which winia reaches with
-/// [`crate::ui::LazyRow::fill_items`], and its `rememberSnapFlingBehavior` with
-/// [`crate::ui::LazyRow::snap_paging`], so a fast swipe settles on a whole month.
+/// [`crate::layout::LazyRow::fill_items`], and its `rememberSnapFlingBehavior` with
+/// [`crate::layout::LazyRow::snap_paging`], so a fast swipe settles on a whole month.
 ///
 /// `show_outside_month` is what separates the two variants: the docked picker draws the neighbouring
 /// month's days in the padding cells, the modal one leaves them empty (see [`MonthGrid`]).

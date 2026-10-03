@@ -29,7 +29,7 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
+use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::ui::sheet_state::{SheetState, SheetValue};
 use crate::unit::Dp;
 
@@ -211,7 +211,7 @@ impl ModalBottomSheet {
             enter_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
             exit_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
             content: Box::new(move |ctx| {
-                let theme = crate::ui::theme::WiniaTheme::colors();
+                let theme = crate::theme::WiniaTheme::colors();
                 // 对齐 Compose BottomSheetDefaults.ContainerColor = surfaceContainerLow
                 // + ExpandedShape 28dp + Elevation 1dp（SheetBottomTokens.DockedModalContainerElevation）
                 let bg = container_color.unwrap_or(theme.surface_container_low);
@@ -222,7 +222,7 @@ impl ModalBottomSheet {
                 let sheet_h: State<f32> = ctx.remember(|| 0.0);
                 // 仅全屏（sheetH≈fullH）时 28→0 过渡，非全屏保持 28（M3 满屏变直角）
                 // progress 基准用 Partial→Expanded 才能半展开保持 28（Hidden→Expanded 会在 Partial 已掉角）
-                let full_h = crate::ui::window_size().1;
+                let full_h = crate::layout::window_size().1;
                 // winia's own rule (kept from the original implementation): an expanded sheet whose panel
                 // reaches the window height drops its top corners. It is NOT from Material 3 — current M3
                 // passes `shape` through untouched and never switches on the sheet's state (checked against
@@ -275,7 +275,7 @@ impl ModalBottomSheet {
                 // 顶部，translation_y = offset 推下：Expanded=fullHeight-sheetHeight
                 // 贴底，Hidden=fullHeight 滑出视口。⚠ 不能用 Stack(End) 贴底——
                 // 会与 offset 双重偏移，面板被推到屏幕外）
-                crate::ui::layout_components::Stack::new()
+                crate::layout::components::Stack::new()
                     .modifier(crate::modifier::Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
                         // Scrim 层：占满全屏、透明、点击关闭（面板之上由 overlay
@@ -285,7 +285,7 @@ impl ModalBottomSheet {
                         // visible=false 导致 closing 冻结，下滑不可见仅淡出）
                         if dismiss_cb.is_some() {
                             let st_hide = st.clone();
-                            crate::ui::layout_components::Stack::new()
+                            crate::layout::components::Stack::new()
                                 .modifier(Modifier::new()
                                     .fill_max_size()
                                     .clickable(move || {
@@ -299,7 +299,7 @@ impl ModalBottomSheet {
                         // 渲染在底部，点击命中错位（面板外点不到 Scrim）。
                         // sheetMaxWidth 640.dp 平板居中（Compose 语义），手机 480 铺满
                         let (sheet_w, sheet_pad_x) =
-                            sheet_panel_geometry(sheet_max_width, crate::ui::window_size().0);
+                            sheet_panel_geometry(sheet_max_width, crate::layout::window_size().0);
                         let mut panel_mod = Modifier::new()
                             .width(sheet_w)
                             // `absolute_offset`, not `offset` — see the scaffold: the x is a
@@ -334,7 +334,7 @@ impl ModalBottomSheet {
                         panel_mod = panel_mod.on_size_changed(move |_w, h| {
                             sheet_h_for_size.set(h);
                             let mut s = up_st.clone();
-                            s.update_anchors(crate::ui::window_size().1, h);
+                            s.update_anchors(crate::layout::window_size().1, h);
                         });
                         let mut panel_mod_with_nested = panel_mod;
                         if gestures {
@@ -427,13 +427,13 @@ impl ModalBottomSheet {
                             .on_drag_end(move || {
                                 pe.settle_with_velocity(pe.last_velocity());
                             });
-                        crate::ui::layout_components::Column::new()
+                        crate::layout::components::Column::new()
                             .modifier(panel_mod_with_panel_drag)
                             .build(ctx, |ctx| {
                                 if drag_handle {
                                     let d = drag_st.clone();
                                     let e = drag_st.clone();
-                                    crate::ui::layout_components::Row::new()
+                                    crate::layout::components::Row::new()
                                         .modifier(
                                             Modifier::new()
                                                 .fill_max_width()
@@ -445,7 +445,7 @@ impl ModalBottomSheet {
                                         )
                                         .arrangement(crate::layout::Arrangement::Center)
                                         .build(ctx, |ctx| {
-                                            crate::ui::layout_components::Stack::new()
+                                            crate::layout::components::Stack::new()
                                                 .modifier(Modifier::new().size(32.0, 4.0).background(
                                                     theme.outline_variant,
                                                     Shape::RoundedRect { corner_radius: 2.0 },

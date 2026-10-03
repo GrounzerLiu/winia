@@ -16,7 +16,7 @@ use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// 轨道尺寸（`SwitchTokens.TrackWidth/Height`）
@@ -724,7 +724,7 @@ mod tests {
         let scene = |ctx: &mut ComposeCtx| {
             let c = ctx.remember(|| true);
             holder.replace(Some(c.clone()));
-            crate::ui::Column::new().build(ctx, |ctx| {
+            crate::layout::Column::new().build(ctx, |ctx| {
                 crate::ui::Text::new(if c.get() { "aaaaaaaaaa" } else { "bb" }).build(ctx);
             });
         };
@@ -773,7 +773,7 @@ mod tests {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
                 holder.replace(Some(c.clone()));
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c2 = c.clone();
                     Switch::new(c.get())
                         .on_checked_change(move |v| c2.update(|s| *s = v))
@@ -956,7 +956,7 @@ mod tests {
         let scene = |ctx: &mut ComposeCtx| {
             let c = ctx.remember(|| false);
             holder.replace(Some(c.clone()));
-            crate::ui::Column::new().build(ctx, |ctx| {
+            crate::layout::Column::new().build(ctx, |ctx| {
                 let c2 = c.clone();
                 Switch::new(c.get())
                     .on_checked_change(move |v| c2.update(|s| *s = v))
@@ -1065,7 +1065,7 @@ mod tests {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
                 holder.replace(Some(c.clone()));
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c2 = c.clone();
                     let src = ctx.remember(|| MutableInteractionSource::new()).get();
                     src_holder.replace(Some(src.clone()));
@@ -1233,7 +1233,7 @@ mod tests {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
                 holder.replace(Some(c.clone()));
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     // 1) 默认开关（点击切换）
                     let c1 = c.clone();
                     Switch::new(c.get())

@@ -166,12 +166,12 @@ impl Window {
         // the palette it started with, and a custom type scale survived exactly one frame). The cell is
         // shared with the window's own composer — see `ui::theme::WindowTheme`.
         let theme = ctx.remember_at_key(key.wrapping_add(1), || {
-            crate::ui::theme::WindowTheme::new(crate::ui::theme::current_theme_spec())
+            crate::theme::WindowTheme::new(crate::theme::current_theme_spec())
         });
         let theme = theme.get();
         if theme.publish(
-            crate::ui::theme::current_theme_spec(),
-            crate::ui::theme::WiniaTheme::typography(),
+            crate::theme::current_theme_spec(),
+            crate::theme::WiniaTheme::typography(),
             crate::layout::direction::current(),
         ) {
             // Something moved in THIS composer, which leaves the window's own composer with nothing

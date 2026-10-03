@@ -10,11 +10,7 @@ use winia::modifier::{Color, Modifier, ScrollState};
 use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
-use winia::ui::{
-    Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar,
-    NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors,
-    TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme,
-};
+use winia::ui::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme, };
 
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 420;

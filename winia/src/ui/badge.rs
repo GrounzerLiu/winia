@@ -15,7 +15,7 @@ use crate::layout::{Alignment, BoxLayout, LayoutNode, MeasurePolicy, Placement, 
 use crate::layout::constraints::Constraints;
 use crate::layout::node::measure_node;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 
 /// 小徽章尺寸（`BadgeTokens.Size = 6dp`）
 pub const BADGE_SIZE: f32 = 6.0;
@@ -120,7 +120,7 @@ impl Badge {
                             text_style,
                             ctx,
                             |ctx| {
-                                crate::ui::layout_components::Row::new()
+                                crate::layout::components::Row::new()
                                     .alignment(Alignment::Center)
                                     .build(ctx, content);
                             },
@@ -258,8 +258,8 @@ impl BadgedBox {
 mod tests {
     use super::*;
 
-    fn light_theme() -> crate::ui::theme::ThemeColors {
-        crate::ui::theme::ThemeColors::light_from_seed(0x6750A4)
+    fn light_theme() -> crate::theme::ThemeColors {
+        crate::theme::ThemeColors::light_from_seed(0x6750A4)
     }
 
     #[test]
@@ -360,7 +360,7 @@ mod tests {
 
         let make_scene = |count: crate::runtime::state::State<i32>,
                           hits: std::sync::Arc<AtomicUsize>,
-                          theme: crate::ui::theme::ThemeColors| {
+                          theme: crate::theme::ThemeColors| {
             move |ctx: &mut ComposeCtx| {
                 WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     BadgedBox::new(move |ctx| {

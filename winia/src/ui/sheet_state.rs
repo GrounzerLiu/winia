@@ -12,7 +12,7 @@
 //! `drag_delta` 喂入，结束经 `settle`/`settle_with_velocity` 吸附。
 
 use crate::runtime::state::State;
-use crate::ui::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
+use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
 
 /// Sheet 值（对标 Compose `SheetValue`）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -42,10 +42,10 @@ use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Po
 use crate::layout::{Alignment, BoxLayout};
 use crate::ui::icon_button::IconButton;
 use crate::ui::icon::Icon;
-use crate::ui::layout_components::{Column, Row};
+use crate::layout::components::{Column, Row};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 // ── Token 常量（androidx-main tokens/NavigationRail*.kt）──
@@ -112,7 +112,7 @@ pub type NavigationRailItemColors = crate::ui::navigation_bar::NavigationBarItem
 /// （ItemActiveIcon=OnSecondaryContainer / ItemActiveLabelText=Secondary /
 /// ItemActiveIndicator=SecondaryContainer / Inactive=OnSurfaceVariant /
 /// Disabled=@38%）。
-pub fn rail_item_colors(theme: &crate::ui::theme::ThemeColors) -> NavigationRailItemColors {
+pub fn rail_item_colors(theme: &crate::theme::ThemeColors) -> NavigationRailItemColors {
     crate::ui::navigation_bar::NavigationBarItemColors::from_theme(theme)
 }
 
@@ -213,7 +213,7 @@ impl NavigationRail {
                 WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
                     if let Some(header) = header {
                         header(ctx);
-                        crate::ui::Spacer::vertical(HEADER_SPACER).build(ctx);
+                        crate::layout::Spacer::vertical(HEADER_SPACER).build(ctx);
                     }
                     content(ctx);
                 });
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn rail_item_colors_follow_v0_11_0_tokens() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let c = rail_item_colors(&theme);
         assert_eq!(c.selected_icon, theme.on_secondary_container, "ItemActiveIcon");
         assert_eq!(c.selected_label, theme.secondary, "ItemActiveLabelText");
@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn unselected_item_hover_shows_state_layer_on_full_pill_rect() {
         let _serial = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let container = theme.surface;
         let to_rgba = |c: Color| (c.r, c.g, c.b, c.a);
 

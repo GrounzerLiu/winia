@@ -7,7 +7,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// IconButton 变体（对标 material3 各独立 composable）

@@ -19,7 +19,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::overlay::{Dialog, OverlayAnimSpec};
+use winia::overlay::{Dialog, OverlayAnimSpec};
 use winia::ui::shared_transition::{current_shared_scope, OverlayClip, SharedTransitionLayout};
 
 const KEY: &str = "searchbar";

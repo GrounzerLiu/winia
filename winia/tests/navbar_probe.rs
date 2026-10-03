@@ -3,10 +3,7 @@ use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;
-use winia::ui::{
-    Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text,
-    ThemeColors, TopAppBar, TopAppBarScrollBehavior, TopAppBarState, WiniaTheme,
-};
+use winia::ui::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, ThemeColors, TopAppBar, TopAppBarScrollBehavior, TopAppBarState, WiniaTheme, };
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
 

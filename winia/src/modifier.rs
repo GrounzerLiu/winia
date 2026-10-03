@@ -4181,7 +4181,7 @@ mod param_eq_tests {
         {
             let rep = reported.clone();
             composer.compose(|ctx| {
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_width().on_size_changed(move |w, h| {
                         rep.lock().unwrap().push((w, h));
                     }))

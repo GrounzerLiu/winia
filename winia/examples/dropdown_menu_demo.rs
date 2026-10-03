@@ -22,7 +22,7 @@ use winia::prelude::*;
 mod settings;
 use winia::runtime::composer::ComposeCtx;
 use winia::modifier::Shape;
-use winia::ui::overlay::{
+use winia::overlay::{
     DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults,
     MenuItemColors,
 };

@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// `surfaceTint` 叠在 `surface` 上。公式与 Compose 逐字一致：`alpha = ((4.5·ln(elev+1)) + 2) / 100`，
 /// 再 `surfaceTint(alpha).compositeOver(surface)`；winia 用 `Color::overlay` 做同一个 alpha 合成。
 /// elevation 为 0 时原样返回 `surface`。
-fn surface_color_at_elevation(theme: crate::ui::theme::ThemeColors, elevation: f32) -> Color {
+fn surface_color_at_elevation(theme: crate::theme::ThemeColors, elevation: f32) -> Color {
     if elevation <= 0.0 {
         return theme.surface;
     }
@@ -184,7 +184,7 @@ impl Surface {
         // TextField::read_only (see text_field.rs build).
         ctx.changed(&self.enabled);
         let key = ctx.next_key();
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         let shape = self.shape;
         // 默认背景 = theme.surface（Compose 默认 `colorScheme.surface`）
         let base_color = self.color.unwrap_or(theme.surface);
@@ -200,7 +200,7 @@ impl Surface {
         // overloads at `:211`、`:317`、`:424`). The stated reason is `Surface.kt:146-150`: a Surface
         // must never look LESS raised than its ancestors. Tinting from the local value instead made
         // every nested surface in a stack read as flat as its parent.
-        let absolute_elevation = crate::ui::theme::WiniaTheme::absolute_tonal_elevation()
+        let absolute_elevation = crate::theme::WiniaTheme::absolute_tonal_elevation()
             + self.tonal_elevation;
         // The gate is the COLOUR and the switch, never this surface's own elevation. Compose's
         // `applyTonalElevation` has no elevation term at all (`ColorScheme.kt:1540-1543`) — the only
@@ -209,7 +209,7 @@ impl Surface {
         // here therefore left a `Surface(0)` nested in a `Surface(3)` flat while Compose tints it, which
         // is precisely what `Surface.kt:146-150` says the local exists to prevent.
         let color = if base_color == theme.surface
-            && crate::ui::theme::WiniaTheme::tonal_elevation_enabled()
+            && crate::theme::WiniaTheme::tonal_elevation_enabled()
         {
             surface_color_at_elevation(theme, absolute_elevation)
         } else {
@@ -223,7 +223,7 @@ impl Surface {
             if base_color == theme.surface {
                 theme.on_surface
             } else {
-                crate::ui::theme::WiniaTheme::content_color()
+                crate::theme::WiniaTheme::content_color()
             }
         });
         let shadow_elevation = self.shadow_elevation;
@@ -295,10 +295,10 @@ impl Surface {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 // 内容色下传（LocalContentColor 等价物——future Text/Icon 默认色）
-                crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     // And the absolute elevation down with it, so a nested Surface tints from the sum
                     // rather than from its own number alone (`Surface.kt:109`).
-                    crate::ui::theme::WiniaTheme::with_absolute_tonal_elevation(
+                    crate::theme::WiniaTheme::with_absolute_tonal_elevation(
                         absolute_elevation,
                         ctx,
                         |ctx| {
@@ -321,7 +321,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
-    use crate::ui::theme::{ThemeColors, WiniaTheme};
+    use crate::theme::{ThemeColors, WiniaTheme};
 
     /// Compose a surface under `theme` (and optionally with the tonal toggle) and return the colour its
     /// background modifier actually resolves to — the painted value, read through the same

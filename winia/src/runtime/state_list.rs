@@ -55,7 +55,7 @@ use crate::runtime::state::State;
 /// An immutable view of a `StateList`'s contents.
 ///
 /// Cheap to clone (one `Arc`), and `Deref`s to a slice so `iter`, `len`, indexing and slices come
-/// from the standard library. `arc()` hands out the `Arc<Vec<T>>` that [`crate::ui::LazyColumn`] takes.
+/// from the standard library. `arc()` hands out the `Arc<Vec<T>>` that [`crate::layout::LazyColumn`] takes.
 pub struct ListSnapshot<T>(Arc<Vec<T>>);
 
 impl<T> ListSnapshot<T> {

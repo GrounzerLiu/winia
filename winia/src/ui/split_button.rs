@@ -39,7 +39,7 @@ use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
 use crate::interaction::{ComponentState, MutableInteractionSource};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 /// The shapes a split button morphs between (material3 `SplitButtonShapes`).
@@ -820,7 +820,7 @@ impl SplitButtonPart {
             // plain `offset` has its x mirrored a second time by the parent's direction in RTL — which
             // turned the correction away from the gap in both halves there. The absolute form is the one
             // the layout does not mirror (`layout/node.rs`, the two branches side by side).
-            crate::ui::Row::new()
+            crate::layout::Row::new()
                 .modifier(Modifier::new().absolute_offset(shift_value, 0.0))
                 .build(ctx, |ctx| content(ctx));
         });
@@ -1057,7 +1057,7 @@ mod tests {
 
     use crate::runtime::composer::Composer;
     use crate::ui::text::Text;
-    use crate::ui::theme::ThemeColors;
+    use crate::theme::ThemeColors;
 
     /// A split button of the default size (40 dp) with a leading label and a trailing "v" glyph, laid
     /// out inside a theme of the given direction. `trailing_height` grows the trailing button's

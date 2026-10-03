@@ -5,7 +5,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Alignment, BoxLayout};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use crate::ui::text::{ProvideTextStyle};
 use crate::text::{TextStyle};
 use std::sync::Arc;
@@ -50,7 +50,7 @@ impl ListItemColors {
         Self { container, content, leading, trailing, overline, supporting, disabled_content, disabled_leading, disabled_trailing, disabled_overline, disabled_supporting }
     }
 
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors) -> Self {
+    pub fn from_theme(theme: &crate::theme::ThemeColors) -> Self {
         let disabled = |color: Color| Color::from_argb((color.a as f32 * 0.38) as u8, color.r, color.g, color.b);
         Self::new(
             theme.surface,
@@ -71,7 +71,7 @@ impl ListItemColors {
 pub struct ListItemDefaults;
 
 impl ListItemDefaults {
-    pub fn colors(theme: &crate::ui::theme::ThemeColors) -> ListItemColors {
+    pub fn colors(theme: &crate::theme::ThemeColors) -> ListItemColors {
         ListItemColors::from_theme(theme)
     }
 
@@ -150,14 +150,14 @@ impl ListItem {
                 let overline = self.overline;
                 let supporting = self.supporting;
                 let headline = self.headline;
-                crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    crate::ui::Row::new().alignment(if has_three_lines { Alignment::Start } else { Alignment::Center }).spacing(LIST_ITEM_SLOT_GAP).build(ctx, |ctx| {
+                crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                    crate::layout::Row::new().alignment(if has_three_lines { Alignment::Start } else { Alignment::Center }).spacing(LIST_ITEM_SLOT_GAP).build(ctx, |ctx| {
                         if let Some(leading) = leading {
-                            crate::ui::theme::WiniaTheme::with_content_color(if self.enabled { colors.leading } else { colors.disabled_leading }, ctx, |ctx| {
+                            crate::theme::WiniaTheme::with_content_color(if self.enabled { colors.leading } else { colors.disabled_leading }, ctx, |ctx| {
                                 leading(ctx);
                             });
                         }
-                        crate::ui::Column::new().modifier(Modifier::new().layout_weight(1.0)).alignment(Alignment::Start).spacing(0.0).build(ctx, |ctx| {
+                        crate::layout::Column::new().modifier(Modifier::new().layout_weight(1.0)).alignment(Alignment::Start).spacing(0.0).build(ctx, |ctx| {
                             if let Some(overline) = overline {
                                 let mut text_style = ListItemDefaults::overline_style(); text_style.color = Some(if self.enabled { colors.overline } else { colors.disabled_overline });
                                 ProvideTextStyle(text_style, ctx, overline);
@@ -170,7 +170,7 @@ impl ListItem {
                             }
                         });
                         if let Some(trailing) = trailing {
-                            crate::ui::theme::WiniaTheme::with_content_color(if self.enabled { colors.trailing } else { colors.disabled_trailing }, ctx, |ctx| {
+                            crate::theme::WiniaTheme::with_content_color(if self.enabled { colors.trailing } else { colors.disabled_trailing }, ctx, |ctx| {
                                 trailing(ctx);
                             });
                         }
@@ -242,8 +242,8 @@ mod tests {
             ListItem::new(|ctx| crate::ui::Text::new("Headline").build(ctx))
                 .overline_content(|ctx| crate::ui::Text::new("Overline").build(ctx))
                 .supporting_content(|ctx| crate::ui::Text::new("Supporting").build(ctx))
-                .leading_content(|ctx| crate::ui::Spacer::vertical(24.0).build(ctx))
-                .trailing_content(|ctx| crate::ui::Spacer::vertical(24.0).build(ctx)),
+                .leading_content(|ctx| crate::layout::Spacer::vertical(24.0).build(ctx))
+                .trailing_content(|ctx| crate::layout::Spacer::vertical(24.0).build(ctx)),
             320.0,
         );
         let root = composer.layout_root_idx().unwrap();
@@ -266,7 +266,7 @@ mod tests {
     fn list_items_measure_inside_lazy_column() {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
-            crate::ui::LazyColumn::new()
+            crate::layout::LazyColumn::new()
                 .modifier(Modifier::new().fill_max_width().height(200.0))
                 .items_plain(3, |ctx, index| {
                     ListItem::new(move |ctx| crate::ui::Text::new(format!("Item {index}")).build(ctx))

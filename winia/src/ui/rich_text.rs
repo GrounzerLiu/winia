@@ -17,7 +17,7 @@ use crate::modifier::{Modifier, ModifierElement, RichSpanStyle, Color};
 use crate::text::InlineDrawable;
 use crate::ui::text::{LOCAL_TEXT_STYLE};
 use crate::text::{FontWeight, FontSlant, TextStyle};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 use std::ops::Range;
 

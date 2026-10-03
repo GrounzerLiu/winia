@@ -24,7 +24,7 @@ pub struct Tooltip {
     /// 内容：None = 文本 Plain 样式；Some = 自定义内容闭包
     text: Option<String>,
     content: Option<Box<dyn Fn(&mut ComposeCtx) + 'static>>,
-    position: crate::ui::overlay::PopupPosition,
+    position: crate::overlay::PopupPosition,
     offset: (f32, f32),
     /// 是否启用 hover 触发（默认 true）
     hover_trigger: bool,
@@ -39,7 +39,7 @@ impl Tooltip {
             external_visible: None,
             text: Some(text.into()),
             content: None,
-            position: crate::ui::overlay::PopupPosition::TopCenter,
+            position: crate::overlay::PopupPosition::TopCenter,
             // ⚠ offset y 必须为负（向上）：TopCenter 定位 = tooltip 底贴锚点顶，
             // offset 是加在定位上的位移——(0, 8) 向下 8px → tooltip 压住锚点
             // 顶部 8px（挡住按钮）。M3 间距 8dp = tooltip 在锚点上方留 8dp
@@ -63,7 +63,7 @@ impl Tooltip {
     }
 
     /// 定位（默认 TopCenter——锚点上方居中）
-    pub fn position(mut self, p: crate::ui::overlay::PopupPosition) -> Self {
+    pub fn position(mut self, p: crate::overlay::PopupPosition) -> Self {
         self.position = p;
         self
     }
@@ -96,7 +96,7 @@ impl Tooltip {
     ) {
         // 锚点容器（普通组合——挂主树；tooltip 锚定其位置，对齐 DropdownMenu）
         let anchor_key = ctx.next_key();
-        let id = ctx.remember(|| crate::ui::overlay::next_overlay_id());
+        let id = ctx.remember(|| crate::overlay::next_overlay_id());
         // hover 交互源：锚点挂 hoverable，进入/离开自动发射 hover 事件
         let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
         let mut anchor_modifier = Modifier::new();
@@ -137,7 +137,7 @@ impl Tooltip {
             } else {
                 self.content.expect("Tooltip 无内容")
             };
-            ctx.open_overlay(crate::ui::overlay::OverlayDesc {
+            ctx.open_overlay(crate::overlay::OverlayDesc {
                 id: id.get(),
                 anchor_slot: Some(anchor_slot),
                 position: self.position,
@@ -177,7 +177,7 @@ impl Tooltip {
 /// 每帧 recompose 重跑，固定 key 保证 slot 稳定复用）。
 fn plain_tooltip_content(ctx: &mut ComposeCtx, text: &str) {
     ctx.key(0, |ctx| {
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         let shape = crate::modifier::Shape::RoundedRect { corner_radius: 8.0 };
         let m = Modifier::new()
             .background(theme.inverse_surface, shape)
@@ -187,7 +187,7 @@ fn plain_tooltip_content(ctx: &mut ComposeCtx, text: &str) {
         match ctx.start_restartable_group(sk, m, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                crate::ui::theme::WiniaTheme::with_content_color(theme.inverse_on_surface, ctx, |ctx| {
+                crate::theme::WiniaTheme::with_content_color(theme.inverse_on_surface, ctx, |ctx| {
                     crate::ui::Text::new(text)
                         .font_size(14.0)
                         .max_lines(4)

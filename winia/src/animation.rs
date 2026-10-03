@@ -2152,12 +2152,12 @@ pub(crate) mod tests {
         let scroll = RefCell::new(None::<crate::modifier::ScrollState>);
         let page = RefCell::new(None::<crate::runtime::state::State<u32>>);
         let frame_parity = RefCell::new(std::rc::Rc::new(std::cell::Cell::new(false)));
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
 
         let scene = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
-                crate::ui::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                    crate::ui::Column::new()
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    crate::layout::Column::new()
                         .modifier(crate::modifier::Modifier::new()
                             .fill_max_size()
                             .vertical_scroll({
@@ -2174,7 +2174,7 @@ pub(crate) mod tests {
                         .build(ctx, |ctx| {
                             for i in 0..10 {
                                 crate::ui::Text::new(format!("section {i}")).font_size(14.0).build(ctx);
-                                crate::ui::Row::new().build(ctx, |ctx| {
+                                crate::layout::Row::new().build(ctx, |ctx| {
                                     crate::ui::Text::new(format!("内容 {i} —— 撑高内容")).build(ctx);
                                 });
                             }

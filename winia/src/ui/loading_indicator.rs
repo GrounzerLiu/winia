@@ -20,7 +20,7 @@ use crate::runtime::state::State;
 use crate::effect::LaunchedEffect;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{MaterialShapes, Morph, MorphToPath, RoundedPolygon};
 use std::sync::LazyLock;
 use std::time::Duration;

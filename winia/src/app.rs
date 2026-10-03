@@ -1,5 +1,6 @@
 //! 应用壳 — run_app + 窗口管理 + 事件循环（多窗口）
 
+pub mod window;
 use std::time::Instant;
 
 use crate::runtime::composer::{ComposeCtx, Composer};
@@ -27,7 +28,7 @@ pub(crate) struct PendingWindow {
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
-    pub theme: Option<crate::ui::theme::WindowTheme>,
+    pub theme: Option<crate::theme::WindowTheme>,
 }
 use skiwin::capture::{request_capture, take_capture};
 use skiwin::{SkiaWindow, SkiaWindowTrait};
@@ -172,13 +173,13 @@ pub(crate) struct PerWindow {
     /// What this window draws with — the palette it clears the surface with, and the typography/direction
     /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
     /// every frame) — see `ui::theme::WindowTheme`.
-    theme_cell: crate::ui::theme::WindowTheme,
+    theme_cell: crate::theme::WindowTheme,
     /// The PAGE's focus while a focus-scope overlay owns the keyboard: a slot key, not a flag on the
     /// tree. Exactly one layer shows a focus ring (the keyboard owner), and the ones below remember
     /// theirs here — see `claim_keyboard_for_overlay` / `release_keyboard_to_lower_layer`.
     suspended_focus_slot: Option<u64>,
     /// The values `theme_cell` last resolved to, i.e. what the tree has already drawn with.
-    theme_applied: crate::ui::theme::AppliedTheme,
+    theme_applied: crate::theme::AppliedTheme,
 }
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
@@ -187,10 +188,10 @@ struct OverlayWindow {
     id: u64,
     composer: crate::runtime::composer::Composer,
     anchor_slot: Option<u64>,
-    position: crate::ui::overlay::PopupPosition,
+    position: crate::overlay::PopupPosition,
     offset: (f32, f32),
     /// Grow the panel out of its anchor along both axes (see `OverlayDesc::anchor_slide`).
-    anchor_slide: Option<crate::ui::overlay::AnchorSlide>,
+    anchor_slide: Option<crate::overlay::AnchorSlide>,
     modal: bool,
     dismiss_on_outside: bool,
     click_passthrough: bool,
@@ -219,9 +220,9 @@ struct OverlayWindow {
     /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
     progress: Option<crate::runtime::state::Animating<f32>>,
     /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
-    enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
+    enter_anim: Option<crate::overlay::OverlayAnimSpec>,
     /// 退出动画规格（None = 瞬时消失）
-    exit_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
+    exit_anim: Option<crate::overlay::OverlayAnimSpec>,
     /// Closing in progress (exit animation playing — kept rendered until done;
     /// no interaction meanwhile)
     closing: bool,
@@ -238,10 +239,10 @@ struct OverlayWindow {
     /// restored by slot_key after layout, mirroring the main tree).
     focused_slot_key: Option<u64>,
     /// Whether this overlay owns the keyboard while it is open (see
-    /// [`crate::ui::overlay::OverlayDesc::focus_scope`]).
+    /// [`crate::overlay::OverlayDesc::focus_scope`]).
     focus_scope: bool,
     /// Whether Escape closes this overlay (Compose's `DialogProperties.dismissOnBackPress`). Copied
-    /// from [`crate::ui::overlay::OverlayDesc::dismiss_on_back_press`] and read by [`PerWindow::escape_key`].
+    /// from [`crate::overlay::OverlayDesc::dismiss_on_back_press`] and read by [`PerWindow::escape_key`].
     dismiss_on_back_press: bool,
     /// Has this overlay already suspended the page's focus? Claiming is a ONE-TIME transition, and
     /// this is what keeps it one: re-running it every frame walked the whole main tree and called
@@ -261,10 +262,10 @@ struct PtrDownState {
 }
 
 impl PerWindow {
-    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
+    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
-        let theme_cell = crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Fixed(theme));
+        let theme_cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
         let theme_applied = theme_cell.applied();
         PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, suspended_focus_slot: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
     }
@@ -640,9 +641,9 @@ impl PerWindow {
                     })
                 });
                 if let Some(b) = bslot.borrow().as_ref() {
-                    crate::ui::adaptive::sync_window_size_state(b, (self.width, self.height));
+                    crate::layout::adaptive::sync_window_size_state(b, (self.width, self.height));
                 }
-                crate::ui::adaptive::set_window_size_state(size_state);
+                crate::layout::adaptive::set_window_size_state(size_state);
                 (self.content)(ctx);
             });
             any_composed |= did_compose;
@@ -1000,7 +1001,7 @@ impl ApplicationHandler for AppState {
         }
         AppState::process_pending_windows(self, event_loop);
         // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
-        crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
+        crate::app::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
         // Redraw requests raised from OUTSIDE the window they concern: a `Window` node publishing a new
         // theme intent runs in its DECLARING tree, which leaves the window's own composer with nothing
         // pending — without this its frame would never be scheduled and the new theme would sit unseen.
@@ -1019,7 +1020,7 @@ impl ApplicationHandler for AppState {
         }
         // The mode moved (from an application or a background thread): every window has to look at it, and
         // a window whose content an application composed itself has no dependency to be woken by.
-        if crate::ui::theme::take_theme_redraw_all() {
+        if crate::theme::take_theme_redraw_all() {
             for pw in self.windows.values() {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
@@ -1057,7 +1058,7 @@ impl ApplicationHandler for AppState {
         // the change itself is process-wide: record it, and schedule the frame of every window — a window
         // that is not redrawn never notices (each one re-resolves against the epoch in its own frame).
         if let WindowEvent::ThemeChanged(theme) = &event {
-            crate::ui::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
+            crate::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
             for pw in self.windows.values_mut() {
                 if let Some(ref sw) = pw.skia_window {
                     sw.request_redraw();
@@ -1184,7 +1185,7 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::Destroyed => {
-                if let Some(cid) = pw.created_id { crate::ui::window::CREATED.lock().unwrap().remove(&cid); }
+                if let Some(cid) = pw.created_id { crate::app::window::CREATED.lock().unwrap().remove(&cid); }
                 if let Some(ref sw) = pw.skia_window {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
@@ -2245,7 +2246,7 @@ impl AppState {
         // means everywhere else in the API.
         let theme = pending
             .theme
-            .unwrap_or_else(|| crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Auto));
+            .unwrap_or_else(|| crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Auto));
         // The ONE place a window's content is wrapped in its theme: the declaring tree publishes the cell
         // before the first frame, and every frame after that composes under it. (`Window::build` used to do
         // this, which left windows opened through the public API unwrapped — their theme then only reached
@@ -2287,9 +2288,9 @@ impl AppState {
                 })
             });
             if let Some(b) = pw.window_size_backchannel.borrow().as_ref() {
-                crate::ui::adaptive::sync_window_size_state(b, (w0, h0));
+                crate::layout::adaptive::sync_window_size_state(b, (w0, h0));
             }
-            crate::ui::adaptive::set_window_size_state(size_state);
+            crate::layout::adaptive::set_window_size_state(size_state);
             (pw.content)(ctx);
         });
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
@@ -2336,7 +2337,7 @@ fn take_redraw_requests() -> Vec<u64> {
     std::mem::take(&mut *PENDING_REDRAW.lock().unwrap())
 }
 
-pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::WindowTheme>) {
+pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
     wake_impl();
 }
@@ -3069,7 +3070,7 @@ fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
 // ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
 
 impl OverlayWindow {
-    fn new_with_composer(desc: crate::ui::overlay::OverlayDesc, composer: Composer) -> Self {
+    fn new_with_composer(desc: crate::overlay::OverlayDesc, composer: Composer) -> Self {
         Self {
             id: desc.id,
             composer,
@@ -3129,7 +3130,7 @@ impl OverlayWindow {
         }
     }
 
-    fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
+    fn update(&mut self, desc: crate::overlay::OverlayDesc) {
         // A desc only reaches this method while its overlay is still DECLARED (a closing overlay is not
         // re-registered), so the caller bringing one back — open, close, open again inside the exit fade,
         // where the id is reused — has to cancel the pending close: leaving `closing` set kept the overlay
@@ -3630,7 +3631,7 @@ fn layout_overlays(pw: &mut PerWindow) {
                 // `exposedDropdownSize`), so the anchor's rect is needed at measure time — before the
                 // positioning pass — and the anchor lives in the main tree, already laid out.
                 let anchor_width = anchor_widths[overlay_index];
-                let margin = crate::ui::overlay::MENU_VERTICAL_MARGIN;
+                let margin = crate::overlay::MENU_VERTICAL_MARGIN;
                 crate::layout::Constraints::new(
                     anchor_width,
                     if ov.match_anchor_width { anchor_width } else { pw.width },
@@ -3670,7 +3671,7 @@ fn layout_overlays(pw: &mut PerWindow) {
             (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
             _ => (0.0, 0.0, 0.0, 0.0),
         };
-        use crate::ui::overlay::PopupPosition as P;
+        use crate::overlay::PopupPosition as P;
         let pos = match ov.position {
             // 窗口对齐（无锚点）
             P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
@@ -3688,7 +3689,7 @@ fn layout_overlays(pw: &mut PerWindow) {
             // centred on its top edge, then pinned to the nearer window edge — each taken only if the menu
             // fits inside `MenuVerticalMargin` (48dp). winia's placement used to do the first alone, which is
             // why a long menu hung off the bottom edge with its last rows unreachable.
-            crate::ui::overlay::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
+            crate::overlay::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
         } else if anchored {
             match ov.position {
                 P::BottomLeft => (ax, ay + ah),
@@ -3707,8 +3708,8 @@ fn layout_overlays(pw: &mut PerWindow) {
         let pos = if let (Some(slide), true) = (&ov.anchor_slide, anchored) {
             let p = slide.progress();
             (
-                crate::ui::overlay::anchor_slide_lerp(ax, p),
-                crate::ui::overlay::anchor_slide_lerp(ay, p),
+                crate::overlay::anchor_slide_lerp(ax, p),
+                crate::overlay::anchor_slide_lerp(ay, p),
             )
         } else {
             pos
@@ -3827,7 +3828,7 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
         // (anim_dy != 0.0) 或 (anim_reveal < 1.0) 时裁剪。
         // The clip height comes from `overlay_reveal_clip_height`, which also keeps "no clip" (`None`)
         // distinct from "clipped to zero" — the distinction the render trace needs.
-        let clip_h = crate::ui::overlay::overlay_reveal_clip_height(size.1, anim_dy, anim_reveal)
+        let clip_h = crate::overlay::overlay_reveal_clip_height(size.1, anim_dy, anim_reveal)
             .unwrap_or(-1.0);
         // Render-time trace: the overlay's reveal/alpha/offset exist only here, at paint time — the debug
         // server's tree reports POST-LAYOUT sizes, so a reveal (a clip) was invisible to every other
@@ -3871,7 +3872,7 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
                 (false, Some(spec), _) if spec.anchor_pivot => ov
                     .anchor_rect
                     .map(|anchor| {
-                        crate::ui::overlay::overlay_transform_origin(
+                        crate::overlay::overlay_transform_origin(
                             anchor,
                             (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
                         )
@@ -3880,7 +3881,7 @@ fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale
                 (true, _, Some(spec)) if spec.anchor_pivot => ov
                     .anchor_rect
                     .map(|anchor| {
-                        crate::ui::overlay::overlay_transform_origin(
+                        crate::overlay::overlay_transform_origin(
                             anchor,
                             (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
                         )
@@ -5266,7 +5267,7 @@ pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::
 #[cfg(test)]
 mod window_theme_tests {
     use super::PerWindow;
-    use crate::ui::theme::{ThemeColors, ThemeSpec, WindowTheme};
+    use crate::theme::{ThemeColors, ThemeSpec, WindowTheme};
 
     /// Every window follows a system theme change — each from its OWN applied state.
     ///
@@ -5275,11 +5276,11 @@ mod window_theme_tests {
     /// platform path they did not even run a frame). Measured on a two-window app in the fixtures.
     #[test]
     fn a_theme_change_reaches_every_window() {
-        let _serial = crate::ui::theme::theme_mode_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::theme::theme_mode_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let light = ThemeColors::default_light();
         let dark = ThemeColors::default_dark();
 
-        crate::ui::theme::set_system_dark_mode(Some(false));
+        crate::theme::set_system_dark_mode(Some(false));
         let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         let mut pinned = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
@@ -5293,7 +5294,7 @@ mod window_theme_tests {
         assert_eq!(first.theme_applied.colors.background, light.background);
         assert_eq!(second.theme_applied.colors.background, light.background);
 
-        crate::ui::theme::set_system_dark_mode(Some(true));
+        crate::theme::set_system_dark_mode(Some(true));
         assert!(first.refresh_theme(), "the first window re-resolves");
         assert!(second.refresh_theme(), "so does the second — the state is per window");
         assert_eq!(first.theme_applied.colors.background, dark.background);
@@ -5311,14 +5312,14 @@ mod window_theme_tests {
 
         // A published TYPE SCALE is a reason to re-run too, with no color change at all: components
         // resolved their type when they built.
-        crate::ui::theme::set_system_dark_mode(Some(false));
-        let big = crate::ui::theme::Typography { body_large: crate::text::TextStyle::new().font_size(24.0), ..Default::default() };
+        crate::theme::set_system_dark_mode(Some(false));
+        let big = crate::theme::Typography { body_large: crate::text::TextStyle::new().font_size(24.0), ..Default::default() };
         assert!(first.theme_cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
         assert!(first.refresh_theme(), "a type-scale change has to reach the tree");
         assert_eq!(first.theme_applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
         assert!(!first.refresh_theme(), "and then it is idle again");
 
-        crate::ui::theme::set_system_dark_mode(None);
+        crate::theme::set_system_dark_mode(None);
     }
 }
 
@@ -5326,8 +5327,8 @@ mod window_theme_tests {
 mod overlay_close_tests {
     use super::{closing_overlay_is_done, OverlayWindow, PerWindow, CLOSING_DEADLINE};
     use crate::runtime::composer::Composer;
-    use crate::ui::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
-    use crate::ui::theme::ThemeColors;
+    use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
+    use crate::theme::ThemeColors;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -5524,7 +5525,7 @@ mod frame_throttle_tests {
 
     #[test]
     fn per_window_modifiers_are_independent() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme.clone());
         let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme);
         first.modifiers = winit::keyboard::ModifiersState::default();
@@ -5544,7 +5545,7 @@ mod frame_throttle_tests {
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         composer.compose(crate::compose!(|ctx| {
-            crate::ui::Column::new()
+            crate::layout::Column::new()
                 .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(scroll2))
                 .build(ctx, |ctx| {
                     // 内容总高 > 视口 600（每行 ~19px × 40 行 ≈ 760）
@@ -5864,7 +5865,7 @@ mod key_node_dual_track_tests {
     use super::PerWindow;
     use crate::layout::Constraints;
     use crate::modifier::{KbEvent, KbEventType, KeyNode, Modifier};
-    use crate::ui::theme::ThemeColors;
+    use crate::theme::ThemeColors;
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
@@ -6316,14 +6317,15 @@ mod drag_target_selection_tests {
     fn scroll_slot_keys_stable_across_recompose() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::ui::Text;
         let mut composer = Composer::new();
         let outer = ScrollState::new();
         let inner = ScrollState::new();
 
         let build = |composer: &mut Composer, outer: &ScrollState, inner: &ScrollState| {
             composer.compose(|ctx| {
-                crate::ui::Column::new()
+                crate::layout::Column::new()
                     .modifier(Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
                         // 状态行（文本随 offset 变化 → 触发重组）
@@ -6386,7 +6388,8 @@ mod drag_target_selection_tests {
     fn scroll_container_height_clamps_to_fixed_height() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::ui::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {
@@ -6414,7 +6417,8 @@ mod drag_target_selection_tests {
     fn scroll_container_grows_with_unbounded_parent() {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::ui::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {

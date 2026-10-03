@@ -4409,9 +4409,9 @@ mod tier0_tests {
     use crate::layout::constraints::Constraints;
     use crate::modifier::Color;
     use crate::nav::{NavBackStack, NavDisplay, NavEntry};
-    use crate::ui::Column;
-    use crate::ui::Row;
-    use crate::ui::Stack;
+    use crate::layout::Column;
+    use crate::layout::Row;
+    use crate::layout::Stack;
 
     /// Plain box leaf with a shared-element marker (no text — keeps the
     /// mechanics test headless-simple; paint movement is asserted via raster).

@@ -22,7 +22,7 @@ use winia::ui::date_picker::{
     remember_date_picker_state, CalendarLocale, DatePickerStateInit, DockedDatePicker, CALENDAR_MONTH_PATH,
 };
 use winia::ui::icon::Icon;
-use winia::ui::overlay::{OverlayAnimSpec, Popup, PopupPosition};
+use winia::overlay::{OverlayAnimSpec, Popup, PopupPosition};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]

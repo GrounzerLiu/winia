@@ -496,7 +496,7 @@ mod tests {
     use crate::runtime::composer::Composer;
     use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
-    use crate::ui::layout_components::Column;
+    use crate::layout::components::Column;
 
     /// 集成：visible 切换 → 内容进入/退出组合树（exit 完成才移除）。
     /// 通过多次 compose + 手动推进动画模拟可见性生命周期。
@@ -737,7 +737,7 @@ mod tests {
     fn expand_h_demo_replica_grows_monotonically() {
         // Exact demo-D replica: Column > AV(expand_in_h) > Text-like sized leaf.
         // Step real animation frames; container width must grow monotonically 0→300.
-        use crate::ui::layout_components::Column;
+        use crate::layout::components::Column;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         let mut composer = Composer::new();

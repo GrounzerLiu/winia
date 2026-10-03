@@ -106,7 +106,7 @@ impl ChipDefaults {
     /// 非选择型（Assist/Suggestion）默认配色——**transparent 容器 + 1dp
     /// outline 边框**（M3：assist/suggestion 是边框样式，无填充）+ onSurfaceVariant
     /// 文字 + primary icon
-    pub fn chip_colors(theme: &crate::ui::theme::ThemeColors) -> ChipColors {
+    pub fn chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
         ChipColors {
             container: crate::modifier::Color::TRANSPARENT,
             label: theme.on_surface_variant,
@@ -120,7 +120,7 @@ impl ChipDefaults {
     /// 选择型（Filter/Input）默认配色：unselected **transparent + outline 边框**
     /// + onSurfaceVariant；selected secondaryContainer（填充）+ onSecondaryContainer
     /// + 0 边框（有填充即无边框）
-    pub fn selectable_chip_colors(theme: &crate::ui::theme::ThemeColors) -> SelectableChipColors {
+    pub fn selectable_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
         SelectableChipColors {
             container: crate::modifier::Color::TRANSPARENT,
             label: theme.on_surface_variant,
@@ -236,7 +236,7 @@ impl Chip {
     pub fn icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.leading_icon = Some(Box::new(f)); self }
 
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         let sel = self.selected;
         // 配色解析（按变体取对应默认）
         let (container, label_color, icon_color, border_w, border_color) = match self.variant {
@@ -285,24 +285,24 @@ impl Chip {
             move |ctx| {
                 // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
                 // 有图标（18dp）时文字会顶对齐而非垂直居中
-                crate::ui::layout_components::Row::new()
+                crate::layout::components::Row::new()
                     .spacing(ChipDefaults::ELEMENT_GAP)
                     .alignment(crate::layout::Alignment::Center)
                     .build(ctx, |ctx| {
                     if let Some(av) = avatar {
                         // avatar 24dp、12dp 圆角（M3 InputChip avatar shape）
-                        crate::ui::layout_components::Stack::new()
+                        crate::layout::components::Stack::new()
                             .modifier(Modifier::new()
                                 .size(ChipDefaults::AVATAR_SIZE, ChipDefaults::AVATAR_SIZE)
                                 .clip(Shape::RoundedRect { corner_radius: 12.0 }))
                             .build(ctx, |c| av(c));
                     }
                     if let Some(ic) = leading {
-                        crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| ic(c));
+                        crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| ic(c));
                     }
-                    crate::ui::theme::WiniaTheme::with_content_color(label_color, ctx, |c| label(c));
+                    crate::theme::WiniaTheme::with_content_color(label_color, ctx, |c| label(c));
                     if let Some(ic) = trailing {
-                        crate::ui::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| ic(c));
+                        crate::theme::WiniaTheme::with_content_color(icon_color, ctx, |c| ic(c));
                     }
                 });
             },
@@ -368,8 +368,8 @@ fn build_chip(
     match ctx.start_restartable_group(key, m, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
-            crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                let mut text_style = crate::ui::theme::WiniaTheme::typography().label_large;
+            crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                let mut text_style = crate::theme::WiniaTheme::typography().label_large;
                 text_style.color = Some(content_color);
                 ProvideTextStyle(text_style, ctx, content);
             });
@@ -382,7 +382,7 @@ fn build_chip(
 mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
-    use crate::ui::theme::Typography;
+    use crate::theme::Typography;
     use crate::text::{FontWeight, TextStyle};
     use crate::unit::{Sp, TextUnit};
 
@@ -410,7 +410,7 @@ mod tests {
         };
         let mut composer = Composer::new();
         composer.compose(|ctx| {
-            crate::ui::theme::WiniaTheme::with_typography(custom, ctx, |ctx| {
+            crate::theme::WiniaTheme::with_typography(custom, ctx, |ctx| {
                 Chip::assist(|ctx| crate::ui::Text::new("Label").build(ctx), || {}).build(ctx);
             });
         });

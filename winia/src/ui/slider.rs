@@ -22,7 +22,7 @@ use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, KbEvent, KbEventType, Modifier};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// 轨道高度（`SliderTokens.ActiveTrackHeight/InactiveTrackHeight = 16dp`）

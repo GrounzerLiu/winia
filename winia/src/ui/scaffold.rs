@@ -6,7 +6,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier, Shape};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 
 pub const SCAFFOLD_FAB_MARGIN: f32 = 16.0;
 
@@ -117,7 +117,7 @@ mod tests {
     use crate::modifier::Dimension;
 
     fn leaf(ctx: &mut ComposeCtx, modifier: Modifier) { let key = ctx.next_key(); ctx.start_leaf(key, modifier); ctx.end_node(); }
-    fn layout(scaffold: Scaffold, direction: LayoutDirection) -> Composer { let mut c=Composer::new(); c.compose(|ctx| WiniaTheme::with_theme_and_direction(crate::ui::theme::ThemeColors::default_light(),direction,ctx,|ctx| scaffold.build(ctx))); c.layout(Constraints::new(0.0,360.0,0.0,640.0)); c }
+    fn layout(scaffold: Scaffold, direction: LayoutDirection) -> Composer { let mut c=Composer::new(); c.compose(|ctx| WiniaTheme::with_theme_and_direction(crate::theme::ThemeColors::default_light(),direction,ctx,|ctx| scaffold.build(ctx))); c.layout(Constraints::new(0.0,360.0,0.0,640.0)); c }
 
     #[test]
     fn reserves_top_bottom_and_positions_fab_overlay() {

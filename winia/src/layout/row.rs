@@ -233,7 +233,7 @@ mod tests {
     fn align_by_baseline_puts_two_sizes_on_one_line() {
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::ui::layout_components::Row;
+        use crate::layout::components::Row;
         use crate::ui::text::Text;
 
         let lines = |aligned: bool| -> (f32, f32) {
@@ -288,7 +288,7 @@ mod tests {
     fn a_wrapped_child_below_the_line_makes_the_row_taller_than_its_tallest_child() {
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
-        use crate::ui::layout_components::Row;
+        use crate::layout::components::Row;
         use crate::ui::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();

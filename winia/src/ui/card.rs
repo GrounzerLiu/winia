@@ -73,7 +73,7 @@ impl CardColors {
     /// compositeOver(ContainerColor)；本仓库约定（同 checkbox/button）用 alpha
     /// 直乘近似——Filled 取 SurfaceVariant@38%，Elevated/Outlined 容器不变
     /// （M3：Elevated 为 Surface@38% 叠 Surface、Outlined 无 disabled 容器变化）。
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors, style: CardStyle) -> Self {
+    pub fn from_theme(theme: &crate::theme::ThemeColors, style: CardStyle) -> Self {
         use crate::modifier::Color;
         let alpha = |c: Color, a: f32| Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b);
         match style {
@@ -186,7 +186,7 @@ impl CardBorder {
 
     /// OutlinedCard 默认边框（对标 material3：1dp + `OutlineVariant`；
     /// disabled 为 Outline @ DisabledOutlineOpacity(0.12) 叠 SurfaceContainerLow）
-    fn outlined(theme: &crate::ui::theme::ThemeColors, enabled: bool) -> Self {
+    fn outlined(theme: &crate::theme::ThemeColors, enabled: bool) -> Self {
         let color = if enabled {
             theme.outline_variant
         } else {
@@ -208,7 +208,7 @@ impl CardDefaults {
     }
 
     /// 默认颜色（对标 material3 CardDefaults.cardColors——按 style 从主题推导）
-    pub fn card_colors(theme: &crate::ui::theme::ThemeColors, style: CardStyle) -> CardColors {
+    pub fn card_colors(theme: &crate::theme::ThemeColors, style: CardStyle) -> CardColors {
         CardColors::from_theme(theme, style)
     }
 
@@ -228,7 +228,7 @@ impl CardDefaults {
     }
 
     /// OutlinedCard 默认边框（M3 OutlinedCardTokens：1dp OutlineVariant）
-    pub fn outlined_border(theme: &crate::ui::theme::ThemeColors, enabled: bool) -> CardBorder {
+    pub fn outlined_border(theme: &crate::theme::ThemeColors, enabled: bool) -> CardBorder {
         CardBorder::outlined(theme, enabled)
     }
 }
@@ -357,7 +357,7 @@ impl Card {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
         let key = ctx.next_key();
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         // 默认颜色统一从 CardDefaults 取（对标 material3 CardDefaults.cardColors）
         let colors = self.colors.unwrap_or_else(|| CardDefaults::card_colors(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Card 的 interactionSource 参数）
@@ -441,7 +441,7 @@ impl Card {
             GroupStatus::Enter => {
                 // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
                 // 取卡片内容色（Filled/Elevated/Outlined 内容色 = OnSurface）
-                crate::ui::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     content(ctx);
                 });
             }
@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_card_colors_match_m3_tokens() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         // Filled：SurfaceContainerHighest 容器 + OnSurface 内容
         let filled = CardDefaults::card_colors(&theme, CardStyle::Filled);
         assert_eq!(filled.container, theme.surface_container_highest);
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_outlined_border_uses_theme_outline_variant() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let enabled = CardBorder::outlined(&theme, true);
         assert_eq!(enabled.width, 1.0);
         assert_eq!(enabled.color, theme.outline_variant);

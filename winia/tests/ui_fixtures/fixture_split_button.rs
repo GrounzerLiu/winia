@@ -8,7 +8,7 @@
 use letclone::clone;
 use winia::prelude::*;
 // material3's own `arrow_drop_down` asset (from the icon set), not a copy: see the constant's docs.
-use winia::ui::overlay::ExposedDropdownMenuDefaults;
+use winia::overlay::ExposedDropdownMenuDefaults;
 
 #[composable]
 fn split_fixture(ctx: &mut ComposeCtx) {

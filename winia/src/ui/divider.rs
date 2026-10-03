@@ -20,7 +20,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 
 /// 默认厚度（`DividerTokens.Thickness = 1dp`）
 pub const DIVIDER_THICKNESS: f32 = 1.0;

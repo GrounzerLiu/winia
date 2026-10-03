@@ -26,7 +26,7 @@ use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::progress_indicator::{self, ProgressIndicatorStrokeCap};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{CornerRounding, Cubic, Morph, MorphToPath, PolygonToPath, RoundedPolygon};
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};

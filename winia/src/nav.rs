@@ -1160,7 +1160,7 @@ impl<K: NavKey> NavTransition<K> {
                 }
                 params
             });
-            crate::ui::layout_components::Column::new()
+            crate::layout::components::Column::new()
                 .modifier(m)
                 .build(ctx, |ctx| {
                     // 场景 key 驱动槽身份（对标 Nav3 AnimatedSceneKey(KClass, key)
@@ -1210,7 +1210,7 @@ impl<K: NavKey> NavTransition<K> {
                     });
                 });
         };
-        crate::ui::layout_components::Stack::new()
+        crate::layout::components::Stack::new()
             .modifier(Modifier::new().fill_max_size().on_size_changed({
                 let width = width.clone();
                 move |w, _| width.set(w)
@@ -1259,7 +1259,7 @@ impl<K: NavKey> NavTransition<K> {
                     NavEnter::SlideIn { .. } | NavEnter::SlideAndFadeIn { .. } | NavEnter::ScaleIn { .. }
                 );
                 if active && displaces {
-                    crate::ui::layout_components::Column::new()
+                    crate::layout::components::Column::new()
                         .modifier(Modifier::new().fill_max_size().clickable(|| {}))
                         .build(ctx, |_| {});
                 }
@@ -1361,7 +1361,7 @@ impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
             return;
         };
         let key = format!("entry:{}", entry.content_key());
-        crate::ui::layout_components::Column::new()
+        crate::layout::components::Column::new()
             .modifier(
                 Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
                     scope.shared_content_state(&key),
@@ -1517,13 +1517,13 @@ impl<K: NavKey> Scene<K> for ListDetailScene<K> {
         let (Some(list), Some(detail)) = (self.entries.first(), self.entries.get(1)) else {
             return;
         };
-        crate::ui::layout_components::Row::new()
+        crate::layout::components::Row::new()
             .modifier(Modifier::new().fill_max_size())
             .build(ctx, |ctx| {
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_height().layout_weight(2.0))
                     .build(ctx, |ctx| render_entry(ctx, list, false));
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_height().layout_weight(3.0))
                     .build(ctx, |ctx| render_entry(ctx, detail, false));
             });
@@ -1967,7 +1967,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             .map(|p| p.dismiss_on_click_outside)
             .unwrap_or(true);
         let dialog_content: Option<(u64, NavEntry<K>)> = dialog_top.map(|t| (t.content_key(), t));
-        let mut dialog = crate::ui::overlay::Dialog::new(dialog_visible);
+        let mut dialog = crate::overlay::Dialog::new(dialog_visible);
         if !dialog_dismiss_outside {
             dialog = dialog.dismiss_on_outside(false);
         }
@@ -3066,7 +3066,7 @@ mod tests {
                 ctx: &mut ComposeCtx,
                 render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
             ) {
-                crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                crate::layout::components::Column::new().build(ctx, |ctx| {
                     for e in &self.entries {
                         render_entry(ctx, e, false);
                     }

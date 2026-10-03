@@ -22,7 +22,7 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 
 /// Snackbar 显示时长（对标 Compose `SnackbarDuration`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,7 +328,7 @@ impl Snackbar {
         let data = self.data;
         let on_dismiss = self.on_dismiss;
 
-        crate::ui::layout_components::Row::new()
+        crate::layout::components::Row::new()
             .modifier(Modifier::new()
                 .fill_max_width()
                 .padding_horizontal(16.0)

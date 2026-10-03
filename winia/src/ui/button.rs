@@ -142,7 +142,7 @@ impl ButtonColors {
     }
 
     /// 从主题按 style 生成默认色（Compose ButtonDefaults.buttonColors 对标）
-    pub fn from_theme(theme: &crate::ui::theme::ThemeColors, style: ButtonStyle) -> Self {
+    pub fn from_theme(theme: &crate::theme::ThemeColors, style: ButtonStyle) -> Self {
         use crate::modifier::Color;
         let (container, content) = match style {
             ButtonStyle::Filled => (theme.primary, theme.on_primary),
@@ -250,7 +250,7 @@ impl ButtonBorder {
 
     /// OutlinedButton 默认边框（对标 material3：1dp + `OutlineVariant`；
     /// disabled 为 OutlineVariant @ DisabledContainerOpacity(0.1)）
-    fn outlined(theme: &crate::ui::theme::ThemeColors, enabled: bool) -> Self {
+    fn outlined(theme: &crate::theme::ThemeColors, enabled: bool) -> Self {
         // OutlinedButtonTokens.OutlineColor = OutlineVariant
         let c = theme.outline_variant;
         let color = if enabled {
@@ -279,7 +279,7 @@ impl ButtonDefaults {
     /// 默认按钮颜色（对标 material3 `ButtonDefaults.buttonColors()`——
     /// 从主题色板按 style 推导容器/内容色）
     pub fn button_colors(
-        theme: &crate::ui::theme::ThemeColors,
+        theme: &crate::theme::ThemeColors,
         style: ButtonStyle,
     ) -> ButtonColors {
         ButtonColors::from_theme(theme, style)
@@ -552,7 +552,7 @@ impl Button {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
         let key = ctx.next_key();
-        let theme = crate::ui::theme::WiniaTheme::colors();
+        let theme = crate::theme::WiniaTheme::colors();
         // 默认颜色统一从 ButtonDefaults 取（对标 material3 ButtonDefaults.buttonColors）
         let colors = self.colors.unwrap_or_else(|| ButtonDefaults::button_colors(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
@@ -668,14 +668,14 @@ impl Button {
                 // 对标 M3：Button 内容 = 居中 Row（图标/文字并排）；
                 // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
                 // 取按钮内容色（如 Filled 内图标自动 on_primary）
-                crate::ui::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
-                    let mut text_style = crate::ui::theme::WiniaTheme::typography().label_large;
+                crate::theme::WiniaTheme::with_content_color(text_color, ctx, |ctx| {
+                    let mut text_style = crate::theme::WiniaTheme::typography().label_large;
                     text_style.color = Some(text_color);
                     crate::ui::text::ProvideTextStyle(
                         text_style,
                         ctx,
                         |ctx| {
-                            crate::ui::Row::new()
+                            crate::layout::Row::new()
                                 .alignment(crate::layout::Alignment::Center)
                                 .spacing(self.size_variant.icon_label_space())
                                 .build(ctx, content);
@@ -748,7 +748,7 @@ mod tests {
         assert_eq!(ButtonDefaults::min_height(), 40.0);
         assert_eq!(ButtonDefaults::icon_spacing(), 8.0, "IconLabelSpace");
         // 颜色工厂与 from_theme 一致（薄包装语义对标 Compose buttonColors()）
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         assert_eq!(
             ButtonDefaults::button_colors(&theme, ButtonStyle::Filled),
             ButtonColors::from_theme(&theme, ButtonStyle::Filled),
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn test_outlined_border_uses_theme_outline() {
         // 对标 M3：OutlinedButton 边框 = OutlineVariant（非 outline/primary）
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let enabled = ButtonBorder::outlined(&theme, true);
         assert_eq!(enabled.width, 1.0);
         assert_eq!(enabled.color, theme.outline_variant, "启用态边框 = OutlineVariant");
@@ -795,7 +795,7 @@ mod tests {
 
     #[test]
     fn button_default_colors_match_m3_tokens() {
-        let theme = crate::ui::theme::ThemeColors::light_from_seed(0x6750A4);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let alpha = |c: crate::modifier::Color, a: f32| {
             crate::modifier::Color::from_argb((c.a as f32 * a) as u8, c.r, c.g, c.b)
         };

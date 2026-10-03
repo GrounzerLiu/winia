@@ -25,11 +25,11 @@ use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement, Point, Size};
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
+use crate::layout::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
 use crate::ui::navigation_bar::NavigationItemIconPosition;
 use crate::ui::short_navigation_bar::{ShortNavigationBar, ShortNavigationBarArrangement, ShortNavigationBarItem};
-use crate::ui::theme::WiniaTheme;
-use crate::ui::layout_components::{Column, Row};
+use crate::theme::WiniaTheme;
+use crate::layout::components::{Column, Row};
 use crate::ui::navigation_rail::{WideNavigationRail, WideNavigationRailItem, WideNavigationRailState};
 use std::sync::Arc;
 
@@ -468,23 +468,23 @@ mod tests {
 
     #[test]
     fn default_type_follows_window_size_classes() {
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(500.0, 700.0);
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
-        crate::ui::adaptive::set_window_size(700.0, 700.0);
+        crate::layout::adaptive::set_window_size(700.0, 700.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
-        crate::ui::adaptive::set_window_size(1000.0, 700.0);
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailExpanded);
         // 矮窗优先横排底栏
-        crate::ui::adaptive::set_window_size(1000.0, 400.0);
+        crate::layout::adaptive::set_window_size(1000.0, 400.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarMedium);
     }
 
     /// 窄窗 → 底栏形态：Column 根，bar 在底部（高 80、贴底）
     #[test]
     fn narrow_window_renders_bottom_bar() {
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(500.0, 700.0);
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
         let mut composer = Composer::new();
         composer.compose(|ctx| scaffold().build(ctx));
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
@@ -499,8 +499,8 @@ mod tests {
     /// 宽窗 → 展开宽轨形态：Row 根，rail 在前（宽 220），内容填余下
     #[test]
     fn wide_window_renders_expanded_rail() {
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(1000.0, 700.0);
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let mut composer = Composer::new();
         composer.compose(|ctx| scaffold().build(ctx));
         composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
@@ -518,8 +518,8 @@ mod tests {
     /// 中宽窗 → 收起轨（96）
     #[test]
     fn medium_window_renders_collapsed_rail() {
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(700.0, 700.0);
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(700.0, 700.0);
         let mut composer = Composer::new();
         composer.compose(|ctx| scaffold().build(ctx));
         composer.layout(Constraints::new(0.0, 700.0, 0.0, 700.0));
@@ -532,22 +532,22 @@ mod tests {
     /// 尺寸 State 驱动形态切换（resize 响应式通路——app 层 set() → 依赖方重组）
     #[test]
     fn window_size_state_drives_suite_type() {
-        crate::ui::adaptive::reset_window_size_state();
+        crate::layout::adaptive::reset_window_size_state();
         let size = crate::runtime::state::State::new((500.0f32, 700.0f32));
-        crate::ui::adaptive::set_window_size_state(size.clone());
+        crate::layout::adaptive::set_window_size_state(size.clone());
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
         size.set((1000.0, 700.0));
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailExpanded);
         size.set((700.0, 700.0));
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
-        crate::ui::adaptive::reset_window_size_state();
+        crate::layout::adaptive::reset_window_size_state();
     }
 
     /// 显式 layout_type 覆盖自动推算
     #[test]
     fn explicit_layout_type_overrides_auto() {
-        crate::ui::adaptive::reset_window_size_state();
-        crate::ui::adaptive::set_window_size(1000.0, 700.0); // 自动会选展开轨
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0); // 自动会选展开轨
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             scaffold().layout_type(NavigationSuiteType::None).build(ctx);
@@ -611,7 +611,7 @@ mod tests {
     /// 异形切换（rail→bar）：收拢（rail 宽度收缩）→ 换形 → 展开（bar 高度生长）
     #[test]
     fn suite_type_switch_collapses_then_expands() {
-        crate::ui::adaptive::reset_window_size_state();
+        crate::layout::adaptive::reset_window_size_state();
         let mut composer = Composer::new();
         let build = |composer: &mut Composer, lt: NavigationSuiteType| {
             composer.compose(|ctx| {

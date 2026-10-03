@@ -2697,12 +2697,12 @@ pub(crate) fn measure_node(
     if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
-    let displaced = crate::ui::subcompose::swap_measuring_node(Some(idx));
-    let sub_before = crate::ui::subcompose::subcomposition_count();
+    let displaced = crate::layout::subcompose::swap_measuring_node(Some(idx));
+    let sub_before = crate::layout::subcompose::subcomposition_count();
     let out = measure_node_inner(nodes, policies, idx, constraints);
-    crate::ui::subcompose::swap_measuring_node(displaced);
+    crate::layout::subcompose::swap_measuring_node(displaced);
     // Remember whether this node's policy composed anything, so the next frame does not fold it.
-    nodes[idx].subcomposed = crate::ui::subcompose::subcomposition_count() > sub_before;
+    nodes[idx].subcomposed = crate::layout::subcompose::subcomposition_count() > sub_before;
     out
 }
 

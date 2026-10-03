@@ -24,7 +24,7 @@ use crate::ui::navigation_bar::{
     NavigationBarItem, NavigationBarItemColors, NavigationItemIconPosition, NAVIGATION_BAR_HEIGHT,
     NAVIGATION_BAR_ITEM_SPACING,
 };
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 /// ShortNavigationBar 的 item 排布（对齐 androidx ShortNavigationBarArrangement）。

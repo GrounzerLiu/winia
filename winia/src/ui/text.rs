@@ -160,7 +160,7 @@ impl Text {
         // （配色错误）；Button/Chip 的 with_content_color 传内容色对 Text 同样无效
         let final_color = self.color
             .or(style.color)
-            .unwrap_or_else(|| crate::ui::theme::WiniaTheme::content_color());
+            .unwrap_or_else(|| crate::theme::WiniaTheme::content_color());
 
         let content_len = self.content.len();
         // 注册到选区容器（供文本拖动选中使用）——仅在 SelectionContainer 的

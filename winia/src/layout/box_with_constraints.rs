@@ -233,7 +233,7 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
     ) -> (Size, Vec<Placement>) {
         // Already measured in THIS frame: report the same answer instead of composing again (see the
         // `first_measure` field).
-        let generation = crate::ui::subcompose::compose_generation().unwrap_or(0);
+        let generation = crate::layout::subcompose::compose_generation().unwrap_or(0);
         if let Some((cached_generation, size)) = self.first_measure.get() {
             if cached_generation == generation {
                 return (size, Vec::new());
@@ -245,7 +245,7 @@ impl MeasurePolicy for ConstraintsSubcomposePolicy {
         // size (`Box` semantics: the box is as big as its content, clamped by the constraints).
         // Reporting anything else would leave the box at 0 while holding a sized child — measured
         // while wiring this: the box read [0,0] with a [98,48] child under it.
-        let size = crate::ui::subcompose::subcompose(constraints, |ctx| {
+        let size = crate::layout::subcompose::subcompose(constraints, |ctx| {
             content(ctx, scope);
         });
         let _ = self.alignment;
@@ -480,7 +480,7 @@ mod tests {
         let build = || {
             let cap = cap.clone();
             move |ctx: &mut ComposeCtx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     BoxWithConstraints::new()
                         .modifier(Modifier::new().max_width(cap.get()))
                         .build(ctx, |ctx, scope| {

@@ -36,7 +36,7 @@ use crate::ui::slider::{
     SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, draw_thumb,
     draw_track_body, fraction_from_value, handle_key, snap_value, value_at_x,
 };
-use crate::ui::theme::WiniaTheme;
+use crate::theme::WiniaTheme;
 use std::sync::Arc;
 
 /// A range value — the winia stand-in for Compose's `ClosedFloatingPointRange<Float>`.
@@ -591,7 +591,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::modifier::{DrawNode, ModifierElement};
-    use crate::ui::theme::ThemeColors;
+    use crate::theme::ThemeColors;
     use std::sync::atomic::{AtomicI32, Ordering};
 
     // ── Pure logic ──

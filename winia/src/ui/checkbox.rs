@@ -14,7 +14,7 @@ use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
 use crate::interaction::MutableInteractionSource;
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// 视觉勾选框尺寸（M3 实现 `CheckboxSize = 20dp`）
@@ -800,7 +800,7 @@ mod tests {
 
         let build = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c1 = ctx.remember(|| true);
                     let c2 = ctx.remember(|| true);
                     let c3 = ctx.remember(|| true);
@@ -820,7 +820,7 @@ mod tests {
                     // 子项循环（列表显式 key——实例隔离）
                     for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
                         ctx.key(label, |ctx| {
-                            crate::ui::Row::new().build(ctx, |ctx| {
+                            crate::layout::Row::new().build(ctx, |ctx| {
                                 crate::ui::Text::new(label).font_size(13.0).build(ctx);
                                 Checkbox::new(c.get()).on_checked_change(|_| {}).build(ctx);
                             });
@@ -864,7 +864,7 @@ mod tests {
 
         let build = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c1 = ctx.remember(|| true);
                     let c2 = ctx.remember(|| true);
                     let c3 = ctx.remember(|| true);
@@ -878,7 +878,7 @@ mod tests {
                     TriStateCheckbox::new(ps).build(ctx);
                     for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
                         ctx.key(label, |ctx| {
-                            crate::ui::Row::new().build(ctx, |ctx| {
+                            crate::layout::Row::new().build(ctx, |ctx| {
                                 crate::ui::Text::new(label).font_size(13.0).build(ctx);
                                 let cc = c.clone();
                                 Checkbox::new(c.get())
@@ -934,7 +934,7 @@ mod tests {
 
         let build_scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c1 = ctx.remember(|| true);
                     let c2 = ctx.remember(|| true);
                     let c3 = ctx.remember(|| false);
@@ -947,7 +947,7 @@ mod tests {
                     TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
                     for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
                         ctx.key(label, |ctx| {
-                            crate::ui::Row::new().build(ctx, |ctx| {
+                            crate::layout::Row::new().build(ctx, |ctx| {
                                 crate::ui::Text::new(label).font_size(13.0).build(ctx);
                                 let cc = c.clone();
                                 Checkbox::new(c.get())
@@ -1047,7 +1047,7 @@ mod tests {
 
         let build_scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
-                crate::ui::Column::new()
+                crate::layout::Column::new()
                     .modifier(crate::modifier::Modifier::new()
                         .fill_max_size()
                         .vertical_scroll(crate::modifier::ScrollState::new()))
@@ -1064,7 +1064,7 @@ mod tests {
                         TriStateCheckbox::new(ps).on_click(|| {}).build(ctx);
                         for (label, c) in [("子项 1", c1.clone()), ("子项 2", c2.clone()), ("子项 3", c3.clone())] {
                             ctx.key(label, |ctx| {
-                                crate::ui::Row::new().build(ctx, |ctx| {
+                                crate::layout::Row::new().build(ctx, |ctx| {
                                     crate::ui::Text::new(label).font_size(13.0).build(ctx);
                                     let cc = c.clone();
                                     Checkbox::new(c.get())
@@ -1109,7 +1109,7 @@ mod tests {
         let holder = RefCell::new(None::<crate::runtime::state::State<bool>>);
         let scene = |composer: &mut crate::runtime::composer::Composer| {
             composer.compose(crate::compose!(|ctx| {
-                crate::ui::Column::new().build(ctx, |ctx| {
+                crate::layout::Column::new().build(ctx, |ctx| {
                     let c3 = ctx.remember(|| false);
                     *holder.borrow_mut() = Some(c3.clone());
                     let _ = c3.get(); // 顶层依赖 → 应注册 Column scope

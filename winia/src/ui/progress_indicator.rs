@@ -29,7 +29,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier};
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use crate::animation::{InfiniteRepeatableSpec, interpolator};
 use std::sync::Arc;
 use std::time::Duration;

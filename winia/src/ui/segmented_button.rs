@@ -33,7 +33,7 @@ use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, mea
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape, TransformOrigin};
 use crate::interaction::MutableInteractionSource;
 use crate::ui::text::ProvideTextStyle;
-use crate::ui::theme::{ThemeColors, WiniaTheme};
+use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
 /// Material Icons "check" (filled, 24 dp viewBox) — the icon an active segment shows by default.
@@ -837,7 +837,7 @@ mod tests {
     use crate::runtime::composer::Composer;
     use crate::layout::LayoutDirection;
     use crate::ui::text::Text;
-    use crate::ui::theme::ThemeColors;
+    use crate::theme::ThemeColors;
 
     fn compose_row(count: usize, selected: usize, theme: &ThemeColors, dir: LayoutDirection) -> Composer {
         let mut composer = Composer::new();

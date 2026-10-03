@@ -9,7 +9,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::ui::{Popup, PopupPosition};
+use winia::overlay::{Popup, PopupPosition};
 
 #[composable]
 fn popup_tap_fixture(ctx: &mut ComposeCtx) {

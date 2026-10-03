@@ -294,7 +294,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// Return the Window lifecycle context owned by this Composer.
-    pub(crate) fn window_lifecycle(&self) -> crate::ui::window::LifecycleState {
+    pub(crate) fn window_lifecycle(&self) -> crate::app::window::LifecycleState {
         self.composer.lifecycle.clone()
     }
 
@@ -347,7 +347,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// 注册顶层弹出层（Popup/Dialog/DropdownMenu 内部调用）——组合期收集，
     /// compose 后由 app.rs 取走并独立物化/渲染
-    pub fn open_overlay(&mut self, mut desc: crate::ui::overlay::OverlayDesc) {
+    pub fn open_overlay(&mut self, mut desc: crate::overlay::OverlayDesc) {
         // ⚠ 捕获 CompositionLocal 快照（主树 provides 内——Theme 等）——
         // overlay 独立 Composer 在 provides 弹栈后 recompose，读不到主树
         // 隐式上下文；快照重放让 overlay 继承主树主题/方向/排版。
@@ -1992,7 +1992,7 @@ pub struct Composer {
     group_skip_stack: Vec<bool>,
     /// 顶层弹出层（Popup/Dialog/DropdownMenu——组合期注册，compose 后取走；
     /// 内容为独立组合单元——独立 Composer 物化/布局/渲染，不参与主树布局）
-    pub(crate) overlays: Vec<crate::ui::overlay::OverlayDesc>,
+    pub(crate) overlays: Vec<crate::overlay::OverlayDesc>,
     /// 本帧组合期各 overlay 的 active 状态（Popup/Dialog build 总执行时记录——
     /// Skip 帧不记录 → sync 保留上帧；主动关闭 visible=false → 记录 false →
     /// sync 删除）。区分"注册方 Skip"（保留）与"主动关闭"（删除）——
@@ -2058,7 +2058,7 @@ pub struct Composer {
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
     /// Subcompositions parked during the current layout pass, waiting for adoption
     /// (`ui::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
-    pub(crate) subcompositions: Vec<(usize, crate::ui::subcompose::Subcomposition)>,
+    pub(crate) subcompositions: Vec<(usize, crate::layout::subcompose::Subcomposition)>,
     /// A subcomposition this composer can re-arrange instead of re-composing (`ui::subcompose`).
     /// Taken by the next `subcompose()` call in the same frame and put back by `layout()`'s adoption
     /// pass, so a second layout pass in one frame reuses the first pass's composition.
@@ -2080,9 +2080,9 @@ pub struct Composer {
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
-    pub(crate) lifecycle: crate::ui::window::LifecycleState,
+    pub(crate) lifecycle: crate::app::window::LifecycleState,
     /// Adaptive window size context owned by this Composer.
-    pub(crate) adaptive: crate::ui::adaptive::AdaptiveContext,
+    pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
     pub(crate) animation_state_ids: HashSet<StateId>,
 
@@ -2190,8 +2190,8 @@ impl Composer {
             #[cfg(test)]
             live_residue: 0,
             selection_registrar: None,
-            lifecycle: crate::ui::window::LifecycleState::default(),
-            adaptive: crate::ui::adaptive::AdaptiveContext::new(),
+            lifecycle: crate::app::window::LifecycleState::default(),
+            adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
             next_flight_id: 1,
@@ -2809,7 +2809,7 @@ impl Composer {
         // the caller's active slot/group/statement context.
         let _runtime_frame = begin_runtime_frame();
         let mut compose_runtime_transaction = ComposeRuntimeTransaction::new(self);
-        let _adaptive_context = crate::ui::adaptive::enter_context(self.adaptive.clone());
+        let _adaptive_context = crate::layout::adaptive::enter_context(self.adaptive.clone());
         let mut dependency_transaction = ComposeDependencyTransaction::new(self);
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.compose_count += 1;
@@ -3057,7 +3057,7 @@ impl Composer {
     pub(crate) fn park_subcomposition(
         &mut self,
         node: usize,
-        entry: crate::ui::subcompose::Subcomposition,
+        entry: crate::layout::subcompose::Subcomposition,
     ) {
         // The node's OWN policy composed content — recorded here, at the moment it happens, because this
         // is the only place that knows WHICH node subcomposed. `Composer::compose`'s compose-end seeding
@@ -3104,7 +3104,7 @@ impl Composer {
         // Measure callbacks can read State and invoke another Composer. Keep
         // their active slot/group/statement context isolated as well.
         let _runtime_frame = begin_runtime_frame();
-        let _adaptive_context = crate::ui::adaptive::enter_context(self.adaptive.clone());
+        let _adaptive_context = crate::layout::adaptive::enter_context(self.adaptive.clone());
         let mut layout_transaction = LayoutTransaction::new(self);
         // Layout can be called without a preceding compose; consume layout-only
         // invalidations here so measure sees the dirty path directly.
@@ -3133,7 +3133,7 @@ impl Composer {
         // tree is measured and BEFORE the reuse index is rebuilt — an adopted subtree has to be in
         // that index, or the next frame's reuse path never sees it.
         self.subcompositions.clear();
-        let _layout_host = crate::ui::subcompose::LayoutHostGuard::arm(self as *mut Composer);
+        let _layout_host = crate::layout::subcompose::LayoutHostGuard::arm(self as *mut Composer);
         if let Some(root_idx) = self.arena.root {
             let (_size, _placements) = crate::layout::measure_node(
                 &mut self.arena.nodes, &self.arena.policies, root_idx, root_constraints);
@@ -3141,7 +3141,7 @@ impl Composer {
             let parked = std::mem::take(&mut self.subcompositions);
             // `adopt_parked` hands back the last composition it moved, which becomes the cache a
             // second layout pass in this same frame can re-arrange instead of re-composing.
-            self.subcomposition_cache = crate::ui::subcompose::adopt_parked(
+            self.subcomposition_cache = crate::layout::subcompose::adopt_parked(
                 &mut self.arena,
                 &mut self.reused_nodes,
                 parked,
@@ -3295,7 +3295,7 @@ impl Composer {
     }
 
     /// 取走本帧注册的顶层弹出层（compose 后调用——清空收集）
-    pub fn take_overlays(&mut self) -> Vec<crate::ui::overlay::OverlayDesc> {
+    pub fn take_overlays(&mut self) -> Vec<crate::overlay::OverlayDesc> {
         std::mem::take(&mut self.overlays)
     }
 
@@ -6319,7 +6319,7 @@ fn test_stmt_guard_drops_on_scope_exit() {
 /// （防 text29 撞 text0——旧执行计数机制在 Skip 帧漂移的根因）。
 #[test]
 fn test_stmt_seq_inherits_outer_iteration_position() {
-    use crate::ui::layout_components::Column;
+    use crate::layout::components::Column;
     use std::cell::RefCell;
     let mut composer = Composer::new();
     let keys_first = RefCell::new(Vec::new());
@@ -6465,7 +6465,7 @@ fn test_mixed_manual_and_keyed_scope_pairing() {
 /// 参数变化 → Enter（content 重跑）；参数未变 + slot clean → Skip（content 不跑）
 #[test]
 fn test_component_param_change_forces_reenter() {
-    use crate::ui::layout_components::Column;
+    use crate::layout::components::Column;
     let mut composer = Composer::new();
     let mut run_count = std::cell::Cell::new(0);
 
@@ -6618,7 +6618,7 @@ fn test_second_compose_in_a_frame_still_skips_unchanged_containers() {
 /// 否则 measure_node 常量折叠返回上帧尺寸/子位置）
 #[test]
 fn test_param_change_updates_layout() {
-    use crate::ui::layout_components::Column;
+    use crate::layout::components::Column;
     use crate::layout::node::find_node_by_id;
     let mut composer = Composer::new();
     let root_id = std::cell::Cell::new(0u64);
@@ -6656,7 +6656,7 @@ fn test_param_change_updates_layout() {
 /// arena 容量不随结构变化持续增长
 #[test]
 fn test_arena_recycles_freed_slots() {
-    use crate::ui::layout_components::Column;
+    use crate::layout::components::Column;
     use crate::ui::text::Text;
     let mut composer = Composer::new();
     let show = crate::runtime::state::State::new(true);
@@ -6950,7 +6950,7 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
 /// "都是同向运动"根因）。此测试验证 desc 携带方向。
 #[test]
 fn test_compose_captures_direction_in_provides_scope() {
-    use crate::ui::theme::WiniaTheme;
+    use crate::theme::WiniaTheme;
     let mut composer = Composer::new();
     let c = crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0);
 
