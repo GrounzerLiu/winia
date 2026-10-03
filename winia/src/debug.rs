@@ -617,7 +617,7 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
                 .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
                 .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
         ModifierElement::PaddingSides { start, top, end, bottom } => {
-            use crate::modifier::{Dimension, SizeValue};
+            use crate::layout::{Dimension, SizeValue};
             // 四边求值（Debug 场景：显示累积/动态标记）
             let sv = |v: &SizeValue| match v {
                 SizeValue::Static(Dimension::Fixed(x)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(x))) => format!("{x}"),

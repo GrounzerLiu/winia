@@ -13,7 +13,8 @@
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::BoxLayout;
-use crate::modifier::{Modifier, SizeValue};
+use crate::modifier::{Modifier};
+use crate::layout::{SizeValue};
 use crate::graphics::{Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
@@ -757,16 +758,16 @@ mod tests {
         assert_eq!(ButtonDefaults::button_elevation(), ButtonElevation::default_elevation());
         assert_eq!(ButtonDefaults::elevated_button_elevation(), ButtonElevation::elevated());
         let p = ButtonDefaults::content_padding(ButtonStyle::Filled);
-        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
-        assert!(matches!(p.1, SizeValue::Static(crate::modifier::Dimension::Fixed(8.0))));
+        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
+        assert!(matches!(p.1, SizeValue::Static(crate::layout::Dimension::Fixed(8.0))));
         let p = ButtonDefaults::content_padding(ButtonStyle::Text);
-        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
+        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
         let icon = ButtonDefaults::button_with_icon_content_padding();
-        assert!(matches!(icon.0, SizeValue::Static(crate::modifier::Dimension::Fixed(16.0))));
-        assert!(matches!(icon.2, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
+        assert!(matches!(icon.0, SizeValue::Static(crate::layout::Dimension::Fixed(16.0))));
+        assert!(matches!(icon.2, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
         let text_icon = ButtonDefaults::text_button_with_icon_content_padding();
-        assert!(matches!(text_icon.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
-        assert!(matches!(text_icon.2, SizeValue::Static(crate::modifier::Dimension::Fixed(16.0))));
+        assert!(matches!(text_icon.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
+        assert!(matches!(text_icon.2, SizeValue::Static(crate::layout::Dimension::Fixed(16.0))));
     }
 
     #[test]
@@ -894,9 +895,9 @@ mod tests {
         assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
         // content_padding_for：按尺寸水平 padding、Text 固定 12
         let p = ButtonDefaults::content_padding_for(ButtonSize::Medium, ButtonStyle::Filled);
-        assert!(matches!(p.0, SizeValue::Static(crate::modifier::Dimension::Fixed(24.0))));
+        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
         let pt = ButtonDefaults::content_padding_for(ButtonSize::XLarge, ButtonStyle::Text);
-        assert!(matches!(pt.0, SizeValue::Static(crate::modifier::Dimension::Fixed(12.0))));
+        assert!(matches!(pt.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
     }
 
     #[test]

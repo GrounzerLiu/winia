@@ -141,7 +141,7 @@ fn fill_max_width_expands_to_parent() {
         });
     }));
 
-    use winia::modifier::Dimension;
+    use winia::layout::Dimension;
     composer.layout(Constraints::new(0.0, 300.0, 0.0, 100.0));
 
     let root_idx = composer.layout_root_idx().expect("root exists");

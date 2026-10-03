@@ -1085,8 +1085,8 @@ impl TextField {
             }
             let read_only = self.read_only;
             let single_line = self.single_line;
-            move |e: &crate::modifier::KbEvent| -> bool {
-                if e.event_type != crate::modifier::KbEventType::KeyDown { return false; }
+            move |e: &crate::input::KbEvent| -> bool {
+                if e.event_type != crate::input::KbEventType::KeyDown { return false; }
                 // 任何按键处理前：光标立即可见 + 闪烁计时器重置
                 // （用户交互时光标不消失——对齐 Compose snapToVisibleAndAnimate）
                 blink_reset();
@@ -2146,9 +2146,9 @@ mod tests {
     /// Returns true if some handler consumed it.
     fn fire_enter(modifier: &Modifier) -> bool {
         use winit::keyboard::{Key, NamedKey};
-        let ev = crate::modifier::KbEvent {
+        let ev = crate::input::KbEvent {
             key: Key::Named(NamedKey::Enter),
-            event_type: crate::modifier::KbEventType::KeyDown,
+            event_type: crate::input::KbEventType::KeyDown,
             is_alt_pressed: false,
             is_ctrl_pressed: false,
             is_shift_pressed: false,

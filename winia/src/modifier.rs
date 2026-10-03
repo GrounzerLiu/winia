@@ -12,6 +12,9 @@ use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::layout::LayoutDirection;
 use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
+use crate::input::{KbEvent, PointerButton, PointerEvent, PointerEventType, PointerKind};
+use crate::layout::{Dimension, IntrinsicSize, SizeValue};
+use crate::text::{DecoMode, DecoStyle, FontEdge, FontHint, RichSpanStyle};
 use crate::interaction::MutableInteractionSource;
 use crate::graphics::{
     BackgroundColor, BlendMode, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
@@ -21,192 +24,6 @@ use crate::graphics::{
 
 // ── Dimension ──
 
-/// 尺寸值，用于 Modifier 和 Layout
-///
-/// 支持多种单位：`Fixed(f32)`（逻辑像素）、`Dp`（密度无关，== 逻辑像素）、
-/// `Px`（物理像素，需 Density 转换）、`Fill`、`Auto`。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Dimension {
-    /// 固定逻辑像素值
-    Fixed(f32),
-    /// 密度无关像素（本项目 1dp == 1 逻辑像素，无需转换）
-    Dp(crate::unit::Dp),
-    /// 物理像素（需 Density 转逻辑像素）
-    Px(crate::unit::Px),
-    /// 填满可用空间
-    Fill,
-    /// 自适应内容大小
-    Auto,
-}
-
-/// Which of the content's intrinsic measurements a size modifier asks for — Compose's
-/// `androidx.compose.foundation.layout.IntrinsicSize`.
-///
-/// An intrinsic measurement is what the content would be with NO incoming space to fill: `Min` is
-/// the smallest it can be laid out at (for text, the longest unbreakable run), `Max` is the size it
-/// takes with nothing wrapped. `Modifier::width(IntrinsicSize::Max)` therefore sizes a node to its
-/// own content instead of to its parent, which is how Compose makes a menu exactly as wide as its
-/// widest item (`material3/Menu.kt` uses `Column(width(IntrinsicSize.Max))`).
-///
-/// The incoming constraints still win afterwards: Compose documents the modifier as "the incoming
-/// measurement constraints may override this value", and `requiredWidth/requiredHeight` are the
-/// variant that ignores them (`enforceIncoming = false`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntrinsicSize {
-    /// The smallest size the content can be laid out at (Compose `IntrinsicSize.Min`).
-    Min,
-    /// The size the content takes when nothing is wrapped or compressed (Compose `IntrinsicSize.Max`).
-    Max,
-}
-
-/// 尺寸值：静态 `Dimension` 或动态求值（布局属性动画用）。
-///
-/// `size()` 统一入口——传 `f32`/`Dimension`（静态）或 `State<f32>`/闭包（动态）：
-/// - `.size(50.0, 24.0)` 静态
-/// - `.size(&scale, 24.0)` 动画（State 直接传，测量时 `get()` 注册依赖到本节点）
-/// - `.size(|| scale.get() * 2.0, 24.0)` 复杂表达式（闭包）
-pub enum SizeValue {
-    Static(Dimension),
-    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
-    /// Size this axis to one of the content's own intrinsic measurements instead of to the
-    /// incoming space — Compose's `Modifier.width/height(IntrinsicSize)`.
-    Intrinsic(IntrinsicSize),
-}
-
-impl From<Dimension> for SizeValue {
-    fn from(d: Dimension) -> Self { SizeValue::Static(d) }
-}
-
-impl From<f32> for SizeValue {
-    fn from(v: f32) -> Self { SizeValue::Static(Dimension::Fixed(v)) }
-}
-
-impl From<crate::unit::Dp> for SizeValue {
-    fn from(v: crate::unit::Dp) -> Self { SizeValue::Static(Dimension::Dp(v)) }
-}
-
-impl From<crate::unit::Px> for SizeValue {
-    fn from(v: crate::unit::Px) -> Self { SizeValue::Static(Dimension::Px(v)) }
-}
-
-impl From<crate::runtime::state::State<f32>> for SizeValue {
-    fn from(s: crate::runtime::state::State<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::State<f32>> for SizeValue {
-    fn from(s: &crate::runtime::state::State<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::runtime::state::Animating<f32>> for SizeValue {
-    fn from(s: crate::runtime::state::Animating<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::Animating<f32>> for SizeValue {
-    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::runtime::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: crate::runtime::state::DerivedValue<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-impl From<&crate::runtime::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: &crate::runtime::state::DerivedValue<f32>) -> Self {
-        let d = d.clone();
-        SizeValue::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-impl From<&crate::runtime::state::State<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::runtime::state::State<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::runtime::state::Animating<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
-    fn from(f: F) -> Self { SizeValue::Dynamic(Arc::new(f)) }
-}
-
-impl Clone for SizeValue {
-    fn clone(&self) -> Self {
-        match self {
-            SizeValue::Static(d) => SizeValue::Static(*d),
-            SizeValue::Dynamic(f) => SizeValue::Dynamic(f.clone()),
-            SizeValue::Intrinsic(s) => SizeValue::Intrinsic(*s),
-        }
-    }
-}
-
-impl std::fmt::Debug for SizeValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SizeValue::Static(d) => write!(f, "{:?}", d),
-            SizeValue::Dynamic(_) => write!(f, "<dynamic>"),
-            SizeValue::Intrinsic(s) => write!(f, "intrinsic({:?})", s),
-        }
-    }
-}
-
-impl From<IntrinsicSize> for SizeValue {
-    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
-}
-
-impl Dimension {
-    pub fn is_fixed(&self) -> bool {
-        matches!(self, Dimension::Fixed(_) | Dimension::Dp(_) | Dimension::Px(_))
-    }
-
-    pub fn is_fill(&self) -> bool {
-        matches!(self, Dimension::Fill)
-    }
-
-    /// 解析为逻辑像素（Px 需要 Density，Dp/Fixed 直接是逻辑像素）
-    pub fn to_logical_px(&self) -> f32 {
-        match self {
-            Dimension::Fixed(v) => *v,
-            Dimension::Dp(d) => d.value(),
-            Dimension::Px(p) => p.to_logical(crate::unit::current_density()),
-            Dimension::Fill | Dimension::Auto => 0.0,
-        }
-    }
-}
-
-impl From<f32> for Dimension {
-    fn from(v: f32) -> Self {
-        Dimension::Fixed(v)
-    }
-}
-
-impl From<crate::unit::Dp> for Dimension {
-    fn from(d: crate::unit::Dp) -> Self {
-        Dimension::Dp(d)
-    }
-}
-
-impl From<crate::unit::Px> for Dimension {
-    fn from(p: crate::unit::Px) -> Self {
-        Dimension::Px(p)
-    }
-}
 
 // ── Shape ──
 
@@ -218,99 +35,9 @@ impl From<crate::unit::Px> for Dimension {
 
 // ── KbEvent ──
 
-#[derive(Debug, Clone)]
-pub struct KbEvent {
-    pub key: winit::keyboard::Key,
-    pub event_type: KbEventType,
-    pub is_alt_pressed: bool,
-    pub is_ctrl_pressed: bool,
-    pub is_shift_pressed: bool,
-    pub is_meta_pressed: bool,
-    pub repeat: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KbEventType {
-    Unknown,
-    KeyDown,
-    KeyUp,
-}
 
 // ── PointerEvent ──
 
-/// 指针按钮
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointerButton {
-    Primary,
-    Secondary,
-    Middle,
-    Other(u16),
-}
-
-impl PointerKind {
-    pub fn from_button_source(button: &winit::event::ButtonSource) -> Self {
-        match button {
-            winit::event::ButtonSource::Mouse(m) => PointerKind::Mouse {
-                button: match m {
-                    winit::event::MouseButton::Left => PointerButton::Primary,
-                    winit::event::MouseButton::Right => PointerButton::Secondary,
-                    winit::event::MouseButton::Middle => PointerButton::Middle,
-                    other => PointerButton::Other(*other as u16),
-                },
-            },
-            winit::event::ButtonSource::Touch { finger_id, force } => PointerKind::Touch {
-                finger_id: finger_id.into_raw() as u64,
-                force: force.map(|f| f.normalized(None) as f32),
-            },
-            winit::event::ButtonSource::TabletTool { kind, data, .. } => PointerKind::Pen {
-                kind: match kind {
-                    winit::event::TabletToolKind::Eraser => PenKind::Eraser,
-                    _ => PenKind::Stylus,
-                },
-                pressure: data.force.map(|f| f.normalized(None) as f32),
-            },
-            _ => PointerKind::Mouse { button: PointerButton::Primary },
-        }
-    }
-}
-
-/// 指针事件类型
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PointerEventType {
-    Down,
-    Up,
-    Move,
-    Scroll { delta: f32, is_vertical: bool },
-}
-
-/// 指针类型（对齐 Compose PointerType）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PointerKind {
-    Mouse { button: PointerButton },
-    Touch { finger_id: u64, force: Option<f32> },
-    Pen { kind: PenKind, pressure: Option<f32> },
-}
-
-/// 触控笔类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PenKind {
-    Stylus,
-    Eraser,
-    Unknown,
-}
-
-/// 指针事件
-#[derive(Debug, Clone)]
-pub struct PointerEvent {
-    pub event_type: PointerEventType,
-    pub position: (f32, f32),
-    pub scene_position: (f32, f32),
-    pub kind: PointerKind,
-    pub is_alt_pressed: bool,
-    pub is_ctrl_pressed: bool,
-    pub is_shift_pressed: bool,
-    pub is_meta_pressed: bool,
-}
 
 // ── 图片绘制类型（ColorFilter / FilterQuality / BlendMode——对齐 Compose ui.graphics）──
 
@@ -3405,7 +3132,7 @@ mod tests {
         match &elements[0] {
             ModifierElement::Size { width, height } => {
                 match (width, height) {
-                    (crate::modifier::SizeValue::Static(w), crate::modifier::SizeValue::Static(h)) => {
+                    (crate::layout::SizeValue::Static(w), crate::layout::SizeValue::Static(h)) => {
                         assert_eq!(*w, Dimension::Fixed(100.0));
                         assert_eq!(*h, Dimension::Fill);
                     }
@@ -3449,60 +3176,6 @@ mod tests {
 
 // ── RichSpanStyle ──
 
-/// 装饰线样式（对应 Skia TextDecorationStyle）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoStyle { Solid, Double, Dotted, Dashed, Wavy }
-
-/// 装饰线模式（对应 Skia TextDecorationMode）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoMode { Gaps, Through }
-
-/// 字体渲染边缘
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontEdge { Alias, AntiAlias, SubpixelAntiAlias }
-
-/// 字体提示
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontHint { None, Slight, Normal, Full }
-
-/// 富文本中每段的已解析样式（含范围）。
-/// 存储在 RichTextContent modifier 中供测量/渲染使用。
-#[derive(Debug, Clone, PartialEq)]
-pub struct RichSpanStyle {
-    /// 范围起（字符索引，含）
-    pub start: usize,
-    /// 范围止（字符索引，不含）
-    pub end: usize,
-    pub font_size: f32,
-    pub color: Color,
-    pub font_weight: crate::text::FontWeight,
-    pub font_style: crate::text::FontSlant,
-    // ── 装饰线 ──
-    pub underline: bool,
-    pub overline: bool,
-    pub strikethrough: bool,
-    pub decoration_color: Option<Color>,
-    pub decoration_style: Option<DecoStyle>,
-    pub decoration_mode: Option<DecoMode>,
-    // ── 基线 ──
-    pub baseline_shift: f32,
-    // ── 间距 ──
-    pub letter_spacing: f32,
-    pub word_spacing: f32,
-    pub height_multiple: f32,
-    pub half_leading: bool,
-    // ── 字体 ──
-    pub font_families: Vec<String>,
-    pub font_width: i32,
-    pub font_edging: Option<FontEdge>,
-    pub font_hinting: Option<FontHint>,
-    pub subpixel: bool,
-    // ── 前景/背景 ──
-    pub foreground_color: Option<Color>,
-    pub background: Option<Color>,
-    // ── 其他 ──
-    pub locale: Option<String>,
-}
 
 // ── 参数相等性（Skip 判定） ──
 

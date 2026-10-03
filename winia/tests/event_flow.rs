@@ -210,7 +210,7 @@ fn nested_state_propagates_layout_recalculation() {
         });
     }));
 
-    use winia::modifier::Dimension;
+    use winia::layout::Dimension;
     let root_idx = composer.layout_root_idx().unwrap();
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];

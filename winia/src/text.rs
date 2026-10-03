@@ -2,7 +2,9 @@
 
 pub mod style;
 pub mod font;
+pub mod decor;
 pub mod transformation;
+pub use decor::{DecoMode, DecoStyle, FontEdge, FontHint, RichSpanStyle};
 pub mod selection;
 pub mod field;
 mod index_bimap;

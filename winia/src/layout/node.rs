@@ -1,6 +1,8 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
-use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
+use crate::modifier::{Modifier, ModifierElement};
+use crate::layout::{IntrinsicSize};
+use crate::text::{RichSpanStyle};
 use crate::transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
@@ -3447,7 +3449,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
     }
     if let Some(st) = s.decoration_style {
-        use crate::modifier::DecoStyle;
+        use crate::text::DecoStyle;
         let sk = match st {
             DecoStyle::Solid => skia_safe::textlayout::TextDecorationStyle::Solid,
             DecoStyle::Double => skia_safe::textlayout::TextDecorationStyle::Double,
@@ -3458,7 +3460,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_style(sk);
     }
     if let Some(m) = s.decoration_mode {
-        use crate::modifier::DecoMode;
+        use crate::text::DecoMode;
         let sk = match m {
             DecoMode::Gaps => skia_safe::textlayout::TextDecorationMode::Gaps,
             DecoMode::Through => skia_safe::textlayout::TextDecorationMode::Through,
@@ -3484,7 +3486,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
 
     // 渲染精度
     if let Some(e) = s.font_edging {
-        use crate::modifier::FontEdge;
+        use crate::text::FontEdge;
         let sk = match e {
             FontEdge::Alias => skia_safe::font::Edging::Alias,
             FontEdge::AntiAlias => skia_safe::font::Edging::AntiAlias,
@@ -3493,7 +3495,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_font_edging(sk);
     }
     if let Some(h) = s.font_hinting {
-        use crate::modifier::FontHint;
+        use crate::text::FontHint;
         let sk = match h {
             FontHint::None => skia_safe::FontHinting::None,
             FontHint::Slight => skia_safe::FontHinting::Slight,
@@ -3576,7 +3578,8 @@ mod intrinsic_tests {
     use super::*;
     use crate::layout::column::ColumnLayout;
     use crate::layout::row::RowLayout;
-    use crate::modifier::{IntrinsicSize, Modifier, ModifierElement};
+    use crate::modifier::{Modifier, ModifierElement};
+    use crate::layout::{IntrinsicSize};
 
     fn text_modifier(content: &str) -> Modifier {
         Modifier::new().push(ModifierElement::TextContent {

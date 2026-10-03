@@ -115,7 +115,7 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
-    use crate::modifier::Dimension;
+    use crate::layout::Dimension;
 
     fn leaf(ctx: &mut ComposeCtx, modifier: Modifier) { let key = ctx.next_key(); ctx.start_leaf(key, modifier); ctx.end_node(); }
     fn layout(scaffold: Scaffold, direction: LayoutDirection) -> Composer { let mut c=Composer::new(); c.compose(|ctx| WiniaTheme::with_theme_and_direction(crate::theme::ThemeColors::default_light(),direction,ctx,|ctx| scaffold.build(ctx))); c.layout(Constraints::new(0.0,360.0,0.0,640.0)); c }

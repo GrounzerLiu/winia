@@ -96,7 +96,7 @@ pub(crate) struct PerWindow {
     /// 指针按下态（Compose 风格 click 检测）
     pointer_down_state: Option<PtrDownState>,
     /// 最近的 PointerKind（Move 事件继承自上一个 Down）
-    last_pointer_kind: crate::modifier::PointerKind,
+    last_pointer_kind: crate::input::PointerKind,
     /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
     /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
     /// 需记录指针位置；PointerLeft 时由调用方清空）
@@ -267,7 +267,7 @@ impl PerWindow {
         // is that palette (nothing to follow), and its type scale is the default.
         let theme_cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
         let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, suspended_focus_slot: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, suspended_focus_slot: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -1224,14 +1224,14 @@ impl ApplicationHandler for AppState {
                 // last_pointer_pos 否则还是旧值——命中目标错位）
                 pw.last_pointer_pos = Some(scene_pos);
                 let event_type = if state.is_pressed() {
-                    crate::modifier::PointerEventType::Down
+                    crate::input::PointerEventType::Down
                 } else {
-                    crate::modifier::PointerEventType::Up
+                    crate::input::PointerEventType::Up
                 };
                 if state.is_pressed() {
                     // ── Down：指针按下核心（共享——真实/Debug 防分叉）──
                     let modifiers = pw.modifiers;
-                    handle_pointer_down(pw, scene_pos, crate::modifier::PointerKind::from_button_source(&button), &modifiers, true);
+                    handle_pointer_down(pw, scene_pos, crate::input::PointerKind::from_button_source(&button), &modifiers, true);
                 }
                 // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
                 // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
@@ -1267,11 +1267,11 @@ impl ApplicationHandler for AppState {
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
                     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-                    let ptr_ev = crate::modifier::PointerEvent {
+                    let ptr_ev = crate::input::PointerEvent {
                         event_type,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PointerKind::from_button_source(&button),
+                        kind: crate::input::PointerKind::from_button_source(&button),
                         is_alt_pressed: pw.modifiers.alt_key(),
                         is_ctrl_pressed: pw.modifiers.control_key(),
                         is_shift_pressed: pw.modifiers.shift_key(),
@@ -1341,11 +1341,11 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let event_type = if event.state.is_pressed() {
-                    crate::modifier::KbEventType::KeyDown
+                    crate::input::KbEventType::KeyDown
                 } else {
-                    crate::modifier::KbEventType::KeyUp
+                    crate::input::KbEventType::KeyUp
                 };
-                let ke = crate::modifier::KbEvent {
+                let ke = crate::input::KbEvent {
                     key: event.logical_key.clone(),
                     event_type,
                     is_alt_pressed: pw.modifiers.alt_key(),
@@ -1448,9 +1448,9 @@ impl ApplicationHandler for AppState {
                             // 逐字符发送 (overlay arena — bubble-only, mirroring main)
                             for ch in text.chars() {
                                 let s = ch.to_string();
-                                let ke = crate::modifier::KbEvent {
+                                let ke = crate::input::KbEvent {
                                     key: winit::keyboard::Key::Character(s.clone().into()),
-                                    event_type: crate::modifier::KbEventType::KeyDown,
+                                    event_type: crate::input::KbEventType::KeyDown,
                                     is_alt_pressed: false, is_ctrl_pressed: false,
                                     is_shift_pressed: false, is_meta_pressed: false,
                                     repeat: false,
@@ -1489,9 +1489,9 @@ impl ApplicationHandler for AppState {
                                 // 逐字符发送
                                 for ch in text.chars() {
                                     let s = ch.to_string();
-                                    let ke = crate::modifier::KbEvent {
+                                    let ke = crate::input::KbEvent {
                                         key: winit::keyboard::Key::Character(s.clone().into()),
-                                        event_type: crate::modifier::KbEventType::KeyDown,
+                                        event_type: crate::input::KbEventType::KeyDown,
                                         is_alt_pressed: false, is_ctrl_pressed: false,
                                         is_shift_pressed: false, is_meta_pressed: false,
                                         repeat: false,
@@ -1992,9 +1992,9 @@ impl AppState {
                         // 任意按键：复用真实键盘派发路径（Preview/Bubble/激活）——
                         // WS 可模拟字符输入/删除/方向键。修饰键默认无（Ctrl 等
                         // 组合暂不支持——如需可扩展 KbEvent 修饰字段）
-                        let ke = crate::modifier::KbEvent {
+                        let ke = crate::input::KbEvent {
                             key: k,
-                            event_type: crate::modifier::KbEventType::KeyDown,
+                            event_type: crate::input::KbEventType::KeyDown,
                             is_alt_pressed: pw.modifiers.alt_key(),
                             is_ctrl_pressed: pw.modifiers.control_key(),
                             is_shift_pressed: pw.modifiers.shift_key(),
@@ -2613,7 +2613,7 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             } else {
                 node.modifier.fixed_size()
                     .and_then(|(_, h)| {
-                        use crate::modifier::Dimension;
+                        use crate::layout::Dimension;
                         match h {
                             Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
                             Dimension::Px(p) => Some(p.to_logical(density)),
@@ -2650,7 +2650,7 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             } else {
                 node.modifier.fixed_size()
                     .and_then(|(w, _)| {
-                        use crate::modifier::Dimension;
+                        use crate::layout::Dimension;
                         match w {
                             Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) => Some(w),
                             Dimension::Px(p) => Some(p.to_logical(density)),
@@ -3994,7 +3994,7 @@ fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usiz
 }
 
 /// 指针按下：先测 overlay（最上层）——命中 → 记录点击目标；外部 → dismiss
-fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier::PointerKind) -> bool {
+fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::input::PointerKind) -> bool {
     if pw.overlays.is_empty() {
         return false;
     }
@@ -4162,8 +4162,8 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
         // from a field as soon as any button in the same popup was tapped. Drag-select inside
         // overlay inputs is v1-out.
         {
-            let ptr_ev = crate::modifier::PointerEvent {
-                event_type: crate::modifier::PointerEventType::Down,
+            let ptr_ev = crate::input::PointerEvent {
+                event_type: crate::input::PointerEventType::Down,
                 position: (0.0, 0.0),
                 scene_position: local,
                 kind: kind.clone(),
@@ -4506,7 +4506,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 ///
 /// 真实 KeyboardInput 与 debug 模拟共用（防行为分叉）：Escape/Tab 等
 /// 框架级按键由调用方前置处理（聚焦导航/清焦），不进入本函数。
-fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
     let Some(fid) = pw.focused_id else { return false };
     let Some(r) = pw.composer.layout_root_idx() else { return false };
     dispatch_key_in_arena(pw.composer.arena_nodes(), r, fid, ke)
@@ -4516,7 +4516,7 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
 /// independent composers — the main-tree focus path can never reach them).
 /// Falls through (returns false) when no overlay has focus, so callers can
 /// continue with the main tree.
-fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
     // Only the arena that OWNS the keyboard gets the key. Walking "the first overlay that has focus"
     // would hand keys to a layer below the modal that is actually on top (an overlay keeps a
     // remembered focus now, see `claim_keyboard_for_overlay`), and falling through to lower surfaces
@@ -4536,7 +4536,7 @@ fn dispatch_key_in_arena(
     nodes: &[crate::layout::node::LayoutNode],
     r: usize,
     fid: u64,
-    ke: &crate::modifier::KbEvent,
+    ke: &crate::input::KbEvent,
 ) -> bool {
     // 收集焦点路径：root → ... → focused
     let mut path: Vec<usize> = Vec::new();
@@ -4578,7 +4578,7 @@ fn dispatch_key_in_arena(
     // 触发 onClick——仅聚焦节点自身的 clickable 响应，不向祖先冒泡）
     let is_activate = matches!(&ke.key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
         || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
-    if ke.event_type == crate::modifier::KbEventType::KeyDown && !ke.repeat && is_activate {
+    if ke.event_type == crate::input::KbEventType::KeyDown && !ke.repeat && is_activate {
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
             if let Some(on_click) = nodes[idx].modifier.on_click() {
                 on_click();
@@ -4701,7 +4701,7 @@ fn find_descendant_ime_callback(nodes: &[LayoutNode], idx: usize) -> Option<usiz
 fn handle_pointer_down(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
-    kind: crate::modifier::PointerKind,
+    kind: crate::input::PointerKind,
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
@@ -4836,8 +4836,8 @@ fn handle_pointer_down(
 
     // 分发 on_pointer_event（Down）
     let nodes = pw.composer.arena_nodes();
-    let ptr_ev = crate::modifier::PointerEvent {
-        event_type: crate::modifier::PointerEventType::Down,
+    let ptr_ev = crate::input::PointerEvent {
+        event_type: crate::input::PointerEventType::Down,
         position: (0.0, 0.0),
         scene_position: scene_pos,
         kind,
@@ -4858,7 +4858,7 @@ fn handle_pointer_down(
 fn handle_pointer_move(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
-    kind: crate::modifier::PointerKind,
+    kind: crate::input::PointerKind,
     modifiers: &winit::keyboard::ModifiersState,
 ) -> bool {
     // 手势驱动（drag capture：tracker 存在即路由——指针移出组件仍接收）
@@ -5136,8 +5136,8 @@ fn handle_pointer_move(
 
     // 分发 on_pointer_event（悬停 Move 也可能更新 State）
     let nodes = pw.composer.arena_nodes();
-    let ptr_ev = crate::modifier::PointerEvent {
-        event_type: crate::modifier::PointerEventType::Move,
+    let ptr_ev = crate::input::PointerEvent {
+        event_type: crate::input::PointerEventType::Move,
         position: (0.0, 0.0),
         scene_position: scene_pos,
         kind,
@@ -5179,7 +5179,7 @@ fn dispatch_ptr_event(
     nodes: &[LayoutNode],
     root: usize,
     path: &[usize],
-    event: &crate::modifier::PointerEvent,
+    event: &crate::input::PointerEvent,
     scene_pos: (f32, f32),
     captured_id: Option<u64>,
 ) -> bool {
@@ -5648,7 +5648,8 @@ mod pointer_dispatch_coord_tests {
     use super::dispatch_ptr_event;
     use crate::layout::node::{hit_test, scene_to_node_local, LayoutNode};
     use crate::layout::{Point, Size};
-    use crate::modifier::{Modifier, PointerButton, PointerEvent, PointerEventType, PointerKind, ScrollState};
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::input::{PointerButton, PointerEvent, PointerEventType, PointerKind};
 
     /// 构造 scroll 容器(0,0,100×200) + 子节点(0,100,100×60，带 PointerEvent handler)。
     /// scroll offset=50 → 子节点视觉顶边 y=50。
@@ -5864,7 +5865,8 @@ mod key_node_dual_track_tests {
     use super::dispatch_key_to_focus;
     use super::PerWindow;
     use crate::layout::Constraints;
-    use crate::modifier::{KbEvent, KbEventType, KeyNode, Modifier};
+    use crate::modifier::{KeyNode, Modifier};
+    use crate::input::{KbEvent, KbEventType};
     use crate::theme::ThemeColors;
     use std::sync::{Arc, Mutex};
 

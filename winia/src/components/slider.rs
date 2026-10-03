@@ -20,7 +20,8 @@
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
-use crate::modifier::{KbEvent, KbEventType, Modifier};
+use crate::modifier::{Modifier};
+use crate::input::{KbEvent, KbEventType};
 use crate::graphics::{Color};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};

@@ -1137,7 +1137,7 @@ impl DropdownMenu {
                             })
                             .then(crate::modifier::Modifier::new().padding_vertical(8.0))
                             .then(crate::modifier::Modifier::new().width(
-                                crate::modifier::IntrinsicSize::Max,
+                                crate::layout::IntrinsicSize::Max,
                             ))
                             .then(crate::modifier::Modifier::new().vertical_scroll(scroll_state.clone()));
                         crate::layout::Column::new().modifier(m).build(ctx, |ctx| menu(ctx));
@@ -1400,9 +1400,9 @@ impl ExposedDropdownMenuBox {
             let toggler = toggler.clone();
             let keyboard = keyboard.clone();
             let expanded = expanded.clone();
-            move |ke: &crate::modifier::KbEvent| -> bool {
+            move |ke: &crate::input::KbEvent| -> bool {
                 use winit::keyboard::{Key, NamedKey};
-                if ke.event_type != crate::modifier::KbEventType::KeyDown || ke.repeat {
+                if ke.event_type != crate::input::KbEventType::KeyDown || ke.repeat {
                     return false;
                 }
                 let space = matches!(&ke.key, Key::Character(c) if c.as_str() == " ");

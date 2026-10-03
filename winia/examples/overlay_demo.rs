@@ -61,7 +61,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                             .modifier(
                                 winia::modifier::Modifier::new()
                                     .size(200.0, 90.0)
-                                    .padding(winia::modifier::Dimension::Fixed(14.0))
+                                    .padding(winia::layout::Dimension::Fixed(14.0))
                                     .background(
                                         winia::graphics::Color::from_argb(255, 250, 250, 250),
                                         winia::graphics::Shape::RoundedRect { corner_radius: 8.0 },
@@ -185,7 +185,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                             .modifier(
                                 winia::modifier::Modifier::new()
                                     .size(300.0, 170.0)
-                                    .padding(winia::modifier::Dimension::Fixed(20.0))
+                                    .padding(winia::layout::Dimension::Fixed(20.0))
                                     .background(
                                         winia::graphics::Color::from_argb(255, 255, 255, 255),
                                         winia::graphics::Shape::RoundedRect { corner_radius: 12.0 },

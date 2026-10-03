@@ -13,7 +13,8 @@
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
-use crate::modifier::{Modifier, ModifierElement, RichSpanStyle};
+use crate::modifier::{Modifier, ModifierElement};
+use crate::text::{RichSpanStyle};
 use crate::graphics::{Color};
 use crate::text::InlineDrawable;
 use crate::components::text::{LOCAL_TEXT_STYLE};
@@ -34,8 +35,8 @@ struct Style {
     ol: bool,
     st: bool,
     deco_color: Option<Color>,
-    deco_style: Option<crate::modifier::DecoStyle>,
-    deco_mode: Option<crate::modifier::DecoMode>,
+    deco_style: Option<crate::text::DecoStyle>,
+    deco_mode: Option<crate::text::DecoMode>,
     baseline_shift: f32,
     letter_spacing: f32,
     word_spacing: f32,
@@ -43,8 +44,8 @@ struct Style {
     half_leading: bool,
     font_families: Vec<String>,
     font_width: i32,
-    font_edging: Option<crate::modifier::FontEdge>,
-    font_hinting: Option<crate::modifier::FontHint>,
+    font_edging: Option<crate::text::FontEdge>,
+    font_hinting: Option<crate::text::FontHint>,
     subpixel: bool,
     foreground_color: Option<Color>,
     bg: Option<Color>,
@@ -322,8 +323,8 @@ impl StyleModifier {
     pub fn strikethrough(mut self) -> Self { self.0.st = true; self }
     pub fn background(mut self, v: Color) -> Self { self.0.bg = Some(v); self }
     pub fn decoration_color(mut self, v: Color) -> Self { self.0.deco_color = Some(v); self }
-    pub fn decoration_style(mut self, v: crate::modifier::DecoStyle) -> Self { self.0.deco_style = Some(v); self }
-    pub fn decoration_mode(mut self, v: crate::modifier::DecoMode) -> Self { self.0.deco_mode = Some(v); self }
+    pub fn decoration_style(mut self, v: crate::text::DecoStyle) -> Self { self.0.deco_style = Some(v); self }
+    pub fn decoration_mode(mut self, v: crate::text::DecoMode) -> Self { self.0.deco_mode = Some(v); self }
     pub fn subscript(mut self) -> Self { self.0.baseline_shift = -0.5; self }
     pub fn superscript(mut self) -> Self { self.0.baseline_shift = 0.5; self }
     pub fn baseline_shift(mut self, v: f32) -> Self { self.0.baseline_shift = v; self }
@@ -333,8 +334,8 @@ impl StyleModifier {
     pub fn half_leading(mut self) -> Self { self.0.half_leading = true; self }
     pub fn font_family(mut self, v: impl Into<String>) -> Self { self.0.font_families.push(v.into()); self }
     pub fn font_width(mut self, v: i32) -> Self { self.0.font_width = v; self }
-    pub fn font_edging(mut self, v: crate::modifier::FontEdge) -> Self { self.0.font_edging = Some(v); self }
-    pub fn font_hinting(mut self, v: crate::modifier::FontHint) -> Self { self.0.font_hinting = Some(v); self }
+    pub fn font_edging(mut self, v: crate::text::FontEdge) -> Self { self.0.font_edging = Some(v); self }
+    pub fn font_hinting(mut self, v: crate::text::FontHint) -> Self { self.0.font_hinting = Some(v); self }
     pub fn subpixel(mut self) -> Self { self.0.subpixel = true; self }
     pub fn foreground_color(mut self, v: Color) -> Self { self.0.foreground_color = Some(v); self }
     pub fn locale(mut self, v: impl Into<String>) -> Self { self.0.locale = Some(v.into()); self }

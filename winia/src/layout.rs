@@ -10,6 +10,8 @@
 
 pub mod constraints;
 pub mod direction;
+pub mod sizing;
+pub use sizing::{Dimension, IntrinsicSize, SizeValue};
 pub mod components;
 pub mod box_with_constraints;
 pub mod lazy_column;

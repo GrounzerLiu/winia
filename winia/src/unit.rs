@@ -464,7 +464,7 @@ mod tests {
         assert_eq!(pxf, Px(3.5));
 
         // Dp/Px → Dimension（供 .size() 消费）
-        use crate::modifier::Dimension;
+        use crate::layout::Dimension;
         let d: Dimension = 10.dp().into();
         assert_eq!(d, Dimension::Dp(Dp(10.0)));
         let p: Dimension = 20.px().into();

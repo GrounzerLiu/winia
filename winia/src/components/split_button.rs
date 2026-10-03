@@ -761,7 +761,7 @@ impl SplitButtonPart {
         // live fixture: -2 while unselected, -2 four hundred milliseconds after the menu opened, 0 only
         // after a pointer move (the report "the icon only moves when the mouse moves over it").
         let optical_shift = self.optical_shift;
-        let shift_value = crate::modifier::SizeValue::Dynamic(Arc::new(move || {
+        let shift_value = crate::layout::SizeValue::Dynamic(Arc::new(move || {
             if !optical_shift {
                 return 0.0;
             }

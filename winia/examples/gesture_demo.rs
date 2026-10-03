@@ -4,7 +4,9 @@
 use letclone::clone;
 use winia::runtime::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{Modifier, Dimension, PointerEvent, PointerEventType};
+use winia::modifier::{Modifier};
+use winia::layout::{Dimension};
+use winia::input::{PointerEvent, PointerEventType};
 use winia::graphics::{Color};
 use winia::components::text::Text;
 use winia::app::window::Window;
