@@ -21,7 +21,8 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::modifier::{Color, Modifier, Shape, SizeValue};
-use crate::components::text_field::{TextField, TextFieldColors, TextFieldValue};
+use crate::components::text_field::{TextField, TextFieldValue};
+use crate::text::field::{TextFieldColors};
 use std::sync::Arc;
 
 /// Search bar state: text query + active flag + expansion progress.

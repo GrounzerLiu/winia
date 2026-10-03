@@ -1164,12 +1164,12 @@ fn render_pass1(
                 // 容器化——TextFieldLayout 定位）；Outlined label 缺口由子节点
                 // Label 的 placement 构造（跨边框悬浮时——label 顶越出容器顶，
                 // 缺口 = label 水平范围 ± 4dp（M3 populated label padding））
-                let cutout = if *variant == crate::components::TextFieldVariant::Outlined {
+                let cutout = if *variant == crate::text::field::TextFieldVariant::Outlined {
                     node.children.iter().find_map(|&ci| {
                         let cn = &nodes[ci];
                         let is_label = cn.modifier.elements().iter().any(|el| {
                             matches!(el, ModifierElement::TextFieldSlot { role }
-                                if *role == crate::components::text_field::TextFieldSlotRole::Label)
+                                if *role == crate::text::field::TextFieldSlotRole::Label)
                         });
                         if !is_label { return None; }
                         // ⚠ 子节点 position 相对**容器**（本节点）——用本节点
@@ -1347,12 +1347,12 @@ fn render_pass1(
             // `text_field_show_cursor` reads those two off the container's visual element along the parent
             // chain (the same walk the cursor colour below uses) and defaults to true for a bare field,
             // which has neither.
-            if focused && !has_selection && crate::components::text_field::text_field_show_cursor(nodes, root_idx, idx) {
+            if focused && !has_selection && crate::text::field::text_field_show_cursor(nodes, root_idx, idx) {
                 if node.cursor_visible.get() {
                     // ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/
                     // error）——输入 leaf 无此元素，从 leaf 找会回退文本色。
                     // 沿 parent 链向上找容器（offset_mapping_for_node 同路径）
-                    let cursor = crate::components::text_field::text_field_visual_color(nodes, root_idx, idx)
+                    let cursor = crate::text::field::text_field_visual_color(nodes, root_idx, idx)
                         .unwrap_or(*color);
                     let mut cp = skia_safe::Paint::default();
                     cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
@@ -1375,7 +1375,7 @@ fn render_pass1(
                         // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
                         // （密码掩码/格式化输入显示文本 ≠ 编辑文本；
                         // TextFieldVisual 在容器——向上找）
-                        let offset_mapping = crate::components::text_field::offset_mapping_for_node(nodes, root_idx, idx);
+                        let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
                         let idx = offset_mapping.as_ref()
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
                             .unwrap_or_else(|| node.cursor_index.get());
@@ -1389,7 +1389,7 @@ fn render_pass1(
             // IME 组合文本下划线（编辑偏移 → 显示偏移）
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
-                    let offset_mapping = crate::components::text_field::offset_mapping_for_node(nodes, root_idx, idx);
+                    let offset_mapping = crate::text::field::offset_mapping_for_node(nodes, root_idx, idx);
                     let (cs, ce) = offset_mapping.as_ref().map(|m| {
                         (m.original_to_transformed(comp_range.start), m.original_to_transformed(comp_range.end))
                     }).unwrap_or((comp_range.start, comp_range.end));
@@ -2007,16 +2007,16 @@ fn skia_tile(tile: crate::brush::BrushTile) -> skia_safe::TileMode {
 fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
-    variant: &crate::components::TextFieldVariant,
+    variant: &crate::text::field::TextFieldVariant,
     shape: &crate::modifier::Shape,
-    colors: &crate::components::TextFieldColors,
+    colors: &crate::text::field::TextFieldColors,
     indicator: &crate::modifier::Color,
     focus_p: f32,
     cutout: Option<Rect>,
 ) {
     let stroke_w = 1.0 + focus_p.clamp(0.0, 1.0);
     match variant {
-        crate::components::TextFieldVariant::Filled => {
+        crate::text::field::TextFieldVariant::Filled => {
             // 容器背景（surfaceContainerHighest；M3 top 4dp 圆角）
             if colors.container.a > 0 {
                 let mut bg = Paint::default();
@@ -2034,7 +2034,7 @@ fn draw_text_field_container(
                 rect.right, rect.bottom,
             ), &lp);
         }
-        crate::components::TextFieldVariant::Outlined => {
+        crate::text::field::TextFieldVariant::Outlined => {
             // 边框（stroke 居中——1/2px，四角 4dp 圆角；label 缺口处断开）
             let w = stroke_w;
             let mut bp = Paint::default();

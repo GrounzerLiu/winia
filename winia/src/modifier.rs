@@ -738,7 +738,7 @@ pub(crate) enum ModifierElement {
     /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
     /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
     /// input/suffix/trailing；仅标记，不参与测量/绘制）
-    TextFieldSlot { role: crate::components::text_field::TextFieldSlotRole },
+    TextFieldSlot { role: crate::text::field::TextFieldSlotRole },
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
@@ -766,9 +766,9 @@ pub(crate) enum ModifierElement {
     /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
     /// 状态过渡动画由后续迭代接入。
     TextFieldVisual {
-        variant: crate::components::TextFieldVariant,
+        variant: crate::text::field::TextFieldVariant,
         shape: Shape,
-        colors: crate::components::TextFieldColors,
+        colors: crate::text::field::TextFieldColors,
         enabled: bool,
         focused: bool,
         is_error: bool,
@@ -1434,7 +1434,7 @@ impl Modifier {
 
     /// TextField 容器子节点角色标记（text-field-v2 容器化内部使用——
     /// TextFieldLayout policy 按角色布局）
-    pub(crate) fn text_field_slot(self, role: crate::components::text_field::TextFieldSlotRole) -> Self {
+    pub(crate) fn text_field_slot(self, role: crate::text::field::TextFieldSlotRole) -> Self {
         self.push(ModifierElement::TextFieldSlot { role })
     }
 
@@ -1639,9 +1639,9 @@ impl Modifier {
     /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
     pub fn text_field_visual(
         self,
-        variant: crate::components::TextFieldVariant,
+        variant: crate::text::field::TextFieldVariant,
         shape: Shape,
-        colors: crate::components::TextFieldColors,
+        colors: crate::text::field::TextFieldColors,
         enabled: bool,
         focused: bool,
         is_error: bool,

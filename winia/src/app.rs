@@ -1791,7 +1791,7 @@ impl ApplicationHandler for AppState {
                                         let empty = nodes[pidx].modifier.content_len() == 0;
                                         // 光标索引是编辑偏移——经映射转显示偏移
                                         // （TextFieldVisual 挂在容器——向上找）
-                                        let caret_idx = crate::components::text_field::offset_mapping_for_node(nodes, r, pidx)
+                                        let caret_idx = crate::text::field::offset_mapping_for_node(nodes, r, pidx)
                                             .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
                                             .unwrap_or_else(|| nodes[pidx].cursor_index.get());
                                         let (cx, cy, ch) = if empty {
@@ -4199,7 +4199,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                     let tl = crate::text::TextLayout::new(para, 0);
                     let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
-                    let edit = crate::components::text_field::offset_mapping_for_node(nodes, r, anchor_node)
+                    let edit = crate::text::field::offset_mapping_for_node(nodes, r, anchor_node)
                         .map(|m| m.transformed_to_original(hit))
                         .unwrap_or(hit);
                     Some((anchor_node, edit))
@@ -4741,7 +4741,7 @@ fn handle_pointer_down(
             // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
             // 转回编辑偏移（密码掩码/格式化输入）。
             // ⚠ TextFieldVisual 挂在**容器**——须向上找（offset_mapping_for_node）
-            crate::components::text_field::offset_mapping_for_node(nodes, r, ai)
+            crate::text::field::offset_mapping_for_node(nodes, r, ai)
                 .map(|m| m.transformed_to_original(hit))
                 .unwrap_or(hit)
         })
@@ -5109,7 +5109,7 @@ fn handle_pointer_move(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 // 显示偏移 → 编辑偏移（密码掩码/格式化输入；
                                 // TextFieldVisual 在容器——向上找）
-                                let current_index = crate::components::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                let current_index = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                     .map(|m| m.transformed_to_original(current_index))
                                     .unwrap_or(current_index);
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
@@ -5120,7 +5120,7 @@ fn handle_pointer_move(
                                 ) {
                                     // 范围是编辑偏移（anchor/current 已转回）——
                                     // reg 空间 = 显示偏移，写入选区前转换
-                                    let (ts, te) = crate::components::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                    let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                         .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
                                         .unwrap_or((s, e));
                                     target.set_selection(ts, te);

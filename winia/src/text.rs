@@ -4,6 +4,7 @@ pub mod style;
 pub mod font;
 pub mod transformation;
 pub mod selection;
+pub mod field;
 mod index_bimap;
 mod paragraph;
 mod paragraph_builder;
@@ -17,6 +18,7 @@ pub use paragraph_builder::ParagraphBuilder;
 pub use text_layout::TextLayout;
 pub use inline_drawable::{InlineDrawable, ImageDrawable, SvgDrawable};
 pub use selection::{Selection, SelectionRegistrar};
+pub use field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
 pub use transformation::{
     IdentityMapping, IdentityTransformation, OffsetMapping, PasswordTransformation,
     TransformedText, VisualTransformation,
