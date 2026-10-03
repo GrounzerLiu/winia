@@ -26,7 +26,7 @@ use std::ops::Range;
 // ── Style（累积样式，按作用域嵌套叠加）──
 
 #[derive(Clone, Debug)]
-struct Style {
+pub(crate) struct Style {
     fs: Option<f32>,
     color: Option<Color>,
     fw: Option<FontWeight>,

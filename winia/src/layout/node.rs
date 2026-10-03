@@ -703,7 +703,7 @@ impl NodeArena {
     /// `skip`：本帧已复用的节点集合——复用节点已挂入本帧树，free 它会导致
     /// 递归进本帧树形成环（无限递归栈溢出），必须跳过。
     /// `visited`：防环防御（树异常成环时终止递归）。
-    pub fn free_node_skip(
+    pub(crate) fn free_node_skip(
         &mut self,
         idx: usize,
         skip: &NodeMarks,

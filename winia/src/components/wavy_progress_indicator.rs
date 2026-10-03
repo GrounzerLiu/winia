@@ -758,7 +758,7 @@ fn draw_linear_wavy_indeterminate(
 /// Linear 波路径缓存：按 size/wavelength/stroke/cap/振幅是否为零 重建满幅波路径。
 /// 避免每帧重新构造二次贝塞尔波和 PathMeasure（对标 Compose `LinearProgressDrawingCache`）。
 #[derive(Default)]
-struct LinearShapesCache {
+pub(crate) struct LinearShapesCache {
     key: Option<(f32, f32, f32, f32, f32, ProgressIndicatorStrokeCap, bool)>,
     full_path: skia_safe::Path,
     full_path_length: f32,
@@ -1662,7 +1662,7 @@ fn draw_circular_wavy_paths(
 /// 额外缓存 `Morph::morph_match`：`Morph::new` 的 feature-mapping 是昂贵步骤，
 /// 这里只做一次，之后每帧用 `Morph::from_morph_match` 廉价插值。
 #[derive(Default)]
-struct CircularShapesCache {
+pub(crate) struct CircularShapesCache {
     size: (f32, f32),
     wavelength: f32,
     stroke_width: f32,

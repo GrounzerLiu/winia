@@ -678,7 +678,7 @@ pub struct State<T> {
     pub(crate) raw: RawState<T>,
 }
 
-struct StateInner<T> {
+pub(crate) struct StateInner<T> {
     signal: Arc<StateSignal>,
     /// Transitional u32 identity kept for animation/public compatibility.
     /// Internal Composer routing uses `signal.id()` exclusively.

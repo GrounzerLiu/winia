@@ -60,7 +60,7 @@ pub fn clear_animations_for_states(state_ids: &[StateId]) {
 
 /// 重复模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RepeatMode {
+pub enum RepeatMode {
     /// 结束回到起点重来
     Restart,
     /// 往返（from→to→from）
@@ -1300,7 +1300,7 @@ impl KeyframesSpec {
 
 /// 重复执行：iterations 次后完成
 #[derive(Clone, Debug)]
-pub(crate) struct RepeatableSpec {
+pub struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
     pub base: Box<AnimationSpec>,
