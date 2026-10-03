@@ -221,4 +221,114 @@ mod tests {
         assert_eq!(placements[0].position.x, 80.0, "第一个子在最右");
         assert_eq!(placements[1].position.x, 0.0, "第二个子在最左");
     }
+
+    /// Two baselines on one line — the case Compose's `alignBy` exists for, a small label next to
+    /// something bigger.
+    ///
+    /// Measured both ways: WITHOUT the modifier the two texts sit on the row's top edge and their
+    /// baselines differ by the difference in their font sizes; with `align_by_baseline` on the larger
+    /// one the lines coincide. The control is what makes the assertion mean something — a row that
+    /// placed both texts identically would satisfy the aligned case vacuously.
+    #[test]
+    fn align_by_baseline_puts_two_sizes_on_one_line() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::ui::layout_components::Row;
+        use crate::ui::text::Text;
+
+        let lines = |aligned: bool| -> (f32, f32) {
+            let mut composer = crate::core::composer::Composer::new();
+            composer.compose(|ctx| {
+                Row::new().build(ctx, |ctx| {
+                    let small = Text::new("small").font_size(12.0);
+                    let big = Text::new("BIG").font_size(28.0);
+                    if aligned {
+                        small.modifier(Modifier::new().align_by_baseline()).build(ctx);
+                        big.modifier(Modifier::new().align_by_baseline()).build(ctx);
+                    } else {
+                        small.build(ctx);
+                        big.build(ctx);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            let nodes = composer.arena_nodes();
+            let texts: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].has_text_content).collect();
+            assert_eq!(texts.len(), 2, "both texts composed");
+            let line_of = |i: usize| {
+                nodes[i].position.y
+                    + nodes[i]
+                        .alignment_line(AlignmentLine::FIRST_BASELINE)
+                        .expect("a text leaf publishes its first baseline")
+            };
+            (line_of(texts[0]), line_of(texts[1]))
+        };
+
+        let (small, big) = lines(false);
+        assert!(
+            (small - big).abs() > 1.0,
+            "the control is vacuous unless the two baselines differ without it: {small} vs {big}"
+        );
+
+        let (small, big) = lines(true);
+        assert_eq!(
+            small, big,
+            "with `align_by_baseline` the smaller text's baseline lands on the bigger one's"
+        );
+    }
+
+    /// A line-aligned child whose text WRAPS below the line makes the row taller than any child in
+    /// it: Compose sizes the cross axis to `beforeCrossAxisAlignmentLine +
+    /// afterCrossAxisAlignmentLine`, not to the tallest child (`RowColumnMeasurePolicy.kt:253-259`),
+    /// because a line pinned at `before` needs room underneath for whatever hangs below it.
+    ///
+    /// Here the small text wraps to several lines, so its first baseline sits high while its box runs
+    /// well below the big text's.
+    #[test]
+    fn a_wrapped_child_below_the_line_makes_the_row_taller_than_its_tallest_child() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::ui::layout_components::Row;
+        use crate::ui::text::Text;
+
+        let mut composer = crate::core::composer::Composer::new();
+        composer.compose(|ctx| {
+            Row::new().build(ctx, |ctx| {
+                Text::new("BIG")
+                    .font_size(28.0)
+                    .modifier(Modifier::new().align_by_baseline())
+                    .build(ctx);
+                Text::new("a small text that wraps")
+                    .font_size(12.0)
+                    // Narrow enough that the label needs several lines.
+                    .modifier(Modifier::new().width(40.0).align_by_baseline())
+                    .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        let nodes = composer.arena_nodes();
+        let texts: Vec<usize> = (0..nodes.len()).filter(|&i| nodes[i].has_text_content).collect();
+        assert_eq!(texts.len(), 2, "both texts composed");
+        let line_of = |i: usize| {
+            nodes[i].position.y
+                + nodes[i]
+                    .alignment_line(AlignmentLine::FIRST_BASELINE)
+                    .expect("a text leaf publishes its first baseline")
+        };
+        assert_eq!(
+            line_of(texts[0]),
+            line_of(texts[1]),
+            "the two baselines still land together"
+        );
+        let tallest = texts
+            .iter()
+            .map(|&t| nodes[t].measured_size.height)
+            .fold(0.0f32, f32::max);
+        let row_height = nodes[composer.layout_root_idx().unwrap()].measured_size.height;
+        assert!(
+            row_height > tallest,
+            "the row must make room for what hangs below the line: row {row_height} against the \
+             tallest child {tallest}"
+        );
+    }
 }

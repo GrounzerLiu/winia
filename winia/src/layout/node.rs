@@ -189,6 +189,27 @@ pub(crate) enum PaintDisposition {
     Placeholder,
 }
 
+/// A line a node reports and that a parent can align children by — Compose's `AlignmentLine`.
+///
+/// Compose's type also carries a merger so a custom line can combine several children's values
+/// (`AlignmentLine(merger)`); winia starts with the one line that matters in practice, the first
+/// text baseline, and a line is identified by value so it is a constant.
+///
+/// `horizontal` says which axis the line runs across, matching Compose's split: the baselines are
+/// `HorizontalAlignmentLine`s, lines that a Row reads down its cross axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlignmentLine {
+    pub horizontal: bool,
+    id: u8,
+}
+
+impl AlignmentLine {
+    /// The distance from a node's top to the baseline of its first line of text
+    /// (`AlignmentLine.FirstBaseline`). Published by text leaves, which is what makes
+    /// `Modifier::align_by_baseline` useful.
+    pub const FIRST_BASELINE: AlignmentLine = AlignmentLine { horizontal: true, id: 0 };
+}
+
 /// 布局树中的一个节点。
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
@@ -199,6 +220,15 @@ pub struct LayoutNode {
     pub modifier: Modifier,
     pub measured_size: Size,
     pub position: Point,
+    /// The alignment lines this node reports, as offsets from its own top edge — Compose's
+    /// `Measured[alignmentLine]`.
+    ///
+    /// Written by whoever measures the node (a text leaf publishes its baseline — see
+    /// `measure_and_cache_text`), read by a Row/Column that a parent aligns children by
+    /// (`Modifier::align_by`). Cleared at the start of every measure, so a line never outlives the
+    /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
+    /// lines. Usually empty, and an empty `Vec` does not allocate.
+    pub alignment_lines: Vec<(AlignmentLine, f32)>,
     /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
     pub children: Vec<usize>,
     /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
@@ -330,6 +360,21 @@ pub struct LayoutNode {
 }
 
 impl LayoutNode {
+    /// Reports `line` at `value` px from this node's top edge — the measure side of an alignment
+    /// line. Whoever measures the node calls this; a line has one position per measurement.
+    pub fn set_alignment_line(&mut self, line: AlignmentLine, value: f32) {
+        match self.alignment_lines.iter_mut().find(|(l, _)| *l == line) {
+            Some(slot) => slot.1 = value,
+            None => self.alignment_lines.push((line, value)),
+        }
+    }
+
+    /// Where this node reports `line`, or `None` when it does not report that line at all — Compose's
+    /// `AlignmentLine.Unspecified`.
+    pub fn alignment_line(&self, line: AlignmentLine) -> Option<f32> {
+        self.alignment_lines.iter().find(|(l, _)| *l == line).map(|(_, v)| *v)
+    }
+
     /// Whether this node's text still matches the snapshot taken when it was last materialized. A
     /// node with no text matches by definition; `None` (never materialized, or materialized before
     /// the text arrived) does NOT — which forces the caller's re-measure, the conservative direction.
@@ -399,6 +444,7 @@ impl LayoutNode {
             modifier,
             measured_size: Size::ZERO,
             position: Point::ZERO,
+            alignment_lines: Vec::new(),
             children: Vec::new(),
             measure_policy,
             focused: false,
@@ -483,6 +529,7 @@ impl Default for LayoutNode {
             modifier: Modifier::new(),
             measured_size: Size::ZERO,
             position: Point::ZERO,
+            alignment_lines: Vec::new(),
             has_image_content: false,
             children: Vec::new(),
             measure_policy: None,
@@ -2705,6 +2752,11 @@ fn measure_node_inner(
     // ancestors — never a recomposition.
     let flight = nodes[idx].flight_measure.clone().map(|f| f.frame.get());
 
+    // A line belongs to the measurement that produced it: clearing here means a node that stops
+    // reporting one (text that became empty, a leaf that became a container) cannot leave a stale
+    // position for a Row/Column to align by. Folded nodes never reach this, so they keep theirs.
+    nodes[idx].alignment_lines.clear();
+
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
@@ -3041,6 +3093,17 @@ fn measure_node_inner(
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
+            // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its first
+            // text baseline, measured from the node's own top, exactly as Compose's text does. Taken
+            // from the paragraph just cached, so it is the baseline of the layout the size came from.
+            let baseline = nodes[idx]
+                .cached_paragraph
+                .borrow()
+                .as_ref()
+                .map(|para| para.alphabetic_baseline() as f32);
+            if let Some(baseline) = baseline {
+                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE, baseline);
+            }
             // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
             // 高度 +20 预留，防与下方元素重叠）
             let supporting_h = supporting_text_height(&nodes[idx]);

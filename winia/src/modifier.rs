@@ -688,6 +688,9 @@ pub(crate) enum ModifierElement {
     AbsoluteOffset { x: SizeValue, y: SizeValue },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
+    /// Align this child by one of its own alignment lines instead of by its edge (Compose's
+    /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
+    AlignBy { line: crate::layout::AlignmentLine },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
     ///
     /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
@@ -1306,6 +1309,24 @@ impl Modifier {
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     pub fn align_self(self, alignment: crate::layout::Alignment) -> Self {
         self.push(ModifierElement::AlignSelf { alignment })
+    }
+
+    /// Align this child by one of its own alignment lines instead of by its edge — Compose's
+    /// `RowScope.Modifier.alignBy` / `ColumnScope.Modifier.alignBy`.
+    ///
+    /// The child reports the line (a text leaf reports its first baseline) and the parent offsets it
+    /// so that every such child's line lands on the same cross-axis position, growing the cross axis
+    /// if the line plus what hangs below it needs more room. It takes precedence over
+    /// [`Modifier::align_self`] and the parent's own alignment, as Compose's `getCrossAxisPosition`
+    /// does (`RowColumnMeasurePolicy.kt:228-251`, `Row.kt:216-231`).
+    pub fn align_by(self, line: crate::layout::AlignmentLine) -> Self {
+        self.push(ModifierElement::AlignBy { line })
+    }
+
+    /// `Modifier.alignByBaseline()` — the common case: align this child's first text baseline with
+    /// its siblings', which is how a label lines up with a taller icon or a larger font beside it.
+    pub fn align_by_baseline(self) -> Self {
+        self.align_by(crate::layout::AlignmentLine::FIRST_BASELINE)
     }
 
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
@@ -2443,6 +2464,16 @@ impl Modifier {
         None
     }
 
+    /// The alignment line this child asks to be aligned by, if any (Compose's `alignBy`).
+    pub fn get_align_by(&self) -> Option<crate::layout::AlignmentLine> {
+        for el in &self.elements {
+            if let ModifierElement::AlignBy { line } = el {
+                return Some(*line);
+            }
+        }
+        None
+    }
+
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
     pub fn get_align_self(&self) -> Option<crate::layout::Alignment> {
         for el in &self.elements {
@@ -2699,6 +2730,7 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
+            Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::LayoutWeight { weight, fill } => f.debug_struct("LayoutWeight").field("weight", weight).field("fill", fill).finish(),
             Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
             Self::RequiredSize { width, height } => f
@@ -3806,6 +3838,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
+        (AlignBy { line: a }, AlignBy { line: b }) => a == b,
         (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
         (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
             ar == br && am == bm

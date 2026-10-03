@@ -300,11 +300,29 @@ pub(crate) fn measure_flex<A: FlexAxis>(
     let (spacing_extra, leading_space) = compute_spacing(arrangement, remaining_main, gap_count);
     let effective_spacing = spacing + spacing_extra;
 
-    // 交叉轴最终尺寸
+    // ── 交叉轴最终尺寸 ──
+    //
+    // Compose's alignment-line pass (`RowColumnMeasurePolicy.kt:228-251`) runs before the size is
+    // taken: a child aligned by one of its lines contributes that line's distance from its own top
+    // (`beforeCrossAxisAlignmentLine`) and everything below it (`afterCrossAxisAlignmentLine`), and
+    // the cross axis must be at least the two added together so a line placed at `before` still has
+    // room for the tallest child under it. `line_before` is where every line-aligned child's line
+    // lands; children without a line ignore it.
+    let mut line_before = 0.0f32;
+    let mut line_after = 0.0f32;
+    for (i, &c) in children.iter().enumerate() {
+        let Some(line) = nodes[c].modifier.get_align_by() else { continue };
+        let child_cross = A::cross_size(child_sizes[i]);
+        let position = nodes[c].alignment_line(line);
+        line_before = line_before.max(position.unwrap_or(0.0));
+        // An unspecified line is treated as the whole child hanging below the line, as Compose does.
+        line_after = line_after.max(child_cross - position.unwrap_or(child_cross));
+    }
+
     let cross_size = if alignment == Alignment::Stretch && A::cross_max(constraints) < f32::MAX {
         A::cross_max(constraints)
     } else {
-        A::constrain_cross(constraints, max_cross)
+        A::constrain_cross(constraints, max_cross.max(line_before + line_after))
     };
 
     // 放置子节点
@@ -313,14 +331,29 @@ pub(crate) fn measure_flex<A: FlexAxis>(
 
     for (i, child_size) in child_sizes.iter().enumerate() {
         let align = aligns[i];
-        let child_cross = if align == Alignment::Stretch { cross_size } else { A::cross_size(*child_size) };
+        let line = nodes[children[i]].modifier.get_align_by();
+        // A line-aligned child is placed by its line, not by an edge, so it keeps its own cross size
+        // even under a stretching parent — Compose's `getCrossAxisPosition` asks the line first and
+        // only falls back to the parent's alignment (`Row.kt:216-231`).
+        let child_cross = if align == Alignment::Stretch && line.is_none() {
+            cross_size
+        } else {
+            A::cross_size(*child_size)
+        };
         // A weighted child keeps its allocated slot (see `allocated_main`).
         let child_main = allocated_main[i].unwrap_or_else(|| A::main_size(*child_size));
-        let cross_offset = match align {
-            Alignment::Start => 0.0,
-            Alignment::End => cross_size - child_cross,
-            Alignment::Center => (cross_size - child_cross) / 2.0,
-            Alignment::Stretch => 0.0,
+        let cross_offset = match line {
+            // `beforeCrossAxisAlignmentLine - alignmentLinePosition`: every line-aligned child's
+            // line lands on the same cross-axis position.
+            Some(line) => {
+                line_before - nodes[children[i]].alignment_line(line).unwrap_or(0.0)
+            }
+            None => match align {
+                Alignment::Start => 0.0,
+                Alignment::End => cross_size - child_cross,
+                Alignment::Center => (cross_size - child_cross) / 2.0,
+                Alignment::Stretch => 0.0,
+            },
         };
         placements.push(Placement {
             size: A::size(child_main, child_cross),
