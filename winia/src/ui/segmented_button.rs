@@ -31,7 +31,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape, TransformOrigin};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::text::ProvideTextStyle;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -182,7 +182,7 @@ impl SegmentedButtonDefaults {
         if count <= 1 {
             return Shape::Pill;
         }
-        let rtl = WiniaTheme::direction() == crate::layout::LayoutDirection::Rtl;
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         if index == 0 {
             if rtl {
                 Shape::right_rounded(Self::OUTER_CORNER_RADIUS)
@@ -242,7 +242,7 @@ macro_rules! segmented_row {
                 let direction = self
                     .modifier
                     .get_layout_direction()
-                    .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+                    .unwrap_or(crate::layout::direction::current());
                 ctx.changed(&direction);
                 let key = ctx.next_key();
                 let m = Modifier::new().fill_max_width().then(self.modifier);
@@ -499,7 +499,7 @@ impl SegmentedButton {
         let direction = self
             .modifier
             .get_layout_direction()
-            .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();

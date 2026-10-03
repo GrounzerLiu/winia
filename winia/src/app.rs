@@ -163,7 +163,7 @@ pub(crate) struct PerWindow {
     /// 外层收不到 Enter（Tooltip 锚点挂 hoverable 时内部 Button 抢走事件））
     hovered_slots: std::collections::HashSet<u64>,
     /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
-    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
+    pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
     /// Overlay focus interaction target (overlay id, slot) — overlay inputs
@@ -213,7 +213,7 @@ struct OverlayWindow {
     /// overlay 是独立 composer，slot 与主树可能重复）
     hovered_slots: std::collections::HashSet<u64>,
     /// 该 overlay 内当前按下 的 interaction source（Press 波纹——up/取消时释放）
-    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
+    pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
     /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
     /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
@@ -1805,7 +1805,7 @@ impl ApplicationHandler for AppState {
                                                 None => (0.0, 0.0, 20.0),
                                             }
                                         };
-                                        let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                                        let align = nodes[pidx].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                                         // CONTENT box: the painter uses it, so the IME
                                         // candidate window must too — under a flight layout
                                         // override `measured_size` is the size the PARENT was
@@ -1820,9 +1820,9 @@ impl ApplicationHandler for AppState {
                                             (abs.0 + pad_x) as f64
                                         } else {
                                             let x_off = match align {
-                                                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => abs.0,
-                                                crate::ui::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
-                                                crate::ui::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
+                                                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => abs.0,
+                                                crate::text::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
+                                                crate::text::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
                                             };
                                             (x_off + pad_x + cx) as f64
                                         };
@@ -4392,7 +4392,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
     }
     // 当前路径上所有 hoverable 的 (slot, interaction)
-    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
+    let hit: Vec<(u64, crate::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -4419,7 +4419,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 
 /// overlay 内 hover 更新（overlay composer + 本地坐标）
 fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
-    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
+    let hit: Vec<(u64, crate::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
         let Some(r) = ov.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
@@ -5088,10 +5088,10 @@ fn handle_pointer_move(
                         // 对齐偏移（匹配渲染侧 x_off）——绘制用内容盒，选区高亮须一致
                         //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
                         let node_w = nodes[innermost].content_box().width;
-                        let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                        let align = nodes[innermost].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                         let x_off = match align {
-                            crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                            crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
+                            crate::text::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                            crate::text::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
                             _ => abs_x,
                         };
                         // 段落局部坐标：扣节点 padding（与渲染侧 content 区一致——
@@ -5312,7 +5312,7 @@ mod window_theme_tests {
         // A published TYPE SCALE is a reason to re-run too, with no color change at all: components
         // resolved their type when they built.
         crate::ui::theme::set_system_dark_mode(Some(false));
-        let big = crate::ui::theme::Typography { body_large: crate::ui::text::TextStyle::new().font_size(24.0), ..Default::default() };
+        let big = crate::ui::theme::Typography { body_large: crate::text::TextStyle::new().font_size(24.0), ..Default::default() };
         assert!(first.theme_cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
         assert!(first.refresh_theme(), "a type-scale change has to reach the tree");
         assert_eq!(first.theme_applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));

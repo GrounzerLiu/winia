@@ -98,7 +98,7 @@ impl Tooltip {
         let anchor_key = ctx.next_key();
         let id = ctx.remember(|| crate::ui::overlay::next_overlay_id());
         // hover 交互源：锚点挂 hoverable，进入/离开自动发射 hover 事件
-        let interaction = ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get();
+        let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
         let mut anchor_modifier = Modifier::new();
         if self.hover_trigger {
             anchor_modifier = anchor_modifier.hoverable(&interaction);

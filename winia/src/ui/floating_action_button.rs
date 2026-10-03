@@ -12,7 +12,7 @@ use crate::layout::LayoutDirection;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::{ComponentState, MutableInteractionSource};
+use crate::interaction::{ComponentState, MutableInteractionSource};
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -394,7 +394,7 @@ impl FloatingActionButton {
             GroupStatus::Enter => {
                 WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     crate::ui::text::ProvideTextStyle(
-                        crate::ui::text::TextStyle::new().color(content_color),
+                        crate::text::TextStyle::new().color(content_color),
                         ctx,
                         content,
                     );
@@ -832,7 +832,7 @@ impl ExtendedFloatingActionButton {
         // 高程动画（同 FAB）
         let elevation_value = self.elevation.map(|e| e.for_state(&state));
 
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
 

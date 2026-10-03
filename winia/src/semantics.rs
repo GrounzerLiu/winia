@@ -23,7 +23,7 @@
 
 use crate::layout::node::{scroll_offset_for_node, LayoutNode};
 use crate::modifier::ModifierElement;
-use crate::ui::checkbox::ToggleableState;
+use crate::selection::ToggleableState;
 
 // ═══════════════════════════════════════════════════════════
 // Role

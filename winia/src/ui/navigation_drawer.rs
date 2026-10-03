@@ -47,7 +47,7 @@ use crate::core::state::State;
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::anchored_draggable::AnchoredDraggableState;
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::layout_components::{Column, Row, Stack};
 use crate::ui::theme::WiniaTheme;
 use crate::unit::Dp;
@@ -594,7 +594,7 @@ impl ModalDrawerSheet {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         ctx.changed(&self.shape);
         ctx.changed(&self.container_color);
@@ -713,7 +713,7 @@ impl ModalNavigationDrawer {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         let rtl = direction == LayoutDirection::Rtl;
         ctx.changed(&direction);
         ctx.changed(&self.gestures_enabled);

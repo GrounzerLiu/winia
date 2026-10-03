@@ -443,7 +443,7 @@ impl AlertDialog {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         let has_icon = self.icon.is_some();
         let shape = self.shape;
         let container_color = self.container_color;
@@ -502,9 +502,9 @@ struct DialogColors {
 
 /// The three text styles, likewise (`HeadlineSmall` / `BodyMedium` / `LabelLarge`).
 struct DialogStyles {
-    title: crate::ui::text::TextStyle,
-    text: crate::ui::text::TextStyle,
-    button: crate::ui::text::TextStyle,
+    title: crate::text::TextStyle,
+    text: crate::text::TextStyle,
+    button: crate::text::TextStyle,
 }
 
 /// The slot closures, grouped so the content function takes one argument instead of six.

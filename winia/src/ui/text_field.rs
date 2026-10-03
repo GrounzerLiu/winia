@@ -7,7 +7,8 @@ use crate::core::composer::ComposeCtx;
 use crate::core::state::State;
 use crate::modifier::Modifier;
 use crate::composable;
-use crate::ui::text::{FontWeight, ProvideTextStyle, TextStyle};
+use crate::ui::text::{ProvideTextStyle};
+use crate::text::{FontWeight, TextStyle};
 use crate::ui::theme::WiniaTheme;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -816,7 +817,7 @@ pub struct TextField {
     /// 最小行数（对标 Compose minLines，默认 1——空内容也占位）
     min_lines: usize,
     /// 交互源（None = build 时内部 remember——对标 Compose TextField 可选注入）
-    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::interaction::MutableInteractionSource>,
     /// 错误状态（对标 Compose isError——文字/边框错误色，供按状态取色）
     is_error: bool,
     /// 容器变体（None = 无容器视觉——裸输入；Filled/Outlined 对齐 M3）
@@ -947,7 +948,7 @@ impl TextField {
 
     /// 注入交互源（hoist——TextField 的 focus 状态发射到此源；
     /// 不传则内部 remember 一个）
-    pub fn interaction_source(mut self, source: crate::ui::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(mut self, source: crate::interaction::MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -1074,7 +1075,7 @@ impl TextField {
         // 读到 None 而 focused 恒 false：外部注入或内部 remember）
         let interaction = if self.enabled {
             Some(self.interaction_source.clone()
-                .unwrap_or_else(|| ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get()))
+                .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get()))
         } else {
             None
         };
@@ -1717,8 +1718,8 @@ impl TextField {
                 input_style.font_weight.unwrap_or_default(),
                 input_style.font_style.unwrap_or_default(),
                 if self.single_line { 1 } else { self.max_lines },
-                crate::ui::TextAlign::Left,
-                crate::ui::TextOverflow::Clip,
+                crate::text::TextAlign::Left,
+                crate::text::TextOverflow::Clip,
                 input_style.soft_wrap.unwrap_or(true),
                 input_style.letter_spacing.unwrap_or(0.0),
                 input_style.line_height.map(|height| height.to_logical_px()),
@@ -2665,7 +2666,7 @@ mod tests {
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::core::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let focus_src = crate::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         // 首帧：未聚焦（label 展开，progress 目标 0）
         for frame in 0..3 {
@@ -2726,7 +2727,7 @@ mod tests {
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::core::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let focus_src = crate::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -2779,7 +2780,7 @@ mod tests {
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::core::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let focus_src = crate::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -2830,7 +2831,7 @@ mod tests {
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::core::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let focus_src = crate::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -2881,7 +2882,7 @@ mod tests {
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::core::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::ui::interaction::MutableInteractionSource::new();
+        let focus_src = crate::interaction::MutableInteractionSource::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         let mk = || {

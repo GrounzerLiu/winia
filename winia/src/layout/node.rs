@@ -2,7 +2,7 @@
 
 use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
 use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
-use crate::ui::text::FontSlant;
+use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
 use super::constraints::Constraints;
@@ -104,16 +104,16 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 /// any of them has to invalidate a folded measurement even when the slot stayed clean.
 pub(crate) type TextSnapshot = (
     String,
-    crate::ui::TextAlign,
+    crate::text::TextAlign,
     crate::modifier::Color,
     f32,
-    crate::ui::text::FontWeight,
-    crate::ui::text::FontSlant,
+    crate::text::FontWeight,
+    crate::text::FontSlant,
     usize,
     bool,
     f32,
     Option<f32>,
-    crate::ui::TextOverflow,
+    crate::text::TextOverflow,
 );
 
 /// The text a modifier carries, or `None` if it has no text element. Rich text is deliberately
@@ -124,7 +124,7 @@ pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
         ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
             Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
         }
-        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, crate::ui::text::FontSlant::Upright, 0, true, 0.0, None, crate::ui::TextOverflow::Clip)),
+        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::text::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::text::FontWeight::NORMAL, crate::text::FontSlant::Upright, 0, true, 0.0, None, crate::text::TextOverflow::Clip)),
         _ => None,
     })
 }
@@ -2348,11 +2348,11 @@ mod tests {
                     content: content.to_string(),
                     font_size: 14.0,
                     color,
-                    font_weight: crate::ui::text::FontWeight::NORMAL,
-                    font_style: crate::ui::text::FontSlant::Upright,
+                    font_weight: crate::text::FontWeight::NORMAL,
+                    font_style: crate::text::FontSlant::Upright,
                     max_lines: usize::MAX,
-                    align: crate::ui::TextAlign::Left,
-                    overflow: crate::ui::TextOverflow::Clip,
+                    align: crate::text::TextAlign::Left,
+                    overflow: crate::text::TextOverflow::Clip,
                     soft_wrap: true,
                     letter_spacing: 0.0,
                     line_height: None,
@@ -3218,11 +3218,11 @@ pub(crate) fn build_plain_paragraph(
     content: &str,
     font_size: f32,
     color: &crate::modifier::Color,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    font_weight: crate::text::FontWeight,
+    font_style: crate::text::FontSlant,
     max_lines: usize,
-    align: crate::ui::TextAlign,
-    overflow: crate::ui::TextOverflow,
+    align: crate::text::TextAlign,
+    overflow: crate::text::TextOverflow,
     soft_wrap: bool,
     letter_spacing: f32,
     line_height: Option<f32>,
@@ -3238,12 +3238,12 @@ pub(crate) fn build_plain_paragraph(
     }
 
     // ellipsis overflow：超出时显示省略号
-    if overflow == crate::ui::TextOverflow::Ellipsis {
+    if overflow == crate::text::TextOverflow::Ellipsis {
         para_style.set_ellipsis("\u{2026}");
     }
 
     // justify alignment
-    if align == crate::ui::TextAlign::Justify {
+    if align == crate::text::TextAlign::Justify {
         para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
     }
 
@@ -3268,9 +3268,9 @@ pub(crate) fn build_plain_paragraph(
         }
     }
     // 设置字重和倾斜
-    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
+    if font_weight != crate::text::FontWeight::NORMAL || font_style != crate::text::FontSlant::Upright {
         use skia_safe::FontStyle;
-        use crate::ui::text::FontSlant;
+        use crate::text::FontSlant;
         let slant = match font_style {
             FontSlant::Upright => skia_safe::font_style::Slant::Upright,
             FontSlant::Italic => skia_safe::font_style::Slant::Italic,
@@ -3583,11 +3583,11 @@ mod intrinsic_tests {
             content: content.to_string(),
             font_size: 14.0,
             color: crate::modifier::Color::from_argb(255, 0, 0, 0),
-            font_weight: crate::ui::text::FontWeight::NORMAL,
-            font_style: crate::ui::text::FontSlant::Upright,
+            font_weight: crate::text::FontWeight::NORMAL,
+            font_style: crate::text::FontSlant::Upright,
             max_lines: usize::MAX,
-            align: crate::ui::TextAlign::Left,
-            overflow: crate::ui::TextOverflow::Clip,
+            align: crate::text::TextAlign::Left,
+            overflow: crate::text::TextOverflow::Clip,
             soft_wrap: true,
             letter_spacing: 0.0,
             line_height: None,

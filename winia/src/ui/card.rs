@@ -12,7 +12,7 @@
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::{ComponentState, MutableInteractionSource};
+use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════
@@ -431,7 +431,7 @@ impl Card {
         // content 闭包自动成为组合 scope（与 Column 一致）；
         // 布局策略 = ColumnLayout（对标 M3：内容包在 Column 中，顶部对齐）
         let dir = modifier.get_layout_direction()
-            .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+            .unwrap_or(crate::layout::direction::current());
         match ctx.start_restartable_group(
             key,
             modifier,

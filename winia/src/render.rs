@@ -65,11 +65,11 @@ struct TextParams<'a> {
     content: &'a str,
     font_size: f32,
     color: &'a crate::modifier::Color,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    font_weight: crate::text::FontWeight,
+    font_style: crate::text::FontSlant,
     max_lines: usize,
-    align: crate::ui::TextAlign,
-    overflow: crate::ui::TextOverflow,
+    align: crate::text::TextAlign,
+    overflow: crate::text::TextOverflow,
     soft_wrap: bool,
     letter_spacing: f32,
     line_height: Option<f32>,
@@ -1100,7 +1100,7 @@ fn render_pass1(
     // 阴影（elevation, shape, color）——链序中与 background 同层绘制；
     // clip=true 时并入 clip_shape（内容裁剪，阴影不受裁——Compose 语义）
     // 阴影层（预扫描直接绘制——见下方 pre-scan 注释）
-    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::ui::TextAlign, crate::ui::TextOverflow, crate::ui::text::FontWeight, crate::ui::text::FontSlant, bool, f32, Option<f32>)> = None;
+    let mut text: Option<(&str, f32, &crate::modifier::Color, usize, crate::text::TextAlign, crate::text::TextOverflow, crate::text::FontWeight, crate::text::FontSlant, bool, f32, Option<f32>)> = None;
     let mut scroll_offset_v: Option<f32> = None;
     let mut scroll_offset_h: Option<f32> = None;
 
@@ -1317,9 +1317,9 @@ fn render_pass1(
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
             para.layout(content_w);
             let x_off = match align {
-                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => content_x,
-                crate::ui::TextAlign::Center => content_x + (content_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                crate::ui::TextAlign::Right => content_x + (content_w - para.max_intrinsic_width()).max(0.0),
+                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
+                crate::text::TextAlign::Center => content_x + (content_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                crate::text::TextAlign::Right => content_x + (content_w - para.max_intrinsic_width()).max(0.0),
             };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
@@ -2069,11 +2069,11 @@ fn measure_text_width(content: &str, font_size: f32, max_width: f32) -> f32 {
         content,
         font_size,
         &crate::modifier::Color::BLACK,
-        crate::ui::text::FontWeight::NORMAL,
-        crate::ui::text::FontSlant::Upright,
+        crate::text::FontWeight::NORMAL,
+        crate::text::FontSlant::Upright,
         usize::MAX,
-        crate::ui::TextAlign::Left,
-        crate::ui::TextOverflow::Clip,
+        crate::text::TextAlign::Left,
+        crate::text::TextOverflow::Clip,
         true,
         0.0,
         None,
@@ -2089,8 +2089,8 @@ fn draw_text_field_aux_text(
     canvas: &Canvas,
     content: &str,
     font_size: f32,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    font_weight: crate::text::FontWeight,
+    font_style: crate::text::FontSlant,
     letter_spacing: f32,
     line_height: Option<f32>,
     color: &crate::modifier::Color,
@@ -2107,8 +2107,8 @@ fn draw_text_field_aux_text(
         font_weight,
         font_style,
         usize::MAX,
-        crate::ui::TextAlign::Left,
-        crate::ui::TextOverflow::Clip,
+        crate::text::TextAlign::Left,
+        crate::text::TextOverflow::Clip,
         true,
         letter_spacing,
         line_height,
@@ -2323,10 +2323,10 @@ fn draw_text_with_selection(
     content: &str,
     font_size: f32,
     color: &crate::modifier::Color,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    font_weight: crate::text::FontWeight,
+    font_style: crate::text::FontSlant,
     x: f32, y: f32, w: f32,
-    max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool,
+    max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool,
     letter_spacing: f32, line_height: Option<f32>,
     registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
     slot_key: u64,
@@ -2350,13 +2350,13 @@ fn draw_text(
     x: f32,
     y: f32,
     max_width: f32,
-    align: crate::ui::TextAlign,
+    align: crate::text::TextAlign,
 ) {
     // 计算 x 偏移以支持 Center/Right/Justify 对齐
     let x_offset = match align {
-        crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => x,
-        crate::ui::TextAlign::Center => x + (max_width - para.max_intrinsic_width()).max(0.0) / 2.0,
-        crate::ui::TextAlign::Right => x + (max_width - para.max_intrinsic_width()).max(0.0),
+        crate::text::TextAlign::Left | crate::text::TextAlign::Justify => x,
+        crate::text::TextAlign::Center => x + (max_width - para.max_intrinsic_width()).max(0.0) / 2.0,
+        crate::text::TextAlign::Right => x + (max_width - para.max_intrinsic_width()).max(0.0),
     };
     para.paint(canvas, x_offset, y);
 }
@@ -2381,8 +2381,8 @@ mod tests {
             canvas,
             "Name",
             12.0,
-            crate::ui::text::FontWeight::NORMAL,
-            crate::ui::text::FontSlant::Upright,
+            crate::text::FontWeight::NORMAL,
+            crate::text::FontSlant::Upright,
             0.0,
             None,
             &crate::modifier::Color::from_argb(255, 255, 0, 0),

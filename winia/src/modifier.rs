@@ -11,7 +11,7 @@ use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::layout::LayoutDirection;
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 
 // ── Dimension ──
 
@@ -560,7 +560,7 @@ pub trait DrawWrapNode: std::fmt::Debug + Send + Sync {
 pub trait ClickNode: std::fmt::Debug + Send + Sync {
     fn on_click(&self);
     /// 绑定的交互源（press 波纹用；无则 None）。
-    fn interaction(&self) -> Option<crate::ui::interaction::MutableInteractionSource> {
+    fn interaction(&self) -> Option<crate::interaction::MutableInteractionSource> {
         None
     }
     /// Skip 指纹 MUST 规范（同 DrawNode）：静态参数进 key；回写/瞬态动画值
@@ -800,7 +800,7 @@ pub(crate) enum ModifierElement {
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32> },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32> },
     /// 富文本内容（含内联 drawable，由 RichText 组件设置）
     RichTextContent {
         content: String,
@@ -1550,11 +1550,11 @@ impl Modifier {
         content: String,
         font_size: f32,
         color: crate::modifier::Color,
-        font_weight: crate::ui::text::FontWeight,
-        font_style: crate::ui::text::FontSlant,
+        font_weight: crate::text::FontWeight,
+        font_style: crate::text::FontSlant,
         max_lines: usize,
-        align: crate::ui::TextAlign,
-        overflow: crate::ui::TextOverflow,
+        align: crate::text::TextAlign,
+        overflow: crate::text::TextOverflow,
         soft_wrap: bool,
     ) -> Self {
         self.text_content_full(
@@ -1571,11 +1571,11 @@ impl Modifier {
         content: String,
         font_size: f32,
         color: crate::modifier::Color,
-        font_weight: crate::ui::text::FontWeight,
-        font_style: crate::ui::text::FontSlant,
+        font_weight: crate::text::FontWeight,
+        font_style: crate::text::FontSlant,
         max_lines: usize,
-        align: crate::ui::TextAlign,
-        overflow: crate::ui::TextOverflow,
+        align: crate::text::TextAlign,
+        overflow: crate::text::TextOverflow,
         soft_wrap: bool,
         letter_spacing: f32,
         line_height: Option<f32>,
@@ -2631,7 +2631,7 @@ impl Modifier {
     }
 
     /// 获取文本对齐方式
-    pub fn align(&self) -> Option<crate::ui::TextAlign> {
+    pub fn align(&self) -> Option<crate::text::TextAlign> {
         for el in &self.elements {
             if let ModifierElement::TextContent { align, .. } = el {
                 return Some(*align);
@@ -2902,8 +2902,8 @@ pub struct TransformOrigin(pub f32, pub f32);
 pub struct SupportingVisual {
     pub content: String,
     pub font_size: f32,
-    pub font_weight: crate::ui::text::FontWeight,
-    pub font_style: crate::ui::text::FontSlant,
+    pub font_weight: crate::text::FontWeight,
+    pub font_style: crate::text::FontSlant,
     pub letter_spacing: f32,
     pub line_height: Option<f32>,
     pub color: Color,
@@ -3752,8 +3752,8 @@ pub struct RichSpanStyle {
     pub end: usize,
     pub font_size: f32,
     pub color: Color,
-    pub font_weight: crate::ui::text::FontWeight,
-    pub font_style: crate::ui::text::FontSlant,
+    pub font_weight: crate::text::FontWeight,
+    pub font_style: crate::text::FontSlant,
     // ── 装饰线 ──
     pub underline: bool,
     pub overline: bool,
@@ -4538,11 +4538,11 @@ mod node_track_tests {
                     "CoverMe".to_string(),
                     14.0,
                     Color::BLACK,
-                    crate::ui::text::FontWeight::NORMAL,
-                    crate::ui::text::FontSlant::Upright,
+                    crate::text::FontWeight::NORMAL,
+                    crate::text::FontSlant::Upright,
                     usize::MAX,
-                    crate::ui::TextAlign::Left,
-                    crate::ui::TextOverflow::Clip,
+                    crate::text::TextAlign::Left,
+                    crate::text::TextOverflow::Clip,
                     true,
                 ),
             );
@@ -4598,7 +4598,7 @@ mod node_track_tests {
         // paints an opaque bar over the press point. The press pixel must show the bar
         // color, not the ripple color.
         use crate::core::composer::Composer;
-        use crate::ui::interaction::MutableInteractionSource;
+        use crate::interaction::MutableInteractionSource;
         use skia_safe::surfaces;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();

@@ -41,7 +41,7 @@ impl Scaffold {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let key = ctx.next_key();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let policy = ScaffoldLayoutPolicy { direction, padding: self.content_padding, fab_position: self.fab_position, top_present: self.top_bar.is_some(), bottom_present: self.bottom_bar.is_some(), fab_present: self.floating_action_button.is_some() };
         let top = self.top_bar;

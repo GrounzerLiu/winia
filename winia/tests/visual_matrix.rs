@@ -124,19 +124,19 @@ fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe:
 
 fn custom_typography() -> Typography {
     Typography {
-        body_large: winia::ui::TextStyle::new()
+        body_large: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(18.0)))
             .line_height(28.0)
             .letter_spacing(0.9),
-        body_small: winia::ui::TextStyle::new()
+        body_small: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(13.0)))
             .line_height(19.0)
             .letter_spacing(0.6),
-        label_large: winia::ui::TextStyle::new()
+        label_large: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(15.0)))
             .line_height(22.0)
             .letter_spacing(0.4)
-            .font_weight(winia::ui::FontWeight::BOLD),
+            .font_weight(winia::text::FontWeight::BOLD),
         ..Typography::default()
     }
 }

@@ -13,7 +13,7 @@ use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -31,31 +31,7 @@ const CHECK_MARK_PATH: &str = "M9.55 18.2 3.55 12.2 5 10.75 9.55 15.3 19 5.85 20
 /// Indeterminate 横线（M3 drawCheck 中段：0.2w..0.8w、y=0.5h，2dp 高）
 const DASH_PATH: &str = "M4.8 11h14.4v2H4.8z";
 
-/// 三态（对标 foundation `ToggleableState`）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToggleableState {
-    Off,
-    On,
-    Indeterminate,
-}
-
-impl ToggleableState {
-    /// `ToggleableState(checked: Boolean)` 等价物
-    pub fn from_bool(checked: bool) -> Self {
-        if checked { Self::On } else { Self::Off }
-    }
-
-    /// 视觉“着色选中”态：On 与 Indeterminate 都算（颜色解析用）。
-    /// 注意与 M3 `ToggleableState.isSelected`（仅 On）语义不同——外部如需
-    /// “真选中”判断请用 `self == ToggleableState::On`。
-    pub fn is_checked(self) -> bool {
-        matches!(self, Self::On | Self::Indeterminate)
-    }
-
-    pub fn is_indeterminate(self) -> bool {
-        self == Self::Indeterminate
-    }
-}
+use crate::selection::ToggleableState;
 
 /// 勾选框颜色集（对标 material3 `CheckboxColors`）——box/border/checkmark
 /// 三组色 × enabled/disabled × Off/On/Indeterminate。

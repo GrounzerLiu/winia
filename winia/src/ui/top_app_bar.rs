@@ -7,7 +7,8 @@ use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Po
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, ScrollState, Shape};
 use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
-use crate::ui::text::{ProvideTextStyle, TextOverflow, TextStyle};
+use crate::ui::text::{ProvideTextStyle};
+use crate::text::{TextOverflow, TextStyle};
 use crate::ui::theme::WiniaTheme;
 
 pub const TOP_APP_BAR_HEIGHT: f32 = 64.0;
@@ -192,7 +193,7 @@ impl TopAppBar {
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let expanded = expanded_height(self.variant);
         let fraction = self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0);

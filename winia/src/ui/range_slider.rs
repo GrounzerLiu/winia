@@ -30,7 +30,7 @@ use crate::layout::BoxLayout;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, Point, Size, measure_node};
 use crate::modifier::{KbEvent, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::slider::{
     SLIDER_ACTIVE_THUMB_WIDTH, SLIDER_THUMB_GAP, SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
     SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, draw_thumb,

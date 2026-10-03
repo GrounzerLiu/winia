@@ -38,7 +38,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement, Point, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
 
@@ -194,7 +194,7 @@ impl NavigationBarDefaults {
     }
 
     /// LabelTextStyle = TypographyKeyTokens.LabelMedium
-    pub fn label_style() -> crate::ui::text::TextStyle {
+    pub fn label_style() -> crate::text::TextStyle {
         WiniaTheme::typography().label_medium
     }
 }
@@ -255,7 +255,7 @@ impl NavigationBar {
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| NavigationBarDefaults::colors(&theme));
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let content = self.content;
         let policy = NavigationBarLayoutPolicy { direction };

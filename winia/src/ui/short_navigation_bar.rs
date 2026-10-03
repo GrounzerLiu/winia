@@ -19,7 +19,7 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{MeasurePolicy, Placement, Point, Size};
 use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::navigation_bar::{
     NavigationBarItem, NavigationBarItemColors, NavigationItemIconPosition, NAVIGATION_BAR_HEIGHT,
     NAVIGATION_BAR_ITEM_SPACING,
@@ -146,7 +146,7 @@ impl ShortNavigationBar {
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.surface_container);
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let content = self.content;
         let policy = ShortNavigationBarLayoutPolicy { arrangement: self.arrangement, direction };

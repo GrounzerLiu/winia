@@ -14,7 +14,7 @@ use crate::composable;
 use crate::core::composer::ComposeCtx;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier, Shape, SizeValue};
-use crate::ui::interaction::{ComponentState, MutableInteractionSource};
+use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 use std::fmt;
 

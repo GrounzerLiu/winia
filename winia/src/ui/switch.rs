@@ -15,7 +15,7 @@ use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -1060,7 +1060,7 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = crate::core::composer::Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
-        let src_holder = std::cell::RefCell::new(None::<crate::ui::interaction::MutableInteractionSource>);
+        let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
@@ -1221,7 +1221,7 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = crate::core::composer::Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::core::state::State<bool>>);
-        let src_holder = std::cell::RefCell::new(None::<crate::ui::interaction::MutableInteractionSource>);
+        let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
         let mut custom_colors = SwitchColors::from_theme(&theme);
         custom_colors.checked_track = crate::modifier::Color::from_argb(255, 46, 125, 50);
         custom_colors.checked_thumb = crate::modifier::Color::WHITE;

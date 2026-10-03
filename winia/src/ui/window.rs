@@ -172,7 +172,7 @@ impl Window {
         if theme.publish(
             crate::ui::theme::current_theme_spec(),
             crate::ui::theme::WiniaTheme::typography(),
-            crate::ui::theme::WiniaTheme::direction(),
+            crate::layout::direction::current(),
         ) {
             // Something moved in THIS composer, which leaves the window's own composer with nothing
             // pending: ask the loop to schedule its frame.

@@ -357,7 +357,7 @@ fn build_chip(
     }
     if enabled {
         if let Some(cb) = on_click {
-            let interaction = ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get();
+            let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
             let cb2 = cb.clone();
             m = m
                 .clickable_with_source(&interaction, move || cb2())
@@ -383,7 +383,7 @@ mod tests {
     use super::*;
     use crate::core::composer::Composer;
     use crate::ui::theme::Typography;
-    use crate::ui::text::{FontWeight, TextStyle};
+    use crate::text::{FontWeight, TextStyle};
     use crate::unit::{Sp, TextUnit};
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {

@@ -44,7 +44,7 @@ use crate::ui::icon_button::IconButton;
 use crate::ui::icon::Icon;
 use crate::ui::layout_components::{Column, Row};
 use crate::modifier::{Color, GraphicsLayerParams, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
 

@@ -1533,7 +1533,7 @@ pub struct DropdownMenuItem {
     content_padding: Option<(f32, f32)>,
     /// M3 `interactionSource: MutableInteractionSource? = null` — the ripple/hover source. `None` means
     /// the item makes and remembers its own.
-    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::interaction::MutableInteractionSource>,
     /// M3 `leadingIcon: @Composable (() -> Unit)? = null` — winia's slot convention is a boxed `FnOnce`,
     /// as in `ListItem::leading_content`.
     leading_icon: Option<Box<dyn FnOnce(&mut crate::core::composer::ComposeCtx) + Send + Sync>>,
@@ -1588,7 +1588,7 @@ impl DropdownMenuItem {
     /// one (material3's `null` default).
     pub fn interaction_source(
         mut self,
-        source: crate::ui::interaction::MutableInteractionSource,
+        source: crate::interaction::MutableInteractionSource,
     ) -> Self {
         self.interaction_source = Some(source);
         self
@@ -1647,7 +1647,7 @@ impl DropdownMenuItem {
         // padding already keeps the top and bottom items clear of them.
         let interaction = self
             .interaction_source
-            .unwrap_or_else(|| ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get());
         let modifier = if self.enabled {
             let modifier = modifier.clickable_with_source(&interaction, move || {
                 if let Some(cb) = &on_click {

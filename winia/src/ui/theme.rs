@@ -11,7 +11,7 @@ use crate::core::composition_local::CompositionLocal;
 use crate::core::composer::ComposeCtx;
 use crate::layout::LayoutDirection;
 use crate::modifier::Color;
-use crate::ui::text::{FontWeight, TextStyle};
+use crate::text::{FontWeight, TextStyle};
 use crate::unit::{Sp, TextUnit};
 use material_colors::color::Argb;
 use material_colors::theme::ThemeBuilder;
@@ -352,10 +352,6 @@ static LOCAL_COLORS: LazyLock<CompositionLocal<ThemeColors>> = LazyLock::new(|| 
     CompositionLocal::new(|| ThemeColors::default_light())
 });
 
-static LOCAL_DIRECTION: LazyLock<CompositionLocal<LayoutDirection>> = LazyLock::new(|| {
-    CompositionLocal::new(|| LayoutDirection::Ltr)
-});
-
 static LOCAL_TYPOGRAPHY: LazyLock<CompositionLocal<Typography>> = LazyLock::new(|| {
     CompositionLocal::new(Typography::default)
 });
@@ -677,7 +673,7 @@ impl WiniaTheme {
             ctx.mark_subtree_dirty();
         }
         let _restore = SpecGuard(CURRENT_THEME_SPEC.with(|s| s.borrow_mut().replace(spec)));
-        LOCAL_DIRECTION.provides(direction, || {
+        crate::layout::direction::provides(direction, || {
             LOCAL_COLORS.provides(colors, || {
                 LOCAL_TYPOGRAPHY.provides(typography, || {
                     LOCAL_CONTENT_COLOR.provides(on_surface, || {
@@ -733,11 +729,6 @@ impl WiniaTheme {
     pub fn colors() -> ThemeColors {
         LOCAL_COLORS.current()
     }
-    /// 读取当前布局方向（Ltr 或 Rtl）。
-    pub fn direction() -> LayoutDirection {
-        LOCAL_DIRECTION.current()
-    }
-
     /// 读取当前 Material Typography token。
     pub fn typography() -> Typography {
         LOCAL_TYPOGRAPHY.current()
@@ -869,9 +860,9 @@ mod tests {
             match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
                 GroupStatus::Skip => { skips.set(skips.get() + 1); }
                 GroupStatus::Enter => {
-                    seen.borrow_mut().push(WiniaTheme::direction());
+                    seen.borrow_mut().push(crate::layout::direction::current());
                     let leaf = ctx.next_key();
-                    let dir = if WiniaTheme::direction() == LayoutDirection::Rtl { "rtl" } else { "ltr" };
+                    let dir = if crate::layout::direction::current() == LayoutDirection::Rtl { "rtl" } else { "ltr" };
                     Text::new(dir).build(ctx);
                     let _ = leaf;
                 }
@@ -1005,7 +996,7 @@ mod tests {
                     let cell = sampled.borrow();
                     cell.as_ref()
                         .unwrap()
-                        .publish(current_theme_spec(), WiniaTheme::typography(), WiniaTheme::direction());
+                        .publish(current_theme_spec(), WiniaTheme::typography(), crate::layout::direction::current());
                 })
             })
         });
@@ -1019,7 +1010,7 @@ mod tests {
         let mut frame = |composer: &mut Composer| {
             composer.compose(|ctx| {
                 cell.provide(ctx, |_| {
-                    seen.borrow_mut().push((WiniaTheme::typography(), WiniaTheme::direction()));
+                    seen.borrow_mut().push((WiniaTheme::typography(), crate::layout::direction::current()));
                 })
             });
         };

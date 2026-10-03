@@ -38,7 +38,7 @@ use crate::layout::node::{
 use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::{Button, ButtonColors, ButtonElevation, ButtonSize, ButtonStyle};
-use crate::ui::interaction::{ComponentState, MutableInteractionSource};
+use crate::interaction::{ComponentState, MutableInteractionSource};
 use crate::ui::theme::WiniaTheme;
 use std::sync::Arc;
 
@@ -160,7 +160,7 @@ impl SplitButtonDefaults {
     /// reads it: a `Shape` carries no direction, so "start" has to be resolved by the caller.
     pub fn leading_shapes(size: ButtonSize) -> SplitButtonShapes {
         let outer = Self::outer_corner_size(Self::container_height(size));
-        let rtl = WiniaTheme::direction() == LayoutDirection::Rtl;
+        let rtl = crate::layout::direction::current() == LayoutDirection::Rtl;
         let make = |inner: f32| {
             if rtl {
                 // start is the right side: outer corners there, inner ones on the left.
@@ -180,7 +180,7 @@ impl SplitButtonDefaults {
     /// corners are full, and the checked shape is a stadium — material3's `TrailingCheckedShape`.
     pub fn trailing_shapes(size: ButtonSize) -> SplitButtonShapes {
         let outer = Self::outer_corner_size(Self::container_height(size));
-        let rtl = WiniaTheme::direction() == LayoutDirection::Rtl;
+        let rtl = crate::layout::direction::current() == LayoutDirection::Rtl;
         let make = |inner: f32| {
             if rtl {
                 Shape::corners(outer, inner, inner, outer)
@@ -265,7 +265,7 @@ impl SplitButtonLayout {
         let direction = self
             .modifier
             .get_layout_direction()
-            .unwrap_or(WiniaTheme::direction());
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let key = ctx.next_key();
         let policy = SplitButtonPolicy { spacing: self.spacing, direction };
@@ -691,7 +691,7 @@ impl SplitButtonPart {
     }
 
     fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        let rtl = WiniaTheme::direction() == LayoutDirection::Rtl;
+        let rtl = crate::layout::direction::current() == LayoutDirection::Rtl;
         let height = SplitButtonDefaults::container_height(self.size);
         let interaction = self
             .interaction_source

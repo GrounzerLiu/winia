@@ -8,7 +8,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
 use crate::ui::icon_button::{IconButtonDefaults, IconButtonSize, IconButtonStyle};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -314,7 +314,7 @@ impl IconToggleButton {
                 // 内容色下传（含 checked 态内容色）——Icon tint Auto 自动跟随
                 WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     crate::ui::text::ProvideTextStyle(
-                        crate::ui::text::TextStyle::new().color(content_color),
+                        crate::text::TextStyle::new().color(content_color),
                         ctx,
                         content,
                     );

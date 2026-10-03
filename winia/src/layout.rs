@@ -9,6 +9,7 @@
 //! - FlowRow / FlowColumn: 流式换行/换列（对标 Compose foundation）
 
 pub mod constraints;
+pub mod direction;
 pub mod node;
 pub(crate) mod flex;
 pub(crate) mod column;

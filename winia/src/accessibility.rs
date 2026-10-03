@@ -32,7 +32,7 @@
 //! | the window itself | Window | — |
 
 use crate::semantics::{SemanticsNode, SemanticsRole, WindowSemantics};
-use crate::ui::checkbox::ToggleableState;
+use crate::selection::ToggleableState;
 use std::sync::Arc;
 use windows::core::{implement, Interface, IUnknown, Result as WinResult};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -1412,7 +1412,7 @@ mod tests {
         let disabled = element(
             Some(SemanticsRole::Checkbox),
             false,
-            SemanticsState::new().checked(crate::ui::checkbox::ToggleableState::Indeterminate),
+            SemanticsState::new().checked(crate::selection::ToggleableState::Indeterminate),
         );
         assert!(!supports_pattern(&disabled, UIA_InvokePatternId));
         assert!(supports_pattern(&disabled, UIA_TogglePatternId));

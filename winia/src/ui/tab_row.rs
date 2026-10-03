@@ -35,7 +35,7 @@ use crate::layout::node::{
 };
 use crate::layout::LayoutDirection;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::text::TextAlign;
+use crate::text::TextAlign;
 use crate::ui::theme::WiniaTheme;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -157,7 +157,7 @@ impl TabRowDefaults {
     }
 
     /// Tab 文本样式（LabelTextFont = TitleSmall = 14.0/20.0）
-    pub fn label_text_style() -> crate::ui::text::TextStyle {
+    pub fn label_text_style() -> crate::text::TextStyle {
         let mut s = WiniaTheme::typography().title_small;
         s.text_align = Some(TextAlign::Center);
         s
@@ -312,7 +312,7 @@ impl TabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
 
         let container_color = self.container_color.unwrap_or_else(|| TabRowDefaults::container_color(&theme));
@@ -595,7 +595,7 @@ pub struct Tab {
     /// LeadingIconTab 模式：icon 左 + text 右（水平排列，SmallTabHeight）
     leading: bool,
     /// 外部交互源注入（缺省内部创建）
-    interaction_source: Option<crate::ui::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::interaction::MutableInteractionSource>,
     modifier: Modifier,
 }
 
@@ -623,7 +623,7 @@ impl Tab {
     }
 
     /// 注入外部交互源（缺省内部创建），用于外部观察 pressed/hover/focus 状态。
-    pub fn interaction_source(mut self, source: crate::ui::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(mut self, source: crate::interaction::MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -667,7 +667,7 @@ impl Tab {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let selected = self.selected;
         let enabled = self.enabled;
@@ -701,7 +701,7 @@ impl Tab {
         // 与 Compose interactionSource 参数语义一致），缺省内部创建
         let interaction = match self.interaction_source.clone() {
             Some(src) => src,
-            None => ctx.remember(|| crate::ui::interaction::MutableInteractionSource::new()).get(),
+            None => ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get(),
         };
         let callback = self.on_click.clone();
 
@@ -1108,7 +1108,7 @@ impl ScrollableTabRow {
 
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
-        let direction = self.modifier.get_layout_direction().unwrap_or(WiniaTheme::direction());
+        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let is_rtl = direction == LayoutDirection::Rtl;
 
@@ -1892,7 +1892,7 @@ mod tests {
     fn tab_accepts_injected_interaction_source() {
         // interaction_source 注入：外部 remember 创建的源应被使用
         //（不 panic，渲染结构同内部创建路径）
-        use crate::ui::interaction::MutableInteractionSource;
+        use crate::interaction::MutableInteractionSource;
         let mut c = Composer::new();
         let colors = crate::ui::theme::ThemeColors::default_light();
         let src: MutableInteractionSource = {

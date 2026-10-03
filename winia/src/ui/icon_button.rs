@@ -6,7 +6,7 @@ use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Color, Modifier, Shape};
 use crate::ui::button::ButtonBorder;
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -331,7 +331,7 @@ impl IconButton {
                 // 内容色下传：Icon tint Auto / Text 均取此色（对标 LocalContentColor）
                 WiniaTheme::with_content_color(content_color, ctx, |ctx| {
                     crate::ui::text::ProvideTextStyle(
-                        crate::ui::text::TextStyle::new().color(content_color),
+                        crate::text::TextStyle::new().color(content_color),
                         ctx,
                         content,
                     );

@@ -4,9 +4,10 @@ use crate::composable;
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Alignment, BoxLayout};
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
+use crate::interaction::MutableInteractionSource;
 use crate::ui::theme::WiniaTheme;
-use crate::ui::text::{ProvideTextStyle, TextStyle};
+use crate::ui::text::{ProvideTextStyle};
+use crate::text::{TextStyle};
 use std::sync::Arc;
 
 pub const LIST_ITEM_ONE_LINE_HEIGHT: f32 = 56.0;

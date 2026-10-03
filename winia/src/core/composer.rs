@@ -882,7 +882,7 @@ struct NodeDesc {
     /// IME 组合范围（渲染画下划线用）——外层 Option 区分"未设置"与"清空"
     composing_range: Option<Option<std::ops::Range<usize>>>,
     /// 布局方向（组合期捕获——provides 作用域内读 CompositionLocal；
-    /// 物化在组合回调后执行——届时 WiniaTheme::direction() 已退出作用域，
+    /// 物化在组合回调后执行——届时主题的 provider 已退出作用域，
     /// 必须从 desc 携带，否则 RTL 下节点快照恒 Ltr → offset/padding 镜像失效）
     direction: crate::layout::LayoutDirection,
 }
@@ -2415,9 +2415,9 @@ impl Composer {
 
         // 组合产物写入 Slot（物化阶段消费——完整分离：arena 建节点移出组合阶段）
         // ⚠ direction 必须在此捕获（组合期 provides 作用域内）——物化期
-        // WiniaTheme::direction() 已退出作用域读不到（RTL 全局切换失效根因）
+        // 主题的 provider 已退出作用域读不到（RTL 全局切换失效根因）
         let direction = modifier.get_layout_direction()
-            .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+            .unwrap_or(crate::layout::direction::current());
         // A Clean slot still has to re-measure when this node's own modifier changed: the modifier is
         // where a container's or leaf's layout inputs live (`max_width`, `size`, `padding`), and a value
         // computed from a state read in an ANCESTOR's scope changes them without dirtying this slot.
@@ -2504,7 +2504,7 @@ impl Composer {
         if is_skip {
             // 方向先算（modifier 随后 move 进 set_skip_modifier）
             let direction = modifier.get_layout_direction()
-                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+                .unwrap_or(crate::layout::direction::current());
             self.slot_table.set_current_desc(None);
             // 保留本帧组合产物 modifier（父层重跑传入的新 offset/背景——物化应用）
             self.slot_table.set_skip_modifier(modifier);
@@ -2516,7 +2516,7 @@ impl Composer {
         } else {
             // Enter：组合期捕获方向（provides 作用域内）——先算再 move
             let direction = modifier.get_layout_direction()
-                .unwrap_or(crate::ui::theme::WiniaTheme::direction());
+                .unwrap_or(crate::layout::direction::current());
         self.slot_table.set_current_desc(Some(NodeDesc {
 
                 key,
@@ -6088,11 +6088,11 @@ fn test_text_content_change_remeasures() {
                         content: text.to_string(),
                         font_size: 14.0,
                         color: crate::modifier::Color::from_argb(255, 0, 0, 0),
-                        font_weight: crate::ui::text::FontWeight::NORMAL,
-                        font_style: crate::ui::text::FontSlant::Upright,
+                        font_weight: crate::text::FontWeight::NORMAL,
+                        font_style: crate::text::FontSlant::Upright,
                         max_lines: usize::MAX,
-                        align: crate::ui::TextAlign::Left,
-                        overflow: crate::ui::TextOverflow::Clip,
+                        align: crate::text::TextAlign::Left,
+                        overflow: crate::text::TextOverflow::Clip,
                         soft_wrap: true,
                         letter_spacing: 0.0,
                         line_height: None,
@@ -6152,11 +6152,11 @@ fn test_text_style_change_remeasures() {
                         font_size: 14.0,
                         // The only thing that differs between the two frames.
                         color: crate::modifier::Color::from_argb(alpha, 0, 0, 0),
-                        font_weight: crate::ui::text::FontWeight::NORMAL,
-                        font_style: crate::ui::text::FontSlant::Upright,
+                        font_weight: crate::text::FontWeight::NORMAL,
+                        font_style: crate::text::FontSlant::Upright,
                         max_lines: usize::MAX,
-                        align: crate::ui::TextAlign::Left,
-                        overflow: crate::ui::TextOverflow::Clip,
+                        align: crate::text::TextAlign::Left,
+                        overflow: crate::text::TextOverflow::Clip,
                         soft_wrap: true,
                         letter_spacing: 0.0,
                         line_height: None,
@@ -6913,11 +6913,11 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
                     content: "plain".to_string(),
                     font_size: 14.0,
                     color: crate::modifier::Color::from_argb(255, 0, 0, 0),
-                    font_weight: crate::ui::text::FontWeight::NORMAL,
-                    font_style: crate::ui::text::FontSlant::Upright,
+                    font_weight: crate::text::FontWeight::NORMAL,
+                    font_style: crate::text::FontSlant::Upright,
                     max_lines: usize::MAX,
-                    align: crate::ui::TextAlign::Left,
-                    overflow: crate::ui::TextOverflow::Clip,
+                    align: crate::text::TextAlign::Left,
+                    overflow: crate::text::TextOverflow::Clip,
                     soft_wrap: true,
                     letter_spacing: 0.0,
                     line_height: None,
@@ -6945,7 +6945,7 @@ fn test_materialize_reuse_clears_stale_textfield_state_on_role_switch() {
 }
 
 /// RTL 全局切换修复回归：组合期 provides 作用域内捕获方向到 desc——
-/// 物化在组合回调后执行（WiniaTheme::direction() 已退出作用域），
+/// 物化在组合回调后执行（主题的 provider 已退出作用域），
 /// 修复前物化期读 theme 恒 Ltr → offset/padding 镜像全部失效（用户实测
 /// "都是同向运动"根因）。此测试验证 desc 携带方向。
 #[test]

@@ -19,8 +19,8 @@
 use crate::core::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Color, Modifier, Shape};
-use crate::ui::interaction::MutableInteractionSource;
-use crate::ui::checkbox::ToggleableState;
+use crate::interaction::MutableInteractionSource;
+use crate::selection::ToggleableState;
 use std::sync::Arc;
 
 /// `ColorScheme.surfaceColorAtElevation`（Compose `ColorScheme.kt:1125-1129`）——按 elevation 把

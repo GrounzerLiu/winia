@@ -59,7 +59,7 @@ impl Column {
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
         // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         build_container(
             ctx,
             self.modifier,
@@ -107,7 +107,7 @@ impl Row {
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
         // 方向参与 changed（同 Column——方向切换必须 Enter 替换 policy）
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         build_container(
             ctx,
@@ -200,7 +200,7 @@ impl FlowRow {
         ctx.changed(&self.alignment);
         // max_items_in_row: usize 有 PartialEq，直接 changed
         ctx.changed(&self.max_items_in_row);
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         build_container(
             ctx,
@@ -257,7 +257,7 @@ impl FlowColumn {
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
         ctx.changed(&self.max_items_in_column);
-        let dir = self.modifier.get_layout_direction().unwrap_or(crate::ui::theme::WiniaTheme::direction());
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&dir);
         build_container(
             ctx,
