@@ -234,7 +234,7 @@ mod tests {
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
         use crate::layout::components::Row;
-        use crate::ui::text::Text;
+        use crate::components::text::Text;
 
         let lines = |aligned: bool| -> (f32, f32) {
             let mut composer = crate::runtime::composer::Composer::new();
@@ -289,7 +289,7 @@ mod tests {
         use crate::layout::AlignmentLine;
         use crate::modifier::Modifier;
         use crate::layout::components::Row;
-        use crate::ui::text::Text;
+        use crate::components::text::Text;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {

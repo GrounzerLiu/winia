@@ -1675,7 +1675,7 @@ mod tests {
                     |v: &u64| *v,
                     move |ctx, _i, v| {
                         c2.fetch_add(1, Ordering::Relaxed);
-                        crate::ui::text::Text::new(format!("Item {}", v))
+                        crate::components::text::Text::new(format!("Item {}", v))
                             .font_size(14.0)
                             .modifier(Modifier::new().padding(12.0))
                             .build(ctx);
@@ -1711,7 +1711,7 @@ mod tests {
                         .snap_paging(true)
                         .modifier(Modifier::new().fill_max_width().fill_max_height())
                         .items(40, |i: usize| i as u64, |ctx, i| {
-                            crate::ui::text::Text::new(format!("M{i}"))
+                            crate::components::text::Text::new(format!("M{i}"))
                                 .font_size(14.0)
                                 .build(ctx);
                         })
@@ -1752,7 +1752,7 @@ mod tests {
                 .state(state.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -1766,7 +1766,7 @@ mod tests {
                 .state(state.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -1835,7 +1835,7 @@ mod tests {
                         |v: &u64| *v,
                         move |ctx, _i, v| {
                             c2.fetch_add(1, Ordering::Relaxed);
-                            crate::ui::text::Text::new(format!("Item {}", v))
+                            crate::components::text::Text::new(format!("Item {}", v))
                                 .font_size(14.0)
                                 .modifier(Modifier::new().padding(12.0))
                                 .build(ctx);
@@ -1865,7 +1865,7 @@ mod tests {
                 .state(s)
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -1907,7 +1907,7 @@ mod tests {
                 .state(s.clone())
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2033,7 +2033,7 @@ mod tests {
                         .state(s)
                         .modifier(Modifier::new().fill_max_width().fill_max_height())
                         .items_from(items, |v: &u64| *v, |ctx, _i, v| {
-                            crate::ui::text::Text::new(format!("Item {}", v))
+                            crate::components::text::Text::new(format!("Item {}", v))
                                 .font_size(14.0)
                                 .modifier(Modifier::new().padding(12.0))
                                 .build(ctx);
@@ -2175,7 +2175,7 @@ mod tests {
             .modifier(Modifier::new().fill_max_width().fill_max_height());
         for s in 0..5u64 {
             lb = lb.sticky_header(s, move |ctx| {
-                crate::ui::text::Text::new(format!("HEAD {s}"))
+                crate::components::text::Text::new(format!("HEAD {s}"))
                     .font_size(18.0)
                     .modifier(Modifier::new().padding(12.0).background(
                         Color::from_argb(255, 0xC6, 0x28, 0x28),
@@ -2187,7 +2187,7 @@ mod tests {
                 19,
                 move |i| 200 + s * 19 + i as u64,
                 move |ctx, i| {
-                    crate::ui::text::Text::new(format!("Item {}", s * 19 + i as u64))
+                    crate::components::text::Text::new(format!("Item {}", s * 19 + i as u64))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2206,7 +2206,7 @@ mod tests {
             .content_padding_cross(cross.0, cross.1)
             .modifier(Modifier::new().fill_max_width().fill_max_height())
             .items_from(items, |v: &u64| *v, |ctx, _i, v| {
-                crate::ui::text::Text::new(format!("Item {v}"))
+                crate::components::text::Text::new(format!("Item {v}"))
                     .font_size(14.0)
                     .modifier(Modifier::new().padding(12.0))
                     .build(ctx);
@@ -2223,7 +2223,7 @@ mod tests {
             .modifier(Modifier::new().fill_max_width().fill_max_height());
         for s in 0..5u64 {
             lb = lb.sticky_header(s, move |ctx| {
-                crate::ui::text::Text::new(format!("HEAD {s}"))
+                crate::components::text::Text::new(format!("HEAD {s}"))
                     .font_size(18.0)
                     .modifier(Modifier::new().padding(12.0).background(
                         Color::from_argb(255, 0xC6, 0x28, 0x28),
@@ -2235,7 +2235,7 @@ mod tests {
                 19,
                 move |i| 200 + s * 19 + i as u64,
                 move |ctx, i| {
-                    crate::ui::text::Text::new(format!("Item {}", s * 19 + i as u64))
+                    crate::components::text::Text::new(format!("Item {}", s * 19 + i as u64))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2415,7 +2415,7 @@ mod tests {
                 let c = c0.clone();
                 lb = lb.sticky_header(s, move |ctx| {
                     c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    crate::ui::text::Text::new(format!("HEAD {s}"))
+                    crate::components::text::Text::new(format!("HEAD {s}"))
                         .font_size(18.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2424,7 +2424,7 @@ mod tests {
                     19,
                     move |i| 200 + s * 19 + i as u64,
                     |ctx, i| {
-                        crate::ui::text::Text::new(format!("Item {i}"))
+                        crate::components::text::Text::new(format!("Item {i}"))
                             .font_size(14.0)
                             .modifier(Modifier::new().padding(12.0))
                             .build(ctx);
@@ -2559,7 +2559,7 @@ mod tests {
             .reverse_layout(true)
             .modifier(Modifier::new().fill_max_width().fill_max_height())
             .items_from(items, |v: &u64| *v, |ctx, _i, v| {
-                crate::ui::text::Text::new(format!("Item {}", v))
+                crate::components::text::Text::new(format!("Item {}", v))
                     .font_size(14.0)
                     .modifier(Modifier::new().padding(12.0))
                     .build(ctx);
@@ -2625,7 +2625,7 @@ mod tests {
                 .state(s)
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(it, |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2640,7 +2640,7 @@ mod tests {
                 .state(s)
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(it, |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2862,7 +2862,7 @@ mod tests {
                 LazyColumn::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
                     .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                        crate::ui::text::Text::new(format!("Item {}", v))
+                        crate::components::text::Text::new(format!("Item {}", v))
                             .font_size(14.0)
                             .modifier(Modifier::new().padding(12.0))
                             .build(ctx);
@@ -2894,7 +2894,7 @@ mod tests {
             LazyColumn::new()
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);
@@ -2961,7 +2961,7 @@ mod tests {
                     .state(scroll_state.clone())
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
                     .items_from(items2.clone(), |v: &u64| *v, |ctx, _i, v| {
-                        crate::ui::text::Text::new(format!("Item {}", v))
+                        crate::components::text::Text::new(format!("Item {}", v))
                             .font_size(14.0)
                             .modifier(Modifier::new().padding(12.0))
                             .build(ctx);
@@ -3022,7 +3022,7 @@ mod tests {
                     .state(state.clone())
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
                     .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                        crate::ui::text::Text::new(format!("Item {}", v))
+                        crate::components::text::Text::new(format!("Item {}", v))
                             .font_size(14.0)
                             .modifier(Modifier::new().fill_max_width().height(24.0))
                             .build(ctx);
@@ -3144,7 +3144,7 @@ mod tests {
             LazyColumn::new()
                 .modifier(Modifier::new().fill_max_width().fill_max_height())
                 .items_from(items.clone(), |v: &u64| *v, |ctx, _i, v| {
-                    crate::ui::text::Text::new(format!("Item {}", v))
+                    crate::components::text::Text::new(format!("Item {}", v))
                         .font_size(14.0)
                         .modifier(Modifier::new().padding(12.0))
                         .build(ctx);

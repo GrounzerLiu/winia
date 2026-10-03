@@ -4,7 +4,7 @@
 > `ShortNavigationBar.kt`（M3 Expressive 水平 item）+ `NavigationItem.kt`
 > 布局数学
 > M3 规格：https://m3.material.io/components/navigation-bar/specs
-> 源码：`winia/src/ui/navigation_bar.rs`；示例：`examples/scaffold_demo.rs`
+> 源码：`winia/src/components/navigation_bar.rs`；示例：`examples/scaffold_demo.rs`
 > （Scaffold 集成）、`examples/navigation_rail_demo.rs`（对照）
 
 ## 1. 变体总览

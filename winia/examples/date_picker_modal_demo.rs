@@ -24,7 +24,7 @@ use letclone::clone;
 use winia::composable;
 use winia::runtime::composer::ComposeCtx;
 use winia::prelude::*;
-use winia::ui::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerStateInit, DatePickerDialog};
+use winia::components::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerStateInit, DatePickerDialog};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]

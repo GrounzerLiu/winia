@@ -126,7 +126,7 @@ choices**, not correctness bugs.
 
 ### 5.1 API shape
 
-| Dimension | Compose upstream | Winia `winia/src/ui/search_bar.rs:27` | Verdict |
+| Dimension | Compose upstream | Winia `winia/src/components/search_bar.rs:27` | Verdict |
 |---|---|---|---|
 | Collapsed | `SearchBar(state, inputField: @Composable()->Unit, shape/colors/tonal/shadow)` — `SearchBarImpl:312` is just `Surface(shape){ inputField }` + `onGloballyPositioned{ collapsedCoords }`. `inputField` is caller-supplied `SearchBarDefaults.InputField` | `SearchBar::new().state().placeholder().leading_icon().trailing_icon().input_colors()` — `inputField` is synthesized internally as `TextField::no_container().single_line(true)` where `state.query` IS the `TextFieldValue`; `on_query_change` is notification-only | **Intentional simplification.** Upstream decouples the field to reuse `TextFieldState / InputTransformation / KeyboardOptions`; Winia's desktop use is simpler — inlining is more ergonomic. Cost: less `RowScope`-level customization of the field. |
 | Expanded | 4 separate composables: `ExpandedFullScreenSearchBar:807 / ExpandedFullScreenContainedSearchBar:693` (Dialog fullscreen) + `ExpandedDockedSearchBar:1074 / ExpandedDockedSearchBarWithGap:964` (Popup dropdown, with/without gap) | `SearchBar` → fullscreen `Dialog`; `DockedSearchBar` → anchored `Popup` on the same `SearchBarState`; single `build(ctx, \|ctx\| content)` | **Folded.** Upstream lets callers pick per breakpoint (phone fullscreen vs tablet docked); Winia merges into two classic components (`docs/search-bar.md:5`). Sufficient for desktop; loses adaptive switching. |

@@ -442,8 +442,8 @@ much was entered:
 
 | entered | repairing frames | of those, real scenarios |
 |---|---|---|
-| 0-2 | 5 | `ui::snackbar` (tree torn down, `root=None`), `ui::animated_visibility` |
-| 4 | 1 | `ui::animated_visibility::tests::siblings_survive_visibility_toggle` |
+| 0-2 | 5 | `components::snackbar` (tree torn down, `root=None`), `components::animated_visibility` |
+| 4 | 1 | `components::animated_visibility::tests::siblings_survive_visibility_toggle` |
 | 6-45 | 115 | every navigation, shared-element and lazy-scroll test |
 
 The premise is false, and the counterexample is not a synthetic one: an `AnimatedVisibility` retiring
@@ -1495,7 +1495,7 @@ run, 3201 outer nodes re-measured.**
    cap) and the test timed out on a click that HAD landed. Compose compares the modifier chain for the
    same reason; `Composer::node_modifier_changed` now does too, and the descriptor's `dirty` is
    `slot_status != Clean || node_modifier_changed(..)`. A `BoxWithConstraints` unit test pins it
-   (`ui::box_with_constraints::tests::a_cap_change_in_the_composition_reaches_the_content_the_box_composes`),
+   (`layout::box_with_constraints::tests::a_cap_change_in_the_composition_reaches_the_content_the_box_composes`),
    and it is the only one of the three fixes with a measurable cost on the scenes that do not subcompose
    at all — one `param_eq` per node whose creator ran (a skipped subtree never reaches `start_node`, so
    an idle frame pays nothing). `boxes` at 800 rows: idle 558 µs, one row updated 1063 µs, against 621 /

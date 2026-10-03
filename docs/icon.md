@@ -102,7 +102,7 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
 
 ## 6. IconButton（已实现）
 
-对标 material3 `IconButton` 一族，见 `winia/src/ui/icon_button.rs`：
+对标 material3 `IconButton` 一族，见 `winia/src/components/icon_button.rs`：
 
 - 变体：`IconButton::new()`（标准）/ `filled()` / `filled_tonal()` /
   `outlined()`（默认 1px outline 边框）。
@@ -133,7 +133,7 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
 
 ### IconToggleButton（已实现）
 
-对标 material3 `IconToggleButton` 一族（`winia/src/ui/icon_toggle_button.rs`）：
+对标 material3 `IconToggleButton` 一族（`winia/src/components/icon_toggle_button.rs`）：
 
 - 构造：`IconToggleButton::new(checked)` / `filled` / `filled_tonal` /
   `outlined`；`on_checked_change(|checked| ...)` 回调（点击取反后调用）。

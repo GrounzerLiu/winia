@@ -4,7 +4,7 @@
 > `WideNavigationRail.kt`（1422 行，M3 Expressive 宽轨）+ `NavigationItem.kt`
 > 的 Start 布局数学
 > M3 规格：https://m3.material.io/components/navigation-rail/specs
-> 源码：`winia/src/ui/navigation_rail.rs`；示例：`examples/navigation_rail_demo.rs`
+> 源码：`winia/src/components/navigation_rail.rs`；示例：`examples/navigation_rail_demo.rs`
 
 ## 1. 变体总览
 

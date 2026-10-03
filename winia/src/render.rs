@@ -8,9 +8,9 @@ use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;
-use crate::ui::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
-use crate::ui::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
-use crate::ui::shared_transition::TransitionRole;
+use crate::components::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
+use crate::components::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
+use crate::components::shared_transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
@@ -444,7 +444,7 @@ fn render_modifier_element<'a>(
                     canvas.draw_rrect(
                         skia_safe::RRect::new_rect_radii(
                             rect,
-                            &crate::ui::shared_transition::rrect_vectors(r),
+                            &crate::components::shared_transition::rrect_vectors(r),
                         ),
                         &paint,
                     );
@@ -464,7 +464,7 @@ fn render_modifier_element<'a>(
                     canvas.draw_rrect(
                         skia_safe::RRect::new_rect_radii(
                             rect,
-                            &crate::ui::shared_transition::rrect_vectors(r),
+                            &crate::components::shared_transition::rrect_vectors(r),
                         ),
                         &paint,
                     );
@@ -562,7 +562,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
         IconSource::Symbol(symbol) => {
             let size = rect.width().min(rect.height());
             if size > 0.0 {
-                if let Some(blob) = crate::ui::icon::symbol_blob(*symbol, size, &spec.axes) {
+                if let Some(blob) = crate::components::icon::symbol_blob(*symbol, size, &spec.axes) {
                     let x = rect.left + (rect.width() - size) / 2.0;
                     let y = rect.top + (rect.height() - size) / 2.0 + size;
                     let mut paint = Paint::default();
@@ -579,7 +579,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
 }
 
 /// winia `Color` → Skia color. Public because the `Canvas`/`DrawScope` API
-/// (`crate::ui::draw_scope`) draws through it too — one conversion for the whole crate rather than a
+/// (`crate::components::draw_scope`) draws through it too — one conversion for the whole crate rather than a
 /// second copy inside the public drawing surface.
 pub fn skia_color(c: crate::modifier::Color) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
@@ -652,19 +652,19 @@ fn sampling_options_for(q: crate::modifier::FilterQuality) -> SamplingOptions {
 fn draw_image_content(
     canvas: &Canvas,
     rect: Rect,
-    source: &crate::ui::icon::IconSource,
-    content_scale: crate::ui::image::ContentScale,
-    alignment: crate::ui::image::ImageAlignment,
+    source: &crate::components::icon::IconSource,
+    content_scale: crate::components::image::ContentScale,
+    alignment: crate::components::image::ImageAlignment,
     alpha: f32,
     color_filter: Option<&crate::modifier::ColorFilter>,
     filter_quality: crate::modifier::FilterQuality,
     direction: crate::layout::LayoutDirection,
 ) {
-    let Some(decoded) = crate::ui::icon::decoded_icon(source) else { return };
+    let Some(decoded) = crate::components::icon::decoded_icon(source) else { return };
     let rtl = direction == crate::layout::LayoutDirection::Rtl;
     match decoded.as_ref() {
-        crate::ui::icon::DecodedIcon::Bitmap { image, width, height } => {
-            let dst = crate::ui::image::content_scale_rect(
+        crate::components::icon::DecodedIcon::Bitmap { image, width, height } => {
+            let dst = crate::components::image::content_scale_rect(
                 content_scale, rect, *width, *height, alignment, rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
@@ -698,9 +698,9 @@ fn draw_image_content(
                 canvas.restore();
             }
         }
-        crate::ui::icon::DecodedIcon::Svg { dom, width, height } => {
+        crate::components::icon::DecodedIcon::Svg { dom, width, height } => {
             // 与位图同一事实来源：content_scale_rect 完整缩放/对齐 + clipToBounds
-            let dst = crate::ui::image::content_scale_rect(
+            let dst = crate::components::image::content_scale_rect(
                 content_scale, rect, *width, *height, alignment, rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
@@ -998,12 +998,12 @@ fn render_pass1(
     // `RoundedCorner` (resolved on the lerped rect), and no clip at all for `None`.
     let tf_clip_rr: Option<skia_safe::RRect> = match (tf_radii, tf_scale) {
         (Some(r), Some((sx, sy))) => {
-            match crate::ui::shared_transition::overlay_clip_of(&node.modifier) {
-                crate::ui::shared_transition::OverlayClip::None => None,
-                crate::ui::shared_transition::OverlayClip::Rectangle => {
+            match crate::components::shared_transition::overlay_clip_of(&node.modifier) {
+                crate::components::shared_transition::OverlayClip::None => None,
+                crate::components::shared_transition::OverlayClip::Rectangle => {
                     Some(skia_safe::RRect::new_rect(rect))
                 }
-                crate::ui::shared_transition::OverlayClip::RoundedCorner(radius) => {
+                crate::components::shared_transition::OverlayClip::RoundedCorner(radius) => {
                     // The radius is device-space, so pre-divide by the paint scale — the
                     // same convention `radii_pairs` uses (the clip is drawn inside
                     // `canvas.scale`).
@@ -1011,10 +1011,10 @@ fn render_pass1(
                     let ry = radius / sy.abs().max(1e-6);
                     Some(skia_safe::RRect::new_rect_xy(rect, rx, ry))
                 }
-                crate::ui::shared_transition::OverlayClip::Bounds => {
+                crate::components::shared_transition::OverlayClip::Bounds => {
                     Some(skia_safe::RRect::new_rect_radii(
                         rect,
-                        &crate::ui::shared_transition::rrect_vectors(r),
+                        &crate::components::shared_transition::rrect_vectors(r),
                     ))
                 }
             }
@@ -1164,12 +1164,12 @@ fn render_pass1(
                 // 容器化——TextFieldLayout 定位）；Outlined label 缺口由子节点
                 // Label 的 placement 构造（跨边框悬浮时——label 顶越出容器顶，
                 // 缺口 = label 水平范围 ± 4dp（M3 populated label padding））
-                let cutout = if *variant == crate::ui::TextFieldVariant::Outlined {
+                let cutout = if *variant == crate::components::TextFieldVariant::Outlined {
                     node.children.iter().find_map(|&ci| {
                         let cn = &nodes[ci];
                         let is_label = cn.modifier.elements().iter().any(|el| {
                             matches!(el, ModifierElement::TextFieldSlot { role }
-                                if *role == crate::ui::text_field::TextFieldSlotRole::Label)
+                                if *role == crate::components::text_field::TextFieldSlotRole::Label)
                         });
                         if !is_label { return None; }
                         // ⚠ 子节点 position 相对**容器**（本节点）——用本节点
@@ -1347,12 +1347,12 @@ fn render_pass1(
             // `text_field_show_cursor` reads those two off the container's visual element along the parent
             // chain (the same walk the cursor colour below uses) and defaults to true for a bare field,
             // which has neither.
-            if focused && !has_selection && crate::ui::text_field::text_field_show_cursor(nodes, root_idx, idx) {
+            if focused && !has_selection && crate::components::text_field::text_field_show_cursor(nodes, root_idx, idx) {
                 if node.cursor_visible.get() {
                     // ⚠ cursor_color 在容器 TextFieldVisual（组合期解析 primary/
                     // error）——输入 leaf 无此元素，从 leaf 找会回退文本色。
                     // 沿 parent 链向上找容器（offset_mapping_for_node 同路径）
-                    let cursor = crate::ui::text_field::text_field_visual_color(nodes, root_idx, idx)
+                    let cursor = crate::components::text_field::text_field_visual_color(nodes, root_idx, idx)
                         .unwrap_or(*color);
                     let mut cp = skia_safe::Paint::default();
                     cp.set_color(skia_safe::Color::from_argb(255, cursor.r, cursor.g, cursor.b));
@@ -1375,7 +1375,7 @@ fn render_pass1(
                         // 光标索引是编辑偏移——经 OffsetMapping 转显示偏移
                         // （密码掩码/格式化输入显示文本 ≠ 编辑文本；
                         // TextFieldVisual 在容器——向上找）
-                        let offset_mapping = crate::ui::text_field::offset_mapping_for_node(nodes, root_idx, idx);
+                        let offset_mapping = crate::components::text_field::offset_mapping_for_node(nodes, root_idx, idx);
                         let idx = offset_mapping.as_ref()
                             .map(|m| m.original_to_transformed(node.cursor_index.get()))
                             .unwrap_or_else(|| node.cursor_index.get());
@@ -1389,7 +1389,7 @@ fn render_pass1(
             // IME 组合文本下划线（编辑偏移 → 显示偏移）
             if let Some(comp_range) = node.composing_range.borrow().as_ref() {
                 if comp_range.start < comp_range.end {
-                    let offset_mapping = crate::ui::text_field::offset_mapping_for_node(nodes, root_idx, idx);
+                    let offset_mapping = crate::components::text_field::offset_mapping_for_node(nodes, root_idx, idx);
                     let (cs, ce) = offset_mapping.as_ref().map(|m| {
                         (m.original_to_transformed(comp_range.start), m.original_to_transformed(comp_range.end))
                     }).unwrap_or((comp_range.start, comp_range.end));
@@ -2007,16 +2007,16 @@ fn skia_tile(tile: crate::brush::BrushTile) -> skia_safe::TileMode {
 fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
-    variant: &crate::ui::TextFieldVariant,
+    variant: &crate::components::TextFieldVariant,
     shape: &crate::modifier::Shape,
-    colors: &crate::ui::TextFieldColors,
+    colors: &crate::components::TextFieldColors,
     indicator: &crate::modifier::Color,
     focus_p: f32,
     cutout: Option<Rect>,
 ) {
     let stroke_w = 1.0 + focus_p.clamp(0.0, 1.0);
     match variant {
-        crate::ui::TextFieldVariant::Filled => {
+        crate::components::TextFieldVariant::Filled => {
             // 容器背景（surfaceContainerHighest；M3 top 4dp 圆角）
             if colors.container.a > 0 {
                 let mut bg = Paint::default();
@@ -2034,7 +2034,7 @@ fn draw_text_field_container(
                 rect.right, rect.bottom,
             ), &lp);
         }
-        crate::ui::TextFieldVariant::Outlined => {
+        crate::components::TextFieldVariant::Outlined => {
             // 边框（stroke 居中——1/2px，四角 4dp 圆角；label 缺口处断开）
             let w = stroke_w;
             let mut bp = Paint::default();
@@ -2261,7 +2261,7 @@ pub(crate) fn draw_focus(
         let grow = if rect.width() > 0.0 { sr.width() / rect.width() } else { 1.0 };
         let rr = RRect::new_rect_radii(
             sr,
-            &crate::ui::shared_transition::rrect_vectors(
+            &crate::components::shared_transition::rrect_vectors(
                 r.map(|(x, y)| ((x + inset).max(0.0) * grow, (y + inset).max(0.0) * grow)),
             ),
         );
@@ -2328,7 +2328,7 @@ fn draw_text_with_selection(
     x: f32, y: f32, w: f32,
     max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool,
     letter_spacing: f32, line_height: Option<f32>,
-    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    registrar: Option<crate::components::selection_container::SelectionRegistrar>,
     slot_key: u64,
 ) {
     if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {

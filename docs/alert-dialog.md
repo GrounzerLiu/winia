@@ -1,6 +1,6 @@
 # AlertDialog
 
-M3 alert dialogs: `winia/src/ui/alert_dialog.rs`. Demo:
+M3 alert dialogs: `winia/src/components/alert_dialog.rs`. Demo:
 `cargo run -p winia --example alert_dialog_demo`.
 
 ## API
@@ -116,7 +116,7 @@ Its per-state numbers (`OutlinedCardTokens.kt:30,34`) are `shadowElevation` only
 is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
 `Surface` because that is where Compose puts it, not because a stock caller uses it.
 
-Six tests in `ui::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
+Six tests in `components::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
 colours staying untouched, zero elevation and the switch each doing nothing, the content colour still
 following the UNTINTED base colour, the tint reaching the rendered pixels, and the accumulation across two
 and three nested surfaces.

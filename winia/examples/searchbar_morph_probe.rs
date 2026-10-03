@@ -20,7 +20,7 @@ use winia::prelude::*;
 mod settings;
 
 use winia::overlay::{Dialog, OverlayAnimSpec};
-use winia::ui::shared_transition::{current_shared_scope, OverlayClip, SharedTransitionLayout};
+use winia::components::shared_transition::{current_shared_scope, OverlayClip, SharedTransitionLayout};
 
 const KEY: &str = "searchbar";
 
@@ -84,7 +84,7 @@ fn collapsed_pill(ctx: &mut ComposeCtx, open: State<bool>) {
     Column::new()
         .modifier(modifier)
         .build(ctx, |ctx| {
-            winia::ui::surface::Surface::new()
+            winia::components::surface::Surface::new()
                 .shape(Shape::Pill)
                 .color(Color::from_argb(255, 220, 225, 235))
                 .on_click(move || st.update(|v| *v = !*v))
@@ -133,7 +133,7 @@ fn panel_body(ctx: &mut ComposeCtx) {
                 ),
         )
         .build(ctx, |ctx| {
-            winia::ui::surface::Surface::new()
+            winia::components::surface::Surface::new()
                 .shape(Shape::Rectangle)
                 .color(Color::from_argb(255, 245, 247, 250))
                 .modifier(Modifier::new().fill_max_size())

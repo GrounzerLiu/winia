@@ -214,7 +214,7 @@ spec 过渡、NavEntryDecorator（on_pop 广播 + wrap 链式）、remember_entr
    pane 级 deferred 至 P1-9 落地后重评
 6. [x] **对话框导航**（对标 Nav3 OverlayScene/DialogScene 的 winia 形）：
    `NavEntry::as_dialog()` 标记（类型化等价 `dialog()` metadata）——栈顶连续
-   dialog entry 经 winia 顶层 overlay 基建（`ui::overlay::Dialog`）渲染为模态
+   dialog entry 经 winia 顶层 overlay 基建（`overlay::overlay::Dialog`）渲染为模态
    覆盖层（主树不渲染其内容、base 场景不变 → 对话框开/关无场景级过渡、
    dismiss = 弹栈）；偏差：单层覆盖（winia overlay v1）、无退出动画、
    覆盖层内容 plain remember 不跨帧持久（remember_entry_state 池化不受影响）

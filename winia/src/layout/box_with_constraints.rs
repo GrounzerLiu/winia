@@ -319,7 +319,7 @@ mod tests {
                         scope.max_width(),
                         scope.is_measured(),
                     ));
-                    crate::ui::Text::new("inside").build(ctx);
+                    crate::components::Text::new("inside").build(ctx);
                 });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -352,7 +352,7 @@ mod tests {
             BoxWithConstraints::new()
                 .modifier(Modifier::new().max_width(200.0))
                 .build(ctx, |ctx, _scope| {
-                    crate::ui::Text::new("content").build(ctx);
+                    crate::components::Text::new("content").build(ctx);
                 });
         };
         let mut composer = Composer::new();
@@ -389,7 +389,7 @@ mod tests {
                     .modifier(Modifier::new().size(80.0, 40.0))
                     .build(ctx, move |ctx, _scope| {
                         runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        crate::ui::Text::new("content").build(ctx);
+                        crate::components::Text::new("content").build(ctx);
                     });
             }
         };
@@ -426,7 +426,7 @@ mod tests {
             BoxWithConstraints::new()
                 .modifier(Modifier::new().size(80.0, 40.0))
                 .build(ctx, |ctx, _scope| {
-                    crate::ui::Text::new("content").build(ctx);
+                    crate::components::Text::new("content").build(ctx);
                 });
         };
         composer.compose(build);
@@ -484,7 +484,7 @@ mod tests {
                     BoxWithConstraints::new()
                         .modifier(Modifier::new().max_width(cap.get()))
                         .build(ctx, |ctx, scope| {
-                            crate::ui::Text::new(format!("BWC max {}", scope.max_width() as i32))
+                            crate::components::Text::new(format!("BWC max {}", scope.max_width() as i32))
                                 .build(ctx);
                         });
                 });

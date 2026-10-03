@@ -5,7 +5,7 @@
 > （`FlowLayout.kt` + `FlowLayoutBuildingBlocks.kt`，1.11.4-sources.jar，
 > 源码解包在 `tmp/flow-src/`——本地工作区，不进版本库）
 > 实现：`winia/src/layout/flow.rs`（`measure_flow<A: FlexAxis>` + 双策略）；
-> 组件：`winia/src/ui/layout_components.rs`（`FlowRow` / `FlowColumn`）；
+> 组件：`winia/src/layout/components.rs`（`FlowRow` / `FlowColumn`）；
 > demo：`winia/examples/flow_demo.rs`（chip 过滤器 + max 行 + 换列）。
 
 ## 1. API
@@ -58,7 +58,7 @@ FlowColumn::new()
 ```bash
 cargo run -p winia --example flow_demo
 cargo test -p winia --lib layout::flow        # policy 层 7 项
-cargo test -p winia --lib ui::layout_components  # 组合链路 2 项
+cargo test -p winia --lib layout::components  # 组合链路 2 项
 ```
 
 测试覆盖：换行/永不换行（无界）/max_items 强制断行/spacing+行内居中/

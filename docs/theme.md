@@ -27,7 +27,7 @@ theming.
 
 Four pieces:
 
-1. **The mode** (`ui::theme`): `set_system_dark_mode(Some(false) | Some(true) | None)` pins light, pins
+1. **The mode** (`theme::theme`): `set_system_dark_mode(Some(false) | Some(true) | None)` pins light, pins
    dark, or hands the decision back to the system. Windows raises `WindowEvent::ThemeChanged` (macOS too;
    X11/Wayland never do) and winia records that as an OBSERVATION — `note_platform_theme` — not as a pin:
    pinning from the event would freeze the app on the first report and ignore every later system change.
@@ -92,15 +92,15 @@ Both were measured, and both are pinned by tests:
 
 ## Tests
 
-- `ui::theme::tests::theme_spec_resolves_auto_per_call_and_fixed_never` — the spec's semantics.
-- `ui::theme::tests::a_theme_provide_records_its_spec_for_its_content_only` — the innermost spec wins and
+- `theme::theme::theme::tests::theme_spec_resolves_auto_per_call_and_fixed_never` — the spec's semantics.
+- `theme::theme::theme::tests::a_theme_provide_records_its_spec_for_its_content_only` — the innermost spec wins and
   the enclosing one comes back (with `dark` inside `auto`: `light` would be indistinguishable from the
   fallback).
-- `ui::theme::tests::a_theme_change_needs_the_subtree_dirty` — a mode change alone changes nothing until
+- `theme::theme::theme::tests::a_theme_change_needs_the_subtree_dirty` — a mode change alone changes nothing until
   the composer is told (the middle step asserts exactly that).
-- `ui::theme::tests::a_window_content_follows_its_cell` — the window shape, end to end at the composer
+- `theme::theme::theme::tests::a_window_content_follows_its_cell` — the window shape, end to end at the composer
   level, through BOTH routes: the system epoch and a published intent.
-- `ui::theme::tests::a_window_content_follows_published_typography_and_direction` — the type scale and
+- `theme::theme::theme::tests::a_window_content_follows_published_typography_and_direction` — the type scale and
   direction a window was declared under reach its content, and a published change reads as "re-run the
   tree" with no color change at all.
 - `app::window_theme_tests::a_theme_change_reaches_every_window` — two windows, one epoch: both follow; a
@@ -112,8 +112,8 @@ Both were measured, and both are pinned by tests:
   direction and a 32 px `body_large`, asserted through a mirrored `Row` and a `ListItem` headline height.
   Both assertions were falsified by reverting the publish to the defaults (the row un-mirrors, the headline
   goes 36 px → 24 px).
-- `ui::pixel_line_parsing` (in `tests/ui/mod.rs`) — the text pixel read: frame coordinates are physical
+- `components::pixel_line_parsing` (in `tests/ui/mod.rs`) — the text pixel read: frame coordinates are physical
   pixels, not bytes (parsing them as bytes rejected every frame whose point sat past 255, i.e. a 175%/200%
   scaled display), and both miss forms are "no color" while still naming the frame.
 
-The mode is process-global, so the tests that move it serialize on `ui::theme::theme_mode_test_lock()`.
+The mode is process-global, so the tests that move it serialize on `theme::theme::theme::theme_mode_test_lock()`.

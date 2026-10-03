@@ -1193,8 +1193,8 @@ impl<K: NavKey> NavTransition<K> {
                                 1.0
                             }
                         });
-                        crate::ui::shared_transition::with_nav_scene(
-                            crate::ui::shared_transition::NavSceneInfo {
+                        crate::components::shared_transition::with_nav_scene(
+                            crate::components::shared_transition::NavSceneInfo {
                                 id: scene_id,
                                 scene_key: scene.scene_key(),
                                 visibility,
@@ -1356,7 +1356,7 @@ pub struct SharedEntryInSceneDecorator;
 
 impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
     fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
-        let Some(scope) = crate::ui::shared_transition::current_shared_scope() else {
+        let Some(scope) = crate::components::shared_transition::current_shared_scope() else {
             inner(ctx);
             return;
         };
@@ -1365,19 +1365,19 @@ impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
             .modifier(
                 Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
                     scope.shared_content_state(&key),
-                    crate::ui::animated_visibility::VisibilityTransition::fade_in(
+                    crate::components::animated_visibility::VisibilityTransition::fade_in(
                         crate::animation::TweenSpec::default(),
                     ),
-                    crate::ui::animated_visibility::VisibilityTransition::fade_out(
+                    crate::components::animated_visibility::VisibilityTransition::fade_out(
                         crate::animation::TweenSpec::default(),
                     ),
-                    crate::ui::shared_transition::BoundsTransform::default(),
-                    crate::ui::shared_transition::ResizeMode::scale_to_bounds(),
-                    crate::ui::shared_transition::PlaceHolderSize::AnimatedSize,
-                    crate::ui::shared_transition::PathMotion::Linear,
+                    crate::components::shared_transition::BoundsTransform::default(),
+                    crate::components::shared_transition::ResizeMode::scale_to_bounds(),
+                    crate::components::shared_transition::PlaceHolderSize::AnimatedSize,
+                    crate::components::shared_transition::PathMotion::Linear,
                     0.0,
                     true,
-                    crate::ui::shared_transition::OverlayClip::Bounds,
+                    crate::components::shared_transition::OverlayClip::Bounds,
                 ),
             )
             .build(ctx, |ctx| inner(ctx));
@@ -2162,16 +2162,16 @@ mod tests {
         composer.compose(|ctx| {
             NavDisplay::new(&bs, |ctx, key| match key {
                 TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                    crate::ui::Text::new("HomeScreen").build(ctx);
+                    crate::components::Text::new("HomeScreen").build(ctx);
                 })
                 .metadata(NavMetadata::new().with(MyMeta { id: 7 })),
                 TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                    crate::ui::Text::new("SettingsScreen").build(ctx);
+                    crate::components::Text::new("SettingsScreen").build(ctx);
                 }),
                 TestRoute::Detail(id) => {
                     let id = *id;
                     NavEntry::new(key.clone(), move |ctx, _| {
-                        crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        crate::components::Text::new(format!("Detail{id}")).build(ctx);
                     })
                 }
             })
@@ -2283,15 +2283,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id; // 复制（&u64 → u64）——move 闭包需 owned
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2348,15 +2348,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2440,10 +2440,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2451,7 +2451,7 @@ mod tests {
                         // 状态池保持（对标 Nav3 SaveableStateHolder）
                         let counter = remember_entry_state(|| 0i32);
                             counter.update(|v| *v += 1);
-                            crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                         })
                     }
                 })
@@ -2529,15 +2529,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2606,10 +2606,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     DialogRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("AboutScreen").build(ctx);
+                        crate::components::Text::new("AboutScreen").build(ctx);
                     })
                     .as_dialog(),
                 })
@@ -2670,7 +2670,7 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("AboutScreen").build(ctx);
+                        crate::components::Text::new("AboutScreen").build(ctx);
                     })
                     .as_dialog(),
                 })
@@ -2729,10 +2729,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2740,7 +2740,7 @@ mod tests {
                             // 组合期写入（重污染路径的最小复现）
                             let counter = remember_entry_state(|| 0i32);
                             counter.update(|v| *v += 1);
-                            crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                         })
                     }
                 })
@@ -2795,10 +2795,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2809,13 +2809,13 @@ mod tests {
                             NavEntry::with_content_key(key, 42, move |ctx, _| {
                                 let counter = remember_entry_state(|| 0i32);
                                 counter.update(|v| *v += 1);
-                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                                crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                             })
                         } else {
                             NavEntry::new(key, move |ctx, _| {
                                 let counter = remember_entry_state(|| 0i32);
                                 counter.update(|v| *v += 1);
-                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                                crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                             })
                         };
                         entry
@@ -2894,15 +2894,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2971,15 +2971,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2992,15 +2992,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3089,15 +3089,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3157,16 +3157,16 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         // Detail 覆盖双向为 none（瞬时）——Settings 不覆盖（对照组）
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                         .transition_spec(NavTransitionSpec::none())
                         .pop_transition_spec(NavTransitionSpec::none())
@@ -3248,15 +3248,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3310,15 +3310,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3382,7 +3382,7 @@ mod tests {
                         render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K2>, bool),
                     ) {
                         // 装饰内容（顶部）
-                        crate::ui::Text::new(format!("[{}]", self.label)).build(ctx);
+                        crate::components::Text::new(format!("[{}]", self.label)).build(ctx);
                         // 原 scene 内容
                         self.inner.content(ctx, render_entry);
                     }
@@ -3398,15 +3398,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })

@@ -87,7 +87,7 @@ DIVIDER_HAIRLINE: f32 = NAN;    // sentinel: one DEVICE pixel (Compose's Dp.Hair
 
 ```bash
 cargo run -p winia --example divider_demo
-cargo test -p winia --lib ui::divider
+cargo test -p winia --lib components::divider
 ```
 
 测试覆盖：默认值（1dp/OutlineVariant）、水平/垂直像素渲染、自定义颜色+厚度、

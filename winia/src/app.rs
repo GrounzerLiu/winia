@@ -258,7 +258,7 @@ struct PtrDownState {
     /// 文本选区的起始字符位置（Down 时记录）
     selection_anchor: Option<usize>,
     /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
-    anchor_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    anchor_registrar: Option<crate::components::selection_container::SelectionRegistrar>,
 }
 
 impl PerWindow {
@@ -1791,7 +1791,7 @@ impl ApplicationHandler for AppState {
                                         let empty = nodes[pidx].modifier.content_len() == 0;
                                         // 光标索引是编辑偏移——经映射转显示偏移
                                         // （TextFieldVisual 挂在容器——向上找）
-                                        let caret_idx = crate::ui::text_field::offset_mapping_for_node(nodes, r, pidx)
+                                        let caret_idx = crate::components::text_field::offset_mapping_for_node(nodes, r, pidx)
                                             .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
                                             .unwrap_or_else(|| nodes[pidx].cursor_index.get());
                                         let (cx, cy, ch) = if empty {
@@ -4199,7 +4199,7 @@ fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier
                     let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                     let tl = crate::text::TextLayout::new(para, 0);
                     let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
-                    let edit = crate::ui::text_field::offset_mapping_for_node(nodes, r, anchor_node)
+                    let edit = crate::components::text_field::offset_mapping_for_node(nodes, r, anchor_node)
                         .map(|m| m.transformed_to_original(hit))
                         .unwrap_or(hit);
                     Some((anchor_node, edit))
@@ -4741,7 +4741,7 @@ fn handle_pointer_down(
             // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
             // 转回编辑偏移（密码掩码/格式化输入）。
             // ⚠ TextFieldVisual 挂在**容器**——须向上找（offset_mapping_for_node）
-            crate::ui::text_field::offset_mapping_for_node(nodes, r, ai)
+            crate::components::text_field::offset_mapping_for_node(nodes, r, ai)
                 .map(|m| m.transformed_to_original(hit))
                 .unwrap_or(hit)
         })
@@ -5109,18 +5109,18 @@ fn handle_pointer_move(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 // 显示偏移 → 编辑偏移（密码掩码/格式化输入；
                                 // TextFieldVisual 在容器——向上找）
-                                let current_index = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                let current_index = crate::components::text_field::offset_mapping_for_node(nodes, r, innermost)
                                     .map(|m| m.transformed_to_original(current_index))
                                     .unwrap_or(current_index);
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
-                                if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
+                                if let Some((target, s, e)) = crate::components::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,
                                     &reg, cur_off, current_index,
                                     scene_pos.1, down.position.1, abs_y,
                                 ) {
                                     // 范围是编辑偏移（anchor/current 已转回）——
                                     // reg 空间 = 显示偏移，写入选区前转换
-                                    let (ts, te) = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                    let (ts, te) = crate::components::text_field::offset_mapping_for_node(nodes, r, innermost)
                                         .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
                                         .unwrap_or((s, e));
                                     target.set_selection(ts, te);
@@ -5550,7 +5550,7 @@ mod frame_throttle_tests {
                 .build(ctx, |ctx| {
                     // 内容总高 > 视口 600（每行 ~19px × 40 行 ≈ 760）
                     for _ in 0..40 {
-                        crate::ui::Text::new("line content line content").build(ctx);
+                        crate::components::Text::new("line content line content").build(ctx);
                     }
                 });
         }));
@@ -5907,7 +5907,7 @@ mod key_node_dual_track_tests {
         let (pre_c, ev_c) = (pre_log.clone(), ev_log.clone());
         pw.content = Box::new(move |ctx| {
             let enum_log3 = enum_log2.clone();
-            crate::ui::Text::new("k")
+            crate::components::Text::new("k")
                 .modifier(
                     Modifier::new()
                         .focusable()
@@ -6318,7 +6318,7 @@ mod drag_target_selection_tests {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::layout::Column;
-        use crate::ui::Text;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let outer = ScrollState::new();
         let inner = ScrollState::new();
@@ -6389,7 +6389,7 @@ mod drag_target_selection_tests {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::layout::Column;
-        use crate::ui::Text;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {
@@ -6418,7 +6418,7 @@ mod drag_target_selection_tests {
         use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
         use crate::layout::Column;
-        use crate::ui::Text;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {

@@ -738,7 +738,7 @@ pub(crate) enum ModifierElement {
     /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
     /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
     /// input/suffix/trailing；仅标记，不参与测量/绘制）
-    TextFieldSlot { role: crate::ui::text_field::TextFieldSlotRole },
+    TextFieldSlot { role: crate::components::text_field::TextFieldSlotRole },
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
@@ -766,9 +766,9 @@ pub(crate) enum ModifierElement {
     /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
     /// 状态过渡动画由后续迭代接入。
     TextFieldVisual {
-        variant: crate::ui::TextFieldVariant,
+        variant: crate::components::TextFieldVariant,
         shape: Shape,
-        colors: crate::ui::TextFieldColors,
+        colors: crate::components::TextFieldColors,
         enabled: bool,
         focused: bool,
         is_error: bool,
@@ -785,7 +785,7 @@ pub(crate) enum ModifierElement {
         focus_progress: crate::runtime::state::State<f32>,
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
         /// None = 恒等）
-        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>>,
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
     },
@@ -795,7 +795,7 @@ pub(crate) enum ModifierElement {
     /// 可达（点击定位/渲染光标查找 None → 显示偏移直写 selection 越界）。
     /// 仅存映射、无渲染/绘制副作用（render 各 match 走 `_ =>` 兜底）。
     TextFieldOffsetMapping {
-        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>,
     },
 
     // ── Content 类 ──
@@ -846,13 +846,13 @@ pub(crate) enum ModifierElement {
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
     /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
     NoFocusRing,
-    DrawIcon { spec: crate::ui::icon::IconSpec },
+    DrawIcon { spec: crate::components::icon::IconSpec },
     /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
     /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
     ImageContent {
-        source: crate::ui::icon::IconSource,
-        content_scale: crate::ui::image::ContentScale,
-        alignment: crate::ui::image::ImageAlignment,
+        source: crate::components::icon::IconSource,
+        content_scale: crate::components::image::ContentScale,
+        alignment: crate::components::image::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,
@@ -888,9 +888,9 @@ pub(crate) enum ModifierElement {
     SharedTransition {
         scope_id: u64,
         key: String,
-        kind: crate::ui::shared_transition::SharedKind,
-        transform: crate::ui::shared_transition::BoundsTransform,
-        path: crate::ui::shared_transition::PathMotion,
+        kind: crate::components::shared_transition::SharedKind,
+        transform: crate::components::shared_transition::BoundsTransform,
+        path: crate::components::shared_transition::PathMotion,
         /// Overlay z-order for the flying pair (Compose `zIndexInOverlay`,
         /// default 0). Orders retained ghosts back-to-front; in-tree targets
         /// keep tree order (documented Tier 0 limitation).
@@ -898,8 +898,8 @@ pub(crate) enum ModifierElement {
         /// sharedBounds enter/exit (Compose `enter`/`exit` — target plays
         /// enter, source plays exit; `None` on sharedElement markers, which
         /// have no such parameters and always crossfade).
-        enter: Option<crate::ui::animated_visibility::VisibilityTransition>,
-        exit: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        enter: Option<crate::components::animated_visibility::VisibilityTransition>,
+        exit: Option<crate::components::animated_visibility::VisibilityTransition>,
         /// Render this endpoint in the transition layer during the flight
         /// (Compose `renderInOverlayDuringTransition`, default `true`): the
         /// flying element escapes ancestor clips and ancestor layer
@@ -1434,7 +1434,7 @@ impl Modifier {
 
     /// TextField 容器子节点角色标记（text-field-v2 容器化内部使用——
     /// TextFieldLayout policy 按角色布局）
-    pub(crate) fn text_field_slot(self, role: crate::ui::text_field::TextFieldSlotRole) -> Self {
+    pub(crate) fn text_field_slot(self, role: crate::components::text_field::TextFieldSlotRole) -> Self {
         self.push(ModifierElement::TextFieldSlot { role })
     }
 
@@ -1639,9 +1639,9 @@ impl Modifier {
     /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
     pub fn text_field_visual(
         self,
-        variant: crate::ui::TextFieldVariant,
+        variant: crate::components::TextFieldVariant,
         shape: Shape,
-        colors: crate::ui::TextFieldColors,
+        colors: crate::components::TextFieldColors,
         enabled: bool,
         focused: bool,
         is_error: bool,
@@ -1649,7 +1649,7 @@ impl Modifier {
         cursor_color: Color,
         indicator_color: crate::runtime::state::State<crate::modifier::Color>,
         focus_progress: crate::runtime::state::State<f32>,
-        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>>,
         supporting: Option<SupportingVisual>,
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
@@ -1673,7 +1673,7 @@ impl Modifier {
     /// 查找 TextFieldVisual.offset_mapping 或本元素）
     pub fn text_field_offset_mapping(
         self,
-        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>,
     ) -> Self {
         self.push(ModifierElement::TextFieldOffsetMapping { offset_mapping })
     }
@@ -1807,16 +1807,16 @@ pub fn no_focus_ring(self) -> Self {
     self.push(ModifierElement::NoFocusRing)
 }
 
-pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
+pub fn draw_icon(self, spec: crate::components::icon::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
     }
 
     /// 图片内容元素（Image 组件用——绘制按 ContentScale/对齐/alpha）
     pub fn image_content(
         self,
-        source: crate::ui::icon::IconSource,
-        content_scale: crate::ui::image::ContentScale,
-        alignment: crate::ui::image::ImageAlignment,
+        source: crate::components::icon::IconSource,
+        content_scale: crate::components::image::ContentScale,
+        alignment: crate::components::image::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,
@@ -3551,9 +3551,19 @@ mod tests {
             FocusRequester::new()
         };
         requester.request_focus();
-        assert!(take_focus_requests().is_empty(), "request must not leak to the unbound window context");
+        // Asserted about THIS request, not about the queue being empty: `FOCUS_REQUESTS` is a global
+        // and another test's leftover is not this test's business. It used to assert emptiness and
+        // passed only because of where it fell in the single-threaded order — renaming `ui` to
+        // `components` moved it and it started failing with an unrelated request in the queue.
+        assert!(
+            !take_focus_requests().contains(&requester.id),
+            "this request must not leak to the unbound window context"
+        );
         let _window = focus_window(33);
-        assert_eq!(take_focus_requests(), vec![requester.id]);
+        assert!(
+            take_focus_requests().contains(&requester.id),
+            "the bound window context must receive it"
+        );
     }
 
     #[test]
@@ -4186,7 +4196,7 @@ mod param_eq_tests {
                         rep.lock().unwrap().push((w, h));
                     }))
                     .build(ctx, |ctx| {
-                        crate::ui::Text::new("hello").build(ctx);
+                        crate::components::Text::new("hello").build(ctx);
                     });
             });
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));

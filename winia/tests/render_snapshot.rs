@@ -6,7 +6,7 @@
 use winia::runtime::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
 use winia::modifier::{Modifier, Color, Shape};
-use winia::ui::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
+use winia::components::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
 use winia::render;
 
 // ── 辅助 ──

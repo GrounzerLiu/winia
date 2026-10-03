@@ -110,7 +110,7 @@ the constraints at measure time, so it never appears in the intrinsic layer.
 - Text: `winia/src/text/paragraph.rs:156-161` `min_intrinsic_width()` / `max_intrinsic_width()`
   (forwarded to the skia paragraph).
 - Images / icons: `winia/src/modifier.rs:1719` `image_intrinsic_size()`,
-  `winia/src/ui/icon.rs:215` `IconSource::intrinsic_size()` (`:396` `file_intrinsic_size`).
+  `winia/src/components/icon.rs:215` `IconSource::intrinsic_size()` (`:396` `file_intrinsic_size`).
 - Consumers read them directly, at leaf level only: `app.rs:1795`, `app.rs:5061-5062`,
   `render.rs:1285-1286`, `render.rs:2034`, `render.rs:2281-2282`, `ui/draw_scope.rs:217`.
 
@@ -128,7 +128,7 @@ the constraints at measure time, so it never appears in the intrinsic layer.
 ### 2.3 Three components work around it by hand
 
 1. **`DropdownMenu`** — the menu column's own policy (deleted in §8.6; the menu now wears material3's
-   `Column(width(IntrinsicSize.Max))` directly), `winia/src/ui/overlay.rs`:
+   `Column(width(IntrinsicSize.Max))` directly), `winia/src/overlay.rs`:
    - pass 1 measures each item's **content** (not the item) with
      `Constraints::new(0.0, f32::MAX, 0.0, f32::MAX)` (`overlay.rs:831-838`), adds the item's own
      horizontal padding and clamps to `DROPDOWN_ITEM_MIN_WIDTH = 112.0` /
@@ -139,13 +139,13 @@ the constraints at measure time, so it never appears in the intrinsic layer.
      itself would not do — its label is `weight(1f)` … an unbounded pass reports the constraint back
      instead of the content (measured: the menu went from 112 to the 280 maximum the moment the label
      was weighted)". This is Compose's `Column(width(IntrinsicSize.Max))` (`Menu.kt:411`).
-2. **`SegmentedButton`** — `SegmentedRowPolicy`, `winia/src/ui/segmented_button.rs:286-345`: pass 1
+2. **`SegmentedButton`** — `SegmentedRowPolicy`, `winia/src/components/segmented_button.rs:286-345`: pass 1
    measures every item with `Constraints::new(MIN_WIDTH, avail, 0.0, f32::MAX)` for the widest
    (`:309-318`), computes `fit = (avail + (n - 1) * overlap) / n` and `item_w = natural.min(fit)`
    (`:322-323`), then re-measures tightly at `(item_w, item_w, height, height)` (`:328-333`). Its own
    doc comment (`:278-280`) names the Compose equivalent: "`Arrangement.spacedBy(-space)` and
    `weight(1f)` inside a row sized to `IntrinsicSize.Min`".
-3. **`TabRow`** — approximation from the first pass, `winia/src/ui/tab_row.rs:22`: "no
+3. **`TabRow`** — approximation from the first pass, `winia/src/components/tab_row.rs:22`: "no
    `maxIntrinsicWidth` call, uses the 1st pass measurement instead".
 
 `winia/src/layout/flow.rs:11` states the absence outright ("no intrinsics — winia has no intrinsic
@@ -208,7 +208,7 @@ phase 1 for unweighted children (`:174-192`) and the final size at `:226-253`
 path as those phases reproduces exactly the trap `MenuColumnPolicy` records: a weighted child hands
 back whatever maximum it is given, so the "natural width" of a weighted label is the constraint, not
 the text. Separately, a policy whose content only exists once composed (`subcomposes()`,
-`node.rs:789`; `ui::subcompose`) cannot answer an intrinsic without composing — the same structural
+`node.rs:789`; `layout::subcompose`) cannot answer an intrinsic without composing — the same structural
 limit already documented for LazyLayout.
 
 ## 4. The mechanism that makes this worth doing
@@ -370,14 +370,14 @@ Box and every other container keep the default approximation, which is also what
 
 ### 8.6 The hand-rolled passes are gone
 
-- `MenuColumnPolicy` (`winia/src/ui/overlay.rs`): pass 1 is now one
+- `MenuColumnPolicy` (`winia/src/overlay.rs`): pass 1 is now one
   `intrinsic_size_of(item, IntrinsicQuery::MaxWidth, f32::MAX)` per item, clamped to 112/280 dp. The
   item is a `Row` whose label is `weight(1f)`, and it is the Row's intrinsic block that prices it by its
   own width — the exact trap the old hand-written pass documented.
-- `SegmentedRowPolicy` (`winia/src/ui/segmented_button.rs`): the natural width is the widest item's max
+- `SegmentedRowPolicy` (`winia/src/components/segmented_button.rs`): the natural width is the widest item's max
   intrinsic width, and the height is the tallest item's min intrinsic height **at the width they all end
   up with**, which is the order `IntrinsicMeasureBlocks` asks in.
-- `TabRowLayoutPolicy` / `ScrollableTabRowLayoutPolicy` (`winia/src/ui/tab_row.rs`): the fixed row folds
+- `TabRowLayoutPolicy` / `ScrollableTabRowLayoutPolicy` (`winia/src/components/tab_row.rs`): the fixed row folds
   `maxIntrinsicHeight(tabWidth)` into its height and `min(maxIntrinsicWidth(tabRowHeight), tabWidth)` into
   the indicator's content width (`TabRow.kt:450-459`); the scrollable row does the same with both axes
   unbounded and no slot clamp (`TabRow.kt:582-603`). The old passes measured each tab at a loose constraint

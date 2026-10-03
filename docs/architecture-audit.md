@@ -181,23 +181,23 @@ Phase 2.3 checklist 第 3 项同步关闭（见 §11）。
 
 ### 3.10 HIGH：SelectionRegistrar fallback 是进程全局 last-writer-wins ✅ 已修复（未提交改动）
 
-位置：winia/src/ui/selection_container.rs:206-212、winia/src/ui/selection_container.rs:244-269、winia/src/app.rs:2341-2345、winia/src/render.rs:836-845。ACTIVE_REGISTRAR 在 SelectionContainer build 时覆盖，但退出不恢复/清空；未注册节点的点击和渲染 fallback 可能访问另一窗口或另一嵌套容器的 registrar。
+位置：winia/src/components/selection_container.rs:206-212、winia/src/components/selection_container.rs:244-269、winia/src/app.rs:2341-2345、winia/src/render.rs:836-845。ACTIVE_REGISTRAR 在 SelectionContainer build 时覆盖，但退出不恢复/清空；未注册节点的点击和渲染 fallback 可能访问另一窗口或另一嵌套容器的 registrar。
 
 当前状态：全局 `ACTIVE_REGISTRAR` 已删除，render.rs:836/841/926 与 app.rs:2357 的 fallback 改为仅用 node 本地 `registrar`（Option），不再回退全局；SelectionRegistrar 通过 `LOCAL_SELECTION_REGISTRAR` CompositionLocal provides 作用域化（新增测试 `test_local_selection_registrar_scopes_to_provides`）。
 
 ### 3.11 HIGH：TextField 光标闪烁任务绕过生命周期
 
-位置：winia/src/ui/text_field.rs:1010-1049；对应的生命周期安全 API 位于 winia/src/effect.rs:22-201。TextField 直接 tokio::spawn 无限循环，没有 remember_coroutine_scope、LaunchedEffect 或 on_remove cleanup。TextField 移除后任务仍可能每 100ms 轮询并持有 State/interaction source；没有 Tokio runtime 的环境还可能在 build 时失败。
+位置：winia/src/components/text_field.rs:1010-1049；对应的生命周期安全 API 位于 winia/src/effect.rs:22-201。TextField 直接 tokio::spawn 无限循环，没有 remember_coroutine_scope、LaunchedEffect 或 on_remove cleanup。TextField 移除后任务仍可能每 100ms 轮询并持有 State/interaction source；没有 Tokio runtime 的环境还可能在 build 时失败。
 
 ## 4. LazyList、滚动和布局缓存风险
 
 ### 4.1 同数量数据变化会复用错误高度
 
-位置：winia/src/ui/lazy_column.rs:494-516、winia/src/ui/lazy_column.rs:603-617。ItemHeightCache 按 index 存储高度，last_known_first_key 只有 total_changed 时才校正。同 total 的替换、重排或 key 内容变化会保留旧高度，导致 prefix_height、visible_range 和 first-visible 错误。
+位置：winia/src/layout/lazy_column.rs:494-516、winia/src/layout/lazy_column.rs:603-617。ItemHeightCache 按 index 存储高度，last_known_first_key 只有 total_changed 时才校正。同 total 的替换、重排或 key 内容变化会保留旧高度，导致 prefix_height、visible_range 和 first-visible 错误。
 
 ### 4.2 measure 校正可能没有触发下一轮组合
 
-位置：winia/src/ui/lazy_column.rs:693-769、winia/src/ui/lazy_column.rs:847-908。组合期按预估高度注册窗口，测量期写回真实高度。如果 first_visible_index/offset 数值未变但 end 窗口发生变化，可能不会 Enter 组合新 item。
+位置：winia/src/layout/lazy_column.rs:693-769、winia/src/layout/lazy_column.rs:847-908。组合期按预估高度注册窗口，测量期写回真实高度。如果 first_visible_index/offset 数值未变但 end 窗口发生变化，可能不会 Enter 组合新 item。
 
 ### 4.3 reverse LazyList 首帧 content height 过期
 
@@ -219,19 +219,19 @@ At: winia/src/layout/flex.rs:169-185, winia/src/layout/flex.rs:204-268. Phase 1 
 
 ### 5.2 Undo 快照缺少 composing_range
 
-位置：winia/src/ui/text_field.rs:91-132、winia/src/ui/text_field.rs:134-146、winia/src/ui/text_field.rs:1779-1828。UndoManager 只保存 String 和 selection，preedit/commit/undo 交错时无法恢复组合范围。
+位置：winia/src/components/text_field.rs:91-132、winia/src/components/text_field.rs:134-146、winia/src/components/text_field.rs:1779-1828。UndoManager 只保存 String 和 selection，preedit/commit/undo 交错时无法恢复组合范围。
 
 ### 5.3 Preedit cursor 单位未明确
 
-位置：winia/src/ui/text_field.rs:1803-1815。文本和 composing_range 使用 UTF-8 byte offset，但 platform cursor 值直接加到 byte position。CJK、emoji 或 UTF-16/code-unit 偏移可能形成非字符边界。
+位置：winia/src/components/text_field.rs:1803-1815。文本和 composing_range 使用 UTF-8 byte offset，但 platform cursor 值直接加到 byte position。CJK、emoji 或 UTF-16/code-unit 偏移可能形成非字符边界。
 
 ### 5.4 Deleted range 没有防御 clamp
 
-位置：winia/src/ui/text_field.rs:37-75。Inserted 路径有 clamp，Deleted 直接 text.drain(range)，stale selection/IME/registrar range 会导致字符串边界 panic。
+位置：winia/src/components/text_field.rs:37-75。Inserted 路径有 clamp，Deleted 直接 text.drain(range)，stale selection/IME/registrar range 会导致字符串边界 panic。
 
 ### 5.5 选区存在两个状态源
 
-位置：winia/src/render.rs:836-859、winia/src/ui/text_field.rs:1832-1869。registrar selection 在拖动中先更新，value/selection_range 通常 pointer-up 才同步；render 同时绘制两套高亮，重组或 blink tick 期间可能重复或回退。（⚠ 此条"两套高亮"描述**不准确**——第二套高亮（读 `node.selection_range`）是死代码、永不执行，已于 Phase 3.4 删除；状态侧双源（value vs registrar）仍存在，见 §Phase 3.4。）
+位置：winia/src/render.rs:836-859、winia/src/components/text_field.rs:1832-1869。registrar selection 在拖动中先更新，value/selection_range 通常 pointer-up 才同步；render 同时绘制两套高亮，重组或 blink tick 期间可能重复或回退。（⚠ 此条"两套高亮"描述**不准确**——第二套高亮（读 `node.selection_range`）是死代码、永不执行，已于 Phase 3.4 删除；状态侧双源（value vs registrar）仍存在，见 §Phase 3.4。）
 
 ### 5.6 Focus restore 可能保留 stale focused_id
 
@@ -241,7 +241,7 @@ At: winia/src/layout/flex.rs:169-185, winia/src/layout/flex.rs:204-268. Phase 1 
 
 ### 6.1 adaptive 是 thread-local singleton ✅ 已修复（未提交改动）
 
-位置：winia/src/ui/adaptive.rs:12-39、winia/src/app.rs:320-343、winia/src/app.rs:1315-1331。WINDOW_SIZE 和 WINDOW_SIZE_STATE 每线程只有一份，每个窗口 compose 都覆盖上一窗口的值。当前同步单线程路径看似可用，但异步读取、未来并行 compose 或 deferred callback 会看到错误窗口尺寸。
+位置：winia/src/layout/adaptive.rs:12-39、winia/src/app.rs:320-343、winia/src/app.rs:1315-1331。WINDOW_SIZE 和 WINDOW_SIZE_STATE 每线程只有一份，每个窗口 compose 都覆盖上一窗口的值。当前同步单线程路径看似可用，但异步读取、未来并行 compose 或 deferred callback 会看到错误窗口尺寸。
 
 当前状态：引入 per-Composer `AdaptiveContext`（adaptive.rs:17-77）+ `AdaptiveContextGuard`/`enter_context`；composer 持有 `adaptive` 字段（composer.rs:1576），compose/layout 入口注入。旧 `WINDOW_SIZE`/`WINDOW_SIZE_STATE` thread-local 降级为 `FALLBACK_*`（仅纯测试兜底，无响应式）。新增测试 `nested_composers_keep_adaptive_context_isolated`。
 
@@ -253,7 +253,7 @@ At: winia/src/layout/flex.rs:169-185, winia/src/layout/flex.rs:204-268. Phase 1 
 
 ### 6.3 Window lifecycle flags 全局共享 ✅ 已修复（未提交改动）
 
-位置：winia/src/ui/window.rs:12-16、winia/src/ui/window.rs:84-110、winia/src/core/composer.rs:1444-1445、winia/src/app.rs:315-316。WINDOW_REBUILT 和 PENDING_REMOVE_ID 是线程级 singleton，交错窗口 compose/回收时可能抑制或误消费另一个窗口的关闭事件。
+位置：winia/src/app/window.rs:12-16、winia/src/app/window.rs:84-110、winia/src/core/composer.rs:1444-1445、winia/src/app.rs:315-316。WINDOW_REBUILT 和 PENDING_REMOVE_ID 是线程级 singleton，交错窗口 compose/回收时可能抑制或误消费另一个窗口的关闭事件。
 
 当前状态：`WINDOW_REBUILT`/`PENDING_REMOVE_ID` thread-local 删除，改为 per-Composer `LifecycleState`（window.rs:27-52，Arc<AtomicBool>/Arc<AtomicU64>）；composer 持有 `lifecycle` 字段（composer.rs:1574），compose 入口 `reset_for_compose`；`process_detached` 按每个 composer 的 `pending_window_close_id()` 逐窗口处理。新增测试 `test_window_lifecycle_isolation_per_composer`（composer.rs:2508）。
 
@@ -273,11 +273,11 @@ FocusRequester、debug event queue、screenshot flag/pixel buffer、event loop p
 
 CompositionLocal 的核心实现位于 winia/src/core/composition_local.rs:13-93：线程局部 SLOTS、同步 provides、rposition 查找和 PopGuard panic 清理。同步嵌套本身正确，但 provider 退出后异步任务和渲染阶段只能看到默认值，因此 direction、theme、density 等必须在组合期捕获。
 
-Theme provider 位于 winia/src/ui/theme.rs:254-367，Density provider 位于 winia/src/unit.rs:346-357。
+Theme provider 位于 winia/src/theme.rs:254-367，Density provider 位于 winia/src/unit.rs:346-357。
 
 ### 7.1 ScaleFactorChanged 不会自动触发组合
 
-位置：winia/src/app.rs:618-623、winia/src/ui/text.rs:225-279、winia/src/ui/rich_text.rs:81-97。ScaleFactorChanged 更新 scale_factor 并 request_redraw，但没有标记 composer dirty；TextUnit::Px 等值在组合期转换后写入 modifier，scale-only 变化可能保留旧 logical size。
+位置：winia/src/app.rs:618-623、winia/src/components/text.rs:225-279、winia/src/components/rich_text.rs:81-97。ScaleFactorChanged 更新 scale_factor 并 request_redraw，但没有标记 composer dirty；TextUnit::Px 等值在组合期转换后写入 modifier，scale-only 变化可能保留旧 logical size。
 
 ### 7.2 render 阶段读取默认 Theme
 
@@ -476,7 +476,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **验证**：新增单元测试 `height_cache_keyed_rebase_follows_identity`（前插 1 项后 key=2→index 3、key=5→index 6 高度迁移正确；新项走预估；旧 index 不残留；数据变短清越界 + 清消失 key）；既有 lazy 测试 27 项全通过；完整 `cargo test -p winia --lib` 634 项通过。另用 debug-server 交互验证 demo `winia/examples/hc_verify_demo.rs`：100 项（48/96 混合高，key=id）滚动到项 50 → 连续前部插入 10 项三次，`firstVisible` 精确 50→60→70→80、`offset` 3216→3696→4176→4656（每次 +480 = 10×48），可见项始终保持 Item 50 在视口——高度缓存与滚动位置按 key 精确跟随。
 
-   **涉及文件**：`winia/src/ui/lazy_column.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
+   **涉及文件**：`winia/src/layout/lazy_column.rs`（`ItemHeightCache`、`LazyListPolicy`、`LazyList::build`）
 
 2. [x] 为 measure/build convergence 增加显式的窗口变化重组通道（方向一——build 感知真实视口，跨帧收敛；已在 `lazy-convergence` 分支实施）
 
@@ -494,7 +494,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **局限（后续轮已收敛）**：跨帧收敛那至多 1 帧的可见项不足（resize 放大瞬间）已关闭——measure 发现窗口不足时请求本帧再组合，帧处理循环消费该请求（验证见下面第 5 项）。与 Compose 仍未对齐的是**机制**而非**结果**：Compose 在测量期组合窗口（`SubcomposeLayout`），从不组合错窗口；winia 按上一帧视口组合，测出不足时本帧收敛，代价是那些帧多一轮 compose+layout。
 
-   **涉及文件**：`winia/src/ui/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
+   **涉及文件**：`winia/src/layout/lazy_column.rs`（`LazyList::build` 读 viewport、`LazyListPolicy::measure` 非 silent set）
 
 3. [x] 将 TextField blink 纳入 effect 生命周期，统一 UTF-8 byte offset、IME cursor 单位和 composing undo 快照（已实施）
 
@@ -508,7 +508,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **验证**：新增测试 `undo_restores_composing_range`（undo 恢复 composing_range + 同文本 composing 变化合并）；`cargo test -p winia --lib` 638 项通过。debug-server 实操 text_field_demo：聚焦第一个字段后 `cursor_visible` 与 `node.cursor_visible` 均 ~500ms 周期交替（build 端 + 渲染端探针确认闪烁正常），空文本字段走 render 空文本分支 `draw_line` 画光标。
 
-   **涉及文件**：`winia/src/ui/text_field.rs`（blink scope、UndoManager、Deleted clamp、Preedit caret）
+   **涉及文件**：`winia/src/components/text_field.rs`（blink scope、UndoManager、Deleted clamp、Preedit caret）
 
 4. [x] 清理 dual selection source，明确 registrar 与 TextFieldValue 的单一事实来源（方向 B——清理死代码，已实施；方向 A——value 唯一源，待办）
 
@@ -543,7 +543,7 @@ UI tree 由 winia/src/debug.rs:168-228 手工拼接。TextContent 做了转义�
 
    **与 Compose 的差异（记录）**：本轮**没有**扩展 `subcompose`。实测设计核查的三条结构事实使其无法承载 `LazyLayout` 的"测量期组合"：①一次 measure 只能 park 一个槽且只有最后一个被采纳；②策略只拿到 `size()`，拿不到可自己 measure/place 的一组 placeable；③采纳发生在整棵树测完之后，策略在自己的 measure 里看不到也放不了它。另有语义代价：把 item 组合搬进 subcomposition 会让 item 的状态读取登记在内层 composer 上（历史一轮试过把内层读取改记到外层槽 key，结果打断长按测试后回退）。故 winia 走"本帧收敛"而不是"测量期组合"，结果一致、机制不同、代价明确（仅不足的帧多一轮）。
 
-   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛 + 逐帧轮数发布）、`winia/src/debug.rs`（`fp`/`fpc`）、`winia/src/ui/lazy_column.rs`（窗口不足判定 + 2 条测试）、`winia/tests/ui_fixtures/fixture_lazy_resize.rs`（新场景）、`winia/tests/ui_test.rs`（app 路径测试）
+   **涉及文件**：`winia/src/core/composer.rs`（`request_compose_after_layout`/`take_compose_after_layout`）、`winia/src/app.rs`（主树帧收敛循环 + 每帧清零 + `layout_overlays` 的逐 overlay 收敛 + 逐帧轮数发布）、`winia/src/debug.rs`（`fp`/`fpc`）、`winia/src/layout/lazy_column.rs`（窗口不足判定 + 2 条测试）、`winia/tests/ui_fixtures/fixture_lazy_resize.rs`（新场景）、`winia/tests/ui_test.rs`（app 路径测试）
 
 ### Phase 4：窗口平台与 E2E
 

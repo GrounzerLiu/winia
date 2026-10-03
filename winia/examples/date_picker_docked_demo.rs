@@ -18,10 +18,10 @@ use winia::composable;
 use winia::runtime::composer::{ComposeCtx, GroupStatus};
 use winia::layout::BoxLayout;
 use winia::prelude::*;
-use winia::ui::date_picker::{
+use winia::components::date_picker::{
     remember_date_picker_state, CalendarLocale, DatePickerStateInit, DockedDatePicker, CALENDAR_MONTH_PATH,
 };
-use winia::ui::icon::Icon;
+use winia::components::icon::Icon;
 use winia::overlay::{OverlayAnimSpec, Popup, PopupPosition};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).

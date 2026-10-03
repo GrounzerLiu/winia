@@ -8,7 +8,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::Chip;
+use winia::components::Chip;
 
 fn section_title(ctx: &mut ComposeCtx, title: &str) {
     Text::new(title)

@@ -6,7 +6,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::RichText;
+use winia::components::RichText;
 use winia::app;
 
 #[composable]

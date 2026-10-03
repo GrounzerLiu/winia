@@ -30,7 +30,7 @@ pub(crate) struct DescNode {
     pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
     pub(crate) dirty: bool,
     /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
-    pub(crate) registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    pub(crate) registrar: Option<crate::components::selection_container::SelectionRegistrar>,
     /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
     pub(crate) focus_color: Option<crate::modifier::Color>,
     /// IME 组合下划线颜色（物化时写入节点——组合期捕获主题 primary，渲染期

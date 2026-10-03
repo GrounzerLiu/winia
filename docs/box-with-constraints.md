@@ -1,6 +1,6 @@
 # BoxWithConstraints
 
-> Source of truth: `winia/src/ui/box_with_constraints.rs`. Alignment target: Compose
+> Source of truth: `winia/src/layout/box_with_constraints.rs`. Alignment target: Compose
 > `androidx.compose.foundation.layout.BoxWithConstraints` plus its `BoxWithConstraintsScope`.
 
 ## What it is
@@ -29,7 +29,7 @@ BoxWithConstraints::new()
 
 ## How the constraints get there
 
-The content is composed **during measurement**, inside a subcomposition (`ui::subcompose`), and the
+The content is composed **during measurement**, inside a subcomposition (`layout::subcompose`), and the
 composed tree is ADOPTED as the box's child — so the scope carries the constraints this measurement just
 computed, which is the relation Compose has. The box is as big as what its content composed (clamped by
 the constraints), so the policy reports the content's measured size instead of a size of its own.
@@ -76,7 +76,7 @@ custom `MeasurePolicy`.
 
 ## Tests
 
-`ui::box_with_constraints::tests`:
+`layout::box_with_constraints::tests`:
 
 | test | what it pins |
 |---|---|

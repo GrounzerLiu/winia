@@ -846,7 +846,7 @@ mod tests {
         use crate::layout::BoxLayout;
         use crate::layout::LayoutDirection;
         use crate::modifier::Modifier;
-        use crate::ui::text::Text;
+        use crate::components::text::Text;
 
         // Records what the reader actually built with, on every run — and every SKIP, so a test can
         // tell "the reader re-read the local" from "the reader never skipped in the first place".
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(after.into_inner(), Some(ThemeSpec::Auto), "and the enclosing one comes back");
     }
 
-    use crate::ui::text::Text;
+    use crate::components::text::Text;
 
     #[test]
     fn material3_typography_matches_list_item_tokens() {

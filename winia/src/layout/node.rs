@@ -1,7 +1,7 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
 use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
-use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
+use crate::components::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
@@ -273,7 +273,7 @@ pub struct LayoutNode {
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
-    pub(crate) registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
+    pub(crate) registrar: std::cell::RefCell<Option<crate::components::selection_container::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
@@ -300,7 +300,7 @@ pub struct LayoutNode {
     /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
     /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
     /// 复用命中必须从干净状态重建（协调器按 slot 回填）。
-    pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
+    pub(crate) transition: Option<crate::components::shared_transition::TransitionVisual>,
     /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
     /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
     /// single comparison, and an illegal combination (a node that is both elevated chrome and a
@@ -2165,9 +2165,9 @@ mod tests {
     // ── Image 叶子测量（固有尺寸布局——对齐 Compose：未指定维度以固有尺寸为基准）──
 
     fn image_modifier() -> Modifier {
-        use crate::ui::image::{ContentScale, ImageAlignment};
+        use crate::components::image::{ContentScale, ImageAlignment};
         Modifier::new().image_content(
-            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::components::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
             ContentScale::Fit,
             ImageAlignment::Center,
             1.0,
@@ -2197,9 +2197,9 @@ mod tests {
     fn test_leaf_image_size_modifier_overrides() {
         // modifier size 覆盖固有尺寸（Compose 语义：size 指定即以此为准）
         let m = Modifier::new().size(64.0, 32.0).image_content(
-            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
-            crate::ui::image::ContentScale::Fit,
-            crate::ui::image::ImageAlignment::Center,
+            crate::components::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::components::image::ContentScale::Fit,
+            crate::components::image::ImageAlignment::Center,
             1.0,
             None,
             crate::modifier::FilterQuality::Low,
@@ -2214,11 +2214,11 @@ mod tests {
         // 无 viewBox/width 的 SVG：测量回退 24×24（与解码回退一致——
         // 否则 Image 测量 0 尺寸空白而 Icon 正常显示的不一致）
         let m = Modifier::new().image_content(
-            crate::ui::icon::IconSource::svg(
+            crate::components::icon::IconSource::svg(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0h24v24H0z\"/></svg>",
             ),
-            crate::ui::image::ContentScale::Fit,
-            crate::ui::image::ImageAlignment::Center,
+            crate::components::image::ContentScale::Fit,
+            crate::components::image::ImageAlignment::Center,
             1.0,
             None,
             crate::modifier::FilterQuality::Low,
@@ -2638,7 +2638,7 @@ pub(crate) struct FlightMeasure {
     /// it. Teardown AND writes must match it: slot keys are positional identities
     /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
     /// newer flight's override.
-    pub owner: crate::ui::shared_transition::FlightKey,
+    pub owner: crate::components::shared_transition::FlightKey,
 }
 
 /// One frame of that override; `None` on a field means "no override there".

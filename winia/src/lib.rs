@@ -6,7 +6,7 @@
 //! - [`runtime`]: 运行时核心（State, ComposeCtx, Composer）
 //! - `modifier`: 链式 Modifier 系统（待实现）
 //! - `layout`: 布局引擎（待实现）
-//! - `ui`: UI 组件（待实现）
+//! - `components`: 组件（按功能平铺于一个目录）
 
 pub mod runtime;
 pub mod unit;
@@ -26,7 +26,7 @@ pub mod icon;
 pub mod modifier;
 pub mod interaction;
 pub mod layout;
-pub mod ui;
+pub mod components;
 pub mod text;
 pub mod render;
 pub mod animation;
@@ -107,43 +107,43 @@ pub mod prelude {
     };
     pub use crate::brush::{Brush, BrushTile};
     pub use crate::modifier::{Dimension, Modifier, Shape, Color, FocusRequester, ScrollState, DecoStyle, DecoMode, FontEdge, FontHint, KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind, BlendMode, ColorFilter, FilterQuality};
-    pub use crate::ui::{Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize, ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface, SurfaceBorder, Icon, IconSource, Tint, PathFillType, AxisValue, Image, ContentScale, ImageAlignment, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, Switch, SwitchColors, SwitchDefaults, RadioButton, RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults, RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults, SingleChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRow, VerticalScrollbar, HorizontalScrollbar, LazyScrollbar, HorizontalLazyScrollbar, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION, LinearProgressIndicator, CircularProgressIndicator, ProgressIndicatorDefaults, ProgressIndicatorStrokeCap, LoadingIndicator, LOADING_INDICATOR_SIZE, LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_CONTAINER_SHAPE, LinearWavyProgressIndicator, CircularWavyProgressIndicator, WavyProgressIndicatorDefaults, WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT, WAVY_CIRCULAR_SIZE, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH, WAVY_GAP_SIZE, WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH, WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH, WAVY_ANIMATION_DURATION_MS, FloatingActionButton, FloatingActionButtonColors, ExtendedFloatingActionButton, EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT, EXTENDED_FAB_MIN_EXPANDED_WIDTH, FloatingActionButtonDefaults, FloatingActionButtonElevation, FloatingActionButtonSize, FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE, FAB_ICON_SIZE, FAB_MEDIUM_ICON_SIZE, FAB_LARGE_ICON_SIZE, Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE, ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT, LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarState, TopAppBarNestedConnection, TopAppBarScrollMode, TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT, TOP_APP_BAR_HORIZONTAL_PADDING, Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors, ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold, NavigationSuiteType, NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail, WideNavigationRailItem, WideNavigationRailState, WindowInsets, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT, NavigationItemIconPosition, NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE, NAVIGATION_RAIL_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_ICON_SIZE, WIDE_RAIL_COLLAPSED_WIDTH, WIDE_RAIL_EXPANDED_MIN_WIDTH, ModalNavigationDrawer, ModalDrawerSheet, DrawerState, DrawerValue, DrawerDefaults, NavigationDrawerItem, NavigationDrawerItemColors, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH, DRAWER_CORNER_RADIUS, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE, DRAWER_SHEET_HORIZONTAL_PADDING, DRAWER_ITEM_START_PADDING, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_SLOT_GAP, AlertDialog, AlertDialogDefaults, BasicAlertDialog, DIALOG_MIN_WIDTH, DIALOG_MAX_WIDTH, DIALOG_CORNER_RADIUS, DIALOG_CONTAINER_PADDING, DIALOG_ICON_PADDING_BOTTOM, DIALOG_TITLE_PADDING_BOTTOM, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_BUTTON_SPACING, DIALOG_ICON_SIZE, SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue, SWIPE_DISMISS_POSITIONAL_THRESHOLD, SWIPE_DISMISS_VELOCITY_THRESHOLD, SelectionContainer, TextField, TextFieldValue, VisualTransformation, OffsetMapping, IdentityTransformation, PasswordTransformation, Tab, TabRow, TabRowDefaults, TabPosition, ScrollableTabRow, ScrollableTabRowDefaults, TAB_ROW_HEIGHT, ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING, MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT, SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING};
+    pub use crate::components::{Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize, ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface, SurfaceBorder, Icon, IconSource, Tint, PathFillType, AxisValue, Image, ContentScale, ImageAlignment, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, Switch, SwitchColors, SwitchDefaults, RadioButton, RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults, RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults, SingleChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRow, VerticalScrollbar, HorizontalScrollbar, LazyScrollbar, HorizontalLazyScrollbar, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION, LinearProgressIndicator, CircularProgressIndicator, ProgressIndicatorDefaults, ProgressIndicatorStrokeCap, LoadingIndicator, LOADING_INDICATOR_SIZE, LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_CONTAINER_SHAPE, LinearWavyProgressIndicator, CircularWavyProgressIndicator, WavyProgressIndicatorDefaults, WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT, WAVY_CIRCULAR_SIZE, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH, WAVY_GAP_SIZE, WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH, WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH, WAVY_ANIMATION_DURATION_MS, FloatingActionButton, FloatingActionButtonColors, ExtendedFloatingActionButton, EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT, EXTENDED_FAB_MIN_EXPANDED_WIDTH, FloatingActionButtonDefaults, FloatingActionButtonElevation, FloatingActionButtonSize, FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE, FAB_ICON_SIZE, FAB_MEDIUM_ICON_SIZE, FAB_LARGE_ICON_SIZE, Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE, ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT, LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarState, TopAppBarNestedConnection, TopAppBarScrollMode, TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT, TOP_APP_BAR_HORIZONTAL_PADDING, Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors, ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold, NavigationSuiteType, NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail, WideNavigationRailItem, WideNavigationRailState, WindowInsets, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT, NavigationItemIconPosition, NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE, NAVIGATION_RAIL_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_ICON_SIZE, WIDE_RAIL_COLLAPSED_WIDTH, WIDE_RAIL_EXPANDED_MIN_WIDTH, ModalNavigationDrawer, ModalDrawerSheet, DrawerState, DrawerValue, DrawerDefaults, NavigationDrawerItem, NavigationDrawerItemColors, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH, DRAWER_CORNER_RADIUS, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE, DRAWER_SHEET_HORIZONTAL_PADDING, DRAWER_ITEM_START_PADDING, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_SLOT_GAP, AlertDialog, AlertDialogDefaults, BasicAlertDialog, DIALOG_MIN_WIDTH, DIALOG_MAX_WIDTH, DIALOG_CORNER_RADIUS, DIALOG_CONTAINER_PADDING, DIALOG_ICON_PADDING_BOTTOM, DIALOG_TITLE_PADDING_BOTTOM, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_BUTTON_SPACING, DIALOG_ICON_SIZE, SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue, SWIPE_DISMISS_POSITIONAL_THRESHOLD, SWIPE_DISMISS_VELOCITY_THRESHOLD, SelectionContainer, TextField, TextFieldValue, VisualTransformation, OffsetMapping, IdentityTransformation, PasswordTransformation, Tab, TabRow, TabRowDefaults, TabPosition, ScrollableTabRow, ScrollableTabRowDefaults, TAB_ROW_HEIGHT, ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING, MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT, SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING};
     pub use crate::text::{TextAlign, TextOverflow, TextStyle, FontWeight, FontSlant};
     pub use crate::interaction::{MutableInteractionSource, ComponentState};
     // The general drawing surface (Compose `Canvas` / `DrawScope`) and the constraints-aware box
     // (Compose `BoxWithConstraints`) — the two entry points a caller reaches for when no existing
     // component expresses what they need.
     pub use crate::layout::{BoxWithConstraints, BoxWithConstraintsScope};
-    pub use crate::ui::{draw_behind, draw_with_content, Canvas, DrawScope, TextMetrics};
+    pub use crate::components::{draw_behind, draw_with_content, Canvas, DrawScope, TextMetrics};
     // Accessibility declarations belong in the same scope as `Modifier` — a caller states a role or a
     // name while building the chain.
     pub use crate::selection::ToggleableState;
 pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
-    pub use crate::ui::snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
-    pub use crate::ui::bottom_sheet::ModalBottomSheet;
-    pub use crate::ui::split_button::{
+    pub use crate::components::snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
+    pub use crate::components::bottom_sheet::ModalBottomSheet;
+    pub use crate::components::split_button::{
         LeadingButton, SplitButtonDefaults, SplitButtonLayout, SplitButtonShapes, TrailingButton,
     };
-    pub use crate::ui::bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
-    pub use crate::ui::sheet_state::{SheetState, SheetValue};
-    pub use crate::ui::animated_visibility::{
+    pub use crate::components::bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
+    pub use crate::components::sheet_state::{SheetState, SheetValue};
+    pub use crate::components::animated_visibility::{
         AnimatedVisibility, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset,
         VisibilityTransition,
     };
-    pub use crate::ui::search_bar::{
+    pub use crate::components::search_bar::{
         SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar,
         SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT,
     };
-    pub use crate::ui::animated_size::AnimatedSize;
-    pub use crate::ui::animated_content::AnimatedContent;
-    pub use crate::ui::crossfade::Crossfade;
-    pub use crate::ui::shared_transition::{
+    pub use crate::components::animated_size::AnimatedSize;
+    pub use crate::components::animated_content::AnimatedContent;
+    pub use crate::components::crossfade::Crossfade;
+    pub use crate::components::shared_transition::{
         BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize,
         ResizeMode, SharedBounds, SharedContentState, SharedTransitionDefaults,
         SharedTransitionLayout, SharedTransitionScope, current_shared_scope,
     };
     pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
-    pub use crate::ui::rich_text::RichText;
+    pub use crate::components::rich_text::RichText;
     // The overlay layer: a popup, a dialog and the menu built on them.
     pub use crate::overlay::{
         Dialog, DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType,

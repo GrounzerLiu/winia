@@ -8,7 +8,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::Chip;
+use winia::components::Chip;
 
 const FILTERS: &[&str] = &[
     "Price: High to Low",

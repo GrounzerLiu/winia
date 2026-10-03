@@ -864,12 +864,12 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::Constraints;
-    use crate::ui::button::Button;
-    use crate::ui::checkbox::TriStateCheckbox;
+    use crate::components::button::Button;
+    use crate::components::checkbox::TriStateCheckbox;
     use crate::layout::components::{Column, Row};
-    use crate::ui::radio_button::RadioButton;
-    use crate::ui::switch::Switch;
-    use crate::ui::text::Text;
+    use crate::components::radio_button::RadioButton;
+    use crate::components::switch::Switch;
+    use crate::components::text::Text;
     use crate::theme::WiniaTheme;
     use crate::modifier::Modifier;
 
@@ -1147,8 +1147,8 @@ mod tests {
     fn a_decorative_icon_stays_out_and_a_described_one_is_an_image() {
         let tree = tree_of(|ctx| {
             Column::new().build(ctx, |ctx| {
-                crate::ui::icon::Icon::svg_path("M0 0 L24 24").build(ctx);
-                crate::ui::icon::Icon::svg_path("M0 0 L24 24")
+                crate::components::icon::Icon::svg_path("M0 0 L24 24").build(ctx);
+                crate::components::icon::Icon::svg_path("M0 0 L24 24")
                     .content_description("Close")
                     .build(ctx);
             });

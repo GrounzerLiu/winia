@@ -6,7 +6,7 @@ use std::ops::Range;
 use crate::text::{IndexBiMap, ParagraphBuilder};
 
 /// Build a laid-out paragraph for one plain text run — the same construction `Text` goes through,
-/// exposed for the public drawing surface (`crate::ui::draw_scope`'s `draw_text`) so canvas text is
+/// exposed for the public drawing surface (`crate::components::draw_scope`'s `draw_text`) so canvas text is
 /// shaped by one path rather than two.
 ///
 /// `width` is the layout width in logical pixels; pass a large value for a single unwrapped line.

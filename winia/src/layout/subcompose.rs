@@ -445,7 +445,7 @@ mod tests {
                 if let Some(runs) = &runs {
                     *runs.lock().unwrap() += 1;
                 }
-                crate::ui::Text::new(text.as_str()).build(ctx);
+                crate::components::Text::new(text.as_str()).build(ctx);
             });
             (size, Vec::new())
         }
@@ -595,7 +595,7 @@ mod tests {
                     });
                     let v = marker.get();
                     seen.lock().unwrap().push(v);
-                    crate::ui::Text::new(format!("marker {v}")).build(ctx);
+                    crate::components::Text::new(format!("marker {v}")).build(ctx);
                 });
                 (size, Vec::new())
             }
@@ -650,7 +650,7 @@ mod tests {
     #[should_panic(expected = "subcompose() must be called from inside a MeasurePolicy::measure")]
     fn subcompose_outside_a_measurement_panics_in_debug() {
         let _ = subcompose(Constraints::new(0.0, 100.0, 0.0, 100.0), |ctx| {
-            crate::ui::Text::new("nowhere").build(ctx);
+            crate::components::Text::new("nowhere").build(ctx);
         });
     }
 }

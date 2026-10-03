@@ -5,7 +5,7 @@
 > 分支计划：`progress-indicator-wavy`（从 v2 分出）。
 > 前置：Morph/RoundedPolygon 基建已通过 `material-shapes` crate 落地进 workspace
 > （见 [docs/loading-indicator.md](loading-indicator.md)），落地时直接复用即可。
-> 实现：`winia/src/ui/wavy_progress_indicator.rs`；demo：
+> 实现：`winia/src/components/wavy_progress_indicator.rs`；demo：
 > `winia/examples/wavy_progress_indicator_demo.rs`。
 
 ## 1. 背景与定位
@@ -326,7 +326,7 @@ trackPathMeasure.getSegment(endProgress * trackPathLength + trackSpacing,
 ### 5.3 组件结构建议（镜像现有 progress_indicator.rs）
 
 ```rust
-// winia/src/ui/wavy_progress_indicator.rs（或并入 progress_indicator.rs）
+// winia/src/components/wavy_progress_indicator.rs（或并入 progress_indicator.rs）
 pub struct LinearWavyProgressIndicator {
     progress: f32,
     indeterminate: bool,

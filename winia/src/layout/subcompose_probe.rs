@@ -196,7 +196,7 @@ mod tests {
         let policy = SubcomposePolicy {
             alignment: Alignment::Start,
             content: std::sync::Arc::new(|ctx: &mut ComposeCtx, c: Constraints| {
-                crate::ui::Text::new(format!("w={}", c.max_width)).build(ctx);
+                crate::components::Text::new(format!("w={}", c.max_width)).build(ctx);
             }),
         };
         let mut nodes = Vec::new();
@@ -208,7 +208,7 @@ mod tests {
 
         let mut outer = Composer::new();
         outer.compose(|ctx| {
-            crate::ui::Text::new("after").build(ctx);
+            crate::components::Text::new("after").build(ctx);
         });
         outer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let root = outer.layout_root_idx().expect("the outer composition produced a tree");
@@ -225,12 +225,12 @@ mod tests {
         let policy = SubcomposePolicy {
             alignment: Alignment::Start,
             content: std::sync::Arc::new(|ctx: &mut ComposeCtx, c: Constraints| {
-                crate::ui::Text::new(format!("inner w={}", c.max_width)).build(ctx);
+                crate::components::Text::new(format!("inner w={}", c.max_width)).build(ctx);
             }),
         };
         let mut outer = Composer::new();
         outer.compose(|ctx| {
-            crate::ui::Text::new("outer").build(ctx);
+            crate::components::Text::new("outer").build(ctx);
         });
         let mut nodes = Vec::new();
         let _ = policy.measure(&mut nodes, &[], &[], Constraints::new(0.0, 200.0, 0.0, 100.0));
@@ -256,12 +256,12 @@ mod tests {
         let policy = SubcomposePolicy {
             alignment: Alignment::Start,
             content: std::sync::Arc::new(|ctx: &mut ComposeCtx, _c: Constraints| {
-                crate::ui::Text::new("sub").build(ctx);
+                crate::components::Text::new("sub").build(ctx);
             }),
         };
         let mut outer = Composer::new();
         outer.compose(|ctx| {
-            crate::ui::Text::new("outer").build(ctx);
+            crate::components::Text::new("outer").build(ctx);
         });
         let _decoy = outer
             .arena
@@ -292,13 +292,13 @@ mod tests {
         let policy = SubcomposePolicy {
             alignment: Alignment::Start,
             content: std::sync::Arc::new(|ctx: &mut ComposeCtx, _c: Constraints| {
-                crate::ui::Text::new("before the panic").build(ctx);
+                crate::components::Text::new("before the panic").build(ctx);
                 panic!("subcomposition panicked on purpose");
             }),
         };
         let mut outer = Composer::new();
         outer.compose(|ctx| {
-            crate::ui::Text::new("outer").build(ctx);
+            crate::components::Text::new("outer").build(ctx);
         });
         outer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
         let before = outer.arena.nodes.len();
@@ -317,7 +317,7 @@ mod tests {
         let ok = SubcomposePolicy {
             alignment: Alignment::Start,
             content: std::sync::Arc::new(|ctx: &mut ComposeCtx, _c: Constraints| {
-                crate::ui::Text::new("after").build(ctx);
+                crate::components::Text::new("after").build(ctx);
             }),
         };
         let mut nodes = Vec::new();
@@ -335,7 +335,7 @@ mod tests {
             SubcomposeProbe::new()
                 .modifier(crate::modifier::Modifier::new().size(80.0, 40.0))
                 .build(ctx, |ctx, _c| {
-                    crate::ui::Text::new("inner").build(ctx);
+                    crate::components::Text::new("inner").build(ctx);
                 });
         };
         let mut composer = Composer::new();

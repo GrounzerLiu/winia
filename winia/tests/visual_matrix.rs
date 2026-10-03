@@ -10,7 +10,7 @@ use winia::modifier::{Color, Modifier, ScrollState};
 use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
-use winia::ui::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme, };
+use winia::components::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme, };
 
 const WIDTH: i32 = 520;
 const HEIGHT: i32 = 420;
@@ -59,9 +59,9 @@ fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: Top
     let scroll = ScrollState::new();
     scroll.offset.set(offset);
     let expanded = match variant {
-        TopAppBarVariant::Medium => winia::ui::TOP_APP_BAR_MEDIUM_HEIGHT,
-        TopAppBarVariant::Large => winia::ui::TOP_APP_BAR_LARGE_HEIGHT,
-        _ => winia::ui::TOP_APP_BAR_HEIGHT,
+        TopAppBarVariant::Medium => winia::components::TOP_APP_BAR_MEDIUM_HEIGHT,
+        TopAppBarVariant::Large => winia::components::TOP_APP_BAR_LARGE_HEIGHT,
+        _ => winia::components::TOP_APP_BAR_HEIGHT,
     };
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
@@ -164,7 +164,7 @@ fn render_case(dark: bool, direction: LayoutDirection, custom: bool) -> (skia_sa
 }
 
 fn build_matrix(ctx: &mut ComposeCtx) {
-    winia::ui::Column::new()
+    winia::components::Column::new()
         .modifier(Modifier::new().fill_max_width().padding(16.0))
         .build(ctx, |ctx| {
             Chip::assist(|ctx| Text::new("Assist").build(ctx), || {})
@@ -278,7 +278,7 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
 }
 
 fn build_rtl_probe(ctx: &mut ComposeCtx) {
-    winia::ui::Row::new()
+    winia::components::Row::new()
         .modifier(Modifier::new().width(200.0).test_tag("rtl-probe"))
         .build(ctx, |ctx| {
             let leading_key = ctx.next_key();
@@ -463,7 +463,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
                         },
                     )
                     .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
-                    .icon_position(winia::ui::NavigationItemIconPosition::Start)
+                    .icon_position(winia::components::NavigationItemIconPosition::Start)
                     .on_click(|| {})
                     .build(ctx);
                 }
@@ -482,7 +482,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
     let nodes = composer.arena_nodes();
     let item0 = nodes[nodes[root].children[0]].children[0];
     let pill = &nodes[item0];
-    assert_eq!(pill.measured_size.height, winia::ui::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
+    assert_eq!(pill.measured_size.height, winia::components::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
         "水平指示器高应为 40");
     let px = pill.position.x;
     let py = pill.position.y;

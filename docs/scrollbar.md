@@ -7,7 +7,7 @@
 > 对标：Compose Multiplatform 桌面 `VerticalScrollbar` / `HorizontalScrollbar`
 > + M3 `Modifier.nonInteractiveScrollbar`（`Scrollbar.kt`，2026 androidx-main，
 > 浏览器取证；几何公式同社区 gist `drawScrollbar`）
-> 实现：`winia/src/ui/scrollbar.rs`（`ScrollbarNode` + 四组件）；
+> 实现：`winia/src/components/scrollbar.rs`（`ScrollbarNode` + 四组件）；
 > demo：`winia/examples/scrollbar_demo.rs`（垂直拖 thumb + 常显开关 + 水平条 + Lazy 列/行）。
 
 ## 1. API
@@ -122,7 +122,7 @@ HorizontalLazyScrollbar::new(row_state).always_show(true).build(ctx);
 
 ```bash
 cargo run -p winia --example scrollbar_demo
-cargo test -p winia --lib ui::scrollbar
+cargo test -p winia --lib components::scrollbar
 ```
 
 测试覆盖：几何隐藏/比例/min-max 钳/小 track 不 panic（P0-1）/非有限输入防腐/

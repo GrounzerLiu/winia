@@ -146,10 +146,10 @@ New/changed tests: `expansion_geometry_interpolates_with_progress`, `expansion_s
 `anchor_slide_interpolates_both_axes_from_the_anchor_to_the_window_corner`, `anchor_slide_clamps_its_progress`,
 `group_without_declared_params_reenters_or_skips`.
 
-Files touched (verified with `git diff --stat af564be..HEAD -- winia/src`): `winia/src/ui/search_bar.rs`
-(744 lines changed — the component), `winia/src/ui/overlay.rs` (+132; `Dialog` placement, `AnchorSlide`),
+Files touched (verified with `git diff --stat af564be..HEAD -- winia/src`): `winia/src/components/search_bar.rs`
+(744 lines changed — the component), `winia/src/overlay.rs` (+132; `Dialog` placement, `AnchorSlide`),
 `winia/src/core/composer.rs` (+44; the group test), `winia/src/app.rs` (+17; resolving the anchor slide),
-`winia/src/ui/tooltip.rs` and `winia/src/ui/bottom_sheet.rs` (+1 each; the new `OverlayDesc` field), plus
+`winia/src/components/tooltip.rs` and `winia/src/components/bottom_sheet.rs` (+1 each; the new `OverlayDesc` field), plus
 `winia/examples/searchbar_morph_probe.rs` (the probe — DELETE IT or keep it as documented evidence; it is
 currently committed).
 

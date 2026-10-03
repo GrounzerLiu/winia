@@ -3,7 +3,7 @@ use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;
-use winia::ui::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, ThemeColors, TopAppBar, TopAppBarScrollBehavior, TopAppBarState, WiniaTheme, };
+use winia::components::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, ThemeColors, TopAppBar, TopAppBarScrollBehavior, TopAppBarState, WiniaTheme, };
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
 
@@ -12,7 +12,7 @@ fn probe_bar_region_bleed() {
     let theme = ThemeColors::default_light();
     let sc = theme.surface_container;
     let scroll_state = ScrollState::new();
-    let app_bar_state = winia::ui::TopAppBarState::new(TOP_BAR_H);
+    let app_bar_state = winia::components::TopAppBarState::new(TOP_BAR_H);
     let behavior = TopAppBarScrollBehavior::new(scroll_state.clone(), TOP_BAR_H);
     let nested = TopAppBarScrollBehavior::enter_always(app_bar_state.clone(), TOP_BAR_H);
     let conn = nested
@@ -36,7 +36,7 @@ fn probe_bar_region_bleed() {
                 Scaffold::new(move |ctx, _p| {
                     let scroll = scroll.clone();
                     let conn = conn.clone();
-                    winia::ui::Column::new()
+                    winia::components::Column::new()
                         .modifier(
                             Modifier::new()
                                 .fill_max_size()
@@ -65,7 +65,7 @@ fn probe_bar_region_bleed() {
                                 i == 0,
                                 |ctx| {
                                     Icon::svg_path(HOME_PATH)
-                                        .size(winia::ui::NAVIGATION_BAR_ICON_SIZE)
+                                        .size(winia::components::NAVIGATION_BAR_ICON_SIZE)
                                         .build(ctx);
                                 },
                             )

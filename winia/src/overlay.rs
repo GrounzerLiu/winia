@@ -898,7 +898,7 @@ pub struct DropdownMenu {
     container_color: Option<crate::modifier::Color>,
     tonal_elevation: f32,
     shadow_elevation: Option<f32>,
-    border: Option<crate::ui::surface::SurfaceBorder>,
+    border: Option<crate::components::surface::SurfaceBorder>,
 }
 
 impl DropdownMenu {
@@ -989,7 +989,7 @@ impl DropdownMenu {
     }
 
     /// M3 `border` — no border by default.
-    pub fn border(mut self, border: crate::ui::surface::SurfaceBorder) -> Self {
+    pub fn border(mut self, border: crate::components::surface::SurfaceBorder) -> Self {
         self.border = Some(border);
         self
     }
@@ -1100,7 +1100,7 @@ impl DropdownMenu {
                 // composer: arena_len=6 and the root was the LAST item (9x12) — the first two were gone,
                 // and the same thing showed up in `overlay_demo` and in the UI fixture's tree.
                 content: Box::new(move |ctx| {
-                    let mut surface = crate::ui::surface::Surface::new()
+                    let mut surface = crate::components::surface::Surface::new()
                         .shape(shape)
                         .color(container_color)
                         .tonal_elevation(tonal_elevation)
@@ -1223,7 +1223,7 @@ impl ExposedDropdownMenuDefaults {
         modifier: crate::modifier::Modifier,
     ) {
         let open = expanded.get();
-        crate::ui::icon::Icon::svg_path(Self::ARROW_DROP_DOWN_PATH)
+        crate::components::icon::Icon::svg_path(Self::ARROW_DROP_DOWN_PATH)
             .modifier(
                 crate::modifier::Modifier::new()
                     .rotate(if open { 180.0 } else { 0.0 })
@@ -1725,7 +1725,7 @@ impl DropdownMenuItem {
                             ),
                     )
                     .build(ctx, |ctx| {
-                        crate::ui::Text::new(text)
+                        crate::components::Text::new(text)
                             .style(style)
                             .color(text_color)
                             .build(ctx);
@@ -1984,7 +1984,7 @@ mod tests {
     fn render_arrow(data: &str) -> Vec<bool> {
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
-            crate::ui::icon::Icon::svg_path(data)
+            crate::components::icon::Icon::svg_path(data)
                 .tint(crate::modifier::Color::BLACK)
                 .size(24.0)
                 .build(ctx);

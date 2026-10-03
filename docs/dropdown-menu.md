@@ -1,6 +1,6 @@
 # DropdownMenu（对齐 Compose material3）
 
-`winia/src/ui/overlay.rs` 的 `DropdownMenu` / `DropdownMenuItem`，以及本文记录的对齐进度与偏差。
+`winia/src/overlay.rs` 的 `DropdownMenu` / `DropdownMenuItem`，以及本文记录的对齐进度与偏差。
 
 ## 0. 运行
 
@@ -293,7 +293,7 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 
 ### 4.10 定位候选补全（本轮）
 
-原先只实现了 M3 候选序列的前两档（下→上）+ 一个 `clamp` 兜底 ✗。现在按 `MenuPosition.kt` 的工厂逐个照搬，抽成纯函数 `overlay::dropdown_menu_position`（便于逐个候选做确定性单测 ✓）：
+原先只实现了 M3 候选序列的前两档（下→上）+ 一个 `clamp` 兜底 ✗。现在按 `MenuPosition.kt` 的工厂逐个照搬，抽成纯函数 `overlay::overlay::dropdown_menu_position`（便于逐个候选做确定性单测 ✓）：
 
 | 轴 | 候选（按顺序取第一个"放得进窗口边距"的） | M3 出处 |
 |---|---|---|
@@ -360,7 +360,7 @@ Deviations kept, and why:
   `SecondaryEditable`, `:1462-1477`) is not published by the box. The state is visible in the tree; the
   role mapping belongs to the semantics work.
 
-API surface published with this round (all reachable as `winia::ui::…` now, previously only by full path):
+API surface published with this round (all reachable as `winia::components::…` now, previously only by full path):
 `MenuDefaults`, `MenuItemColors`, `ExposedDropdownMenuBox`, `ExposedDropdownMenuAnchorType`,
 `ExposedDropdownMenuDefaults`. `MenuDefaults` mirrors `Menu.kt:181-260` — TonalElevation, ShadowElevation,
 shape, containerColor, itemColors, DropdownMenuItemContentPadding — and both components resolve their
@@ -372,7 +372,7 @@ the field keeps receiving characters, the spacebar does not toggle, Enter closes
 hand-over step), `exposed_dropdown_editable_anchor_hands_the_keyboard_over_on_a_reach_key` (ArrowDown
 hands the keyboard over, then Tab reaches the first item) in `winia/tests/ui_test.rs`;
 `menu_defaults_are_material3s_tokens` and `menu_defaults_are_what_the_components_resolve_to` in
-`winia/src/ui/overlay.rs`.
+`winia/src/overlay.rs`.
 
 "Turn it off" proofs, each measured by reverting one term and re-running
 `exposed_dropdown_editable_anchor_opens_without_taking_the_caret`:
@@ -429,7 +429,7 @@ caret usable). Library tests: `app::press_target_tests` pins the three press-tar
 
 ### 4.15 Planned: `PopupPosition` moves to Start/Center/End
 
-`PopupPosition` (`winia/src/ui/overlay.rs:162`) names **absolute corners**: `TopLeft`, `TopCenter`,
+`PopupPosition` (`winia/src/overlay.rs:162`) names **absolute corners**: `TopLeft`, `TopCenter`,
 `TopRight`, `Center`, `BottomLeft`, `BottomCenter`, `BottomRight`. Neither the enum nor the anchored
 placement branch consults the layout direction — `app.rs:3667` resolves `BottomLeft` to `(ax, ay + ah)`,
 pure geometry, and the unanchored branch to `(0.0, h - size.1)`. So an anchored popup aligns to the

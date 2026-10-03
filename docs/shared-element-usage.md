@@ -325,7 +325,7 @@ Three properties worth knowing before you rely on it:
 
 ## 8. Tests
 
-- `cargo test -p winia --lib ui::shared_transition` (83 tests: unit,
+- `cargo test -p winia --lib components::shared_transition` (83 tests: unit,
   headless Tier 0/Tier 1 raster probes, guard-checked regression tests
   for scroll add-back, morph hit routing, bouncy overshoot, baseline
   identity, arc paint, z-order, enter/exit slide, expand wipe, active

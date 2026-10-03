@@ -5,7 +5,7 @@ use letclone::clone;
 use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
-use winia::ui::text::Text;
+use winia::components::text::Text;
 use winia::app::window::Window;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
@@ -14,7 +14,7 @@ mod settings;
 use winia::theme::WiniaTheme;
 use winia::layout::Column;
 use winia::layout::components::Row;
-use winia::ui::button::{Button, ButtonStyle};
+use winia::components::button::{Button, ButtonStyle};
 use winia::app;
 
 #[composable]

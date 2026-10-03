@@ -6,7 +6,7 @@ use winia::runtime::composer::Composer;
 use winia::runtime::state::State;
 use winia::layout::constraints::Constraints;
 use winia::modifier::Modifier;
-use winia::ui::{Text, Column};
+use winia::components::{Text, Column};
 use winia::runtime::composer::ComposeCtx;
 
 fn compose_and_layout(composer: &mut Composer, w: f32, h: f32, ui: impl FnOnce(&mut ComposeCtx)) {

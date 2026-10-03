@@ -8,7 +8,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::Tooltip;
+use winia::components::Tooltip;
 
 #[composable]
 fn tooltip_ui(ctx: &mut ComposeCtx) {

@@ -142,11 +142,11 @@ The honest next step is a probe round, not an implementation:
 ## 5b. What the experiment found (2026-09-26)
 
 > **Written while the work lived on `exp/lookahead-probe`; its findings are kept as recorded. The code it
-> talks about (`ui::subcompose`, the `BoxWithConstraints` rewrite, the materialize-contract change) is in
+> talks about (`layout::subcompose`, the `BoxWithConstraints` rewrite, the materialize-contract change) is in
 > this tree now — §6 records where each piece ended up.**
 
 Both steps of §5 were run on an experiment branch. Every claim below is a test in
-`winia/src/ui/subcompose_probe.rs`, which is still in the tree: the probe tests are kept, because they
+`winia/src/layout/subcompose_probe.rs`, which is still in the tree: the probe tests are kept, because they
 are what define the facility's guarantees.
 
 **Step 1 — the extra `layout()` is cheap.** Driving 16 flights through `shared_transition_demo` and
@@ -188,7 +188,7 @@ without it, at 800 rows).
 
 ## 5c. The facility, and the one structural conflict left
 
-The follow-up round built the facility for real — `winia/src/ui/subcompose.rs`, with:
+The follow-up round built the facility for real — `winia/src/layout/subcompose.rs`, with:
 
 - a thread-local marker (`measure_node` arms the node index while a measurement runs),
 - a registry on the composer that a policy parks its composition in (reached through a

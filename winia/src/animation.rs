@@ -2173,9 +2173,9 @@ pub(crate) mod tests {
                             }))
                         .build(ctx, |ctx| {
                             for i in 0..10 {
-                                crate::ui::Text::new(format!("section {i}")).font_size(14.0).build(ctx);
+                                crate::components::Text::new(format!("section {i}")).font_size(14.0).build(ctx);
                                 crate::layout::Row::new().build(ctx, |ctx| {
-                                    crate::ui::Text::new(format!("内容 {i} —— 撑高内容")).build(ctx);
+                                    crate::components::Text::new(format!("内容 {i} —— 撑高内容")).build(ctx);
                                 });
                             }
                             // 动画 section（每帧 notify——demo 8a/8b 等价）
@@ -2183,13 +2183,13 @@ pub(crate) mod tests {
                                 if frame_parity.borrow().get() { 200.0 } else { 40.0 },
                                 crate::animation::TweenSpec::default().into(),
                             );
-                            crate::ui::Text::new(format!("w={}", a.peek())).build(ctx);
+                            crate::components::Text::new(format!("w={}", a.peek())).build(ctx);
                             let p = ctx.remember(|| 0u32);
                             *page.borrow_mut() = Some(p.clone());
-                            crate::ui::crossfade::Crossfade::new(p.clone())
+                            crate::components::crossfade::Crossfade::new(p.clone())
                                 .animation(crate::animation::TweenSpec::default())
                                 .build(ctx, |ctx, pg| {
-                                    crate::ui::Text::new(format!("page {pg}")).build(ctx);
+                                    crate::components::Text::new(format!("page {pg}")).build(ctx);
                                 });
                         });
                 });

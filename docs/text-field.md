@@ -91,7 +91,7 @@ Placeholder/Prefix(输入前) | Input(剩余宽) | Suffix(输入后) | Trailing(
 - **组合下划线**：`composing_range` 经映射转显示偏移，行底 1px 线。
 - **supporting**：容器底部外侧 4dp，默认 Typography `body_small`（12sp/16sp/Regular/0.4sp），error 时只覆盖颜色。
 
-### 3.3 键盘（完整映射表，winia/src/ui/text_field.rs kb_handler）
+### 3.3 键盘（完整映射表，winia/src/components/text_field.rs kb_handler）
 
 | 键 | 动作 | 对标 Compose KeyCommand |
 |---|---|---|

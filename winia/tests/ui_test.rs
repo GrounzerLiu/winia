@@ -2494,6 +2494,12 @@ fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
 
     app.send(&format!("m {} {}", (cx + cw / 2.0) as i32, (cy + ch / 2.0) as i32));
     std::thread::sleep(Duration::from_millis(150));
+    // Known flake, left as it is: the injected wheel events do not all reach the menu — measured
+    // offsets of 120 and 240 against the 552 range, i.e. one or two of these twelve landed. Sending
+    // forty instead made it WORSE (four runs in five), so the loss is not "not enough events" and
+    // the cause is in the debug input path, not here. Reproduced on the tree before the module
+    // restructure (two of three runs passed alone), so it is not that either. The assertion below
+    // is exact and stays that way: it is about where the scroll STOPS.
     for _ in 0..12 {
         app.scroll_delta(0.0, -120.0);
     }

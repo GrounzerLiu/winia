@@ -10,7 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::runtime::state::{ComposerSubscription, State, StateId, StateSignal};
-use crate::ui::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
+use crate::components::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;
@@ -620,7 +620,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 设置当前选区注册表（由 SelectionContainer::build 调用）
-    pub fn set_selection_registrar(&mut self, reg: crate::ui::selection_container::SelectionRegistrar) {
+    pub fn set_selection_registrar(&mut self, reg: crate::components::selection_container::SelectionRegistrar) {
         self.composer.selection_registrar = Some(reg);
     }
 
@@ -631,7 +631,7 @@ impl<'a> ComposeCtx<'a> {
     /// 给当前节点设 registrar 引用（供后续渲染/事件从中读取）。
     /// 组合期（物化前）写入当前 slot 的 desc——物化时应用到 arena 节点
     /// （组合/布局分离后 node_stack 在组合期为空，直接写节点会丢失）。
-    pub fn set_current_node_registrar(&mut self, reg: crate::ui::selection_container::SelectionRegistrar) {
+    pub fn set_current_node_registrar(&mut self, reg: crate::components::selection_container::SelectionRegistrar) {
         if let Some(desc) = &mut self.composer.slot_table.current_slot().desc {
             desc.registrar = Some(reg);
         }
@@ -753,7 +753,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// 获取选区注册表
-    pub fn selection_registrar(&self) -> Option<crate::ui::selection_container::SelectionRegistrar> {
+    pub fn selection_registrar(&self) -> Option<crate::components::selection_container::SelectionRegistrar> {
         self.composer.selection_registrar.clone()
     }
 
@@ -862,7 +862,7 @@ struct NodeDesc {
     /// 被消费清 false，物化时须从 desc 携带）
     dirty: bool,
     /// 文本选择 registrar（组合期 set_current_node_registrar 写入——物化时应用）
-    registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    registrar: Option<crate::components::selection_container::SelectionRegistrar>,
     /// 焦点环颜色（组合期 set_current_node_focus_color 写入——物化时应用；
     /// 渲染期 CompositionLocal 已退出，必须组合期捕获）
     focus_color: Option<crate::modifier::Color>,
@@ -2078,7 +2078,7 @@ pub struct Composer {
     #[cfg(test)]
     pub(crate) live_residue: usize,
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
-    pub(crate) selection_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
+    pub(crate) selection_registrar: Option<crate::components::selection_container::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
     pub(crate) lifecycle: crate::app::window::LifecycleState,
     /// Adaptive window size context owned by this Composer.
@@ -6626,8 +6626,8 @@ fn test_param_change_updates_layout() {
     // 帧 1：spacing 0，两个子 Text
     composer.compose(crate::compose!(|ctx| {
         Column::new().spacing(0.0).build(ctx, |ctx| {
-            crate::ui::text::Text::new("a").build(ctx);
-            crate::ui::text::Text::new("b").build(ctx);
+            crate::components::text::Text::new("a").build(ctx);
+            crate::components::text::Text::new("b").build(ctx);
         });
     }));
     let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);
@@ -6636,8 +6636,8 @@ fn test_param_change_updates_layout() {
     // 帧 2：spacing 10——参数变化 → Enter + dirty → 布局更新
     composer.compose(crate::compose!(|ctx| {
         Column::new().spacing(10.0).build(ctx, |ctx| {
-            crate::ui::text::Text::new("a").build(ctx);
-            crate::ui::text::Text::new("b").build(ctx);
+            crate::components::text::Text::new("a").build(ctx);
+            crate::components::text::Text::new("b").build(ctx);
         });
     }));
     composer.layout(c);
@@ -6657,7 +6657,7 @@ fn test_param_change_updates_layout() {
 #[test]
 fn test_arena_recycles_freed_slots() {
     use crate::layout::components::Column;
-    use crate::ui::text::Text;
+    use crate::components::text::Text;
     let mut composer = Composer::new();
     let show = crate::runtime::state::State::new(true);
     let c = crate::layout::constraints::Constraints::new(0.0, 800.0, 0.0, 600.0);

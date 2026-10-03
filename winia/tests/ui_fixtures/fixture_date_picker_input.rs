@@ -7,7 +7,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::ui::date_picker::{
+use winia::components::date_picker::{
     CalendarDate, CalendarLocale, DatePickerDialog, DatePickerState, DatePickerStateInit, DisplayMode,
 };
 

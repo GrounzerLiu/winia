@@ -204,7 +204,7 @@ the day is today; `null` when nothing applies. The range words come from `DateRa
   `formatHeadlineDescription`, `formatDatePickerNavigateToYearString`. Behind them: `java.time`, `WeekFields`,
   `android.icu.text.DateFormat` / `android.text.format.DateFormat.getBestDateTimePattern`, and `java.text`
   (`SimpleDateFormat`, `DateFormatSymbols`, `NumberFormat`). winia replaces the lot with the date arithmetic in
-  `winia/src/ui/date_picker.rs` plus a caller-supplied locale and formatter.
+  `winia/src/components/date_picker.rs` plus a caller-supplied locale and formatter.
 - **Not mirrored on purpose**: `DatePickerColors.equals`/`hashCode` ignore `navigationContentColor`,
   `dividerColor` and `dateTextFieldColors` (`DatePicker.kt:1045-1102`) — an upstream omission, not behaviour.
 
@@ -270,7 +270,7 @@ them directly on screen.
 
 ## winia status
 
-`winia/src/ui/date_picker.rs` holds the calendar model the rest of the component needs:
+`winia/src/components/date_picker.rs` holds the calendar model the rest of the component needs:
 `CalendarDate` (proleptic Gregorian, `days_from_civil`/`civil_from_days`, day-of-week in `java.time`'s
 Monday-is-1 numbering), `CalendarMonth` (length, `days_from_start_of_week_to_first_of_month`,
 `start_utc_time_millis`, `end_utc_time_millis`, `index_in`), `CalendarLocale` (weekday and month names plus the
@@ -497,7 +497,7 @@ Measured with a debug trace, that is exactly what happened: clicking a month arr
 ping-pong between two pages forever, one `scroll_to_item` per frame, each cancelling the animation the last
 one had started — `page=1500 month_index=1520` then `page=1520 month_index=1500`, repeating. Remembering
 what we published instead removed the feedback path, and the arrows now settle with a single transition.
-The versioned guard on the outcome is `ui::date_picker::tests::a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`,
+The versioned guard on the outcome is `components::date_picker::tests::a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`,
 which pins the OTHER half of the same mechanism — that the wait the guard introduces is bounded, so a
 leaked `is_scrolling` cannot turn into a frozen month.
 
@@ -536,7 +536,7 @@ presses behave exactly as before. Measured after the fix, same gesture: `prev` 6
 120 ms; `prev` 5/5 and `next` 5/5 at 60 ms; and three settled presses still move `[+1, +1, +1]` and
 `[-1, -1, -1]`.
 
-The guard is `ui::date_picker::tests::a_second_press_during_the_animation_steps_again_in_both_directions`,
+The guard is `components::date_picker::tests::a_second_press_during_the_animation_steps_again_in_both_directions`,
 which asserts the whole trajectory of targets (101/102/103 forward, 99/98/97 back) rather than a final
 state — a fix that landed on the right page while skipping one would pass a last-value check.
 
