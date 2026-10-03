@@ -8,7 +8,8 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::overlay::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
+use winia::overlay::{Dialog, OverlayAnimSpec, Popup, PopupPosition};
+use winia::components::dropdown_menu::{DropdownMenu, DropdownMenuItem};
 use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 

@@ -156,11 +156,12 @@ pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
     };
     pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
     pub use crate::components::rich_text::RichText;
-    // The overlay layer: a popup, a dialog and the menu built on them.
-    pub use crate::overlay::{
-        Dialog, DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType,
-        ExposedDropdownMenuBox, ExposedDropdownMenuDefaults, MenuDefaults, MenuItemColors,
-        OverlayAnimSpec, Popup, PopupPosition,
+    // The overlay runtime: a popup and a dialog.
+    pub use crate::overlay::{Dialog, OverlayAnimSpec, Popup, PopupPosition};
+    // …and the menu built on it, which is a component.
+    pub use crate::components::dropdown_menu::{
+        DropdownMenu, DropdownMenuItem, ExposedDropdownMenuAnchorType, ExposedDropdownMenuBox,
+        ExposedDropdownMenuDefaults, MenuDefaults, MenuItemColors,
     };
     pub use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
     pub use crate::app::window::Window;

@@ -3631,7 +3631,7 @@ fn layout_overlays(pw: &mut PerWindow) {
                 // `exposedDropdownSize`), so the anchor's rect is needed at measure time — before the
                 // positioning pass — and the anchor lives in the main tree, already laid out.
                 let anchor_width = anchor_widths[overlay_index];
-                let margin = crate::overlay::MENU_VERTICAL_MARGIN;
+                let margin = crate::components::dropdown_menu::MENU_VERTICAL_MARGIN;
                 crate::layout::Constraints::new(
                     anchor_width,
                     if ov.match_anchor_width { anchor_width } else { pw.width },
@@ -3689,7 +3689,7 @@ fn layout_overlays(pw: &mut PerWindow) {
             // centred on its top edge, then pinned to the nearer window edge — each taken only if the menu
             // fits inside `MenuVerticalMargin` (48dp). winia's placement used to do the first alone, which is
             // why a long menu hung off the bottom edge with its last rows unreachable.
-            crate::overlay::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
+            crate::components::dropdown_menu::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
         } else if anchored {
             match ov.position {
                 P::BottomLeft => (ax, ay + ah),

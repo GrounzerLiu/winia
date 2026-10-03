@@ -22,10 +22,8 @@ use winia::prelude::*;
 mod settings;
 use winia::runtime::composer::ComposeCtx;
 use winia::graphics::Shape;
-use winia::overlay::{
-    DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults,
-    MenuItemColors,
-};
+use winia::overlay::{};
+use winia::components::dropdown_menu::{DropdownMenu, DropdownMenuItem, ExposedDropdownMenuBox, ExposedDropdownMenuDefaults, MenuItemColors};
 use winia::composable;
 
 #[composable]

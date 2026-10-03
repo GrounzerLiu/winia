@@ -34,6 +34,7 @@ pub mod loading_indicator;
 pub mod wavy_progress_indicator;
 pub mod floating_action_button;
 pub mod divider;
+pub mod dropdown_menu;
 pub mod list_item;
 pub mod top_app_bar;
 pub mod scaffold;
