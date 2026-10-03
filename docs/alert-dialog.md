@@ -228,9 +228,13 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   unconditional consume is load-bearing for every other overlay.
 - **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack
   when the *caller* imposes a height, which puts the action row at the bottom of that height;
-  winia's `layout_weight` has no `fill` flag and would stretch the node, so it is omitted and the
-  slack stays BELOW the buttons instead (the column stacks from the top). A dialog sizes to its
-  content by default, so this only shows with a caller-imposed height.
+  winia omits it and the slack stays BELOW the buttons instead (the column stacks from the top). A
+  dialog sizes to its content by default, so this only shows with a caller-imposed height. The reason
+  this entry used to give — that `layout_weight` had no `fill` flag and would stretch the node — is no
+  longer true: `Modifier::layout_weight_fill(weight, fill)` exists, and `layout_weight_fill(1.0, false)`
+  on the text slot is what would match Compose. It is deferred rather than dropped because the
+  difference only appears under an imposed height, which no fixture exercises, so adopting it now would
+  land unverified.
 - **No `DialogProperties` object** — the three cross-platform fields are flat on the builder
   (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped.
   `usePlatformDefaultWidth` is a common `DialogProperties` field (`DatePickerDialog.kt:59`) that winia's

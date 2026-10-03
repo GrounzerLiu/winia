@@ -697,8 +697,10 @@ pub(crate) enum ModifierElement {
     /// collapsing the dialog's height when switching to input mode".
     ///
     /// ⚠ The collapse only happens under `Arrangement::Start`/`End`/`Center`. A `SpaceBetween`,
-    /// `SpaceAround` or `SpaceEvenly` container stretches to the main axis its parent offers
-    /// (winia's deliberate deviation from Compose, pinned by `layout/row.rs` and `layout/flex.rs`),
+    /// `SpaceAround` or `SpaceEvenly` container stretches to the main axis its parent offers — the
+    /// `Arrangement::SpaceBetween | SpaceAround | SpaceEvenly` arm of `layout/flex.rs::measure_flex`,
+    /// pinned by `layout/row.rs`'s `test_row_rtl_space_between_mirrors_full_width` and
+    /// `layout/column.rs`'s `a_non_filling_weight_does_not_shrink_a_space_between_container` —
     /// and a saving the child makes is then spent on the gap before its next sibling instead of
     /// shortening the container. Measured: a `fill = false` child of 20 dp beside a 30 dp sibling
     /// in a column offered 500 dp comes out 500 dp tall with the sibling at y = 470 under
@@ -707,17 +709,18 @@ pub(crate) enum ModifierElement {
     /// pattern copied from material3 that relies on the collapse has to use `Start` here.
     ///
     /// ⚠ "The share is a MAXIMUM" holds for the constraints this hands the child, not for the child's
-    /// own `size`/`width`/`height`: those resolve through `resolved_size` into
-    /// `Constraints::tighten_*`, which raises min and max together and overrides the incoming maximum
-    /// (`layout/node.rs` reads it before flex computes anything). So a `fill = false` child asking for
+    /// own `size`/`width`/`height`: `resolved_size` only REPORTS those numbers, and
+    /// `layout/node.rs`'s measure applies them as `Constraints::tighten_width`/`tighten_height`,
+    /// which set min and max together and so override the incoming maximum — before flex computes
+    /// anything. So a `fill = false` child asking for
     /// MORE than its share is not clamped — measured: a column offered 500 dp with a
     /// `layout_weight_fill(1.0, false).size(100, 600)` child and a 30 dp sibling comes out 500 dp tall
     /// with the first child at 600 dp and the sibling pushed to y = 600, i.e. out of the column. With
     /// `fill = true` the same child is placed in its 470 dp share instead. Compose clamps in both
-    /// cases (`constraints.constrain(targetConstraints)` under `enforceIncoming = true`), so this is a
-    /// winia divergence that predates the flag — pinned by
-    /// `layout/column.rs`'s `an_oversized_non_filling_weight_overflows_its_share` so that fixing it
-    /// cannot pass unnoticed.
+    /// cases — its `size`/`height` constrain against the incoming maximum, `enforceIncoming = true`
+    /// — so this is a winia divergence that predates the flag, recorded by
+    /// `layout/column.rs`'s `known_divergence_an_oversized_non_filling_weight_overflows_its_share`
+    /// because fixing it cannot be told from a routine value refresh otherwise.
     LayoutWeight { weight: f32, fill: bool },
     /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
     AspectRatio { ratio: f32, match_height_first: bool },

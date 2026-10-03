@@ -221,17 +221,24 @@ mod tests {
         );
     }
 
-    /// Records where "the share is a MAXIMUM" stops being true, so that closing the gap cannot pass
-    /// unnoticed. This is NOT the behaviour to want: Compose clamps the child to its share
-    /// (`constraints.constrain(targetConstraints)` under `enforceIncoming = true`), while winia's
-    /// `size`/`height` raise min and max together and override the incoming maximum before flex runs.
+    /// KNOWN DIVERGENCE, not a target: this test exists to make the gap between winia and Compose
+    /// visible, not to bless the numbers it asserts.
+    ///
+    /// Compose clamps such a child to its share — its `size`/`height` constrain against the incoming
+    /// maximum under `enforceIncoming = true` — so Compose gives 470 dp where winia gives 600. winia's
+    /// `size`/`height` (via `Constraints::tighten_*` in `layout/node.rs`'s measure) set min and max
+    /// together and so override the incoming maximum before flex runs.
+    ///
+    /// A fix must therefore change these expectations, and the assertion messages say what the fixed
+    /// numbers are so that the change reads as the fix rather than as a refresh of stale values. The
+    /// positive half of the same behaviour is pinned by `a_weight_that_fills_takes_its_whole_share`
+    /// and `a_weight_that_does_not_fill_keeps_the_childs_own_height` above; the doc on
+    /// `modifier::ModifierElement::LayoutWeight` carries the same warning.
     ///
     /// Measured before writing this: the column reports its own 500 dp bound, the child takes 600 dp
-    /// anyway, and the sibling is pushed to y = 600 — out of the column it belongs to. A `fill = true`
-    /// child asking for the same 600 dp is placed in its 470 dp share instead, which is why the flag
-    /// is what decides this.
+    /// anyway, and the sibling is pushed to y = 600 — out of the column it belongs to.
     #[test]
-    fn an_oversized_non_filling_weight_overflows_its_share() {
+    fn known_divergence_an_oversized_non_filling_weight_overflows_its_share() {
         use crate::modifier::Modifier;
         let mut nodes = vec![
             LayoutNode::leaf(
@@ -248,14 +255,17 @@ mod tests {
             &children,
             Constraints::new(0.0, 100.0, 0.0, 500.0),
         );
-        assert_eq!(size.height, 500.0, "the column still reports its own bound");
+        assert_eq!(
+            size.height, 500.0,
+            "the column still reports its own bound; a clamp would not change this"
+        );
         assert_eq!(
             placements[0].size.height, 600.0,
-            "the child kept its own size rather than being clamped to the 470 dp share"
+            "KNOWN DIVERGENCE: Compose clamps this to the 470 dp share, winia keeps the child's 600"
         );
         assert_eq!(
             placements[1].position.y, 600.0,
-            "and the sibling fell outside the column"
+            "KNOWN DIVERGENCE: with a clamp the sibling would sit at y = 470, inside the column"
         );
     }
 
@@ -332,34 +342,5 @@ mod tests {
         let (_size, placements) = column.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
-    }
-}
-
-#[cfg(test)]
-mod zz_probe2 {
-    use super::*;
-    #[test]
-    fn zz_probe_oversized_weighted_child() {
-        use crate::modifier::Modifier;
-        // The share is 500-30 = 470; the child declares 600.
-        let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().layout_weight_fill(1.0, false).size(100.0, 600.0)),
-            LayoutNode::leaf(Modifier::new().size(100.0, 30.0)),
-        ];
-        let children: Vec<usize> = (0..nodes.len()).collect();
-        let (size, placements) = ColumnLayout::new()
-            .measure(&mut nodes, &[], &children, Constraints::new(0.0, 100.0, 0.0, 500.0));
-        println!("ZZ2 fill=false size(600): container {}, child {} at y={}, sibling y={}",
-                 size.height, placements[0].size.height, placements[0].position.y, placements[1].position.y);
-
-        let mut nodes2 = vec![
-            LayoutNode::leaf(Modifier::new().layout_weight(1.0).size(100.0, 600.0)),
-            LayoutNode::leaf(Modifier::new().size(100.0, 30.0)),
-        ];
-        let children2: Vec<usize> = (0..nodes2.len()).collect();
-        let (size2, p2) = ColumnLayout::new()
-            .measure(&mut nodes2, &[], &children2, Constraints::new(0.0, 100.0, 0.0, 500.0));
-        println!("ZZ2 fill=true  size(600): container {}, child {} at y={}, sibling y={}",
-                 size2.height, p2[0].size.height, p2[0].position.y, p2[1].position.y);
     }
 }

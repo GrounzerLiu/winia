@@ -214,7 +214,7 @@ Compose mirrors two independent things, and a picker needs both:
 
 1. **Layout** — `Row` puts its first child at the *start* (the right edge under RTL), and
    `Arrangement.Start`/`End`, `paddingStart`/`paddingEnd` swap meaning with it. winia mirrors placements
-   in `layout/flex.rs:288` and every container reads the ambient direction at compose time
+   in `layout/flex.rs:302-303` and every container reads the ambient direction at compose time
    (`ui/layout_components.rs:110`), so this half needed no date picker work.
 2. **Artwork** — only glyphs the caller marks auto-mirrored flip. material3's two month arrows are
    `Icons.AutoMirrored.Filled.KeyboardArrowLeft` / `…KeyboardArrowRight` (`DatePicker.kt:2225`, `:2232`),
@@ -804,10 +804,16 @@ Measured on the fixture, the dialog's rect (`find_tag_in_overlay` on `dpi-dialog
 | Input | 360 × 568 (the cap, with the content ending around y = 274) | 360 × 240 |
 | Picker | 360 × 568 | 360 × 560 |
 
-`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both numbers exactly, so a stretch creeping back
-into either mode fails rather than passing under a loose bound. Both assume the dialog's default
-content: the title is what gives the header its 120 dp, and a caller passing `.title(None)` drops the
-header to 44 and the dialog with it.
+Both figures are the picker's own content, so they can be re-derived: 240 is the 120 dp header, the
+outlined field's 56, its 16 dp bottom inset while no error shows and the 48 dp action row; 560 is the
+120 dp header, 56 dp month navigation, 48 dp weekday row, 288 dp month and the same 48 dp action row.
+
+`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both, in each mode, so a stretch creeping back
+into either fails rather than passing under a loose bound. The comparison is against the whole logical
+pixel: the debug tree serialises measured sizes with `{:.0}` (`debug.rs:593`), so the assertion's real
+tolerance is ±0.5 rather than zero. Both figures also assume the dialog's default content — the title is
+what gives the header its 120 dp, and a caller passing `.title(None)` drops the header to 44 and the
+dialog with it.
 
 One deviation rides along: the dialog's `Column` uses `Arrangement::Start` where the source says
 `SpaceBetween`. winia's `SpaceBetween` stretches a container to the main axis its parent offers — pinned
