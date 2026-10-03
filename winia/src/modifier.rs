@@ -660,9 +660,11 @@ pub(crate) enum ModifierElement {
     MinHeight { value: SizeValue },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
     /// constraint, so content that would be wider is constrained to it, and is then held at or
-    /// above the min. When a min and a max conflict the MIN wins, unlike Compose's `widthIn`
-    /// (which coerces the min down to the max); that deviation is deliberate — see the measure
-    /// block in `layout/node.rs`. Supports a dynamic value.
+    /// above the min. Supports a dynamic value.
+    ///
+    /// A min and a max on the same axis may conflict; which one wins is Compose's chain-order rule,
+    /// replayed by [`Modifier::min_max_steps`] — the max written first yields the max, the min
+    /// written first yields the min.
     MaxWidth { value: SizeValue },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
     MaxHeight { value: SizeValue },
@@ -1231,8 +1233,8 @@ impl Modifier {
         self.push(ModifierElement::MaxWidth { value: value.into() })
     }
 
-    /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min wins, see
-    /// [`Self::max_width`])
+    /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min resolves by chain
+    /// order, see [`Self::max_width`])
     pub fn max_height(self, value: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::MaxHeight { value: value.into() })
     }
@@ -2200,6 +2202,41 @@ impl Modifier {
                     if let Some(v) = resolve(value) { out.1 = Some(v); }
                 }
                 _ => {}
+            }
+        }
+        out
+    }
+
+    /// The min/max size elements in CHAIN ORDER, as `(is_width, is_min, value)`.
+    ///
+    /// Compose nests one node per call and `constrain`s each node's target constraints into what it
+    /// was handed (`Size.kt`: `SizeNode.targetConstraints`), so every node's output range is a
+    /// sub-range of its input's and the OUTER call decides a conflict:
+    /// `.widthIn(max = 200.dp).widthIn(min = 300.dp)` measures 200, the reverse measures 300.
+    /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
+    /// and collapse that away, so the measure pipeline replays the order with this instead.
+    pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
+        use crate::unit::{current_density, Dp, Px};
+        let resolve = |sv: &SizeValue| -> Option<f32> {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                SizeValue::Dynamic(f) => Some(f()),
+                SizeValue::Intrinsic(_) => None,
+            }
+        };
+        let mut out = Vec::new();
+        for el in &self.elements {
+            let (is_width, is_min, value) = match el {
+                ModifierElement::MinWidth { value } => (true, true, value),
+                ModifierElement::MaxWidth { value } => (true, false, value),
+                ModifierElement::MinHeight { value } => (false, true, value),
+                ModifierElement::MaxHeight { value } => (false, false, value),
+                _ => continue,
+            };
+            if let Some(v) = resolve(value) {
+                out.push((is_width, is_min, v));
             }
         }
         out

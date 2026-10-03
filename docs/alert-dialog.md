@@ -131,12 +131,15 @@ screenshots.
 **Width** is the content's own width clamped into `280..560dp` — Compose's `sizeIn`. That needs
 both halves of `widthIn`: `min_width` alone would let a long body grow the dialog to the window.
 `Modifier::max_width` was added for it (`winia/src/modifier.rs`, `layout/node.rs`): the cap
-lowers the incoming max and is then held at or above the min. When a min and a max conflict the
-min wins here, which is a DEVIATION from Compose — its `widthIn(min, max)` coerces the min down
-to the max, and two separate calls are order-dependent, which winia cannot express at all
-(its elements are scanned chain-wide, position-independently). Min-wins is CSS's precedence and
-the reason the clamp exists: `Constraints::constrain_*` are `f32::clamp`, which panics on
-min > max. Verified on a 900-wide window: the dialog stays 560.
+lowers the incoming max and is then held at or above the min.
+
+When a min and a max conflict the winner is Compose's chain-order rule, replayed by
+`Modifier::min_max_steps`: each Compose modifier is its own node and constrains into what the node
+before it produced, so `.max_width(200).min_width(300)` measures 200 while the reverse measures
+300. This used to be a recorded deviation — "the min always wins", which is CSS's precedence and
+matches only the second order — and the clamp is what keeps `Constraints` consistent either way
+(`Constraints::constrain_*` are `f32::clamp`, which panics on min > max). Verified on a 900-wide
+window: the dialog stays 560.
 
 **The action row** is a `FlowRow` whose layout direction is FLIPPED while the buttons keep the
 original one (`AlertDialogFlowRow`). With the content in the order confirm-then-dismiss, that

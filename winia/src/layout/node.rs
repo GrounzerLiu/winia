@@ -1999,14 +1999,30 @@ mod tests {
         assert_eq!(size.width, 200.0, "max_width 限制内容宽度");
     }
 
+    /// A conflicting min and max resolve by CHAIN ORDER, which is Compose's rule: each modifier is
+    /// its own node and `constrain`s into what the node before it produced, so the outer call's
+    /// range is the one that survives (`Size.kt`: `SizeNode.targetConstraints`).
+    ///
+    /// Both directions are asserted because either single answer is wrong on its own — this used to
+    /// be "the min always wins", a documented deviation that matched the second order only.
     #[test]
-    fn max_width_yields_to_a_larger_min() {
-        // A conflicting min and max resolve to the MIN here, which is a documented deviation
-        // from Compose's `widthIn` (it coerces the min down to the max) — see the measure block.
-        let m = Modifier::new().max_width(200.0).min_width(300.0);
-        let mut nodes = vec![LayoutNode::leaf(m)];
-        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
-        assert_eq!(size.width, 300.0, "min 高于 max 时 min 胜出");
+    fn a_conflicting_min_and_max_resolve_by_chain_order() {
+        let measure = |m: Modifier| {
+            let mut nodes = vec![LayoutNode::leaf(m)];
+            let (size, _) =
+                measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
+            size.width
+        };
+        assert_eq!(
+            measure(Modifier::new().max_width(200.0).min_width(300.0)),
+            200.0,
+            "the max written first is the outer node, so it wins the conflict"
+        );
+        assert_eq!(
+            measure(Modifier::new().min_width(300.0).max_width(200.0)),
+            300.0,
+            "and the min written first wins it, as in Compose"
+        );
     }
 
     #[test]
@@ -2728,35 +2744,27 @@ fn measure_node_inner(
         inner_constraints = t.transform(inner_constraints);
     }
 
-    // 最小尺寸（MinWidth/MinHeight——对标 Compose widthIn/heightIn）：
-    // 提升 incoming min，受 max 夹住（min 不得越过 max——tight size 下
-    // 最小约束让位于固定尺寸，与 Compose constraints 合并语义一致）。
-    let (min_w, min_h) = nodes[idx].modifier.min_size_constraint();
-    if let Some(w) = min_w {
-        inner_constraints.min_width = inner_constraints.min_width.max(w).min(inner_constraints.max_width);
-    }
-    if let Some(h) = min_h {
-        inner_constraints.min_height = inner_constraints.min_height.max(h).min(inner_constraints.max_height);
-    }
-    // Maximum sizes (MaxWidth/MaxHeight — the other half of Compose's widthIn/heightIn):
-    // lower the incoming max, then hold it at or above the min.
+    // Min/max sizes (MinWidth/MinHeight/MaxWidth/MaxHeight — Compose's widthIn/heightIn), replayed
+    // in CHAIN ORDER because that is what decides a conflict in Compose.
     //
-    // When a min and a max CONFLICT the min wins here (`.min_width(300).max_width(200)` is 300),
-    // which is a documented DEVIATION from Compose: its `SizeNode` coerces the min down to the
-    // max instead, so one `widthIn(min = 300.dp, max = 200.dp)` yields 200 — and its two separate
-    // calls are even order-dependent (`.widthIn(max = 200).widthIn(min = 300)` -> 200 but the
-    // reverse -> 300). winia scans its elements chain-wide and position-independently, so it
-    // cannot express that order-dependence at all; min-wins is CSS's `min-width`/`max-width`
-    // precedence, and the clamp is what keeps `Constraints` consistent — `constrain_width`/
-    // `constrain_height` are `f32::clamp`, which PANICS when min > max.
-    let (max_w, max_h) = nodes[idx].modifier.max_size_constraint();
-    if let Some(w) = max_w {
-        inner_constraints.max_width = inner_constraints.max_width.min(w);
-        inner_constraints.max_width = inner_constraints.max_width.max(inner_constraints.min_width);
-    }
-    if let Some(h) = max_h {
-        inner_constraints.max_height = inner_constraints.max_height.min(h);
-        inner_constraints.max_height = inner_constraints.max_height.max(inner_constraints.min_height);
+    // Each Compose modifier is its own node whose constraints are `constrain`ed into what the node
+    // before it produced, so every node's range is a sub-range of its input's and the OUTER call
+    // wins: `.widthIn(max = 200).widthIn(min = 300)` is 200 while the reverse is 300. A min lowers
+    // to the current max and a max rises to the current min, which is that same nesting expressed
+    // as one pass; the clamp also keeps `Constraints` consistent, since `constrain_width`/
+    // `constrain_height` are `f32::clamp` and panic when min > max.
+    for (is_width, is_min, v) in nodes[idx].modifier.min_max_steps() {
+        if is_width {
+            if is_min {
+                inner_constraints.min_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            } else {
+                inner_constraints.max_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            }
+        } else if is_min {
+            inner_constraints.min_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+        } else {
+            inner_constraints.max_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+        }
     }
 
     // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
