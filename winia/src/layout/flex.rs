@@ -186,12 +186,19 @@ pub(crate) fn measure_flex<A: FlexAxis>(
             total_weight += w;
             continue;
         }
-        // 扣除已测节点占用的间距
-        let measured_count = child_sizes[..i]
-            .iter()
-            .filter(|s| s.width > 0.0 || s.height > 0.0)
-            .count() as f32;
-        let spacing_deduct = measured_count * spacing;
+        // Every preceding NON-WEIGHTED child charges its gap, whatever it measured — Compose adds
+        // `spaceAfterLastNoWeight` after each of them (`RowColumnMeasurePolicy.kt:143-145`), an empty
+        // one included. winia used to count only the children that measured non-zero, which handed
+        // the following child more room than Compose gives it: measured, a 100 dp column with a 30 dp
+        // spacing after a 0x0 child left the next child its full 100 where Compose measures it
+        // against 70.
+        //
+        // Weighted children cannot be counted here — they have not been measured yet — and their
+        // spacing is charged to the weighted allocation instead. Compose does the same: its
+        // `fixedSpace` only ever sees non-weighted children, and the weighted pool subtracts
+        // `arrangementSpacingTotal` for them separately (`:163-165`).
+        let preceding_non_weighted = weights[..i].iter().filter(|w| w.is_none()).count() as f32;
+        let spacing_deduct = preceding_non_weighted * spacing;
         let main_remaining = A::main_max(constraints) - total_fixed_main - spacing_deduct;
 
         let cc = A::build_phase1(constraints, main_remaining);
