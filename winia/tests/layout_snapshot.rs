@@ -5,7 +5,8 @@
 use winia::runtime::composer::Composer;
 use winia::layout::constraints::Constraints;
 use winia::modifier::Modifier;
-use winia::components::{Text, Column, Row};
+use winia::components::{Text};
+use winia::layout::{Column, Row};
 
 #[test]
 fn leaf_node_has_correct_size() {

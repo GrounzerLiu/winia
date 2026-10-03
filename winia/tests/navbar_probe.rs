@@ -3,7 +3,8 @@ use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::Constraints;
 use winia::modifier::{Modifier, ScrollState};
 use winia::render;
-use winia::components::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, ThemeColors, TopAppBar, TopAppBarScrollBehavior, TopAppBarState, WiniaTheme, };
+use winia::components::{Icon, NavigationBar, NavigationBarItem, NAVIGATION_BAR_ICON_SIZE, Scaffold, Text, TopAppBar, TopAppBarScrollBehavior, TopAppBarState};
+use winia::theme::{ThemeColors, WiniaTheme};
 
 const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
 
@@ -36,7 +37,7 @@ fn probe_bar_region_bleed() {
                 Scaffold::new(move |ctx, _p| {
                     let scroll = scroll.clone();
                     let conn = conn.clone();
-                    winia::components::Column::new()
+                    winia::layout::Column::new()
                         .modifier(
                             Modifier::new()
                                 .fill_max_size()

@@ -11,10 +11,14 @@ use winia::graphics::{Color};
 use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
-use winia::components::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme, };
+use winia::components::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold};
+use winia::theme::{ThemeColors, Typography, WiniaTheme};
 
 const WIDTH: i32 = 520;
-const HEIGHT: i32 = 420;
+// Tall enough for everything the matrix builds. It was 420, which the matrix had outgrown:
+// the last components were laid out past the bottom edge, and `size()` coerces into the
+// incoming constraints (Compose's `SizeNode`), so the disabled FAB measured 56 x 0.
+const HEIGHT: i32 = 1200;
 const SEED: u32 = 0xff6750a4;
 
 fn raster_surface() -> skia_safe::Surface {
@@ -165,7 +169,7 @@ fn render_case(dark: bool, direction: LayoutDirection, custom: bool) -> (skia_sa
 }
 
 fn build_matrix(ctx: &mut ComposeCtx) {
-    winia::components::Column::new()
+    winia::layout::Column::new()
         .modifier(Modifier::new().fill_max_width().padding(16.0))
         .build(ctx, |ctx| {
             Chip::assist(|ctx| Text::new("Assist").build(ctx), || {})
@@ -279,7 +283,7 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
 }
 
 fn build_rtl_probe(ctx: &mut ComposeCtx) {
-    winia::components::Row::new()
+    winia::layout::Row::new()
         .modifier(Modifier::new().width(200.0).test_tag("rtl-probe"))
         .build(ctx, |ctx| {
             let leading_key = ctx.next_key();

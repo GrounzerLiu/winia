@@ -7,7 +7,8 @@ use winia::runtime::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
 use winia::modifier::{Modifier};
 use winia::graphics::{Color, Shape};
-use winia::components::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
+use winia::components::{Text, Button, FloatingActionButton, FloatingActionButtonSize, Icon};
+use winia::layout::{Column, Row};
 use winia::render;
 
 // ── 辅助 ──
@@ -325,7 +326,7 @@ fn z_index_reorders_sibling_painting() {
 // semantics tree names a color. Each test states the gradient's direction and then asserts what the
 // renderer actually put at the two ends and the middle.
 
-use winia::brush::{Brush, BrushTile};
+use winia::graphics::{Brush, BrushTile};
 
 const RED: (u8, u8, u8) = (255, 0, 0);
 const BLUE: (u8, u8, u8) = (0, 0, 255);

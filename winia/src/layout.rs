@@ -17,7 +17,6 @@ pub mod box_with_constraints;
 pub mod lazy_column;
 pub mod adaptive;
 pub mod subcompose;
-pub(crate) mod subcompose_probe;
 pub mod node;
 pub(crate) mod flex;
 pub(crate) mod column;

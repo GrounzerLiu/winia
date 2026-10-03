@@ -513,7 +513,7 @@ mod tests {
     }
 
     // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is
-    // covered by `ui::subcompose_probe`'s direct tests. It cannot be tested here through
+    // covered by `layout::subcompose`'s own tests. It cannot be tested here through
     // `measure_node` alone, because `subcompose()` requires the composer's layout pass to be armed
     // (`LayoutHostGuard`) — which is exactly the contract the facility documents.
 }
