@@ -209,7 +209,7 @@ Phase 2.3 checklist 第 3 项同步关闭（见 §11）。
 
 ### 4.5 Flex spacing 对零尺寸 child 不一致
 
-位置：winia/src/layout/flex.rs:159-178、winia/src/layout/flex.rs:206-245。phase 1 只统计之前尺寸非零的 child，最终 total_spacing 却按全部 child 计算。零尺寸节点会造成剩余约束和最终放置的 spacing 语义不一致。
+At: winia/src/layout/flex.rs:169-185, winia/src/layout/flex.rs:204-268. Phase 1 counts only the children whose size was non-zero at the time it measured them, while the final `total_spacing` is computed over every child. A zero-sized node therefore makes the remaining-constraint arithmetic and the final placement disagree about spacing.
 
 ## 5. TextField、IME、Selection 风险
 
