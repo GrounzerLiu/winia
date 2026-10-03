@@ -3797,7 +3797,7 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
 fn date_picker_dialog_is_the_modal_picker() {
     let mut app = UiTest::launch("date_picker_dialog");
     app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
-    assert_eq!(app.overlay_count(), 1, "the modal picker is an overlay");
+    wait_for_one_overlay(&mut app);
 
     let (x, y, w, h) = app.find_tag_in_overlay("dpd-dialog").expect("the dialog");
     assert_eq!(w, 360.0, "ContainerWidth is 360 dp");
@@ -3878,7 +3878,7 @@ fn date_picker_selects_the_day_that_is_tapped() {
 fn the_date_picker_mode_toggle_swaps_the_calendar_for_the_entry_field() {
     let mut app = UiTest::launch("date_picker_input");
     app.expect_text_timeout("mode: input", Duration::from_secs(5));
-    assert_eq!(app.overlay_count(), 1, "the modal picker is an overlay");
+    wait_for_one_overlay(&mut app);
     // The calendar's own month navigation is gone: the field replaced it.
     assert!(
         !app.overlay_texts().iter().any(|text| text == "2024"),
@@ -3905,6 +3905,28 @@ fn the_date_picker_mode_toggle_swaps_the_calendar_for_the_entry_field() {
         app.find_tag_in_overlay("date-picker-input-field").is_some(),
         "the field is back after the second toggle"
     );
+}
+
+/// Wait until the fixture has registered exactly one overlay entry.
+///
+/// An overlay is registered by its own composer, so it can land a frame after the page's own text:
+/// reading `overlay_count()` once right after a launch races that frame — measured under a
+/// full-suite run as `left: 0, right: 1` at the modal picker's own assertion. Polling with a
+/// deadline keeps a genuinely missing overlay a failure, just a slower one.
+fn wait_for_one_overlay(app: &mut UiTest) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 1 {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected exactly one overlay entry, got {}",
+            app.overlay_count()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 /// Click a tagged node inside an overlay entry. [`UiTest::click_tag`] only looks in the main tree,
