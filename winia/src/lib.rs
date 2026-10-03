@@ -36,6 +36,7 @@ pub mod nav;
 pub mod semantics;
 pub mod theme;
 pub mod overlay;
+pub mod transition;
 pub mod selection;
 /// The Windows UI Automation bridge (feature `accessibility`, Windows only): publishes the semantics
 /// tree to the OS so screen readers can read and operate the UI. See `docs/semantics.md`.
@@ -144,9 +145,11 @@ pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
     pub use crate::components::animated_content::AnimatedContent;
     pub use crate::components::crossfade::Crossfade;
     pub use crate::components::shared_transition::{
-        BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize,
-        ResizeMode, SharedBounds, SharedContentState, SharedTransitionDefaults,
-        SharedTransitionLayout, SharedTransitionScope, current_shared_scope,
+        SharedContentState, SharedTransitionDefaults, SharedTransitionLayout, SharedTransitionScope,
+        current_shared_scope,
+    };
+    pub use crate::transition::{
+        BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds, SharedKind,
     };
     pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
     pub use crate::components::rich_text::RichText;

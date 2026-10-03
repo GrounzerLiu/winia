@@ -10,7 +10,7 @@
 //! - Key 管理: 全局唯一 key 计数器
 
 use crate::runtime::state::{ComposerSubscription, State, StateId, StateSignal};
-use crate::components::shared_transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
+use crate::transition::{ActiveFlight, FlightId, PendingSource, SharedBounds};
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{LayoutNode, MeasurePolicy};
 use crate::modifier::Modifier;

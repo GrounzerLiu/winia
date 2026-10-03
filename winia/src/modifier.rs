@@ -888,9 +888,9 @@ pub(crate) enum ModifierElement {
     SharedTransition {
         scope_id: u64,
         key: String,
-        kind: crate::components::shared_transition::SharedKind,
-        transform: crate::components::shared_transition::BoundsTransform,
-        path: crate::components::shared_transition::PathMotion,
+        kind: crate::transition::SharedKind,
+        transform: crate::transition::BoundsTransform,
+        path: crate::transition::PathMotion,
         /// Overlay z-order for the flying pair (Compose `zIndexInOverlay`,
         /// default 0). Orders retained ghosts back-to-front; in-tree targets
         /// keep tree order (documented Tier 0 limitation).

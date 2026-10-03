@@ -20,7 +20,8 @@ use winia::prelude::*;
 mod settings;
 
 use winia::overlay::{Dialog, OverlayAnimSpec};
-use winia::components::shared_transition::{current_shared_scope, OverlayClip, SharedTransitionLayout};
+use winia::components::shared_transition::{current_shared_scope, SharedTransitionLayout};
+use winia::transition::{OverlayClip};
 
 const KEY: &str = "searchbar";
 

@@ -180,9 +180,6 @@ pub use swipe_to_dismiss::{
     SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue,
     SWIPE_DISMISS_POSITIONAL_THRESHOLD, SWIPE_DISMISS_VELOCITY_THRESHOLD,
 };
-pub use shared_transition::{
-    BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize,
-    ResizeMode, SharedBounds, SharedContentState, SharedKind, SharedTransitionDefaults,
-    SharedTransitionLayout, SharedTransitionScope,
-};
+pub use shared_transition::{SharedContentState, SharedTransitionDefaults, SharedTransitionLayout, SharedTransitionScope};
+pub use crate::transition::{BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds, SharedKind};
 pub use search_bar::{SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar, SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT};

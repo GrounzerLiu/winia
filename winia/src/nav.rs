@@ -1371,13 +1371,13 @@ impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
                     crate::components::animated_visibility::VisibilityTransition::fade_out(
                         crate::animation::TweenSpec::default(),
                     ),
-                    crate::components::shared_transition::BoundsTransform::default(),
-                    crate::components::shared_transition::ResizeMode::scale_to_bounds(),
-                    crate::components::shared_transition::PlaceHolderSize::AnimatedSize,
-                    crate::components::shared_transition::PathMotion::Linear,
+                    crate::transition::BoundsTransform::default(),
+                    crate::transition::ResizeMode::scale_to_bounds(),
+                    crate::transition::PlaceHolderSize::AnimatedSize,
+                    crate::transition::PathMotion::Linear,
                     0.0,
                     true,
-                    crate::components::shared_transition::OverlayClip::Bounds,
+                    crate::transition::OverlayClip::Bounds,
                 ),
             )
             .build(ctx, |ctx| inner(ctx));

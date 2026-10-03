@@ -1,7 +1,7 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
 use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
-use crate::components::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
+use crate::transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
 use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
@@ -300,7 +300,7 @@ pub struct LayoutNode {
     /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
     /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
     /// 复用命中必须从干净状态重建（协调器按 slot 回填）。
-    pub(crate) transition: Option<crate::components::shared_transition::TransitionVisual>,
+    pub(crate) transition: Option<crate::transition::TransitionVisual>,
     /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
     /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
     /// single comparison, and an illegal combination (a node that is both elevated chrome and a
@@ -2638,7 +2638,7 @@ pub(crate) struct FlightMeasure {
     /// it. Teardown AND writes must match it: slot keys are positional identities
     /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
     /// newer flight's override.
-    pub owner: crate::components::shared_transition::FlightKey,
+    pub owner: crate::transition::FlightKey,
 }
 
 /// One frame of that override; `None` on a field means "no override there".

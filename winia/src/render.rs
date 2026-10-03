@@ -10,7 +10,7 @@ use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;
 use crate::animation::visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
 use crate::graphics::{DecodedIcon, IconSource, IconSpec, decoded_icon};
-use crate::components::shared_transition::TransitionRole;
+use crate::transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
 use skia_safe::image_filters;
@@ -444,7 +444,7 @@ fn render_modifier_element<'a>(
                     canvas.draw_rrect(
                         skia_safe::RRect::new_rect_radii(
                             rect,
-                            &crate::components::shared_transition::rrect_vectors(r),
+                            &crate::transition::rrect_vectors(r),
                         ),
                         &paint,
                     );
@@ -464,7 +464,7 @@ fn render_modifier_element<'a>(
                     canvas.draw_rrect(
                         skia_safe::RRect::new_rect_radii(
                             rect,
-                            &crate::components::shared_transition::rrect_vectors(r),
+                            &crate::transition::rrect_vectors(r),
                         ),
                         &paint,
                     );
@@ -998,12 +998,12 @@ fn render_pass1(
     // `RoundedCorner` (resolved on the lerped rect), and no clip at all for `None`.
     let tf_clip_rr: Option<skia_safe::RRect> = match (tf_radii, tf_scale) {
         (Some(r), Some((sx, sy))) => {
-            match crate::components::shared_transition::overlay_clip_of(&node.modifier) {
-                crate::components::shared_transition::OverlayClip::None => None,
-                crate::components::shared_transition::OverlayClip::Rectangle => {
+            match crate::transition::overlay_clip_of(&node.modifier) {
+                crate::transition::OverlayClip::None => None,
+                crate::transition::OverlayClip::Rectangle => {
                     Some(skia_safe::RRect::new_rect(rect))
                 }
-                crate::components::shared_transition::OverlayClip::RoundedCorner(radius) => {
+                crate::transition::OverlayClip::RoundedCorner(radius) => {
                     // The radius is device-space, so pre-divide by the paint scale — the
                     // same convention `radii_pairs` uses (the clip is drawn inside
                     // `canvas.scale`).
@@ -1011,10 +1011,10 @@ fn render_pass1(
                     let ry = radius / sy.abs().max(1e-6);
                     Some(skia_safe::RRect::new_rect_xy(rect, rx, ry))
                 }
-                crate::components::shared_transition::OverlayClip::Bounds => {
+                crate::transition::OverlayClip::Bounds => {
                     Some(skia_safe::RRect::new_rect_radii(
                         rect,
-                        &crate::components::shared_transition::rrect_vectors(r),
+                        &crate::transition::rrect_vectors(r),
                     ))
                 }
             }
@@ -2261,7 +2261,7 @@ pub(crate) fn draw_focus(
         let grow = if rect.width() > 0.0 { sr.width() / rect.width() } else { 1.0 };
         let rr = RRect::new_rect_radii(
             sr,
-            &crate::components::shared_transition::rrect_vectors(
+            &crate::transition::rrect_vectors(
                 r.map(|(x, y)| ((x + inset).max(0.0) * grow, (y + inset).max(0.0) * grow)),
             ),
         );
