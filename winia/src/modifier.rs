@@ -700,19 +700,10 @@ pub(crate) enum ModifierElement {
     /// maximum its parent offers, so the collapse survives `SpaceBetween` as well — which is what
     /// material3 itself relies on.
     ///
-    /// ⚠ "The share is a MAXIMUM" holds for the constraints this hands the child, not for the child's
-    /// own `size`/`width`/`height`: `resolved_size` only REPORTS those numbers, and
-    /// `layout/node.rs`'s measure applies them as `Constraints::tighten_width`/`tighten_height`,
-    /// which set min and max together and so override the incoming maximum — before flex computes
-    /// anything. So a `fill = false` child asking for
-    /// MORE than its share is not clamped — measured: a column offered 500 dp with a
-    /// `layout_weight_fill(1.0, false).size(100, 600)` child and a 30 dp sibling comes out 500 dp tall
-    /// with the first child at 600 dp and the sibling pushed to y = 600, i.e. out of the column. With
-    /// `fill = true` the same child is placed in its 470 dp share instead. Compose clamps in both
-    /// cases — its `size`/`height` constrain against the incoming maximum, `enforceIncoming = true`
-    /// — so this is a winia divergence that predates the flag, recorded by
-    /// `layout/column.rs`'s `known_divergence_an_oversized_non_filling_weight_overflows_its_share`
-    /// because fixing it cannot be told from a routine value refresh otherwise.
+    /// The share really is a MAXIMUM for a `fill = false` child: a child asking for more is coerced
+    /// into it, because a `Size` is clamped into the incoming range (`layout/node.rs`'s measure, the
+    /// same rule `Modifier::size` documents) before anything flex computes. `Modifier::required_size`
+    /// is the escape hatch for a child that must leave the share on purpose.
     LayoutWeight { weight: f32, fill: bool },
     /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
     AspectRatio { ratio: f32, match_height_first: bool },
@@ -1096,6 +1087,10 @@ impl Default for Modifier {
 
 impl Modifier {
     /// 设置固定宽高
+    ///
+    /// 对标 Compose `Modifier.size`：请求值会被**夹进** incoming 范围（`enforceIncoming = true`
+    /// ——`SizeNode.measure` 对 `Constraints.fixed(w, h)` 做 `constraints.constrain`）。所以
+    /// 请求超出父给的 max 时结果取 max，而不是溢出；想真的溢出用 [`Modifier::required_size`]。
     pub fn size(self, width: impl Into<SizeValue>, height: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::Size {
             width: width.into(),

@@ -152,10 +152,12 @@ The caller's `modifier` is a WRAPPER around the surface — as in Compose's
 of eating into it alongside the 24dp content padding.
 
 A slot is laid out inside the content box with its own bottom padding and cross-axis alignment.
-A slot that demands more than the box (`.size(w, h)` larger than the dialog) OVERFLOWS it:
-winia's `size()` overrides the incoming constraints where Compose's coerces them
-(`requiredSize` is Compose's override), so the surface's `clip` is what keeps it inside the
-rounded corners; the node still starts at the padding, so nothing else moves.
+A slot that demands more than the box (`.size(w, h)` larger than the dialog) is COERCED into it:
+a `Size` is clamped into the incoming range, which is Compose's `size()` (`enforceIncoming = true`
+— a request only overrides the range through `required_size`, Compose's `requiredSize`), so such a
+slot comes out at the width it is offered and still starts at the padding. winia used to write the
+request over the constraints and let the surface's `clip` hide the spill; the alignment with Compose
+removed that, and `required_size` is what a caller reaches for if the spill is wanted.
 
 `confirm_button` is a slot like the rest, so a dialog without one builds (Compose's two-action
 overload requires it; its `content` overload is `BasicAlertDialog` here).

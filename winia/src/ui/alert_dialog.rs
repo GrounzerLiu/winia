@@ -887,16 +887,23 @@ mod tests {
     }
 
     #[test]
-    fn a_slot_wider_than_the_dialog_overflows_and_is_positioned_at_the_padding() {
-        // winia's `size()` OVERRIDES the incoming constraints where Compose's coerces them (the
-        // override is Compose's `requiredSize`), so a slot that demands more than the dialog is
-        // measured at its request; the surface's `clip` is what keeps it inside the rounded
-        // container. Recorded here because a slot author has to know it, and pinned so the
-        // behaviour cannot change silently.
+    fn a_slot_wider_than_the_dialog_is_coerced_into_it_and_keeps_its_padding() {
+        // A slot asking for more width than it is offered comes out at the offered width — Compose's
+        // `size()` is `enforceIncoming = true` (`SizeNode.measure` runs
+        // `constraints.constrain(Constraints.fixed(...))`). winia used to write the request over the
+        // constraints instead, so a 900 dp slot measured 900 and depended on the surface's `clip` to
+        // hide the spill; that override is `required_size` now, for a caller who really wants it.
+        //
+        // The coerced width is the dialog's own cap reached through its padding:
+        // `DIALOG_MAX_WIDTH` 560 less the 24 dp content padding on each side.
         let mut c = compose_dialog(AlertDialog::new(true).title(fixed_slot("wide", 900.0, 20.0)));
         let inner = lay_out_overlay(&mut c);
         let (x, _, w, _) = abs_rect(&inner, "wide");
         assert_eq!(x, DIALOG_CONTAINER_PADDING, "still laid out at the padding");
-        assert_eq!(w, 900.0, "and measured at its request, past the dialog's cap");
+        assert_eq!(
+            w,
+            DIALOG_MAX_WIDTH - 2.0 * DIALOG_CONTAINER_PADDING,
+            "coerced to what it is offered, not measured at its 900 dp request"
+        );
     }
 }

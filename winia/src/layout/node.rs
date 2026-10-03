@@ -2694,9 +2694,22 @@ fn measure_node_inner(
 
     // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
     // 测量时求值并注册依赖到本节点）
+    //
+    // The requested size is CLAMPED into the incoming range, not written over it — Compose's
+    // `Modifier.size`/`width`/`height` are `enforceIncoming = true`: `SizeNode.measure` builds
+    // `Constraints.fixed(w, h)` and runs `constraints.constrain(targetConstraints)` on it, so a
+    // request wider than the parent allows comes out at the parent's maximum rather than overflowing
+    // it, and one narrower than the parent's minimum comes out at the minimum. `required_size` is the
+    // escape hatch for the other semantics and keeps writing over the range (see below).
     if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
-        if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
-        if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
+        if let Some(w) = sw {
+            let w = inner_constraints.constrain_width(w);
+            inner_constraints = inner_constraints.tighten_width(w);
+        }
+        if let Some(h) = sh {
+            let h = inner_constraints.constrain_height(h);
+            inner_constraints = inner_constraints.tighten_height(h);
+        }
     }
 
     // 开放布局节点 A 型（exp/modifier-node）：resolved_size 之后串行变换约束。
@@ -2761,23 +2774,13 @@ fn measure_node_inner(
         }
     }
 
-    // 1. 固定尺寸（仅 Static+Static 的 Size——由 resolved_size 已处理，此分支保留兼容其他查询）
-    if let Some((width, height)) = nodes[idx].modifier.fixed_size() {
-        use crate::modifier::Dimension;
-        if let Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) = width {
-            inner_constraints = inner_constraints.tighten_width(w);
-        }
-        if let Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) = height {
-            inner_constraints = inner_constraints.tighten_height(h);
-        }
-        // Px 需 Density 转换
-        if let Dimension::Px(p) = width {
-            inner_constraints = inner_constraints.tighten_width(p.to_logical(crate::unit::current_density()));
-        }
-        if let Dimension::Px(p) = height {
-            inner_constraints = inner_constraints.tighten_height(p.to_logical(crate::unit::current_density()));
-        }
-    }
+    // Step 1 (a fixed `Size`) used to be applied here as well, reading `Modifier::fixed_size()`.
+    // It was redundant — `resolved_size` above already turns every `Static(Fixed)`/`Static(Dp)`/
+    // `Static(Px)` axis into a number and tightens with it, `fixed_size` only reports the subset
+    // where BOTH axes are static, and merging is a superset of "the first element with both static"
+    // — but it was not harmless: it re-wrote the RAW request after the clamp, so a `.size(100, 600)`
+    // in a 470 dp slot came out at 600 again and undid the alignment with Compose. Removed rather
+    // than duplicated so there is one place that decides a node's size from its modifier.
 
     // 1.5 固有尺寸请求（`Modifier.width/height(IntrinsicSize)`）——该轴取内容自己的固有测量。
     // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的

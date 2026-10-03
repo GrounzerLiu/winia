@@ -23,7 +23,12 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
 
     Column::new()
                         .modifier(Modifier::new()
-                            .size(Dimension::Fill, 700.0)
+                            // `fill_max_height`, not a hardcoded 700: the content area is the
+                            // window's 700 less the 64 dp top bar, and a `size()` request is coerced
+                            // into what it is offered (Compose's `enforceIncoming = true`), so 700
+                            // only ever meant "as tall as I am given" and used to overflow by 64.
+                            .fill_max_width()
+                            .fill_max_height()
                             .padding(16.0)
                             .vertical_scroll(scroll_state))
                         .spacing(12.0)

@@ -8833,12 +8833,15 @@ mod tier0_tests {
                         ),
                 )
                 .build(ctx, |ctx| {
-                    // 500 wide inside a 120-wide hero: spills by construction.
+                    // 500 wide inside a 120-wide hero: spills by construction. `required_size`, not
+                    // `size`: Compose coerces a plain `size()` into the incoming range
+                    // (`enforceIncoming = true`), so 500 would come out at the hero's 120 and there
+                    // would be nothing to spill; `requiredSize` is the deliberate-overflow escape.
                     let key = ctx.next_key();
                     ctx.start_leaf(
                         key,
                         Modifier::new()
-                            .size(500.0, 30.0)
+                            .required_size(500.0, 30.0)
                             .background(Color::GREEN, Shape::Rectangle),
                     );
                     ctx.end_node();

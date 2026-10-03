@@ -224,24 +224,19 @@ mod tests {
         );
     }
 
-    /// KNOWN DIVERGENCE, not a target: this test exists to make the gap between winia and Compose
-    /// visible, not to bless the numbers it asserts.
+    /// A child that asks for more than its share comes out at its share, which is what Compose's
+    /// `size()` does (`enforceIncoming = true`: `SizeNode.measure` runs
+    /// `constraints.constrain(Constraints.fixed(...))` on the request). It used to come out at its
+    /// own request and push its sibling out of the column; this test asserted that, as a recorded
+    /// divergence, until `layout/node.rs` started coercing a `Size` into the incoming range.
     ///
-    /// Compose clamps such a child to its share — its `size`/`height` constrain against the incoming
-    /// maximum under `enforceIncoming = true` — so Compose gives 470 dp where winia gives 600. winia's
-    /// `size`/`height` (via `Constraints::tighten_*` in `layout/node.rs`'s measure) set min and max
-    /// together and so override the incoming maximum before flex runs.
+    /// The overflow that a caller really wants is still available through `Modifier::required_size`,
+    /// which keeps writing over the range — `shared_transition.rs`'s spilling hero relies on it.
     ///
-    /// A fix must therefore change these expectations, and the assertion messages say what the fixed
-    /// numbers are so that the change reads as the fix rather than as a refresh of stale values. The
-    /// positive half of the same behaviour is pinned by `a_weight_that_fills_takes_its_whole_share`
-    /// and `a_weight_that_does_not_fill_keeps_the_childs_own_height` above; the doc on
-    /// `modifier::ModifierElement::LayoutWeight` carries the same warning.
-    ///
-    /// Measured before writing this: the column reports its own 500 dp bound, the child takes 600 dp
-    /// anyway, and the sibling is pushed to y = 600 — out of the column it belongs to.
+    /// The companion cases are above: `a_weight_that_fills_takes_its_whole_share` (the share wins
+    /// over a smaller request) and `a_weight_that_does_not_fill_keeps_the_childs_own_height`.
     #[test]
-    fn known_divergence_an_oversized_non_filling_weight_overflows_its_share() {
+    fn an_oversized_non_filling_weight_is_coerced_into_its_share() {
         use crate::modifier::Modifier;
         let mut nodes = vec![
             LayoutNode::leaf(
@@ -260,15 +255,15 @@ mod tests {
         );
         assert_eq!(
             size.height, 500.0,
-            "the column still reports its own bound; a clamp would not change this"
+            "the share plus the sibling still add up to the parent's bound"
         );
         assert_eq!(
-            placements[0].size.height, 600.0,
-            "KNOWN DIVERGENCE: Compose clamps this to the 470 dp share, winia keeps the child's 600"
+            placements[0].size.height, 470.0,
+            "600 was coerced into the 470 dp share rather than overflowing it"
         );
         assert_eq!(
-            placements[1].position.y, 600.0,
-            "KNOWN DIVERGENCE: with a clamp the sibling would sit at y = 470, inside the column"
+            placements[1].position.y, 470.0,
+            "so the sibling stays inside the column"
         );
     }
 
