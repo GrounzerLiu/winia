@@ -1162,9 +1162,6 @@ impl ScrollableTabRow {
             scroll_state: scroll_state.clone(),
             last_selected,
             layout_seen: layout_seen.clone(),
-            divider_color,
-            indicator_color,
-            indicator_shape,
             indicator_slot: self.indicator_slot,
         };
 
@@ -1224,9 +1221,6 @@ struct ScrollableTabRowLayoutPolicy {
     /// 才写 fling_limit），首帧不应消费 last_selected。set(true) notify → 下帧
     /// 重测 → fling_limit 就绪 → 正确居中滚动。
     layout_seen: State<bool>,
-    divider_color: Color,
-    indicator_color: Color,
-    indicator_shape: Shape,
     /// See [`ScrollableTabRow::indicator`]: composed at measure time with the positions.
     indicator_slot: Option<std::sync::Arc<dyn Fn(&mut ComposeCtx, TabIndicatorScope) + Send + Sync>>,
 }

@@ -981,7 +981,6 @@ pub(crate) enum SlotStatus {
     Clean,
     /// slot 与上一帧相同，但被标记为脏 → 需要重新测量
     Dirty,
-    New,
 }
 
 /// 槽位表 — 组合树的内部数据结构（树形嵌套）
@@ -5845,7 +5844,9 @@ fn test_panic_restore_keeps_both_consumed_batch_and_in_frame_notification() {
     );
 }
 
-/// Helper: 深度优先检查 Slot 树上是否有残留 desc（panic 帧产物）。
+/// Helper: 深度优先检查 Slot 树上是否有残留 desc（panic 帧产物）。The test below is its only
+/// caller, so the lib build cannot see the use.
+#[allow(dead_code)]
 fn slot_tree_has_residual_desc(slot: &Slot) -> bool {
     if slot.desc.is_some() {
         return true;

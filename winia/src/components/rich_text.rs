@@ -624,7 +624,6 @@ mod tests {
         fn ul() -> Self { Style { ul: true, ..Style::default() } }
         fn st() -> Self { Style { st: true, ..Style::default() } }
         fn b() -> Self { Style { fw: Some(FontWeight::BOLD), ..Style::default() } }
-        fn i() -> Self { Style { slant: Some(FontSlant::Italic), ..Style::default() } }
         fn fs(v: f32) -> Self { Style { fs: Some(v), ..Style::default() } }
         fn col(c: Color) -> Self { Style { color: Some(c), ..Style::default() } }
         fn all() -> Self {

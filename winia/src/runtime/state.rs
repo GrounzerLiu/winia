@@ -491,14 +491,20 @@ macro_rules! impl_handle_common {
                 self.0.state_id()
             }
 
+            /// The macro emits this for every handle type; the ones the dependency maps do not
+            /// ask for are still part of what a handle is, and the callers that will want them
+            /// are in this file.
+            #[allow(dead_code)]
             pub(crate) fn signal_id(&self) -> StateId {
                 self.0.signal_id()
             }
 
+            #[allow(dead_code)] // see `signal_id` above
             pub(crate) fn from_raw(raw: RawState<T>) -> Self {
                 Self(raw)
             }
 
+            #[allow(dead_code)] // see `signal_id` above
             pub(crate) fn as_raw(&self) -> &RawState<T> {
                 &self.0
             }
@@ -731,9 +737,6 @@ impl<T: 'static> State<T> {
         Visual::from_raw(self.raw)
     }
 
-    pub(crate) fn into_backchannel(self) -> Backchannel<T> {
-        Backchannel::from_raw(self.raw)
-    }
 
 
 }
@@ -791,13 +794,11 @@ impl<T: 'static> State<T> {
     }
 
     /// Internal alias used by Composer dependency maps.
+    #[allow(dead_code)] // the dependency maps ask one handle type; the alias is on them all
     pub(crate) fn signal_id(&self) -> StateId {
         self.raw.signal_id()
     }
 
-    pub(crate) fn notify(&self, wake: bool) {
-        self.raw.notify(wake);
-    }
 }
 
 impl<T> Clone for State<T> {

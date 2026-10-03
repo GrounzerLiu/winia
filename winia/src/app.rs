@@ -2550,6 +2550,7 @@ fn find_scroll_target(nodes: &[LayoutNode], idx: usize, dx: f32, dy: f32) -> Opt
     } else { None }
 }
 
+#[allow(dead_code)] // the tests in this file call it
 fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> crate::nested_scroll::ScrollDelta {
     apply_scroll_delta_inner(nodes, idx, dx, dy, density, true)
 }
@@ -5241,6 +5242,7 @@ fn dispatch_ptr_event(
 /// 距上次 request >= 帧间隔才允许请求（WM_PAINT 生成频率受控为刷新率）。
 /// 独立于渲染节流（last_render_time）——避免 WM_PAINT 晚于 request（ε>0）导致
 /// 定时器唤醒时 now-last_render = I-ε < I 恒拦截 → 渲染频率减半（2I 间隔）。
+#[allow(dead_code)] // the tests in this file call it
 pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
     now.duration_since(last_request) >= interval
 }

@@ -1518,8 +1518,6 @@ impl TextField {
                     shape,
                     colors.clone(),
                     self.enabled,
-                    focused,
-                    self.is_error,
                     self.read_only,
                     if self.is_error { colors.error_cursor } else { colors.cursor },
                     indicator_anim,

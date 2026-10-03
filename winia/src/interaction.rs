@@ -208,6 +208,7 @@ impl MutableInteractionSource {
     }
 
     /// 是否有未结束的波纹层（事件循环驱动重绘的依据）
+    #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn has_active_ripples(&self) -> bool {
         !self.ripple_layers.lock().is_empty()
     }

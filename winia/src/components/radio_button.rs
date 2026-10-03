@@ -328,7 +328,6 @@ mod tests {
     struct RenderScene {
         px: Vec<[u8; 4]>,
         w: usize,
-        h: usize,
         origin: (f32, f32), // 40×40 触摸目标左上角
     }
 
@@ -366,7 +365,7 @@ mod tests {
             }
         }
         assert!(found, "应有 40×40 触摸目标");
-        RenderScene { px: px.to_vec(), w: 300, h: 300, origin }
+        RenderScene { px: px.to_vec(), w: 300, origin }
     }
 
     impl RenderScene {

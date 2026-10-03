@@ -352,8 +352,6 @@ pub(crate) enum ModifierElement {
         shape: Shape,
         colors: crate::text::field::TextFieldColors,
         enabled: bool,
-        focused: bool,
-        is_error: bool,
         /// material3's `readOnly`, carried here because the RENDER needs it: material3 draws its caret as
         /// `showCursor = enabled && !readOnly && …` (`foundation/text/CoreTextField.kt`), so a read-only
         /// field shows no caret. winia drew one whenever the field had focus.
@@ -607,6 +605,7 @@ impl Modifier {
     }
 
     /// 返回所有开放节点的只读引用
+    #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn modifier_nodes(&self) -> &[ModifierNode] {
         &self.nodes
     }
@@ -1127,6 +1126,7 @@ impl Modifier {
     }
 
     /// 统一构造 TextContent 元素（Text/TextField 共用——字段单一来源，P3-6）
+    #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn text_content(
         mut self,
         content: String,
@@ -1225,8 +1225,6 @@ impl Modifier {
         shape: Shape,
         colors: crate::text::field::TextFieldColors,
         enabled: bool,
-        focused: bool,
-        is_error: bool,
         read_only: bool,
         cursor_color: Color,
         indicator_color: crate::runtime::state::State<crate::graphics::Color>,
@@ -1239,8 +1237,6 @@ impl Modifier {
             shape,
             colors,
             enabled,
-            focused,
-            is_error,
             read_only,
             cursor_color,
             indicator_color,

@@ -17,6 +17,9 @@ use std::sync::Arc;
 /// 注册的文本段信息
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredSegment {
+    /// The slot that registered this segment. Kept because it is the record's identity — the
+    /// registration site knows it and cannot be asked for it later; no reader needs it yet.
+    #[allow(dead_code)]
     pub slot_key: u64,
     pub global_offset: usize,
     pub text_len: usize,

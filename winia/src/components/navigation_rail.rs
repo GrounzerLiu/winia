@@ -78,6 +78,7 @@ const RAIL_VERTICAL_PADDING: f32 = 4.0;
 /// header 之后的间距 = NavigationRailHeaderPadding
 const HEADER_SPACER: f32 = 8.0;
 /// Material DisabledAlpha
+#[allow(dead_code)] // the tests in this file call it
 const DISABLED_ALPHA: f32 = 0.38;
 /// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
 const WIDE_INDICATOR_H_PADDING: f32 = 16.0;

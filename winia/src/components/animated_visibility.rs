@@ -292,7 +292,7 @@ mod tests {
             composer.compose(|ctx| {
                 AnimatedVisibility::new(v1.clone())
                     .build(ctx, |ctx| {
-                        TextLeaf::new("AV content").build(ctx);
+                        TextLeaf::new().build(ctx);
                     });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -403,12 +403,10 @@ mod tests {
     }
 
     /// 测试用固定尺寸叶子（Text 需字体环境——用固定尺寸盒子代替）
-    struct TextLeaf {
-        label: &'static str,
-    }
+    struct TextLeaf;
     impl TextLeaf {
-        fn new(label: &'static str) -> Self {
-            Self { label }
+        const fn new() -> Self {
+            Self
         }
         fn build(&self, ctx: &mut ComposeCtx) {
             let key = ctx.next_key();
