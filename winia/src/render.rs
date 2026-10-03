@@ -8,8 +8,8 @@ use crate::debug_log;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;
-use crate::components::animated_visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
-use crate::components::icon::{DecodedIcon, IconSource, IconSpec, decoded_icon};
+use crate::animation::visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
+use crate::graphics::{DecodedIcon, IconSource, IconSpec, decoded_icon};
 use crate::components::shared_transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
 use skia_safe::sampling_options::{FilterMode, MipmapMode};
@@ -562,7 +562,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
         IconSource::Symbol(symbol) => {
             let size = rect.width().min(rect.height());
             if size > 0.0 {
-                if let Some(blob) = crate::components::icon::symbol_blob(*symbol, size, &spec.axes) {
+                if let Some(blob) = crate::graphics::symbol_blob(*symbol, size, &spec.axes) {
                     let x = rect.left + (rect.width() - size) / 2.0;
                     let y = rect.top + (rect.height() - size) / 2.0 + size;
                     let mut paint = Paint::default();
@@ -652,19 +652,19 @@ fn sampling_options_for(q: crate::modifier::FilterQuality) -> SamplingOptions {
 fn draw_image_content(
     canvas: &Canvas,
     rect: Rect,
-    source: &crate::components::icon::IconSource,
-    content_scale: crate::components::image::ContentScale,
-    alignment: crate::components::image::ImageAlignment,
+    source: &crate::graphics::IconSource,
+    content_scale: crate::graphics::ContentScale,
+    alignment: crate::graphics::ImageAlignment,
     alpha: f32,
     color_filter: Option<&crate::modifier::ColorFilter>,
     filter_quality: crate::modifier::FilterQuality,
     direction: crate::layout::LayoutDirection,
 ) {
-    let Some(decoded) = crate::components::icon::decoded_icon(source) else { return };
+    let Some(decoded) = crate::graphics::decoded_icon(source) else { return };
     let rtl = direction == crate::layout::LayoutDirection::Rtl;
     match decoded.as_ref() {
-        crate::components::icon::DecodedIcon::Bitmap { image, width, height } => {
-            let dst = crate::components::image::content_scale_rect(
+        crate::graphics::DecodedIcon::Bitmap { image, width, height } => {
+            let dst = crate::graphics::content_scale_rect(
                 content_scale, rect, *width, *height, alignment, rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
@@ -698,9 +698,9 @@ fn draw_image_content(
                 canvas.restore();
             }
         }
-        crate::components::icon::DecodedIcon::Svg { dom, width, height } => {
+        crate::graphics::DecodedIcon::Svg { dom, width, height } => {
             // 与位图同一事实来源：content_scale_rect 完整缩放/对齐 + clipToBounds
-            let dst = crate::components::image::content_scale_rect(
+            let dst = crate::graphics::content_scale_rect(
                 content_scale, rect, *width, *height, alignment, rtl,
             );
             if dst.width() <= 0.0 || dst.height() <= 0.0 {
@@ -2328,7 +2328,7 @@ fn draw_text_with_selection(
     x: f32, y: f32, w: f32,
     max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool,
     letter_spacing: f32, line_height: Option<f32>,
-    registrar: Option<crate::components::selection_container::SelectionRegistrar>,
+    registrar: Option<crate::text::selection::SelectionRegistrar>,
     slot_key: u64,
 ) {
     if registrar.and_then(|reg| reg.selected_range(slot_key)).is_some() {

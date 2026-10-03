@@ -11,6 +11,11 @@
 //! - 帧驱动在 `app.rs` 的 `AboutToWait` 中更新
 
 pub mod interpolator;
+pub mod visibility;
+
+pub use visibility::{
+    ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
+};
 
 use crate::runtime::state::{State, StateId};
 use crate::runtime::composer::Composer;

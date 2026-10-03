@@ -40,7 +40,7 @@ use std::sync::Arc;
 ///
 /// Taken from Google's own icon set, not from memory: `fonts.google.com/icons` with
 /// `?icon.set=materialicons&icon.name=check` serves exactly this `d` and a `0 0 24 24` viewBox, which is
-/// the coordinate space [`crate::components::icon::IconSource::svg_path`] assumes. (The same page serves the
+/// the coordinate space [`crate::graphics::IconSource::svg_path`] assumes. (The same page serves the
 /// Material SYMBOLS variant in a `0 -960 960 960` box — unusable here without rescaling.)
 pub const CHECK_ICON_PATH: &str = "M19.69,5.23L8.96,15.96l-4.23-4.23L2.96,13.5l6,6L21.46,7L19.69,5.23z";
 

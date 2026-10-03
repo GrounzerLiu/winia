@@ -35,7 +35,7 @@ use crate::components::surface::{Surface, SurfaceBorder};
 use crate::effect::LaunchedEffect;
 use crate::components::text::{ProvideTextStyle, Text};
 use crate::components::text_field::{TextField, TextFieldValue};
-use crate::components::text_transformation::{OffsetMapping, TransformedText, VisualTransformation};
+use crate::text::transformation::{OffsetMapping, TransformedText, VisualTransformation};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
@@ -5007,7 +5007,7 @@ mod tests {
     #[test]
     fn the_picker_composes_its_chevrons_as_auto_mirrored() {
         use crate::modifier::ModifierElement;
-        use crate::components::icon::IconSource;
+        use crate::graphics::IconSource;
 
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
@@ -5101,7 +5101,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for element in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec, .. } = element {
-                    if let crate::components::icon::IconSource::SvgPath { data, .. } = &spec.source {
+                    if let crate::graphics::IconSource::SvgPath { data, .. } = &spec.source {
                         out.push(data.to_string());
                     }
                 }

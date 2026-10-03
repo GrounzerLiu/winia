@@ -167,7 +167,7 @@ impl SharedTransitionDefaults {
 /// The scaling model a `ScaleToBounds` end uses is Compose's `ContentScale` —
 /// `androidx.compose.ui.layout.ContentScale`, the SAME type `Image` takes, not a parallel
 /// copy of it. `ImageAlignment` is Compose's 9-position `Alignment`.
-pub use crate::components::image::{ContentScale, ImageAlignment};
+pub use crate::graphics::{ContentScale, ImageAlignment};
 
 /// Content deformation during flight (Compose `ResizeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

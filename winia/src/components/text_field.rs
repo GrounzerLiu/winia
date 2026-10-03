@@ -722,7 +722,7 @@ pub(crate) fn offset_mapping_for_node(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
     idx: usize,
-) -> Option<std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>> {
+) -> Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>> {
     use crate::modifier::ModifierElement;
     let mut cur = Some(idx);
     while let Some(i) = cur {
@@ -833,7 +833,7 @@ pub struct TextField {
     supporting_text: Option<String>,
     /// 视觉变换（密码掩码/格式化输入——对标 Compose visualTransformation；
     /// None = 恒等）
-    visual_transformation: Option<std::sync::Arc<dyn crate::components::text_transformation::VisualTransformation>>,
+    visual_transformation: Option<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>,
     /// 前置图标（M3 leadingIcon——组合内容闭包：12dp 边距垂直居中，
     /// 与文本 16dp 间距）
     leading_icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -1005,7 +1005,7 @@ impl TextField {
     /// 视觉变换（对标 Compose `visualTransformation`）——密码掩码
     /// `PasswordTransformation`、格式化输入（自定义 OffsetMapping）。
     /// 显示文本 ≠ 编辑文本；光标/选区/定位自动经 OffsetMapping 转换
-    pub fn visual_transformation(mut self, t: impl Into<std::sync::Arc<dyn crate::components::text_transformation::VisualTransformation>>) -> Self {
+    pub fn visual_transformation(mut self, t: impl Into<std::sync::Arc<dyn crate::text::transformation::VisualTransformation>>) -> Self {
         self.visual_transformation = Some(t.into());
         self
     }
@@ -1105,9 +1105,9 @@ impl TextField {
         // original→transformed，点击/拖动定位用 transformed→original）。
         // ⚠ placeholder 不经过变换（显示原样）
         let transformation = self.visual_transformation.clone()
-            .unwrap_or_else(|| std::sync::Arc::new(crate::components::text_transformation::IdentityTransformation::new()));
+            .unwrap_or_else(|| std::sync::Arc::new(crate::text::transformation::IdentityTransformation::new()));
         let transformed = transformation.filter(&content);
-        let offset_mapping: std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping> = transformed.offset_mapping;
+        let offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping> = transformed.offset_mapping;
         // 显示文本恒为变换结果（placeholder 为闭包子节点——text-field-v2
         // 容器化：由 TextFieldLayout 定位在输入位）
         let has_visual = visual.is_some();
@@ -1189,11 +1189,11 @@ impl TextField {
         // （app.rs handle_pointer_move 的 compute_selection 依赖节点
         // registrar；TextField 此前不注册 → 拖动被跳过）。选区经
         // set_on_change 同步回 value（拖动结束 fire_on_change）
-        let registrar = ctx.remember(|| crate::components::selection_container::SelectionRegistrar::new()).get();
+        let registrar = ctx.remember(|| crate::text::selection::SelectionRegistrar::new()).get();
         {
             let v = value.clone();
             let mapping = offset_mapping.clone();
-            registrar.set_on_change(move |sel: &crate::components::selection_container::Selection| {
+            registrar.set_on_change(move |sel: &crate::text::selection::Selection| {
                 v.update(|val| {
                     // reg 空间 = 显示文本（global_offset=0 单段）——转换回
                     // 编辑偏移写入 value

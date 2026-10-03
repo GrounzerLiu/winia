@@ -1804,7 +1804,8 @@ mod tests {
     #[test]
     fn tab_leading_icon_lays_out_horizontally() {
         // LeadingIconTab：icon 左 + 8dp + text 右（水平排列），整体水平居中
-        use crate::components::icon::{Icon, IconSource};
+        use crate::components::icon::{Icon};
+        use crate::graphics::{IconSource};
         let mut c = Composer::new();
         let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {
@@ -1852,7 +1853,8 @@ mod tests {
     fn tab_leading_icon_rtl_mirrors_icon_to_right() {
         // RTL 回归：LeadingIconTab 在 RTL 下 icon 应移右侧、text 移左侧
         //（用户实测：Tab Three 切 RTL 后不镜像——Tab 内部布局此前不感知方向）
-        use crate::components::icon::{Icon, IconSource};
+        use crate::components::icon::{Icon};
+        use crate::graphics::{IconSource};
         let mut c = Composer::new();
         let colors = crate::theme::ThemeColors::default_light();
         c.compose(|ctx| {

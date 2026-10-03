@@ -273,7 +273,7 @@ pub struct LayoutNode {
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
-    pub(crate) registrar: std::cell::RefCell<Option<crate::components::selection_container::SelectionRegistrar>>,
+    pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
@@ -2165,9 +2165,9 @@ mod tests {
     // ── Image 叶子测量（固有尺寸布局——对齐 Compose：未指定维度以固有尺寸为基准）──
 
     fn image_modifier() -> Modifier {
-        use crate::components::image::{ContentScale, ImageAlignment};
+        use crate::graphics::{ContentScale, ImageAlignment};
         Modifier::new().image_content(
-            crate::components::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::graphics::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
             ContentScale::Fit,
             ImageAlignment::Center,
             1.0,
@@ -2197,9 +2197,9 @@ mod tests {
     fn test_leaf_image_size_modifier_overrides() {
         // modifier size 覆盖固有尺寸（Compose 语义：size 指定即以此为准）
         let m = Modifier::new().size(64.0, 32.0).image_content(
-            crate::components::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
-            crate::components::image::ContentScale::Fit,
-            crate::components::image::ImageAlignment::Center,
+            crate::graphics::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::graphics::ContentScale::Fit,
+            crate::graphics::ImageAlignment::Center,
             1.0,
             None,
             crate::modifier::FilterQuality::Low,
@@ -2214,11 +2214,11 @@ mod tests {
         // 无 viewBox/width 的 SVG：测量回退 24×24（与解码回退一致——
         // 否则 Image 测量 0 尺寸空白而 Icon 正常显示的不一致）
         let m = Modifier::new().image_content(
-            crate::components::icon::IconSource::svg(
+            crate::graphics::IconSource::svg(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0h24v24H0z\"/></svg>",
             ),
-            crate::components::image::ContentScale::Fit,
-            crate::components::image::ImageAlignment::Center,
+            crate::graphics::ContentScale::Fit,
+            crate::graphics::ImageAlignment::Center,
             1.0,
             None,
             crate::modifier::FilterQuality::Low,

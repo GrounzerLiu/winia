@@ -23,7 +23,7 @@ use winia::prelude::*;
 mod settings;
 
 use winia::components::{TextField, TextFieldValue};
-use winia::components::text_transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
+use winia::text::transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
 
 /// 自定义视觉变换：仅保留数字，每 4 位加空格分组（123456789012 → 1234 5678 9012）。
 ///

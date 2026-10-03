@@ -785,7 +785,7 @@ pub(crate) enum ModifierElement {
         focus_progress: crate::runtime::state::State<f32>,
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
         /// None = 恒等）
-        offset_mapping: Option<std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
     },
@@ -795,7 +795,7 @@ pub(crate) enum ModifierElement {
     /// 可达（点击定位/渲染光标查找 None → 显示偏移直写 selection 越界）。
     /// 仅存映射、无渲染/绘制副作用（render 各 match 走 `_ =>` 兜底）。
     TextFieldOffsetMapping {
-        offset_mapping: std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
     },
 
     // ── Content 类 ──
@@ -846,13 +846,13 @@ pub(crate) enum ModifierElement {
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
     /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
     NoFocusRing,
-    DrawIcon { spec: crate::components::icon::IconSpec },
+    DrawIcon { spec: crate::graphics::IconSpec },
     /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
     /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
     ImageContent {
-        source: crate::components::icon::IconSource,
-        content_scale: crate::components::image::ContentScale,
-        alignment: crate::components::image::ImageAlignment,
+        source: crate::graphics::IconSource,
+        content_scale: crate::graphics::ContentScale,
+        alignment: crate::graphics::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,
@@ -898,8 +898,8 @@ pub(crate) enum ModifierElement {
         /// sharedBounds enter/exit (Compose `enter`/`exit` — target plays
         /// enter, source plays exit; `None` on sharedElement markers, which
         /// have no such parameters and always crossfade).
-        enter: Option<crate::components::animated_visibility::VisibilityTransition>,
-        exit: Option<crate::components::animated_visibility::VisibilityTransition>,
+        enter: Option<crate::animation::visibility::VisibilityTransition>,
+        exit: Option<crate::animation::visibility::VisibilityTransition>,
         /// Render this endpoint in the transition layer during the flight
         /// (Compose `renderInOverlayDuringTransition`, default `true`): the
         /// flying element escapes ancestor clips and ancestor layer
@@ -1649,7 +1649,7 @@ impl Modifier {
         cursor_color: Color,
         indicator_color: crate::runtime::state::State<crate::modifier::Color>,
         focus_progress: crate::runtime::state::State<f32>,
-        offset_mapping: Option<std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
         supporting: Option<SupportingVisual>,
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
@@ -1673,7 +1673,7 @@ impl Modifier {
     /// 查找 TextFieldVisual.offset_mapping 或本元素）
     pub fn text_field_offset_mapping(
         self,
-        offset_mapping: std::sync::Arc<dyn crate::components::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
     ) -> Self {
         self.push(ModifierElement::TextFieldOffsetMapping { offset_mapping })
     }
@@ -1807,16 +1807,16 @@ pub fn no_focus_ring(self) -> Self {
     self.push(ModifierElement::NoFocusRing)
 }
 
-pub fn draw_icon(self, spec: crate::components::icon::IconSpec) -> Self {
+pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
     }
 
     /// 图片内容元素（Image 组件用——绘制按 ContentScale/对齐/alpha）
     pub fn image_content(
         self,
-        source: crate::components::icon::IconSource,
-        content_scale: crate::components::image::ContentScale,
-        alignment: crate::components::image::ImageAlignment,
+        source: crate::graphics::IconSource,
+        content_scale: crate::graphics::ContentScale,
+        alignment: crate::graphics::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,

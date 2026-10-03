@@ -258,7 +258,7 @@ struct PtrDownState {
     /// 文本选区的起始字符位置（Down 时记录）
     selection_anchor: Option<usize>,
     /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
-    anchor_registrar: Option<crate::components::selection_container::SelectionRegistrar>,
+    anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
 }
 
 impl PerWindow {
