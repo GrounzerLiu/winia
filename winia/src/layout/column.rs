@@ -267,6 +267,42 @@ mod tests {
         );
     }
 
+    /// KNOWN DIVERGENCE, not a target: a spacing that does not fit shrinks the CHILDREN here where
+    /// Compose shrinks the GAP.
+    ///
+    /// Compose measures each child against what is left after the gaps already placed and only then
+    /// clamps the gap it counts toward the next child's remaining space —
+    /// `spaceAfterLastNoWeight = min(arrangementSpacingInt, (remaining - placeableMainAxisSize)
+    /// .fastCoerceAtLeast(0))`, `RowColumnMeasurePolicy.kt:142-145` — so a child keeps its own size
+    /// and the shortfall lands on the gap. winia subtracts the whole `spacing` from the remaining
+    /// main axis BEFORE measuring (`layout/flex.rs` phase 1), so the child collapses instead.
+    ///
+    /// Measured: this column is offered 100 dp with a 60 dp spacing and two 40 dp children, and the
+    /// second comes out 0 dp where Compose gives it 40. A fix has to change these expectations, and
+    /// the messages say what the fixed numbers are so that the change reads as the fix rather than as
+    /// a refresh of stale values. The fix is not local to this loop: `total_fixed_main` also feeds the
+    /// weighted allocation, and Compose subtracts only the WEIGHTED children's spacing there
+    /// (`arrangementSpacingTotal`), while winia subtracts `spacing * (n - 1)`.
+    #[test]
+    fn known_divergence_a_spacing_too_large_for_the_axis_shrinks_the_children() {
+        let mut nodes = vec![make_leaf(100.0, 40.0), make_leaf(100.0, 40.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new()
+            .spacing(60.0)
+            .measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(0.0, 100.0, 0.0, 100.0),
+            );
+        assert_eq!(placements[0].size.height, 40.0, "the first child keeps its height");
+        assert_eq!(
+            placements[1].size.height, 0.0,
+            "KNOWN DIVERGENCE: Compose keeps this child at 40 dp and clamps the 60 dp gap to 20"
+        );
+        assert_eq!(size.height, 100.0, "the column is still its bound");
+    }
+
     #[test]
     fn test_column_simple() {
         let column = ColumnLayout::new();
