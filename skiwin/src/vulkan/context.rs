@@ -88,7 +88,10 @@ impl VulkanRenderContext {
             };
 
             let direct_context = direct_contexts::make_vulkan(
-                &vk::BackendContext::new(
+                // `BackendContext::new` is deprecated in favour of the builder, which takes the
+                // Vulkan API version to cap at. `None` leaves it to skia, which is what the
+                // deprecated constructor did.
+                &vk::BackendContext::new_builder(
                     instance.handle().as_raw() as _,
                     device.physical_device().handle().as_raw() as _,
                     device.handle().as_raw() as _,
@@ -97,7 +100,9 @@ impl VulkanRenderContext {
                         queue.queue_family_index() as usize,
                     ),
                     &get_proc,
-                ),
+                    None,
+                )
+                .build(),
                 None,
             )
             .ok_or_else(|| {
