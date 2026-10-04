@@ -341,3 +341,221 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
     }
     consumed
 }
+
+#[cfg(test)]
+mod nested_scroll_chain_tests {
+    use super::{dispatch_nested_scroll_delta};
+    use crate::layout::node::LayoutNode;
+    use crate::unit::{Offset, Size};
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
+
+    /// 记录器 connection：记录 on_pre_scroll/on_post_scroll 的调用顺序。
+    /// pre 消费一半，post 消费全部 available——便于验证顺序与消费量。
+    /// `global_log`（可选）记录**跨节点**顺序（如 "pre-R" "post-T"）——
+    /// 独立 log 只能验证单节点内部顺序，无法捕获 pre-R→M→T→post-T→M→R。
+    struct Recorder {
+        name: String,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        global_log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+        order: std::sync::atomic::AtomicUsize,
+    }
+    impl Recorder {
+        fn with_global(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>, global: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Self { name: name.to_string(), log, global_log: Some(global), order: std::sync::atomic::AtomicUsize::new(0) }
+        }
+    }
+    impl NestedScrollConnection for Recorder {
+        fn on_pre_scroll(&self, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
+            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.log.lock().unwrap().push(format!("pre-{}-{}", self.name, n));
+            if let Some(g) = &self.global_log {
+                g.lock().unwrap().push(format!("pre-{}", self.name));
+            }
+            ScrollDelta::new(available.x / 2.0, available.y / 2.0)
+        }
+        fn on_post_scroll(&self, _: ScrollDelta, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
+            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.log.lock().unwrap().push(format!("post-{}-{}", self.name, n));
+            if let Some(g) = &self.global_log {
+                g.lock().unwrap().push(format!("post-{}", self.name));
+            }
+            ScrollDelta::new(available.x, available.y)
+        }
+        fn on_pre_fling(&self, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
+        fn on_post_fling(&self, _: ScrollVelocity, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
+    }
+
+    #[test]
+    fn delta_chain_pre_post_order_includes_target() {
+        // 构造 root(connection R) → mid(connection M) → target(scroll + connection T)
+        let r_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let m_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let t_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        // 共享全局 log：验证跨节点顺序 pre-R→M→T→post-T→M→R
+        let global = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        let conn_r = Recorder::with_global("R", r_log.clone(), global.clone());
+        let conn_m = Recorder::with_global("M", m_log.clone(), global.clone());
+        let conn_t = Recorder::with_global("T", t_log.clone(), global.clone());
+
+        let scroll = ScrollState::new();
+        scroll.offset.set(0.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().nested_scroll(conn_r).size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().nested_scroll(conn_m).size(200.0, 200.0)),
+            LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).nested_scroll(conn_t).size(100.0, 100.0)),
+        ];
+        nodes[0].measured_size = Size::new(200.0, 200.0);
+        nodes[1].measured_size = Size::new(200.0, 200.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[2].measured_size = Size::new(100.0, 100.0);
+        nodes[2].position = Offset::new(0.0, 100.0);
+        nodes[2].scroll_viewport_height = 100.0;
+        nodes[2].scroll_content_height = 200.0; // 可滚动 100
+        nodes[0].children.push(1);
+        nodes[1].children.push(2);
+
+        let density = crate::unit::Density::from_density(1.0);
+        // 消费推演（dy=-20，负 delta = 内容上移 = offset 增加；每个 pre 吃一半）：
+        //   R pre -10 → M pre -5 → T pre -2.5 → child 剩余 -2.5 → child 消费 2.5
+        //   post 链（含 T）：M post 全吃 available → T post 全吃 → R post 全吃剩余
+        let consumed = dispatch_nested_scroll_delta(
+            &mut nodes, 0, 2,
+            ScrollDelta::new(0.0, -20.0),
+            NestedScrollSource::Wheel,
+            density,
+        );
+
+        // R：pre 一次（吃 10）+ post 一次（child 消费后，吃剩余）——R 是最后 post
+        assert_eq!(*r_log.lock().unwrap(), vec!["pre-R-0", "post-R-1"], "R pre 后 post");
+        // M：pre 一次 + post 一次（在 T/R 之前——逆序 M→T→R）
+        assert_eq!(*m_log.lock().unwrap(), vec!["pre-M-0", "post-M-1"], "M pre 后 post");
+        // T：pre + post（TopAppBar 类 connection 挂在 target 上，post 必须被调用——
+        // 修复前的关键回归点：排除 target 会破坏 content_offset 变色/回弹）
+        assert_eq!(*t_log.lock().unwrap(), vec!["pre-T-0", "post-T-1"], "T 也参与 post（TopAppBar 依赖）");
+
+        // consumed 应为负（负 delta 方向消费），且 child 已实际滚动 offset>0
+        assert!(consumed.y < 0.0, "应沿 delta 方向消费，实际 {:?}", consumed);
+        assert!(scroll.offset.get() > 0.0, "child 应实际滚动（pre 只吃一半），实际 {}", scroll.offset.get());
+
+        // 跨节点全局顺序：pre 正序 R→M→T，post 逆序 T→M→R（含 target T）
+        let g = global.lock().unwrap().clone();
+        assert_eq!(g, vec!["pre-R", "pre-M", "pre-T", "post-T", "post-M", "post-R"],
+            "全局顺序应为 pre-R→M→T→post-T→M→R（含 target T 参与 post）——实际 {g:?}");
+    }
+}
+
+#[cfg(test)]
+mod release_velocity_floor_tests {
+    use super::{dispatch_nested_scroll_fling};
+    use crate::layout::node::LayoutNode;
+    use crate::unit::{Offset, Size};
+    use crate::modifier::{Modifier, ScrollState, SnapSpec};
+    use crate::nested_scroll::ScrollVelocity;
+
+    const STEP: f32 = 336.0;
+    /// Below the 50 px/s floor the call site uses for the DECAY, and below the snap's own 400 dp/s
+    /// threshold too — so the snap that runs here is the "settle on the nearer page" branch, which is
+    /// the one a slow drag-and-release needs.
+    const GENTLE: f32 = 12.0;
+
+    /// A root with one scrollable child, mid-page so the snap has somewhere to go.
+    ///
+    /// The offset matters: at an exact page boundary the snap target equals the current offset and the
+    /// spring is never registered (`push_animatable_with_velocity_and_done` short-circuits on
+    /// `peek() == target`), which would make a `has_animation` assertion vacuous.
+    fn tree(snap: Option<SnapSpec>, offset: f32) -> (Vec<LayoutNode>, ScrollState) {
+        let scroll = ScrollState::new();
+        scroll.offset.set(offset);
+        scroll.fling_limit.set(STEP * 9.0);
+        scroll.snap.set(snap);
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .size(400.0, STEP),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(400.0, 600.0);
+        nodes[1].measured_size = Size::new(400.0, STEP);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[1].scroll_viewport_height = STEP;
+        nodes[1].scroll_content_height = STEP * 10.0;
+        nodes[0].children.push(1);
+        (nodes, scroll)
+    }
+
+    fn snap_spec() -> SnapSpec {
+        SnapSpec { step: STEP, min_fling_velocity: 400.0 }
+    }
+
+    /// A paged list released below the 50 px/s floor still flings — because its whole motion is the
+    /// snap spring, and the floor was written for a decay it does not run.
+    ///
+    /// This is the half no unit test reached before: `ScrollState::fling` enters `fling_with_boundary`
+    /// directly and never crosses this call site, so the existing
+    /// `a_paged_list_settles_even_when_it_is_released_at_rest` is green whether or not the bypass here
+    /// exists. Without `|| ss.snaps()`, the release below is dropped before any fling starts and the
+    /// list comes to rest between two pages with nothing left to snap it back.
+    #[test]
+    fn a_paged_list_flings_below_the_decay_floor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        // Mid-page, so the nearer-page snap target is a real move.
+        let (mut nodes, scroll) = tree(Some(snap_spec()), STEP * 0.6);
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
+
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "a paging list released at {GENTLE} px/s must still run its snap spring — the 50 px/s \
+             floor is the decay's, and this list has no decay phase"
+        );
+
+        // And it is the SNAP that ran, not a decay: one page, on the boundary.
+        let mut frames = 0;
+        while crate::animation::has_animation_for_state(scroll.offset.state_id()) && frames < 400 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            frames += 1;
+        }
+        let end = scroll.offset.get();
+        assert!(
+            (end / STEP - (end / STEP).round()).abs() < 1e-3,
+            "the gentle release settled at {end}, which is not a page boundary — a decay would stop \
+             wherever the friction ran out"
+        );
+        assert!(
+            end >= STEP,
+            "and it advanced to the nearer page ahead ({end} should be at least one page in)"
+        );
+    }
+
+    /// The control, and the reason the test above is about the exception rather than about the number:
+    /// the SAME velocity on a container with no snap spec is still dropped by the floor, so a plain
+    /// scroll view does not bank a fling out of the tail of a slow drag.
+    #[test]
+    fn an_ordinary_container_keeps_the_decay_floor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let (mut nodes, scroll) = tree(None, STEP * 0.6);
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
+
+        assert!(
+            !crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "without a snap spec a {GENTLE} px/s release must start nothing — the 50 px/s floor still \
+             guards the decay, which is what it was written for"
+        );
+        assert_eq!(scroll.offset.get(), STEP * 0.6, "and the offset is untouched");
+
+        // The floor is a floor, not a wall: the same container released fast does fling.
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: 900.0 });
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "a fast release on an ordinary container still flings"
+        );
+    }
+}
