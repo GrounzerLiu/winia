@@ -231,7 +231,7 @@ pub(crate) fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, 
 /// _scroll_delta` 的显式 target 语义：target 滚不动应留给 post 链的祖先
 /// connection 处理，**不能**偷偷滚子节点（否则"在外层顶部向下拖"会错误地
 /// 滚动内层子列表——用户报告的 bug：外层已到顶，delta 递归到内层）。
-pub(crate) fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density, recursive: bool) -> crate::nested_scroll::ScrollDelta {
+fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density, recursive: bool) -> crate::nested_scroll::ScrollDelta {
     let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
     {
         let node = &nodes[idx];

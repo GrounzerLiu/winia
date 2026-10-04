@@ -193,7 +193,7 @@ pub(crate) fn press_gesture_target(
 /// A `closing` overlay is deliberately still resolved: unlike a press (`hit_overlay` treats a fading
 /// overlay as transparent) the finger is already down and its nodes are still composed, so the
 /// gesture completes into the popup and dies with it when `finish_closing_overlays` removes it.
-pub(crate) fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
+fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
     let id = arena?;
     pw.overlay.layers.iter().position(|o| o.id == id)
 }
@@ -210,7 +210,7 @@ pub(crate) fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Optio
 /// shipped is visibly affected (its content is a `TextField` whose `on_press` already fired plus
 /// `clickable` rows that use `on_click`), but a component that wants a tap to survive its own
 /// overlay's motion would need the arena origin frozen at press time.
-pub(crate) fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
+fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
     match pw.input.arena {
         None => Some(scene_pos),
         Some(id) => {

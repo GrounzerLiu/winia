@@ -10,7 +10,6 @@
 //! - 均实现 `AnimatableValue`，可直接用于动画系统
 
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
-use std::sync::LazyLock;
 
 // ═══════════════════════════════════════════════════════════
 // Dp — 密度无关像素（1dp ≈ 1/160 inch）

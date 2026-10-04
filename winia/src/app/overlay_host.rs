@@ -212,10 +212,10 @@ pub(crate) fn keyboard_scope(pw: &PerWindow) -> Option<usize> {
 }
 /// Whether this overlay owns the keyboard: it declares itself a focus scope, has not started
 /// closing, and still has a size.
-pub(crate) fn overlay_owns_keyboard(ov: &OverlayWindow) -> bool {
+fn overlay_owns_keyboard(ov: &OverlayWindow) -> bool {
     !ov.closing && ov.focus_scope && overlay_has_size(ov)
 }
-pub(crate) fn overlay_has_size(ov: &OverlayWindow) -> bool {
+fn overlay_has_size(ov: &OverlayWindow) -> bool {
     ov.composer.layout_root()
         .map(|r| r.measured_size.width > 0.0 && r.measured_size.height > 0.0)
         .unwrap_or(false)
@@ -380,7 +380,7 @@ pub(crate) fn finish_closing_overlays(pw: &mut PerWindow) {
 }
 /// Whether a close has been pending past [`CLOSING_DEADLINE`] — the safety net for a tween that never
 /// reports done, and the trigger for handing a still-declared overlay back its interactivity.
-pub(crate) fn closing_overlay_timed_out(closing_since: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+fn closing_overlay_timed_out(closing_since: Option<std::time::Instant>, now: std::time::Instant) -> bool {
     closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE)
 }
 /// Whether a closing overlay may be dropped: its fade finished, or it has been closing past
@@ -402,7 +402,7 @@ pub(crate) fn closing_overlay_is_done(
 
 /// overlay 移除前清理交互状态（hover 补 Exit + press 释放）——
 /// overlay 删除后其节点销毁，交互 source 悬空 → 必须在移除前发射
-pub(crate) fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
+fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
     let olds: Vec<u64> = ov.hovered_slots.drain().collect();
     for slot in olds {
         overlay_exit_hover_at(ov, slot);

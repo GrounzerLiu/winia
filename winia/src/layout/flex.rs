@@ -5,7 +5,7 @@
 //! 编译期泛型参数，消除两处 ~140 行的重复代码。
 
 use super::constraints::Constraints;
-use crate::unit::{Offset, Size};
+use crate::unit::Size;
 use super::node::*;
 
 // ── FlexAxis trait ──

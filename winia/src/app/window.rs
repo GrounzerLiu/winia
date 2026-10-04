@@ -2,10 +2,9 @@ use crate::app;
 use crate::composable;
 use crate::prelude::*;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
-use crate::runtime::lifecycle::LifecycleState;
 /// Window 占位 leaf / created_id 的 key 盐（黄金比例——与内容节点 next_key 空间隔离）
 const WINDOW_KEY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
 

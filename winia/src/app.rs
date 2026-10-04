@@ -4,25 +4,23 @@ pub mod gesture;
 pub mod overlay_host;
 
 use gesture::{
-    GestureState, PtrDownState,    drag_scroll_up, end_gesture, fire_gesture_action, fire_in_gesture_arena, gesture_down,
+    GestureState, PtrDownState,    drag_scroll_up, fire_gesture_action, fire_in_gesture_arena, gesture_down,
     gesture_move, gesture_up, inner_component_drag, path_drag_idx, path_scroll_idx,
-    press_gesture_target, process_pending_taps_on_down, slot_has_double_tap,
+    press_gesture_target, process_pending_taps_on_down,
 };
 use overlay_host::{
     OverlayHost,
-    begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click, focus_scope_is_open, finish_closing_overlays, hit_overlay, keyboard_scope,
-    layout_overlays, overlay_anchor_rect, overlay_down, overlay_drag_up, overlay_exit_hover_at,
-    overlay_update_hover, release_keyboard_to_lower_layer, render_overlays, sync_overlays,
-    OverlayWindow,
+    begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click, focus_scope_is_open, hit_overlay, keyboard_scope,
+    layout_overlays, overlay_down, overlay_drag_up, overlay_exit_hover_at,
+    overlay_update_hover, render_overlays, sync_overlays,
 };
 pub mod scroll;
 pub mod window;
 
 use scroll::{
-    apply_scroll_delta, dispatch_nested_scroll_delta, dispatch_nested_scroll_fling,
+    dispatch_nested_scroll_delta, dispatch_nested_scroll_fling,
     find_scroll_target, scroll_delta_with_shift, DragScroll,
 };
-use std::time::Instant;
 
 use crate::runtime::composer::{ComposeCtx, Composer};
 use crate::debug;
@@ -41,7 +39,7 @@ pub(crate) fn drag_trace_enabled() -> bool {
     false
 }
 
-pub(crate) struct PendingWindow {
+struct PendingWindow {
     pub width: f32,
     pub height: f32,
     pub title: String,
@@ -83,7 +81,7 @@ fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
 /// needs the tree to run again (a component resolved its colours and type when it composed, so a
 /// new palette is invisible until it recomposes). One field on `PerWindow` now, two values that
 /// only mean anything next to each other.
-pub(crate) struct WindowThemeState {
+struct WindowThemeState {
     /// The palette this window clears with, and the typography/direction its tree resolved. Shared
     /// with the `Window` node that manages the window (which re-samples all of it every frame) —
     /// see `theme::WindowTheme`.
@@ -109,7 +107,7 @@ impl WindowThemeState {
 /// Split out of `PerWindow` because these eight fields are only ever read and written by the frame
 /// loop's own bookkeeping — nothing outside `app.rs` touches them, and together they are what makes
 /// "should this frame be drawn" have an answer.
-pub(crate) struct FrameClock {
+struct FrameClock {
     /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
     pub(crate) frame_counter: u64,
     /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
@@ -179,10 +177,10 @@ pub(crate) struct PerWindow {
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
     /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
-    pub(crate) theme: WindowThemeState,
+    theme: WindowThemeState,
     /// The frame's clock: when it last rendered and last asked to, how fast it should be
     /// going, and whether it has given up (see `FrameClock`).
-    pub(crate) clock: FrameClock,
+    clock: FrameClock,
     /// The pointer and gesture state: what is down, what a gesture locked onto, and the
     /// sessions it opened (see `GestureState` — fourteen fields that used to be here).
     pub(crate) input: GestureState,
@@ -2254,7 +2252,7 @@ pub fn open_window_with_title(width: f32, height: f32, title: String, content: O
     wake_impl();
 }
 
-pub(crate) fn wake_impl() {
+fn wake_impl() {
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
         let _ = proxy.wake_up();
         return;
@@ -2262,7 +2260,7 @@ pub(crate) fn wake_impl() {
     debug::wake();
 }
 
-pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
+fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
@@ -3265,7 +3263,7 @@ fn dispatch_ptr_event(
 /// 独立于渲染节流（last_render_time）——避免 WM_PAINT 晚于 request（ε>0）导致
 /// 定时器唤醒时 now-last_render = I-ε < I 恒拦截 → 渲染频率减半（2I 间隔）。
 #[allow(dead_code)] // the tests in this file call it
-pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
+fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
     now.duration_since(last_request) >= interval
 }
 
@@ -3331,7 +3329,8 @@ mod window_theme_tests {
 #[cfg(test)]
 mod overlay_close_tests {
     use super::overlay_host::{closing_overlay_is_done, CLOSING_DEADLINE};
-    use super::{OverlayWindow, PerWindow};
+    use super::overlay_host::OverlayWindow;
+    use super::PerWindow;
     use crate::runtime::composer::Composer;
     use crate::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
     use crate::theme::ThemeColors;
@@ -3564,7 +3563,7 @@ mod frame_throttle_tests {
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
         let root = composer.layout_root_idx().unwrap();
         assert_eq!(scroll.offset.get(), 0.0);
-        let consumed = super::apply_scroll_delta(
+        let consumed = super::scroll::apply_scroll_delta(
             composer.arena_nodes_mut(),
             root,
             0.0,
