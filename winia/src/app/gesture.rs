@@ -9,6 +9,93 @@ use super::*;
 /// `scene_pos` 是事件位置；tap/drag 系列动作自带 `down_pos`——坐标用动作
 /// 携带的位置（slop 内移动后 up 位置与按下位置不同，用 up 会偏）。
 /// 返回是否消费（有回调执行）。
+/// What the pointer is doing: the press that may become a click, the gesture the press opened, and
+/// the sessions that gesture started.
+///
+/// These were fourteen fields on `PerWindow`, every one of them widened to `pub(crate)` so this
+/// module could read it. They move together — the tracker, the node and slot it belongs to, the
+/// arena it lives in, the axis it locked onto, the scroll ancestor it may hand itself to, and the
+/// taps waiting out a double-tap window. The window keeps the frame; the pointer keeps this.
+pub(crate) struct GestureState {
+    /// 指针按下态（Compose 风格 click 检测）
+    pub(crate) down: Option<PtrDownState>,
+    /// 最近的 PointerKind（Move 事件继承自上一个 Down）
+    pub(crate) last_kind: crate::input::PointerKind,
+    /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
+    /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
+    /// 需记录指针位置；PointerLeft 时由调用方清空）
+    pub(crate) last_pos: Option<(f32, f32)>,
+    /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
+    pub(crate) down_slot: Option<u64>,
+    /// 手势状态机（单活动手势——down 创建，up/cancel 销毁）
+    pub(crate) tracker: Option<crate::input::gesture::GestureTracker>,
+    /// 手势回调路由：手势节点 id
+    pub(crate) node: Option<u64>,
+    /// 双击上下文（上次 tap 的节点/时刻/位置——跨手势传递；
+    /// 绑定节点——不同节点的手势不共享双击计数）
+    pub(crate) tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
+    /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
+    pub(crate) slot: Option<u64>,
+    /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
+    /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
+    /// while a gesture — or a deferred tap — is still in flight.
+    pub(crate) arena: Option<u64>,
+    /// Dominant axis the current gesture locked onto: decided once, on the first move that is
+    /// decisive, and kept for the rest of the gesture (see `gesture_move`). `None` while undecided.
+    pub(crate) axis: Option<crate::input::gesture::ScrollAxis>,
+    /// Scroll ancestor recorded for the current gesture when the press landed on an inner drag
+    /// component (a swipeable row inside a list): if the finger turns out to move along the
+    /// scroll's axis, the gesture is handed to that node and the component's drag is cancelled.
+    /// `None` for a press with no scroll on its hit path.
+    pub(crate) scroll_slot: Option<u64>,
+    /// The arena's screen origin, FROZEN when the gesture started. The gesture measures displacement
+    /// against it, so an overlay that MOVES under the finger must not add its own motion: the expanded
+    /// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS` and is pressable while it moves, and reading the
+    /// live origin turned a stationary finger into a slop-exceeding drag that cancelled the tap
+    /// (`a_tap_survives_its_own_popup_moving`).
+    pub(crate) arena_origin: (f32, f32),
+    /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
+    pub(crate) drag_scroll: Option<DragScroll>,
+    /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
+    /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
+    /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
+    pub(crate) pending_taps: Vec<crate::input::gesture::PendingTap>,
+}
+
+impl Default for GestureState {
+    fn default() -> Self {
+        Self {
+            down: None,
+            last_kind: crate::input::PointerKind::Mouse {
+                button: crate::input::PointerButton::Primary,
+            },
+            last_pos: None,
+            down_slot: None,
+            tracker: None,
+            node: None,
+            tap_ctx: None,
+            slot: None,
+            arena: None,
+            axis: None,
+            scroll_slot: None,
+            arena_origin: (0.0, 0.0),
+            drag_scroll: None,
+            pending_taps: Vec::new(),
+        }
+    }
+}
+
+/// Compose 风格的 click 检测中间状态
+pub(crate) struct PtrDownState {
+    pub(crate) node_id: u64,
+    pub(crate) position: (f32, f32),
+    pub(crate) time: std::time::Instant,
+    /// 文本选区的起始字符位置（Down 时记录）
+    pub(crate) selection_anchor: Option<usize>,
+    /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
+    pub(crate) anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
+}
+
 pub(crate) fn fire_gesture_action(
     nodes: &[crate::layout::node::LayoutNode],
     root: usize,
@@ -124,7 +211,7 @@ pub(crate) fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Optio
 /// `clickable` rows that use `on_click`), but a component that wants a tap to survive its own
 /// overlay's motion would need the arena origin frozen at press time.
 pub(crate) fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
-    match pw.gesture_arena {
+    match pw.input.arena {
         None => Some(scene_pos),
         Some(id) => {
             // The arena must still exist (its composer is where the action lands)...
@@ -132,15 +219,15 @@ pub(crate) fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option
             // ...but the conversion uses the origin frozen at press time, not the live one: see
             // `gesture_arena_origin`.
             Some((
-                scene_pos.0 - pw.gesture_arena_origin.0,
-                scene_pos.1 - pw.gesture_arena_origin.1,
+                scene_pos.0 - pw.input.arena_origin.0,
+                scene_pos.1 - pw.input.arena_origin.1,
             ))
         }
     }
 }
 
 /// Fire a gesture action at `slot` inside `arena` — the arena the gesture target belongs to, passed
-/// explicitly because the callers clear `pw.gesture_arena` (the gesture is over) before dispatching
+/// explicitly because the callers clear `pw.input.arena` (the gesture is over) before dispatching
 /// its last action. The main tree and each overlay have their own composer, so an action is routed
 /// together with the arena it was produced for — the same split `press_gesture_target` follows on
 /// the way in. `None` means the MAIN TREE; an arena that no longer resolves (the popup is gone) is
@@ -199,7 +286,7 @@ pub(crate) fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64)
 pub(crate) fn process_pending_taps_on_down(pw: &mut PerWindow, node_id: u64) {
     let now = std::time::Instant::now();
     let mut kept = Vec::new();
-    for t in std::mem::take(&mut pw.pending_taps) {
+    for t in std::mem::take(&mut pw.input.pending_taps) {
         use crate::input::gesture::PendingTapAction as A;
         match crate::input::gesture::pending_tap_on_down(&t, now, node_id) {
             A::Fire => pw.fire_pending_tap(t),
@@ -207,7 +294,7 @@ pub(crate) fn process_pending_taps_on_down(pw: &mut PerWindow, node_id: u64) {
             A::Keep => kept.push(t),
         }
     }
-    pw.pending_taps = kept;
+    pw.input.pending_taps = kept;
 }
 
 /// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
@@ -227,16 +314,16 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     process_pending_taps_on_down(pw, node_id);
 
     // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
-    let ctx = pw.gesture_tap_ctx.take()
+    let ctx = pw.input.tap_ctx.take()
         .filter(|(n, _, _)| *n == node_id)
         .map(|(_, t, p)| (t, p));
-    pw.gesture = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
-    pw.gesture_node = Some(node_id);
-    pw.gesture_slot = Some(slot);
-    pw.gesture_arena = None; // the main tree
-    pw.gesture_axis = None;
-    pw.gesture_scroll_slot = None;
-    pw.gesture_arena_origin = (0.0, 0.0);
+    pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
+    pw.input.node = Some(node_id);
+    pw.input.slot = Some(slot);
+    pw.input.arena = None; // the main tree
+    pw.input.axis = None;
+    pw.input.scroll_slot = None;
+    pw.input.arena_origin = (0.0, 0.0);
     // on_press 立即触发（本地坐标）
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -252,16 +339,17 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 /// The decision is taken ONCE and holds for the rest of the gesture: handing over mid-gesture
 /// would mean replaying the deltas the component already consumed.
 pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.gesture_slot else { return false; };
+    let Some(slot) = pw.input.slot else { return false; };
     let Some(local) = gesture_arena_pos(pw, scene_pos) else {
         end_gesture(pw); // the target's overlay vanished mid-drag
         return false;
     };
     let mut axis_undecided = false;
-    if pw.gesture_axis.is_none() {
+    if pw.input.axis.is_none() {
         if let Some((scroll_slot, down)) = pw
-            .gesture_scroll_slot
-            .zip(pw.gesture.as_ref().map(|t| t.down_position()))
+            .input
+            .scroll_slot
+            .zip(pw.input.tracker.as_ref().map(|t| t.down_position()))
         {
             // The scroll is armed whenever the press passed over an inner drag component — the
             // target of the press may still be a plain tap node inside it (a `TextField` inside a
@@ -274,54 +362,54 @@ pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
                 // cancelling the tap family exactly as it did before the arbitration existed.
                 None => axis_undecided = true,
                 Some(axis) => {
-                    pw.gesture_axis = Some(axis);
+                    pw.input.axis = Some(axis);
                     if axis == ScrollAxis::Vertical {
                         // The scroll ancestor owns it: cancel the component's drag, so no
                         // `on_drag_*` callback fires for a gesture it did not get, and open a
                         // scroll session on the ancestor node — the rest of the gesture (and its
                         // fling) is the ordinary drag-scroll path from here on. A target with no drag
                         // of its own has nothing to cancel; the call is then a no-op.
-                        if let Some(t) = pw.gesture.as_mut() {
+                        if let Some(t) = pw.input.tracker.as_mut() {
                             t.cancel_drag_for_arbitration();
                         }
-                        pw.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
+                        pw.input.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
                     }
                 }
             }
         }
     }
-    if pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Vertical) {
+    if pw.input.axis == Some(crate::input::gesture::ScrollAxis::Vertical) {
         return false; // the scroll session owns the rest of the gesture
     }
     let allow_drag = !axis_undecided
-        && (pw.gesture_scroll_slot.is_none()
-            || pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
+        && (pw.input.scroll_slot.is_none()
+            || pw.input.axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
     let action = {
-        let Some(t) = pw.gesture.as_mut() else { return false; };
+        let Some(t) = pw.input.tracker.as_mut() else { return false; };
         t.on_move(local, allow_drag)
     };
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
-    let arena = pw.gesture_arena;
+    let arena = pw.input.arena;
     fire_in_gesture_arena(pw, arena, slot, action)
 }
 
 /// Drop the gesture state (tracker + target) without firing anything.
 pub(crate) fn end_gesture(pw: &mut PerWindow) {
-    pw.gesture = None;
-    pw.gesture_node = None;
-    pw.gesture_slot = None;
-    pw.gesture_arena = None;
-    pw.gesture_axis = None;
-    pw.gesture_scroll_slot = None;
-    pw.gesture_arena_origin = (0.0, 0.0);
+    pw.input.tracker = None;
+    pw.input.node = None;
+    pw.input.slot = None;
+    pw.input.arena = None;
+    pw.input.axis = None;
+    pw.input.scroll_slot = None;
+    pw.input.arena_origin = (0.0, 0.0);
 }
 
 /// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
 /// 内容继续向上 = offset 增大）。速度不足 → 仅结束滚动中标记。
 pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
-    let Some(ds) = pw.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
+    let Some(ds) = pw.input.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
     let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
     let target: Option<usize> = (|| {
         let nodes = pw.composer.arena_nodes();
@@ -343,22 +431,22 @@ pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
 
 /// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
 pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.gesture_slot else { return false; };
-    let Some(gid) = pw.gesture_node else { return false; };
+    let Some(slot) = pw.input.slot else { return false; };
+    let Some(gid) = pw.input.node else { return false; };
     // The tracker recorded positions in the target's arena, so its action carries arena-local
     // coordinates already; the arena itself decides where the action is dispatched — captured here
     // because `end_gesture` clears it before the dispatch below.
-    let arena = pw.gesture_arena;
+    let arena = pw.input.arena;
     if arena.is_some() && gesture_arena_overlay(pw, arena).is_none() {
         end_gesture(pw); // the target's overlay vanished mid-gesture
         return false;
     }
     let action = {
-        let Some(mut t) = pw.gesture.take() else { return false; };
+        let Some(mut t) = pw.input.tracker.take() else { return false; };
         // ⚠ 必须先 on_up（Tap 分支记录 last_tap）再取 tap_context——
         // 顺序颠倒则双击上下文恒 None（ctx 在 up 判定前读取）
         let action = t.on_up();
-        pw.gesture_tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
+        pw.input.tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
         action
     };
     end_gesture(pw);
@@ -370,14 +458,14 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     // 已在第二次 down 时取消）；超时/按下其他节点 → 补发 Tap（fire_pending_tap）
     if let crate::input::gesture::GestureAction::Tap(pos) = action {
         if slot_has_double_tap(pw, arena, slot) {
-            pw.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
+            pw.input.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
             return false;
         }
         return fire_in_gesture_arena(pw, arena, slot, action);
     }
     if matches!(action, crate::input::gesture::GestureAction::DoubleTap(_)) {
         // 双击命中：第一次 tap 的 pending 应已在第二次 down 时取消——防御性清理同节点残留
-        pw.pending_taps.retain(|t| t.node_id != gid);
+        pw.input.pending_taps.retain(|t| t.node_id != gid);
     }
     fire_in_gesture_arena(pw, arena, slot, action)
 }

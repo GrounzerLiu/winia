@@ -823,8 +823,8 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 // The axis arbitration in `gesture_move` is main-tree only: an overlay drag runs
                 // through `overlay_drag` (its own session, which fires the callbacks itself), not
                 // through the tracker, so there is nothing to hand over here.
-                pw.gesture_axis = None;
-                pw.gesture_scroll_slot = None;
+                pw.input.axis = None;
+                pw.input.scroll_slot = None;
                 if inner_comp_drag {
                     if let Some(didx) = drag_idx {
                         pw.overlay.drag = Some((i, nodes[didx].slot_key, scene_pos));
@@ -891,7 +891,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
         //
         // The tracker goes with it, so the rest of the tap family (`on_tap` / `on_double_tap` /
         // `on_long_press`) fires in a popup too; `gesture_move` / `gesture_up` route their actions
-        // back into this arena (`pw.gesture_arena`). A target WITH drag gestures is tracked as well:
+        // back into this arena (`pw.input.arena`). A target WITH drag gestures is tracked as well:
         // the overlay drag session for that same node is stood down below, because both dispatchers
         // would otherwise fire its `on_drag_*` callbacks for one gesture.
         {
@@ -931,16 +931,16 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 // Same bookkeeping as the main tree for both kinds of target: a deferred tap on this
                 // node is due, or this press is its double-tap candidate.
                 process_pending_taps_on_down(pw, nid);
-                let ctx = pw.gesture_tap_ctx.take()
+                let ctx = pw.input.tap_ctx.take()
                     .filter(|(n, _, _)| *n == nid)
                     .map(|(_, t, p)| (t, p));
-                pw.gesture = Some(crate::input::gesture::GestureTracker::new(nid, local, has_drag, ctx));
-                pw.gesture_node = Some(nid);
-                pw.gesture_slot = Some(slot);
-                pw.gesture_arena = Some(ov_id);
-                pw.gesture_axis = None;
-                pw.gesture_scroll_slot = None;
-                pw.gesture_arena_origin = pw
+                pw.input.tracker = Some(crate::input::gesture::GestureTracker::new(nid, local, has_drag, ctx));
+                pw.input.node = Some(nid);
+                pw.input.slot = Some(slot);
+                pw.input.arena = Some(ov_id);
+                pw.input.axis = None;
+                pw.input.scroll_slot = None;
+                pw.input.arena_origin = pw
                     .overlay
                     .layers
                     .iter()

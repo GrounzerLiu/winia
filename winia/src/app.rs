@@ -4,7 +4,7 @@ pub mod gesture;
 pub mod overlay_host;
 
 use gesture::{
-    drag_scroll_up, end_gesture, fire_gesture_action, fire_in_gesture_arena, gesture_down,
+    GestureState, PtrDownState,    drag_scroll_up, end_gesture, fire_gesture_action, fire_in_gesture_arena, gesture_down,
     gesture_move, gesture_up, inner_component_drag, path_drag_idx, path_scroll_idx,
     press_gesture_target, process_pending_taps_on_down, slot_has_double_tap,
 };
@@ -113,49 +113,6 @@ pub(crate) struct PerWindow {
     pub(crate) last_render_time: std::time::Instant,
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
-    /// 指针按下态（Compose 风格 click 检测）
-    pointer_down_state: Option<PtrDownState>,
-    /// 最近的 PointerKind（Move 事件继承自上一个 Down）
-    last_pointer_kind: crate::input::PointerKind,
-    /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
-    /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
-    /// 需记录指针位置；PointerLeft 时由调用方清空）
-    last_pointer_pos: Option<(f32, f32)>,
-    /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
-    pointer_down_slot: Option<u64>,
-    /// 手势状态机（单活动手势——down 创建，up/cancel 销毁）
-    gesture: Option<crate::input::gesture::GestureTracker>,
-    /// 手势回调路由：手势节点 id
-    gesture_node: Option<u64>,
-    /// 双击上下文（上次 tap 的节点/时刻/位置——跨手势传递；
-    /// 绑定节点——不同节点的手势不共享双击计数）
-    gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
-    /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
-    gesture_slot: Option<u64>,
-    /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
-    /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
-    /// while a gesture — or a deferred tap — is still in flight.
-    gesture_arena: Option<u64>,
-    /// Dominant axis the current gesture locked onto: decided once, on the first move that is
-    /// decisive, and kept for the rest of the gesture (see `gesture_move`). `None` while undecided.
-    gesture_axis: Option<crate::input::gesture::ScrollAxis>,
-    /// Scroll ancestor recorded for the current gesture when the press landed on an inner drag
-    /// component (a swipeable row inside a list): if the finger turns out to move along the
-    /// scroll's axis, the gesture is handed to that node and the component's drag is cancelled.
-    /// `None` for a press with no scroll on its hit path.
-    gesture_scroll_slot: Option<u64>,
-    /// The arena's screen origin, FROZEN when the gesture started. The gesture measures displacement
-    /// against it, so an overlay that MOVES under the finger must not add its own motion: the expanded
-    /// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS` and is pressable while it moves, and reading the
-    /// live origin turned a stationary finger into a slop-exceeding drag that cancelled the tap
-    /// (`a_tap_survives_its_own_popup_moving`).
-    gesture_arena_origin: (f32, f32),
-    /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
-    drag_scroll: Option<DragScroll>,
-    /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
-    /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
-    /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
-    pending_taps: Vec<crate::input::gesture::PendingTap>,
     /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
     last_refresh_check: std::time::Instant,
     /// 当前窗口修饰键状态（ModifiersChanged 按 WindowId 维护）
@@ -173,6 +130,9 @@ pub(crate) struct PerWindow {
     /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
     /// every frame) — see `ui::theme::WindowTheme`.
     theme_cell: crate::theme::WindowTheme,
+    /// The pointer and gesture state: what is down, what a gesture locked onto, and the
+    /// sessions it opened (see `GestureState` — fourteen fields that used to be here).
+    pub(crate) input: GestureState,
     /// The overlay host: the layers, and the interaction state that only makes sense against
     /// them (see `OverlayHost` — the group that used to be ten fields here).
     pub(crate) overlay: OverlayHost,
@@ -181,16 +141,6 @@ pub(crate) struct PerWindow {
 }
 
 
-/// Compose 风格的 click 检测中间状态
-struct PtrDownState {
-    node_id: u64,
-    position: (f32, f32),
-    time: Instant,
-    /// 文本选区的起始字符位置（Down 时记录）
-    selection_anchor: Option<usize>,
-    /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
-    anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
-}
 
 impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
@@ -198,7 +148,7 @@ impl PerWindow {
         // is that palette (nothing to follow), and its type scale is the default.
         let theme_cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
         let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlay: OverlayHost::default(), pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, theme_cell }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -832,7 +782,7 @@ impl ApplicationHandler for AppState {
         let mut next_tap_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             let mut kept = Vec::new();
-            for t in std::mem::take(&mut pw.pending_taps) {
+            for t in std::mem::take(&mut pw.input.pending_taps) {
                 if t.deadline <= now {
                     pw.fire_pending_tap(t);
                 } else {
@@ -844,7 +794,7 @@ impl ApplicationHandler for AppState {
                     });
                 }
             }
-            pw.pending_taps = kept;
+            pw.input.pending_taps = kept;
         }
         if let Some(d) = next_tap_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
@@ -857,9 +807,9 @@ impl ApplicationHandler for AppState {
         // window, so the deadline only has to be remembered until it passes.
         let mut next_long_press: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
-            let fired = pw.gesture.as_mut().and_then(|tracker| tracker.poll_long_press(now));
+            let fired = pw.input.tracker.as_mut().and_then(|tracker| tracker.poll_long_press(now));
             if let Some(action) = fired {
-                let (slot, arena) = (pw.gesture_slot, pw.gesture_arena);
+                let (slot, arena) = (pw.input.slot, pw.input.arena);
                 if let Some(slot) = slot {
                     let fired_callback = fire_in_gesture_arena(pw, arena, slot, action);
                     if fired_callback {
@@ -867,7 +817,7 @@ impl ApplicationHandler for AppState {
                     }
                 }
             }
-            if let Some(deadline) = pw.gesture.as_ref().and_then(|tracker| tracker.long_press_deadline()) {
+            if let Some(deadline) = pw.input.tracker.as_ref().and_then(|tracker| tracker.long_press_deadline()) {
                 next_long_press = Some(match next_long_press {
                     Some(existing) => existing.min(deadline),
                     None => deadline,
@@ -1010,7 +960,7 @@ impl ApplicationHandler for AppState {
                     // and without it a scrollable menu could not be scrolled at all: the main-tree search
                     // below cannot see into another arena (measured: the last item stayed at y=920 in a
                     // 520px window no matter how much the wheel moved).
-                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                    let overlay_target = pw.input.last_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
                         let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
@@ -1047,7 +997,7 @@ impl ApplicationHandler for AppState {
                         // 用户实测 bug）。`None`（启动后无移动/已离开窗口）也
                         // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
                         // 见 consume_debug_events）。
-                        let target = pw.last_pointer_pos.and_then(|(px, py)| {
+                        let target = pw.input.last_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
                             path.iter().rev().find(|&&idx| {
@@ -1135,7 +1085,7 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 // Down/Up 也刷新指针位置（点击后不移动直接滚轮时，
                 // last_pointer_pos 否则还是旧值——命中目标错位）
-                pw.last_pointer_pos = Some(scene_pos);
+                pw.input.last_pos = Some(scene_pos);
                 let event_type = if state.is_pressed() {
                     crate::input::PointerEventType::Down
                 } else {
@@ -1190,13 +1140,13 @@ impl ApplicationHandler for AppState {
                         is_shift_pressed: pw.modifiers.shift_key(),
                         is_meta_pressed: pw.modifiers.meta_key(),
                     };
-                    pw.last_pointer_kind = ptr_ev.kind.clone();
-                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+                    pw.input.last_kind = ptr_ev.kind.clone();
+                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
                     // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
-                    if let Some(slot) = pw.pointer_down_slot {
+                    if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
@@ -1208,9 +1158,9 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
-                    pw.pointer_down_slot = None;
+                    pw.input.down_slot = None;
                     // 防御：take 可能未执行（click 检测分支外的边界）——强制清 state
-                    pw.pointer_down_state = None;
+                    pw.input.down = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -1228,14 +1178,14 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 // 记录最后指针位置（MouseWheel 命中滚动目标用——§3.7；
                 // winit 0.31 MouseWheel 事件不带 cursor position）
-                pw.last_pointer_pos = Some(scene_pos);
+                pw.input.last_pos = Some(scene_pos);
                 // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
                 // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
                 let modifiers = pw.modifiers;
-                let consumed = handle_pointer_move(pw, scene_pos, pw.last_pointer_kind.clone(), &modifiers);
+                let consumed = handle_pointer_move(pw, scene_pos, pw.input.last_kind.clone(), &modifiers);
                 // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
                 // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
-                if consumed || pw.pointer_down_state.is_some() {
+                if consumed || pw.input.down.is_some() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
@@ -1247,7 +1197,7 @@ impl ApplicationHandler for AppState {
                 for old in olds {
                     exit_hover_at(pw, old);
                 }
-                pw.last_pointer_pos = None;
+                pw.input.last_pos = None;
             }
             WindowEvent::ModifiersChanged(m) => {
                 pw.modifiers = m.state();
@@ -1825,7 +1775,7 @@ impl AppState {
                     // ⚠ Click 是合成单事件（非 down/up 分离）——overlay 命中后
                     // 必须立即执行点击（真实路径 down 记录 + up 触发；这里
                     // down 记录后直接 exec，否则 overlay 按钮永远点不动）
-                    let click_kind = pw.last_pointer_kind.clone();
+                    let click_kind = pw.input.last_kind.clone();
                     if overlay_down(pw, (x, y), click_kind) {
                         // 命中 overlay：立即执行点击（合成单事件——down 记录 +
                         // 立即 up 触发；真实路径由 PointerUp 事件触发）
@@ -1995,16 +1945,16 @@ impl AppState {
                 debug::DebugEvent::PointerDown { x, y } => {
                     // 模拟指针按下：与真实 PointerButton Down 共用核心
                     // （with_focus=false——调试路径不做光标/聚焦）
-                    pw.last_pointer_pos = Some((x, y));
+                    pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers, false);
+                    handle_pointer_down(pw, (x, y), pw.input.last_kind.clone(), &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
                     // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
-                    pw.last_pointer_pos = Some((x, y));
+                    pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers);
+                    handle_pointer_move(pw, (x, y), pw.input.last_kind.clone(), &modifiers);
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 debug::DebugEvent::PointerUp { x, y } => {
@@ -2032,7 +1982,7 @@ impl AppState {
                     // 释放按下交互（与真实路径一致）
                     release_pressed_interaction(pw);
                     // 通知选区变化 + 清理
-                    if let Some(slot) = pw.pointer_down_slot {
+                    if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
@@ -2044,8 +1994,8 @@ impl AppState {
                             }
                         }
                     }
-                    pw.pointer_down_slot = None;
-                    pw.pointer_down_state = None;
+                    pw.input.down_slot = None;
+                    pw.input.down = None;
                     handled = true;
                 }
                 debug::DebugEvent::Scroll { dx, dy } => {
@@ -2053,7 +2003,7 @@ impl AppState {
                     // pointer first (a test moves the pointer with `m x y`), then the main tree's blind
                     // search — which is what makes a scrollable menu testable at all, since the blind
                     // search only ever sees the main tree's arena.
-                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                    let overlay_target = pw.input.last_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
                         let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
@@ -2477,13 +2427,13 @@ fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
 fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-    let Some(down) = pw.pointer_down_state.take() else {
+    let Some(down) = pw.input.down.take() else {
         return false;
     };
     // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
     // （如聚焦触发），arena 节点重建 → node_id 变化 → 旧 id 匹配必然失败；
     // slot_key 按组合位置稳定，不受重组影响）
-    let down_slot = pw.pointer_down_slot;
+    let down_slot = pw.input.down_slot;
     let dx = scene_pos.0 - down.position.0;
     let dy = scene_pos.1 - down.position.1;
     let dist = (dx * dx + dy * dy).sqrt();
@@ -2761,14 +2711,14 @@ fn handle_pointer_down(
                 .and_then(|reg| reg.segment_info(nodes[ai].slot_key).map(|(off, _)| off + a))
         })
     });
-    pw.pointer_down_state = Some(PtrDownState {
+    pw.input.down = Some(PtrDownState {
         node_id: nodes[innermost].id,
         position: scene_pos,
         time: std::time::Instant::now(),
         selection_anchor: anchor_global,
         anchor_registrar: own_reg, // None（不可选节点）→ 无 anchor 容器
     });
-    pw.pointer_down_slot = Some(nodes[innermost].slot_key);
+    pw.input.down_slot = Some(nodes[innermost].slot_key);
 
     if with_focus {
         // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）。
@@ -2793,7 +2743,7 @@ fn handle_pointer_down(
 
     // 拖拽滚动目标：按下点向上找最近滚动容器。文本选择/组件 drag 手势优先
     // （拖选文本/组件拖拽不滚动——对齐 Compose 最内层 pointerInput 消费）
-    pw.drag_scroll = (|| {
+    pw.input.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -2811,7 +2761,7 @@ fn handle_pointer_down(
             }
         }
         let Some(&innermost) = path.last() else { return None };
-        let selecting = pw.pointer_down_state.as_ref()
+        let selecting = pw.input.down.as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);
         // 内层手势优先，但**滚动优先于外层面板拖拽**（对齐 Compose：BottomSheet 面板
@@ -2826,7 +2776,7 @@ fn handle_pointer_down(
         // fallback owner here. `None` when the component stands alone (it owns every direction), and
         // `None` while a text selection is in progress: the selection keeps the pointer (it is
         // extended from every move below), so the list must not start scrolling under the finger.
-        pw.gesture_scroll_slot = if child_drag && !selecting {
+        pw.input.scroll_slot = if child_drag && !selecting {
             scroll_idx.map(|i| nodes[i].slot_key)
         } else {
             None
@@ -2850,8 +2800,8 @@ fn handle_pointer_down(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.last_pointer_kind = ptr_ev.kind.clone();
-    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    pw.input.last_kind = ptr_ev.kind.clone();
+    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     true
 }
 
@@ -2868,7 +2818,7 @@ fn handle_pointer_move(
     // 手势驱动（drag capture：tracker 存在即路由——指针移出组件仍接收）
     // ⚠ 必须在 nodes 借用之前（gesture_move 内部自取 nodes/pw mut）
     let mut handled = false;
-    if pw.gesture_node.is_some() && gesture_move(pw, scene_pos) {
+    if pw.input.node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
     }
     // overlay 点击 slop 取消：按下 overlay 后拖出 18px → 取消 click（对齐
@@ -2994,16 +2944,16 @@ fn handle_pointer_move(
     }
     // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本
     // 选择之前——但按下时已排除组件 drag 手势与文本选择，此处无冲突
-    if pw.drag_scroll.is_some() {
+    if pw.input.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
             let nodes = pw.composer.arena_nodes();
             let Some(r) = pw.composer.layout_root_idx() else { return None };
-            let slot = pw.drag_scroll.as_ref().unwrap().slot;
+            let slot = pw.input.drag_scroll.as_ref().unwrap().slot;
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
         })();
         let (dx, dy) = {
-            let ds = pw.drag_scroll.as_mut().unwrap();
+            let ds = pw.input.drag_scroll.as_mut().unwrap();
             let dx = scene_pos.0 - ds.last_x;
             let dy = scene_pos.1 - ds.last_y;
             ds.last_x = scene_pos.0;
@@ -3022,7 +2972,7 @@ fn handle_pointer_move(
                     idx,
                     nodes[idx].modifier.vertical_scroll_state().is_some(),
                     nodes[idx].modifier.horizontal_scroll_state().is_some(),
-                    pw.drag_scroll.as_ref().map(|d| d.slot));
+                    pw.input.drag_scroll.as_ref().map(|d| d.slot));
             }
             // 轴感知：垂直容器吃 dy，水平容器吃 dx（apply_scroll_delta 按节点轴取）
             let (ax, ay) = {
@@ -3059,8 +3009,8 @@ fn handle_pointer_move(
     // 悬停更新（自身 hit test——不依赖下方 nodes 借用）
     update_hover(pw, scene_pos);
     // 越界 slop：按下交互取消（Compose：press 超过 touch slop → Cancel）
-    if pw.pointer_down_state.is_some() {
-        let down = pw.pointer_down_state.as_ref().unwrap();
+    if pw.input.down.is_some() {
+        let down = pw.input.down.as_ref().unwrap();
         let dx = scene_pos.0 - down.position.0;
         let dy = scene_pos.1 - down.position.1;
         if (dx * dx + dy * dy).sqrt() > 18.0 {
@@ -3075,9 +3025,9 @@ fn handle_pointer_move(
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
     // 拖拽选中文本
-    if pw.pointer_down_state.is_some() {
+    if pw.input.down.is_some() {
         if let Some(&innermost) = path.last() {
-            let down = pw.pointer_down_state.as_ref().unwrap();
+            let down = pw.input.down.as_ref().unwrap();
             let dx = scene_pos.0 - down.position.0;
             let dy = scene_pos.1 - down.position.1;
             const CLICK_SLOP: f32 = 18.0;
@@ -3105,7 +3055,7 @@ fn handle_pointer_move(
                         let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                         let tl = crate::text::TextLayout::new(para, 0);
                         {
-                            let down = pw.pointer_down_state.as_ref().unwrap();
+                            let down = pw.input.down.as_ref().unwrap();
                             // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
                             // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
@@ -3150,8 +3100,8 @@ fn handle_pointer_move(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.last_pointer_kind = ptr_ev.kind.clone();
-    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    pw.input.last_kind = ptr_ev.kind.clone();
+    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     handled || consumed
 }
 
