@@ -86,7 +86,7 @@ fn resolve_base() -> Style {
     let theme = WiniaTheme::colors();
     let base = LOCAL_TEXT_STYLE.current();
     Style {
-        fs: base.font_size.map(|u| u.to_logical_px()),
+        fs: base.font_size.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
         color: base.color.or(Some(theme.on_surface)),
         fw: base.font_weight,
         slant: base.font_style,
@@ -136,7 +136,7 @@ impl<'a> RichTextScope<'a> {
 
     fn apply_textstyle(&mut self, s: &TextStyle) {
         s.color.map(|v| self.style.color = Some(v));
-        s.font_size.map(|v| self.style.fs = Some(v.to_logical_px()));
+        s.font_size.map(|v| self.style.fs = Some(v.to_logical_px(crate::runtime::density::current_density())));
         s.font_weight.map(|v| self.style.fw = Some(v));
         s.font_style.map(|v| self.style.slant = Some(v));
         if s.underline { self.style.ul = true; }
@@ -189,7 +189,7 @@ impl<'a> RichTextScope<'a> {
 
     pub fn font_size(&mut self, v: impl Into<crate::unit::TextUnit>, f: impl FnOnce(&mut Self)) {
         let saved = self.style.clone();
-        self.style.fs = Some(v.into().to_logical_px());
+        self.style.fs = Some(v.into().to_logical_px(crate::runtime::density::current_density()));
         f(self);
         self.style = saved;
     }
@@ -316,7 +316,7 @@ pub struct StyleModifier(Style);
 impl StyleModifier {
     pub fn bold(mut self) -> Self { self.0.fw = Some(FontWeight::BOLD); self }
     pub fn italic(mut self) -> Self { self.0.slant = Some(FontSlant::Italic); self }
-    pub fn font_size(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.fs = Some(v.into().to_logical_px()); self }
+    pub fn font_size(mut self, v: impl Into<crate::unit::TextUnit>) -> Self { self.0.fs = Some(v.into().to_logical_px(crate::runtime::density::current_density())); self }
     pub fn color(mut self, v: Color) -> Self { self.0.color = Some(v); self }
     pub fn underline(mut self) -> Self { self.0.ul = true; self }
     pub fn overline(mut self) -> Self { self.0.ol = true; self }

@@ -1695,7 +1695,8 @@ impl Modifier {
     }
 
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => *v,
@@ -1748,7 +1749,8 @@ impl Modifier {
     /// 解析 Size 元素的尺寸（静态/动态单轴独立解析）——返回 (width, height) 解析值，
     /// None 表示该轴不约束（Auto/Fill）。
     pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         // 合并所有 Size 元素（链序：后 push 的外层胜出——非 None 覆盖）。
         // ⚠ 不能只返回第一个：`width(300).height(dyn)` 是两个 Size 元素，
         // 只取第一个会丢 height（min_lines 动态高度失效的根因）
@@ -1781,7 +1783,8 @@ impl Modifier {
     /// 该轴无最小约束。动态值在布局期求值（State::get 注册 layout_dep——
     /// 动画可驱动 min 尺寸，只重测不重组）。
     pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1815,7 +1818,8 @@ impl Modifier {
     /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
     /// and collapse that away, so the measure pipeline replays the order with this instead.
     pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1845,7 +1849,8 @@ impl Modifier {
     /// axis with no cap. Dynamic values are evaluated during layout (a `State::get` registers
     /// a layout dependency, so an animation can drive the cap without recomposing).
     pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -1983,7 +1988,8 @@ impl Modifier {
     /// pipeline together with `Modifier::width/height(IntrinsicSize)` — see
     /// [`Modifier::intrinsic_width_request`].
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -2237,7 +2243,7 @@ impl Modifier {
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
                 SizeValue::Intrinsic(_) => 0.0,
@@ -2256,7 +2262,7 @@ impl Modifier {
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
                 SizeValue::Intrinsic(_) => 0.0,

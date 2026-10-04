@@ -127,7 +127,7 @@ impl Dimension {
         match self {
             Dimension::Fixed(v) => *v,
             Dimension::Dp(d) => d.value(),
-            Dimension::Px(p) => p.to_logical(crate::unit::current_density()),
+            Dimension::Px(p) => p.to_logical(crate::runtime::density::current_density()),
             Dimension::Fill | Dimension::Auto => 0.0,
         }
     }
@@ -188,4 +188,22 @@ impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
 
 impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
     fn from(f: F) -> Self { SizeValue::Dynamic(Arc::new(f)) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::density::with_density;
+
+    /// Dp → 逻辑像素 = dp 值；Px → 逻辑像素 = px/density. The `Px` arm reads the ambient density,
+    /// so this is the module that supplies it — the assertion used to sit in `unit.rs`, which must
+    /// not name the runtime layer for it.
+    #[test]
+    fn dimension_to_logical_px_resolves_against_the_ambient_density() {
+        with_density(crate::unit::Density::from_density(2.0), || {
+            assert_eq!(Dimension::Dp(crate::unit::Dp(10.0)).to_logical_px(), 10.0);
+            assert_eq!(Dimension::Px(crate::unit::Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0
+            assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
+        });
+    }
 }

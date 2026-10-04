@@ -1231,7 +1231,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 step: vh,
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
-                min_fling_velocity: 400.0 * crate::unit::current_density().density,
+                min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,
             })
         } else {
             None

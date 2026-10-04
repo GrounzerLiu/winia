@@ -563,7 +563,7 @@ mod tests {
         // At 1.5x density a 640dp sheet inside an 800-wide window is 640 logical px with 80px
         // of margin. The bug this pins asked for `Dp::to_px` (960 PHYSICAL) and the `min`
         // clipped it to the whole window, i.e. no margin and no maximum at all.
-        crate::unit::with_density(Density::from_density(1.5), || {
+        crate::runtime::density::with_density(Density::from_density(1.5), || {
             assert_eq!(
                 sheet_panel_geometry(Some(Dp(640.0)), 800.0),
                 (640.0, 80.0),

@@ -335,11 +335,16 @@ pub enum TextUnit {
 }
 
 impl TextUnit {
-    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）
-    pub fn to_logical_px(&self) -> f32 {
+    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）。
+    ///
+    /// The density is a parameter and not an ambient lookup: asking for it would make this module —
+    /// the lowest one — name the composition runtime. Compose does the same
+    /// (`TextUnit.toPx(density)`), and the caller that has a `Density` in hand is the one that
+    /// knows which subtree it is resolving for.
+    pub fn to_logical_px(&self, density: Density) -> f32 {
         match self {
             TextUnit::Sp(s) => s.value(),
-            TextUnit::Px(p) => p.to_logical(current_density()),
+            TextUnit::Px(p) => p.to_logical(density),
         }
     }
 }
@@ -352,26 +357,6 @@ impl From<Sp> for TextUnit {
 }
 impl From<Px> for TextUnit {
     fn from(p: Px) -> Self { TextUnit::Px(p) }
-}
-
-// ═══════════════════════════════════════════════════════════
-// LOCAL_DENSITY — CompositionLocal（对标 Compose LocalDensity）
-// ═══════════════════════════════════════════════════════════
-
-use crate::runtime::composition_local::CompositionLocal;
-
-static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> = LazyLock::new(|| {
-    CompositionLocal::new(|| Density::standard())
-});
-
-/// 读取当前子树 Density（默认 standard=1.0）
-pub fn current_density() -> Density {
-    LOCAL_DENSITY.current()
-}
-
-/// 在子树中提供 Density
-pub fn with_density<R>(density: Density, content: impl FnOnce() -> R) -> R {
-    LOCAL_DENSITY.provides(density, content)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -472,12 +457,8 @@ mod tests {
         let p: Dimension = 20.px().into();
         assert_eq!(p, Dimension::Px(Px(20.0)));
 
-        // Dp → 逻辑像素 = dp 值；Px → 逻辑像素 = px/density
-        with_density(Density::from_density(2.0), || {
-            assert_eq!(Dimension::Dp(Dp(10.0)).to_logical_px(), 10.0);
-            assert_eq!(Dimension::Px(Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0 = 10 逻辑
-            assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
-        });
+        // `Dimension::to_logical_px` needs the ambient density, so its assertion lives beside it
+        // in `layout/sizing.rs` rather than here.
     }
     /// Guard for the class of bug this module's doc comments describe.
     ///

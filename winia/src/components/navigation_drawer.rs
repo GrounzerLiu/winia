@@ -993,7 +993,7 @@ mod tests {
         // velocity rule. Read at 1.5x density with an UNSCALED logical velocity, so a
         // threshold that converted the dp token to physical px/s (600 here instead of 400)
         // would spring back and fail.
-        crate::unit::with_density(crate::unit::Density::from_density(1.5), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(1.5), || {
             let s = DrawerState::new(DrawerValue::Open);
             anim.track(&s);
             s.update_anchors(360.0, false);
@@ -1010,7 +1010,7 @@ mod tests {
         // instead of flinging the drawer shut. Read at 1.5x density with an unscaled velocity:
         // the earlier version scaled the velocity by the density exactly as the buggy
         // threshold did, so the two cancelled out and the test could not see the bug.
-        crate::unit::with_density(crate::unit::Density::from_density(1.5), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(1.5), || {
             let s = DrawerState::new(DrawerValue::Closed);
             anim.track(&s);
             s.update_anchors(360.0, false);
@@ -1369,7 +1369,7 @@ mod tests {
         let state = DrawerState::new(DrawerValue::Closed);
         let mut c = comp();
         let st = state.clone();
-        crate::unit::with_density(crate::unit::Density::from_density(1.5), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(1.5), || {
             c.compose(move |ctx| {
                 ModalNavigationDrawer::new(|ctx| {
                     crate::components::Text::new("page").build(ctx);

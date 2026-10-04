@@ -80,3 +80,9 @@ pub enum FilterQuality {
 impl Default for FilterQuality {
     fn default() -> Self { Self::Low }
 }
+
+/// This crate's `Color` as skia's — the one place the two meet, so that a module holding a colour
+/// (text layout, say) does not have to reach up into the renderer to convert it.
+pub fn skia_color(c: Color) -> skia_safe::Color {
+    skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
+}

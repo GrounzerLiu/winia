@@ -8,6 +8,7 @@ use crate::layout::LayoutDirection;
 use crate::layout::node::{LayoutNode, PaintDisposition};
 use crate::modifier::ModifierElement;
 use crate::animation::visibility::{ExpandFrom, ExpandFromH, SlideDirection, SlideOffset};
+use crate::graphics::skia_color;
 use crate::graphics::{DecodedIcon, IconSource, IconSpec, decoded_icon};
 use crate::transition::TransitionRole;
 use skia_safe::{BlendMode, Canvas, Color4f, IRect, Paint, RRect, Rect, SamplingOptions};
@@ -580,10 +581,6 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
 /// winia `Color` → Skia color. Public because the `Canvas`/`DrawScope` API
 /// (`crate::components::draw_scope`) draws through it too — one conversion for the whole crate rather than a
 /// second copy inside the public drawing surface.
-pub fn skia_color(c: crate::graphics::Color) -> skia_safe::Color {
-    skia_safe::Color::from_argb(c.a, c.r, c.g, c.b)
-}
-
 /// 映射 winia BlendMode → skia BlendMode（同源 29 值）
 fn to_skia_blend_mode(bm: crate::graphics::BlendMode) -> BlendMode {
     use crate::graphics::BlendMode as BM;

@@ -3447,25 +3447,25 @@ mod tests {
         // build 读 density（模拟 Text font_size Px 组合期转换）存入外部 State
         let seen = State::new(0.0f32);
         let build = |ctx: &mut ComposeCtx| {
-            let d = crate::unit::current_density();
+            let d = crate::runtime::density::current_density();
             seen.set(d.density);
             let key = ctx.next_key();
             ctx.start_leaf(key, Modifier::new());
             ctx.end_node();
         };
         // 帧 1：density 2.0
-        crate::unit::with_density(crate::unit::Density::from_density(2.0), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(2.0), || {
             composer.compose(build);
         });
         assert_eq!(seen.get(), 2.0, "首帧 density 2.0");
         // 模拟 ScaleFactorChanged：request_recomposition + density 变为 1.0
         composer.request_recomposition(0);
-        crate::unit::with_density(crate::unit::Density::from_density(1.0), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(1.0), || {
             assert!(composer.recompose(build), "request_recomposition 应驱动重组");
         });
         assert_eq!(seen.get(), 1.0, "重组后 build 读到新 density 1.0");
         // 无 request 时 recompose 应跳过（needs_recomposition 已消费）
-        crate::unit::with_density(crate::unit::Density::from_density(1.0), || {
+        crate::runtime::density::with_density(crate::unit::Density::from_density(1.0), || {
             assert!(!composer.recompose(build), "无变化时 recompose 应跳过");
         });
     }

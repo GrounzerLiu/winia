@@ -174,7 +174,7 @@ impl Text {
         };
         let modifier = self.modifier.text_content_full(
             self.content,
-            final_font_size.to_logical_px(),
+            final_font_size.to_logical_px(crate::runtime::density::current_density()),
             final_color,
             final_font_weight,
             final_font_style,
@@ -183,7 +183,7 @@ impl Text {
             final_overflow,
             final_soft_wrap,
             final_letter_spacing,
-            final_line_height.map(|u| u.to_logical_px()),
+            final_line_height.map(|u| u.to_logical_px(crate::runtime::density::current_density())),
         );
 
         ctx.start_leaf(key, modifier);

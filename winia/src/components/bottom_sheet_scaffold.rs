@@ -345,7 +345,7 @@ mod tests {
         // `with_density` wraps both phases), and a compose-only wrapper left that callback
         // reading density 1.0 — where `to_px` happens to equal the correct value, hiding a
         // regression in exactly the site this test is meant to catch.
-        crate::unit::with_density(Density::from_density(1.5), || {
+        crate::runtime::density::with_density(Density::from_density(1.5), || {
             c.compose(move |ctx| {
                 crate::layout::adaptive::set_window_size(480.0, 720.0);
                 BottomSheetScaffold::new()

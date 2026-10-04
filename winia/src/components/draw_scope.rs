@@ -137,7 +137,7 @@ impl<'a> DrawScope<'a> {
     fn fill(&self, color: Color) -> Paint {
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
-        paint.set_color(crate::render::skia_color(color));
+        paint.set_color(crate::graphics::skia_color(color));
         paint
     }
 
@@ -334,7 +334,7 @@ impl DrawWrapNode for CanvasNode {
         rect: SkRect,
         modifier: &Modifier,
     ) {
-        let scope = DrawScope::new(canvas, rect, crate::unit::current_density().density);
+        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
         (self.draw)(&scope);
         let _ = modifier;
     }
@@ -370,7 +370,7 @@ impl std::fmt::Debug for BehindNode {
 
 impl DrawWrapNode for BehindNode {
     fn draw_before(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::unit::current_density().density);
+        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
         (self.draw)(&scope);
     }
 }
@@ -388,12 +388,12 @@ impl std::fmt::Debug for WithContentNode {
 
 impl DrawWrapNode for WithContentNode {
     fn draw_before(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::unit::current_density().density);
+        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
         (self.before)(&scope);
     }
 
     fn draw_after(&self, canvas: &SkCanvas, rect: SkRect, _modifier: &Modifier) {
-        let scope = DrawScope::new(canvas, rect, crate::unit::current_density().density);
+        let scope = DrawScope::new(canvas, rect, crate::runtime::density::current_density().density);
         (self.after)(&scope);
     }
 }

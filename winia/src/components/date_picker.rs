@@ -2845,7 +2845,7 @@ impl crate::modifier::DrawNode for DayCircleNode {
         let mut paint = skia_safe::Paint::default();
         paint.set_anti_alias(true);
         paint.set_style(skia_safe::PaintStyle::Fill);
-        paint.set_color(crate::render::skia_color(Color {
+        paint.set_color(crate::graphics::skia_color(Color {
             a: (t * 255.0).round() as u8,
             ..self.color
         }));

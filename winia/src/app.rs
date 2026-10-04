@@ -674,7 +674,7 @@ impl PerWindow {
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
         let density = crate::unit::Density::from_density(self.scale_factor as f32);
-        crate::unit::with_density(density, || {
+        crate::runtime::density::with_density(density, || {
         // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
         self.composer.set_adaptive_window_size(self.width, self.height);
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
@@ -2252,7 +2252,7 @@ impl AppState {
         let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
-        crate::unit::with_density(density, || {
+        crate::runtime::density::with_density(density, || {
         // 首帧同样注入窗口尺寸（自适应组件首帧即正确形态）+ 挂载响应式 State
         pw.composer.set_adaptive_window_size(pending.width, pending.height);
         let slot = &pw.window_size_state;

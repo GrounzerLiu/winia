@@ -16,7 +16,7 @@ pub mod layer;
 pub mod shape;
 
 pub use brush::{Brush, BrushSource, BrushTile, GradientBrush};
-pub use color::{BlendMode, Color, ColorFilter, FilterQuality};
+pub use color::{skia_color, BlendMode, Color, ColorFilter, FilterQuality};
 pub use layer::{
     BackgroundColor, GraphicsLayerParams, GraphicsLayerSpec, ShadowParams, TransformOrigin,
 };

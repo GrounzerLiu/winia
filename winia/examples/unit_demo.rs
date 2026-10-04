@@ -13,7 +13,7 @@ mod settings;
 
 #[composable]
 fn unit_demo(ctx: &mut ComposeCtx) {
-    let density = winia::unit::current_density();
+    let density = winia::runtime::density::current_density();
 
     Column::new()
         .modifier(Modifier::new().padding(16.0).fill_max_size())

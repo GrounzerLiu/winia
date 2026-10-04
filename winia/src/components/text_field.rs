@@ -318,14 +318,14 @@ impl TextFieldColors {
 
 fn text_style_line_height(style: &TextStyle, font_size: f32) -> f32 {
     style.line_height
-        .map(|height| height.to_logical_px())
+        .map(|height| height.to_logical_px(crate::runtime::density::current_density()))
         .unwrap_or(font_size * 1.4)
 }
 
 fn interpolate_text_style(from: &TextStyle, to: &TextStyle, progress: f32, color: crate::graphics::Color) -> TextStyle {
     let progress = progress.clamp(0.0, 1.0);
-    let from_size = from.font_size.unwrap_or(16.0.into()).to_logical_px();
-    let to_size = to.font_size.unwrap_or(12.0.into()).to_logical_px();
+    let from_size = from.font_size.unwrap_or(16.0.into()).to_logical_px(crate::runtime::density::current_density());
+    let to_size = to.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density());
     let font_size = from_size + (to_size - from_size) * progress;
     let from_line_height = text_style_line_height(from, from_size);
     let to_line_height = text_style_line_height(to, to_size);
@@ -913,7 +913,7 @@ impl TextField {
         if let Some(font_size) = self.font_size {
             input_style.font_size = Some(font_size);
         }
-        let font_size = input_style.font_size.unwrap_or(16.0.into()).to_logical_px();
+        let font_size = input_style.font_size.unwrap_or(16.0.into()).to_logical_px(crate::runtime::density::current_density());
         let input_line_height = text_style_line_height(&input_style, font_size);
         // 外观状态（M3 容器）——focused 从交互源组合期读取
         let visual = self.variant;
@@ -1479,11 +1479,11 @@ impl TextField {
             // 支持文本：容器底部外侧 12sp（M3 supporting 色）
             let supporting_visual = self.supporting_text.as_ref().map(|s| crate::modifier::SupportingVisual {
                 content: s.clone(),
-                font_size: typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(),
+                font_size: typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density()),
                 font_weight: typography.body_small.font_weight.unwrap_or_default(),
                 font_style: typography.body_small.font_style.unwrap_or_default(),
                 letter_spacing: typography.body_small.letter_spacing.unwrap_or(0.0),
-                line_height: typography.body_small.line_height.map(|height| height.to_logical_px()),
+                line_height: typography.body_small.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
                 color: if disabled { colors.disabled_supporting }
                     else if self.is_error { colors.error_supporting }
                     else { colors.supporting },
@@ -1538,8 +1538,8 @@ impl TextField {
         // 占位；测量用 paragraph 实际高度（含折行）
         let supporting_h = self.supporting_text.as_ref().map_or(0.0, |_| {
             4.0 + typography.body_small.line_height
-                .map(|height| height.to_logical_px())
-                .unwrap_or_else(|| typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px() * 1.4)
+                .map(|height| height.to_logical_px(crate::runtime::density::current_density()))
+                .unwrap_or_else(|| typography.body_small.font_size.unwrap_or(12.0.into()).to_logical_px(crate::runtime::density::current_density()) * 1.4)
         });
         let container_modifier = if self.supporting_text.is_some() || self.min_lines > 1 {
             let line_h = input_line_height;
@@ -1573,7 +1573,7 @@ impl TextField {
                 crate::text::TextOverflow::Clip,
                 input_style.soft_wrap.unwrap_or(true),
                 input_style.letter_spacing.unwrap_or(0.0),
-                input_style.line_height.map(|height| height.to_logical_px()),
+                input_style.line_height.map(|height| height.to_logical_px(crate::runtime::density::current_density())),
             );
         let input_modifier = if interaction.is_some() {
             let fr_click = fr.clone();
@@ -2531,7 +2531,7 @@ mod tests {
                     // TextField 经 LOCAL_TEXT_STYLE 提供动画字号——闭包内
                     // Text 默认字号随动画（16sp ↔ 12sp）
                     let fs = crate::components::text::LOCAL_TEXT_STYLE.current().font_size;
-                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px(crate::runtime::density::current_density())).unwrap_or(0.0));
                     crate::components::Text::new("Name").build(ctx);
                 });
             composer.compose(|ctx| {
@@ -2548,7 +2548,7 @@ mod tests {
                 .interaction_source(focus_src.clone())
                 .label(move |ctx| {
                     let fs = crate::components::text::LOCAL_TEXT_STYLE.current().font_size;
-                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px(crate::runtime::density::current_density())).unwrap_or(0.0));
                     crate::components::Text::new("Name").build(ctx);
                 });
             composer.compose(|ctx| {
@@ -2588,7 +2588,7 @@ mod tests {
                 .interaction_source(focus_src.clone())
                 .label(move |ctx| {
                     let fs = crate::components::text::LOCAL_TEXT_STYLE.current().font_size;
-                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px()).unwrap_or(0.0));
+                    log.lock().unwrap().push(fs.map(|f| f.to_logical_px(crate::runtime::density::current_density())).unwrap_or(0.0));
                     crate::components::Text::new("Name").build(ctx);
                 })
         };

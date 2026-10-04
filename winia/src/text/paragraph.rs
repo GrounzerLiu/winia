@@ -19,7 +19,7 @@ pub fn build_plain_paragraph(
     let fc = crate::text::font::get_font_collection();
     let mut ts = TextStyle::new();
     ts.set_font_size(font_size);
-    ts.set_color(crate::render::skia_color(color));
+    ts.set_color(crate::graphics::skia_color(color));
     let mut style = ParagraphStyle::default();
     style.set_text_style(&ts);
     let mut b = ParagraphBuilder::new(&style, fc);

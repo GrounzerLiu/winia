@@ -608,7 +608,7 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
             let sv = |v: &SizeValue| match v {
                 SizeValue::Static(Dimension::Fixed(x)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(x))) => format!("{x}"),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => "0".to_string(),
-                SizeValue::Static(Dimension::Px(p)) => format!("{:.0}", p.to_logical(crate::unit::current_density())),
+                SizeValue::Static(Dimension::Px(p)) => format!("{:.0}", p.to_logical(crate::runtime::density::current_density())),
                 SizeValue::Dynamic(_) => "<dyn>".to_string(),
                 SizeValue::Intrinsic(s) => format!("intrinsic({:?})", s),
             };
