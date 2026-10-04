@@ -1,5 +1,7 @@
 # The semantics gap (accessibility)
 
+> ⚠ **Historical record — the round of 2026-09-22, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > Status: **partly closed.** The model and a debug consumer exist now — `docs/semantics.md` has what
 > is implemented, the deliberately small property set, and what a platform bridge still needs. What
 > follows is the original analysis, kept because its reasoning about ORDER (model vs bridge, and why

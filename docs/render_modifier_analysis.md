@@ -1,5 +1,7 @@
 # winia render.rs / modifier.rs 深度分析报告
 
+> ⚠ **Historical record — the round of 2026-08-31, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 - 分析对象：`winia/src/render.rs`（1926 行）、`winia/src/modifier.rs`（2839 行），及调用侧 `winia/src/app.rs`、`skiwin` 后端
 - 结论：这是一个 **Compose 语义的 UI 渲染管线**：不可变 enum 链式 Modifier → 单阶段深度遍历 LayoutNode 树绘制到 Skia Canvas，后端为 skiwin Vulkan（含 GL/CPU/D3D 备选）
 

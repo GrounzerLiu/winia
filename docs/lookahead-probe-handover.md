@@ -1,5 +1,7 @@
 # `exp/lookahead-probe` — what it does now, and how to pick it up
 
+> ⚠ **Historical record — the round of 2026-09-27, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > Status: **the whole objective is in place.** The acceptance test
 > (`box_with_constraints_composes_its_content_at_measure_time`) is GREEN and un-ignored: the content
 > prints the parent's cap on the first frame, the box takes its size from what it composed, and a cap

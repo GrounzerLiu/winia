@@ -1724,10 +1724,10 @@ fn draw_backdrop_blur(
     // 节点屏幕物理位置：当前画布矩阵映射（含全局 sf 与祖先 scroll/gl/overlay）
     let m = canvas.local_to_device_as_3x3();
     let corners = [
-        m.map_xy(x, y),
-        m.map_xy(x + w, y),
-        m.map_xy(x, y + h),
-        m.map_xy(x + w, y + h),
+        m.map_point((x, y)),
+        m.map_point((x + w, y)),
+        m.map_point((x, y + h)),
+        m.map_point((x + w, y + h)),
     ];
     let (sx0, sy0) = corners.iter().fold((f32::MAX, f32::MAX), |acc, p| {
         (acc.0.min(p.x), acc.1.min(p.y))
@@ -1772,7 +1772,7 @@ fn draw_backdrop_blur(
 
     // 画回：快照原点物理 (left,top) → 画布逻辑坐标（逆矩阵）
     let Some(inv) = m.invert() else { return };
-    let origin = inv.map_xy(left as f32, top as f32);
+    let origin = inv.map_point((left as f32, top as f32));
     // 矩阵缩放（无旋转/斜切时直接取对角线；否则均匀 scale = 1/√|det| 近似）
     let (rc00, rc01, rc10, rc11) = (m.rc(0, 0), m.rc(0, 1), m.rc(1, 0), m.rc(1, 1));
     let det = rc00 * rc11 - rc01 * rc10;
@@ -2389,8 +2389,8 @@ mod tests {
         m.set_scale_x(1.5); m.set_scale_y(1.5);
         let (x, y, w, h, r) = (300.0f32, 250.0f32, 260.0f32, 170.0f32, 12.0f32);
         let corners = [
-            m.map_xy(x, y), m.map_xy(x + w, y),
-            m.map_xy(x, y + h), m.map_xy(x + w, y + h),
+            m.map_point((x, y)), m.map_point((x + w, y)),
+            m.map_point((x, y + h)), m.map_point((x + w, y + h)),
         ];
         let (sx0, sy0) = corners.iter().fold((f32::MAX, f32::MAX), |acc, p| (acc.0.min(p.x), acc.1.min(p.y)));
         let (sx1, sy1) = corners.iter().fold((f32::MIN, f32::MIN), |acc, p| (acc.0.max(p.x), acc.1.max(p.y)));
@@ -2431,8 +2431,8 @@ mod tests {
         let left = (x * 1.5 - r * 3.0).floor() as i32;
         let top = (y * 1.5 - r * 3.0).floor() as i32;
         let inv = m.invert().expect("invert");
-        let origin = inv.map_xy(left as f32, top as f32);
-        let back = m.map_xy(origin.x, origin.y);
+        let origin = inv.map_point((left as f32, top as f32));
+        let back = m.map_point((origin.x, origin.y));
         let (bdx, bdy) = (back.x, back.y);
         assert!((bdx - left as f32).abs() < 1e-3, "像素网格精确对齐：{bdx} vs {left}");
         assert!((bdy - top as f32).abs() < 1e-3, "像素网格精确对齐：{bdy} vs {top}");
@@ -2450,8 +2450,8 @@ mod tests {
         let inv = m.invert().expect("invert");
         // 快照边界（矩阵映射后取整）
         let left = 450i32; let top = 300i32;
-        let origin = inv.map_xy(left as f32, top as f32);
-        let back = m.map_xy(origin.x, origin.y);
+        let origin = inv.map_point((left as f32, top as f32));
+        let back = m.map_point((origin.x, origin.y));
         let (bdx, bdy) = (back.x, back.y);
         assert!((bdx - left as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdx} vs {left}");
         assert!((bdy - top as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdy} vs {top}");

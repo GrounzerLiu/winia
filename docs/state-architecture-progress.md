@@ -1,5 +1,7 @@
 # State 响应式架构重构进度
 
+> ⚠ **Historical record — the round of 2026-08-26, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > 目标：彻底移除 State creator-owner TLS，改为 ownerless State + 按读取建立 Composer 订阅。
 > 范围：D:/Projects/winia 当前 v2。此文档跟踪实现进度、验证结果和剩余风险。
 > 约束：保留用户既有 dirty worktree 变更；每阶段独立验证；不把临时 RAII owner 修复冒充最终架构。

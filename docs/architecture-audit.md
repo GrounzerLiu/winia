@@ -1,5 +1,18 @@
 # Winia v2 底层架构审计
 
+> ⚠ **Historical record — the round of 2026-08-26, kept as written.** This is a
+> snapshot log of one audit pass, not a description of the tree today. The
+> *mechanisms* in §2 and §3 (dependency frames, the layout transaction retry, the
+> canonical reverse graph) are still what the code does; the *paths and numbers*
+> are not. Read `core/` as `runtime/`, `ui/` as `components/`, `ui/font.rs` as
+> `text/font.rs`; the test count it records (612, then 639) is 1255; the ui_test
+> count (14 → 17) is 92; `winit` is 0.31.0-beta.3, not beta.2. The fix-order
+> checklists are the record of what was done *then*, and the files they name have
+> moved since the `ui/` → `components/` restructure.
+>
+> The rest of the `docs/*-round.md`, `*-progress.md`, `*-gap*.md` and
+> `*-handover.md` files are the same kind of note and carry the same caveat.
+>
 > 状态：架构审计与增量修复跟踪。本轮只修改 ownerless State/frame 目标文件和本审计文档，不回滚既有 dirty worktree。
 > 范围：D:/Projects/winia，v2 分支；当前工作树观测为 origin/v2 ahead 41。
 > 结论：3.1 owner TLS 泄漏已由 ownerless StateSignal 基础切片修复；3.2/3.4 已有 RuntimeFrame、layout-only 和布局事务 retry 基础切片；3.9/6.1/6.2/6.3 已由多窗口上下文隔离修复；3.10/6.4/6.5 已部分修复；Phase 1（所有权与恢复边界）三项中第 2 项（guard 体系）与第 3 项（依赖收敛）已完成，第 1 项（per-Window context）仍有 debug 事件/动画表/事件循环三处全局单态残留——经评估 2 处为本质全局、1 处为代码美化，均已决策不继续清理（原因见 §11 checklist）；剩余 Phase 2（坐标/复用/LayoutNode）、Phase 3（LazyList/TextField——其中 height cache 按 key 缓存已实施，见 §Phase 3.1）、Phase 4（CompositionLocal/Theme/E2E）和其他风险仍开放。

@@ -57,7 +57,48 @@ use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::WindowId;
+use winit::window::{ImeRequest, WindowId};
+
+/// Tell the window whether it takes IME text input.
+///
+/// `Window::set_ime_allowed(bool)` is deprecated; the replacement is an `ImeRequest`, which carries
+/// the cursor area and the hint/purpose alongside the flag. winia has no model for either — no
+/// component asks for a numeric keyboard and nothing reports the caret's screen box to the OS (the
+/// gap `docs/text-field.md` records) — so this reproduces what winit's own deprecated shim did
+/// (`winit-core/src/window.rs:1338-1356`) and keeps the two parts separable: the enable path is the
+/// one that has to change when the hint plumbing lands, and the disable path is `ImeRequest::Disable`
+/// exactly.
+///
+/// The request returns a `Result`; winit's platforms treat a refused IME update as non-fatal, and
+/// there is nothing here to fall back to, so it is dropped like the shim drops it.
+pub(crate) fn set_ime_enabled(sw: &SkiaWindow, enabled: bool) {
+    let request = if enabled {
+        ime_enable_request()
+    } else {
+        ImeRequest::Disable
+    };
+    let _ = sw.request_ime_update(request);
+}
+
+/// The enable half, with winit's placeholder values spelled out.
+///
+/// The cursor area is `0x0 at 0,0` — winit's own comment where this came from reads "there's nothing
+/// sensible to use here by default". A real one needs the focused node's caret rectangle in window
+/// coordinates, which is what the composed tree knows and the OS does not.
+fn ime_enable_request() -> ImeRequest {
+    use winit::window::{ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequestData};
+    let capabilities = ImeCapabilities::new().with_hint_and_purpose().with_cursor_area();
+    let data = ImeRequestData::default()
+        .with_hint_and_purpose(ImeHint::NONE, ImePurpose::Normal)
+        .with_cursor_area(
+            winit::dpi::LogicalPosition::new(0.0, 0.0).into(),
+            winit::dpi::LogicalSize::new(0.0, 0.0).into(),
+        );
+    ImeRequest::Enable(
+        ImeEnableRequest::new(capabilities, data)
+            .expect("the capabilities and the data above cover the same two fields"),
+    )
+}
 
 /// 方向键焦点导航方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,7 +348,7 @@ impl PerWindow {
             _ => false,
         };
         if let Some(ref sw) = self.skia_window {
-            sw.set_ime_allowed(wants_ime);
+            set_ime_enabled(&sw, wants_ime);
         }
     }
 
@@ -436,7 +477,7 @@ impl PerWindow {
             self.overlay.layers[i].focused_id = new_id;
             self.overlay.layers[i].focused_slot_key = new_slot;
             if let Some(ref sw) = self.skia_window {
-                sw.set_ime_allowed(want_ime);
+                set_ime_enabled(&sw, want_ime);
             }
         } else {
             let (new_id, new_slot) = self.composer.layout_root_idx().map(|r| {
@@ -1552,7 +1593,7 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(want);
+                                    set_ime_enabled(&sw, want);
                                 }
                                 break;
                             }
@@ -1572,7 +1613,7 @@ impl ApplicationHandler for AppState {
                                 // leaf——须向下找子树（node_or_descendant_wants_ime）
                                 let wants_ime = node_or_descendant_wants_ime(nodes, found);
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(wants_ime);
+                                    set_ime_enabled(&sw, wants_ime);
                                 }
                             }
                         }
@@ -1796,7 +1837,7 @@ impl AppState {
                         crate::layout::node::set_focus_by_id(nodes, root, node_id);
                     }
                     if let Some(ref sw) = pw.skia_window {
-                        sw.set_ime_allowed(false);
+                        set_ime_enabled(&sw, false);
                     }
                 }
             }
@@ -1876,7 +1917,7 @@ impl AppState {
                         }
                         pw.focused_id = Some(fid);
                         pw.focused_slot_key = Some(sk);
-                        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+                        if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, true); }
                     }
                     debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
                     debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
@@ -1977,7 +2018,7 @@ impl AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(want);
+                                    set_ime_enabled(&sw, want);
                                 }
                                 handled = true;
                                 break;

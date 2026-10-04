@@ -1,5 +1,7 @@
 # Shared element transitions: Compose API gap tracking
 
+> ⚠ **Historical record — the round of 2026-09-10, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > Baseline: Compose `animation` module `SharedTransitionScope` API surface
 > (2025 — including `OverlayClip`, `renderInOverlayDuringTransition`,
 > `sharedElementWithCallerManagedVisibility`, `SharedTransitionDefaults`),

@@ -1,5 +1,7 @@
 # 动画系统差距分析（对标 Jetpack Compose）
 
+> ⚠ **Historical record — the round of 2026-08-05, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > 分支：`animation-system`（基于 text-field 02ce48c）
 > 方法：官方文档（developer.android.com/develop/ui/compose/animation/value-based 等）+ 本地代码盘点
 > 目的：完整对照 Compose 动画 API 面，给出实现/优化清单

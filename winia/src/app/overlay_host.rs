@@ -4,6 +4,7 @@
 //! out, renders and hit-tests on top of the page — it also takes the keyboard while it is modal.
 
 use super::*;
+use super::set_ime_enabled;
 
 /// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
 /// 渲染定位在主树之上（模态遮罩 + 内容）
@@ -152,7 +153,7 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     // where they were instead of starting over.
     release_keyboard_to_lower_layer(pw);
     if pw.focused_id.is_none() && !pw.overlay.layers.iter().any(|o| !o.closing && o.focused_id.is_some()) {
-        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(false); }
+        if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, false); }
     }
     cleanup_overlay_interactions(&mut pw.overlay.layers[idx]);
     // 启动退出动画（progress 1→0）；无退出规格 → 立即移除（不推无用动画——
@@ -287,7 +288,7 @@ pub(crate) fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
     }
     if let Some(ref sw) = pw.skia_window {
         // Nothing in the panel is focused until the user tabs into it, so the IME has no target yet.
-        sw.set_ime_allowed(false);
+        set_ime_enabled(&sw, false);
     }
 }
 /// Hand the keyboard back when the last focus-scope overlay stops owning it: the nearest layer below
