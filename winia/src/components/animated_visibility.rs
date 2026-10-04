@@ -116,17 +116,13 @@ impl AnimatedVisibility {
                     crate::graphics::TransformOrigin(cfg.transform_origin.0, cfg.transform_origin.1);
             }
             if let Some((dir, offset)) = cfg.slide {
-                let dist = match offset {
-                    SlideOffset::Fixed(px) => px,
-                    SlideOffset::Fraction(f) => {
-                        let (w, h) = cs.peek();
-                        let full = match dir {
-                            SlideDirection::Left | SlideDirection::Right => w,
-                            SlideDirection::Up | SlideDirection::Down => h,
-                        };
-                        f * full
-                    }
+                // The extent along the slide axis; `SlideOffset::resolve` does the rest.
+                let (w, h) = cs.peek();
+                let extent = match dir {
+                    SlideDirection::Left | SlideDirection::Right => w,
+                    SlideDirection::Up | SlideDirection::Down => h,
                 };
+                let dist = offset.resolve(extent);
                 let off = (1.0 - p) * dist;
                 match dir {
                     SlideDirection::Left => params.translation_x = -off,
@@ -739,15 +735,11 @@ mod tests {
         // Fraction(1.0) on 120-wide content = 120px full slide; Fixed(48) stays 48.
         // Resolve through the same match arms the gfx closure uses.
         let resolve = |offset: SlideOffset, dir: SlideDirection, w: f32, h: f32| -> f32 {
-            match offset {
-                SlideOffset::Fixed(px) => px,
-                SlideOffset::Fraction(f) => {
-                    f * match dir {
-                        SlideDirection::Left | SlideDirection::Right => w,
-                        SlideDirection::Up | SlideDirection::Down => h,
-                    }
-                }
-            }
+            let extent = match dir {
+                SlideDirection::Left | SlideDirection::Right => w,
+                SlideDirection::Up | SlideDirection::Down => h,
+            };
+            offset.resolve(extent)
         };
         assert!((resolve(SlideOffset::Fixed(48.0), SlideDirection::Right, 120.0, 60.0) - 48.0).abs() < 0.01);
         assert!((resolve(SlideOffset::Fraction(1.0), SlideDirection::Right, 120.0, 60.0) - 120.0).abs() < 0.01);

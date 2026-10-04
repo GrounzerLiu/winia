@@ -28,23 +28,11 @@ pub const LAZY_ITEM_ESTIMATED_HEIGHT: f32 = 48.0;
 /// 超出视口后仍注册的额外项数（上下各预取，减少滚动时补注册抖动）
 pub const LAZY_BEYOND_BOUNDS: usize = 4;
 
-mod sealed_axis {
-    pub trait Sealed {}
-}
-
-/// The lazy list's main axis, as a type-level parameter: `LazyColumn = LazyList<VerticalAxis>`
-/// (vertical) and `LazyRow = LazyList<HorizontalAxis>` (horizontal).
+/// The lazy list's main axis. Sealed, like [`Axis`]: the two markers it carries are the whole set.
 ///
-/// Sealed trait: do not implement it for your own types. Those two marker types are the whole set.
-pub trait LazyAxis: sealed_axis::Sealed + 'static {
-    #[doc(hidden)]
-    fn main_max(c: Constraints) -> f32;
-    #[doc(hidden)]
-    fn cross_max(c: Constraints) -> f32;
-    #[doc(hidden)]
-    fn main_size(s: Size) -> f32;
-    #[doc(hidden)]
-    fn cross_size(s: Size) -> f32;
+/// The questions both container families ask — main and cross extents, `size`, `point` — are on
+/// [`Axis`]; this adds what only a lazy list needs.
+pub trait LazyAxis: super::axis::Axis {
     /// A child's constraints: the cross axis inherits the parent's max, the main axis is unbounded
     /// (wrap content).
     #[doc(hidden)]
@@ -59,25 +47,12 @@ pub trait LazyAxis: sealed_axis::Sealed + 'static {
     /// viewport, which is what makes a snap position an item boundary.
     #[doc(hidden)]
     fn with_main_exact(c: Constraints, v: f32) -> Constraints;
-    /// (cross, main) → position
-    #[doc(hidden)]
-    fn point(cross: f32, main: f32) -> Offset;
-    /// (cross, main) → size
-    #[doc(hidden)]
-    fn size(cross: f32, main: f32) -> Size;
     /// The scroll modifier, per axis (vertical / horizontal)
     #[doc(hidden)]
     fn scroll(state: crate::modifier::ScrollState) -> Modifier;
 }
 
-/// The vertical main-axis marker (`LazyColumn = LazyList<VerticalAxis>`)
-pub enum VerticalAxis {}
-impl sealed_axis::Sealed for VerticalAxis {}
-impl LazyAxis for VerticalAxis {
-    fn main_max(c: Constraints) -> f32 { c.max_height }
-    fn cross_max(c: Constraints) -> f32 { c.max_width }
-    fn main_size(s: Size) -> f32 { s.height }
-    fn cross_size(s: Size) -> f32 { s.width }
+impl LazyAxis for crate::layout::axis::VerticalAxis {
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: f32::MAX }
     }
@@ -87,21 +62,12 @@ impl LazyAxis for VerticalAxis {
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: c.min_width, max_width: c.max_width, min_height: v, max_height: v }
     }
-    fn point(cross: f32, main: f32) -> Offset { Offset::new(cross, main) }
-    fn size(cross: f32, main: f32) -> Size { Size::new(cross, main) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().vertical_scroll(state)
     }
 }
 
-/// The horizontal main-axis marker (`LazyRow = LazyList<HorizontalAxis>`)
-pub enum HorizontalAxis {}
-impl sealed_axis::Sealed for HorizontalAxis {}
-impl LazyAxis for HorizontalAxis {
-    fn main_max(c: Constraints) -> f32 { c.max_width }
-    fn cross_max(c: Constraints) -> f32 { c.max_height }
-    fn main_size(s: Size) -> f32 { s.width }
-    fn cross_size(s: Size) -> f32 { s.height }
+impl LazyAxis for crate::layout::axis::HorizontalAxis {
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: f32::MAX, min_height: 0.0, max_height: c.max_height }
     }
@@ -111,8 +77,6 @@ impl LazyAxis for HorizontalAxis {
     fn with_main_exact(c: Constraints, v: f32) -> Constraints {
         Constraints { min_width: v, max_width: v, min_height: c.min_height, max_height: c.max_height }
     }
-    fn point(cross: f32, main: f32) -> Offset { Offset::new(main, cross) }
-    fn size(cross: f32, main: f32) -> Size { Size::new(main, cross) }
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().horizontal_scroll(state)
     }
@@ -422,16 +386,16 @@ pub struct LazyList<A: LazyAxis> {
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
-pub type LazyColumn = LazyList<VerticalAxis>;
+pub type LazyColumn = LazyList<crate::layout::axis::VerticalAxis>;
 /// A horizontal lazy list (Compose's `LazyRow`)
-pub type LazyRow = LazyList<HorizontalAxis>;
+pub type LazyRow = LazyList<crate::layout::axis::HorizontalAxis>;
 
-impl LazyList<VerticalAxis> {
+impl LazyList<crate::layout::axis::VerticalAxis> {
     /// A vertical list (LazyColumn)
     pub fn new() -> Self { Self::new_list() }
 }
 
-impl LazyList<HorizontalAxis> {
+impl LazyList<crate::layout::axis::HorizontalAxis> {
     /// A horizontal list (LazyRow)
     pub fn new() -> Self { Self::new_list() }
 }
@@ -1137,7 +1101,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 固定高度时给子节点 f32::MAX；⚠ is_finite() 对 f32::MAX 也返回 true，
         // 必须用框架惯例 `< f32::MAX` 判定）回退缓存值，避免视口
         // 无限膨胀（实测：f32::MAX 视口会让 clamp 把 offset 清零）
-        let main_max = A::main_max(constraints);
+        let main_max = A::main_max(&constraints);
         let vh = if main_max < f32::MAX && main_max > 0.0 {
             // 非 silent set：viewport 变化（resize）→ 通知 build 重组，用新视口
             // 补组合可见项（方向一）。值稳定时 PartialEq 去重不通知（无振荡）。
@@ -1155,7 +1119,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // position an item boundary.
         let (cb, ca) = self.cross_padding;
         let mut child_constraints = A::child_constraints(constraints);
-        let cross_max = A::cross_max(child_constraints);
+        let cross_max = A::cross_max(&child_constraints);
         child_constraints = A::with_cross_max(child_constraints, (cross_max - cb - ca).max(0.0));
         if self.fill_items && vh > 0.0 {
             child_constraints = A::with_main_exact(child_constraints, vh);
@@ -1356,13 +1320,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             let content_pos = if self.reverse { content_h - pos - h } else { pos };
             placements.push(crate::layout::node::Placement {
                 // 交叉轴从 cross_before 处开始（contentPadding 交叉轴语义）
-                position: A::point(cb, content_pos),
-                size: A::size(w, h),
+                position: A::point(content_pos, cb),
+                size: A::size(h, w),
             });
         }
 
         self.cache.set(cache);
-        (A::size(A::cross_max(constraints), vh), placements)
+        (A::size(vh, A::cross_max(&constraints)), placements)
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {

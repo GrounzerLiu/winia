@@ -23,6 +23,8 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::animation::push_animatable;
+// The slide distance is shared with `AnimatedVisibility`; nav used to declare its own copy.
+use crate::animation::SlideOffset;
 use crate::graphics::GraphicsLayerParams;
 use std::any::Any;
 use std::collections::HashMap;
@@ -700,27 +702,6 @@ impl<K: NavKey> NavEntry<K> {
 // NavTransition — 导航滑动过渡（对标 Nav3 transitionSpec 的 push/pop 动画）
 // ═══════════════════════════════════════════════════════════
 
-/// 滑动位移来源（对标 Compose `slideInHorizontally(initialOffsetX: (Int) -> Int)`
-/// 的常用取值——Compose 闭包入参为内容宽度：`{ it }` = 全宽、`{ -it / 3 }` =
-/// 反向 1/3 视差；winia 组合模型无布局期闭包，声明式表达为比例或固定值）。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SlideOffset {
-    /// 容器宽度比例（1.0 = 全宽——对标 `{ it }`；-0.3 = 反向 30%——对标 `{ -it / 3 }`）
-    Fraction(f32),
-    /// 固定逻辑 px（对标固定 dp 位移——M3 shared-axis 的 30dp；当前按逻辑 px
-    /// 解析、随密度缩放后续接）
-    Px(f32),
-}
-
-impl SlideOffset {
-    fn resolve(&self, width: f32) -> f32 {
-        match self {
-            SlideOffset::Fraction(f) => f * width,
-            SlideOffset::Px(d) => *d,
-        }
-    }
-}
-
 /// 进入过渡（对标 Compose `EnterTransition`；仅枚举常用组合——同侧 Slide+Fade，
 /// 其余 Compose `+` 组合需扩变体）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -875,12 +856,12 @@ impl NavTransitionSpec {
     pub fn shared_axis() -> (Self, Self) {
         (
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Px(30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Px(-30.0) },
+                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(30.0) },
+                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(-30.0) },
             ),
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Px(-30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Px(30.0) },
+                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(-30.0) },
+                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(30.0) },
             ),
         )
     }

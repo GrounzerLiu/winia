@@ -18,15 +18,29 @@ pub enum SlideDirection {
 }
 
 /// Slide distance (cf. Compose `slideInHorizontally(initialOffsetX: (fullWidth) -> Int)`).
-/// Compose takes a lambda over content size; the common cases are a fixed pixel offset
-/// or a fraction of content size — both covered here without a closure in the key.
+///
+/// Compose takes a lambda over the content size; the common cases are a fixed offset or a fraction
+/// of it, which these two variants express without a closure. Both users of a slide share the type:
+/// [`AnimatedVisibility`](crate::components::animated_visibility) and the navigation scene
+/// transitions in [`crate::nav`], which had a second, near-identical enum of its own.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SlideOffset {
-    /// Fixed pixel offset (status quo 48px default — `SlideOffset::Fixed(48.0)`).
+    /// Fixed logical pixels — the default 48, and the M3 shared-axis 30.
     Fixed(f32),
-    /// Fraction of content size along the slide axis (1.0 = full width/height slide-in,
-    /// the Compose `initialOffsetX = { fullWidth }` equivalent).
+    /// Fraction of the content extent along the slide axis (1.0 = a full slide-in, the Compose
+    /// `initialOffsetX = { fullWidth }`; -0.3 = the reverse parallax `{ -it / 3 }`).
     Fraction(f32),
+}
+
+impl SlideOffset {
+    /// The distance to slide, given the container's extent **along the slide axis** — the caller
+    /// knows whether that is the width or the height.
+    pub fn resolve(&self, extent: f32) -> f32 {
+        match self {
+            SlideOffset::Fixed(px) => *px,
+            SlideOffset::Fraction(f) => f * extent,
+        }
+    }
 }
 
 impl Default for SlideOffset {

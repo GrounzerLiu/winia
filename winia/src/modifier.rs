@@ -204,7 +204,7 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
 /// 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”的纯函数——
 /// 禁止读外部可变（Atomic/时钟/RefCell/全局）。常量折叠按 incoming 缓存，
 /// 同 key 同约束直接返回旧尺寸；非纯读取即 stale（枚举侧无此口子，node 独有）。
-pub trait LayoutNode: std::fmt::Debug + Send + Sync {
+pub trait LayoutModifierNode: std::fmt::Debug + Send + Sync {
     fn transform(&self, inner: crate::layout::Constraints) -> crate::layout::Constraints;
     /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
     fn node_key(&self) -> String {
@@ -222,7 +222,7 @@ pub enum ModifierNode {
     Click(std::sync::Arc<dyn ClickNode>),
     Pointer(std::sync::Arc<dyn PointerNode>),
     Key(std::sync::Arc<dyn KeyNode>),
-    Layout(std::sync::Arc<dyn LayoutNode>),
+    Layout(std::sync::Arc<dyn LayoutModifierNode>),
 }
 
 /// Modifier 链中的单个元素。
@@ -595,7 +595,7 @@ impl Modifier {
     }
 
     /// 追加一个布局节点 A 型（约束变换——resolved_size 之后、padding 之前串行）。
-    pub fn layout_node(self, node: impl LayoutNode + 'static) -> Self {
+    pub fn layout_node(self, node: impl LayoutModifierNode + 'static) -> Self {
         self.push_node(ModifierNode::Layout(std::sync::Arc::new(node)))
     }
 
@@ -644,7 +644,7 @@ impl Modifier {
     }
 
     /// 开放布局节点迭代（测量管线用——resolved_size 之后串行变换约束）。
-    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutNode>> {
+    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutModifierNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Layout(l) => Some(l),
             _ => None,
@@ -4239,7 +4239,7 @@ mod node_track_tests {
         min_w: f32,
     }
 
-    impl LayoutNode for TestMinWidthNode {
+    impl LayoutModifierNode for TestMinWidthNode {
         fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
             inner.min_width = inner.min_width.max(self.min_w).min(inner.max_width);
             inner
@@ -4295,7 +4295,7 @@ mod node_track_tests {
         struct DynMinNode {
             s: State<f32>,
         }
-        impl LayoutNode for DynMinNode {
+        impl LayoutModifierNode for DynMinNode {
             fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
                 let v = self.s.get();
                 inner.min_width = inner.min_width.max(v).min(inner.max_width);

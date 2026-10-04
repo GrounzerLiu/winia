@@ -229,7 +229,7 @@ impl MeasurePolicy for FlowRowLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        measure_flow::<super::flex::HorizontalAxis>(
+        measure_flow::<super::axis::HorizontalAxis>(
             self.arrangement,
             self.alignment,
             self.main_spacing,
@@ -294,7 +294,7 @@ impl MeasurePolicy for FlowColumnLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        measure_flow::<super::flex::VerticalAxis>(
+        measure_flow::<super::axis::VerticalAxis>(
             self.arrangement,
             self.alignment,
             self.main_spacing,

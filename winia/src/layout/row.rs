@@ -51,7 +51,7 @@ impl MeasurePolicy for RowLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        flex::measure_flex::<flex::HorizontalAxis>(
+        flex::measure_flex::<super::axis::HorizontalAxis>(
             self.arrangement,
             self.alignment,
             self.spacing,

@@ -11,15 +11,10 @@ use super::node::*;
 // ── FlexAxis trait ──
 
 /// 主轴/交叉轴的抽象映射。所有方法均为关联函数，编译期单态化零开销。
-pub(crate) trait FlexAxis {
-    // ── 尺寸提取 ──
-    fn main_size(s: Size) -> f32;
-    fn cross_size(s: Size) -> f32;
-
-    // ── 约束提取 ──
-    fn main_max(c: &Constraints) -> f32;
-    fn cross_max(c: &Constraints) -> f32;
-
+///
+/// The six questions both container families ask live in [`Axis`]; this adds what only the flex
+/// algorithm needs.
+pub(crate) trait FlexAxis: super::axis::Axis {
     // ── 约束构造 ──
     fn constrain_main(c: &Constraints, v: f32) -> f32;
     fn constrain_cross(c: &Constraints, v: f32) -> f32;
@@ -53,8 +48,7 @@ pub(crate) trait FlexAxis {
     fn build_phase2(c: &Constraints, allocated: f32, fill_main: bool, stretch_cross: bool) -> Constraints;
 
     // ── 值构造 ──
-    fn size(main: f32, cross: f32) -> Size;
-    fn point(main: f32, cross: f32) -> Offset;
+    // `size` / `point` are on `Axis`.
 
     // ── RTL ──
     /// RTL 镜像时的容器宽度（x 轴范围）——水平主轴用行自身测量宽度，
@@ -64,15 +58,7 @@ pub(crate) trait FlexAxis {
 
 // ── 实现：垂直主轴 (Column) ──
 
-pub(crate) struct VerticalAxis;
-
-impl FlexAxis for VerticalAxis {
-    #[inline] fn main_size(s: Size) -> f32 { s.height }
-    #[inline] fn cross_size(s: Size) -> f32 { s.width }
-
-    #[inline] fn main_max(c: &Constraints) -> f32 { c.max_height }
-    #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_width }
-
+impl FlexAxis for super::axis::VerticalAxis {
     #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
     #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
 
@@ -98,9 +84,6 @@ impl FlexAxis for VerticalAxis {
         }
     }
 
-    #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(cross, main) }
-    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(cross, main) }
-
     #[inline]
     fn rtl_container_width(_measured_main: f32, cross_size: f32) -> f32 {
         cross_size
@@ -109,15 +92,7 @@ impl FlexAxis for VerticalAxis {
 
 // ── 实现：水平主轴 (Row) ──
 
-pub(crate) struct HorizontalAxis;
-
-impl FlexAxis for HorizontalAxis {
-    #[inline] fn main_size(s: Size) -> f32 { s.width }
-    #[inline] fn cross_size(s: Size) -> f32 { s.height }
-
-    #[inline] fn main_max(c: &Constraints) -> f32 { c.max_width }
-    #[inline] fn cross_max(c: &Constraints) -> f32 { c.max_height }
-
+impl FlexAxis for super::axis::HorizontalAxis {
     #[inline] fn constrain_main(c: &Constraints, v: f32) -> f32 { c.constrain_width(v) }
     #[inline] fn constrain_cross(c: &Constraints, v: f32) -> f32 { c.constrain_height(v) }
 
@@ -141,9 +116,6 @@ impl FlexAxis for HorizontalAxis {
             max_height: c.max_height,
         }
     }
-
-    #[inline] fn size(main: f32, cross: f32) -> Size { Size::new(main, cross) }
-    #[inline] fn point(main: f32, cross: f32) -> Offset { Offset::new(main, cross) }
 
     #[inline]
     fn rtl_container_width(measured_main: f32, _cross_size: f32) -> f32 {

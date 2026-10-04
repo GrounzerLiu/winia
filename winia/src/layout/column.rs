@@ -51,7 +51,7 @@ impl MeasurePolicy for ColumnLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        flex::measure_flex::<flex::VerticalAxis>(
+        flex::measure_flex::<super::axis::VerticalAxis>(
             self.arrangement,
             self.alignment,
             self.spacing,

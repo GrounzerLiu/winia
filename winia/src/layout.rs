@@ -8,6 +8,7 @@
 //! - Box: 层叠排列
 //! - FlowRow / FlowColumn: 流式换行/换列（对标 Compose foundation）
 
+pub mod axis;
 pub mod constraints;
 pub mod direction;
 pub mod sizing;
@@ -24,6 +25,7 @@ mod row;
 pub(crate) mod box_layout;
 pub mod flow;
 
+pub use axis::{Axis, HorizontalAxis, VerticalAxis};
 pub use constraints::Constraints;
 // The layout primitives re-exported at the layer root: `Row`/`Column`/`Stack` are how a caller names
 // the layout, not which file they live in.
