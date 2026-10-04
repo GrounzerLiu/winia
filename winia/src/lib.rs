@@ -14,6 +14,20 @@
 //!
 //! [`debug`] is the dev-server channel and [`accessibility`] the Windows UI Automation bridge; both
 //! are stubs unless their feature is on.
+//!
+//! # The one sanctioned inversion
+//!
+//! [`runtime`] names `crate::overlay::OverlayDesc` in three places: `ComposeCtx::open_overlay`
+//! queues one, `Composer` holds the queue, and `Composer::take_overlays` hands it to the frame that
+//! hosts it. The record is the overlay layer's — it carries `PopupPosition`, `OverlayAnimSpec`, the
+//! dismissal flags — and the runtime does exactly one thing to it: it stamps
+//! `local_snapshot` with the composition locals captured at the call site, because an overlay
+//! composes in its own `Composer` after those providers have popped and cannot read the main tree's
+//! theme or direction otherwise.
+//!
+//! Moving the record into `runtime` to satisfy the direction would take `PopupPosition`,
+//! `OverlayAnimSpec` and the four presentation helpers they need with it, which places five things
+//! worse than it fixes one. So the edge is deliberate, narrow — one type — and recorded here.
 
 pub mod runtime;
 pub mod unit;

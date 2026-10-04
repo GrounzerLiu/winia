@@ -294,7 +294,7 @@ impl<'a> ComposeCtx<'a> {
     }
 
     /// Return the Window lifecycle context owned by this Composer.
-    pub(crate) fn window_lifecycle(&self) -> crate::app::window::LifecycleState {
+    pub(crate) fn window_lifecycle(&self) -> crate::runtime::lifecycle::LifecycleState {
         self.composer.lifecycle.clone()
     }
 
@@ -2076,7 +2076,7 @@ pub struct Composer {
     /// 当前选区注册表（SelectionContainer compose 时注入，供事件处理访问）
     pub(crate) selection_registrar: Option<crate::text::selection::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
-    pub(crate) lifecycle: crate::app::window::LifecycleState,
+    pub(crate) lifecycle: crate::runtime::lifecycle::LifecycleState,
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
@@ -2186,7 +2186,7 @@ impl Composer {
             #[cfg(test)]
             live_residue: 0,
             selection_registrar: None,
-            lifecycle: crate::app::window::LifecycleState::default(),
+            lifecycle: crate::runtime::lifecycle::LifecycleState::default(),
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
