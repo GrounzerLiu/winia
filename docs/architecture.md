@@ -24,6 +24,64 @@ taken along the way, see [`v2-design-notes.md`](v2-design-notes.md) — a dated 
 
 ## Layers
 
+```mermaid
+---
+title: winia module layers
+---
+%% See docs/architecture.md § Layers.
+%% Solid edges are the direction a module may depend in; dashed edges are the
+%% upward ones that exist on purpose, each labelled with what it is.
+flowchart TB
+    subgraph L6["layer 6"]
+        app["app<br/>winit application · window · frame loop"]
+    end
+    subgraph L5["layer 5"]
+        cmp["components"]
+        thm["theme"]
+        ovl["overlay"]
+        nav["nav"]
+    end
+    subgraph L4["layer 4"]
+        rnd["render"]
+    end
+    subgraph L3["layer 3"]
+        rt["runtime"]
+        itr["interaction"]
+        smt["semantics"]
+        sel["selection"]
+        nsc["nested_scroll"]
+        eff["effect"]
+        trs["transition"]
+    end
+    subgraph L2["layer 2"]
+        lay["layout"]
+        mod["modifier"]
+    end
+    subgraph L1["layer 1"]
+        txt["text"]
+        ani["animation"]
+        inp["input"]
+    end
+    subgraph L0["layer 0"]
+        unt["unit"]
+        gfx["graphics"]
+    end
+
+    L6 --> L5
+    L5 --> L4
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+    L1 --> L0
+
+    acc["accessibility"]
+    rt -. "the overlay queue — the one inversion" .-> ovl
+    unt -. "AnimatableValue impls" .-> ani
+    gfx -. "AxisValue can be animated" .-> rt
+    itr -. "the ripple's animation state" .-> ani
+    acc -. "publishes semantics' tree" .-> smt
+```
+
 The tree is layered, but not strictly: a module may name the ones below it freely, and a handful of
 edges do point up. One rule **is** enforced, because breaking it would mean a lower layer drifting
 into the component model — `layout`, `runtime`, `modifier`, `interaction`, `input`, `selection`,
@@ -100,6 +158,25 @@ with it, which places five things worse than it fixes one. The edge is deliberat
 
 ## A frame
 
+```mermaid
+---
+title: a frame
+---
+%% See docs/architecture.md § A frame.
+%% The whole loop is `PerWindow::recompose_layout_render` in app.rs.
+flowchart TB
+    ev["winit event<br/>routed by app.rs"]
+    st["State::set / update<br/>schedules the composers that read it"]
+    rec["Composer::recompose<br/>repeat until nothing is pending"]
+    mat["materialize<br/>slot tree becomes the LayoutNode arena<br/>nodes reused by slot key"]
+    lay["Composer::layout(constraints)<br/>measure + place"]
+    ovh["per overlay: its own Composer and tree<br/>laid out at the window size,<br/>positioned against its anchor"]
+    drw["render::render(nodes, root, canvas)<br/>then render_overlays"]
+
+    ev --> st --> rec --> mat --> lay --> ovh --> drw
+    drw -. "layout-time writes<br/>(Backchannel / State)" .-> st
+```
+
 The whole loop is `PerWindow::recompose_layout_render` in `app.rs`.
 
 1. **Event.** winit delivers a `WindowEvent`; `app.rs` routes it — pointer and key into
@@ -146,11 +223,26 @@ reads should subscribe.
 
 ## State
 
-`runtime/state.rs`. A `State<T>` is an observable cell. Creation is **ownerless**: `State::new` is
-not bound to a composer, and `get()` is what subscribes the current pass. That is why a component can
-build a state in its constructor and hand it out without threading a composition context through.
+```mermaid
+---
+title: what a read and a write each do
+---
+%% See docs/architecture.md § State.
+%% There is no second delivery channel: a write goes through the cell's
+%% StateSignal and reaches exactly the composers that read it.
+flowchart TB
+    get["x.get() inside a pass"] --> dep["records a dependency<br/>DepMode::Compose / Layout / Draw"]
+    dep --> cell[("the cell<br/>value + StateSignal id")]
 
-The handle type says what a write does, and the type is the whole contract:
+    set["x.set(v) / x.update(f)"] --> eq{"equal to the current value?"}
+    eq -- "yes — PartialEq dedupe" --> noop["nothing happens"]
+    eq -- no --> fan["fan out to the composers<br/>that are still alive"]
+    cell --> fan
+    fan --> act["compose pass: recompose that subtree<br/>layout pass: re-measure next frame<br/>draw pass: repaint"]
+```
+
+A write never names a channel: it goes through the cell's `StateSignal` and reaches exactly the
+composers that read it. What a write *does* when it arrives is the handle's whole contract:
 
 | handle | a read | a write |
 | --- | --- | --- |
@@ -159,9 +251,9 @@ The handle type says what a write does, and the type is the whole contract:
 | `Visual<T>` | `peek`, no subscription | no recompose; the renderer reads it while drawing |
 | `Backchannel<T>` | `peek` | nothing; the next frame reads what was written |
 
-There is no separate notification channel: a write goes through the cell's `StateSignal` and fans out
-to the composers that read it. Writes dedupe on `PartialEq`, so writing an equal value costs
-nothing.
+`runtime/state.rs`. A `State<T>` is an observable cell. Creation is **ownerless**: `State::new` is
+not bound to a composer, and `get()` is what subscribes the current pass. That is why a component can
+build a state in its constructor and hand it out without threading a composition context through.
 
 `StateList`/`StateMap` (`runtime/state_list.rs`) are the observable collections behind
 `mutableStateListOf`/`mutableStateMapOf`; they hand out snapshots so an iteration cannot observe a
@@ -253,6 +345,34 @@ grouped by subject.
 
 ## Overlays
 
+```mermaid
+---
+title: the overlay host
+---
+%% See docs/architecture.md § Overlays.
+%% An overlay is a second composition: its own Composer, its own tree.
+flowchart TB
+    subgraph PW["PerWindow"]
+        page["composer — the page's Composer + tree"]
+        inp["input — GestureState"]
+        clk["clock — FrameClock"]
+        subgraph OH["overlay — OverlayHost"]
+            o1["OverlayWindow id 1<br/>Composer #2, its own tree"]
+            o2["OverlayWindow id 2<br/>Composer #3, its own tree"]
+        end
+    end
+
+    open["Composer::open_overlay(Desc)<br/>while composing"] --> q["queued on the Composer<br/>local_snapshot stamped with the locals<br/>in scope at that moment"]
+    q --> o1
+    q --> o2
+
+    o1 --> policy["laid out at the window size,<br/>positioned against the anchor"]
+    o2 --> policy
+    policy --> hit["hit test: overlays first,<br/>topmost to bottom, then the page"]
+    policy --> dra["draw: the page, then the overlays"]
+    policy --> kbd["keyboard: a focus-scope overlay owns it,<br/>the page's focus is suspended"]
+```
+
 An overlay is a second composition: its own `Composer`, its own tree, drawn and hit-tested above the
 page. `overlay.rs` builds the descriptor, `Composer::open_overlay` queues it and captures the
 composition locals, and `app/overlay_host.rs` hosts them — layout against the anchor, z-order,
@@ -319,6 +439,9 @@ than here — `Modifier::align_by_baseline`'s contract, the `Axis` traits, `Cont
 `Alignment::Stretch` are the usual examples.
 
 ## Where to read more
+
+The diagrams in this document are Mermaid. [`diagrams/`](diagrams/) holds the same text as
+`.mmd` files — one per diagram — for a viewer that opens files rather than code fences.
 
 `docs/` has a page per subsystem: [`state-handles.md`](state-handles.md) (why there are five
 handles), [`modifier-node.md`](modifier-node.md), [`lazy-column.md`](lazy-column.md),

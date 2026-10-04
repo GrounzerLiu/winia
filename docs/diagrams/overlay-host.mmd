@@ -1,0 +1,25 @@
+---
+title: the overlay host
+---
+%% See docs/architecture.md § Overlays.
+%% An overlay is a second composition: its own Composer, its own tree.
+flowchart TB
+    subgraph PW["PerWindow"]
+        page["composer — the page's Composer + tree"]
+        inp["input — GestureState"]
+        clk["clock — FrameClock"]
+        subgraph OH["overlay — OverlayHost"]
+            o1["OverlayWindow id 1<br/>Composer #2, its own tree"]
+            o2["OverlayWindow id 2<br/>Composer #3, its own tree"]
+        end
+    end
+
+    open["Composer::open_overlay(Desc)<br/>while composing"] --> q["queued on the Composer<br/>local_snapshot stamped with the locals<br/>in scope at that moment"]
+    q --> o1
+    q --> o2
+
+    o1 --> policy["laid out at the window size,<br/>positioned against the anchor"]
+    o2 --> policy
+    policy --> hit["hit test: overlays first,<br/>topmost to bottom, then the page"]
+    policy --> dra["draw: the page, then the overlays"]
+    policy --> kbd["keyboard: a focus-scope overlay owns it,<br/>the page's focus is suspended"]

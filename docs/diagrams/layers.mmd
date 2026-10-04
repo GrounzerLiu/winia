@@ -1,0 +1,55 @@
+---
+title: winia module layers
+---
+%% See docs/architecture.md § Layers.
+%% Solid edges are the direction a module may depend in; dashed edges are the
+%% upward ones that exist on purpose, each labelled with what it is.
+flowchart TB
+    subgraph L6["layer 6"]
+        app["app<br/>winit application · window · frame loop"]
+    end
+    subgraph L5["layer 5"]
+        cmp["components"]
+        thm["theme"]
+        ovl["overlay"]
+        nav["nav"]
+    end
+    subgraph L4["layer 4"]
+        rnd["render"]
+    end
+    subgraph L3["layer 3"]
+        rt["runtime"]
+        itr["interaction"]
+        smt["semantics"]
+        sel["selection"]
+        nsc["nested_scroll"]
+        eff["effect"]
+        trs["transition"]
+    end
+    subgraph L2["layer 2"]
+        lay["layout"]
+        mod["modifier"]
+    end
+    subgraph L1["layer 1"]
+        txt["text"]
+        ani["animation"]
+        inp["input"]
+    end
+    subgraph L0["layer 0"]
+        unt["unit"]
+        gfx["graphics"]
+    end
+
+    L6 --> L5
+    L5 --> L4
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+    L1 --> L0
+
+    acc["accessibility"]
+    rt -. "the overlay queue — the one inversion" .-> ovl
+    unt -. "AnimatableValue impls" .-> ani
+    gfx -. "AxisValue can be animated" .-> rt
+    itr -. "the ripple's animation state" .-> ani
+    acc -. "publishes semantics' tree" .-> smt

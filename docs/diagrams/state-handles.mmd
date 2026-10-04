@@ -1,0 +1,15 @@
+---
+title: what a read and a write each do
+---
+%% See docs/architecture.md § State.
+%% There is no second delivery channel: a write goes through the cell's
+%% StateSignal and reaches exactly the composers that read it.
+flowchart TB
+    get["x.get() inside a pass"] --> dep["records a dependency<br/>DepMode::Compose / Layout / Draw"]
+    dep --> cell[("the cell<br/>value + StateSignal id")]
+
+    set["x.set(v) / x.update(f)"] --> eq{"equal to the current value?"}
+    eq -- "yes — PartialEq dedupe" --> noop["nothing happens"]
+    eq -- no --> fan["fan out to the composers<br/>that are still alive"]
+    cell --> fan
+    fan --> act["compose pass: recompose that subtree<br/>layout pass: re-measure next frame<br/>draw pass: repaint"]
