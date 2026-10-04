@@ -77,7 +77,7 @@ pub enum Brush {
     /// A single color: the same result as `Modifier::background`, kept here so a caller can choose a
     /// brush at runtime without switching modifier methods.
     Solid(Color),
-    /// Linear: color runs from [`GradientBrush::from_to`]'s start to its end.
+    /// Linear: color runs from `GradientBrush::from_to`'s start to its end.
     Linear(GradientBrush),
     /// Radial: color runs outward from the centre, reaching its last stop at `radius`.
     Radial(GradientBrush),

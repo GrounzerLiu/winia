@@ -1,6 +1,6 @@
 //! The text field's container payload — what the `Modifier` chain carries and the renderer reads.
 //!
-//! `ModifierElement::TextFieldVisual` holds a [`TextFieldVisual`] payload, so the variant, the slot
+//! `ModifierElement::TextFieldVisual` holds a `TextFieldVisual` payload, so the variant, the slot
 //! roles, the colour set and the three render-time queries all have to be visible below the
 //! component. The component keeps `TextField`, `TextFieldDefaults` and the constructors that turn a
 //! `WiniaTheme` into a `TextFieldColors` — the design-system half.

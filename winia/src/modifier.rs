@@ -1112,7 +1112,7 @@ impl Modifier {
     ///
     /// Accepts a value or a closure, so a gradient can follow animated state the same way
     /// `background` accepts an animated color. Gradient coordinates are FRACTIONS of the node's
-    /// bounds — see the module docs on [`crate::brush`] for why that differs from Compose.
+    /// bounds — see the module docs on [`crate::graphics::brush`] for why that differs from Compose.
     pub fn background_brush(
         self,
         brush: impl Into<crate::graphics::BrushSource>,

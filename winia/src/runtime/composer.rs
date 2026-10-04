@@ -34,7 +34,7 @@ impl Drop for StmtGuard {
 
 /// RAII 组合 scope guard——Drop 时调用 end_scope（配对 start_scope_guarded）。
 /// 持有 composer 裸指针：guard 生命周期内 composer 必须存活且无并发访问
-/// （组合单线程）；guard 由 #[composable] 宏注入声明在函数开头、函数返回
+/// （组合单线程）；guard 由 `#[composable]` 宏注入声明在函数开头、函数返回
 /// 时最后 drop——end_scope 在所有语句 guard pop 之后执行，配对正确。
 pub struct ScopeGuard {
     composer: *mut Composer,
@@ -216,7 +216,7 @@ fn params_equal(a: &[Box<dyn ParamValue>], b: &[Box<dyn ParamValue>]) -> bool {
 /// scope 栈空（组合外/测量）→ ACTIVE_SLOT_KEY。
 pub(crate) fn with_active_scope(f: impl FnOnce(u64)) {
     // 统一依赖注册目标 = 最内层 scope（容器组件 start_restartable_group 时 push、
-    // #[composable] 函数 start_scope 时 push）：组件内读取（Text build）注册到最近
+    // `#[composable]` 函数 start_scope 时 push）：组件内读取（Text build）注册到最近
     // 容器 scope（对标 Compose ReplaceGroup 内联语义）；content 闭包内表达式注册到
     // 所在容器 scope。NODE_DEPTH 不再参与（此前导致 content scope 收不到依赖——
     // content 闭包内 NODE_DEPTH 恒 ≥1，永远走 ACTIVE_SLOT_KEY）。
@@ -443,7 +443,7 @@ impl<'a> ComposeCtx<'a> {
         self.composer.start_scope()
     }
 
-    /// #[composable] 宏注入：以源码哈希为 scope key 开始（函数级 key 稳定——
+    /// `#[composable]` 宏注入：以源码哈希为 scope key 开始（函数级 key 稳定——
     /// 结构变化不漂移）。内部节点的 next_key 以 scope 源码哈希为 key 基。
     /// ⚠ 不调用 start_scope（它也会 push None——双重 push 后栈顶是 None，
     /// next_key 读 scope=0 → 跨函数同 stmt id 的 key 碰撞 → 节点复用串位）
@@ -461,7 +461,7 @@ impl<'a> ComposeCtx<'a> {
 
     /// RAII 版 scope 开始（Drop 时自动 end_scope）——支持返回值函数与提前
     /// return（显式 end_scope 在提前退出时泄漏 scope 栈——新 key 系统
-    /// #[composable] 宏展开使用此版本；guard 声明在函数开头、存活到函数
+    /// `#[composable]` 宏展开使用此版本；guard 声明在函数开头、存活到函数
     /// 返回——end_scope 在所有语句 guard pop 之后执行，配对正确）。
     /// ⚠ guard 内持有 composer 裸指针——调用方必须保证 guard 生命周期内
     /// composer 存活且无并发访问（组合单线程——成立）。
@@ -494,7 +494,7 @@ impl<'a> ComposeCtx<'a> {
         ScopeGuard { composer: self.composer as *mut Composer }
     }
 
-    /// #[composable] 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
+    /// `#[composable]` 宏注入：进入一条语句（id 为编译期固定的源码位置序号）。
     /// 返回 RAII guard——语句块结束时 drop 自动 pop_stmt：闭包体/循环体内的
     /// `return`/`break`/`continue`/`panic!` 提前退出也不会泄漏 stmt 栈
     /// （显式 push/pop 在提前退出时栈会永久错位——后续语句 key 静默漂移）。
@@ -522,13 +522,13 @@ impl<'a> ComposeCtx<'a> {
         StmtGuard
     }
 
-    /// #[composable] 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
+    /// `#[composable]` 宏注入：退出语句（与 push_stmt 配对）——保留兼容旧用法
     pub fn push_stmt(&mut self, id: u32) {
         let seq = self.composer.slot_table.sibling_position();
         STMT_STACK.with(|s| s.borrow_mut().push((id, seq)));
     }
 
-    /// #[composable] 宏注入：退出语句（与 push_stmt 配对）
+    /// `#[composable]` 宏注入：退出语句（与 push_stmt 配对）
     pub fn pop_stmt(&mut self) {
         STMT_STACK.with(|s| { s.borrow_mut().pop(); });
     }
@@ -559,9 +559,9 @@ impl<'a> ComposeCtx<'a> {
     /// 按序比较——相等返回 `false`（参数未变），不等/首次返回 `true`。
     /// 暂存本帧参数（start_node 时写入 slot.params，供下帧比较）。
     ///
-    /// 用法（#[composable] 组件内——参数未变 + slot clean 时容器 Skip，content 不重跑）：
+    /// 用法（`#[composable]` 组件内——参数未变 + slot clean 时容器 Skip，content 不重跑）：
     /// ```ignore
-    /// #[composable]
+    /// `#[composable]`
     /// fn card(ctx: &mut ComposeCtx, title: &str) {
     ///     let _title_changed = ctx.changed(&title.to_string());  // 参数声明（start 容器前）
     ///     Column::new()
@@ -2242,7 +2242,7 @@ impl Composer {
     /// 导致 remember 的 State 全部丢失重建）。
     /// 能否获得稳定 key 的 base（新 key 系统核心判定）：
     /// - 显式 ctx.key(id, f) 作用域内 → 稳定（用户保证唯一）
-    /// - STMT_STACK 有宏注入的语句（#[composable]/keyed_stmt! 展开）→ 稳定
+    /// - STMT_STACK 有宏注入的语句（`#[composable]`/keyed_stmt! 展开）→ 稳定
     ///   （base = fnv(scope_src, 语句id, 迭代seq)——编译期固定）
     /// - 都不是 → None（调用方 panic 兜底——fail-fast，不静默降级）
     pub(crate) fn try_stable_base(&self) -> Option<u64> {
@@ -2281,7 +2281,7 @@ impl Composer {
     }
 
     /// 调用链哈希：fnv(scope_src, STMT栈顶语句id, 迭代seq)——编译期固定
-    /// 的组合位置（#[composable]/keyed_stmt! 注入的语句）
+    /// 的组合位置（`#[composable]`/keyed_stmt! 注入的语句）
     fn chain_hash(&self) -> Option<u64> {
         STMT_STACK.with(|s| {
             let s = s.borrow();
@@ -2299,16 +2299,16 @@ impl Composer {
     /// 没有稳定 key 源时的 panic（fail-fast——不静默降级为路径哈希）
     pub(crate) fn panic_no_stable_key(&self, api: &str) -> ! {
         panic!(
-            "无法获得稳定 key（{}）：调用点不在 #[composable]/keyed_stmt! 注入内，\
+            "无法获得稳定 key（{}）：调用点不在 `#[composable]`/keyed_stmt! 注入内，\
              也无 ctx.key() 包裹——key 会在结构变化时漂移。修复：①将调用点放入 \
-             #[composable] 函数内 ②用 ctx.key() 包裹 ③content 闭包参数名与 \
+             `#[composable]` 函数内 ②用 ctx.key() 包裹 ③content 闭包参数名与 \
              #[composable(x)] 指定的标识符一致",
             api
         )
     }
 
     pub fn next_group_key(&mut self) -> u64 {
-        // key 基优先级：显式 ctx.key() > #[composable] 语句 id（源码位置）。
+        // key 基优先级：显式 ctx.key() > `#[composable]` 语句 id（源码位置）。
         // 语句 id 由宏注入（编译期按源码结构固定编号）——结构变化（前面插入/移除兄弟
         // 节点）不影响语句 id → key 不漂移 → remember/复用稳定（对标 Compose 编译器
         // 的调用点 key）。无稳定源 → panic（fail-fast）。
@@ -2343,7 +2343,7 @@ impl Composer {
     /// ⚠ 手动调用（无源码哈希）：scope_source_stack push None，与 start_scope_keyed
     /// 的 Some 区分——end_scope 严格配对，不破坏外层宏注入的 source。
     /// ⚠ release 下宏外调用会触发稳定 key panic（next_group_key 快速失败）——
-    /// 生产代码应使用 #[composable]/app_root! 注入的 start_scope_keyed。
+    /// 生产代码应使用 `#[composable]`/`app_root!` 注入的 start_scope_keyed。
     pub fn start_scope(&mut self) -> u64 {
         self.scope_source_stack.push(None);
         let key = self.next_group_key();
@@ -4296,7 +4296,7 @@ fn test_changed_param_comparison() {
     assert_eq!(p4, Some(true), "与上帧比较（hello vs world）→ 变化 → true");
 }
 
-/// 阶段5：参数相等跳过集成测试——#[composable] 组件用 ctx.changed 声明参数，
+/// 阶段5：参数相等跳过集成测试——`#[composable]` 组件用 ctx.changed 声明参数，
 /// 参数未变 + slot clean → group Skip；参数变化 → Enter。
 #[test]
 fn test_param_equal_skip_integration() {
@@ -4306,7 +4306,7 @@ fn test_param_equal_skip_integration() {
 
     let compose_once = |composer: &mut Composer, title: &str, out: &mut Option<GroupStatus>| {
         composer.compose(|ctx| {
-            // 组件（模拟 #[composable]）：参数声明（start group 前）
+            // 组件（模拟 `#[composable]`）：参数声明（start group 前）
             let _changed = ctx.changed(&title.to_string());
             let key = ctx.next_key();
             let status = ctx.start_restartable_group(key, Modifier::new(), crate::layout::BoxLayout::new());
@@ -6189,7 +6189,7 @@ fn test_text_style_change_remeasures() {
 #[test]
 fn test_stmt_key_stable_across_structure_change() {
     let mut composer = Composer::new();
-    // 模拟 #[composable] 宏注入：帧 1 语句 5 内组合两个节点；帧 2 前插入一条语句
+    // 模拟 `#[composable]` 宏注入：帧 1 语句 5 内组合两个节点；帧 2 前插入一条语句
     // （运行时结构变化——但语句 id 是源码位置，不受影响）→ key 应稳定。
     let mut keys_frame1 = Vec::new();
     composer.compose(|ctx| {
@@ -6369,7 +6369,7 @@ fn test_stmt_seq_inherits_outer_iteration_position() {
     );
 }
 
-/// 跨函数 seq 隔离回归：不同 #[composable] 函数的语句 id 各自从 0 开始——
+/// 跨函数 seq 隔离回归：不同 `#[composable]` 函数的语句 id 各自从 0 开始——
 /// seq 取 slot 树兄弟位置（next_sibling_index）——函数 A/B 在不同 scope 槽位，
 /// 各自 child_counters 独立 → seq 天然隔离（函数 B 行数变化不影响 A 的 key）。
 #[test]

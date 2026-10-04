@@ -7,7 +7,7 @@
 //!   horizontal and 8 dp vertical, `labelLarge` text, base shape `CornerFull`.
 //! - `SegmentedButtonDefaults::item_shape(index, count)`: one item is a full stadium, the first rounds
 //!   its start corners, the last its end corners, everything between is a rectangle. winia resolves the
-//!   direction from [`WiniaTheme::direction`], so the caller passes the same index/count in LTR and RTL.
+//!   direction from `layout::direction::current()`, so the caller passes the same index/count in LTR and RTL.
 //! - Colors resolve from `enabled × active`: active is `secondaryContainer` / `onSecondaryContainer`
 //!   with an `outline` border, inactive is transparent / `onSurface` with the same border, and disabled
 //!   is `onSurface` (content) and `outline` at the token alphas. The container color does NOT animate
@@ -179,7 +179,7 @@ impl SegmentedButtonDefaults {
     }
 
     /// The shape of the item at `index` in a row of `count` (material3 `itemShape`). Direction-aware:
-    /// "start" follows [`WiniaTheme::direction`], so an RTL row rounds the other two corners.
+    /// "start" follows `layout::direction::current()`, so an RTL row rounds the other two corners.
     pub fn item_shape(index: usize, count: usize) -> Shape {
         if count <= 1 {
             return Shape::Pill;

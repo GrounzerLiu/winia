@@ -3,7 +3,7 @@
 //! The architecture follows Jetpack Compose; the backend is winit + skia-safe. A module's layer is
 //! the direction it is allowed to depend in, lowest first:
 //!
-//! - [`unit`], [`graphics`] — values with no dependencies of their own (`Dp`, `Color`, `Shape`);
+//! - [`mod@unit`], [`mod@graphics`] — the values everything else is expressed in (`Dp`, `Color`, `Shape`);
 //! - [`text`], [`animation`], [`input`] — text layout, animation, and the event vocabulary;
 //! - [`layout`], [`runtime`] — the measure/place pass and the composition runtime (`State`,
 //!   `ComposeCtx`, `Composer`, [`modifier`]);

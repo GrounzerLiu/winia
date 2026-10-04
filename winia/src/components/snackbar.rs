@@ -242,7 +242,7 @@ impl SnackbarHost {
     /// 完成回调 dismiss——无需每帧检查）。
     ///
     /// 布局：**不 fill_max_size**（避免全屏覆盖层在 hit_test 中拦截下方所有
-    /// 点击）。底部定位由父容器完成——典型用法放 [`Scaffold::bottom_bar`]
+    /// 点击）。底部定位由父容器完成——典型用法放 [`crate::components::Scaffold::bottom_bar`]
     /// （winia 原生底部槽，只占条自身高度、不遮挡内容区点击），或放入
     /// 底部对齐的覆盖容器。Snackbar 条本身 `fill_max_width` → 底部全宽横条。
     #[composable]

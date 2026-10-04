@@ -3,7 +3,7 @@
 //! Structure (mirrors androidx `NavigationDrawer.kt`):
 //! - [`ModalNavigationDrawer`] owns the state, the anchors, the placement and the
 //!   scrim, and puts the app content behind both. It is an **in-tree** component
-//!   (a `Stack`), exactly like Compose's — not an overlay like [`ModalBottomSheet`]:
+//!   (a `Stack`), exactly like Compose's — not an overlay like [`crate::components::bottom_sheet::ModalBottomSheet`]:
 //!   the drawer is part of the app shell, and the content under it keeps its
 //!   composition state.
 //! - [`ModalDrawerSheet`] is the surface the caller nests inside the drawer slot:

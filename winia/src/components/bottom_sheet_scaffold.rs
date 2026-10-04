@@ -1,7 +1,7 @@
 //! `BottomSheetScaffold` — a persistent bottom panel that drags out to show more, mirroring
 //! Compose's `BottomSheetScaffold`.
 //!
-//! Differences from [`ModalBottomSheet`]:
+//! Differences from [`crate::components::bottom_sheet::ModalBottomSheet`]:
 //! - **Not a popup**: part of the host's layout (always present), no `Overlay`, no scrim, and
 //!   the page stays visible.
 //! - **Peek height**: `sheetPeekHeight` (56dp by default) sets how much shows when collapsed —

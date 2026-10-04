@@ -25,7 +25,7 @@ use crate::composable;
 /// The anchor's coordinates are known only to the layout pass, so the caller supplies the progress reader
 /// and the layout pass does the interpolation.
 ///
-/// The two endpoints are resolved by [`anchor_slide_origin`].
+/// The two endpoints are resolved by `anchor_slide_origin` in the layout pass.
 #[derive(Clone)]
 pub struct AnchorSlide(pub std::sync::Arc<dyn Fn() -> f32 + Send + Sync>);
 

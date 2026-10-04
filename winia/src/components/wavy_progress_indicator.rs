@@ -15,7 +15,7 @@
 //!   多画两波长供滚动），`PathMeasure` 按 progress 截段；
 //! - **Circular 形状**：`RoundedPolygon.circle(numVertices)` 与
 //!   `star(numVerticesPerRadius, innerRadius=0.75, rounding=(0.35,0.4),
-//!   innerRounding=(0.5))` 归一化后 Morph；amplitude∈[0,1] 用 `Morph.to_path`；
+//!   innerRounding=(0.5))` 归一化后 Morph；amplitude∈(0..1) 用 `Morph.to_path`；
 //!   路径重复两圈 + waveOffset 偏移取段 + 绕中心旋转补偿。
 
 use crate::animation::interpolator;

@@ -27,10 +27,11 @@ pub const LAZY_ITEM_ESTIMATED_HEIGHT: f32 = 48.0;
 /// 超出视口后仍注册的额外项数（上下各预取，减少滚动时补注册抖动）
 pub const LAZY_BEYOND_BOUNDS: usize = 4;
 
-/// The lazy list's main axis. Sealed, like [`Axis`]: the two markers it carries are the whole set.
+/// The lazy list's main axis. Sealed, like [`Axis`](super::axis::Axis): the two markers it carries are
+/// the whole set.
 ///
 /// The questions both container families ask — main and cross extents, `size`, `point` — are on
-/// [`Axis`]; this adds what only a lazy list needs.
+/// [`Axis`](super::axis::Axis); this adds what only a lazy list needs.
 pub trait LazyAxis: super::axis::Axis {
     /// A child's constraints: the cross axis inherits the parent's max, the main axis is unbounded
     /// (wrap content).
@@ -571,7 +572,7 @@ impl<A: LazyAxis> LazyList<A> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ItemHeightCache {
     /// index 视图（index → 高度）：供连续扫描（prefix/anchor/visible_range）
-    /// 与越界预估使用；数据前部增删/重排后此视图会错位，由 [`rebase`] 校正。
+    /// 与越界预估使用；数据前部增删/重排后此视图会错位，由 [`ItemHeightCache::rebase`] 校正。
     pub heights: Vec<f32>,
     /// key 视图（item key → 高度）：跨数据变化保持"项身份 → 高度"——
     /// 数据增删/重排后，同一 key 的项高度不因 index 平移而丢失。私有，

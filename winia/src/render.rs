@@ -29,7 +29,7 @@ pub fn render(nodes: &[LayoutNode], root_idx: usize, canvas: &Canvas) {
 /// This is the Compose `renderInOverlayDuringTransition` elevation: the node
 /// keeps its place in the tree (layout, state and hit testing are untouched)
 /// and is merely re-drawn from the root of the canvas by
-/// [`Composer::render_layer`], which is `pub(crate)` — see
+/// `Composer::render_layer`, which is `pub(crate)` — see
 /// `docs/shared-element-transition.md` §3.6.
 /// `root_idx` stays the REAL tree root — the text-field helpers inside
 /// `render_pass1` resolve colours and offset mappings by walking up to it, so
@@ -1889,7 +1889,7 @@ fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::graphi
 /// Fill `shape` with a [`crate::graphics::Brush`].
 ///
 /// The two absolute cases are resolved here, against the node's rect: a gradient's coordinates are
-/// fractions of the bounds (see the [`crate::brush`] module docs), so a gradient fills any size node.
+/// fractions of the bounds (see the [`crate::graphics::brush`] module docs), so a gradient fills any size node.
 fn draw_brush(canvas: &Canvas, rect: Rect, brush: &crate::graphics::Brush, shape: &crate::graphics::Shape) {
     match brush {
         crate::graphics::Brush::Solid(color) => draw_background(canvas, rect, color, shape),

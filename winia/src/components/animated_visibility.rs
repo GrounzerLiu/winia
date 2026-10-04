@@ -62,7 +62,7 @@ impl AnimatedVisibility {
         self
     }
 
-    /// 构建动画容器（对比测试：临时去掉 #[composable]）
+    /// 构建动画容器（对比测试：临时去掉 `#[composable]`）
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let visible = self.visible;
         let enter = self.enter;
