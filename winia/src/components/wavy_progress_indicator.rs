@@ -456,7 +456,6 @@ impl LinearWavyProgressIndicator {
                 crate::animation::push_animatable(amplitude_state.clone(), target, spec);
             }
 
-            let draw_stop = true;
             let cache = shapes_cache.clone();
             Modifier::new()
                 .size(WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT)

@@ -433,7 +433,6 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         let (mut leading_w, mut trailing_w) = (0.0f32, 0.0f32);
         let (mut prefix_w, mut suffix_w) = (0.0f32, 0.0f32);
         let mut placements: Vec<crate::layout::Placement> = Vec::new();
-        let mut has_input = false;
         for (i, &c) in children.iter().enumerate() {
             match roles[i] {
                 TextFieldSlotRole::Leading => {
@@ -963,7 +962,6 @@ impl TextField {
         let offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping> = transformed.offset_mapping;
         // 显示文本恒为变换结果（placeholder 为闭包子节点——text-field-v2
         // 容器化：由 TextFieldLayout 定位在输入位）
-        let has_visual = visual.is_some();
         let display_content = transformed.text.clone();
         let display_color = color;
         // label 悬浮动画进度（0 = 展开 / 1 = 悬浮——M3 FastSpatial 150ms）。

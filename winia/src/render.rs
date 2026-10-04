@@ -1151,7 +1151,7 @@ fn render_pass1(
                 scroll_offset_h = Some(off);
             }
             // 文本输入框容器（M3 Filled/Outlined——背景/指示线/边框/label/支持文本）
-            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, read_only: _, cursor_color: _, indicator_color, focus_progress, offset_mapping, supporting } => {
+            ModifierElement::TextFieldVisual { variant, shape, colors, enabled: _, read_only: _, cursor_color: _, indicator_color, focus_progress, offset_mapping: _, supporting } => {
                 // 容器 rect：有支持文本时扣除其区域（supporting 画在容器底部外
                 // 4dp，节点总高 = 容器 + 4 + 16）
                 let supporting_h = supporting.as_ref().map_or(0.0, |sv| sv.height());
@@ -1999,7 +1999,7 @@ fn draw_text_field_container(
     canvas: &Canvas,
     rect: Rect,
     variant: &crate::text::field::TextFieldVariant,
-    shape: &crate::graphics::Shape,
+    _shape: &crate::graphics::Shape,
     colors: &crate::text::field::TextFieldColors,
     indicator: &crate::graphics::Color,
     focus_p: f32,

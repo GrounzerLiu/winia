@@ -1596,9 +1596,6 @@ impl ApplicationHandler for AppState {
                     event_loop.set_control_flow(ControlFlow::WaitUntil(pw.clock.last_render_time + pw.clock.frame_interval));
                 } else {
                 pw.clock.last_render_time = now;
-                let w = pw.width;
-                let h = pw.height;
-                let sf = pw.scale_factor as f32;
                 // 崩溃边界（P3-3）：compose/layout/draw 任一段 panic（用户 content 代码 /
                 // skia 异常）不崩窗口——捕获后跳过本帧（保留上帧画面），下帧正常重试。
                 // 连续 panic 计数防风暴：超过阈值打印错误并停更（不再自旋）。
@@ -1610,7 +1607,7 @@ impl ApplicationHandler for AppState {
                     // bridge): it is a full tree walk per frame, and `publishing_enabled` is a const,
                     // so a plain build never pays for it.
                     let mut main_nodes = Vec::new();
-                    pw.recompose_layout_render(window_id, |nodes, root_idx, surface| {
+                    pw.recompose_layout_render(window_id, |nodes, root_idx, _surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
                         if crate::semantics::publishing_enabled() {
                             main_nodes = crate::semantics::semantics_tree(nodes, root_idx);
@@ -1841,12 +1838,11 @@ impl AppState {
                         continue;
                     }
                     // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
-                    let (fid, sk, path_len, click_handled) = {
+                    let (fid, sk, _path_len, _click_handled) = {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
                             let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
-                            let mut click_handled = false;
                             // debug 点击聚焦：path 中最深的 focusable 节点
                             // （text-field-v2 容器化后焦点/交互在容器——空字段
                             // 输入子节点 0 宽点不中；旧逻辑只看 ime_callback
@@ -1882,8 +1878,8 @@ impl AppState {
                         pw.focused_slot_key = Some(sk);
                         if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
                     }
-                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
-                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
+                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
+                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
                 }
                 debug::DebugEvent::Key { key } => {
                     if key == "Escape" {
@@ -2807,7 +2803,7 @@ fn handle_pointer_down(
                     n.modifier.vertical_scroll_state().is_some());
             }
         }
-        let Some(&innermost) = path.last() else { return None };
+        let Some(&_innermost) = path.last() else { return None };
         let selecting = pw.input.down.as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);

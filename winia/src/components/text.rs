@@ -190,8 +190,8 @@ impl Text {
         if let Some(reg) = reg_for_node {
             ctx.set_current_node_registrar(reg);
         }
-        if let Some((k, len, off)) = registered_off {
-            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", k, len, off);
+        if let Some((_k, _len, _off)) = registered_off {
+            debug_log!("[selection] Text registered: slot_key={} len={} global_off={}", _k, _len, _off);
         }
         ctx.end_node();
     }

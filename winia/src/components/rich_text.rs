@@ -390,7 +390,6 @@ impl RichText {
             } else { None }
         };
 
-        let content_len = content.len();
         let modifier = self.modifier.push(ModifierElement::RichTextContent {
             content,
             drawables,

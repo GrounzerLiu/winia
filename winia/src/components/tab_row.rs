@@ -1247,7 +1247,7 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
         nodes: &mut Vec<LayoutNode>,
         policies: &[Box<dyn MeasurePolicy>],
         children: &[usize],
-        constraints: Constraints,
+        _constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         // 两段式依赖：动画值 get() 注册到本节点（滚动容器）——动画帧重测本节点
         self.offset_state.get();

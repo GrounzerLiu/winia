@@ -2233,13 +2233,14 @@ impl Composer {
                 if let Some(ref sm) = source_marker {
                     let source_is_bounds = matches!(sm.kind, SharedKind::Bounds { .. });
                     if source_is_bounds != target_is_bounds {
-                        let (scope, key) = self
+                        // The pair exists for the log below, which folds away without the feature.
+                        let (_scope, _key) = self
                             .shared_flights
                             .get(&id)
                             .map(|a| (a.flight.scope_id, a.flight.key.clone()))
                             .unwrap_or((0, String::new()));
                         crate::debug_log!(
-                            "[shared] mixed-kind pair scope={scope} key={key} — flight follows the target side"
+                            "[shared] mixed-kind pair scope={_scope} key={_key} — flight follows the target side"
                         );
                     }
                 }
