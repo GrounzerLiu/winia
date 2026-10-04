@@ -75,6 +75,77 @@ fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
 }
 
+// ── WindowThemeState ──
+
+/// What this window draws with, and what it has already drawn with.
+///
+/// The pair has to move together: `applied` is the comparison that decides whether a theme change
+/// needs the tree to run again (a component resolved its colours and type when it composed, so a
+/// new palette is invisible until it recomposes). One field on `PerWindow` now, two values that
+/// only mean anything next to each other.
+pub(crate) struct WindowThemeState {
+    /// The palette this window clears with, and the typography/direction its tree resolved. Shared
+    /// with the `Window` node that manages the window (which re-samples all of it every frame) —
+    /// see `theme::WindowTheme`.
+    pub(crate) cell: crate::theme::WindowTheme,
+    /// The values `cell` last resolved to, i.e. what the tree has already drawn with.
+    pub(crate) applied: crate::theme::AppliedTheme,
+}
+
+impl WindowThemeState {
+    /// A window with the given intent: its palette is whatever the caller passed (nothing to follow),
+    /// and its type scale is the default.
+    pub(crate) fn from_theme(theme: crate::theme::ThemeColors) -> Self {
+        let cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
+        let applied = cell.applied();
+        Self { cell, applied }
+    }
+}
+
+// ── FrameClock ──
+
+/// The frame clock: the throttle, the counters, and the give-up state.
+///
+/// Split out of `PerWindow` because these eight fields are only ever read and written by the frame
+/// loop's own bookkeeping — nothing outside `app.rs` touches them, and together they are what makes
+/// "should this frame be drawn" have an answer.
+pub(crate) struct FrameClock {
+    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
+    pub(crate) frame_counter: u64,
+    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
+    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
+    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
+    pub(crate) last_request_time: std::time::Instant,
+    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
+    /// 切换）需重建窗口——当前不做动态跟踪）
+    pub(crate) frame_interval: std::time::Duration,
+    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
+    pub(crate) force_redraw: bool,
+    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
+    pub(crate) consecutive_panics: u32,
+    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
+    pub(crate) render_disabled: bool,
+    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
+    pub(crate) last_render_time: std::time::Instant,
+    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
+    pub(crate) last_refresh_check: std::time::Instant,
+}
+
+impl Default for FrameClock {
+    fn default() -> Self {
+        Self {
+            frame_counter: 0,
+            last_request_time: std::time::Instant::now(),
+            frame_interval: std::time::Duration::from_millis(16),
+            force_redraw: false,
+            consecutive_panics: 0,
+            render_disabled: false,
+            last_render_time: std::time::Instant::now(),
+            last_refresh_check: std::time::Instant::now(),
+        }
+    }
+}
+
 // ── PerWindow ──
 
 pub(crate) struct PerWindow {
@@ -93,28 +164,9 @@ pub(crate) struct PerWindow {
     window_size_backchannel: std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
-    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
-    pub(crate) frame_counter: u64,
-    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
-    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
-    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
-    last_request_time: std::time::Instant,
-    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
-    /// 切换）需重建窗口——当前不做动态跟踪）
-    pub(crate) frame_interval: std::time::Duration,
-    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
-    pub(crate) force_redraw: bool,
-    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
-    pub(crate) consecutive_panics: u32,
-    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
-    pub(crate) render_disabled: bool,
 
-    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
-    pub(crate) last_render_time: std::time::Instant,
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
-    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
-    last_refresh_check: std::time::Instant,
     /// 当前窗口修饰键状态（ModifiersChanged 按 WindowId 维护）
     pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
@@ -126,18 +178,17 @@ pub(crate) struct PerWindow {
     pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
-    /// What this window draws with — the palette it clears the surface with, and the typography/direction
-    /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
-    /// every frame) — see `ui::theme::WindowTheme`.
-    theme_cell: crate::theme::WindowTheme,
+    /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
+    pub(crate) theme: WindowThemeState,
+    /// The frame's clock: when it last rendered and last asked to, how fast it should be
+    /// going, and whether it has given up (see `FrameClock`).
+    pub(crate) clock: FrameClock,
     /// The pointer and gesture state: what is down, what a gesture locked onto, and the
     /// sessions it opened (see `GestureState` — fourteen fields that used to be here).
     pub(crate) input: GestureState,
     /// The overlay host: the layers, and the interaction state that only makes sense against
     /// them (see `OverlayHost` — the group that used to be ten fields here).
     pub(crate) overlay: OverlayHost,
-    /// The values `theme_cell` last resolved to, i.e. what the tree has already drawn with.
-    theme_applied: crate::theme::AppliedTheme,
 }
 
 
@@ -146,9 +197,8 @@ impl PerWindow {
     fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
-        let theme_cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
-        let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, theme_cell }
+        let theme = WindowThemeState::from_theme(theme);
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -270,15 +320,15 @@ impl PerWindow {
     fn refresh_frame_interval(&mut self) {
         const RECHECK_MIN: std::time::Duration = std::time::Duration::from_millis(300);
         let now = std::time::Instant::now();
-        if now.duration_since(self.last_refresh_check) < RECHECK_MIN {
+        if now.duration_since(self.clock.last_refresh_check) < RECHECK_MIN {
             return;
         }
-        self.last_refresh_check = now;
+        self.clock.last_refresh_check = now;
         let Some(ref sw) = self.skia_window else { return; };
         let Some(interval) = current_frame_interval(sw) else { return; };
-        if interval != self.frame_interval {
-            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.frame_interval, interval);
-            self.frame_interval = interval;
+        if interval != self.clock.frame_interval {
+            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.clock.frame_interval, interval);
+            self.clock.frame_interval = interval;
             if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
         }
     }
@@ -537,8 +587,8 @@ impl PerWindow {
     fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
-        self.frame_counter += 1;
-        debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        self.clock.frame_counter += 1;
+        debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
         // scene published this frame, and flushes the previous frame's records.
         //
@@ -546,7 +596,7 @@ impl PerWindow {
         // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
         // so a build with the feature and no env var records into memory and writes nothing.
         crate::anim_trace::begin_frame(
-            self.frame_counter,
+            self.clock.frame_counter,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
@@ -643,7 +693,7 @@ impl PerWindow {
             }
         }
 
-        let bg = self.theme_applied.colors.background;
+        let bg = self.theme.applied.colors.background;
 
         if let Some(root_idx) = self.composer.layout_root_idx() {
             let nodes = self.composer.arena_nodes();
@@ -727,13 +777,13 @@ impl ApplicationHandler for AppState {
             // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
             // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
             // 修复 request 每轮发送 → WM_PAINT 消息唤醒 Wait 的 55k/s 自驱动空转
-            let interval = self.windows.values().map(|pw| pw.frame_interval).min()
+            let interval = self.windows.values().map(|pw| pw.clock.frame_interval).min()
                 .unwrap_or(std::time::Duration::from_millis(16));
             event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + interval));
             let now = std::time::Instant::now();
             for pw in self.windows.values_mut() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
@@ -741,7 +791,7 @@ impl ApplicationHandler for AppState {
             // 动画刚停止：强制终帧渲染（最后一次 set 的 request 可能被跳过）
             for pw in self.windows.values_mut() {
                 if let Some(ref sw) = pw.skia_window {
-                    pw.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
+                    pw.clock.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
                     sw.request_redraw();
                 }
             }
@@ -753,21 +803,21 @@ impl ApplicationHandler for AppState {
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             // 渲染欠账按 last_render 对齐（force_redraw 由帧节流跳过时设置）
-            if pw.force_redraw {
-                if now.duration_since(pw.last_render_time) >= pw.frame_interval {
+            if pw.clock.force_redraw {
+                if now.duration_since(pw.clock.last_render_time) >= pw.clock.frame_interval {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
-                    let d = pw.last_render_time + pw.frame_interval;
+                    let d = pw.clock.last_render_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
             // pending state 按 last_request 节流（动画持续 pending 时每帧至多一次）
             if pw.composer.has_pending_states() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
-                    let d = pw.last_request_time + pw.frame_interval;
+                    let d = pw.clock.last_request_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
@@ -894,12 +944,12 @@ impl ApplicationHandler for AppState {
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             if pw.composer.has_pending_states() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
                     // 节流命中不丢弃：到期重试（一次性更新不卡到外部事件）
-                    let d = pw.last_request_time + pw.frame_interval;
+                    let d = pw.clock.last_request_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
@@ -1537,18 +1587,18 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
-                if pw.render_disabled {
+                if pw.clock.render_disabled {
                     // 崩溃边界（P3-3）：连续 panic 后停更——保留最后画面
                     return;
                 }
-                if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
+                if !pw.clock.force_redraw && now.duration_since(pw.clock.last_render_time) < pw.clock.frame_interval {
                     // 帧节流命中：不丢弃本次更新——记渲染欠账（force_redraw），
                     // 下一个可用帧由 new_events 补发 request_redraw。原实现直接
                     // 跳过：一次性状态变更（如双击延迟 tap）会卡到外部事件才刷新
-                    pw.force_redraw = true;
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(pw.last_render_time + pw.frame_interval));
+                    pw.clock.force_redraw = true;
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(pw.clock.last_render_time + pw.clock.frame_interval));
                 } else {
-                pw.last_render_time = now;
+                pw.clock.last_render_time = now;
                 let w = pw.width;
                 let h = pw.height;
                 let sf = pw.scale_factor as f32;
@@ -1606,8 +1656,8 @@ impl ApplicationHandler for AppState {
                 }));
                 match panic_result {
                     Ok(()) => {
-                        pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
-                        pw.consecutive_panics = 0;
+                        pw.clock.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                        pw.clock.consecutive_panics = 0;
                         // 动画自驱动兜底：渲染中注册的动画依赖 wake_up 启动下一轮，
                         // 但 Windows 上从事件处理内调用 EventLoopProxy::wake_up 偶发丢失
                         // （winit 已知竞态）→ 动画冻结在起始值，直到下一个外部事件
@@ -1618,14 +1668,14 @@ impl ApplicationHandler for AppState {
                         }
                     }
                     Err(e) => {
-                        pw.consecutive_panics += 1;
+                        pw.clock.consecutive_panics += 1;
                         let msg = if let Some(s) = e.downcast_ref::<&str>() { (*s).to_string() }
                                   else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
                                   else { "unknown panic".to_string() };
-                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.consecutive_panics, msg);
-                        if pw.consecutive_panics >= 30 {
+                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.clock.consecutive_panics, msg);
+                        if pw.clock.consecutive_panics >= 30 {
                             eprintln!("[render-panic] 连续 30 次 panic——停止本窗口渲染（避免 panic 风暴）");
-                            pw.render_disabled = true;
+                            pw.clock.render_disabled = true;
                         }
                         // force_redraw 保持 true——下帧继续尝试（若未停更）
                     }
@@ -2122,13 +2172,13 @@ impl AppState {
         // What the window has drawn is what the cell says right now — its first frame is about to compose
         // with exactly this, and a default guess here would both re-run that frame for nothing and miss a
         // publish that changed a custom type scale back to the default.
-        pw.theme_applied = theme.applied();
-        pw.theme_cell = theme;
+        pw.theme.applied = theme.applied();
+        pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
-        pw.frame_interval = frame_interval;
+        pw.clock.frame_interval = frame_interval;
         // FocusRequester created by this window's initial composition is bound
         // to this WindowId, just like later redraw compositions.
         let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
@@ -2156,7 +2206,7 @@ impl AppState {
             (pw.content)(ctx);
         });
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
-        let bg = pw.theme_applied.colors.background;
+        let bg = pw.theme.applied.colors.background;
         if let Some(root_idx) = pw.composer.layout_root_idx() {
             let nodes = pw.composer.arena_nodes();
             if let Some(ref mut sw) = pw.skia_window {
@@ -2228,7 +2278,7 @@ pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
 /// nothing.
 impl PerWindow {
     fn refresh_theme(&mut self) -> bool {
-        if !self.theme_cell.refresh(&mut self.theme_applied) {
+        if !self.theme.cell.refresh(&mut self.theme.applied) {
             return false;
         }
         // The window's own snapshot (the surface clear color) is `theme_applied.colors`, refreshed above;
@@ -3240,27 +3290,27 @@ mod window_theme_tests {
         let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         let mut pinned = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         // What a `Window` node passes: a cell whose intent follows the system.
-        first.theme_cell = WindowTheme::new(ThemeSpec::Auto);
-        second.theme_cell = WindowTheme::new(ThemeSpec::Auto);
+        first.theme.cell = WindowTheme::new(ThemeSpec::Auto);
+        second.theme.cell = WindowTheme::new(ThemeSpec::Auto);
         // A window whose application pinned a palette: its cell stays `Fixed`.
-        pinned.theme_cell = WindowTheme::new(ThemeSpec::Fixed(light));
+        pinned.theme.cell = WindowTheme::new(ThemeSpec::Fixed(light));
         first.refresh_theme();
         second.refresh_theme();
-        assert_eq!(first.theme_applied.colors.background, light.background);
-        assert_eq!(second.theme_applied.colors.background, light.background);
+        assert_eq!(first.theme.applied.colors.background, light.background);
+        assert_eq!(second.theme.applied.colors.background, light.background);
 
         crate::theme::set_system_dark_mode(Some(true));
         assert!(first.refresh_theme(), "the first window re-resolves");
         assert!(second.refresh_theme(), "so does the second — the state is per window");
-        assert_eq!(first.theme_applied.colors.background, dark.background);
+        assert_eq!(first.theme.applied.colors.background, dark.background);
         assert_eq!(
-            second.theme_applied.colors.background, dark.background,
+            second.theme.applied.colors.background, dark.background,
             "the second window must not be left behind"
         );
 
         // A pinned window resolves the same palette again and has nothing to redraw.
         assert!(!pinned.refresh_theme(), "a pinned window has nothing to re-run");
-        assert_eq!(pinned.theme_applied.colors.background, light.background);
+        assert_eq!(pinned.theme.applied.colors.background, light.background);
 
         // An idle window does no work either.
         assert!(!first.refresh_theme(), "nothing changed since the last frame");
@@ -3269,9 +3319,9 @@ mod window_theme_tests {
         // resolved their type when they built.
         crate::theme::set_system_dark_mode(Some(false));
         let big = crate::theme::Typography { body_large: crate::text::TextStyle::new().font_size(24.0), ..Default::default() };
-        assert!(first.theme_cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
+        assert!(first.theme.cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
         assert!(first.refresh_theme(), "a type-scale change has to reach the tree");
-        assert_eq!(first.theme_applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
+        assert_eq!(first.theme.applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
         assert!(!first.refresh_theme(), "and then it is idle again");
 
         crate::theme::set_system_dark_mode(None);
