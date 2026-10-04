@@ -1,12 +1,19 @@
-//! Winia — 声明式跨平台 GUI 框架
+//! Winia — a declarative cross-platform GUI framework.
 //!
-//! 架构对标 Jetpack Compose，基于 winit + skia-safe。
+//! The architecture follows Jetpack Compose; the backend is winit + skia-safe. A module's layer is
+//! the direction it is allowed to depend in, lowest first:
 //!
-//! # 核心模块
-//! - [`runtime`]: 运行时核心（State, ComposeCtx, Composer）
-//! - `modifier`: 链式 Modifier 系统（待实现）
-//! - `layout`: 布局引擎（待实现）
-//! - `components`: 组件（按功能平铺于一个目录）
+//! - [`unit`], [`graphics`] — values with no dependencies of their own (`Dp`, `Color`, `Shape`);
+//! - [`text`], [`animation`], [`input`] — text layout, animation, and the event vocabulary;
+//! - [`layout`], [`runtime`] — the measure/place pass and the composition runtime (`State`,
+//!   `ComposeCtx`, `Composer`, [`modifier`]);
+//! - [`render`], [`transition`] — painting and the shared-element machinery;
+//! - [`components`], [`theme`], [`overlay`], [`nav`], [`selection`], [`semantics`] — what a caller
+//!   builds with;
+//! - [`app`] — the winit application and the window that hosts a tree.
+//!
+//! [`debug`] is the dev-server channel and [`accessibility`] the Windows UI Automation bridge; both
+//! are stubs unless their feature is on.
 
 pub mod runtime;
 pub mod unit;
@@ -53,41 +60,7 @@ pub mod accessibility {
 pub mod app;
 pub mod effect;
 pub mod input;
-#[cfg(feature = "debug-server")]
 pub mod debug;
-
-#[cfg(not(feature = "debug-server"))]
-pub mod debug {
-    // no-op stubs
-    pub fn start_stdin_channel() {}
-    pub fn start_ws_server() {}
-    pub fn begin_session() {}
-    pub fn end_session() {}
-    pub fn has_pending() -> bool { false }
-    pub fn set_wake_callback(_cb: impl Fn() + Send + Sync + 'static) {}
-    pub fn set_event_loop_proxy(_proxy: winit::event_loop::EventLoopProxy) {}
-    pub fn update_tree(_window_id: u64, _json: &str) {}
-    pub fn set_overlay_trees(_window_id: u64, _trees: Vec<(u64, (f32, f32), String)>) {}
-    pub fn remove_tree(_window_id: u64) {}
-    pub fn screenshot_requested(_window_id: u64) -> bool { false }
-    pub fn screenshot_done(_window_id: u64) {}
-    pub fn wake() {}
-    pub fn force_shutdown() {}
-    pub fn is_shutdown() -> bool { false }
-    pub fn update_pixels(_window_id: u64, _pixels: &[u8], _width: u32, _height: u32) {}
-    pub fn update_frame_passes(_window_id: u64, _passes: u8) {}
-    pub fn clear_frame_passes() {}
-    pub fn set_legacy_target(_window_id: u64) {}
-    pub fn take_queued_events(_window_id: u64) -> Vec<DebugEvent> { Vec::new() }
-    pub fn queued_event_targets() -> std::collections::HashSet<u64> { std::collections::HashSet::new() }
-    pub fn queue_event(_event: DebugEvent) {}
-    pub fn simulate_native_click(_x: f32, _y: f32) {}
-    pub fn build_tree_json(_nodes: &[crate::layout::node::LayoutNode], _root_idx: usize) -> String { String::new() }
-    pub fn set_event_result(_s: &str) {}
-    pub fn get_event_result() -> String { String::new() }
-    #[derive(Debug, Clone)]
-    pub enum DebugEvent { Click { x: f32, y: f32 }, Key { key: String }, Text { value: String }, Scroll { dx: f32, dy: f32 }, Resize { w: f32, h: f32 }, FocusNext, RequestFocus { id: u64 }, PointerDown { x: f32, y: f32 }, PointerMove { x: f32, y: f32 }, PointerUp { x: f32, y: f32 } }
-}
 
 // 公开核心类型
 pub use runtime::composer::{ComposeCtx, Composer};
@@ -115,7 +88,54 @@ pub mod prelude {
     pub use crate::text::{DecoStyle, DecoMode, FontEdge, FontHint};
     pub use crate::input::{KbEvent, KbEventType, PointerEvent, PointerEventType, PointerButton, PointerKind, PenKind};
     pub use crate::graphics::{Shape, Color, BlendMode, ColorFilter, FilterQuality};
-    pub use crate::components::{Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize, ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface, SurfaceBorder, Icon, Tint, Image, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox, Switch, SwitchColors, SwitchDefaults, RadioButton, RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults, RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults, SingleChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRow, VerticalScrollbar, HorizontalScrollbar, LazyScrollbar, HorizontalLazyScrollbar, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH, SCROLLBAR_THUMB_MAX_FRACTION, LinearProgressIndicator, CircularProgressIndicator, ProgressIndicatorDefaults, ProgressIndicatorStrokeCap, LoadingIndicator, LOADING_INDICATOR_SIZE, LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_CONTAINER_SHAPE, LinearWavyProgressIndicator, CircularWavyProgressIndicator, WavyProgressIndicatorDefaults, WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT, WAVY_CIRCULAR_SIZE, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH, WAVY_GAP_SIZE, WAVY_LINEAR_STOP_SIZE, WAVY_LINEAR_DETERMINATE_WAVELENGTH, WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH, WAVY_ANIMATION_DURATION_MS, FloatingActionButton, FloatingActionButtonColors, ExtendedFloatingActionButton, EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT, EXTENDED_FAB_MIN_EXPANDED_WIDTH, FloatingActionButtonDefaults, FloatingActionButtonElevation, FloatingActionButtonSize, FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE, FAB_ICON_SIZE, FAB_MEDIUM_ICON_SIZE, FAB_LARGE_ICON_SIZE, Divider, DividerDefaults, DIVIDER_THICKNESS, DIVIDER_HAIRLINE, ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT, LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarState, TopAppBarNestedConnection, TopAppBarScrollMode, TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT, TOP_APP_BAR_HORIZONTAL_PADDING, Scaffold, ScaffoldContentPadding, ScaffoldFabPosition, SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors, ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold, NavigationSuiteType, NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail, WideNavigationRailItem, WideNavigationRailState, WindowInsets, NavigationBarDefaults, NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT, NavigationItemIconPosition, NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT, NAVIGATION_BAR_ICON_SIZE, NAVIGATION_RAIL_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_ICON_SIZE, WIDE_RAIL_COLLAPSED_WIDTH, WIDE_RAIL_EXPANDED_MIN_WIDTH, ModalNavigationDrawer, ModalDrawerSheet, DrawerState, DrawerValue, DrawerDefaults, NavigationDrawerItem, NavigationDrawerItemColors, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH, DRAWER_CORNER_RADIUS, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE, DRAWER_SHEET_HORIZONTAL_PADDING, DRAWER_ITEM_START_PADDING, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_SLOT_GAP, AlertDialog, AlertDialogDefaults, BasicAlertDialog, DIALOG_MIN_WIDTH, DIALOG_MAX_WIDTH, DIALOG_CORNER_RADIUS, DIALOG_CONTAINER_PADDING, DIALOG_ICON_PADDING_BOTTOM, DIALOG_TITLE_PADDING_BOTTOM, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_BUTTON_SPACING, DIALOG_ICON_SIZE, SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue, SWIPE_DISMISS_POSITIONAL_THRESHOLD, SWIPE_DISMISS_VELOCITY_THRESHOLD, SelectionContainer, TextField, TextFieldValue, Tab, TabRow, TabRowDefaults, TabPosition, ScrollableTabRow, ScrollableTabRowDefaults, TAB_ROW_HEIGHT, ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING, MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT, SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING};
+    pub use crate::components::{
+        Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize,
+        ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface,
+        SurfaceBorder, Icon, Tint, Image, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize,
+        IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox,
+        CheckboxColors, CheckboxDefaults, TriStateCheckbox, Switch, SwitchColors, SwitchDefaults, RadioButton,
+        RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults,
+        RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,
+        SingleChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRow, VerticalScrollbar, HorizontalScrollbar,
+        LazyScrollbar, HorizontalLazyScrollbar, SCROLLBAR_THICKNESS, SCROLLBAR_THUMB_MIN_LENGTH,
+        SCROLLBAR_THUMB_MAX_FRACTION, LinearProgressIndicator, CircularProgressIndicator,
+        ProgressIndicatorDefaults, ProgressIndicatorStrokeCap, LoadingIndicator, LOADING_INDICATOR_SIZE,
+        LOADING_INDICATOR_ACTIVE_SIZE, LOADING_INDICATOR_CONTAINER_SHAPE, LinearWavyProgressIndicator,
+        CircularWavyProgressIndicator, WavyProgressIndicatorDefaults, WAVY_LINEAR_WIDTH, WAVY_LINEAR_HEIGHT,
+        WAVY_CIRCULAR_SIZE, WAVY_STROKE_WIDTH, WAVY_TRACK_STROKE_WIDTH, WAVY_GAP_SIZE, WAVY_LINEAR_STOP_SIZE,
+        WAVY_LINEAR_DETERMINATE_WAVELENGTH, WAVY_LINEAR_INDETERMINATE_WAVELENGTH, WAVY_CIRCULAR_WAVELENGTH,
+        WAVY_ANIMATION_DURATION_MS, FloatingActionButton, FloatingActionButtonColors,
+        ExtendedFloatingActionButton, EXTENDED_FAB_COLLAPSED_WIDTH, EXTENDED_FAB_HEIGHT,
+        EXTENDED_FAB_MIN_EXPANDED_WIDTH, FloatingActionButtonDefaults, FloatingActionButtonElevation,
+        FloatingActionButtonSize, FAB_SMALL_SIZE, FAB_REGULAR_SIZE, FAB_MEDIUM_SIZE, FAB_LARGE_SIZE,
+        FAB_ICON_SIZE, FAB_MEDIUM_ICON_SIZE, FAB_LARGE_ICON_SIZE, Divider, DividerDefaults, DIVIDER_THICKNESS,
+        DIVIDER_HAIRLINE, ListItem, ListItemColors, ListItemDefaults, LIST_ITEM_ONE_LINE_HEIGHT,
+        LIST_ITEM_TWO_LINE_HEIGHT, LIST_ITEM_THREE_LINE_HEIGHT, LIST_ITEM_HORIZONTAL_PADDING,
+        LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_SLOT_GAP, LIST_ITEM_CONTENT_GAP, TopAppBar, TopAppBarColors,
+        TopAppBarScrollBehavior, TopAppBarState, TopAppBarNestedConnection, TopAppBarScrollMode,
+        TopAppBarVariant, TOP_APP_BAR_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT,
+        TOP_APP_BAR_HORIZONTAL_PADDING, Scaffold, ScaffoldContentPadding, ScaffoldFabPosition,
+        SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
+        ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold,
+        NavigationSuiteType, NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
+        WideNavigationRailItem, WideNavigationRailState, WindowInsets, NavigationBarDefaults,
+        NAVIGATION_BAR_HEIGHT, NAVIGATION_BAR_ITEM_SPACING, NAVIGATION_BAR_H_INDICATOR_HEIGHT,
+        NavigationItemIconPosition, NAVIGATION_BAR_INDICATOR_WIDTH, NAVIGATION_BAR_INDICATOR_HEIGHT,
+        NAVIGATION_BAR_ICON_SIZE, NAVIGATION_RAIL_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
+        NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_ICON_SIZE,
+        WIDE_RAIL_COLLAPSED_WIDTH, WIDE_RAIL_EXPANDED_MIN_WIDTH, ModalNavigationDrawer, ModalDrawerSheet,
+        DrawerState, DrawerValue, DrawerDefaults, NavigationDrawerItem, NavigationDrawerItemColors,
+        DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH, DRAWER_CORNER_RADIUS, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE,
+        DRAWER_SHEET_HORIZONTAL_PADDING, DRAWER_ITEM_START_PADDING, DRAWER_ITEM_END_PADDING,
+        DRAWER_ITEM_SLOT_GAP, AlertDialog, AlertDialogDefaults, BasicAlertDialog, DIALOG_MIN_WIDTH,
+        DIALOG_MAX_WIDTH, DIALOG_CORNER_RADIUS, DIALOG_CONTAINER_PADDING, DIALOG_ICON_PADDING_BOTTOM,
+        DIALOG_TITLE_PADDING_BOTTOM, DIALOG_TEXT_PADDING_BOTTOM, DIALOG_BUTTON_SPACING, DIALOG_ICON_SIZE,
+        SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue, SWIPE_DISMISS_POSITIONAL_THRESHOLD,
+        SWIPE_DISMISS_VELOCITY_THRESHOLD, SelectionContainer, TextField, TextFieldValue, Tab, TabRow,
+        TabRowDefaults, TabPosition, ScrollableTabRow, ScrollableTabRowDefaults, TAB_ROW_HEIGHT,
+        ACTIVE_INDICATOR_HEIGHT, HORIZONTAL_TEXT_PADDING, MIN_INDICATOR_WIDTH, LARGE_TAB_HEIGHT,
+        SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING,
+    };
     pub use crate::text::{TextAlign, TextOverflow, TextStyle, FontWeight, FontSlant};
     pub use crate::interaction::{MutableInteractionSource, ComponentState};
     // The general drawing surface (Compose `Canvas` / `DrawScope`) and the constraints-aware box
@@ -126,7 +146,7 @@ pub mod prelude {
     // Accessibility declarations belong in the same scope as `Modifier` — a caller states a role or a
     // name while building the chain.
     pub use crate::selection::ToggleableState;
-pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
+    pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
     pub use crate::components::snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
     pub use crate::components::bottom_sheet::ModalBottomSheet;
     pub use crate::components::split_button::{
