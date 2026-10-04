@@ -9,6 +9,7 @@ use gesture::{
     press_gesture_target, process_pending_taps_on_down, slot_has_double_tap,
 };
 use overlay_host::{
+    OverlayHost,
     begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click, focus_scope_is_open, finish_closing_overlays, hit_overlay, keyboard_scope,
     layout_overlays, overlay_anchor_rect, overlay_down, overlay_drag_up, overlay_exit_hover_at,
     overlay_update_hover, release_keyboard_to_lower_layer, render_overlays, sync_overlays,
@@ -151,24 +152,6 @@ pub(crate) struct PerWindow {
     gesture_arena_origin: (f32, f32),
     /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
     drag_scroll: Option<DragScroll>,
-    /// 顶层弹出层（独立组合单元——渲染在主树之上）
-    overlays: Vec<OverlayWindow>,
-    /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
-    overlay_click: Option<(usize, (f32, f32), u64)>,
-    /// overlay 拖拽会话（down 命中 overlay 且有 on_drag 的节点时建立——
-    /// (overlay index, 节点 slot_key, 拖拽起点 scene)）。overlay 是独立
-    /// composer，拖拽走 overlay 内容节点的 on_drag/on_drag_end。
-    overlay_drag: Option<(usize, u64, (f32, f32))>,
-    /// The overlay's screen origin frozen when the drag started — the absolute `pos` handed to
-    /// `on_drag_start` / `on_drag` is arena-local, and an overlay that moves during the drag must not
-    /// inject its own motion into it (the deltas are scene-space and unaffected).
-    overlay_drag_origin: (f32, f32),
-    /// overlay 拖拽是否已越过 slop 触发 DragStart
-    overlay_drag_started: bool,
-    /// overlay 拖拽上一次 move 位置（增量计算用）
-    overlay_drag_last: Option<(f32, f32)>,
-    /// overlay 内的可滚动容器（独立 Composer——嵌套滚动用，列表到顶下拉拖 Sheet）
-    overlay_drag_scroll: Option<DragScroll>,
     /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
     /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
     /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
@@ -186,17 +169,13 @@ pub(crate) struct PerWindow {
     pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
-    /// Overlay focus interaction target (overlay id, slot) — overlay inputs
-    /// report is_focused() only after emit_focus in their own arena.
-    overlay_focused_interaction: Option<(u64, u64)>,
     /// What this window draws with — the palette it clears the surface with, and the typography/direction
     /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
     /// every frame) — see `ui::theme::WindowTheme`.
     theme_cell: crate::theme::WindowTheme,
-    /// The PAGE's focus while a focus-scope overlay owns the keyboard: a slot key, not a flag on the
-    /// tree. Exactly one layer shows a focus ring (the keyboard owner), and the ones below remember
-    /// theirs here — see `claim_keyboard_for_overlay` / `release_keyboard_to_lower_layer`.
-    suspended_focus_slot: Option<u64>,
+    /// The overlay host: the layers, and the interaction state that only makes sense against
+    /// them (see `OverlayHost` — the group that used to be ten fields here).
+    pub(crate) overlay: OverlayHost,
     /// The values `theme_cell` last resolved to, i.e. what the tree has already drawn with.
     theme_applied: crate::theme::AppliedTheme,
 }
@@ -219,7 +198,7 @@ impl PerWindow {
         // is that palette (nothing to follow), and its type scale is the default.
         let theme_cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
         let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, suspended_focus_slot: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::input::PointerKind::Mouse { button: crate::input::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlay: OverlayHost::default(), pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, theme_cell }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -261,18 +240,18 @@ impl PerWindow {
     /// no cursor, no blink, no focused colors. Tracks (overlay id, slot); called
     /// after layout_overlays (slot resolution needs overlay layout done).
     fn sync_overlay_focus_interaction(&mut self) {
-        let cur: Option<(u64, u64)> = (0..self.overlays.len()).rev().find_map(|i| {
-            let ov = &self.overlays[i];
+        let cur: Option<(u64, u64)> = (0..self.overlay.layers.len()).rev().find_map(|i| {
+            let ov = &self.overlay.layers[i];
             if ov.closing {
                 return None;
             }
             ov.focused_slot_key.map(|s| (ov.id, s))
         });
-        if cur == self.overlay_focused_interaction {
+        if cur == self.overlay.focused_interaction {
             return;
         }
-        if let Some((old_id, old_slot)) = self.overlay_focused_interaction.take() {
-            if let Some(ov) = self.overlays.iter().find(|o| o.id == old_id) {
+        if let Some((old_id, old_slot)) = self.overlay.focused_interaction.take() {
+            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == old_id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot) {
@@ -286,14 +265,14 @@ impl PerWindow {
             }
         }
         if let Some((id, slot)) = cur {
-            if let Some(ov) = self.overlays.iter().find(|o| o.id == id) {
+            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
                         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
                             if let Some(src) = nodes[idx].modifier.focusable_interaction() {
                                 src.emit_focus();
-                                self.overlay_focused_interaction = Some((id, slot));
+                                self.overlay.focused_interaction = Some((id, slot));
                             }
                         }
                     }
@@ -315,13 +294,13 @@ impl PerWindow {
     /// the IME off while moving focus inside a dialog's text field.
     fn apply_ime_for_focus_in(&self, overlay: Option<usize>, fid: Option<u64>) {
         let root = match overlay {
-            Some(i) => self.overlays.get(i).and_then(|ov| ov.composer.layout_root_idx()),
+            Some(i) => self.overlay.layers.get(i).and_then(|ov| ov.composer.layout_root_idx()),
             None => self.composer.layout_root_idx(),
         };
         let wants_ime = match (root, fid) {
             (Some(r), Some(fid)) => {
                 let nodes = match overlay {
-                    Some(i) => self.overlays[i].composer.arena_nodes(),
+                    Some(i) => self.overlay.layers[i].composer.arena_nodes(),
                     None => self.composer.arena_nodes(),
                 };
                 crate::layout::node::find_node_by_id(nodes, r, fid)
@@ -367,8 +346,8 @@ impl PerWindow {
                 fire_gesture_action(nodes, r, t.slot_key, action);
             }
             Some(id) => {
-                let Some(i) = self.overlays.iter().position(|o| o.id == id) else { return; };
-                let ov = &self.overlays[i];
+                let Some(i) = self.overlay.layers.iter().position(|o| o.id == id) else { return; };
+                let ov = &self.overlay.layers[i];
                 let nodes = ov.composer.arena_nodes();
                 let Some(r) = ov.composer.layout_root_idx() else { return; };
                 fire_gesture_action(nodes, r, t.slot_key, action);
@@ -390,12 +369,12 @@ impl PerWindow {
     /// dismissed it is still where they were instead of having to tab back. Clearing the focus is
     /// what Escape does when there is nothing to close (the collapsed field loses its ring).
     fn escape_key(&mut self) -> bool {
-        if let Some(i) = self.overlays.iter().rposition(|o| !o.closing) {
+        if let Some(i) = self.overlay.layers.iter().rposition(|o| !o.closing) {
             // A dismissal is a REQUEST: the component hides itself in `on_dismiss` and flips the
             // caller's `visible`. With no handler nobody can complete it, and starting one anyway
             // faded the overlay out only to have the deadline hand it back — the key is left to the
             // overlay's own handlers instead (a component that wants Escape can still see it).
-            if self.overlays[i].on_dismiss.is_none() {
+            if self.overlay.layers[i].on_dismiss.is_none() {
                 return false;
             }
             // `dismissOnBackPress = false` SWALLOWS the key. This is a deliberate divergence, and the
@@ -411,10 +390,10 @@ impl PerWindow {
             // Ordering matters and is not an accident: with no `on_dismiss_request` there is nothing
             // for a dismissal to ask, so the handler check above wins and the key is left alone even
             // when this flag is off.
-            if !self.overlays[i].dismiss_on_back_press {
+            if !self.overlay.layers[i].dismiss_on_back_press {
                 return true;
             }
-            let id = self.overlays[i].id;
+            let id = self.overlay.layers[i].id;
             begin_overlay_close(self, id);
             return true;
         }
@@ -442,7 +421,7 @@ impl PerWindow {
     fn tab_move_focus(&mut self, shift: bool) {
         if let Some(i) = keyboard_scope(self) {
             let (new_id, new_slot, want_ime) = {
-                let ov = &mut self.overlays[i];
+                let ov = &mut self.overlay.layers[i];
                 match ov.composer.layout_root_idx() {
                     Some(r) => {
                         let nodes = ov.composer.arena_nodes_mut();
@@ -457,8 +436,8 @@ impl PerWindow {
                     None => (None, None, false),
                 }
             };
-            self.overlays[i].focused_id = new_id;
-            self.overlays[i].focused_slot_key = new_slot;
+            self.overlay.layers[i].focused_id = new_id;
+            self.overlay.layers[i].focused_slot_key = new_slot;
             if let Some(ref sw) = self.skia_window {
                 sw.set_ime_allowed(want_ime);
             }
@@ -485,14 +464,14 @@ impl PerWindow {
     fn focus_move_directional(&mut self, dir: FocusDir) -> bool {
         let overlay = keyboard_scope(self);
         let (current, root) = match overlay {
-            Some(i) => (self.overlays[i].focused_id, self.overlays[i].composer.layout_root_idx()),
+            Some(i) => (self.overlay.layers[i].focused_id, self.overlay.layers[i].composer.layout_root_idx()),
             None => (self.focused_id, self.composer.layout_root_idx()),
         };
         let (Some(fid), Some(r)) = (current, root) else { return false };
 
         let target = {
             let nodes = match overlay {
-                Some(i) => self.overlays[i].composer.arena_nodes(),
+                Some(i) => self.overlay.layers[i].composer.arena_nodes(),
                 None => self.composer.arena_nodes(),
             };
             let candidates = crate::layout::node::collect_focus_candidates(nodes, r);
@@ -524,7 +503,7 @@ impl PerWindow {
         let Some(target) = target else { return false };
 
         let (nodes, root) = match overlay {
-            Some(i) => (self.overlays[i].composer.arena_nodes_mut(), r),
+            Some(i) => (self.overlay.layers[i].composer.arena_nodes_mut(), r),
             None => (self.composer.arena_nodes_mut(), r),
         };
         crate::layout::node::clear_focus(nodes, root);
@@ -533,8 +512,8 @@ impl PerWindow {
                 .map(|idx| nodes[idx].slot_key);
             match overlay {
                 Some(i) => {
-                    self.overlays[i].focused_id = Some(target);
-                    self.overlays[i].focused_slot_key = slot;
+                    self.overlay.layers[i].focused_id = Some(target);
+                    self.overlay.layers[i].focused_slot_key = slot;
                 }
                 None => {
                     self.focused_id = Some(target);
@@ -690,9 +669,9 @@ impl PerWindow {
         // overlay counterparts, drive active Tier1, free unmatched stashes.
         // Main composer first by convention (Tier1 flights live in its map).
         {
-            let mut all: Vec<&mut crate::runtime::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
+            let mut all: Vec<&mut crate::runtime::composer::Composer> = Vec::with_capacity(1 + self.overlay.layers.len());
             all.push(&mut self.composer);
-            for ov in self.overlays.iter_mut() {
+            for ov in self.overlay.layers.iter_mut() {
                 all.push(&mut ov.composer);
             }
             crate::runtime::composer::Composer::poll_cross_flights(&mut all);
@@ -708,7 +687,7 @@ impl PerWindow {
         if self.composer.take_layout_override_fresh() {
             self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
         }
-        for ov in self.overlays.iter_mut() {
+        for ov in self.overlay.layers.iter_mut() {
             if ov.composer.take_layout_override_fresh() {
                 ov.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
             }
@@ -750,7 +729,7 @@ impl PerWindow {
                         self.composer.render_layer(canvas);
                     }
                     canvas.restore();
-                    render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    render_overlays(&self.overlay.layers, canvas, sf, (self.width, self.height));
                     if cross_active {
                         canvas.save();
                         canvas.scale((sf, sf));
@@ -1033,7 +1012,7 @@ impl ApplicationHandler for AppState {
                     // 520px window no matter how much the wheel moved).
                     let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
-                        let ov = &pw.overlays[i];
+                        let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
@@ -1043,7 +1022,7 @@ impl ApplicationHandler for AppState {
                         }).copied().map(|t| (i, t, r))
                     });
                     if let Some((i, target, r)) = overlay_target {
-                        let ov = &mut pw.overlays[i];
+                        let ov = &mut pw.overlay.layers[i];
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                         let nodes = ov.composer.arena_nodes();
                         if dy != 0.0 && consumed.y == 0.0 {
@@ -1337,8 +1316,8 @@ impl ApplicationHandler for AppState {
                         // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入 leaf——
                         // 只查焦点节点自身则 Preedit 永远到不了（预输入不显示）。
                         // 从焦点节点向下找第一个 ime_callback。
-                        let overlay_target: Option<(usize, usize)> = (0..pw.overlays.len()).rev().find_map(|i| {
-                            let ov = &pw.overlays[i];
+                        let overlay_target: Option<(usize, usize)> = (0..pw.overlay.layers.len()).rev().find_map(|i| {
+                            let ov = &pw.overlay.layers[i];
                             if ov.closing { return None; }
                             let fid = ov.focused_id?;
                             let nodes = ov.composer.arena_nodes();
@@ -1348,7 +1327,7 @@ impl ApplicationHandler for AppState {
                             Some((i, ime_idx))
                         });
                         if let Some((i, ime_idx)) = overlay_target {
-                            let nodes = pw.overlays[i].composer.arena_nodes();
+                            let nodes = pw.overlay.layers[i].composer.arena_nodes();
                             if let Some(cb) = nodes[ime_idx].ime_callback.borrow_mut().as_mut() {
                                 cb(&text, cursor);
                             }
@@ -1369,8 +1348,8 @@ impl ApplicationHandler for AppState {
                     Ime::Commit(text) => {
                         // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式.
                         // Focused overlay first, then main tree (same routing rule).
-                        let overlay_target: Option<usize> = (0..pw.overlays.len()).rev().find(|&i| {
-                            let ov = &pw.overlays[i];
+                        let overlay_target: Option<usize> = (0..pw.overlay.layers.len()).rev().find(|&i| {
+                            let ov = &pw.overlay.layers[i];
                             if ov.closing { return false; }
                             ov.focused_id.and_then(|fid| {
                                 ov.composer.layout_root_idx().and_then(|r| {
@@ -1389,7 +1368,7 @@ impl ApplicationHandler for AppState {
                                     is_shift_pressed: false, is_meta_pressed: false,
                                     repeat: false,
                                 };
-                                let ov = &pw.overlays[i];
+                                let ov = &pw.overlay.layers[i];
                                 if let Some(fid) = ov.focused_id {
                                     let nodes = ov.composer.arena_nodes();
                                     if let Some(r) = ov.composer.layout_root_idx() {
@@ -1521,7 +1500,7 @@ impl ApplicationHandler for AppState {
                     }
                     if main_hit {
                         // Single-focus invariant: main focus clears overlay foci.
-                        for ov in pw.overlays.iter_mut() {
+                        for ov in pw.overlay.layers.iter_mut() {
                             if ov.focused_id.is_some() {
                                 if let Some(r) = ov.composer.layout_root_idx() {
                                     crate::layout::node::clear_focus(ov.composer.arena_nodes_mut(), r);
@@ -1531,9 +1510,9 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     } else {
-                        for i in (0..pw.overlays.len()).rev() {
+                        for i in (0..pw.overlay.layers.len()).rev() {
                             let hit = {
-                                let ov = &mut pw.overlays[i];
+                                let ov = &mut pw.overlay.layers[i];
                                 if ov.closing {
                                     false
                                 } else if let Some(r) = ov.composer.layout_root_idx() {
@@ -1544,7 +1523,7 @@ impl ApplicationHandler for AppState {
                             };
                             if hit {
                                 let (fid, fslot, want) = {
-                                    let ov = &pw.overlays[i];
+                                    let ov = &pw.overlay.layers[i];
                                     let nodes = ov.composer.arena_nodes();
                                     let fid = ov.composer.layout_root_idx()
                                         .and_then(|r| crate::layout::node::get_focus_id(nodes, r));
@@ -1555,8 +1534,8 @@ impl ApplicationHandler for AppState {
                                     }).unwrap_or((0, false));
                                     (fid, fslot, want)
                                 };
-                                pw.overlays[i].focused_id = fid;
-                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                pw.overlay.layers[i].focused_id = fid;
+                                pw.overlay.layers[i].focused_slot_key = fid.map(|_| fslot);
                                 // Single-focus invariant: overlay focus clears main
                                 // focus and sibling overlay foci.
                                 if pw.focused_id.is_some() {
@@ -1566,7 +1545,7 @@ impl ApplicationHandler for AppState {
                                     pw.focused_id = None;
                                     pw.focused_slot_key = None;
                                 }
-                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                for (j, other) in pw.overlay.layers.iter_mut().enumerate() {
                                     if j != i && other.focused_id.is_some() {
                                         if let Some(r) = other.composer.layout_root_idx() {
                                             crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
@@ -1641,9 +1620,9 @@ impl ApplicationHandler for AppState {
                         }
                     });
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
-                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
+                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlay.layers
                     // 栈序，与 render_overlays 绘制顺序一致。
-                    let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlays.iter().filter_map(|ov| {
+                    let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlay.layers.iter().filter_map(|ov| {
                         ov.composer.layout_root_idx()
                             .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
                     }).collect();
@@ -1652,7 +1631,7 @@ impl ApplicationHandler for AppState {
                         // The overlays' arenas are walked too, so a modal's contents are in the tree a
                         // screen reader descends. Each keeps its screen origin: its tree is in the
                         // overlay's own coordinates.
-                        let overlays = pw.overlays.iter().filter_map(|ov| {
+                        let overlays = pw.overlay.layers.iter().filter_map(|ov| {
                             ov.composer.layout_root_idx().map(|r| crate::semantics::OverlaySemantics {
                                 id: ov.id,
                                 origin: ov.screen_pos,
@@ -1962,9 +1941,9 @@ impl AppState {
                     if !handled {
                         // Main tree missed — try overlays topmost-first (same
                         // single-focus clearing as the frame request path).
-                        for i in (0..pw.overlays.len()).rev() {
+                        for i in (0..pw.overlay.layers.len()).rev() {
                             let hit = {
-                                let ov = &mut pw.overlays[i];
+                                let ov = &mut pw.overlay.layers[i];
                                 if ov.closing {
                                     false
                                 } else if let Some(r) = ov.composer.layout_root_idx() {
@@ -1975,7 +1954,7 @@ impl AppState {
                             };
                             if hit {
                                 let (fid, fslot, want) = {
-                                    let ov = &pw.overlays[i];
+                                    let ov = &pw.overlay.layers[i];
                                     let nodes = ov.composer.arena_nodes();
                                     let r = ov.composer.layout_root_idx();
                                     let fid = r.and_then(|r| crate::layout::node::get_focus_id(nodes, r));
@@ -1986,8 +1965,8 @@ impl AppState {
                                     }).unwrap_or((0, false));
                                     (fid, fslot, want)
                                 };
-                                pw.overlays[i].focused_id = fid;
-                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                pw.overlay.layers[i].focused_id = fid;
+                                pw.overlay.layers[i].focused_slot_key = fid.map(|_| fslot);
                                 if pw.focused_id.is_some() {
                                     if let Some(r) = pw.composer.layout_root_idx() {
                                         crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
@@ -1995,7 +1974,7 @@ impl AppState {
                                     pw.focused_id = None;
                                     pw.focused_slot_key = None;
                                 }
-                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                for (j, other) in pw.overlay.layers.iter_mut().enumerate() {
                                     if j != i && other.focused_id.is_some() {
                                         if let Some(r) = other.composer.layout_root_idx() {
                                             crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
@@ -2076,7 +2055,7 @@ impl AppState {
                     // search only ever sees the main tree's arena.
                     let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
-                        let ov = &pw.overlays[i];
+                        let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
@@ -2086,7 +2065,7 @@ impl AppState {
                         }).copied().map(|t| (i, t, r))
                     });
                     if let Some((i, target, r)) = overlay_target {
-                        let ov = &mut pw.overlays[i];
+                        let ov = &mut pw.overlay.layers[i];
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                         handled = consumed.x != 0.0 || consumed.y != 0.0;
                     } else if let Some(r) = pw.composer.layout_root_idx() {
@@ -2305,7 +2284,7 @@ impl PerWindow {
         // The window's own snapshot (the surface clear color) is `theme_applied.colors`, refreshed above;
         // the tree has to run again for the new values to reach the components that resolved them.
         self.composer.mark_content_dirty();
-        for ov in &mut self.overlays {
+        for ov in &mut self.overlay.layers {
             ov.composer.mark_content_dirty();
         }
         if let Some(ref sw) = self.skia_window {
@@ -2412,7 +2391,7 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
         src.emit_release();
     }
     // overlay 的按下交互同步释放（overlay 独立 composer——独立 pressed 状态）
-    for ov in &mut pw.overlays {
+    for ov in &mut pw.overlay.layers {
         if let Some((_, src)) = ov.pressed_interaction.take() {
             src.emit_release();
         }
@@ -2428,7 +2407,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     // 同时主树 + **其他 overlay** 全部退出 hover（overlay 盖住下层——
     // 对齐真实指针层叠；堆叠 overlay 时下层按钮 hover 不残留）
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
-        let ov = &mut pw.overlays[i];
+        let ov = &mut pw.overlay.layers[i];
         overlay_update_hover(ov, local);
         // 主树 hover 全清（指针在 overlay 上——主树不可见）
         let olds: Vec<u64> = pw.hovered_slots.drain().collect();
@@ -2436,18 +2415,18 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
             exit_hover_at(pw, slot);
         }
         // 其他 overlay（下层）hover 全清
-        for j in 0..pw.overlays.len() {
+        for j in 0..pw.overlay.layers.len() {
             if j == i { continue; }
-            let olds: Vec<u64> = pw.overlays[j].hovered_slots.drain().collect();
+            let olds: Vec<u64> = pw.overlay.layers[j].hovered_slots.drain().collect();
             for slot in olds {
-                overlay_exit_hover_at(&mut pw.overlays[j], slot);
+                overlay_exit_hover_at(&mut pw.overlay.layers[j], slot);
             }
         }
         return;
     }
     // 未命中任何 overlay：主树 hover 更新 + 所有 overlay hover 全清
     // （指针离开 overlay——overlay 的 hover 状态清理）
-    for ov in &mut pw.overlays {
+    for ov in &mut pw.overlay.layers {
         let olds: Vec<u64> = ov.hovered_slots.drain().collect();
         for slot in olds {
             overlay_exit_hover_at(ov, slot);
@@ -2547,7 +2526,7 @@ fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
     // remembered focus now, see `claim_keyboard_for_overlay`), and falling through to lower surfaces
     // would double-handle a key the owner already acted on.
     let Some(i) = keyboard_scope(pw) else { return false };
-    let ov = &pw.overlays[i];
+    let ov = &pw.overlay.layers[i];
     let Some(fid) = ov.focused_id else { return false };
     let Some(r) = ov.composer.layout_root_idx() else { return false };
     // The owner did not consume — stop here.
@@ -2894,10 +2873,10 @@ fn handle_pointer_move(
     }
     // overlay 点击 slop 取消：按下 overlay 后拖出 18px → 取消 click（对齐
     // 主树 detect_click 的 slop 判定；down 位置 = overlay screen_pos + local）
-    if pw.overlay_click.is_some() {
-        let cancel = match pw.overlay_click {
+    if pw.overlay.click.is_some() {
+        let cancel = match pw.overlay.click {
             Some((idx, local, _)) => {
-                match pw.overlays.get(idx) {
+                match pw.overlay.layers.get(idx) {
                     Some(ov) => {
                         let down_screen = (ov.screen_pos.0 + local.0, ov.screen_pos.1 + local.1);
                         let dx = scene_pos.0 - down_screen.0;
@@ -2910,17 +2889,17 @@ fn handle_pointer_move(
             None => false,
         };
         if cancel {
-            pw.overlay_click = None;
+            pw.overlay.click = None;
             release_pressed_interaction(pw);
         }
     }
-    if let Some((idx, slot, down_pos)) = pw.overlay_drag {
+    if let Some((idx, slot, down_pos)) = pw.overlay.drag {
         let (dx, dy) = (scene_pos.0 - down_pos.0, scene_pos.1 - down_pos.1);
-        if !pw.overlay_drag_started {
+        if !pw.overlay.drag_started {
             if dx * dx + dy * dy >= 8.0 * 8.0 {
-                pw.overlay_drag_started = true;
-                pw.overlay_drag_last = Some(scene_pos);
-                if let Some(ov) = pw.overlays.get(idx) {
+                pw.overlay.drag_started = true;
+                pw.overlay.drag_last = Some(scene_pos);
+                if let Some(ov) = pw.overlay.layers.get(idx) {
                     let nodes = ov.composer.arena_nodes();
                     if let Some(r) = ov.composer.layout_root_idx() {
                         // ⚠ The overlay arena is LAYER-local, and a gesture callback receives
@@ -2930,8 +2909,8 @@ fn handle_pointer_move(
                         // origin, which is why dragging a Slider inside a popup landed on the wrong
                         // value (deltas are unaffected: the layer offset cancels in a difference).
                         let local = (
-                            scene_pos.0 - pw.overlay_drag_origin.0,
-                            scene_pos.1 - pw.overlay_drag_origin.1,
+                            scene_pos.0 - pw.overlay.drag_origin.0,
+                            scene_pos.1 - pw.overlay.drag_origin.1,
                         );
                         fire_gesture_action(nodes, r, slot,
                             crate::input::gesture::GestureAction::DragStart(local));
@@ -2942,15 +2921,15 @@ fn handle_pointer_move(
                 handled = true;
             }
         } else {
-            let last = pw.overlay_drag_last.unwrap_or(down_pos);
+            let last = pw.overlay.drag_last.unwrap_or(down_pos);
             let inc = (scene_pos.0 - last.0, scene_pos.1 - last.1);
-            pw.overlay_drag_last = Some(scene_pos);
-            if let Some(ov) = pw.overlays.get(idx) {
+            pw.overlay.drag_last = Some(scene_pos);
+            if let Some(ov) = pw.overlay.layers.get(idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     let local = (
-                        scene_pos.0 - pw.overlay_drag_origin.0,
-                        scene_pos.1 - pw.overlay_drag_origin.1,
+                        scene_pos.0 - pw.overlay.drag_origin.0,
+                        scene_pos.1 - pw.overlay.drag_origin.1,
                     );
                     fire_gesture_action(nodes, r, slot,
                         crate::input::gesture::GestureAction::DragMove(local, inc));
@@ -2962,18 +2941,18 @@ fn handle_pointer_move(
     // overlay 内拖拽滚动（独立 Composer——BottomSheet 内 LazyColumn）
     // 列表滚动走 overlay Composer 的 dispatch_nested_scroll_delta，Sheet 通过 panel 上的
     // SheetNested（nested_scroll）吃剩余 available。此分支仅消费列表，能否拖 Sheet 取决于 nested。
-    if pw.overlay_drag_scroll.is_some() {
+    if pw.overlay.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
-            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-            let slot = pw.overlay_drag_scroll.as_ref().unwrap().slot;
-            let ov = pw.overlays.get(ov_idx)?;
+            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            let slot = pw.overlay.drag_scroll.as_ref().unwrap().slot;
+            let ov = pw.overlay.layers.get(ov_idx)?;
             let r = ov.composer.layout_root_idx()?;
             let nodes = ov.composer.arena_nodes();
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
         })();
         let (dx, dy) = {
-            let ds = pw.overlay_drag_scroll.as_mut().unwrap();
+            let ds = pw.overlay.drag_scroll.as_mut().unwrap();
             let dx = scene_pos.0 - ds.last_x;
             let dy = scene_pos.1 - ds.last_y;
             ds.last_x = scene_pos.0;
@@ -2986,16 +2965,16 @@ fn handle_pointer_move(
         };
         if let Some(idx) = target {
             let (ax, ay) = {
-                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-                let ov = &pw.overlays[ov_idx];
+                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                let ov = &pw.overlay.layers[ov_idx];
                 let nodes = ov.composer.arena_nodes();
                 if nodes[idx].modifier.vertical_scroll_state().is_some() { (0.0, dy) }
                 else if nodes[idx].modifier.horizontal_scroll_state().is_some() { (dx, 0.0) }
                 else { (0.0, 0.0) }
             };
             if ax != 0.0 || ay != 0.0 {
-                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-                if let Some(ov) = pw.overlays.get_mut(ov_idx) {
+                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                if let Some(ov) = pw.overlay.layers.get_mut(ov_idx) {
                     if let Some(root) = ov.composer.layout_root_idx() {
                         let density = crate::unit::Density::from_density(pw.scale_factor as f32);
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), root, idx, crate::nested_scroll::ScrollDelta::new(ax, ay), crate::nested_scroll::NestedScrollSource::Drag, density);
@@ -3005,8 +2984,8 @@ fn handle_pointer_move(
                     }
                 }
             }
-            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-            if let Some(ov) = pw.overlays.get(ov_idx) {
+            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            if let Some(ov) = pw.overlay.layers.get(ov_idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() { ss.is_scroll_in_progress.set(true); }
                 else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() { ss.is_scroll_in_progress.set(true); }
@@ -3088,7 +3067,7 @@ fn handle_pointer_move(
             release_pressed_interaction(pw);
             // overlay 点击同步取消（对齐主树 detect_click 的 slop 判定——
             // 拖出 slop 后 up 不应 fire overlay click）
-            pw.overlay_click = None;
+            pw.overlay.click = None;
         }
     }
     let nodes = pw.composer.arena_nodes();
@@ -3475,11 +3454,11 @@ mod overlay_close_tests {
         // True (the default): the escape starts the close.
         let light = ThemeColors::default_light();
         let mut kept = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
-        kept.overlays
+        kept.overlay.layers
             .push(OverlayWindow::new_with_composer(desc(true), Composer::new()));
         assert!(kept.escape_key(), "escape is consumed");
         assert!(
-            kept.overlays[0].closing,
+            kept.overlay.layers[0].closing,
             "and it closes the dialog that opted in"
         );
 
@@ -3487,14 +3466,15 @@ mod overlay_close_tests {
         let light = ThemeColors::default_light();
         let mut stubborn = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         stubborn
-            .overlays
+            .overlay
+            .layers
             .push(OverlayWindow::new_with_composer(desc(false), Composer::new()));
         assert!(
             stubborn.escape_key(),
             "escape is still SWALLOWED so the page behind does not see it"
         );
         assert!(
-            !stubborn.overlays[0].closing,
+            !stubborn.overlay.layers[0].closing,
             "but the dialog that opted out stays open"
         );
     }

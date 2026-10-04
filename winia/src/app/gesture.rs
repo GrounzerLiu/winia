@@ -108,7 +108,7 @@ pub(crate) fn press_gesture_target(
 /// gesture completes into the popup and dies with it when `finish_closing_overlays` removes it.
 pub(crate) fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
     let id = arena?;
-    pw.overlays.iter().position(|o| o.id == id)
+    pw.overlay.layers.iter().position(|o| o.id == id)
 }
 
 /// Convert a window position into the gesture target's arena space: unchanged for the main tree,
@@ -128,7 +128,7 @@ pub(crate) fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option
         None => Some(scene_pos),
         Some(id) => {
             // The arena must still exist (its composer is where the action lands)...
-            pw.overlays.iter().find(|o| o.id == id)?;
+            pw.overlay.layers.iter().find(|o| o.id == id)?;
             // ...but the conversion uses the origin frozen at press time, not the live one: see
             // `gesture_arena_origin`.
             Some((
@@ -157,9 +157,9 @@ pub(crate) fn fire_in_gesture_arena(
             let Some(r) = pw.composer.layout_root_idx() else { return false; };
             fire_gesture_action(nodes, r, slot, action)
         }
-        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+        Some(id) => match pw.overlay.layers.iter().position(|o| o.id == id) {
             Some(i) => {
-                let ov = &pw.overlays[i];
+                let ov = &pw.overlay.layers[i];
                 let nodes = ov.composer.arena_nodes();
                 let Some(r) = ov.composer.layout_root_idx() else { return false; };
                 fire_gesture_action(nodes, r, slot, action)
@@ -178,9 +178,9 @@ pub(crate) fn fire_in_gesture_arena(
 pub(crate) fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64) -> bool {
     let (nodes, r) = match arena {
         None => (pw.composer.arena_nodes(), pw.composer.layout_root_idx()),
-        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
+        Some(id) => match pw.overlay.layers.iter().position(|o| o.id == id) {
             Some(i) => {
-                let ov = &pw.overlays[i];
+                let ov = &pw.overlay.layers[i];
                 (ov.composer.arena_nodes(), ov.composer.layout_root_idx())
             }
             None => return false,
