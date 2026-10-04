@@ -334,7 +334,7 @@ impl ModalBottomSheet {
                         let sheet_h_for_size = sheet_h.clone();
                         panel_mod = panel_mod.on_size_changed(move |_w, h| {
                             sheet_h_for_size.set(h);
-                            let mut s = up_st.clone();
+                            let s = up_st.clone();
                             s.update_anchors(crate::layout::window_size().1, h);
                         });
                         let mut panel_mod_with_nested = panel_mod;

@@ -195,7 +195,7 @@ fn subcompose_sized(
     // The composition that ran for THIS node last frame, if any: composing the content into its slot
     // table again is what lets a `remember` inside the content survive the frame.
     let remembered = node.and_then(|n| SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&n)));
-    let mut inner: Box<Composer> = match (cached, remembered) {
+    let inner: Box<Composer> = match (cached, remembered) {
         // Same constraints as the parked composition: arrange the EXISTING tree again rather than
         // composing the content a second time this frame.
         (Some(mut composer), _) if composer_ran_under(&composer, constraints) => {

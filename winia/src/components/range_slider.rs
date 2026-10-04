@@ -268,7 +268,7 @@ impl RangeSlider {
         // the root's own draw box is not), and once the body's node was the root with the gestures on
         // an inner node. The padding band is inert here, as Compose's `modifier.padding(16)` leaves a
         // Slider's own pointer input untouched.
-        let mut m = Modifier::new().fill_max_width().then(self.modifier);
+        let m = Modifier::new().fill_max_width().then(self.modifier);
 
         let mut gestures = Modifier::new();
         if enabled {

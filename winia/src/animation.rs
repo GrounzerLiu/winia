@@ -526,7 +526,7 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
 /// 更新所有活跃动画，返回是否有动画还在运行
 pub fn update_animations() -> bool {
     // 锁内取出动画，锁外执行 update（避免锁内执行用户代码导致死锁）
-    let mut anims = std::mem::take(&mut *ACTIVE_ANIMATIONS.lock().unwrap());
+    let anims = std::mem::take(&mut *ACTIVE_ANIMATIONS.lock().unwrap());
     let mut still = Vec::new();
     for mut a in anims {
         if a.update() { still.push(a); }
@@ -539,7 +539,7 @@ pub fn update_animations() -> bool {
         }
     }
     // Color 动画
-    let mut canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
+    let canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
     let mut cstill = Vec::new();
     for mut c in canims {
         if c.update() { cstill.push(c); }

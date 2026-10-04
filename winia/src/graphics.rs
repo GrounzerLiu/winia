@@ -305,7 +305,7 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
         IconSource::SvgPath { data, fill_type } => DecodeKey::SvgPath(data.clone(), *fill_type),
         IconSource::Svg(data) => DecodeKey::Doc(data.clone()),
         IconSource::File(path) => DecodeKey::File(path.clone()),
-        _ => return None,
+        // Every other variant is rejected here, so the second match below has no catch-all to write.
     };
     DECODED_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
@@ -320,7 +320,6 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
             }
             IconSource::Svg(data) => decode_svg_str(data),
             IconSource::File(path) => decode_file(path),
-            _ => None,
         };
         // 成功与失败都缓存（失败带 TTL——避免每帧重读，但会过期重试）
         let entry = (Instant::now(), decoded.map(Arc::new));

@@ -188,7 +188,7 @@ impl BottomSheetScaffold {
                 // x is a CENTRING inset, which is direction-independent, while a plain offset
                 // mirrors its x under RTL (`layout/node.rs` placement) — that put the sheet at
                 // -pad_x in RTL, with as much clipped off the left as left dead on the right.
-                let mut sheet_mod = Modifier::new()
+                let sheet_mod = Modifier::new()
                     .width(sheet_w)
                     .absolute_offset(sheet_pad_x, st_for_offset.offset_state())
                     .shadow(

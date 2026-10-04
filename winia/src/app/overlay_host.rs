@@ -920,7 +920,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                     // `fire_in_gesture_arena` into this same arena, so nothing is lost, and the node
                     // gains its `on_tap` / `on_double_tap` / `on_long_press` (the tap family of a
                     // popup drag target used to be unreachable, `Slider` included).
-                    if pw.overlay.drag.map(|(idx, key, _)| (idx == i && key == slot)).unwrap_or(false) {
+                    if pw.overlay.drag.map(|(idx, key, _)| idx == i && key == slot).unwrap_or(false) {
                         pw.overlay.drag = None;
                         pw.overlay.drag_started = false;
                         pw.overlay.drag_last = None;

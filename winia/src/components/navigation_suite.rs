@@ -329,7 +329,7 @@ impl NavigationSuiteScaffold {
                                 let items = self.items;
                                 WideNavigationRail::new(rail_state, move |ctx| {
                                     for item in items {
-                                        let mut b = WideNavigationRailItem::new(
+                                        let b = WideNavigationRailItem::new(
                                             item.selected,
                                             item.icon,
                                             item.label.unwrap_or_else(|| Box::new(|ctx| crate::components::Text::new("").build(ctx))),

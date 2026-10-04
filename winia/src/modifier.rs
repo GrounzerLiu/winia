@@ -932,7 +932,7 @@ impl Modifier {
     ///
     /// `match_height_first = true` 时优先按高度约束推导宽度
     /// （对标 `matchHeightConstraintsFirst`）。
-    pub fn aspect_ratio(mut self, ratio: f32, match_height_first: bool) -> Self {
+    pub fn aspect_ratio(self, ratio: f32, match_height_first: bool) -> Self {
         assert!(ratio > 0.0, "aspectRatio {ratio} must be > 0（Compose 前置校验）");
         self.push(ModifierElement::AspectRatio { ratio, match_height_first })
     }
@@ -1128,7 +1128,7 @@ impl Modifier {
     /// 统一构造 TextContent 元素（Text/TextField 共用——字段单一来源，P3-6）
     #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn text_content(
-        mut self,
+        self,
         content: String,
         font_size: f32,
         color: crate::graphics::Color,
@@ -1149,7 +1149,7 @@ impl Modifier {
     /// 全参版（含 letter_spacing/line_height——Text 组件用，对标 Compose
     /// TextStyle.letterSpacing/lineHeight）
     pub(crate) fn text_content_full(
-        mut self,
+        self,
         content: String,
         font_size: f32,
         color: crate::graphics::Color,

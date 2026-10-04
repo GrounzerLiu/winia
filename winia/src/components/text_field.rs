@@ -425,7 +425,7 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
                 if let ModifierElement::TextFieldSlot { role } = el { Some(*role) } else { None }
             }).unwrap_or(TextFieldSlotRole::Input)
         };
-        let mut roles: Vec<TextFieldSlotRole> = children.iter().map(|&c| role_of(c)).collect();
+        let roles: Vec<TextFieldSlotRole> = children.iter().map(|&c| role_of(c)).collect();
         let icon_c = crate::layout::Constraints::fixed(24.0, 24.0);
         let text_c = |max_w: f32| crate::layout::Constraints::new(0.0, max_w.max(0.0), 0.0, 30.0);
         // 第一轮：leading/trailing（图标）+ prefix/suffix（文本）——宽度
@@ -472,8 +472,8 @@ impl crate::layout::MeasurePolicy for TextFieldLayout {
         const AFFIX_GAP: f32 = 2.0; // PrefixSuffixTextPadding
         // 容器宽：min_width 兜底起步——input 测量后再按内容回算（超长输入
         // 撑宽容器）。⚠ 循环依赖：input 测量需要 input_w → 用 min 起步
-        let mut width = constraints.min_width;
-        let mut input_w = (width - left - prefix_w - AFFIX_GAP - suffix_w - right).max(0.0);
+        let width = constraints.min_width;
+        let input_w = (width - left - prefix_w - AFFIX_GAP - suffix_w - right).max(0.0);
         let mut input_size = crate::unit::Size::ZERO;
         let mut input_pos_x = 0.0f32;
         for (i, &c) in children.iter().enumerate() {

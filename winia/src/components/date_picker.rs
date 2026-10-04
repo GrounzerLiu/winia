@@ -2171,7 +2171,7 @@ impl DatePickerDialog {
             .width(DatePickerDefaults::CONTAINER_WIDTH)
             .max_height(DatePickerDefaults::MODAL_CONTAINER_HEIGHT);
 
-        let mut dialog = BasicAlertDialog::new(self.visible)
+        let dialog = BasicAlertDialog::new(self.visible)
             .shape(shape)
             .container_color(colors.container)
             // The picker is the container: material3's date picker dialog adds no padding, where winia's
