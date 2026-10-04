@@ -18,7 +18,7 @@
 //! `constraints`, `maxDimension`, `minDimension`), so a layout can branch on the space actually
 //! available instead of on the window's. Composition sees those values through a subcomposition.
 //!
-//! winia now HAS the measure-time subcomposition this needs (`ui::subcompose`), so the content runs
+//! winia now HAS the measure-time subcomposition this needs (`layout::subcompose`), so the content runs
 //! inside measurement with the constraints that measurement just computed — the same relation Compose
 //! has, and the "one composition behind" deviation this module used to document is gone.
 //!

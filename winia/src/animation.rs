@@ -926,7 +926,7 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
 /// of the flight, passing through the threshold band means the spring is still moving fast.
 ///
 /// Scaling the velocity into frames (`velocity * FRAME < threshold`) reads better and is WRONG: it fires
-/// on that first passage, so the bounce is cut. Measured — `ui::shared_transition`'s
+/// on that first passage, so the bounce is cut. Measured — `components::shared_transition`'s
 /// `tier0_bouncy_spring_overshoot_renders_then_settles` (damping 0.6, threshold 0.1 on a 0..1 progress)
 /// went from "overshoots past 1.0 and then settles" to "settles at 0.886", i.e. the flight ended while
 /// the spring was still ~11 % short of its target. Scaling it the other way (`velocity * FRAME <
@@ -1388,7 +1388,7 @@ pub(crate) mod tests {
     /// threshold band while still moving fast is NOT rest. Pinned because "the velocity and the
     /// displacement are compared in different units" looks like a bug and has already been
     /// "fixed" once — that attempt cut the bounce and turned
-    /// `ui::shared_transition::tier0_tests::tier0_bouncy_spring_overshoot_renders_then_settles` red
+    /// `components::shared_transition::tier0_tests::tier0_bouncy_spring_overshoot_renders_then_settles` red
     /// (see `spring_at_rest`).
     #[test]
     fn a_spring_crossing_its_target_is_not_at_rest() {
@@ -1409,7 +1409,7 @@ pub(crate) mod tests {
     }
 
     /// A spring ends on its own criterion, not on the 5 s extreme-parameter protection: from 0 to 123
-    /// with `ui::tab_row`'s indicator spring (damping 0.6 / stiffness 700 / threshold 0.01) the physics
+    /// with `components::tab_row`'s indicator spring (damping 0.6 / stiffness 700 / threshold 0.01) the physics
     /// gives `ln(123 / 0.01) / (0.6 * sqrt(700)) ≈ 0.59 s`, and the value lands EXACTLY on the target.
     #[test]
     fn a_spring_finishes_without_waiting_for_the_extreme_parameter_protection() {

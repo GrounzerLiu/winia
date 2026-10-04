@@ -130,7 +130,7 @@ impl Window {
         // every frame and may switch which theme node wraps this window — palette, typography and direction
         // alike — and the window has to follow that (a sub-window whose tree flipped from light to dark kept
         // the palette it started with, and a custom type scale survived exactly one frame). The cell is
-        // shared with the window's own composer — see `ui::theme::WindowTheme`.
+        // shared with the window's own composer — see `theme::WindowTheme`.
         let theme = ctx.remember_at_key(key.wrapping_add(1), || {
             crate::theme::WindowTheme::new(crate::theme::current_theme_spec())
         });

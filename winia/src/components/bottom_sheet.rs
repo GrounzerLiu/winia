@@ -485,7 +485,7 @@ pub(crate) struct SheetPanelNode {
     /// The token radius (28 dp), used while the sheet is not full height.
     pub(crate) radius: f32,
     /// The window's client height as of the last COMPOSE. Passed in rather than read at paint time
-    /// because `ui::window_size()` answers from a compose-time `AdaptiveContext` and falls back to
+    /// because `layout::window_size()` answers from a compose-time `AdaptiveContext` and falls back to
     /// `(800, 600)` outside one — in the draw phase that made a 560-tall panel look "not full" forever.
     pub(crate) window_height: f32,
 }

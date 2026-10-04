@@ -297,7 +297,7 @@ pub struct LayoutNode {
     /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
-    /// Whether this node's OWN measure policy subcomposed content (`ui::subcompose`), recorded by
+    /// Whether this node's OWN measure policy subcomposed content (`layout::subcompose`), recorded by
     /// [`crate::runtime::composer::Composer::park_subcomposition`] at the moment it parked the composition.
     ///
     /// It is one of the two ways `Composer::compose`'s compose-end seeding recognizes a node that has to
@@ -314,7 +314,7 @@ pub struct LayoutNode {
     /// flag, and one row's update re-measured — and re-subcomposed — all 800).
     pub(crate) subcomposed: bool,
     /// The arena index of this node's subcomposed child, if its policy composed one
-    /// (`ui::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
+    /// (`layout::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
     /// adopted subtree has NO descriptor, so materialize's "clear and rebuild from descriptors" would
     /// drop it, and the shape check ("does the cached child count match the descriptors?") would
     /// refuse the reuse path every frame. Both arms therefore treat this index as separate: the child
@@ -797,7 +797,7 @@ pub trait MeasurePolicy: std::fmt::Debug {
     /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
 
-    /// Whether this policy composes content DURING measurement (`ui::subcompose`).
+    /// Whether this policy composes content DURING measurement (`layout::subcompose`).
     ///
     /// Such a node must be re-measured whenever it is materialized: its content is composed inside
     /// the measurement, so a folded size freezes the content at the previous frame's parameters. The

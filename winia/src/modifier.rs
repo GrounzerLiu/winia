@@ -462,7 +462,7 @@ pub(crate) enum ModifierElement {
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
-    /// 共享元素转场标记（ui::shared_transition——纯数据标记：配对身份 + 变形规格；
+    /// 共享元素转场标记（components::shared_transition——纯数据标记：配对身份 + 变形规格；
     /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
     /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
     SharedTransition {
@@ -490,7 +490,7 @@ pub(crate) enum ModifierElement {
         render_in_overlay: bool,
         /// Which SCENE this end belongs to, when it is composed inside a scene host that publishes
         /// one (winia's nav: each transition layer provides its scene id, see
-        /// `ui::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
+        /// `components::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
         /// system uses it to pair ends that are BOTH alive — during a nav transition the outgoing
         /// and incoming scenes both carry the same shared key, and without a scene the winner is
         /// whichever the tree walk happened to visit last, which reads as a new switch every frame.

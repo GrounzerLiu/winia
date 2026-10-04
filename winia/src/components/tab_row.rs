@@ -201,7 +201,7 @@ pub struct TabRow {
 ///
 /// Compose's `TabRow` hands its indicator a `TabIndicatorScope` with a `tabPositions` list, and those
 /// positions only exist once the row has been measured — which is why the indicator is composed inside
-/// measurement (`ui::subcompose`) instead of by the caller during composition.
+/// measurement (`layout::subcompose`) instead of by the caller during composition.
 #[derive(Debug, Clone)]
 pub struct TabIndicatorScope {
     positions: Vec<TabPosition>,
@@ -1489,7 +1489,7 @@ mod tests {
 
     /// The caller's indicator is composed DURING measurement and sees the positions the row just
     /// computed — the reason Compose needs `SubcomposeLayout` for this slot, and the thing this branch's
-    /// `ui::subcompose` facility now provides. The positions are measure-time data: a caller cannot
+    /// `layout::subcompose` facility now provides. The positions are measure-time data: a caller cannot
     /// know them while composing, which is what kept this API out of winia before.
     #[test]
     fn a_custom_indicator_is_composed_with_the_measured_positions() {

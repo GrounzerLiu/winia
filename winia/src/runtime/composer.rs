@@ -2053,9 +2053,9 @@ pub struct Composer {
     /// 本帧已复用的节点索引（free 时跳过——避免递归进本帧树形成环）
     pub(crate) reused_nodes: crate::layout::node::NodeMarks,
     /// Subcompositions parked during the current layout pass, waiting for adoption
-    /// (`ui::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
+    /// (`layout::subcompose`). Cleared at the start of every `layout()`; emptied by the adoption pass.
     pub(crate) subcompositions: Vec<(usize, crate::layout::subcompose::Subcomposition)>,
-    /// A subcomposition this composer can re-arrange instead of re-composing (`ui::subcompose`).
+    /// A subcomposition this composer can re-arrange instead of re-composing (`layout::subcompose`).
     /// Taken by the next `subcompose()` call in the same frame and put back by `layout()`'s adoption
     /// pass, so a second layout pass in one frame reuses the first pass's composition.
     subcomposition_cache: Option<Box<Composer>>,
@@ -2089,7 +2089,7 @@ pub struct Composer {
     /// 重组总次数（vsync 研究——单次渲染内多次 compose 的观测）
     pub(crate) compose_count: u64,
     /// Shared-element flights (Phase 2): active flights by id (Tier-0
-    /// coordinator lives in ui::shared_transition as `impl Composer`).
+    /// coordinator lives in components::shared_transition as `impl Composer`).
     pub(crate) shared_flights: HashMap<FlightId, ActiveFlight>,
     pub(crate) next_flight_id: u64,
     /// Last frame's (scope, key) → slot map for switch detection.
@@ -3049,7 +3049,7 @@ impl Composer {
     }
 
     /// Park a subcomposition against the node that composed it, for the adoption pass at the end of
-    /// `layout` (`ui::subcompose`). The registry is cleared at the start of every layout pass.
+    /// `layout` (`layout::subcompose`). The registry is cleared at the start of every layout pass.
     pub(crate) fn park_subcomposition(
         &mut self,
         node: usize,
