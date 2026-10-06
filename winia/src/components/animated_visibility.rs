@@ -29,7 +29,6 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
-use crate::graphics::{GraphicsLayerParams};
 pub use crate::animation::visibility::{
     ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
@@ -104,34 +103,10 @@ impl AnimatedVisibility {
         let gfx = move || {
             let p = g.peek();
             let cfg = if v.peek() { &e } else { &x };
-            let mut params = GraphicsLayerParams::default();
-            if cfg.fade {
-                params.alpha = p;
-            }
-            if cfg.scale {
-                let s = cfg.scale_from + (1.0 - cfg.scale_from) * p;
-                params.scale_x = s;
-                params.scale_y = s;
-                params.transform_origin =
-                    crate::graphics::TransformOrigin(cfg.transform_origin.0, cfg.transform_origin.1);
-            }
-            if let Some((dir, offset)) = cfg.slide {
-                // The extent along the slide axis; `SlideOffset::resolve` does the rest.
-                let (w, h) = cs.peek();
-                let extent = match dir {
-                    SlideDirection::Left | SlideDirection::Right => w,
-                    SlideDirection::Up | SlideDirection::Down => h,
-                };
-                let dist = offset.resolve(extent);
-                let off = (1.0 - p) * dist;
-                match dir {
-                    SlideDirection::Left => params.translation_x = -off,
-                    SlideDirection::Right => params.translation_x = off,
-                    SlideDirection::Up => params.translation_y = -off,
-                    SlideDirection::Down => params.translation_y = off,
-                }
-            }
-            params
+            // The transition vocabulary lives in one place (`VisibilityTransition::layer_params`),
+            // shared with `AnimatedContent` — which runs the same conversion for each of its two
+            // generations, once per transition.
+            cfg.layer_params(p, cs.peek())
         };
         // Direction-active config: the transition playing NOW (enter when visible,
         // exit when hidden). Clip, expand flags AND anchors all follow it — NOT an

@@ -226,6 +226,48 @@ impl VisibilityTransition {
         self.transform_origin = transform_origin;
         self
     }
+    /// The draw-layer parameters this transition produces at `progress`, for a content box of
+    /// `content_extent`.
+    ///
+    /// `progress` is how SETTLED the transition is: `1.0` is the resting state (whatever the
+    /// transition's flags are, they contribute nothing), `0.0` is the far end — an enter that has
+    /// not started, or an exit that has finished. An entering content therefore runs its progress
+    /// 0 → 1 and a leaving one runs 1 → 0, both through this one function; that is what lets a
+    /// crossfade's two halves be the same code with the two different transitions.
+    ///
+    /// The content extent is only needed by a `SlideOffset::Fraction` slide, which resolves
+    /// against it.
+    pub fn layer_params(&self, progress: f32, content_extent: (f32, f32)) -> crate::graphics::GraphicsLayerParams {
+        let p = progress;
+        let mut params = crate::graphics::GraphicsLayerParams::default();
+        if self.fade {
+            params.alpha = p;
+        }
+        if self.scale {
+            let s = self.scale_from + (1.0 - self.scale_from) * p;
+            params.scale_x = s;
+            params.scale_y = s;
+            params.transform_origin =
+                crate::graphics::TransformOrigin(self.transform_origin.0, self.transform_origin.1);
+        }
+        if let Some((dir, offset)) = self.slide {
+            // The extent along the slide axis; `SlideOffset::resolve` does the rest.
+            let (w, h) = content_extent;
+            let extent = match dir {
+                SlideDirection::Left | SlideDirection::Right => w,
+                SlideDirection::Up | SlideDirection::Down => h,
+            };
+            let dist = offset.resolve(extent);
+            let off = (1.0 - p) * dist;
+            match dir {
+                SlideDirection::Left => params.translation_x = -off,
+                SlideDirection::Right => params.translation_x = off,
+                SlideDirection::Up => params.translation_y = -off,
+                SlideDirection::Down => params.translation_y = off,
+            }
+        }
+        params
+    }
 }
 
 impl Default for VisibilityTransition {

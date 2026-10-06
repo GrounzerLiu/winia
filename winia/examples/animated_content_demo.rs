@@ -6,7 +6,7 @@
 //! 用法：`cargo run -p winia --example animated_content_demo`
 
 use letclone::clone;
-use winia::animation::{AnimationSpec, SpringSpec, TweenSpec};
+use winia::animation::{AnimationSpec, SpringSpec};
 use winia::prelude::*;
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
@@ -32,9 +32,9 @@ fn animated_content_demo(ctx: &mut ComposeCtx) {
                         .build(ctx, |ctx| { Text::new("Page B (wide)").build(ctx); });
                 });
 
-            // 内容切换：fade 300ms + 尺寸 Spring
+            // 内容切换：两代同场（默认 = Compose 的 fadeIn(220)+scaleIn(0.92) / fadeOut(90)），
+            // 容器尺寸用 Spring 从旧内容尺寸动画到新内容尺寸
             AnimatedContent::new(page.clone())
-                .animation(TweenSpec::default())
                 .size_animation(AnimationSpec::Spring(SpringSpec::bouncy()))
                 .build(ctx, |ctx, p| {
                     if p == 0 {

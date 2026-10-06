@@ -118,7 +118,7 @@
 | High-level value anim | `animate_rect_as_state` / `animate_bounds_as_state` | ⏸️ skipped by design (no `Rect` unit type exists; bounds animate via `Offset`+`Size`, both animatable — add when a consumer needs it) |
 | High-level value anim | `label` / `finished_listener` params | ⚠️ partial (`on_finish` + `push_animatable_with_done` done; `label` skipped — Transition already has it) |
 | Container anim | **`AnimatedVisibility`** enter/exit set | ✅ done (params aligned + horizontal expand, P0-1) |
-| Container anim | `AnimatedContent` / `Crossfade` | ✅ done (single content generation — engine limit, documented) |
+| Container anim | `AnimatedContent` / `Crossfade` | ⚠️ `AnimatedContent` now keeps both generations composed (two scenes at once, incoming on top, independent enter/exit/size progress, clipped to the animated size); `Crossfade` is still the old single-generation fade-out-then-in, and the 90 ms enter delay has no `TweenSpec` field to live in. Both record what is left in their module docs |
 | Transition | `animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ✅ done (P0-2) |
 | Infinite anim | `animate_value` (generic) | ❌ missing (float/color only) |
 | Spec | `cubic_bezier`/`PathEasing` custom easing | ✅ done (P2-11) |
@@ -166,8 +166,8 @@
 
 ### P1 — 常见需求
 4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）✅ `7d85252`
-   - 实现为**顺序淡入淡出**（非交叉）：组合引擎单内容世代（无 Compose 双世代
-     outgoing 组合）——旧内容淡出完成才切换新内容淡入；`Crossfade::new(target).build(ctx, |ctx, t| ...)`
+   - 实现为**顺序淡入淡出**（非交叉）：旧内容淡出完成才切换新内容淡入；`Crossfade::new(target).build(ctx, |ctx, t| ...)`
+   - `AnimatedContent` 后来改成了两代同场（见下），所以同一引擎**做得到**——这条的理由不再成立，`Crossfade` 待跟进
 5. **`animate_content_size`**（尺寸变化自动动画）✅ `7d85252`
    - 实现为**容器组件 `AnimatedSize`**（非 Modifier）：本框架 Modifier 是纯数据
      （构建期无组合上下文）无法内嵌 remember——容器组件在组合期创建 State（机制等价）
@@ -203,10 +203,10 @@
 13. **graphics_layer 补属性**（shadow/clip/shape/blur——渲染层能力）
 14. **`animate_item`**（列表增删/移动动画——需先有 LazyList 或简单列表容器）
 15. **`AnimatedContent`** ✅ 本分支
-    - `AnimatedContent<T>::new(target)` + `.animation(spec)`（fade）+ `.size_animation(spec)`（sizeTransform，默认 Spring bouncy）
-    - 机制：target 变 → 旧内容淡出 → 淡出完成（progress<0.001）→ 锁定旧尺寸 → current.set → 内容重建 → 淡入；**容器尺寸 = lerp(prev_size, 新内容尺寸, progress)**（布局层 layout_dep 每帧重测）；alpha 绘制层 peek（零重组）
-    - 单内容世代（无 Compose 双世代 outgoing——组合引擎限制，文档注明）
-    - 测试：`animated_content_switches_with_size_transform`；demo：`animated_content_demo`
+    - `AnimatedContent<T>::new(target)` + `.enter(...)` / `.exit(...)` + `.size_animation(spec)`（sizeTransform，默认 Spring）+ `.clip(bool)` / `.modifier(...)` / `.content_key(...)`
+    - 机制（两代同场，对齐 Compose `currentlyVisible`）：target 变 → **立刻**把旧目标搬进 `previous`、新目标写进 `current`，两代各起一个容器槽同时组合；旧的按 `exit` 1→0 淡出、新的按 `enter` 0→1 淡入，**在时间上重叠**；新的一代后组合 → 画在上面；**容器尺寸 = lerp(旧内容尺寸, 新内容尺寸, size)**（独立进度与规格，布局层 layout_dep 每帧重测）；两代的 alpha/scale 绘制层 peek（零重组）；容器默认 `clip = true` 裁到动画尺寸
+    - 仍未对齐：90ms 延迟（`TweenSpec` 无 delay 字段）、`contentAlignment`（winia 的 `Alignment` 是单轴，Compose 是二维）、快速连切只保留一代离场内容
+    - 测试：`both_generations_are_composed_during_a_transition`、`animated_content_switches_with_size_transform`、`size_animation_independent_of_fade`、`the_same_content_key_updates_in_place_without_a_transition`；demo：`animated_content_demo`
 
 ### 缺陷修复（随上述实施顺带）
 - dedup 忽略 spec（P0-2 时修）
