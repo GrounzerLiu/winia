@@ -13,9 +13,12 @@
 //! - **Width**: `DialogMinWidth` = 280dp .. `DialogMaxWidth` = 560dp, i.e. the content's own
 //!   width clamped into that range (Compose's `sizeIn`). This is what `Modifier::max_width`
 //!   was added for; `min_width` alone would let a long title grow the dialog to the window.
+//!   `platform_default_width(false)` is `DialogProperties.usePlatformDefaultWidth = false`: the
+//!   range is not applied at all and the content decides its own width.
 //! - **Content column**: padding 24dp all round; then, in order, the icon (16dp below,
 //!   centred), the title (16dp below, start-aligned — or centred when an icon is present), the
-//!   text (24dp below, start-aligned) and the buttons (end-aligned).
+//!   text (24dp below, start-aligned; it takes the slack when a height is imposed) and the
+//!   buttons (end-aligned).
 //! - **Buttons**: a `FlowRow` (8dp both axes) whose LAYOUT DIRECTION IS FLIPPED while the
 //!   buttons themselves keep the original direction. That is what puts the confirm action after
 //!   the dismiss one in a row while keeping it ABOVE when the row wraps — the trick is
@@ -559,8 +562,15 @@ struct DialogSlots {
 /// constrained, the text box is clamped to the leftover space so the action row keeps its own
 /// height. Without it a tall text takes its full content height, the column overflows and the
 /// buttons are crushed — measured at 0 px in the 800x600 window the tests lay out in, with the fix
-/// putting the row back at its own 40 px. `fill = false` matters: the share is the box's MAXIMUM
-/// main-axis size, so text shorter than its share leaves the column shorter as well.
+/// putting the row back at its own 40 px.
+///
+/// `fill = false` is the load-bearing half, and the tests that pin it are the ones with a SHORT
+/// text, not the tall one: with `fill = true` the box is forced to its share either way, so
+/// `a_tall_text_leaves_the_action_row_its_height` passes on both. Swapping the call for
+/// `layout_weight(1.0)` fails `slots_stack_in_order_with_their_paddings` (measured: 11 passed, 1
+/// failed, at its `confirm_y` assertion), because its fixed 40-tall text would be stretched to the
+/// whole share. That is the behaviour `fill = false` buys: the share is a MAXIMUM main-axis size,
+/// so text shorter than its share leaves the column shorter as well.
 ///
 /// The other slots have no weight; Compose gives none either.
 fn alert_dialog_content(

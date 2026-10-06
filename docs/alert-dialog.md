@@ -215,12 +215,19 @@ state is needed on top of that, because the enter animation runs on registration
 an edge for is its own sheet slide, which a dialog has none of) — and see "Composing it" above for why
 `visible` has to be an argument rather than a surrounding `if`.
 
-Tests (10) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
+Tests (12) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
 `dismiss_on_outside`, `dismiss_on_back_press` and `focusable` flags reaching the overlay, each with
-Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap; the slot order
-with its 16/16/24 paddings; the title centring with an icon and start-alignment without one; the
-button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
+Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap BY
+DEFAULT — and, with `platform_default_width(false)`, a body wider than the cap escaping it while the
+window still bounds it; a text slot taller than the window leaving the action row its own height; the
+slot order with its 16/16/24 paddings; the title centring with an icon and start-alignment without
+one; the button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
 above the dismiss; and the over-sized-slot overflow above.
+
+The `fill = false` in the text slot's weight is pinned by `slots_stack_in_order_with_their_paddings`,
+NOT by the tall-text test: with `fill = true` the box is stretched to its share whether it needs it
+or not, which that test catches through its fixed 40-tall text (swapping the call for
+`layout_weight(1.0)` measures 11 passed / 1 failed), while the tall-text test passes on both.
 
 The escape gate itself is tested at the key path, not just on the flag:
 `app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
@@ -242,9 +249,10 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   within when no focus-scope overlay is up (`app.rs:3346`), so focus does not reach the page behind.
   Every other key does fall through (`focus_scope_is_open` is false), so this is Tab only. Not fixed: the
   unconditional consume is load-bearing for every other overlay.
-- **No `weight(1f, fill = false)` on the text — RESOLVED.** Compose gives it so the text absorbs the
-  slack when a height is imposed; winia now does too, and a test pins it (a 2000px text in a 600px
-  window leaves the action row at its own 40px instead of crushing it to 0)
+- **Text slot weight — ALIGNED (was a deviation).** Compose gives the text slot
+  `weight(1f, fill = false)` so it absorbs the slack when a height is imposed; winia now does the
+  same, and two tests cover the two halves: a 2000px text in a 600px window leaves the action row at
+  its own 40px instead of crushing it to 0, and a 40px text is not stretched to its share.
 - **No `DialogProperties` object** — the cross-platform fields are flat on the builder
   (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`, `platform_default_width`) rather than
   grouped. `decorFitsSystemWindows` and the rest of the Android-window fields have no desktop
