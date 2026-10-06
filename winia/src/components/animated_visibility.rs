@@ -103,9 +103,8 @@ impl AnimatedVisibility {
         let gfx = move || {
             let p = g.peek();
             let cfg = if v.peek() { &e } else { &x };
-            // The transition vocabulary lives in one place (`VisibilityTransition::layer_params`),
-            // shared with `AnimatedContent` — which runs the same conversion for each of its two
-            // generations, once per transition.
+            // 过渡词汇表只有一处实现（`VisibilityTransition::layer_params`），与
+            // `AnimatedContent` 共用——它给自己的两代各跑一次同一个转换。
             cfg.layer_params(p, cs.peek())
         };
         // Direction-active config: the transition playing NOW (enter when visible,

@@ -96,10 +96,16 @@ impl<T> AnimatedContent<T> {
 struct ContentSizePolicy {
     prev_size: State<Option<(f32, f32)>>,
     /// 新旧一代的内容尺寸——`last_size` 供切换时锁为 `prev_size`（sizeTransform 起点），
-    /// `content_size` 供 `SlideOffset::Fraction` 的过渡在绘制期解析距离。
+    /// `container_size` 供 `SlideOffset::Fraction` 的过渡在绘制期解析距离。
+    /// 新旧一代的内容尺寸——`last_size` 供切换时锁为 `prev_size`（sizeTransform 起点），
+    /// `container_size` 供 `SlideOffset::Fraction` 的过渡在绘制期解析距离。
     /// 两个都是 Backchannel：只在切换那一刻/绘制期读，每帧 notify 会白白重组调用方。
+    /// （`Backchannel::set` 仍要拿一次写锁，所以是"不通知"而不是"零成本"。）
     last_size: Backchannel<Option<(f32, f32)>>,
-    content_size: Backchannel<Option<(f32, f32)>>,
+    /// **容器**的尺寸——slide 按它解析距离（Compose 的 `slideIntoContainer` 量的是
+    /// `currentSize`，也就是容器，`AnimatedContent.kt:451`）。两代读的是同一个：
+    /// 曾经让离场那一代去读**入场那一代**的尺寸，50 → 200 的切换里 50 宽的旧内容被推了 200。
+    container_size: Backchannel<Option<(f32, f32)>>,
     size: State<f32>,
 }
 
@@ -120,7 +126,6 @@ impl MeasurePolicy for ContentSizePolicy {
         // 新一代是最后一个子节点（后组合 = 画在上层）。
         let incoming = measured.last().copied().unwrap_or(Size::new(0.0, 0.0));
         self.last_size.set(Some((incoming.width, incoming.height)));
-        self.content_size.set(Some((incoming.width, incoming.height)));
         // 布局期读 size（get 注册 layout_dep → 动画期间每帧重测——容器尺寸跟随切换动画；
         // peek 不注册 → 尺寸卡首帧值不动）
         let p = self.size.get();
@@ -131,6 +136,8 @@ impl MeasurePolicy for ContentSizePolicy {
             ),
             _ => (incoming.width, incoming.height),
         };
+        // 两代的层都按容器尺寸解析 slide（Compose 同规则）
+        self.container_size.set(Some((w, h)));
         let placements = children
             .iter()
             .zip(measured.iter())
@@ -158,15 +165,26 @@ impl MeasurePolicy for ContentSizePolicy {
     }
 }
 
+/// Compose 的 `SizeTransform` 默认 spring：`Spring.StiffnessMediumLow` = 400、无弹跳
+/// （`AnimatedContent.kt:217-223`）。`SpringSpec::default()` 是 stiffness 200
+/// （winia 自己的 `StiffnessLow` 档），用它容器会慢约 1.4 倍。
+fn default_size_spec() -> AnimationSpec {
+    AnimationSpec::Spring(SpringSpec {
+        damping_ratio: 1.0,
+        stiffness: 400.0,
+        ..SpringSpec::default()
+    })
+}
+
 impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
     /// Compose 的默认过渡：`fadeIn(220) + scaleIn(0.92) togetherWith fadeOut(90)`，
-    /// sizeTransform 用 `spring()`，容器裁剪到动画尺寸。
+    /// sizeTransform 用 `spring(stiffness = StiffnessMediumLow)`，容器裁剪到动画尺寸。
     pub fn new(target: State<T>) -> Self {
         Self {
             target,
             enter: default_enter(),
             exit: default_exit(),
-            size_spec: AnimationSpec::Spring(SpringSpec::default()),
+            size_spec: default_size_spec(),
             clip: true,
             modifier: Modifier::new(),
             content_key: None,
@@ -203,10 +221,26 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         self
     }
 
+    /// 一代的组合 key（对标 Compose `key(contentKey(it))`，`AnimatedContent.kt:873`）。
+    ///
+    /// 有 `content_key` 时用调用方给的键——**同一个键回到场上时复用原来的槽**（A → B → A
+    /// 的 A 带着自己的 `remember` 状态回来）。没有就退回自增计数：每代一个全新的槽。
+    /// 两者都必须随代变化，固定 key 会让新的一代重放旧一代记录的槽（内容闭包不重跑）。
+    fn generation_key(&self, value: &T, counter: u64) -> u64 {
+        match &self.content_key {
+            Some(k) => k(value),
+            None => counter,
+        }
+    }
+
     /// 构建内容切换容器。
-    /// ⚠ 不宏化：内部 `exit.get()`/`size.get()` 依赖必须注册到**调用点 scope**
-    /// （父容器每帧重跑 → 退出完成/尺寸完成检测执行）——宏化封闭内部 scope 会切断
-    /// 失效传播（同 animated_visibility/crossfade 宏化回归）。
+    ///
+    /// ⚠ 不宏化：`target` / `exit` / `size` 的依赖必须由**本函数自己的 scope**读到——
+    /// 宏化会把它们关进内部 scope，父容器每帧重跑时读不到，动画推进/完成检测就断了
+    /// （同 animated_visibility/crossfade 宏化回归）。
+    ///
+    /// `target.get()` 在这里读，是为了让**调用方**的 scope 订阅它（target 一变就重跑本
+    /// `build`）；每帧的推进与完成检测则在容器的 `Enter` 分支里读，见那里的注释。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx, T)) {
         // 依赖注册：target 变化 → 外层 scope 重组（本 build 重跑，容器槽随之 dirty → Enter）
         let target = self.target.get();
@@ -222,7 +256,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         // Compose 用 `key(contentKey(state))` 做同一件事。
         let generation: State<u64> = ctx.remember(|| 0);
         let last_size = ctx.remember_backchannel(|| None);
-        let content_size = ctx.remember_backchannel(|| None);
+        let container_size = ctx.remember_backchannel(|| None);
 
         let container_layer = {
             let clip = self.clip;
@@ -236,7 +270,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         let policy = ContentSizePolicy {
             prev_size: prev_size.clone(),
             last_size: last_size.clone(),
-            content_size: content_size.clone(),
+            container_size: container_size.clone(),
             size: size.clone(),
         };
         let key = ctx.next_key();
@@ -244,16 +278,17 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         match ac_status {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // Everything the frame needs happens INSIDE this branch, and that is load-bearing:
-                // a write made in the CALLER's scope (before the container is started) marks the
-                // container's slot dirty while the pass that is consuming it is already running,
-                // and the mark is gone by the next frame — so the container skipped and replayed
-                // its previous children while `previous`/`current` had already moved on. Measured:
-                // a switch made mid-transition left the old pair on screen for four frames and then
-                // hard-cut to the incoming generation alone. Here the container re-enters because
-                // its own dependencies changed, so the swap and the children it composes happen in
-                // one frame.
+                // 一帧要做的事全部发生在这个分支里，这一点是有承重的：写在**调用方** scope
+                // （容器 start 之前）的赋值，会在正在消费它的那一趟里把容器槽标脏，而那个标记
+                // 到下一帧就没了——容器于是 Skip、重放上帧的子节点，而 `previous`/`current`
+                // 早就走过去了。实测：过渡途中再切一次，旧的那对在屏幕上留了四帧，然后硬切到
+                // 只剩入场那一代。放在这里，容器是因为自己的依赖变了才 Enter，换代与它组合的
+                // 子节点在同一帧发生。
                 let target_now = self.target.get();
+                // 容器还必须依赖 `current`。少了这条，`content_key` 不变而值变了的更新只把
+                // `current` 标脏，容器仍是干净的，整棵子树被重放、内容根本不会带着新值重跑——
+                // 实测：同一个 key 下 target 从 0 走到 3，叶子宽度还停在 50。
+                let _c = current.get();
                 // 完成检测要每帧跑一次——订阅两个进度（fadeOut 90ms 与 size 的 spring 时长不同，
                 // 两个都可能先完成），同时这正是"动画期间容器每帧 Enter"的来源
                 let _x = exit.get();
@@ -306,12 +341,15 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 if let Some(outgoing) = outgoing {
                     let t = self.exit.clone();
                     let g = exit.clone();
-                    let cs = content_size.clone();
+                    let cs = container_size.clone();
                     let layer = Modifier::new().graphics_layer(move || {
                         t.layer_params(g.peek(), cs.peek().unwrap_or((0.0, 0.0)))
                     });
-                    let gen_id = generation.peek();
+                    let gen_id = self.generation_key(&outgoing, generation.peek());
                     ctx.key((GENERATION_PREV, gen_id), |ctx| {
+                        // 把这一代的值声明成子槽参数（对标 Compose 对 content lambda 参数的
+                        // changed 比较）：值变了就重跑内容，不依赖 key 是否变化
+                        ctx.changed(&outgoing);
                         let mkey = ctx.next_key();
                         if let GroupStatus::Enter =
                             ctx.start_restartable_group(mkey, layer, BoxLayout::default())
@@ -325,13 +363,15 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 let shown = current.peek().clone();
                 let t = self.enter.clone();
                 let g = enter.clone();
-                let cs = content_size.clone();
+                let cs = container_size.clone();
                 let layer = Modifier::new().graphics_layer(move || {
                     t.layer_params(g.peek(), cs.peek().unwrap_or((0.0, 0.0)))
                 });
-                let gen_id = generation.peek();
+                let gen_id = self.generation_key(&shown, generation.peek());
                 ctx.key((GENERATION_CURRENT, gen_id), |ctx| {
                     let _c = current.get();
+                    // 同上：`content_key` 相同的一代换值时，key 不变，只有这条能让内容重跑
+                    ctx.changed(&shown);
                     let mkey = ctx.next_key();
                     if let GroupStatus::Enter =
                         ctx.start_restartable_group(mkey, layer, BoxLayout::default())
@@ -370,7 +410,11 @@ mod tests {
         }
     }
 
-    /// 两代同场时容器有两个子节点，静止时只有一个——容器 = 有两个子节点的那个节点。
+    /// 两代同场时容器有两个子节点，静止时只有一个——容器 = 那两个子节点的父节点。
+    ///
+    /// 形状启发式，复用前要知道它有两个盲点：某一代的内容**不组合任何节点**（合法，
+    /// 例如 `if flag { Text(..) }` 且 flag 为假）会让那层包装没有子节点；树根不是容器时
+    /// （示例都套了 `Column`）`children[0]` 那条下降会走丢。本模块的几棵树都成立。
     fn container_child_count(composer: &Composer) -> usize {
         let Some(root) = composer.layout_root_idx() else { return 0 };
         let nodes = composer.arena_nodes();
@@ -616,8 +660,9 @@ mod tests {
                     // 0..=9 是同一份内容（同一页的两次渲染），10 才换内容
                     .content_key(|p| if *p < 10 { 0 } else { 1 })
                     .build(ctx, |ctx, page| {
-                        // 宽度跟 KEY 走，而不是跟值走——同一份内容换值不该改尺寸
-                        let w = if page < 10 { 50.0 } else { 200.0 };
+                        // 宽度必须跟**值**走，不能跟 key 走：宽度若由 key 决定，这条测试就分不清
+                        // "内容带着新值重跑了"和"内容压根没重跑"——两者给出同一个叶子。review 发现。
+                        let w = 50.0 + page as f32 * 10.0;
                         SizedLeaf { w }.build(ctx);
                     });
             });
@@ -627,26 +672,25 @@ mod tests {
         recompose(&mut composer);
         assert_eq!(leaf_widths(&composer), vec![50.0], "initial");
 
-        // 键不变：值换掉，内容以新值重跑，但没有第二代入场
+        // 键不变：值换掉，内容以新值重跑（叶子宽度 = 80 就是"重跑了"的证据），但没有第二代入场
         target.set(3);
         recompose(&mut composer);
         assert_eq!(container_child_count(&composer), 1, "no transition for the same key");
-        assert_eq!(leaf_widths(&composer), vec![50.0]);
+        assert_eq!(leaf_widths(&composer), vec![80.0], "the content re-ran with the new value");
 
         // 键变了：正常过渡——两代同场
         target.set(10);
         recompose(&mut composer);
-        assert_eq!(leaf_widths(&composer), vec![50.0, 200.0], "a new key animates");
+        assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
     }
 
 
-    /// Regression: a switch made while a transition is STILL RUNNING shows the new pair at once.
+    /// 回归：过渡**还在跑**的时候再切一次，新的那对要立刻上位。
     ///
-    /// Each generation needs its own composition key. With a fixed key the outgoing group replayed
-    /// its recorded slots instead of re-running the content closure with the new outgoing value —
-    /// measured: the tree kept showing `[50, 60]` for four frames after switching to the third
-    /// value, then jumped to `[70]` alone (the incoming generation, with no outgoing). The same
-    /// fixed key would also hand one generation's `remember`ed state to the next.
+    /// 每一代都要有自己的组合 key。key 固定时，离场那组会重放它记录的槽，而不会带着新的
+    /// 离场值重跑内容闭包——实测：切到第三个值之后，树里连续四帧还是 `[50, 60]`，然后跳到
+    /// 只剩 `[70]`（入场那一代，没有离场的一代）。同一个固定 key 还会把上一代的 `remember`
+    /// 状态交给下一代。
     #[test]
     fn a_switch_during_a_transition_shows_the_new_pair_at_once() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());

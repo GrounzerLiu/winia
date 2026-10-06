@@ -1,14 +1,13 @@
-//! Enter/exit transition configuration — the spec half of `AnimatedVisibility` and of the
-//! shared-transition endpoints.
+//! 进出场过渡配置——`AnimatedVisibility` 与共享元素过渡两端共用的那份"动作规格"。
 //!
-//! It is a motion spec, not a component: the Modifier chain carries it, `nav.rs` stores it per
-//! transition and `shared_transition` pairs them. It lived in `components/animated_visibility.rs`,
-//! which meant the toolkit named a component to describe how something fades.
+//! 它是动作规格、不是组件：Modifier 链携带它，`nav.rs` 按过渡存它，`shared_transition` 用它
+//! 配对两端。它原先住在 `components/animated_visibility.rs`，那等于用某个组件的名字去描述
+//! "东西怎么淡出"——放回 `animation` 层才对。
 
 use crate::animation::AnimationSpec;
 
-/// Slide direction (`VisibilityTransition::slide_in/slide_out`).
-/// Combined with [`SlideOffset`]: direction picks the axis+sign, offset picks the distance.
+/// Slide 方向（`VisibilityTransition::slide_in/slide_out`）。
+/// 与 [`SlideOffset`] 配合：方向决定轴与正负，offset 决定距离。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlideDirection {
     Left,
@@ -17,24 +16,22 @@ pub enum SlideDirection {
     Down,
 }
 
-/// Slide distance (cf. Compose `slideInHorizontally(initialOffsetX: (fullWidth) -> Int)`).
+/// Slide 距离（对标 Compose `slideInHorizontally(initialOffsetX: (fullWidth) -> Int)`）。
 ///
-/// Compose takes a lambda over the content size; the common cases are a fixed offset or a fraction
-/// of it, which these two variants express without a closure. Both users of a slide share the type:
-/// [`AnimatedVisibility`](crate::components::animated_visibility) and the navigation scene
-/// transitions in [`crate::nav`], which had a second, near-identical enum of its own.
+/// Compose 收一个"按内容尺寸算"的 lambda；常见情形只有固定值或比例两种，这两个变体不用闭包
+/// 就能表达。两处用 slide 的地方共用这个类型：[`AnimatedVisibility`](crate::components::animated_visibility)
+/// 与 [`crate::nav`] 的场景过渡——后者原先自己有一个几乎一样的枚举。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SlideOffset {
-    /// Fixed logical pixels — the default 48, and the M3 shared-axis 30.
+    /// 固定逻辑像素——默认 48，M3 共享轴是 30。
     Fixed(f32),
-    /// Fraction of the content extent along the slide axis (1.0 = a full slide-in, the Compose
-    /// `initialOffsetX = { fullWidth }`; -0.3 = the reverse parallax `{ -it / 3 }`).
+    /// 沿 slide 轴的内容尺寸的**比例**（1.0 = 整段滑入，即 Compose 的
+    /// `initialOffsetX = { fullWidth }`；-0.3 = 反向视差 `{ -it / 3 }`）。
     Fraction(f32),
 }
 
 impl SlideOffset {
-    /// The distance to slide, given the container's extent **along the slide axis** — the caller
-    /// knows whether that is the width or the height.
+    /// 该滑多远，`extent` 是**沿 slide 轴**的容器尺寸——调用方知道那是宽还是高。
     pub fn resolve(&self, extent: f32) -> f32 {
         match self {
             SlideOffset::Fixed(px) => *px,
@@ -49,57 +46,57 @@ impl Default for SlideOffset {
     }
 }
 
-/// Vertical expand anchor (cf. Compose `expandVertically(expandFrom: Alignment.Top)`).
+/// 纵向展开的锚点（对标 Compose `expandVertically(expandFrom: Alignment.Top)`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExpandFrom {
-    /// Content grows downward from the top (status quo).
+    /// 内容从顶部往下长（沿用现状）。
     #[default]
     Top,
-    /// Content grows upward from the bottom.
+    /// 内容从底部往上长。
     Bottom,
 }
 
-/// Horizontal expand anchor (cf. Compose `expandHorizontally(expandFrom: Alignment.Start)`).
-/// NOTE: Start is unconditionally the left edge and End unconditionally the right edge
-/// (no RTL mirroring — Compose parity backlog; RTL callers pick the anchor explicitly).
+/// 横向展开的锚点（对标 Compose `expandHorizontally(expandFrom: Alignment.Start)`）。
+/// 注意：Start 一律是左边、End 一律是右边（没有 RTL 镜像——对齐 Compose 的欠账，
+/// RTL 调用方自己显式选锚点）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExpandFromH {
-    /// Content grows rightward from the start (left) edge.
+    /// 内容从起点（左）往右长。
     #[default]
     Start,
-    /// Content grows leftward from the end (right) edge.
+    /// 内容从终点（右）往左长。
     End,
 }
 
-/// Enter/exit transition config: fade/slide/expand/scale effects + animation spec.
-/// Combine with `with_*` chaining (cf. Compose `fadeIn() + expandVertically()`).
+/// 进出场过渡配置：fade / slide / expand / scale 效果 + 动画规格。
+/// 用 `with_*` 组合（对标 Compose 的 `fadeIn() + expandVertically()`）。
 #[derive(Debug, Clone)]
 pub struct VisibilityTransition {
-    /// Fade in/out (alpha 0<->1)
+    /// 淡入/淡出（alpha 0<->1）
     pub fade: bool,
-    /// Slide in/out (direction + distance)
+    /// 滑入/滑出（方向 + 距离）
     pub slide: Option<(SlideDirection, SlideOffset)>,
-    /// Vertical expand/shrink (container height 0<->full, layout layer, followers move along)
+    /// 纵向展开/收起（容器高 0<->全高，布局层——后面的内容跟着走）
     pub expand: bool,
-    /// Vertical expand anchor
+    /// 纵向展开锚点
     pub expand_from: ExpandFrom,
-    /// Horizontal expand/shrink (container width 0<->full, layout layer)
+    /// 横向展开/收起（容器宽 0<->全宽，布局层）
     pub expand_h: bool,
-    /// Horizontal expand anchor
+    /// 横向展开锚点
     pub expand_from_h: ExpandFromH,
-    /// Scale (scale_from<->1.0 around transform_origin)
+    /// 缩放（scale_from <-> 1.0，绕 transform_origin）
     pub scale: bool,
-    /// Scale start value (status quo 0.8 — cf. Compose `scaleIn(initialScale)`)
+    /// 缩放的起始值（现状 0.8——对标 Compose `scaleIn(initialScale)`）
     pub scale_from: f32,
-    /// Scale pivot, normalized (0.5, 0.5) = center (cf. Compose `transformOrigin`)
+    /// 缩放轴心，归一化（0.5, 0.5）= 中心（对标 Compose `transformOrigin`）
     pub transform_origin: (f32, f32),
-    /// Animation spec
+    /// 动画规格
     pub spec: AnimationSpec,
 }
 
 impl VisibilityTransition {
-    /// No-op transition (all channels off — slide/scale-only customs without
-    /// fade, or sharedBounds endpoints that ride the flight opaquely).
+    /// 空过渡（所有通道关闭——只有 slide/scale 的自定义过渡、或共享元素两端
+    /// 完全由飞行层负责的场合）。
     pub fn empty() -> Self {
         Self {
             fade: false,
@@ -141,11 +138,11 @@ impl VisibilityTransition {
     pub fn shrink_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::expand_in(spec)
     }
-    /// Horizontal expand (cf. Compose `expandHorizontally`).
+    /// 横向展开（对标 Compose `expandHorizontally`）。
     pub fn expand_in_h(spec: impl Into<AnimationSpec>) -> Self {
         Self { expand_h: true, ..Self::base(spec.into()) }
     }
-    /// Horizontal shrink (cf. Compose `shrinkHorizontally`).
+    /// 横向收起（对标 Compose `shrinkHorizontally`）。
     pub fn shrink_out_h(spec: impl Into<AnimationSpec>) -> Self {
         Self::expand_in_h(spec)
     }
@@ -155,7 +152,7 @@ impl VisibilityTransition {
     pub fn slide_out(dir: SlideDirection, spec: impl Into<AnimationSpec>) -> Self {
         Self::slide_in(dir, spec)
     }
-    /// Slide with explicit distance (cf. Compose `initialOffsetX/Y` lambda).
+    /// 指定距离的 slide（对标 Compose 的 `initialOffsetX/Y` lambda）。
     pub fn slide_in_offset(
         dir: SlideDirection,
         offset: SlideOffset,
@@ -176,67 +173,64 @@ impl VisibilityTransition {
     pub fn scale_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::scale_in(spec)
     }
-    /// Combine: overlay fade in/out
+    /// 叠加：再打开 fade
     pub fn with_fade(mut self) -> Self {
         self.fade = true;
         self
     }
-    /// Combine: overlay vertical expand/shrink
+    /// 叠加：再打开纵向展开/收起
     pub fn with_expand(mut self) -> Self {
         self.expand = true;
         self
     }
-    /// Combine: overlay vertical expand/shrink with explicit anchor
+    /// 叠加：纵向展开/收起 + 显式锚点
     pub fn with_expand_from(mut self, from: ExpandFrom) -> Self {
         self.expand = true;
         self.expand_from = from;
         self
     }
-    /// Combine: overlay horizontal expand/shrink
+    /// 叠加：再打开横向展开/收起
     pub fn with_expand_h(mut self) -> Self {
         self.expand_h = true;
         self
     }
-    /// Combine: overlay horizontal expand/shrink with explicit anchor
+    /// 叠加：横向展开/收起 + 显式锚点
     pub fn with_expand_h_from(mut self, from: ExpandFromH) -> Self {
         self.expand_h = true;
         self.expand_from_h = from;
         self
     }
-    /// Combine: overlay slide (default 48px distance)
+    /// 叠加：slide（默认 48px 距离）
     pub fn with_slide(mut self, dir: SlideDirection) -> Self {
         self.slide = Some((dir, SlideOffset::default()));
         self
     }
-    /// Combine: overlay slide with explicit distance
+    /// 叠加：slide + 显式距离
     pub fn with_slide_offset(mut self, dir: SlideDirection, offset: SlideOffset) -> Self {
         self.slide = Some((dir, offset));
         self
     }
-    /// Combine: overlay scale (default 0.8 from center)
+    /// 叠加：scale（默认 0.8、以中心为原点）
     pub fn with_scale(mut self) -> Self {
         self.scale = true;
         self
     }
-    /// Combine: overlay scale with explicit start value and pivot
-    /// (cf. Compose `scaleIn(initialScale, transformOrigin)`)
+    /// 叠加：scale + 显式起始值与轴心
+    /// （对标 Compose `scaleIn(initialScale, transformOrigin)`）
     pub fn with_scale_from(mut self, scale_from: f32, transform_origin: (f32, f32)) -> Self {
         self.scale = true;
         self.scale_from = scale_from;
         self.transform_origin = transform_origin;
         self
     }
-    /// The draw-layer parameters this transition produces at `progress`, for a content box of
-    /// `content_extent`.
+    /// 本过渡在 `progress` 处产生的绘制层参数，`content_extent` 是解析 slide 距离用的盒子。
     ///
-    /// `progress` is how SETTLED the transition is: `1.0` is the resting state (whatever the
-    /// transition's flags are, they contribute nothing), `0.0` is the far end — an enter that has
-    /// not started, or an exit that has finished. An entering content therefore runs its progress
-    /// 0 → 1 and a leaving one runs 1 → 0, both through this one function; that is what lets a
-    /// crossfade's two halves be the same code with the two different transitions.
+    /// `progress` 是"落定程度"：`1.0` 是静止态（过渡的各个开关都不贡献任何东西），`0.0` 是
+    /// 另一端——还没开始的入场，或已经结束的退场。于是入场的内容跑 0 → 1、离场的内容跑
+    /// 1 → 0，两者走的是同一个函数；这正是让 crossfade 的两半能用"同一份代码 + 两个不同
+    /// 过渡"实现的原因。
     ///
-    /// The content extent is only needed by a `SlideOffset::Fraction` slide, which resolves
-    /// against it.
+    /// `content_extent` 只有 `SlideOffset::Fraction` 的 slide 需要，按它解析距离。
     pub fn layer_params(&self, progress: f32, content_extent: (f32, f32)) -> crate::graphics::GraphicsLayerParams {
         let p = progress;
         let mut params = crate::graphics::GraphicsLayerParams::default();
@@ -251,7 +245,7 @@ impl VisibilityTransition {
                 crate::graphics::TransformOrigin(self.transform_origin.0, self.transform_origin.1);
         }
         if let Some((dir, offset)) = self.slide {
-            // The extent along the slide axis; `SlideOffset::resolve` does the rest.
+            // 沿 slide 轴的长度；剩下的交给 `SlideOffset::resolve`。
             let (w, h) = content_extent;
             let extent = match dir {
                 SlideDirection::Left | SlideDirection::Right => w,

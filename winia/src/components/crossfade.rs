@@ -9,7 +9,11 @@
 //!     });
 //! ```
 //!
-//! 机制（顺序淡入淡出——组合引擎单内容世代，无 Compose 双世代 outgoing 组合）：
+//! 机制（顺序淡入淡出——**这不是 Compose `Crossfade` 的语义**）：
+//! 旧内容淡完才换、再淡入新的，任一时刻只有一代在场上。这里原先记的理由是
+//! "组合引擎无 Compose 双世代 outgoing 组合"——**这个理由是错的**：
+//! `AnimatedContent` 现在就是两代同场（见 `animated_content.rs` 与
+//! `docs/animation-gap-analysis.md`）。本组件的跟进**尚未做**，不是做不到。
 //! - **内部状态**：`current: State<T>`（显示中目标）+ `progress: State<f32>`（动画进度）
 //! - **切换流程**：target 变化（`get()` 注册依赖→重组）→ 当前内容淡出（progress 1→0，
 //!   绘制层 alpha=progress）；淡出完成（progress<0.001）→ `current.set(target)`（notify）

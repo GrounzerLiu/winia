@@ -118,7 +118,7 @@
 | High-level value anim | `animate_rect_as_state` / `animate_bounds_as_state` | ⏸️ skipped by design (no `Rect` unit type exists; bounds animate via `Offset`+`Size`, both animatable — add when a consumer needs it) |
 | High-level value anim | `label` / `finished_listener` params | ⚠️ partial (`on_finish` + `push_animatable_with_done` done; `label` skipped — Transition already has it) |
 | Container anim | **`AnimatedVisibility`** enter/exit set | ✅ done (params aligned + horizontal expand, P0-1) |
-| Container anim | `AnimatedContent` / `Crossfade` | ⚠️ `AnimatedContent` now keeps both generations composed (two scenes at once, incoming on top, independent enter/exit/size progress, clipped to the animated size); `Crossfade` is still the old single-generation fade-out-then-in, and the 90 ms enter delay has no `TweenSpec` field to live in. Both record what is left in their module docs |
+| Container anim | `AnimatedContent` / `Crossfade` | ⚠️ `AnimatedContent` 已改成两代同场（两代同时组合、新的画在上面、enter/exit/size 三个进度彼此独立、容器裁到动画尺寸）；`Crossfade` 仍是旧的单代淡出再淡入；进入的 90ms 延迟没有地方放（`TweenSpec` 无 delay 字段）。未对齐的部分两边都记在各自的模块文档里 |
 | Transition | `animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ✅ done (P0-2) |
 | Infinite anim | `animate_value` (generic) | ❌ missing (float/color only) |
 | Spec | `cubic_bezier`/`PathEasing` custom easing | ✅ done (P2-11) |
