@@ -372,11 +372,12 @@ itself, so the dialog does it, and `DatePicker::colors` exists for that. Either 
 before: `DatePickerDialog::colors()` reached the surface and stopped, so an overridden dialog showed a
 theme-coloured calendar inside a caller-coloured container.
 
-Two deviations there. material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog collapses
-when the input mode is shorter than the calendar; winia has no weights, so the content and the action row follow
-one another in the `Column` — the row still lands at the end, because the column is only as tall as its content.
-And `AlertDialogFlowRow`'s `crossAxisSpacing` (12) only matters when the two buttons wrap onto two lines, which
-winia's `Row` does not do; the row here is not a `FlowRow`.
+One deviation there: `AlertDialogFlowRow`'s `crossAxisSpacing` (12) only matters when the two buttons wrap
+onto two lines, which winia's `Row` does not do; the row here is not a `FlowRow` (`date_picker.rs:2221`).
+The content box is not one — material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog
+collapses when the input mode is shorter than the calendar, and winia does the same with
+`layout_weight_fill(1.0, false)` (`date_picker.rs:2211`), whose share is a MAXIMUM: the box reports the size
+the picker actually asked for, and the dialog ends up content + action row rather than the whole cap.
 
 That needed one change outside this component: winia's `BasicAlertDialog` carried the alert dialog's 24 dp of
 content padding on its surface, where Compose's `BasicAlertDialog` has none — the padding belongs to
