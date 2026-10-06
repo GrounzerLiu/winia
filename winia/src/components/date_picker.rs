@@ -2177,6 +2177,11 @@ impl DatePickerDialog {
             // The picker is the container: material3's date picker dialog adds no padding, where winia's
             // `BasicAlertDialog` carries the alert dialog's 24 dp (`DatePickerDialog.android.kt:88-93`).
             .content_padding(0.0)
+            // `DialogProperties(usePlatformDefaultWidth = false)` — material3's date picker dialog passes
+            // it (`DatePickerDialog.kt:59`) so the 280..560 range does not constrain `requiredWidth(360)`:
+            // the picker's own width is the dialog's width, and the `size` modifier below is the only
+            // authority on it.
+            .platform_default_width(false)
             .modifier(self.modifier.then(size))
             .content(move |ctx| {
                 // `Column(verticalArrangement = SpaceBetween)`: the content in a `weight(1f, fill = false)` box,

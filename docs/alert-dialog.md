@@ -133,6 +133,17 @@ both halves of `widthIn`: `min_width` alone would let a long body grow the dialo
 `Modifier::max_width` was added for it (`winia/src/modifier.rs`, `layout/node.rs`): the cap
 lowers the incoming max and is then held at or above the min.
 
+`platform_default_width(false)` is Compose's `DialogProperties.usePlatformDefaultWidth = false`:
+the range is not applied, so the content sizes itself. That is how a caller asks for a dialog wider
+than `DIALOG_MAX_WIDTH`, or one that fills the window. On both `AlertDialog` and `BasicAlertDialog`,
+default `true`.
+
+**The text slot takes the slack.** Compose wraps it in `Box(Modifier.weight(1f, fill = false))`
+(`AlertDialog.kt:350`) and so does winia — `layout_weight_fill(1.0, false)`. When a height is
+imposed, the text box is clamped to the leftover space so the action row keeps its own height.
+Measured in the tests' 800x600 window with a 2000px text: without the weight the dialog is
+`280x600` with the action row at `y=576, h=0`; with it, `y=536, h=40`.
+
 When a min and a max conflict the winner is Compose's chain-order rule, replayed by
 `Modifier::min_max_steps`: each Compose modifier is its own node and constrains into what the node
 before it produced, so `.max_width(200).min_width(300)` measures 200 while the reverse measures
@@ -178,7 +189,7 @@ them, but the group holds nothing winia acts on differently):
 | `dismissOnClickOutside` | `dismiss_on_outside` | true |
 | `dismissOnBackPress` | `dismiss_on_back_press` | true |
 | `isFocusable` | `focusable` (drives the overlay's `focus_scope`) | true |
-| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | — | `usePlatformDefaultWidth` is a common `DialogProperties` field with no counterpart in an overlay that sizes itself; `decorFitsSystemWindows` is an Android-window concept. Deliberately not stubbed |
+| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | `platform_default_width` | `decorFitsSystemWindows` is an Android-window concept with no desktop meaning and is deliberately not stubbed |
 
 `dismiss_on_back_press(false)` still SWALLOWS Escape rather than letting it through, so the page behind the
 scrim never reacts to a key this dialog kept. **That swallow is winia's own, not a copy of Compose's** —
@@ -231,20 +242,14 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   within when no focus-scope overlay is up (`app.rs:3346`), so focus does not reach the page behind.
   Every other key does fall through (`focus_scope_is_open` is false), so this is Tab only. Not fixed: the
   unconditional consume is load-bearing for every other overlay.
-- **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack
-  when the *caller* imposes a height, which puts the action row at the bottom of that height;
-  winia omits it and the slack stays BELOW the buttons instead (the column stacks from the top). A
-  dialog sizes to its content by default, so this only shows with a caller-imposed height. The reason
-  this entry used to give — that `layout_weight` had no `fill` flag and would stretch the node — is no
-  longer true: `Modifier::layout_weight_fill(weight, fill)` exists, and `layout_weight_fill(1.0, false)`
-  on the text slot is what would match Compose. It is deferred rather than dropped because the
-  difference only appears under an imposed height, which no fixture exercises, so adopting it now would
-  land unverified.
-- **No `DialogProperties` object** — the three cross-platform fields are flat on the builder
-  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped.
-  `usePlatformDefaultWidth` is a common `DialogProperties` field (`DatePickerDialog.kt:59`) that winia's
-  overlay has no counterpart for, and `decorFitsSystemWindows` is an Android-window concept; both are
-  deliberately absent. See the table under "Structure and behaviour" for which is which.
+- **No `weight(1f, fill = false)` on the text — RESOLVED.** Compose gives it so the text absorbs the
+  slack when a height is imposed; winia now does too, and a test pins it (a 2000px text in a 600px
+  window leaves the action row at its own 40px instead of crushing it to 0)
+- **No `DialogProperties` object** — the cross-platform fields are flat on the builder
+  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`, `platform_default_width`) rather than
+  grouped. `decorFitsSystemWindows` and the rest of the Android-window fields have no desktop
+  meaning; `usePlatformDefaultWidth` does, and is `platform_default_width`. See the table under
+  "Structure and behaviour" for which is which.
 - The tests find the dialog's nodes through `Modifier::test_tag` and a real overlay layout (the
   registered overlay's content is composed in its own `Composer`, as the app does), so they
   check the geometry the user sees rather than the builder's fields.

@@ -108,6 +108,7 @@ pub struct BasicAlertDialog {
     dismiss_on_outside: bool,
     dismiss_on_back_press: bool,
     focusable: bool,
+    platform_default_width: bool,
     shape: Option<Shape>,
     container_color: Option<Color>,
     content_padding: f32,
@@ -123,12 +124,24 @@ impl BasicAlertDialog {
             dismiss_on_outside: true,
             dismiss_on_back_press: true,
             focusable: true,
+            platform_default_width: true,
             shape: None,
             container_color: None,
             content_padding: DIALOG_CONTAINER_PADDING,
             modifier: Modifier::new(),
             content: Box::new(|_| {}),
         }
+    }
+
+    /// Whether the container is held inside `DialogMinWidth .. DialogMaxWidth` — Compose's
+    /// `DialogProperties.usePlatformDefaultWidth`, `true` by default.
+    ///
+    /// `false` is how Compose builds a dialog that sizes itself: the content decides its own width
+    /// and the 280..560 range is not applied. Without it there is no way to ask for a dialog wider
+    /// than [`DIALOG_MAX_WIDTH`], or for one that fills the window.
+    pub fn platform_default_width(mut self, v: bool) -> Self {
+        self.platform_default_width = v;
+        self
     }
 
     /// The inset between the container and the content, [`DIALOG_CONTAINER_PADDING`] by default.
@@ -240,6 +253,7 @@ impl BasicAlertDialog {
         let content = self.content;
         let on_dismiss = self.on_dismiss_request;
         let content_padding = self.content_padding;
+        let platform_default_width = self.platform_default_width;
         let user_modifier = self.modifier;
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
@@ -264,9 +278,15 @@ impl BasicAlertDialog {
             content: Box::new(move |ctx| {
                 // Rebuilt per call: this closure is `Fn` (the overlay composes it every frame
                 // it is up), so nothing can be moved out of it.
-                let surface = Modifier::new()
-                    .min_width(DIALOG_MIN_WIDTH)
-                    .max_width(DIALOG_MAX_WIDTH)
+                //
+                // The width range is Compose's `sizeIn(DialogMinWidth, DialogMaxWidth)`, applied
+                // unless the caller turned it off — `DialogProperties.usePlatformDefaultWidth`,
+                // which is the switch that lets a dialog size itself.
+                let mut surface = Modifier::new();
+                if platform_default_width {
+                    surface = surface.min_width(DIALOG_MIN_WIDTH).max_width(DIALOG_MAX_WIDTH);
+                }
+                let surface = surface
                     .background(container, shape)
                     .clip(shape)
                     // `role = Dialog` is winia's landing for Compose's
@@ -306,6 +326,7 @@ pub struct AlertDialog {
     dismiss_on_outside: bool,
     dismiss_on_back_press: bool,
     focusable: bool,
+    platform_default_width: bool,
     icon: Option<Box<dyn Fn(&mut ComposeCtx)>>,
     title: Option<Box<dyn Fn(&mut ComposeCtx)>>,
     text: Option<Box<dyn Fn(&mut ComposeCtx)>>,
@@ -328,6 +349,7 @@ impl AlertDialog {
             dismiss_on_outside: true,
             dismiss_on_back_press: true,
             focusable: true,
+            platform_default_width: true,
             icon: None,
             title: None,
             text: None,
@@ -401,6 +423,14 @@ impl AlertDialog {
         self
     }
 
+    /// Whether the container is held inside `DialogMinWidth .. DialogMaxWidth` — Compose's
+    /// `DialogProperties.usePlatformDefaultWidth`, `true` by default. See
+    /// [`BasicAlertDialog::platform_default_width`].
+    pub fn platform_default_width(mut self, v: bool) -> Self {
+        self.platform_default_width = v;
+        self
+    }
+
     pub fn shape(mut self, shape: Shape) -> Self {
         self.shape = Some(shape);
         self
@@ -467,6 +497,7 @@ impl AlertDialog {
             .dismiss_on_outside(self.dismiss_on_outside)
             .dismiss_on_back_press(self.dismiss_on_back_press)
             .focusable(self.focusable)
+            .platform_default_width(self.platform_default_width)
             .modifier(self.modifier)
             .dismiss_handler(self.on_dismiss_request)
             .content(move |ctx| {
@@ -523,17 +554,15 @@ struct DialogSlots {
 /// Each slot is wrapped in its own box so it can carry the slot's bottom padding and
 /// cross-axis alignment; the Column itself belongs to [`BasicAlertDialog`].
 ///
-/// Deviation: Compose wraps the text slot in `Box(Modifier.weight(1f, fill = false))`
-/// (`AlertDialog.kt:350`) so it takes the slack when the CALLER imposes a height — and is clamped
-/// to that share rather than pushing the action row out of view. winia omits the weight and sizes
-/// to its content, so an imposed height leaves the slack below the buttons instead.
+/// The text slot carries `layout_weight_fill(1.0, false)`, matching Compose's
+/// `Box(Modifier.weight(1f, fill = false))` (`AlertDialog.kt:350`): when the column is height
+/// constrained, the text box is clamped to the leftover space so the action row keeps its own
+/// height. Without it a tall text takes its full content height, the column overflows and the
+/// buttons are crushed — measured at 0 px in the 800x600 window the tests lay out in, with the fix
+/// putting the row back at its own 40 px. `fill = false` matters: the share is the box's MAXIMUM
+/// main-axis size, so text shorter than its share leaves the column shorter as well.
 ///
-/// The reason this note used to give — that `Modifier::layout_weight` had no `fill` flag, so a
-/// weight could only stretch the node — is no longer true: `Modifier::layout_weight_fill(weight,
-/// fill)` exists and `layout_weight_fill(1.0, false)` on this slot is what would match Compose, on a
-/// column that can now be shortened by it (the `Arrangement` variants no longer grow a content-sized
-/// container to the maximum their parent offers). The change still waits for its own verification,
-/// because the difference only appears under an imposed height and no fixture exercises one today.
+/// The other slots have no weight; Compose gives none either.
 fn alert_dialog_content(
     ctx: &mut ComposeCtx,
     slots: &DialogSlots,
@@ -545,35 +574,43 @@ fn alert_dialog_content(
     use crate::layout::components::{FlowRow, Stack};
     use crate::components::text::ProvideTextStyle;
 
-    // A slot: an inner box carrying the padding and the alignment within the Column.
+    // A slot: an inner box carrying the padding and the alignment within the Column, and — for the
+    // text slot only — the weight that lets it take the slack when a height is imposed.
     fn slot(
         ctx: &mut ComposeCtx,
         padding_bottom: f32,
         align: Alignment,
+        weight: Option<f32>,
         content: impl FnOnce(&mut ComposeCtx),
     ) {
+        let mut modifier = Modifier::new();
+        if let Some(w) = weight {
+            // `fill = false`: the share is the box's MAXIMUM main-axis size, so text shorter than
+            // its share leaves the column shorter too — Compose's `weight(1f, fill = false)`.
+            modifier = modifier.layout_weight_fill(w, false);
+        }
         Stack::new()
-            .modifier(Modifier::new().padding_bottom(padding_bottom).align_self(align))
+            .modifier(modifier.padding_bottom(padding_bottom).align_self(align))
             .build(ctx, content);
     }
 
     if let Some(icon) = &slots.icon {
         WiniaTheme::with_content_color(colors.icon, ctx, |ctx| {
-            slot(ctx, DIALOG_ICON_PADDING_BOTTOM, Alignment::Center, icon);
+            slot(ctx, DIALOG_ICON_PADDING_BOTTOM, Alignment::Center, None, icon);
         });
     }
     if let Some(title) = &slots.title {
         WiniaTheme::with_content_color(colors.title, ctx, |ctx| {
             // Compose centres the title when an icon sits above it, and starts it otherwise.
             let align = if has_icon { Alignment::Center } else { Alignment::Start };
-            slot(ctx, DIALOG_TITLE_PADDING_BOTTOM, align, |ctx| {
+            slot(ctx, DIALOG_TITLE_PADDING_BOTTOM, align, None, |ctx| {
                 ProvideTextStyle(styles.title.clone(), ctx, |ctx| title(ctx));
             });
         });
     }
     if let Some(text) = &slots.text {
         WiniaTheme::with_content_color(colors.text, ctx, |ctx| {
-            slot(ctx, DIALOG_TEXT_PADDING_BOTTOM, Alignment::Start, |ctx| {
+            slot(ctx, DIALOG_TEXT_PADDING_BOTTOM, Alignment::Start, Some(1.0), |ctx| {
                 ProvideTextStyle(styles.text.clone(), ctx, |ctx| text(ctx));
             });
         });
@@ -581,7 +618,7 @@ fn alert_dialog_content(
     let (confirm, dismiss) = (&slots.confirm_button, &slots.dismiss_button);
     if confirm.is_some() || dismiss.is_some() {
         WiniaTheme::with_content_color(colors.button, ctx, |ctx| {
-            slot(ctx, 0.0, Alignment::End, |ctx| {
+            slot(ctx, 0.0, Alignment::End, None, |ctx| {
                 // Compose's `AlertDialogFlowRow`: the FLOW lays out in the flipped direction
                 // while the buttons inside keep the original one. The content order (confirm
                 // first) then reads dismiss-then-confirm across a row and confirm-above-dismiss
@@ -762,6 +799,46 @@ mod tests {
             inner.arena_nodes()[root].measured_size.width, DIALOG_MAX_WIDTH,
             "content wider than {DIALOG_MAX_WIDTH} is constrained to it"
         );
+    }
+
+    #[test]
+    fn the_width_clamp_is_what_platform_default_width_turns_off() {
+        // Compose's `DialogProperties(usePlatformDefaultWidth = false)` is how a dialog sizes
+        // itself. With it off the 560 cap does not apply: 900 of content (plus the 24dp padding)
+        // comes out wider than `DIALOG_MAX_WIDTH` and stays inside the 800 window.
+        let mut c = compose_dialog(
+            AlertDialog::new(true)
+                .platform_default_width(false)
+                .title(fixed_slot("wide", 900.0, 20.0)),
+        );
+        let inner = lay_out_overlay(&mut c);
+        let root = inner.layout_root_idx().expect("laid out");
+        let width = inner.arena_nodes()[root].measured_size.width;
+        assert!(
+            width > DIALOG_MAX_WIDTH,
+            "with the platform default width off the cap must not apply, got {width}"
+        );
+        assert!(width <= 800.0, "and the window still constrains it, got {width}");
+    }
+
+    #[test]
+    fn a_tall_text_leaves_the_action_row_its_height() {
+        // Compose wraps the text slot in `weight(1f, fill = false)` (`AlertDialog.kt:350`): when
+        // the column is height-constrained, the text box is clamped to the leftover space so the
+        // action row keeps its own. Without that the text takes its full content height, the
+        // column overflows and the buttons are crushed: this dialog came out `280x600` in the
+        // 800x600 window below, with the action row at y=576 and height 0. With the weight it is
+        // at y=536 with its full height.
+        let mut c = compose_dialog(
+            AlertDialog::new(true)
+                .title(fixed_slot("t", 100.0, 20.0))
+                .text(fixed_slot("body", 200.0, 2000.0))
+                .confirm_button(fixed_slot("ok", 80.0, 40.0)),
+        );
+        let inner = lay_out_overlay(&mut c);
+        let (_, y, _, h) = abs_rect(&inner, "ok");
+        assert_eq!(h, 40.0, "the action row keeps its own height");
+        assert_eq!(y, 536.0, "and sits above the container's bottom padding");
     }
 
     #[test]
