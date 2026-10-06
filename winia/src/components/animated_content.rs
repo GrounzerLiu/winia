@@ -208,7 +208,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
     /// （父容器每帧重跑 → 退出完成/尺寸完成检测执行）——宏化封闭内部 scope 会切断
     /// 失效传播（同 animated_visibility/crossfade 宏化回归）。
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx, T)) {
-        // 依赖注册：target 变化 → 外层 scope 重组 → 本 build 重跑（切换启动）
+        // 依赖注册：target 变化 → 外层 scope 重组（本 build 重跑，容器槽随之 dirty → Enter）
         let target = self.target.get();
         // 内部状态（remember——语句级 key 稳定，跨重组保留）
         let current: State<T> = ctx.remember(|| target.clone());
@@ -217,53 +217,12 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         let exit: State<f32> = ctx.remember(|| 1.0);
         let size: State<f32> = ctx.remember(|| 1.0);
         let prev_size: State<Option<(f32, f32)>> = ctx.remember(|| None);
+        // 每一代有自己的 key：固定 key 会让"新的一代"复用上一代的槽（旧内容离场后，
+        // 新来的那代继承它的 `remember` 状态——实测就是树里显示旧内容）。
+        // Compose 用 `key(contentKey(state))` 做同一件事。
+        let generation: State<u64> = ctx.remember(|| 0);
         let last_size = ctx.remember_backchannel(|| None);
         let content_size = ctx.remember_backchannel(|| None);
-        // 两个完成检测要每帧跑一次——各自订阅进度（fadeOut 90ms 与 size 的 spring
-        // 时长不同，两个都可能先完成）
-        let _x = exit.get();
-        let _s = size.get();
-
-        if current.peek() != target {
-            // 内容身份：键相同 = 同一份内容——状态换进去但不播过渡（Compose `contentKey`）
-            let same_content = match &self.content_key {
-                Some(key) => {
-                    let shown_now = current.peek();
-                    key(&shown_now) == key(&target)
-                }
-                None => false,
-            };
-            if same_content {
-                // 同一份内容：只换值。`current.get()` 在容器里订阅着 → 内容以新值重跑，
-                // previous/进度都不动（不播过渡）
-                current.set(target.clone());
-            } else {
-                // 立刻换代：旧的一代进 previous（它自己的 exit 从 1 开始往下走），
-                // 新的一代进 current。不等待——两代同时在场上，这才是 AnimatedContent。
-                previous.set(Some(current.peek().clone()));
-                prev_size.set(last_size.peek());
-                current.set(target.clone());
-                exit.set(1.0);
-                enter.set(0.0);
-                size.set(0.0);
-            }
-        }
-
-        push_animatable(enter.clone(), 1.0, self.enter.spec.clone());
-        if previous.peek().is_some() {
-            push_animatable(exit.clone(), 0.0, self.exit.spec.clone());
-            if exit.peek() <= 0.001 {
-                // 旧的一代走完了——它的槽下一帧不再组合（previous.get() 注册了依赖）
-                previous.set(None);
-            }
-        }
-        if prev_size.peek().is_some() {
-            push_animatable(size.clone(), 1.0, self.size_spec.clone());
-            if size.peek() >= 0.999 {
-                // 尺寸动画收尾：容器回到"就是内容尺寸"，下一帧不再插值
-                prev_size.set(None);
-            }
-        }
 
         let container_layer = {
             let clip = self.clip;
@@ -275,15 +234,73 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         };
         let modifier = self.modifier.clone().then(container_layer);
         let policy = ContentSizePolicy {
-            prev_size,
-            last_size,
+            prev_size: prev_size.clone(),
+            last_size: last_size.clone(),
             content_size: content_size.clone(),
             size: size.clone(),
         };
         let key = ctx.next_key();
-        match ctx.start_restartable_group(key, modifier, policy) {
+        let ac_status = ctx.start_restartable_group(key, modifier, policy);
+        match ac_status {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
+                // Everything the frame needs happens INSIDE this branch, and that is load-bearing:
+                // a write made in the CALLER's scope (before the container is started) marks the
+                // container's slot dirty while the pass that is consuming it is already running,
+                // and the mark is gone by the next frame — so the container skipped and replayed
+                // its previous children while `previous`/`current` had already moved on. Measured:
+                // a switch made mid-transition left the old pair on screen for four frames and then
+                // hard-cut to the incoming generation alone. Here the container re-enters because
+                // its own dependencies changed, so the swap and the children it composes happen in
+                // one frame.
+                let target_now = self.target.get();
+                // 完成检测要每帧跑一次——订阅两个进度（fadeOut 90ms 与 size 的 spring 时长不同，
+                // 两个都可能先完成），同时这正是"动画期间容器每帧 Enter"的来源
+                let _x = exit.get();
+                let _s = size.get();
+
+                if current.peek() != target_now {
+                    // 内容身份：键相同 = 同一份内容——状态换进去但不播过渡（Compose `contentKey`）
+                    let same_content = match &self.content_key {
+                        Some(k) => {
+                            let shown_now = current.peek();
+                            k(&shown_now) == k(&target_now)
+                        }
+                        None => false,
+                    };
+                    if same_content {
+                        // 同一份内容：只换值（不播过渡）。`current.get()` 在下面订阅着 →
+                        // 内容以新值重跑，previous/三个进度都不动
+                        current.set(target_now.clone());
+                    } else {
+                        // 立刻换代：旧的一代进 previous（它自己的 exit 从 1 开始往下走），
+                        // 新的一代进 current。不等待——两代同时在场上，这才是 AnimatedContent。
+                        previous.set(Some(current.peek().clone()));
+                        prev_size.set(last_size.peek());
+                        current.set(target_now.clone());
+                        exit.set(1.0);
+                        enter.set(0.0);
+                        size.set(0.0);
+                        generation.set(generation.peek().wrapping_add(1));
+                    }
+                }
+
+                push_animatable(enter.clone(), 1.0, self.enter.spec.clone());
+                if previous.peek().is_some() {
+                    push_animatable(exit.clone(), 0.0, self.exit.spec.clone());
+                    if exit.peek() <= 0.001 {
+                        // 旧的一代走完了——它的槽下一帧不再组合（previous.get() 是依赖）
+                        previous.set(None);
+                    }
+                }
+                if prev_size.peek().is_some() {
+                    push_animatable(size.clone(), 1.0, self.size_spec.clone());
+                    if size.peek() >= 0.999 {
+                        // 尺寸动画收尾：容器回到"就是内容尺寸"，下一帧不再插值
+                        prev_size.set(None);
+                    }
+                }
+
                 // previous 变化（Some → None）→ 容器槽 dirty → Enter → 旧的一代拆除
                 let outgoing = previous.get();
                 if let Some(outgoing) = outgoing {
@@ -293,7 +310,8 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                     let layer = Modifier::new().graphics_layer(move || {
                         t.layer_params(g.peek(), cs.peek().unwrap_or((0.0, 0.0)))
                     });
-                    ctx.key(GENERATION_PREV, |ctx| {
+                    let gen_id = generation.peek();
+                    ctx.key((GENERATION_PREV, gen_id), |ctx| {
                         let mkey = ctx.next_key();
                         if let GroupStatus::Enter =
                             ctx.start_restartable_group(mkey, layer, BoxLayout::default())
@@ -311,7 +329,8 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
                 let layer = Modifier::new().graphics_layer(move || {
                     t.layer_params(g.peek(), cs.peek().unwrap_or((0.0, 0.0)))
                 });
-                ctx.key(GENERATION_CURRENT, |ctx| {
+                let gen_id = generation.peek();
+                ctx.key((GENERATION_CURRENT, gen_id), |ctx| {
                     let _c = current.get();
                     let mkey = ctx.next_key();
                     if let GroupStatus::Enter =
@@ -618,5 +637,57 @@ mod tests {
         target.set(10);
         recompose(&mut composer);
         assert_eq!(leaf_widths(&composer), vec![50.0, 200.0], "a new key animates");
+    }
+
+
+    /// Regression: a switch made while a transition is STILL RUNNING shows the new pair at once.
+    ///
+    /// Each generation needs its own composition key. With a fixed key the outgoing group replayed
+    /// its recorded slots instead of re-running the content closure with the new outgoing value —
+    /// measured: the tree kept showing `[50, 60]` for four frames after switching to the third
+    /// value, then jumped to `[70]` alone (the incoming generation, with no outgoing). The same
+    /// fixed key would also hand one generation's `remember`ed state to the next.
+    #[test]
+    fn a_switch_during_a_transition_shows_the_new_pair_at_once() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                AnimatedContent::new(t.clone()).build(ctx, |ctx, page| {
+                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance_one = |composer: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(composer);
+        };
+
+        recompose(&mut composer);
+        target.set(1);
+        recompose(&mut composer);
+        advance_one(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![50.0, 60.0], "first transition is running");
+
+        // …switch again while that one is in flight
+        target.set(2);
+        recompose(&mut composer);
+        advance_one(&mut composer);
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![60.0, 70.0],
+            "the new pair replaces the old one immediately, with no stale outgoing"
+        );
+
+        // …and the container catches up to the final generation
+        for _ in 0..90 {
+            advance_one(&mut composer);
+        }
+        assert_eq!(leaf_widths(&composer), vec![70.0]);
     }
 }
