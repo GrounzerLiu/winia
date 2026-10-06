@@ -3105,12 +3105,10 @@ impl DockedDatePicker {
                         let cross_month_rows = month_rows.clone();
                         let cross_panel = panel.clone();
                         crate::components::Crossfade::new(panel.clone())
-                            // The default 300 ms linear tween plays twice per switch (out, then
-                            // in) — 150 ms eased each way lands about as fast as the panel feels.
-                            .animation(TweenSpec::new(
-                                std::time::Duration::from_millis(150),
-                                crate::animation::interpolator::EaseOutCubic::new(),
-                            ))
+                            // The default: Compose's `tween()` — one 300 ms cross-fade. This used to
+                            // ask for 150 ms because `Crossfade` faded the old panel out and the new
+                            // one in in sequence, so 300 ms played twice (600 ms of panel switch);
+                            // both generations now overlap in that single tween.
                             .build(
                             ctx,
                             move |ctx, shown| match shown {

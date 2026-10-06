@@ -395,8 +395,8 @@ pub struct SegmentedButton {
     content_padding: Option<(f32, f32)>,
     border: Option<(f32, Color)>,
     interaction_source: Option<MutableInteractionSource>,
-    icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
-    inactive_icon: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    icon: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
+    inactive_icon: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
     modifier: Modifier,
 }
 
@@ -470,16 +470,19 @@ impl SegmentedButton {
     }
 
     /// Replace the default check mark shown while the segment is active.
-    pub fn icon(mut self, icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
-        self.icon = Some(Box::new(icon));
+    ///
+    /// `Fn`, not `FnOnce`: when an inactive icon is given, the crossfade keeps both icons composed
+    /// at once and calls this once per generation per frame.
+    pub fn icon(mut self, icon: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.icon = Some(Arc::new(icon));
         self
     }
 
     /// An icon to show while the segment is NOT active. Given one, the two crossfade and the content
     /// does not slide (Compose's `Icon(active, activeContent, inactiveContent)`); without one, the
     /// label slides as the active icon appears.
-    pub fn inactive_icon(mut self, icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
-        self.inactive_icon = Some(Box::new(icon));
+    pub fn inactive_icon(mut self, icon: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.inactive_icon = Some(Arc::new(icon));
         self
     }
 
@@ -640,9 +643,9 @@ impl SegmentedButton {
                 let icon_modifier = Modifier::new()
                     .size(SegmentedButtonDefaults::ICON_SIZE, SegmentedButtonDefaults::ICON_SIZE)
                     .graphics_layer(move || {
-                        // The crossfading pair fades through its OWN layer (`Crossfade` swaps two
-                        // contents), so this one must stay out of the way at alpha 1 — leaving it at 0
-                        // hid the whole slot and the fade never showed.
+                        // The crossfading pair fades through its OWN per-generation layer, so this
+                        // one must stay out of the way at alpha 1 — a second fade here would multiply
+                        // with it, and leaving it at 0 hid the whole slot.
                         let p = if crossfade {
                             1.0
                         } else if shown {
@@ -675,17 +678,19 @@ impl SegmentedButton {
                                 // `Crossfade(targetState = active)` between the two, so the swap FADES
                                 // instead of popping — and there is no scale-in there, the pair only
                                 // changes opacity, which is also why the label does not slide.
-                                // `Crossfade` here is the framework's own widget: fade out, swap, fade in.
+                                // Both generations are on screen: during the transition BOTH icons
+                                // are composed and `Crossfade` owns their alphas, so this has to be
+                                // callable twice (`Arc<dyn Fn>`, not `FnOnce`).
                                 let active_state = ctx.remember(|| active);
                                 active_state.set(active);
                                 let a_icon = icon;
                                 let i_icon = inactive_icon;
                                 crate::components::crossfade::Crossfade::new(active_state)
                                     .build(ctx, move |ctx, is_active| {
-                                        let chosen = if is_active { a_icon } else { i_icon };
-                                        let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> =
+                                        let chosen = if is_active { a_icon.clone() } else { i_icon.clone() };
+                                        let inner: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync> =
                                             chosen.unwrap_or_else(|| {
-                                                Box::new(|ctx: &mut ComposeCtx| {
+                                                Arc::new(|ctx: &mut ComposeCtx| {
                                                     crate::components::icon::Icon::svg_path(CHECK_ICON_PATH)
                                                         .size(SegmentedButtonDefaults::ICON_SIZE)
                                                         .build(ctx);
@@ -695,9 +700,9 @@ impl SegmentedButton {
                                     });
                             } else {
                                 let chosen = icon;
-                                let inner: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync> = chosen
+                                let inner: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync> = chosen
                                     .unwrap_or_else(|| {
-                                        Box::new(|ctx: &mut ComposeCtx| {
+                                        Arc::new(|ctx: &mut ComposeCtx| {
                                             crate::components::icon::Icon::svg_path(CHECK_ICON_PATH)
                                                 .size(SegmentedButtonDefaults::ICON_SIZE)
                                                 .build(ctx);

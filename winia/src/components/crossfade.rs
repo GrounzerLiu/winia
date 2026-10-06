@@ -1,92 +1,221 @@
-//! `Crossfade` — 内容切换过渡（对标 Compose `Crossfade`）
+//! `Crossfade` — cross-fading content switch (mirrors Compose `Crossfade`)
 //!
-//! 用法：
 //! ```ignore
 //! Crossfade::new(page)                            // State<Page>
 //!     .animation(TweenSpec::default())
-//!     .build(ctx, |ctx, p| {                      // 内容闭包接收当前显示目标
+//!     .build(ctx, |ctx, p| {                      // the content closure gets that generation's state
 //!         Text::new(format!("Page: {:?}", p)).build(ctx);
 //!     });
 //! ```
 //!
-//! 机制（顺序淡入淡出——**这不是 Compose `Crossfade` 的语义**）：
-//! 旧内容淡完才换、再淡入新的，任一时刻只有一代在场上。这里原先记的理由是
-//! "组合引擎无 Compose 双世代 outgoing 组合"——**这个理由是错的**：
-//! `AnimatedContent` 现在就是两代同场（见 `animated_content.rs` 与
-//! `docs/animation-gap-analysis.md`）。本组件的跟进**尚未做**，不是做不到。
-//! - **内部状态**：`current: State<T>`（显示中目标）+ `progress: State<f32>`（动画进度）
-//! - **切换流程**：target 变化（`get()` 注册依赖→重组）→ 当前内容淡出（progress 1→0，
-//!   绘制层 alpha=progress）；淡出完成（progress<0.001）→ `current.set(target)`（notify）
-//!   → 容器槽 Enter → 内容重建（新 target）→ 淡入（progress 0→1）
-//! - **不触发重排**：布局尺寸 = 内容尺寸（BoxLayout Stack 语义），动画纯绘制层
-//!   （graphics_layer 动态闭包渲染期 peek）——零重排零重组
-//! - **每帧重组重跑调用方组件闭包**：progress.get() 注册在调用方槽——动画推进
-//!   notify → 调用方组件闭包重跑（本 build 重执行）；容器槽仅 current 变化时
-//!   Enter（内容重建），动画期间内容子树保持 Skip 不重建
+//! Mechanism (BOTH generations on screen, overlapping inside one tween — Compose's semantics):
+//! - State: `current` (the incoming generation) + `previous: Option<T>` (the outgoing one)
+//!   + `enter` (incoming 0→1) and `exit` (outgoing 1→0) progresses
+//! - Switch: a target change moves the old target into `previous` and the new one into `current`
+//!   IMMEDIATELY; both compose into their own container slot, the incoming composed last so it
+//!   draws on top, and the outgoing is dropped when its own `exit` bottoms out
+//! - Draw layers: each generation's `graphics_layer` reads its own progress (render-time `peek` —
+//!   no remeasure, no recompose)
+//! - Layout: `BoxLayout` stack semantics, the container is the content's size — there is NO size
+//!   animation. That is the only thing separating this from `AnimatedContent`, which is how
+//!   Compose draws the line too.
+//!
+//! Compose's `Crossfade` keeps a `currentlyVisible` list (`Crossfade.kt:104`) and gives every
+//! visible state its own `animateFloat` alpha; `previous`/`current` are that list here.
+//!
+//! Known differences from Compose:
+//! - **One outgoing generation only.** Compose's list can hold three at once (a switch made
+//!   mid-transition); `previous` is a single `Option`, so a rapid re-switch hard-cuts the middle
+//!   generation.
+//! - No `label` (the engine's parameter is `_label`, unused).
 
-use crate::animation::{push_animatable, AnimationSpec};
+use crate::animation::visibility::VisibilityTransition;
+use crate::animation::{interpolator, push_animatable, AnimationSpec, TweenSpec};
+use crate::layout::box_layout::BoxLayout;
+use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
-use crate::layout::box_layout::BoxLayout;
-use crate::modifier::{Modifier};
-use crate::graphics::{GraphicsLayerParams};
+use std::time::Duration;
 
-/// 内容切换过渡（顺序淡入淡出）
+/// Stable key bases for the two generations (`ctx.key` scopes). Positional keys do not work: once
+/// the outgoing generation leaves, the incoming one's statement key shifts up a slot and inherits
+/// it (same shape as `animated_content.rs`).
+const GENERATION_PREV: u64 = 0xC205_0000_0000_0001;
+const GENERATION_CURRENT: u64 = 0xC205_0000_0000_0002;
+
+/// Compose `tween()`'s default easing, `FastOutSlowInEasing` = `CubicBezierEasing(0.2, 0, 0, 1)`.
+fn fast_out_slow_in() -> interpolator::CubicBezier {
+    interpolator::CubicBezier::new(0.2, 0.0, 0.0, 1.0)
+}
+
+/// Compose `Crossfade`'s default `animationSpec = tween()`: 300 ms, `FastOutSlowInEasing`.
+fn default_spec() -> AnimationSpec {
+    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(300), fast_out_slow_in()))
+}
+
+/// Content switch transition (both generations on screen, cross-fading).
 pub struct Crossfade<T> {
     target: State<T>,
     spec: AnimationSpec,
+    modifier: Modifier,
+    /// Content identity (Compose's `contentKey`, `Crossfade.kt:101`): two states with the same key
+    /// are the SAME content — the new value is swapped in with NO transition at all. Without one,
+    /// every value change animates. The caller maps its state to a `u64`.
+    content_key: Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>,
 }
 
 impl<T: Clone + PartialEq + 'static> Crossfade<T> {
+    /// Compose's defaults: `animationSpec = tween()` (300 ms, `FastOutSlowIn`).
     pub fn new(target: State<T>) -> Self {
         Self {
             target,
-            spec: AnimationSpec::Tween(Default::default()),
+            spec: default_spec(),
+            modifier: Modifier::new(),
+            content_key: None,
         }
     }
 
-    /// 切换动画规格（默认 300ms 线性 tween）
+    /// The switch animation spec (Compose's `animationSpec` parameter).
     pub fn animation(mut self, spec: impl Into<AnimationSpec>) -> Self {
         self.spec = spec.into();
         self
     }
 
-    /// 构建交叉淡入淡出容器。
-    /// ⚠ 不宏化：内部 progress.get() 依赖必须注册到**调用点 scope**（父容器
-    /// 每帧重跑 → 淡出完成检测执行）——宏化会封闭内部 scope，父容器感知不到
-    /// 进度变化 → Column Skip → 检测冻结 → 内容残留（animated_visibility
-    /// 宏化回归同因）。内部 remember 靠调用点语句 base（稳定）。
-    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx, T)) {
-        // 依赖注册：target 变化 → 外层 scope 重组 → 本 build 重跑（切换启动）
-        let target = self.target.get();
-        // 内部状态（remember——语句级 key 稳定，跨重组保留）
-        let current: State<T> = ctx.remember(|| target.clone());
-        let progress: State<f32> = ctx.remember(|| 1.0);
-        // 动画推进 → 外层重组（淡出完成检测执行）
-        let _p = progress.get();
-        let cur = current.peek().clone();
-        // 淡出完成检测：切换中且进度≈0 → 切换 current（notify → 下帧容器槽 Enter → 内容重建）
-        if cur != target && progress.peek() < 0.001 {
-            current.set(target.clone());
+    /// A modifier for the container itself (Compose's `modifier` parameter).
+    pub fn modifier(mut self, m: Modifier) -> Self {
+        self.modifier = m;
+        self
+    }
+
+    /// The same key means the same content: the state changes but nothing animates (Compose's
+    /// `contentKey` semantics).
+    pub fn content_key(mut self, f: impl Fn(&T) -> u64 + Send + Sync + 'static) -> Self {
+        self.content_key = Some(Box::new(f));
+        self
+    }
+
+    /// One generation's composition key (Compose's `key(contentKey(it))`, `Crossfade.kt:136`).
+    ///
+    /// With a `content_key` the caller's key is used, so a state that comes back REUSES its slots.
+    /// Without one it falls back to a counter: a fresh slot per generation. Either way it has to
+    /// vary per generation — a fixed key replays the previous generation's recorded slots, so the
+    /// content closure never re-runs.
+    fn generation_key(&self, value: &T, counter: u64) -> u64 {
+        match &self.content_key {
+            Some(k) => k(value),
+            None => counter,
         }
-        // 动画目标：切换中 → 淡出（0）；显示中 → 淡入（1）——同目标 dedup 跳过
-        let goal = if cur == target { 1.0 } else { 0.0 };
-        push_animatable(progress.clone(), goal, self.spec.clone());
-        // 绘制层：alpha = progress（淡出 1→0 / 淡入 0→1）——渲染期 peek 不注册依赖
-        let g = progress.clone();
-        let gfx = move || {
-            let mut params = GraphicsLayerParams::default();
-            params.alpha = g.peek();
-            params
-        };
-        let modifier = Modifier::new().graphics_layer(gfx);
+    }
+
+    /// Build the cross-fading container.
+    ///
+    /// ⚠ Do not wrap this in a macro: the `target` and `exit` dependencies have to be read by THIS
+    /// function's own scope. A macro would close them into an inner scope, the parent container
+    /// would no longer see the progress move, and the completion check would freeze (the same
+    /// regression `animated_visibility` hit).
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx, T)) {
+        // Dependency: a target change recomposes the caller's scope, so this `build` re-runs and
+        // the container's slot goes dirty with it.
+        let target = self.target.get();
+        // Internal state (`remember` — the statement key is stable, so it survives recomposition).
+        let current: State<T> = ctx.remember(|| target.clone());
+        let previous: State<Option<T>> = ctx.remember(|| None);
+        let enter: State<f32> = ctx.remember(|| 1.0);
+        let exit: State<f32> = ctx.remember(|| 1.0);
+        let generation: State<u64> = ctx.remember(|| 0);
+        let enter_cfg = VisibilityTransition::fade_in(self.spec.clone());
+        let exit_cfg = VisibilityTransition::fade_out(self.spec.clone());
+
         let key = ctx.next_key();
-        match ctx.start_restartable_group(key, modifier, BoxLayout::new()) {
+        match ctx.start_restartable_group(key, self.modifier.clone(), BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // 注册容器槽依赖：current 变化 → 容器槽 dirty → 下帧 Enter → 内容重建
+                // Everything the frame needs happens INSIDE this branch — see the same comment in
+                // `animated_content.rs`: a write made before the container starts marks the
+                // container's slot dirty during the pass that is already consuming it, the mark is
+                // gone by the next frame, and the container then skips and replays stale children
+                // while the generations have already moved on.
+                let target_now = self.target.get();
+                // The container must also depend on `current`: without this, a same-key value
+                // change dirties only `current`, the whole subtree is replayed, and the content
+                // never re-runs with the new value.
                 let _c = current.get();
-                content(ctx, cur);
+                // The exit completion check runs once a frame — and this is also what keeps the
+                // container entering every frame while the animation runs.
+                let _x = exit.get();
+
+                if current.peek() != target_now {
+                    let same_content = match &self.content_key {
+                        Some(k) => {
+                            let shown_now = current.peek();
+                            k(&shown_now) == k(&target_now)
+                        }
+                        None => false,
+                    };
+                    if same_content {
+                        // The same content: swap the value, do not animate (progress and
+                        // `previous` are untouched).
+                        current.set(target_now.clone());
+                    } else {
+                        // Swap generations at once: both are on screen, which is what makes this a
+                        // crossfade.
+                        previous.set(Some(current.peek().clone()));
+                        current.set(target_now.clone());
+                        exit.set(1.0);
+                        enter.set(0.0);
+                        generation.set(generation.peek().wrapping_add(1));
+                    }
+                }
+
+                push_animatable(enter.clone(), 1.0, self.spec.clone());
+                if previous.peek().is_some() {
+                    push_animatable(exit.clone(), 0.0, self.spec.clone());
+                    if exit.peek() <= 0.001 {
+                        // The outgoing generation is done — it stops composing next frame
+                        // (`previous.get()` is a dependency).
+                        previous.set(None);
+                    }
+                }
+
+                // The outgoing generation composes first (underneath); the incoming one last (on
+                // top).
+                let outgoing = previous.get();
+                if let Some(outgoing) = outgoing {
+                    let cfg = exit_cfg.clone();
+                    let g = exit.clone();
+                    let layer = Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
+                    let gen_id = self.generation_key(&outgoing, generation.peek());
+                    ctx.key((GENERATION_PREV, gen_id), |ctx| {
+                        // Declare this generation's value as the slot parameter: a value change
+                        // re-runs the content without needing the key to change.
+                        ctx.changed(&outgoing);
+                        let mkey = ctx.next_key();
+                        if let GroupStatus::Enter =
+                            ctx.start_restartable_group(mkey, layer, BoxLayout::new())
+                        {
+                            content(ctx, outgoing.clone());
+                        }
+                        ctx.end_restartable_group();
+                    });
+                }
+                let shown = current.peek().clone();
+                let cfg = enter_cfg.clone();
+                let g = enter.clone();
+                let layer = Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
+                let gen_id = self.generation_key(&shown, generation.peek());
+                ctx.key((GENERATION_CURRENT, gen_id), |ctx| {
+                    let _c = current.get();
+                    // As above: with a `content_key`, a same-key value change leaves the key alone
+                    // and this is the only thing that re-runs the content.
+                    ctx.changed(&shown);
+                    let mkey = ctx.next_key();
+                    if let GroupStatus::Enter =
+                        ctx.start_restartable_group(mkey, layer, BoxLayout::new())
+                    {
+                        content(ctx, shown);
+                    }
+                    ctx.end_restartable_group();
+                });
             }
         }
         ctx.end_restartable_group();
@@ -96,12 +225,12 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::composer::Composer;
-    use crate::runtime::state::State;
     use crate::layout::constraints::Constraints;
     use crate::layout::node::LayoutNode;
+    use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
 
-    /// 测试用叶子：宽度反映 target（page=0 → 50，其他 → 200）——切换后可断言
+    /// Test leaf: its width reflects the state (page=0 → 50, anything else → 200).
     struct SizedLeaf {
         w: f32,
     }
@@ -117,23 +246,26 @@ mod tests {
         }
     }
 
-    /// 查布局树中第一个非根节点的测量宽度（Crossfade 内容叶子）
-    fn leaf_width(composer: &Composer) -> f32 {
-        let Some(root) = composer.layout_root_idx() else { return -1.0 };
+    /// Every leaf's width, ascending — two generations on screen show up as two entries.
+    fn leaf_widths(composer: &Composer) -> Vec<f32> {
+        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
         let nodes = composer.arena_nodes();
-        fn first_leaf(nodes: &[LayoutNode], idx: usize) -> f32 {
-            let n = &nodes[idx];
-            if n.children.is_empty() {
-                n.measured_size.width
-            } else {
-                first_leaf(nodes, n.children[0])
+        fn walk(nodes: &[LayoutNode], idx: usize, out: &mut Vec<f32>) {
+            if nodes[idx].children.is_empty() {
+                out.push(nodes[idx].measured_size.width);
+                return;
+            }
+            for &c in &nodes[idx].children {
+                walk(nodes, c, out);
             }
         }
-        first_leaf(nodes, root)
+        let mut out = Vec::new();
+        walk(nodes, root, &mut out);
+        out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        out
     }
 
-    /// 集成：target 切换 → 内容淡出 → 重建（新 target）→ 淡入。
-    /// 通过多次 compose + 手动推进动画模拟切换生命周期。
+    /// Integration: a target change cross-fades both generations and settles on the new content.
     #[test]
     fn crossfade_switches_content_on_target_change() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -143,16 +275,13 @@ mod tests {
 
         let mut recompose = |composer: &mut Composer| {
             composer.compose(|ctx| {
-                Crossfade::new(t.clone())
-                    .animation(crate::animation::TweenSpec::default())
-                    .build(ctx, |ctx, page| {
-                        let w = if page == 0 { 50.0 } else { 200.0 };
-                        SizedLeaf { w }.build(ctx);
-                    });
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    let w = if page == 0 { 50.0 } else { 200.0 };
+                    SizedLeaf { w }.build(ctx);
+                });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
-        // 推进动画帧（真实时间驱动 Tween）
         let mut advance = |composer: &mut Composer| {
             for _ in 0..12 {
                 crate::animation::update_animations();
@@ -161,24 +290,21 @@ mod tests {
             }
         };
 
-        // 首帧：显示 target 0（叶子宽 50）
         recompose(&mut composer);
-        assert_eq!(leaf_width(&composer), 50.0, "初始显示 target 0");
+        assert_eq!(leaf_widths(&composer), vec![50.0], "initially target 0");
 
-        // 切换 target → 淡出（progress 1→0）→ 完成 → 内容重建（宽 200）→ 淡入
         target.set(7);
         recompose(&mut composer);
         advance(&mut composer);
-        assert_eq!(leaf_width(&composer), 200.0, "切换后内容重建为 target 7");
+        assert_eq!(leaf_widths(&composer), vec![200.0], "after the switch only target 7");
 
-        // 切回 target 0 → 内容再切回
         target.set(0);
         recompose(&mut composer);
         advance(&mut composer);
-        assert_eq!(leaf_width(&composer), 50.0, "切回后内容重建为 target 0");
+        assert_eq!(leaf_widths(&composer), vec![50.0], "and back to target 0");
     }
 
-    /// 淡出中途 retarget（A→B 淡出未完成改 C）——旧动画移除 + 平滑过渡到新目标
+    /// Retarget mid-transition (A→B unfinished, then C): converges on the new target, no panic.
     #[test]
     fn crossfade_retarget_mid_fade() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -188,16 +314,14 @@ mod tests {
 
         let mut recompose = |composer: &mut Composer| {
             composer.compose(|ctx| {
-                Crossfade::new(t.clone())
-                    .animation(crate::animation::TweenSpec::default())
-                    .build(ctx, |ctx, page| {
-                        let w = match page {
-                            0 => 50.0,
-                            1 => 100.0,
-                            _ => 200.0,
-                        };
-                        SizedLeaf { w }.build(ctx);
-                    });
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    let w = match page {
+                        0 => 50.0,
+                        1 => 100.0,
+                        _ => 200.0,
+                    };
+                    SizedLeaf { w }.build(ctx);
+                });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
@@ -209,9 +333,8 @@ mod tests {
             }
         };
 
-        // 0 → 1（开始淡出）→ 仅推 2 帧（淡出未完成）→ 改 2（retarget）
         recompose(&mut composer);
-        assert_eq!(leaf_width(&composer), 50.0);
+        assert_eq!(leaf_widths(&composer), vec![50.0]);
         target.set(1);
         recompose(&mut composer);
         for _ in 0..2 {
@@ -219,11 +342,138 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(30));
             recompose(&mut composer);
         }
-        // 淡出未完成（progress 还在 1→0 途中）→ 直接 retarget 到 2
+        // The cross-fade is still running — retarget to 2 on top of it.
         target.set(2);
         recompose(&mut composer);
         advance(&mut composer);
-        // 最终收敛到目标 2——且没有 panic/卡死（retarget 移除旧动画）
-        assert_eq!(leaf_width(&composer), 200.0, "retarget 后应收敛到新目标 2");
+        assert_eq!(leaf_widths(&composer), vec![200.0], "retarget converges on the new target");
+    }
+
+    /// Compose's `Crossfade` keeps the OUTGOING generation composed and fades it alongside the
+    /// incoming one (`Crossfade.kt:104`'s `currentlyVisible`). The old implementation faded the
+    /// outgoing to nothing, swapped, then faded the incoming in — one generation at a time.
+    #[test]
+    fn both_generations_are_composed_during_a_transition() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    let w = if page == 0 { 50.0 } else { 200.0 };
+                    SizedLeaf { w }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance_one = |composer: &mut Composer| {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(composer);
+        };
+
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![50.0], "at rest: one generation");
+
+        target.set(7);
+        recompose(&mut composer);
+        advance_one(&mut composer);
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![50.0, 200.0],
+            "both generations are on screen from the frame after the switch"
+        );
+
+        // The outgoing is torn down once it is done.
+        for _ in 0..40 {
+            advance_one(&mut composer);
+        }
+        assert_eq!(leaf_widths(&composer), vec![200.0], "the outgoing is removed");
+    }
+
+    /// One transition plays ONE spec's worth of time, not two (the old serial version needed
+    /// 2×300 ms). What is observable is when the animation stops: serial was still fading in at
+    /// 400 ms.
+    #[test]
+    fn the_switch_takes_one_spec_duration_not_two() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone())
+                    .animation(TweenSpec::new(
+                        std::time::Duration::from_millis(300),
+                        crate::animation::interpolator::Linear::new(),
+                    ))
+                    .build(ctx, |ctx, page| {
+                        let w = if page == 0 { 50.0 } else { 200.0 };
+                        SizedLeaf { w }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        target.set(7);
+        recompose(&mut composer);
+        let start = std::time::Instant::now();
+        let mut settled_at = None;
+        for _ in 0..60 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            recompose(&mut composer);
+            if !crate::animation::is_animating() {
+                settled_at = Some(start.elapsed().as_millis() as f32);
+                break;
+            }
+        }
+        let settled = settled_at.expect("the transition must finish");
+        assert!(
+            settled < 450.0,
+            "one 300ms spec, not two: still animating at {settled}ms"
+        );
+        assert_eq!(leaf_widths(&composer), vec![200.0]);
+    }
+
+    /// `content_key`: two states with the same key are the same content — the value is swapped in
+    /// without a transition (Compose's `contentKey`), so no second generation appears; and the leaf
+    /// width proves the content really did re-run with the new value.
+    #[test]
+    fn the_same_content_key_does_not_animate() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone())
+                    // 0..=9 is one piece of content (two renders of the same page); 10 is a new one.
+                    .content_key(|p| if *p < 10 { 0 } else { 1 })
+                    .build(ctx, |ctx, page| {
+                        // The width follows the VALUE, not the key: with a key-derived width this
+                        // test could not tell "re-ran with the new value" from "never re-ran".
+                        let w = 50.0 + page as f32 * 10.0;
+                        SizedLeaf { w }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![50.0], "initial");
+
+        target.set(3);
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![80.0], "the content re-ran with the new value");
+
+        target.set(10);
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
     }
 }

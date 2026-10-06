@@ -118,7 +118,7 @@
 | High-level value anim | `animate_rect_as_state` / `animate_bounds_as_state` | ⏸️ skipped by design (no `Rect` unit type exists; bounds animate via `Offset`+`Size`, both animatable — add when a consumer needs it) |
 | High-level value anim | `label` / `finished_listener` params | ⚠️ partial (`on_finish` + `push_animatable_with_done` done; `label` skipped — Transition already has it) |
 | Container anim | **`AnimatedVisibility`** enter/exit set | ✅ done (params aligned + horizontal expand, P0-1) |
-| Container anim | `AnimatedContent` / `Crossfade` | ⚠️ `AnimatedContent` 已改成两代同场（两代同时组合、新的画在上面、enter/exit/size 三个进度彼此独立、容器裁到动画尺寸）；`Crossfade` 仍是旧的单代淡出再淡入；进入的 90ms 延迟没有地方放（`TweenSpec` 无 delay 字段）。未对齐的部分两边都记在各自的模块文档里 |
+| Container anim | `AnimatedContent` / `Crossfade` | ⚠️ both hold two generations now (both composed at once, incoming on top, independent enter/exit/size progresses, container clipped to the animated size; `Crossfade` has no size animation by design). Not aligned: Compose's 90 ms enter delay has nowhere to live (`TweenSpec` has no delay field), `contentAlignment` (Compose's `Alignment` is 2-D, winia's is one axis), and only one outgoing generation is kept where Compose keeps a list. Each module documents its own remainder |
 | Transition | `animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ✅ done (P0-2) |
 | Infinite anim | `animate_value` (generic) | ❌ missing (float/color only) |
 | Spec | `cubic_bezier`/`PathEasing` custom easing | ✅ done (P2-11) |
@@ -166,8 +166,8 @@
 
 ### P1 — 常见需求
 4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）✅ `7d85252`
-   - 实现为**顺序淡入淡出**（非交叉）：旧内容淡出完成才切换新内容淡入；`Crossfade::new(target).build(ctx, |ctx, t| ...)`
-   - `AnimatedContent` 后来改成了两代同场（见下），所以同一引擎**做得到**——这条的理由不再成立，`Crossfade` 待跟进
+   - Originally implemented as a SEQUENTIAL fade (out to nothing, swap, fade in) — which is not what the name or Compose promises. It now keeps both generations composed like `AnimatedContent`; the earlier note here blamed an engine limit that never existed (`NavDisplay` had composed two scenes at once all along)
+   - `Crossfade::new(target)` + `.animation(spec)` / `.modifier(..)` / `.content_key(..)` + `.build(ctx, |ctx, t| ...)`
 5. **`animate_content_size`**（尺寸变化自动动画）✅ `7d85252`
    - 实现为**容器组件 `AnimatedSize`**（非 Modifier）：本框架 Modifier 是纯数据
      （构建期无组合上下文）无法内嵌 remember——容器组件在组合期创建 State（机制等价）
@@ -202,11 +202,12 @@
     - 测试：`frame_clock_ticks_and_waits`；prelude 导出
 13. **graphics_layer 补属性**（shadow/clip/shape/blur——渲染层能力）
 14. **`animate_item`**（列表增删/移动动画——需先有 LazyList 或简单列表容器）
-15. **`AnimatedContent`** ✅ 本分支
-    - `AnimatedContent<T>::new(target)` + `.enter(...)` / `.exit(...)` + `.size_animation(spec)`（sizeTransform，默认 Spring）+ `.clip(bool)` / `.modifier(...)` / `.content_key(...)`
-    - 机制（两代同场，对齐 Compose `currentlyVisible`）：target 变 → **立刻**把旧目标搬进 `previous`、新目标写进 `current`，两代各起一个容器槽同时组合；旧的按 `exit` 1→0 淡出、新的按 `enter` 0→1 淡入，**在时间上重叠**；新的一代后组合 → 画在上面；**容器尺寸 = lerp(旧内容尺寸, 新内容尺寸, size)**（独立进度与规格，布局层 layout_dep 每帧重测）；两代的 alpha/scale 绘制层 peek（零重组）；容器默认 `clip = true` 裁到动画尺寸
-    - 仍未对齐：90ms 延迟（`TweenSpec` 无 delay 字段）、`contentAlignment`（winia 的 `Alignment` 是单轴，Compose 是二维）、快速连切只保留一代离场内容
-    - 测试：`both_generations_are_composed_during_a_transition`、`animated_content_switches_with_size_transform`、`size_animation_independent_of_fade`、`the_same_content_key_updates_in_place_without_a_transition`；demo：`animated_content_demo`
+15. **`AnimatedContent`** / **`Crossfade`** ✅ 本分支
+    - `AnimatedContent<T>::new(target)` + `.enter(...)` / `.exit(...)` + `.size_animation(spec)` (sizeTransform, a spring by default) + `.clip(bool)` / `.modifier(...)` / `.content_key(...)`; `Crossfade<T>::new(target)` + `.animation(spec)` / `.modifier(...)` / `.content_key(...)` — the same component without a size animation, which is exactly how Compose splits the two
+    - Mechanism (both generations on screen, Compose's `currentlyVisible`): a target change moves the old value into `previous` and the new one into `current` IMMEDIATELY and the two compose into their own container slots, the incoming last so it draws on top; the outgoing runs `exit` 1→0 while the incoming runs `enter` 0→1, overlapping in time; `AnimatedContent` also animates the container's size — lerp(old content size, new content size, size) on its OWN progress and spec, re-measured every frame through a layout dep — and clips to it by default
+    - Both need per-generation composition keys plus `ctx.changed(&value)`: a fixed key replays the previous generation's slots instead of re-running the content closure, and a same-`content_key` value change otherwise never re-runs it either. Both bugs were measured (a switch made mid-transition left the old pair on screen for four frames; a same-key update left the leaf at its old size)
+    - Still not aligned: the 90 ms enter delay (`TweenSpec` has no delay field), `contentAlignment` (winia's `Alignment` is one axis, Compose's is 2-D), and only one outgoing generation is kept
+    - Tests: `both_generations_are_composed_during_a_transition`, `the_switch_takes_one_spec_duration_not_two`, `the_same_content_key_does_not_animate`, `a_switch_during_a_transition_shows_the_new_pair_at_once` (AnimatedContent), `animated_content_switches_with_size_transform`, `size_animation_independent_of_fade`; demos: `animated_content_demo`
 
 ### 缺陷修复（随上述实施顺带）
 - dedup 忽略 spec（P0-2 时修）
