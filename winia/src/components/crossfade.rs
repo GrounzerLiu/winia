@@ -98,8 +98,13 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
     ///
     /// With a `content_key` the caller's key is used, so a state that comes back REUSES its slots.
     /// Without one it falls back to a counter: a fresh slot per generation. Either way it has to
-    /// vary per generation — a fixed key replays the previous generation's recorded slots, so the
-    /// content closure never re-runs.
+    /// vary per generation, but not for the reason it is tempting to write down: with the
+    /// `ctx.changed(&value)` declaration in `build` the content closure re-runs on a value change
+    /// anyway (measured: making the outgoing key constant alone still produced the right pair). What
+    /// a constant key does is reuse the slots UNDER the closure, so what a generation `remember`s is
+    /// the previous generation's, and a switch made mid-transition can show the old pair for a
+    /// frame — measured with both keys constant: `[50, 60]` one frame after the target moved to the
+    /// third value, where `[60, 70]` belongs.
     fn generation_key(&self, value: &T, counter: u64) -> u64 {
         match &self.content_key {
             Some(k) => k(value),
@@ -475,5 +480,54 @@ mod tests {
         target.set(10);
         recompose(&mut composer);
         assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
+    }
+
+    /// Regression: a switch made while a cross-fade is STILL RUNNING shows the new pair at once.
+    ///
+    /// Each generation needs its own composition key. With a constant one the outgoing group replays
+    /// its recorded slots instead of re-running the content closure with the new outgoing value —
+    /// measured, one frame after switching to the third value: `[50, 60]` where `[60, 70]` belongs,
+    /// settling on `[70]` only later. (The `changed` declaration alone does not cover this: it
+    /// re-runs the closure, but the slots underneath are the previous generation's.)
+    #[test]
+    fn a_switch_during_a_transition_shows_the_new_pair_at_once() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance = |composer: &mut Composer, n: usize| {
+            for _ in 0..n {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                recompose(composer);
+            }
+        };
+
+        recompose(&mut composer);
+        target.set(1);
+        recompose(&mut composer);
+        advance(&mut composer, 2);
+        assert_eq!(leaf_widths(&composer), vec![50.0, 60.0], "the first cross-fade is running");
+
+        // …switch again while that one is still in flight
+        target.set(2);
+        recompose(&mut composer);
+        advance(&mut composer, 1);
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![60.0, 70.0],
+            "the new pair replaces the old one immediately, with no stale outgoing"
+        );
+
+        advance(&mut composer, 60);
+        assert_eq!(leaf_widths(&composer), vec![70.0]);
     }
 }
