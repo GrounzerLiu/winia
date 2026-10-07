@@ -336,11 +336,14 @@ month at a time because "winia has no lazy row", with the arrows stepping the mo
 shape — a paged `LazyRow` over every month in the year range, with the arrows animating the list rather than
 writing the month — see "Swiping between months".
 
-The year panel carries the second deviation. material3 overlays it on the month calendar inside an
-`AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia swaps the calendar out,
-which shows the same picture because the panel is exactly as tall as what it replaces (335 + 1 dp of divider
-against the weekday row's 48 plus the grid's 288) and paints the picker's own container colour behind the years —
-the difference is the missing animation. Its list is a `LazyColumn` of *row* items rather than a
+The year panel carries the second deviation — now only half of one. material3 overlays it on the month calendar
+inside an `AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia used to swap
+the calendar out, which showed the same picture because the panel is exactly as tall as what it replaces (335 +
+1 dp of divider against the weekday row's 48 plus the grid's 288). It now composes the same shape: a `Stack`
+whose first child is the calendar and whose second is `AnimatedVisibility(expand + fade from 0.6, clipped)`,
+matching `DatePicker.kt:1596-1617`. What is still winia's own is the animation spec: Compose reads motion-scheme
+tokens (`DefaultEffects` for the expand and for the fade in, `FastEffects` for the fade out) and winia has no
+motion scheme, so both directions run one spring. Its list is a `LazyColumn` of *row* items rather than a
 `LazyVerticalGrid`, and it opens on `year_panel_first_row = max(0, displayedYear - yearRange.first) / 3 - 1`,
 which is material3's `initialFirstVisibleItemIndex` converted from a cell index to a row. material3 also scrolls
 its month list to the picked year and lets the list write the displayed month back; winia has no month list, so

@@ -16,7 +16,9 @@
 //! of the week explicitly, and [`CalendarLocale::default`] is an English, Sunday-first locale. A caller that
 //! needs another language supplies its own; the picker never reads a global.
 
+use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{AnimationSpec, TweenSpec};
+use crate::components::animated_visibility::AnimatedVisibility;
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
@@ -40,6 +42,11 @@ use crate::text::transformation::{OffsetMapping, TransformedText, VisualTransfor
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
+
+/// The alpha material3's date picker brings its year panel in from (`DatePicker.kt:1617`:
+/// `fadeIn(animationSpec = fadeInAnimationSpec, initialAlpha = 0.6f)`) — the panel is already 60%
+/// opaque when the expand starts, so it reads as a reveal rather than as a second surface arriving.
+const YEAR_PANEL_INITIAL_ALPHA: f32 = 0.6;
 
 /// Milliseconds in a day, the unit material3's pickers count in (`CalendarModel.kt:316`).
 pub const MILLIS_IN_24_HOURS: i64 = 86_400_000;
@@ -1867,14 +1874,53 @@ impl DatePicker {
                             &month_rows,
                             &month_step_in_flight,
                         );
-                        if open {
-                            year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
-                        } else {
-                            weekday_row(ctx, &model, &colors);
-                            // The modal picker leaves the neighbouring month's slots empty, as material3
-                            // does and as the M3 specs' modal anatomy has no state for.
-                            month_pages(ctx, &state, &model, &colors, &month_rows, false);
-                        }
+                        // material3 overlays the year panel on the calendar and keeps the calendar composed
+                        // underneath (`DatePicker.kt:1596-1617`): a `Box` whose first child is the weekday row
+                        // plus the month grid, and whose second is `AnimatedVisibility(clipToBounds, enter =
+                        // expandVertically + fadeIn(initialAlpha = 0.6f), exit = shrinkVertically + fadeOut)`.
+                        // winia used to swap the calendar out instead, which looked the same only because the
+                        // panel is exactly as tall as what it covers — and carried no motion at all.
+                        //
+                        // The shape is built in BOTH states, not just while the panel is open: a structure that
+                        // appears and disappears with the toggle would rebuild the calendar's slots (and its
+                        // `remember`ed month rows) on every open, which is also why `AnimatedVisibility` owns
+                        // the open/closed half of this.
+                        //
+                        // The spec: Compose reads motion-scheme tokens (`DefaultEffects` for the expand and the
+                        // fade in, `FastEffects` for the fade out); winia has no motion scheme, so both sides
+                        // run one spring — the same substitution the rest of the crate makes.
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_width())
+                            .build(ctx, |ctx| {
+                                // A Column, not bare siblings: the Stack overlaps what it holds, and the
+                                // weekday row has to stay above the grid it belongs to.
+                                Column::new()
+                                    .modifier(Modifier::new().fill_max_width().test_tag(CALENDAR_PANEL_TAG))
+                                    .arrangement(Arrangement::Start)
+                                    .build(ctx, |ctx| {
+                                        weekday_row(ctx, &model, &colors);
+                                        // The modal picker leaves the neighbouring month's slots empty, as material3
+                                        // does and as the M3 specs' modal anatomy has no state for.
+                                        month_pages(ctx, &state, &model, &colors, &month_rows, false);
+                                    });
+                                AnimatedVisibility::new(year_panel_open.clone())
+                                    .enter(
+                                        VisibilityTransition::fade_in(AnimationSpec::Spring(
+                                            crate::animation::SpringSpec::default(),
+                                        ))
+                                        .with_alpha_from(YEAR_PANEL_INITIAL_ALPHA)
+                                        .with_expand(),
+                                    )
+                                    .exit(
+                                        VisibilityTransition::fade_out(AnimationSpec::Spring(
+                                            crate::animation::SpringSpec::default(),
+                                        ))
+                                        .with_expand(),
+                                    )
+                                    .build(ctx, |ctx| {
+                                        year_panel(ctx, &state, &model, &colors, &year_rows, on_year_selected);
+                                    });
+                            });
                     });
             });
     }
@@ -2582,11 +2628,11 @@ fn year_panel_first_row(state: &DatePickerState, model: &CalendarModel) -> usize
 /// it (`YearPicker`, `DatePicker.kt:2061-2116`).
 ///
 /// material3 overlays this on the month calendar and keeps the calendar composed underneath
-/// (`DatePicker.kt:1612-1660`); winia swaps the calendar out instead, which looks the same because the panel is
-/// exactly as tall as the weekday row and the grid it replaces and paints the picker's own container colour
-/// behind it. What is missing is material3's expand and fade (`AnimatedVisibility`) — the modal path still
-/// switches abruptly, while the docked path wraps this panel in a `Crossfade` of its own, so only the modal
-/// picker carries that deviation; `docs/date-picker.md` lists it.
+/// (`DatePicker.kt:1612-1660`); the modal picker composes the same shape — the calendar in a `Stack`'s first
+/// child, this panel expanding over it in an `AnimatedVisibility` clipped to its own bounds — so the panel's
+/// height matching the weekday row plus the grid it covers (335 + 1 dp of divider against 48 + 288) is what
+/// keeps the container still rather than what hid the swap. The animation spec is winia's own: Compose reads
+/// motion-scheme tokens and winia has no motion scheme.
 fn year_panel(
     ctx: &mut ComposeCtx,
     state: &DatePickerState,

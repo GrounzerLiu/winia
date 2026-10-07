@@ -77,6 +77,10 @@ pub enum ExpandFromH {
 pub struct VisibilityTransition {
     /// Fade in/out (alpha 0<->1)
     pub fade: bool,
+    /// Alpha the fade starts from, i.e. the alpha at `progress == 0` (cf. Compose
+    /// `fadeIn(initialAlpha)` — the material3 date picker's year panel comes in from 0.6). Ignored
+    /// when `fade` is off, which is also what makes it safe to leave at the default.
+    pub alpha_from: f32,
     /// Slide in/out (direction + distance)
     pub slide: Option<(SlideDirection, SlideOffset)>,
     /// Vertical expand/shrink (container height 0<->full, layout layer, followers move along)
@@ -103,6 +107,7 @@ impl VisibilityTransition {
     pub fn empty() -> Self {
         Self {
             fade: false,
+            alpha_from: 0.0,
             slide: None,
             expand: false,
             expand_from: ExpandFrom::Top,
@@ -118,6 +123,7 @@ impl VisibilityTransition {
     fn base(spec: AnimationSpec) -> Self {
         Self {
             fade: false,
+            alpha_from: 0.0,
             slide: None,
             expand: false,
             expand_from: ExpandFrom::Top,
@@ -181,6 +187,13 @@ impl VisibilityTransition {
         self.fade = true;
         self
     }
+    /// Combine: fade in from `initial_alpha` rather than transparent (cf. Compose
+    /// `fadeIn(initialAlpha)` — the material3 date picker overlays its year panel from 0.6).
+    pub fn with_alpha_from(mut self, initial_alpha: f32) -> Self {
+        self.fade = true;
+        self.alpha_from = initial_alpha;
+        self
+    }
     /// Combine: overlay vertical expand/shrink
     pub fn with_expand(mut self) -> Self {
         self.expand = true;
@@ -241,7 +254,9 @@ impl VisibilityTransition {
         let p = progress;
         let mut params = crate::graphics::GraphicsLayerParams::default();
         if self.fade {
-            params.alpha = p;
+            // `alpha_from` is the alpha at progress 0 (Compose's `fadeIn(initialAlpha)`); 0.0 is the
+            // plain fade, so a transition that never sets it behaves exactly as before.
+            params.alpha = self.alpha_from + (1.0 - self.alpha_from) * p;
         }
         if self.scale {
             let s = self.scale_from + (1.0 - self.scale_from) * p;
@@ -274,6 +289,7 @@ impl Default for VisibilityTransition {
     fn default() -> Self {
         Self {
             fade: true,
+            alpha_from: 0.0,
             slide: None,
             expand: false,
             expand_from: ExpandFrom::Top,

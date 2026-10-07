@@ -3773,6 +3773,13 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     );
     let (_yx, _yy, yw, yh) = app.find_tag("dp-year-2024").expect("the displayed year's cell");
     assert_eq!((yw, yh), (72.0, 36.0), "a year cell is 72 x 36");
+    // …and the calendar it covers is still composed, which is material3's structure: a `Box` whose first
+    // child is the weekdays plus the grid, with the panel expanding over it (`DatePicker.kt:1596-1617`).
+    // winia used to swap the calendar out, so this is the assertion that pins the overlay.
+    assert!(
+        app.find_tag("dp-calendar-panel").is_some(),
+        "the calendar stays composed under the year panel"
+    );
 
     // A test tag inside a scrolled list reports the item's position in the list's CONTENT coordinates, so a
     // year cell cannot be tapped through the rectangle `find_tag` returns — it comes back 2079 dp (this list's
@@ -3785,7 +3792,14 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     app.tap(nx + nw / 2.0, cell_y);
     app.expect_text_timeout("month: September 2025", Duration::from_secs(5));
     app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
-    app.refresh();
+    // The panel leaves with an exit transition (material3's `shrinkVertically + fadeOut`), so it is still
+    // composed for a moment after the pick — wait for it rather than reading the tree once, which is what the
+    // instant swap this replaced allowed.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.find_tag("dp-year-2025").is_some() {
+        app.refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(
         app.find_tag("dp-year-2025").is_none(),
         "picking a year closes the panel"
