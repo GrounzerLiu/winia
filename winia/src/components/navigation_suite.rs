@@ -166,7 +166,13 @@ impl NavigationSuiteScaffold {
         self
     }
 
-    /// 形态切换过渡开关（默认开启）——收拢→换形→展开（220ms 线性）
+    /// The shape-transition switch (on by default): collapse, swap the layout type, expand (220 ms
+    /// linear).
+    ///
+    /// This is a winia extra, not an alignment: Compose switches the layout type with a plain `when`
+    /// and moves the items with `movableContentOf` (`NavigationSuiteScaffold.kt:577-578`), with no
+    /// transition at all. See the state machine below for why holding both shapes at once is not
+    /// available to this component yet.
     pub fn transition(mut self, enabled: bool) -> Self {
         self.transition = enabled;
         self
@@ -186,13 +192,24 @@ impl NavigationSuiteScaffold {
         let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
         let content = self.content;
 
-        // ── 形态过渡状态机（收拢 → 换形 → 展开）──
-        // 对标 AnimatedContent 的"淡出→换内容→淡入"，fade 换成尺寸：
-        // Collapsing：当前形态容器宽度/高度 → 0（clip 裁剪溢出内容）
-        // 到 0：current 切换到新形态（分支换槽，旧槽回收）
-        // Idle：新形态从 0 展开到全尺寸
-        // 单世代引擎兼容：收拢期旧分支 Skip（节点存活不重组），FnOnce items
-        // 只在首次 Enter 消费——无需双世代
+        // ── 形态过渡状态机（收拢 → 换形 → 展开）——**这是 winia 自己的东西** ──
+        // Compose 那边**没有**过渡：`NavigationSuiteScaffold.kt:577-578` 先
+        // `val movableContent = remember(content) { movableContentOf(content) }`，再一个
+        // 普通的 `when (navigationSuiteType) { … }` 直接换——形状、布局、时机都不插值，
+        // 靠 `movableContentOf` 把 items 子树在换父节点时原样搬过去（组合状态保住、
+        // 不重跑）。这个文件里那点动画只有脚手架自己的显隐（`Animatable` 推
+        // `NavigationSuiteScaffoldValue`），和形态无关。
+        //
+        // winia 的 morph 是形态切换时的一段收拢/展开：Collapsing——当前形态容器宽度/高度 →
+        // 0（clip 裁剪溢出内容）；到 0——current 切到新形态（分支换槽，旧槽回收）；
+        // Idle——新形态从 0 展开到全尺寸。要接 Compose 得先有 `movableContent` 的等价物；
+        // 现在没有，所以它是**有意偏差**，不是对齐。
+        //
+        // 为什么不能同时持两代：items 的 icon/label 载荷是 `Box<dyn FnOnce>`（见
+        // `NavigationSuiteItem`），同一个载荷没法在一帧里被两个分支各调一次。收拢期旧分支
+        // Skip、只在首次 Enter 消费，正好绕开这一点——约束来自载荷类型本身，不是引擎；
+        // 引擎自 `AnimatedContent`/`Crossfade` 起就能持两代（`Arc<dyn Fn>` 载荷的
+        // `SegmentedButton` 已经在用）。
         let phase: State<SuitePhase> = ctx.remember(|| SuitePhase::Idle);
         let current: State<NavigationSuiteType> = ctx.remember(|| target_type);
         let next = ctx.remember_backchannel(|| None);
