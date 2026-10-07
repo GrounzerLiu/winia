@@ -40,8 +40,7 @@ use std::time::Duration;
 /// Stable key bases for the two generations (`ctx.key` scopes). Positional keys do not work: once
 /// the outgoing generation leaves, the incoming one's statement key shifts up a slot and inherits
 /// it (same shape as `animated_content.rs`).
-const GENERATION_PREV: u64 = 0xC205_0000_0000_0001;
-const GENERATION_CURRENT: u64 = 0xC205_0000_0000_0002;
+const GENERATION_ENTRY: u64 = 0xC205_0000_0000_0001;
 
 /// Compose `tween()`'s default easing, `FastOutSlowInEasing` = `CubicBezierEasing(0.2, 0, 0, 1)`.
 fn fast_out_slow_in() -> interpolator::CubicBezier {
@@ -122,108 +121,212 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
         // Dependency: a target change recomposes the caller's scope, so this `build` re-runs and
         // the container's slot goes dirty with it.
         let target = self.target.get();
-        // Internal state (`remember` — the statement key is stable, so it survives recomposition).
-        let current: State<T> = ctx.remember(|| target.clone());
-        let previous: State<Option<T>> = ctx.remember(|| None);
-        let enter: State<f32> = ctx.remember(|| 1.0);
-        let exit: State<f32> = ctx.remember(|| 1.0);
-        let generation: State<u64> = ctx.remember(|| 0);
-        let enter_cfg = VisibilityTransition::fade_in(self.spec.clone());
-        let exit_cfg = VisibilityTransition::fade_out(self.spec.clone());
+        // Everything on screen, plus one alpha per entry. Compose holds the same two things: a
+        // `currentlyVisible` list and, for each entry, an `animateFloat` toward 1 if that entry IS
+        // the target and 0 otherwise (`Crossfade.kt:104-136`). The list lives in a `remember`ed
+        // struct because the alphas have to be indexed by entry — a `ctx.remember` call site is a
+        // statement position, so it cannot hand out one slot per entry.
+        let core = ctx.remember_backchannel(|| VisibleSet::new(target.clone()));
+        let fade = VisibilityTransition::fade_in(self.spec.clone());
 
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, self.modifier.clone(), BoxLayout::new()) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                // Everything the frame needs happens INSIDE this branch — see the same comment in
-                // `animated_content.rs`: a write made before the container starts marks the
-                // container's slot dirty during the pass that is already consuming it, the mark is
-                // gone by the next frame, and the container then skips and replays stale children
-                // while the generations have already moved on.
+                // Per-frame work happens INSIDE this branch: a write made before the container
+                // starts would mark its slot dirty during the pass already consuming it. See the
+                // same comment in `animated_content.rs` for the measurement.
                 let target_now = self.target.get();
-                // The container must also depend on `current`: without this, a same-key value
-                // change dirties only `current`, the whole subtree is replayed, and the content
-                // never re-runs with the new value.
-                let _c = current.get();
-                // The exit completion check runs once a frame — and this is also what keeps the
-                // container entering every frame while the animation runs.
-                let _x = exit.get();
+                // Subscribe to the entries, and to every entry's alpha: that second half is what
+                // keeps the container entering each frame while a fade runs, which is where the next
+                // frame's `push_animatable` and the drop rule below live. Without the read the
+                // composition is skipped after the first frame and nothing ever leaves the screen
+                // (measured: the outgoing entry stayed composed and
+                // `crossfade_switches_content_on_target_change` read `[50, 200]` where `[200]` is
+                // right).
+                let mut set = core.peek();
+                for entry in set.entries.iter() {
+                    let _ = set.alpha(entry.era).get();
+                }
 
-                if current.peek() != target_now {
-                    let same_content = match &self.content_key {
-                        Some(k) => {
-                            let shown_now = current.peek();
-                            k(&shown_now) == k(&target_now)
+                // ── The target is not on screen yet, or is on screen already ──
+                // Compose asks two different questions here (`Crossfade.kt:112-124`): whether the
+                // target VALUE is the state currently shown, and — separately — whether any visible
+                // state shares its `contentKey`. A value that is new but matches a visible state's
+                // key REPLACES that entry in place, which is what makes a state that comes back
+                // keep its alpha (and its slots) and reverse its fade instead of restarting from
+                // nothing.
+                let newest_is_the_target = set
+                    .entries
+                    .last()
+                    .map(|e| e.value == target_now)
+                    .unwrap_or(false);
+                if !newest_is_the_target {
+                    match set.position_by_key(&target_now, &self.content_key) {
+                        Some(i) => {
+                            // In place: the entry keeps its era, so its alpha keeps running and its
+                            // slots survive. A `content_key` match therefore updates the content
+                            // with no animation at all, which is the point of the key.
+                            //
+                            // It deliberately does NOT move to the end. Compose's
+                            // `currentlyVisible[replacementId] = targetState` leaves the position too
+                            // and draws the target on top regardless, but winia matches a child's key
+                            // at its POSITION (or by its path-hash prefix there), so a reorder
+                            // truncates from that index and rebuilds both subtrees — losing exactly
+                            // the `remember`ed state this branch exists to preserve. Measured in a
+                            // minimal probe: `ctx.key` around a restartable group, two entries, swap
+                            // the order, both slots created again. The cost of not moving is z-order
+                            // only: a state that comes back while another is leaving draws under it
+                            // for the length of that fade.
+                            set.entries[i].value = target_now.clone();
                         }
-                        None => false,
-                    };
-                    if same_content {
-                        // The same content: swap the value, do not animate (progress and
-                        // `previous` are untouched).
-                        current.set(target_now.clone());
-                    } else {
-                        // Swap generations at once: both are on screen, which is what makes this a
-                        // crossfade.
-                        previous.set(Some(current.peek().clone()));
-                        current.set(target_now.clone());
-                        exit.set(1.0);
-                        enter.set(0.0);
-                        generation.set(generation.peek().wrapping_add(1));
+                        None => set.push(target_now.clone()),
                     }
+                    core.set(set.clone());
                 }
 
-                push_animatable(enter.clone(), 1.0, self.spec.clone());
-                if previous.peek().is_some() {
-                    push_animatable(exit.clone(), 0.0, self.spec.clone());
-                    if exit.peek() <= 0.001 {
-                        // The outgoing generation is done — it stops composing next frame
-                        // (`previous.get()` is a dependency).
-                        previous.set(None);
-                    }
+                // ── One alpha per entry: toward 1 if it is the target, 0 otherwise ──
+                for entry in set.entries.iter() {
+                    let goal = if self.matches(&entry.value, &target_now) { 1.0 } else { 0.0 };
+                    push_animatable(set.alpha(entry.era), goal, self.spec.clone());
                 }
 
-                // The outgoing generation composes first (underneath); the incoming one last (on
-                // top).
-                let outgoing = previous.get();
-                if let Some(outgoing) = outgoing {
-                    let cfg = exit_cfg.clone();
-                    let g = exit.clone();
-                    let layer = Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
-                    let gen_id = self.generation_key(&outgoing, generation.peek());
-                    ctx.key((GENERATION_PREV, gen_id), |ctx| {
-                        // Declare this generation's value as the slot parameter: a value change
-                        // re-runs the content without needing the key to change.
-                        ctx.changed(&outgoing);
+                // ── Drop what has finished leaving. The target itself never drops: a brand new
+                // entry starts at 0 and has to be allowed to rise.
+                let survivors: Vec<Entry<T>> = set
+                    .entries
+                    .iter()
+                    .filter(|e| self.matches(&e.value, &target_now) || set.alpha(e.era).peek() > 0.001)
+                    .cloned()
+                    .collect();
+                if survivors.len() != set.entries.len() {
+                    set.retain(survivors);
+                    core.set(set.clone());
+                }
+
+                // ── Compose what is left, oldest first so the newest is drawn on top ──
+                for entry in set.entries.iter() {
+                    let cfg = fade.clone();
+                    let g = set.alpha(entry.era);
+                    let layer =
+                        Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
+                    let value = entry.value.clone();
+                    let gen_id = self.generation_key(&value, entry.era);
+                    ctx.key((GENERATION_ENTRY, gen_id), |ctx| {
+                        // Declare this entry's value as the slot parameter: a value change re-runs
+                        // the content without needing the key to change.
+                        ctx.changed(&value);
                         let mkey = ctx.next_key();
                         if let GroupStatus::Enter =
                             ctx.start_restartable_group(mkey, layer, BoxLayout::new())
                         {
-                            content(ctx, outgoing.clone());
+                            content(ctx, value.clone());
                         }
                         ctx.end_restartable_group();
                     });
                 }
-                let shown = current.peek().clone();
-                let cfg = enter_cfg.clone();
-                let g = enter.clone();
-                let layer = Modifier::new().graphics_layer(move || cfg.layer_params(g.peek(), (0.0, 0.0)));
-                let gen_id = self.generation_key(&shown, generation.peek());
-                ctx.key((GENERATION_CURRENT, gen_id), |ctx| {
-                    let _c = current.get();
-                    // As above: with a `content_key`, a same-key value change leaves the key alone
-                    // and this is the only thing that re-runs the content.
-                    ctx.changed(&shown);
-                    let mkey = ctx.next_key();
-                    if let GroupStatus::Enter =
-                        ctx.start_restartable_group(mkey, layer, BoxLayout::new())
-                    {
-                        content(ctx, shown);
-                    }
-                    ctx.end_restartable_group();
-                });
             }
         }
         ctx.end_restartable_group();
+    }
+
+    /// Whether an entry's value counts as the same content as the target — Compose's `contentKey`
+    /// comparison, which is value equality when the caller supplied no key.
+    fn matches(&self, a: &T, b: &T) -> bool {
+        match &self.content_key {
+            Some(k) => k(a) == k(b),
+            None => a == b,
+        }
+    }
+}
+
+/// One state on screen, with the composition key its slots live under.
+#[derive(Debug, Clone)]
+struct Entry<T> {
+    value: T,
+    era: u64,
+}
+
+/// Every state on screen plus one alpha per entry — Compose's `currentlyVisible` and its
+/// `contentMap`'s `animateFloat`s, in one `remember`ed value.
+///
+/// The alphas are `State<f32>` handles kept in a map keyed by entry, not by position: an entry keeps
+/// its own alpha across the switches of the entries around it, which is what lets a state that comes
+/// back reverse mid-fade instead of restarting.
+#[derive(Debug)]
+struct VisibleSet<T> {
+    entries: Vec<Entry<T>>,
+    alphas: std::collections::HashMap<u64, State<f32>>,
+    next_gen: u64,
+}
+
+impl<T: Clone> Clone for VisibleSet<T> {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            alphas: self.alphas.clone(),
+            next_gen: self.next_gen,
+        }
+    }
+}
+
+/// Entries compare by their value (the key an entry is identified by) and their era spans the set:
+/// `State::set` requires `PartialEq`, and two sets with the same states on screen in the same order
+/// are the same set to the composition, alphas aside (the alphas live in `State`s the container
+/// subscribes to separately).
+impl<T: PartialEq> PartialEq for VisibleSet<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.next_gen == other.next_gen
+            && self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .zip(other.entries.iter())
+                .all(|(a, b)| a.era == b.era && a.value == b.value)
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
+    fn new(first: T) -> Self {
+        let mut alphas = std::collections::HashMap::new();
+        alphas.insert(0, State::new(1.0));
+        Self {
+            entries: vec![Entry { value: first, era: 0 }],
+            alphas,
+            next_gen: 1,
+        }
+    }
+
+    /// This entry's alpha. An entry that is on screen always has one — `push` creates it — so the
+    /// fallback only covers a value that was never pushed.
+    fn alpha(&self, era: u64) -> State<f32> {
+        self.alphas.get(&era).cloned().unwrap_or_else(|| State::new(0.0))
+    }
+
+    /// Where the entry matching `value` by content key sits, if it is on screen.
+    fn position_by_key(&self, value: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>) -> Option<usize> {
+        self.entries.iter().position(|e| same(&e.value, value, key))
+    }
+
+    fn push(&mut self, value: T) {
+        let era = self.next_gen;
+        self.next_gen += 1;
+        self.alphas.insert(era, State::new(0.0));
+        self.entries.push(Entry { value, era });
+    }
+
+    /// Keep only `survivors`, dropping the alphas of everything else.
+    fn retain(&mut self, survivors: Vec<Entry<T>>) {
+        let keep: std::collections::HashSet<u64> = survivors.iter().map(|e| e.era).collect();
+        self.alphas.retain(|era, _| keep.contains(era));
+        self.entries = survivors;
+    }
+}
+
+fn same<T: PartialEq>(a: &T, b: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>) -> bool {
+    match key {
+        Some(k) => k(a) == k(b),
+        None => a == b,
     }
 }
 
@@ -482,15 +585,16 @@ mod tests {
         assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
     }
 
-    /// Regression: a switch made while a cross-fade is STILL RUNNING shows the new pair at once.
+    /// A switch made while a cross-fade is STILL RUNNING puts the new target on screen at once, and
+    /// the state it interrupted keeps fading out instead of being hard-cut.
     ///
-    /// Each generation needs its own composition key. With a constant one the outgoing group replays
-    /// its recorded slots instead of re-running the content closure with the new outgoing value —
-    /// measured, one frame after switching to the third value: `[50, 60]` where `[60, 70]` belongs,
-    /// settling on `[70]` only later. (The `changed` declaration alone does not cover this: it
-    /// re-runs the closure, but the slots underneath are the previous generation's.)
+    /// Compose's `currentlyVisible` is a list, so all three are composed for a moment: the one that
+    /// was leaving, the one that was arriving, and the new target (`Crossfade.kt:104-136`). The
+    /// implementation this replaced kept a single outgoing generation, which threw the interrupted
+    /// one away mid-fade; a constant composition key shows up here as the new target never appearing
+    /// at all (measured: `[50, 60]` where `[50, 60, 70]` belongs).
     #[test]
-    fn a_switch_during_a_transition_shows_the_new_pair_at_once() {
+    fn a_switch_during_a_transition_puts_the_target_on_screen_at_once() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut composer = Composer::new();
         let target = State::new(0u32);
@@ -523,11 +627,112 @@ mod tests {
         advance(&mut composer, 1);
         assert_eq!(
             leaf_widths(&composer),
-            vec![60.0, 70.0],
-            "the new pair replaces the old one immediately, with no stale outgoing"
+            vec![50.0, 60.0, 70.0],
+            "the target is on screen immediately, and the state the switch interrupted keeps fading"
         );
 
         advance(&mut composer, 60);
         assert_eq!(leaf_widths(&composer), vec![70.0]);
     }
+
+    /// How many content slots have ever been created, to tell "the entry kept its slot" from "the
+    /// entry was thrown away and rebuilt".
+    static SLOT_MARKERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    /// Compose replaces an entry that is still on screen IN PLACE (`Crossfade.kt:117-123`:
+    /// `currentlyVisible[replacementId] = targetState`), so a state that comes back keeps its own
+    /// alpha AND its own slots — it reverses its fade instead of restarting from nothing.
+    ///
+    /// The width here encodes which slot the content lives in (`remember` runs once per slot, so the
+    /// marker increments when a slot is created), which is what makes the difference visible: the
+    /// two-generation implementation dropped the outgoing entry and rebuilt the returning one, and
+    /// that shows up as a third marker.
+    #[test]
+    fn a_state_that_comes_back_reuses_its_own_slot() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        SLOT_MARKERS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone()).build(ctx, |ctx, _page| {
+                    let slot = ctx
+                        .remember(|| SLOT_MARKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+                        .peek();
+                    SizedLeaf { w: 10.0 + slot as f32 * 100.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance = |composer: &mut Composer, n: usize| {
+            for _ in 0..n {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                recompose(composer);
+            }
+        };
+
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![10.0], "the first state lives in slot 0");
+
+        target.set(1);
+        recompose(&mut composer);
+        advance(&mut composer, 2);
+        assert_eq!(leaf_widths(&composer), vec![10.0, 110.0], "the second state gets its own slot");
+
+        // …back to 0 while 1 is still fading: 0 is on screen, so it is replaced in place.
+        target.set(0);
+        recompose(&mut composer);
+        advance(&mut composer, 1);
+        assert_eq!(
+            leaf_widths(&composer),
+            vec![10.0, 110.0],
+            "the state that came back kept its own slot, and no third one was created"
+        );
+        assert_eq!(
+            SLOT_MARKERS.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly two slots were ever created"
+        );
+
+        advance(&mut composer, 60);
+        assert_eq!(leaf_widths(&composer), vec![10.0], "and it settles on the state that came back");
+    }
+
+    /// A cross-fade leaves nothing running behind it: once only the target is on screen, the
+    /// animation engine is idle again.
+    #[test]
+    fn nothing_is_still_animating_once_a_switch_settles() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        target.set(1);
+        recompose(&mut composer);
+        let mut settled = false;
+        for _ in 0..80 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(&mut composer);
+            if !crate::animation::is_animating() && leaf_widths(&composer) == vec![60.0] {
+                settled = true;
+                break;
+            }
+        }
+        assert!(settled, "the cross-fade finishes and the engine goes idle");
+        assert!(!crate::animation::is_animating(), "nothing is left animating");
+    }
+
+
 }
