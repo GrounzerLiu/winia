@@ -3806,6 +3806,48 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     );
 }
 
+/// What:  an `AnimatedSize` whose content takes its new size long before the container reaches it.
+/// When:  the child grows 60 → 400 dp under a 6 s spec, and a pixel just outside the container is read
+///        mid-animation.
+/// Then:  nothing of the child is drawn outside the container: Compose's `animateContentSize` starts
+///        with `clipToBounds()` (`AnimationModifier.kt:77`) and winia's container used to draw the
+///        overflowing child.
+///
+/// Measured before the clip was added: with the container at 142 dp the pixel 91 dp past its right edge
+/// came back `255 0 0` — the child's own colour — against a black page. The two points are read from
+/// ONE frame, because the container is moving: a second capture would be a different width.
+#[test]
+fn animated_size_clips_the_content_it_outgrows() {
+    let mut app = UiTest::launch("animated_size_overflow");
+    app.expect_text("grow");
+    app.click_tag("grow");
+
+    // Let the container start moving: the child is already 400 dp wide.
+    let mut outside = None;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.refresh();
+        let Some((bx, by, bw, bh)) = app.find_tag("animated-box") else { continue };
+        if bw < 100.0 {
+            // Still near its resting width — the window where the child is far wider than the box.
+            outside = Some((bx + bw + 40.0, by + bh / 2.0));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (ox, oy) = outside.expect("the container is still animating and narrower than the child");
+
+    let (bx, by, bw, bh) = app.find_tag("animated-box").expect("the animated container");
+    let inside = (bx + bw / 2.0, by + bh / 2.0);
+    let px = app.pixels_at_logical(&[inside, (ox, oy)]);
+    assert_eq!(px[0], Some((255, 0, 0, 255)), "inside the container the child is visible");
+    assert_eq!(
+        px[1],
+        Some((0, 0, 0, 255)),
+        "outside it the page shows through — the child is clipped to the container"
+    );
+}
+
 /// What:  the DOCKED picker's panel switch (calendar ⇄ year).
 /// When:  the year menu is clicked.
 /// Then:  the two panels overlap — the frame the year panel first shows up, the calendar panel is still

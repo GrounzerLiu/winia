@@ -16,6 +16,30 @@
 //! - **容器组件而非 Modifier**：本框架 Modifier 是纯数据（构建期无组合上下文），
 //!   无法内嵌 remember 持有动画 State——容器组件在组合期创建 State（机制等价）
 
+//! What matches Compose's `Modifier.animateContentSize` (`AnimationModifier.kt:69-114`,
+//! `:159-247`): the animated size is the container's size, the first measurement snaps rather than
+//! animating, a new target while an animation runs re-targets from the current value, the result is
+//! CLAMPED into the incoming constraints (`constraints.constrain(it)`, `:217`), and the container is
+//! clipped to its own bounds (`this.clipToBounds()`, `:77`) so a child that already took its new size
+//! does not paint outside the box still animating toward it.
+//!
+//! Known differences from Compose, recorded rather than silent:
+//! - **A container component, not a `Modifier`.** Compose's modifier node is measured by the parent's
+//!   chain; winia's `Modifier` is pure data with no composition context, so the animation `State`
+//!   could not be held there (see the mechanism note above). The observable difference is that this
+//!   animates the container it builds, not an arbitrary modifier position.
+//! - **No `alignment`.** Compose aligns the CHILD inside the animated box (`:225-230`) and defaults
+//!   to `Alignment.TopStart`; winia places children at the origin, which is that default, but there
+//!   is no way to ask for another one. Visible while the box is larger than the child — which is the
+//!   second half of every shrink.
+//! - **No `finishedListener`.** Compose calls it with `(startSize, endSize)` when the animation ends
+//!   `Finished` (`:243`), never when it is superseded.
+//! - **No default spec.** Compose defaults to `spring(stiffness = StiffnessMediumLow,
+//!   visibilityThreshold = IntSize.VisibilityThreshold)`; every caller here passes one, and the
+//!   documented example passes `TweenSpec::default()`, which is not the same motion.
+//! - **No lookahead.** Compose measures with lookahead constraints when a lookahead scope is present
+//!   (`:196-206`); winia has no lookahead scope.
+
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
@@ -62,7 +86,14 @@ impl AnimatedSize {
             spec: self.spec,
         };
         let key = ctx.next_key();
-        match ctx.start_restartable_group(key, self.modifier, policy) {
+        // Clip to the container's own bounds, the way Compose's `animateContentSize` starts with
+        // `this.clipToBounds()` (`AnimationModifier.kt:77`). Without it a child that has already taken
+        // its NEW size paints outside the box that is still animating toward it — measured on a
+        // 60 → 400 dp grow with a 6 s spec: with the container at 142 dp, the pixel 91 dp beyond its
+        // right edge was the child's own colour (`255 0 0`). The clip goes after the caller's
+        // modifiers, which is where Compose puts it too.
+        let modifier = self.modifier.then(Modifier::new().clip(crate::graphics::Shape::Rectangle));
+        match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 content(ctx);
@@ -125,7 +156,18 @@ impl MeasurePolicy for SizePolicy {
         if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
             eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
         }
-        (Size::new(cur.width, cur.height), placements)
+        // Constrain into the INCOMING constraints, as Compose does (`constraints.constrain(it)` —
+        // "so that parent doesn't force center this layout", `AnimationModifier.kt:217`). It matters
+        // when the constraints tighten while an animation toward a larger size is still running: the
+        // animated value is then a size the parent never allowed, and reporting it would place the
+        // siblings after this one outside the parent.
+        (
+            Size::new(
+                constraints.constrain_width(cur.width),
+                constraints.constrain_height(cur.height),
+            ),
+            placements,
+        )
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -173,6 +215,63 @@ mod tests {
             }
         }
         first_container(nodes, root)
+    }
+
+    /// The animated value is reported through the INCOMING constraints, as Compose does
+    /// (`constraints.constrain(it)`, `AnimationModifier.kt:217`).
+    ///
+    /// The reachable case: the constraints tighten while an animation toward a larger size is still
+    /// running. Without the clamp the container reports a size the parent never allowed, and the
+    /// sibling after it is placed outside the parent.
+    #[test]
+    fn animated_size_reports_a_size_the_constraints_allow() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                AnimatedSize::new(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(5000),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .build(ctx, |ctx| {
+                    SizedLeaf { w: w.get() }.build(ctx);
+                });
+            });
+        };
+
+        recompose(&mut composer);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
+        assert_eq!(container_width(&composer), 50.0, "first frame jumps to the content size");
+
+        // Grow toward 400 while the parent allows it, and let it get PAST the width the parent is
+        // about to allow — otherwise the clamp has nothing to do and the test passes either way
+        // (measured: it did, at `mid` 60 against a 100 limit).
+        let w = holder.borrow().as_ref().unwrap().clone();
+        w.set(400.0);
+        recompose(&mut composer);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
+        let mut mid = container_width(&composer);
+        let mut waited = 0;
+        while mid <= 120.0 && waited < 4000 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            crate::animation::update_animations();
+            waited += 20;
+            recompose(&mut composer);
+            composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
+            mid = container_width(&composer);
+        }
+        assert!(mid > 120.0, "the animation got past the limit the parent is about to set (mid={mid})");
+
+        // …and tighten the parent while it runs.
+        composer.layout(Constraints::new(0.0, 100.0, 0.0, 400.0));
+        let clamped = container_width(&composer);
+        assert!(
+            clamped <= 100.0,
+            "the container never reports more than the parent allows (got {clamped})"
+        );
     }
 
     #[test]
