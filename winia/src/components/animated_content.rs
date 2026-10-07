@@ -30,8 +30,6 @@
 //!   than the size spring, so an exit can finish while the size still moves.
 //!
 //! Known differences from Compose:
-//! - **No 90 ms delay.** Compose's default is `fadeIn(tween(220, delayMillis = 90))` and winia's
-//!   `TweenSpec` has no delay field. The enter starts early and the total is 220 ms (Compose: 310).
 //! - **No `contentAlignment`.** Compose's `Alignment` is 2-D (`TopStart` by default); winia's is a
 //!   single axis (Start/End/Center/Stretch), so both generations sit at the container's top-left —
 //!   the same as Compose's DEFAULT, just not adjustable.
@@ -56,10 +54,15 @@ fn fast_out_slow_in() -> interpolator::CubicBezier {
     interpolator::CubicBezier::new(0.2, 0.0, 0.0, 1.0)
 }
 
-/// Compose `AnimatedContent`'s default enter: `fadeIn(tween(220)) + scaleIn(0.92)`.
+/// Compose `AnimatedContent`'s default enter: `fadeIn(tween(220, delayMillis = 90)) +
+/// scaleIn(0.92, tween(220, delayMillis = 90))` — the incoming content waits out the outgoing one's
+/// 90 ms fade before it starts, which is the staggered default the component's docs describe.
 fn default_enter() -> VisibilityTransition {
-    VisibilityTransition::fade_in(TweenSpec::new(Duration::from_millis(220), fast_out_slow_in()))
-        .with_scale_from(0.92, (0.5, 0.5))
+    VisibilityTransition::fade_in(
+        TweenSpec::new(Duration::from_millis(220), fast_out_slow_in())
+            .delay(Duration::from_millis(90)),
+    )
+    .with_scale_from(0.92, (0.5, 0.5))
 }
 
 /// Compose's default exit: `fadeOut(tween(90))` — out fast, in slow.

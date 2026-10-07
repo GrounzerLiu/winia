@@ -180,12 +180,10 @@ impl SearchBarDefaults {
     }
 
     /// Expand animation (Compose `AnimationEnterDurationMillis` = `MotionTokens.DurationLong4` = 600ms with
-    /// `EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`).
-    ///
-    /// Deviation from Compose, recorded: Compose also passes `delayMillis = 100`
-    /// (`MotionTokens.DurationShort2`). winia's `TweenSpec` has no delay field, so the delay is expressed as
-    /// a `KeyframesSpec` that holds the start value for the first 100ms of a 700ms spec — the same shape,
-    /// using only existing primitives instead of adding a field Compose would also accept.
+    /// `EasingEmphasizedDecelerateCubicBezier` = `CubicBezier(0.05, 0.7, 0.1, 1.0)`), plus Compose's
+    /// `delayMillis = 100` (`MotionTokens.DurationShort2`), carried on `TweenSpec::delay`. That field exists
+    /// for this: the delay used to be a `KeyframesSpec` polyline holding the start value for the first 100ms
+    /// of a 700ms spec, because there was nowhere else to put it.
     pub fn expand_spec() -> crate::animation::AnimationSpec {
         expand_spec()
     }
@@ -247,25 +245,37 @@ fn collapse_interpolator() -> std::sync::Arc<dyn crate::animation::interpolator:
 
 /// Expand spec: 600ms, emphasized-decelerate, starting 100ms late.
 ///
-/// The delay is expressed with a `KeyframesSpec` (hold the value, then tween) because winia's `TweenSpec`
-/// has no delay field; the resulting motion is the same curve shifted by the delay, which is what Compose's
-/// `delayMillis` produces.
+/// Compose's `delayMillis`: the same curve, shifted.
 fn expand_spec() -> crate::animation::AnimationSpec {
-    delayed_tween(SEARCH_BAR_EXPAND_MS, SEARCH_BAR_ANIMATION_DELAY_MS, expand_interpolator())
+    crate::animation::AnimationSpec::Tween(
+        crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(SEARCH_BAR_EXPAND_MS),
+            expand_interpolator(),
+        )
+        .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS)),
+    )
 }
 
 /// Collapse spec: 350ms, `CubicBezier(0, 1, 0, 1)`, starting 100ms late (see [`expand_spec`]).
 fn collapse_spec() -> crate::animation::AnimationSpec {
-    delayed_tween(SEARCH_BAR_COLLAPSE_MS, SEARCH_BAR_ANIMATION_DELAY_MS, collapse_interpolator())
+    crate::animation::AnimationSpec::Tween(
+        crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(SEARCH_BAR_COLLAPSE_MS),
+            collapse_interpolator(),
+        )
+        .delay(std::time::Duration::from_millis(SEARCH_BAR_ANIMATION_DELAY_MS)),
+    )
 }
 
 /// Compose `AnimationForContentFadeInSpec`: `tween(DurationShort2)` delayed by `DurationShort1` (50ms), so
 /// the results start appearing only after the container has begun to open.
 fn content_fade_in_spec() -> crate::animation::AnimationSpec {
-    delayed_tween(
-        SEARCH_BAR_CONTENT_FADE_MS,
-        SEARCH_BAR_CONTENT_FADE_DELAY_MS,
-        std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+    crate::animation::AnimationSpec::Tween(
+        crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_MS),
+            crate::animation::interpolator::Linear::new(),
+        )
+        .delay(std::time::Duration::from_millis(SEARCH_BAR_CONTENT_FADE_DELAY_MS)),
     )
 }
 
@@ -302,42 +312,6 @@ fn docked_exit_spec() -> crate::overlay::OverlayAnimSpec {
     .with_interpolator(crate::animation::interpolator::CubicBezier::new(0.0, 1.0, 0.0, 1.0))
 }
 
-/// A tween of `duration_ms` that does not move until `SEARCH_BAR_ANIMATION_DELAY_MS` has elapsed.
-///
-/// `progress` here is the spec's own time fraction: from 0 to `delay` it samples the curve's value at 0 (so
-/// the value is held), and from there it remaps the remaining time onto the full curve.
-fn delayed_tween(
-    duration_ms: u64,
-    delay_ms: u64,
-    interpolator: std::sync::Arc<dyn crate::animation::interpolator::Interpolator>,
-) -> crate::animation::AnimationSpec {
-    let delay = delay_ms as f32;
-    let total = (duration_ms + delay_ms) as f32;
-    let held = if total > 0.0 { delay / total } else { 0.0 };
-    // The curve is sampled into a polyline over the post-delay window, with LINEAR segments.
-    //
-    // Two things matter here, both measured on a running app (per-frame probe on the overlay height):
-    //  - the segment interpolator must be Linear, because `interpolate_keyframes` applies the SEGMENT's
-    //    interpolator to the within-segment fraction. Passing the curve itself replayed its fast-out shape
-    //    once per segment: the panel then advanced in eight "jump then crawl" sawteeth (measured single-frame
-    //    steps of 0.41, 0.064, 0.033, 0.018 ... — the visible stutter);
-    //  - the resolution has to be fine enough that the polyline tracks the curve: with a coarse sample set
-    //    the first segment already carries a large share of the total travel.
-    // 96 samples put the largest single-frame step near the curve's own slope (see the probe assertion in
-    // the tests) instead of a segment's chord.
-    let steps = 96;
-    let mut frames: Vec<(f32, f32)> = Vec::with_capacity(steps + 2);
-    frames.push((0.0, 0.0));
-    frames.push((held, 0.0));
-    for i in 1..=steps {
-        let t = i as f32 / steps as f32;
-        frames.push((held + (1.0 - held) * t, interpolator.interpolate(t)));
-    }
-    crate::animation::AnimationSpec::Keyframes(crate::animation::KeyframesSpec::new(
-        std::time::Duration::from_millis(duration_ms + delay_ms),
-        frames,
-    ))
-}
 
 // ───────────────────── expansion geometry (Compose `FullScreenSearchBarLayout`) ─────────────────────
 //
@@ -1173,76 +1147,30 @@ mod tests {
         assert_eq!(expansion_vertical_padding(1.0), SEARCH_BAR_VERTICAL_PADDING);
     }
 
-    /// The expansion must move SMOOTHLY, not in sawteeth.
-    ///
-    /// `interpolate_keyframes` applies each SEGMENT's interpolator to the within-segment fraction, so
-    /// building the delay with the easing curve as the segment interpolator replays that curve once per
-    /// segment. Measured on a running app (per-frame probe on the overlay height) the panel then advanced as
-    /// eight "jump then crawl" cycles — single-frame progress steps of 0.41, 0.064, 0.033, 0.018 — which is
-    /// the stutter a user sees.
-    ///
-    /// Teeth: pass the curve as the segment interpolator (or drop the resolution) and the monotonic step
-    /// bound below fails.
-    #[test]
-    fn expansion_steps_are_monotonic_and_bounded() {
-        let crate::animation::AnimationSpec::Keyframes(k) = expand_spec() else { unreachable!() };
-        // Every segment must be LINEAR: the values already carry the curve.
-        for (i, (_, _, interp)) in k.frames.iter().enumerate() {
-            let linear_like = (interp.interpolate(0.25) - 0.25).abs() < 1e-4;
-            assert!(
-                linear_like,
-                "segment {i} carries a non-linear interpolator; the curve is already in the values, so a                  curved segment re-applies it and produces sawteeth"
-            );
-        }
-        // Values are monotonic and the largest step is a small fraction of the travel, so no single frame
-        // can carry a visible jump.
-        let values: Vec<f32> = k.frames.iter().map(|(_, v, _)| *v).collect();
-        for w in values.windows(2) {
-            assert!(w[1] >= w[0] - 1e-6, "values must not go backwards: {w:?}");
-        }
-        let steps: Vec<f32> = values.windows(2).map(|w| w[1] - w[0]).collect();
-        let max_step = steps.iter().cloned().fold(0.0f32, f32::max);
-        assert!(
-            max_step < 0.15,
-            "the largest single step must be small (measured 0.41 with the sawtooth bug), got {max_step}"
-        );
-        // …and the motion is front-loaded, which is what the emphasized-decelerate curve means.
-        assert!(steps[1] > steps[steps.len() / 2], "fast out: early steps larger than middle steps");
-    }
-
-    /// Compose's timings: expand 600ms + 100ms delay, collapse 350ms + 100ms delay, and the progress must
-    /// stay held during the delay (that is what the `KeyframesSpec` shift buys).
+    /// Compose's timings, as `TweenSpec` fields: expand 600ms of motion after a 100ms delay, collapse
+    /// 350ms after the same delay. This used to be a `KeyframesSpec` whose duration was the sum, with the
+    /// delay expressed as a held head of the polyline; `TweenSpec::delay` carries it directly now, so the
+    /// duration here is the MOTION, exactly like Compose's `durationMillis`.
     #[test]
     fn expansion_specs_match_composes_timings() {
-        let total = |spec: &crate::animation::AnimationSpec| match spec {
-            crate::animation::AnimationSpec::Keyframes(k) => k.duration.as_millis() as u64,
-            other => panic!("expected a keyframes spec, got {other:?}"),
+        let timing = |spec: &crate::animation::AnimationSpec| match spec {
+            crate::animation::AnimationSpec::Tween(t) => {
+                (t.duration.as_millis() as u64, t.delay.as_millis() as u64)
+            }
+            other => panic!("expected a tween spec, got {other:?}"),
         };
         assert_eq!(
-            total(&expand_spec()),
-            SEARCH_BAR_EXPAND_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
-            "expand = 600ms of motion + 100ms delay"
+            timing(&expand_spec()),
+            (SEARCH_BAR_EXPAND_MS, SEARCH_BAR_ANIMATION_DELAY_MS),
+            "expand = 600ms of motion, 100ms late"
         );
         assert_eq!(
-            total(&collapse_spec()),
-            SEARCH_BAR_COLLAPSE_MS + SEARCH_BAR_ANIMATION_DELAY_MS,
-            "collapse = 350ms of motion + 100ms delay"
+            timing(&collapse_spec()),
+            (SEARCH_BAR_COLLAPSE_MS, SEARCH_BAR_ANIMATION_DELAY_MS),
+            "collapse = 350ms of motion, 100ms late"
         );
 
-        // The held window is real: the value at the delay boundary is still the start value.
-        let crate::animation::AnimationSpec::Keyframes(k) = expand_spec() else { unreachable!() };
-        let held = SEARCH_BAR_ANIMATION_DELAY_MS as f32 / k.duration.as_millis() as f32;
-        let at_boundary = k
-            .frames
-            .iter()
-            .find(|(x, _, _)| (*x - held).abs() < 1e-6)
-            .map(|(_, v, _)| *v)
-            .expect("a frame exactly at the delay boundary");
-        assert_eq!(at_boundary, 0.0, "the value is held until the delay elapses");
-
-        // Endpoints still reach 1.0 and the curve is the emphasized-decelerate one (fast early).
-        let curve: Vec<f32> = k.frames.iter().map(|(_, v, _)| *v).collect();
-        assert_eq!(*curve.last().unwrap(), 1.0, "ends fully open");
+        // …and the curve is still the emphasized-decelerate one (fast early).
         let quarter = expand_interpolator().interpolate(0.25);
         assert!(quarter > 0.25, "emphasized-decelerate runs ahead of linear, got {quarter}");
     }
@@ -1450,24 +1378,25 @@ mod tests {
     /// fails — that is the coupling Compose specifically avoids.
     #[test]
     fn content_fade_is_separate_from_the_geometry_clock() {
-        let dur = |spec: &crate::animation::AnimationSpec| match spec {
-            crate::animation::AnimationSpec::Keyframes(k) => k.duration.as_millis() as u64,
-            crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis() as u64,
+        let timing = |spec: &crate::animation::AnimationSpec| match spec {
+            crate::animation::AnimationSpec::Tween(t) => {
+                (t.duration.as_millis() as u64, t.delay.as_millis() as u64)
+            }
             other => panic!("unexpected spec {other:?}"),
         };
         assert_eq!(
-            dur(&content_fade_in_spec()),
-            SEARCH_BAR_CONTENT_FADE_MS + SEARCH_BAR_CONTENT_FADE_DELAY_MS,
+            timing(&content_fade_in_spec()),
+            (SEARCH_BAR_CONTENT_FADE_MS, SEARCH_BAR_CONTENT_FADE_DELAY_MS),
             "content fades in on the short spec + the short delay, not on the 600ms container clock"
         );
         assert_eq!(
-            dur(&content_fade_out_spec()),
-            SEARCH_BAR_CONTENT_FADE_MS,
+            timing(&content_fade_out_spec()),
+            (SEARCH_BAR_CONTENT_FADE_MS, 0),
             "content fades out immediately (no delay)"
         );
         // …and it is genuinely shorter than the container's motion, which is the point of the split.
         assert!(
-            dur(&content_fade_in_spec()) < dur(&expand_spec()),
+            timing(&content_fade_in_spec()).0 < timing(&expand_spec()).0,
             "the content clock must be shorter than the geometry clock"
         );
     }

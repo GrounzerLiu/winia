@@ -761,6 +761,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             }
             AnimationSpec::Tween(spec) => {
                 let elapsed = now - state.start;
+                // `delayMillis`: hold `from` until it elapses (Compose's `tween(delayMillis)`) — the
+                // animation is still running, so the loop keeps ticking and nothing snaps.
+                if elapsed < spec.delay {
+                    (state.from.clone(), false)
+                } else {
+                let elapsed = elapsed - spec.delay;
                 // duration=0 → 立即完成（0 时长 = 瞬移）；>0 走正常时间轴
                 let t = if spec.duration.is_zero() {
                     1.0
@@ -774,6 +780,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     (state.to.clone(), true)
                 } else {
                     (state.from.lerp(&state.to, eased), false)
+                }
                 }
             }
             AnimationSpec::Keyframes(spec) => {
@@ -1257,6 +1264,10 @@ impl SpringSpec {
 #[derive(Clone, Debug)]
 pub struct TweenSpec {
     pub duration: Duration,
+    /// Wait before the tween starts — during it the value stays at `from` (cf. Compose
+    /// `tween(delayMillis)`). `Duration::ZERO` is the plain tween, so a spec that never sets it
+    /// behaves exactly as before.
+    pub delay: Duration,
     /// 表驱动插值器（v1 预采样表——避免运行时计算过重；`Linear::new()` 为恒等）
     pub interpolator: std::sync::Arc<dyn interpolator::Interpolator>,
 }
@@ -1268,7 +1279,13 @@ impl TweenSpec {
         duration: Duration,
         interpolator: impl Into<std::sync::Arc<dyn interpolator::Interpolator>>,
     ) -> Self {
-        Self { duration, interpolator: interpolator.into() }
+        Self { duration, delay: Duration::ZERO, interpolator: interpolator.into() }
+    }
+
+    /// The same tween, waiting `delay` before it starts (Compose's `tween(delayMillis)`).
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
     }
 }
 
@@ -1276,6 +1293,7 @@ impl Default for TweenSpec {
     fn default() -> Self {
         Self {
             duration: Duration::from_millis(300),
+            delay: Duration::ZERO,
             interpolator: std::sync::Arc::new(interpolator::Linear::new()),
         }
     }
@@ -1504,6 +1522,38 @@ pub(crate) mod tests {
         assert_eq!(anim.state.get(), 100.0);
     }
 
+    /// `TweenSpec::delay` (Compose's `tween(delayMillis)`): the value holds `from` until the delay
+    /// has passed, then the tween runs its full duration from there.
+    #[test]
+    fn tween_holds_from_until_its_delay_elapses() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        anim.animate_to(
+            100.0,
+            AnimationSpec::Tween(
+                TweenSpec::new(Duration::from_millis(60), interpolator::Linear::new())
+                    .delay(Duration::from_millis(120)),
+            ),
+        );
+        // Well inside the delay: still exactly `from`, and still running.
+        let mut held_at = 0.0f32;
+        for _ in 0..6 {
+            assert!(anim.update(), "a delayed tween is still running");
+            std::thread::sleep(Duration::from_millis(10));
+            held_at = anim.state.get();
+        }
+        assert_eq!(held_at, 0.0, "the value has not moved while the delay runs");
+
+        // …and once the delay is past, it completes the 60 ms tween (180 ms of delay + tween).
+        let mut frames = 6;
+        while anim.update() && frames < 60 {
+            std::thread::sleep(Duration::from_millis(10));
+            frames += 1;
+        }
+        assert!(frames < 60, "the delayed tween finishes (took {frames} frames)");
+        assert_eq!(anim.state.get(), 100.0);
+    }
+
     #[test]
     fn infinite_float_restart_loops() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -1665,7 +1715,7 @@ pub(crate) mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         let mut frames = 0;
         while anim.update() && frames < 100 {
             std::thread::sleep(Duration::from_millis(10));
@@ -1683,7 +1733,7 @@ pub(crate) mod tests {
         let mut anim = Animatable::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
+                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
         while anim.update() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -2241,9 +2291,7 @@ mod repeated_tests {
 
         // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
-            push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec {
-                duration: std::time::Duration::from_millis(300),
-                interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+            push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
             }));
             std::thread::sleep(std::time::Duration::from_millis(400));
             update_animations();
@@ -2259,18 +2307,14 @@ mod repeated_tests {
     fn mid_flight_retarget_switches() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = crate::runtime::state::State::new(40.0f32);
-        push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(1000),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(1000), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
         std::thread::sleep(std::time::Duration::from_millis(50));
         update_animations();
         let mid = state.peek();
         assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
-        push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(200),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();
@@ -2294,9 +2338,7 @@ mod repeated_tests {
         assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
         // 动画收敛：0 → 100（Tween）
         let state = crate::runtime::state::State::new(0i32);
-        push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(200),
-            interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         std::thread::sleep(std::time::Duration::from_millis(300));
         update_animations();
@@ -2521,9 +2563,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         let mut anim = Animatable::new(st.clone());
         anim.animate_to(
             100.0,
-            AnimationSpec::Tween(TweenSpec {
-                duration: Duration::from_millis(300),
-                interpolator: Arc::new(EaseInQuad::new()),
+            AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(300), delay: Duration::ZERO, interpolator: Arc::new(EaseInQuad::new()),
             }),
         );
         std::thread::sleep(Duration::from_millis(60));

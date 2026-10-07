@@ -98,9 +98,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
 
     let alpha = ctx.animate_float_as_state(
         if clicked.get() { 0.9 } else { 0.2 },
-        AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(300),
-            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
+        AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     // 表达式直接写（非闭包非宏非中间变量）——注册到本函数 scope
@@ -170,9 +168,7 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
     let bg = ctx.animate_color_as_state(
         if clicked.get() { Color::from_argb(255, 76, 175, 80) }
         else { Color::from_argb(255, 156, 39, 176) },
-        AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(500),
-            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
+        AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(500), delay: Duration::ZERO, interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     Column::new()
