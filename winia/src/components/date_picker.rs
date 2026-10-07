@@ -1673,6 +1673,12 @@ const MONTH_MENU_TAG: &str = "dp-month-menu";
 /// The prefix of a year cell's `test_tag` — `dp-year-2024` — so a UI test can find one year's box.
 const YEAR_CELL_TAG_PREFIX: &str = "dp-year-";
 
+/// The docked picker's calendar panel (`dp-calendar-panel`). The year and month panels are findable
+/// through their cells; this is the calendar side's handle, which is what lets a UI test assert that
+/// BOTH panels are composed while the docked crossfade runs — the one thing a serial fade can never
+/// do, and the assertion that would catch it coming back.
+const CALENDAR_PANEL_TAG: &str = "dp-calendar-panel";
+
 /// The prefix of a month cell's `test_tag` in the docked month list — `dp-month-9` — matching
 /// [`YEAR_CELL_TAG_PREFIX`]'s scheme so a UI test can find one month's pill.
 const MONTH_CELL_TAG_PREFIX: &str = "dp-month-";
@@ -3117,7 +3123,7 @@ impl DockedDatePicker {
                                     // Box (stacked, overlapping children), so without this the grid
                                     // starts at the same y as the weekday row (measured overlap).
                                     Column::new()
-                                        .modifier(Modifier::new().fill_max_width())
+                                        .modifier(Modifier::new().fill_max_width().test_tag(CALENDAR_PANEL_TAG))
                                         .arrangement(Arrangement::Start)
                                         .build(ctx, |ctx| {
                                             weekday_row(ctx, &cross_model, &cross_colors);

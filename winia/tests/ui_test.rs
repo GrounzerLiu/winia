@@ -3792,6 +3792,61 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     );
 }
 
+/// What:  the DOCKED picker's panel switch (calendar ⇄ year).
+/// When:  the year menu is clicked.
+/// Then:  the two panels overlap — the frame the year panel first shows up, the calendar panel is still
+///        composed, and only once the switch settles does the calendar panel go away.
+///
+/// Why this and not just "the year panel appears": the panels are two generations of the docked `Crossfade`,
+/// and the crossfade is the point. It used to fade the outgoing panel out to nothing, swap, then fade the
+/// incoming one in, which can never show both; the default is now Compose's `tween()` — one 300 ms cross-fade
+/// — and this is the only coverage that 300 ms has. It is also the assertion that would catch a return to
+/// the serial fade, which no geometry check can see.
+#[test]
+fn date_picker_panel_switch_cross_fades_both_panels() {
+    let mut app = UiTest::launch("date_picker_docked");
+    assert!(
+        app.find_tag("dp-calendar-panel").is_some(),
+        "the docked picker opens on the calendar panel"
+    );
+    assert!(
+        app.find_tag("dp-year-2024").is_none(),
+        "…and the year panel is not composed yet"
+    );
+
+    app.click_tag("dp-year-menu");
+
+    // Poll instead of sampling once: the click lands ~120 ms in and the tween is 300 ms, so under load a
+    // single refresh can arrive after it ended — but the frame the incoming panel first appears is by
+    // definition inside the window, and that is where the outgoing one has to still be there.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut overlaps = false;
+    while Instant::now() < deadline {
+        app.refresh();
+        if app.find_tag("dp-year-2024").is_some() {
+            overlaps = app.find_tag("dp-calendar-panel").is_some();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        overlaps,
+        "both panels are composed while the switch cross-fades — a serial fade can only ever show one"
+    );
+
+    // Settled: the outgoing generation is torn down and the year panel is what remains.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.find_tag("dp-calendar-panel").is_some() {
+        app.refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        app.find_tag("dp-calendar-panel").is_none(),
+        "the outgoing panel is removed once the cross-fade ends"
+    );
+    assert!(app.find_tag("dp-year-2024").is_some(), "and the year panel remains");
+}
+
 /// What:  the modal date picker's dialog.
 /// When:  it is up, and then a day and the dismiss button are tapped.
 /// Then:  the container is the token size, the tap reaches the state the page reads, and the dialog closes and

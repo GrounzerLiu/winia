@@ -40,6 +40,8 @@ mod date_picker;
 mod date_picker_dialog;
 #[path = "fixture_date_picker_input.rs"]
 mod date_picker_input;
+#[path = "fixture_date_picker_docked.rs"]
+mod date_picker_docked;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -104,6 +106,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("date_picker", date_picker::main),
     ("date_picker_dialog", date_picker_dialog::main),
     ("date_picker_input", date_picker_input::main),
+    ("date_picker_docked", date_picker_docked::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),
     ("overlay", overlay::main),
