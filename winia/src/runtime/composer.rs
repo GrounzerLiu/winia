@@ -536,6 +536,10 @@ impl<'a> ComposeCtx<'a> {
     /// 显式 key（对标 Compose `key(id)`）：包裹的子树用 id 哈希为 key 基——
     /// 结构变化（列表重排/子树移动）时 remember/复用仍稳定。
     /// 用法：`ctx.key("scroll_list", |ctx| { ... });`
+    ///
+    /// 重排这条直到 `start_slot` 加上按 key 的查找才真正成立：在那之前，一个 key 换了位置的子节点
+    /// 会被当成新节点、从该索引截断重建（`a_keyed_sibling_that_moves_keeps_its_slots` 是那条测量，
+    /// 去掉查找它就会数出 4 个槽而不是 2 个）。
     /// 显式 key 作用域（对标 Compose `key(key1, content)`）：`id` 参与内部所有
     /// 语句/组件的 key 基——`id` 变化 → 内部槽 key 变化 → 旧子树重建（结构切换）；
     /// `id` 稳定 → 跨重组 key 稳定（remember State 保留）。
@@ -1432,6 +1436,25 @@ impl SlotTable {
         // 重建 slot 导致 remember 的 State 丢失
         let same_position = idx < parent.children.len()
             && parent.children[idx].key >> 32 == key >> 32;
+        // A key that sits LATER among the siblings is a reorder — an explicit `ctx.key` list that
+        // moved an item, since statement order cannot change on its own. Rotate that slot into the
+        // current position instead of truncating from here: truncating would drop every sibling
+        // after `idx` and rebuild them, losing the `remember`ed state the key exists to preserve.
+        // Measured before this: a two-entry keyed swap recreated both slots.
+        //
+        // The search only fires when the index does not already match (below), and only among this
+        // parent's direct children, so the unkeyed path is untouched: two unkeyed siblings have
+        // different statement keys and neither is ever found elsewhere.
+        if !(idx < parent.children.len()
+            && (parent.children[idx].key == key || same_position))
+        {
+            if let Some(found) = parent.children.iter().position(|c| c.key == key) {
+                if found > idx {
+                    let moved = parent.children.remove(found);
+                    parent.children.insert(idx, moved);
+                }
+            }
+        }
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             parent.children[idx].visited = true; // 本帧活跃（物化收集依据）
@@ -7102,6 +7125,58 @@ fn test_slot_count_bound_is_an_upper_bound_on_materialized_nodes() {
              the slot tree's node count, not a constant"
         );
     }
+}
+
+/// A slot whose key moved to a different index among its siblings keeps its slots — the reorder case.
+///
+/// `start_slot` used to look for a matching key only AT the current index (or a sibling whose path-hash
+/// prefix matched there) and otherwise truncated the parent's children from that index. Statement
+/// order cannot change on its own, so the only way a key arrives at an index it did not occupy is an
+/// explicit `ctx.key` list that reordered — and there the truncation threw away exactly the slots the
+/// key exists to keep. Measured with this shape, two keyed subtrees swapped: both were recreated on
+/// every flip.
+///
+/// Teeth: drop the keyed lookup (keep only the index match) and `created` counts 4 instead of 2.
+#[test]
+fn a_keyed_sibling_that_moves_keeps_its_slots() {
+    let mut composer = Composer::new();
+    let constraints = crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 400.0);
+    let reversed = State::new(false);
+    let flag = reversed.clone();
+    let created = std::cell::Cell::new(0u32);
+
+    let mut recompose = |composer: &mut Composer, created: &std::cell::Cell<u32>| {
+        composer.compose(|ctx| {
+            let flip = flag.get();
+            let order: [u64; 2] = if flip { [2, 1] } else { [1, 2] };
+            for id in order {
+                ctx.key(id, |ctx| {
+                    let key = ctx.next_key();
+                    match ctx.start_restartable_group(
+                        key,
+                        Modifier::new(),
+                        crate::layout::box_layout::BoxLayout::new(),
+                    ) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            let _ = ctx.remember(|| created.set(created.get() + 1));
+                        }
+                    }
+                    ctx.end_restartable_group();
+                });
+            }
+        });
+        composer.layout(constraints);
+    };
+
+    recompose(&mut composer, &created);
+    assert_eq!(created.get(), 2, "two keyed subtrees, one slot each");
+    reversed.set(true);
+    recompose(&mut composer, &created);
+    assert_eq!(created.get(), 2, "the order flipped and both kept their slots");
+    reversed.set(false);
+    recompose(&mut composer, &created);
+    assert_eq!(created.get(), 2, "…and back");
 }
 
 /// A slot can survive a compose UNVISITED and outside a skipped subtree, so `collect_live_keys` is

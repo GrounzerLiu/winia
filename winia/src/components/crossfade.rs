@@ -168,17 +168,18 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
                             // slots survive. A `content_key` match therefore updates the content
                             // with no animation at all, which is the point of the key.
                             //
-                            // It deliberately does NOT move to the end. Compose's
-                            // `currentlyVisible[replacementId] = targetState` leaves the position too
-                            // and draws the target on top regardless, but winia matches a child's key
-                            // at its POSITION (or by its path-hash prefix there), so a reorder
-                            // truncates from that index and rebuilds both subtrees — losing exactly
-                            // the `remember`ed state this branch exists to preserve. Measured in a
-                            // minimal probe: `ctx.key` around a restartable group, two entries, swap
-                            // the order, both slots created again. The cost of not moving is z-order
-                            // only: a state that comes back while another is leaving draws under it
-                            // for the length of that fade.
+                            // The entry moves to the end so it is composed last and drawn on top,
+                            // which is Compose's order (`Crossfade.kt:189`). That used to be unsafe
+                            // here: `start_slot` matched a child's key only at its current index and
+                            // otherwise truncated, so moving a keyed sibling rebuilt it. The keyed
+                            // lookup added to `start_slot` is what makes this safe — and
+                            // `a_state_that_comes_back_reuses_its_own_slot` is the component-level
+                            // check that it still is.
                             set.entries[i].value = target_now.clone();
+                            if i + 1 != set.entries.len() {
+                                let moved = set.entries.remove(i);
+                                set.entries.push(moved);
+                            }
                         }
                         None => set.push(target_now.clone()),
                     }
@@ -733,6 +734,7 @@ mod tests {
         assert!(settled, "the cross-fade finishes and the engine goes idle");
         assert!(!crate::animation::is_animating(), "nothing is left animating");
     }
+
 
 
 }
