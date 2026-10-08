@@ -29,7 +29,9 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
-use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
+use crate::layout::node::{
+    measure_node, IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
+};
 use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape, TransformOrigin};
@@ -758,6 +760,43 @@ struct SegmentedButtonContentPolicy {
     direction: LayoutDirection,
 }
 
+impl SegmentedButtonContentPolicy {
+    /// `IconSlot + label + 2 * pad_h`: what `measure` reports across, with the label's intrinsic width
+    /// in place of its measured one.
+    fn content_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        query: IntrinsicQuery,
+        height: f32,
+    ) -> f32 {
+        let label_index = if self.has_icon { 1 } else { 0 };
+        let label_w = match children.get(label_index) {
+            Some(&label) => ctx.child_intrinsic(label, query, height),
+            None => 0.0,
+        };
+        SegmentedButtonDefaults::ICON_SLOT + label_w + 2.0 * self.pad_h
+    }
+
+    /// `tallest content + 2 * pad_v`: `measure` gives every child the same width
+    /// (`constraints.max_width - 2 * pad_h`) and keeps the tallest, so the intrinsic asks each child
+    /// its own extreme at that width.
+    fn content_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        query: IntrinsicQuery,
+        width: f32,
+    ) -> f32 {
+        let inner_w = (width - 2.0 * self.pad_h).max(0.0);
+        children
+            .iter()
+            .map(|&child| ctx.child_intrinsic(child, query, inner_w))
+            .fold(0.0, f32::max)
+            + 2.0 * self.pad_v
+    }
+}
+
 impl MeasurePolicy for SegmentedButtonContentPolicy {
     fn measure(
         &self,
@@ -826,6 +865,54 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
             Size::new(block_w + 2.0 * self.pad_h, content_h + 2.0 * self.pad_v),
             placements,
         )
+    }
+
+    // ── Intrinsic measurement: the item's own arithmetic, never `measure` ──
+    //
+    // `measure` registers a layout dependency on the animated slot offset and pushes that animation,
+    // so the trait's default — which answers an intrinsic by running `measure` with the queried axis
+    // unbounded (`node.rs:1003-1051`; Compose's own default, and Compose's contract that intrinsics
+    // are side-effect free, `ui/layout/MeasurePolicy.kt:133`) — would register a dependency and touch
+    // the animation on behalf of a probe. This is not a rare path: the strip is a row sized to
+    // `IntrinsicSize.Min`, so EVERY layout of a segmented button asks its items these questions.
+    //
+    // The numbers are the measure's own — `IconSlot + label + 2 * pad` across, the tallest content plus
+    // the vertical padding down — with the children's intrinsics in place of their measurements.
+
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        self.content_intrinsic_width(ctx, children, IntrinsicQuery::MinWidth, height)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        self.content_intrinsic_width(ctx, children, IntrinsicQuery::MaxWidth, height)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        self.content_intrinsic_height(ctx, children, IntrinsicQuery::MinHeight, width)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        self.content_intrinsic_height(ctx, children, IntrinsicQuery::MaxHeight, width)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {

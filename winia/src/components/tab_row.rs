@@ -32,7 +32,8 @@ use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::unit::{Offset, Size};
 use crate::layout::node::{
-    intrinsic_size_of, measure_node, IntrinsicQuery, LayoutNode, MeasurePolicy, Placement,
+    intrinsic_size_of, measure_node, IntrinsicCtx, IntrinsicQuery, LayoutNode, MeasurePolicy,
+    Placement,
 };
 use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
@@ -565,6 +566,108 @@ impl MeasurePolicy for TabRowLayoutPolicy {
             }
         }
     }
+
+    // ── Intrinsic measurement: folded from the tabs, never by running `measure` ──
+    //
+    // `measure` derives the indicator's target from `constraints.max_width`, starts a spring toward
+    // it, and consumes the row's first-measurement flag. The trait's defaults answer an intrinsic by
+    // running exactly that measure with the queried axis UNBOUNDED (`node.rs:1003-1051`; Compose's own
+    // default, which is why Compose's animating nodes extend
+    // `LayoutModifierNodeWithPassThroughIntrinsics`, `AnimationModifier.kt:259-280`). Measured before
+    // these overrides: an ancestor asking for width intrinsics handed the row `max_width = f32::MAX`,
+    // the indicator's target became `Infinity`, and the bar was placed at `NaN`.
+    //
+    // Both folds repeat the first pass of `measure` (`TabRow.kt:450-459`) with the indicator
+    // bookkeeping left out, so the numbers are the same ones the row itself uses.
+
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        tabs_intrinsic_width(ctx, children, IntrinsicQuery::MinWidth, height)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        tabs_intrinsic_width(ctx, children, IntrinsicQuery::MaxWidth, height)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        tabs_intrinsic_height(ctx, children, width)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        tabs_intrinsic_height(ctx, children, width)
+    }
+}
+
+/// TabRow children are `[tabs.., divider, indicator]`; the divider and the indicator are placed
+/// inside the row's height, so neither prices it.
+fn tab_count_of(children: &[usize]) -> usize {
+    children.len().saturating_sub(2)
+}
+
+/// A fixed `TabRow` gives every tab an equal slot (`tab_width = row_width / tab_count`), so the row's
+/// natural width is `tab_count` slots as wide as the widest tab's content wants to be.
+fn tabs_intrinsic_width(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    query: IntrinsicQuery,
+    height: f32,
+) -> f32 {
+    let tab_count = tab_count_of(children);
+    if tab_count == 0 {
+        return 0.0;
+    }
+    let widest = (0..tab_count)
+        .map(|i| ctx.child_intrinsic(children[i], query, height))
+        .fold(0.0, f32::max);
+    widest * tab_count as f32
+}
+
+/// The row is as tall as the TALLEST tab's max intrinsic height AT the width every tab gets — the
+/// measure's own first pass.
+fn tabs_intrinsic_height(ctx: &mut IntrinsicCtx<'_>, children: &[usize], width: f32) -> f32 {
+    let tab_count = tab_count_of(children);
+    if tab_count == 0 {
+        return 0.0;
+    }
+    let tab_width = if width >= f32::MAX {
+        f32::MAX
+    } else {
+        width / tab_count as f32
+    };
+    (0..tab_count)
+        .map(|i| ctx.child_intrinsic(children[i], IntrinsicQuery::MaxHeight, tab_width))
+        .fold(0.0, f32::max)
+}
+
+/// A scrollable strip asks every tab at `Constraints.Infinity` — width and height — so its height is
+/// the tallest tab's max intrinsic height there.
+fn strip_intrinsic_height(ctx: &mut IntrinsicCtx<'_>, children: &[usize]) -> f32 {
+    let tab_count = tab_count_of(children);
+    if tab_count == 0 {
+        return 0.0;
+    }
+    (0..tab_count)
+        .map(|i| ctx.child_intrinsic(children[i], IntrinsicQuery::MaxHeight, f32::MAX))
+        .fold(0.0, f32::max)
 }
 
 // ── Tab 组件 ──
@@ -1392,9 +1495,71 @@ impl MeasurePolicy for ScrollableTabRowLayoutPolicy {
             }
         }
     }
+
+    // ── Intrinsic measurement: the strip's own arithmetic, never `measure` ──
+    //
+    // Same reason as the fixed row above: `measure` starts the indicator spring from
+    // `constraints`-derived geometry and consumes the first-measurement flag, so the trait's default
+    // (which runs `measure` with the queried axis unbounded) turns an intrinsic query into state.
+    // The strip is a horizontal scroll of natural-width tabs, so both folds repeat the measure's own
+    // first pass (`TabRow.kt:582-603`): every tab asked at `Constraints.Infinity`, heights folded by
+    // max, widths summed with the minimum touch-target width this row forces (`min_tab_width`).
+
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        _height: f32,
+    ) -> f32 {
+        self.strip_intrinsic_width(ctx, children)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        _height: f32,
+    ) -> f32 {
+        self.strip_intrinsic_width(ctx, children)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        _width: f32,
+    ) -> f32 {
+        strip_intrinsic_height(ctx, children)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        _width: f32,
+    ) -> f32 {
+        strip_intrinsic_height(ctx, children)
+    }
 }
 
 impl ScrollableTabRowLayoutPolicy {
+    /// The strip's natural width: the tabs side by side at their natural widths, each forced up to
+    /// the row's minimum touch-target width, plus the row's edge padding — the `layout_width` its
+    /// measure computes.
+    fn strip_intrinsic_width(&self, ctx: &mut IntrinsicCtx<'_>, children: &[usize]) -> f32 {
+        let tab_count = tab_count_of(children);
+        if tab_count == 0 {
+            return 0.0;
+        }
+        let tabs: f32 = (0..tab_count)
+            .map(|i| {
+                ctx.child_intrinsic(children[i], IntrinsicQuery::MaxWidth, f32::MAX)
+                    .max(self.min_tab_width)
+            })
+            .sum();
+        2.0 * self.edge_padding + tabs
+    }
+
     /// ScrollableTabData：选中变化 → 居中滚动（对齐 Compose calculateTabOffset）。
     ///
     /// Extracted from `measure` because a caller-supplied indicator takes the same early-return path
@@ -1960,6 +2125,151 @@ mod tests {
         let ind = &nodes[children[3]]; // [tab0, tab1, divider, indicator]
         assert_eq!(ind.position.x, 0.0, "越界 selected 指示条 x=0");
         assert_eq!(ind.measured_size.width, 0.0, "越界 selected 指示条宽 0");
+    }
+
+    /// An intrinsic query above the row must not run the row's measure.
+    ///
+    /// `TabRowLayoutPolicy::measure` derives the indicator's target from `constraints.max_width` and
+    /// starts a spring toward it, and the first call consumes the row's `initialized` flag. The trait's
+    /// default answers an intrinsic by running exactly that measure, with the queried axis UNBOUNDED
+    /// (`node.rs:1003-1051` — Compose's own default does the same, which is why Compose's animating
+    /// nodes extend `LayoutModifierNodeWithPassThroughIntrinsics`, `AnimationModifier.kt:259-280`). An
+    /// ancestor asking its children's width intrinsics therefore used to hand the row
+    /// `max_width = f32::MAX`: the indicator's target became ~6e37 and the row was placed with it.
+    #[test]
+    fn an_intrinsic_query_above_a_tab_row_does_not_move_the_indicator() {
+        use std::time::Duration;
+        // Animation state is mutated by the row's own measure: hold the shared serial lock.
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut c = Composer::new();
+        let colors = crate::theme::ThemeColors::default_light();
+        c.compose(move |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                let key = ctx.next_key();
+                match ctx.start_restartable_group(
+                    key,
+                    Modifier::new().width(crate::layout::IntrinsicSize::Max),
+                    crate::layout::column::ColumnLayout::default(),
+                ) {
+                    GroupStatus::Enter => {
+                        TabRow::new(0, |ctx| {
+                            for i in 0..3 {
+                                let label = format!("Tab {i}");
+                                Tab::new(i == 0, || {})
+                                    .text(move |ctx| Text::new(&label).build(ctx))
+                                    .build(ctx);
+                            }
+                        })
+                        .build(ctx);
+                    }
+                    GroupStatus::Skip => {}
+                }
+                ctx.end_restartable_group();
+            });
+        });
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        // The row's FIRST measurement snaps the indicator onto the selected tab. A probe that ran that
+        // measurement for the row consumed the flag, so the first real layout instead started a spring
+        // from zero — the bar slid in from the row's left edge.
+        let first = indicator_x(&c);
+        assert!(
+            first > 0.0 && first < 60.0,
+            "the first layout snaps the indicator onto tab 0, x={first}"
+        );
+        for _ in 0..60 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(8));
+            c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        }
+        let x = indicator_x(&c);
+        assert!(
+            x >= 0.0 && x <= 360.0,
+            "an intrinsic query must leave the indicator where the row's own layout puts it, x={x}"
+        );
+    }
+
+    /// The scrollable row answers the same query. Its own arithmetic ignores the incoming constraints
+    /// (it lays the tabs out at their natural widths), so the default's `measure` happens to place the
+    /// bar in the same spot — what it does change is that the row now owns an animation it never asked
+    /// for: the probe's measurement consumes `initialized`, so the row's first real measure takes the
+    /// animating branch. An untouched first layout has nothing to animate.
+    #[test]
+    fn an_intrinsic_query_above_a_scrollable_tab_row_does_not_move_the_indicator() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let plain = scrollable_row_first_layout(false);
+        let probed = scrollable_row_first_layout(true);
+        assert_eq!(
+            probed.0, plain.0,
+            "an intrinsic query must not change the row's first layout (probed {}, plain {})",
+            probed.0, plain.0
+        );
+        assert!(plain.0 > 0.0, "the row places the indicator inside itself, x={}", plain.0);
+        assert!(!plain.1, "an untouched first layout registers no animation");
+        assert!(
+            !probed.1,
+            "an intrinsic query must not make the row animate on its first layout"
+        );
+    }
+
+    /// One layout of the same six-tab scrollable row, under a plain column or under one sized to
+    /// `IntrinsicSize::Max` (which asks its child the intrinsics before measuring it). Answers the
+    /// indicator's x and whether the layout registered an animation.
+    fn scrollable_row_first_layout(probe: bool) -> (f32, bool) {
+        let mut c = Composer::new();
+        let colors = crate::theme::ThemeColors::default_light();
+        c.compose(move |ctx| {
+            WiniaTheme::with_theme_and_direction(colors, LayoutDirection::Ltr, ctx, |ctx| {
+                let modifier = if probe {
+                    Modifier::new().width(crate::layout::IntrinsicSize::Max)
+                } else {
+                    Modifier::new()
+                };
+                let key = ctx.next_key();
+                match ctx.start_restartable_group(
+                    key,
+                    modifier,
+                    crate::layout::column::ColumnLayout::default(),
+                ) {
+                    GroupStatus::Enter => {
+                        ScrollableTabRow::new(0, |ctx| {
+                            for i in 0..6 {
+                                let label = format!("Tab {i}");
+                                Tab::new(i == 0, || {})
+                                    .text(move |ctx| Text::new(&label).build(ctx))
+                                    .build(ctx);
+                            }
+                        })
+                        .build(ctx);
+                    }
+                    GroupStatus::Skip => {}
+                }
+                ctx.end_restartable_group();
+            });
+        });
+        c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
+        (indicator_x(&c), crate::animation::update_animations())
+    }
+
+    /// The row's own indicator node, found by the divider + bar pair it places last.
+    fn indicator_x(c: &Composer) -> f32 {
+        let root = c.layout_root_idx().unwrap();
+        let nodes = c.arena_nodes();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            let kids = nodes[n].children.clone();
+            if let [.., divider, indicator] = kids[..] {
+                if nodes[divider].measured_size.height == 1.0
+                    && nodes[indicator].measured_size.height == ACTIVE_INDICATOR_HEIGHT
+                {
+                    return nodes[indicator].position.x;
+                }
+            }
+            stack.extend(kids);
+        }
+        panic!("no indicator in the tree");
     }
 
     #[test]
