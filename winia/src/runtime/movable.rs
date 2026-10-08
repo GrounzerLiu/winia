@@ -273,6 +273,59 @@ mod tests {
         );
     }
 
+    /// A `remember` INSIDE movable content, under an explicit `ctx.key(…)`, keeps its value when the
+    /// shape around it changes — the arrangement the navigation suite uses to make each item's payload
+    /// its own slot whatever order the shapes compose things in.
+    ///
+    /// The key matters because a `remember` slot is identified by (base, per-frame counter), and the
+    /// suite's two payloads per item are composed in a different order by the two shapes. This is the
+    /// smallest form of that: content that remembers under a key, invoked from a bar-like parent on one
+    /// frame and a rail-like one on the next.
+    #[test]
+    fn a_keyed_remember_inside_movable_content_survives_a_resize_of_its_host() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static INITS: AtomicUsize = AtomicUsize::new(0);
+
+        let mut composer = Composer::new();
+        let width = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(40));
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let handle = ctx.remember_movable_content({
+                    let width = width.clone();
+                    move |ctx| {
+                        ctx.key("item-icon", |ctx| {
+                            let marker: crate::runtime::state::State<usize> =
+                                ctx.remember(|| INITS.fetch_add(1, Ordering::SeqCst));
+                            let _ = marker.get();
+                            let w = width.load(Ordering::SeqCst) as f32;
+                            Column::new()
+                                .modifier(Modifier::new().size(w, 10.0))
+                                .build(ctx, |_ctx| {});
+                        });
+                    }
+                });
+                Column::new()
+                    .modifier(Modifier::new().size(100.0, 40.0))
+                    .build(ctx, |ctx| {
+                        handle.compose(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        frame(&mut composer);
+        assert_eq!(INITS.load(Ordering::SeqCst), 1, "the payload composes once");
+
+        width.store(24, Ordering::SeqCst);
+        frame(&mut composer);
+        frame(&mut composer);
+        assert_eq!(
+            INITS.load(Ordering::SeqCst),
+            1,
+            "and not again on later frames, whatever the shape around it does"
+        );
+    }
+
     /// The whole point, measured: content composed under one parent and then under ANOTHER keeps what
     /// it `remember`ed, and switching back and forth does not run its `remember` initializer again.
     ///
