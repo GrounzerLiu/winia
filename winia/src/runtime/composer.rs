@@ -1725,15 +1725,6 @@ impl SlotTable {
         self.movable_referenced.insert(id);
         let _ = status;
 
-        self.movable_saved_path = std::mem::take(&mut self.path);
-        self.movable_saved_counters = std::mem::take(&mut self.child_counters);
-        self.child_counters.push(0);
-        self.movable_composing = Some(id);
-        self.movable_store.entry(id).or_insert_with(|| {
-            let mut store = Slot::new(id);
-            store.movable_store = Some(id);
-            store
-        });
         // A content that MOVED (its reference sits at a different key) or that is coming back after a
         // frame in which neither branch referenced it has to compose for real: its nodes have a new
         // parent, so the measurement they took under the old one cannot stand. Marking the content's
@@ -1744,6 +1735,7 @@ impl SlotTable {
             None => true,
         };
         self.movable_last_ref.insert(id, key);
+
         // The reference slot is COMPLETE: it holds nothing of its own (the walk inlines the store in
         // its place), so close it before switching into the store. Leaving its path frame open put the
         // rest of the invoking component's composition INSIDE the ref slot — measured: the navigation
@@ -1751,6 +1743,7 @@ impl SlotTable {
         // under a slot the walk ignores (`navigation_bar.rs:659`, `navigation_rail.rs:1396`,
         // "index out of bounds: the len is 2 but the index is 2").
         self.end_slot();
+
         if needs_recompose {
             if let Some(store) = self.movable_store.get_mut(&id) {
                 for child in &mut store.children {
@@ -1758,15 +1751,18 @@ impl SlotTable {
                 }
             }
         }
-        self.movable_saved_path = std::mem::take(&mut self.path);
-        self.movable_saved_counters = std::mem::take(&mut self.child_counters);
-        self.child_counters.push(0);
-        self.movable_composing = Some(id);
         self.movable_store.entry(id).or_insert_with(|| {
             let mut store = Slot::new(id);
             store.movable_store = Some(id);
             store
         });
+        // Save the invoking site's position and hand composition over to the store. The order matters:
+        // the save must happen AFTER the ref slot is closed, or the saved path carries the ref's own
+        // frame and every later invocation lands one level too deep.
+        self.movable_saved_path = std::mem::take(&mut self.path);
+        self.movable_saved_counters = std::mem::take(&mut self.child_counters);
+        self.child_counters.push(0);
+        self.movable_composing = Some(id);
     }
 
     /// Stop composing movable content, back at the position that invoked it.

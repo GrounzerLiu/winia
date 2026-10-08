@@ -154,6 +154,65 @@ mod tests {
         );
     }
 
+    /// The navigation suite's arrangement, reduced: the handles are remembered in a LOOP before the
+    /// place that invokes them, and the invocation happens inside a component that is itself inside a
+    /// container. Sending an item payload through its handle collapsed the whole frame there — the
+    /// descriptor walk reported one node for the entire suite, `root kids=1 descs=1`, measured 0x0 —
+    /// after a version that created the same handles but passed the payloads through unchanged rendered
+    /// normally. This pins which half of that is the problem.
+    #[test]
+    fn handles_remembered_in_a_loop_survive_being_invoked_deeper_down() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            // Handles first, in a loop, exactly like the suite.
+            let mut handles = Vec::new();
+            for index in 0..(std::env::var("HANDLES").ok().and_then(|v| v.parse().ok()).unwrap_or(3)) {
+                let handle = ctx.remember_movable_content(move |ctx| {
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(10.0 + index as f32, 5.0));
+                    ctx.end_node();
+                });
+                handles.push(handle);
+            }
+            // …then a container that renders them, two levels down.
+            Column::new()
+                .modifier(Modifier::new().size(200.0, 60.0))
+                .build(ctx, |ctx| {
+                    for handle in handles {
+                        Column::new()
+                            .modifier(Modifier::new().size(100.0, 20.0))
+                            .build(ctx, move |ctx| {
+                                handle.compose(ctx);
+                            });
+                    }
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        assert!(
+            nodes[root].measured_size.width > 0.0 && nodes[root].measured_size.height > 0.0,
+            "the container must be measured: {:?}",
+            nodes[root].measured_size
+        );
+        // Every handle's payload must be somewhere in the tree.
+        let mut widths = Vec::new();
+        fn collect(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<f32>) {
+            out.push(nodes[idx].measured_size.width);
+            for &c in &nodes[idx].children {
+                collect(nodes, c, out);
+            }
+        }
+        collect(nodes, root, &mut widths);
+        for expected in [10.0f32, 11.0, 12.0] {
+            assert!(
+                widths.iter().any(|w| (*w - expected).abs() < 0.01),
+                "payload {expected} is missing from {widths:?}"
+            );
+        }
+    }
+
     /// Compose's movable group keeps everything under it, including the parts this frame did NOT
     /// compose — and that is what makes movable content survive a structure change INSIDE it, not just
     /// a move between parents.
