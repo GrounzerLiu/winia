@@ -29,14 +29,14 @@
 //!   "exactly the content's size". The two are independent — the default fadeOut (90 ms) is shorter
 //!   than the size spring, so an exit can finish while the size still moves.
 //!
-//! Known differences from Compose:
-//! - **No `contentAlignment`.** Compose's `Alignment` is 2-D (`TopStart` by default); winia's is a
-//!   single axis (Start/End/Center/Stretch), so both generations sit at the container's top-left —
-//!   the same as Compose's DEFAULT, just not adjustable.
+//! No differences from Compose are recorded here any more: the fade defaults (including the 90 ms
+//! delay), the two-generation behaviour, the composition keys, `contentAlignment` and the size
+//! transform are all in place. What remains winia's own is the engine underneath, not this API.
 
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{interpolator, push_animatable, AnimationSpec, SpringSpec, TweenSpec};
 use crate::layout::box_layout::BoxLayout;
+use crate::layout::node::ContentAlignment;
 use crate::layout::{MeasurePolicy, Placement};
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
@@ -83,6 +83,9 @@ pub struct AnimatedContent<T> {
     /// content — the new state is swapped in with no transition. Without one, values are compared
     /// with `PartialEq`. The caller maps its state to a `u64`.
     content_key: Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>,
+    /// Where each generation sits inside the container — Compose's `contentAlignment`, 2-D and
+    /// `TopStart` by default (`AnimatedContent.kt:137`).
+    content_alignment: ContentAlignment,
 }
 
 impl<T> AnimatedContent<T> {
@@ -100,6 +103,9 @@ impl<T> AnimatedContent<T> {
 /// at rest the container is exactly the content's size.
 #[derive(Debug)]
 struct ContentSizePolicy {
+    /// Compose's `contentAlignment` — applied to every generation, resolved against the animated
+    /// container size (`AnimatedContent.kt:692-694`).
+    content_alignment: ContentAlignment,
     prev_size: State<Option<(f32, f32)>>,
     /// The incoming generation's content size, to be locked into `prev_size` at switch time (the
     /// sizeTransform's starting point). A Backchannel: it is read once, at the switch, so notifying
@@ -144,12 +150,19 @@ impl MeasurePolicy for ContentSizePolicy {
         };
         // Both generations' layers resolve a slide against the container size (Compose's rule).
         self.container_size.set(Some((w, h)));
+        // Each generation is aligned inside the container the frame ends up with, the way Compose
+        // resolves `contentAlignment.align(placeable, measuredSize)` (`AnimatedContent.kt:692-694`).
+        let space = Size::new(w, h);
         let placements = children
             .iter()
             .zip(measured.iter())
-            .map(|(_, s)| Placement {
-                size: Size::new(s.width, s.height),
-                position: Offset::new(0.0, 0.0),
+            .map(|(_, s)| {
+                let child = Size::new(s.width, s.height);
+                let (x, y) = self.content_alignment.anchor(child, space);
+                Placement {
+                    size: self.content_alignment.child_size(child, space),
+                    position: Offset::new(x, y),
+                }
             })
             .collect();
         (
@@ -195,7 +208,16 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
             clip: true,
             modifier: Modifier::new(),
             content_key: None,
+            content_alignment: ContentAlignment::TOP_START,
         }
+    }
+
+    /// Where each generation sits inside the container. Compose's default is `TopStart`, which is
+    /// what this used to hard-code; the two generations overlap while the transition runs, so a
+    /// `Center` is what puts a small page in the middle of a larger one.
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = a;
+        self
     }
 
     /// The enter transition — it acts on the incoming generation.
@@ -288,6 +310,7 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
         };
         let modifier = self.modifier.clone().then(container_layer);
         let policy = ContentSizePolicy {
+            content_alignment: self.content_alignment,
             prev_size: prev_size.clone(),
             last_size: last_size.clone(),
             container_size: container_size.clone(),
@@ -648,6 +671,27 @@ mod tests {
         assert_eq!(container_width_of(&composer), 50.0, "the container width is back to 50");
     }
 
+    /// Every leaf's placement, as (x, width) — the alignment test needs WHERE a generation sits, not
+    /// just how wide it is.
+    fn leaf_placements(composer: &Composer) -> Vec<(f32, f32)> {
+        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+        let nodes = composer.arena_nodes();
+        fn walk(nodes: &[LayoutNode], idx: usize, x: f32, out: &mut Vec<(f32, f32)>) {
+            let here = x + nodes[idx].position.x;
+            if nodes[idx].children.is_empty() {
+                out.push((here, nodes[idx].measured_size.width));
+                return;
+            }
+            for &c in &nodes[idx].children {
+                walk(nodes, c, here, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(nodes, root, 0.0, &mut out);
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        out
+    }
+
     /// The container's own measured width: it is the interpolated value while two generations are
     /// up.
     fn container_width_of(composer: &Composer) -> f32 {
@@ -814,6 +858,54 @@ mod tests {
         assert_eq!(leaf_widths(&composer), vec![80.0, 150.0], "a new key animates");
     }
 
+
+    /// `contentAlignment` puts each generation where Compose puts it: the child is aligned inside the
+    /// container, not at its origin (`AnimatedContent.kt:692-694`).
+    ///
+    /// The case that shows it is a small page in a container that is still the large page's size —
+    /// which is what the size transform spends its time doing. The size spec is slow ON PURPOSE: with
+    /// `Snap` the container is already the new size on the frame of the switch, so the child and the
+    /// box agree and a broken alignment looks correct (measured — that version of this test passed
+    /// with the alignment removed).
+    #[test]
+    fn animated_content_aligns_each_generation_inside_the_container() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                AnimatedContent::new(t.clone())
+                    .content_alignment(ContentAlignment::CENTER)
+                    .size_animation(AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(5000),
+                        crate::animation::interpolator::Linear::new(),
+                    )))
+                    .build(ctx, |ctx, page| {
+                        let w = if page == 0 { 200.0 } else { 60.0 };
+                        SizedLeaf { w }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        // The switch: the small page arrives while the container is still the large one's size.
+        target.set(1);
+        recompose(&mut composer);
+        let box_w = container_width_of(&composer);
+        let leaves = leaf_placements(&composer);
+        let small = leaves
+            .iter()
+            .find(|(_, w)| (*w - 60.0).abs() < 0.01)
+            .map(|(x, w)| (*x, *w))
+            .expect("the small generation is on screen");
+        assert!(
+            (small.0 - (box_w - small.1) / 2.0).abs() < 0.51,
+            "the child is centred in the container, not at its origin (x={}, box_w={box_w})",
+            small.0
+        );
+    }
 
     /// A switch made while a transition is STILL RUNNING keeps the state it interrupted, so three
     /// states are on screen at once.

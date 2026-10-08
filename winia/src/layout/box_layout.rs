@@ -13,20 +13,36 @@ use super::node::measure_node;
 /// Box 的尺寸取所有子节点中的最大值。
 #[derive(Debug, Clone)]
 pub struct BoxLayout {
-    /// 子节点在 Box 中的对齐方式
+    /// 子节点在 Box 中的对齐方式（单轴值同时作用于两个轴——见 [`ContentAlignment`]）
     pub alignment: Alignment,
+    /// 两个轴各自的对齐（Compose 的二维 `contentAlignment`）。设了就用它，
+    /// 否则退回上面的 `alignment`。
+    pub content_alignment: Option<ContentAlignment>,
 }
 
 impl BoxLayout {
     pub fn new() -> Self {
         BoxLayout {
             alignment: Alignment::Start,
+            content_alignment: None,
         }
     }
 
+    /// The same value on both axes — `Start` is Compose's `TopStart`, `End` is `BottomEnd`.
     pub fn alignment(mut self, a: Alignment) -> Self {
         self.alignment = a;
         self
+    }
+
+    /// Each axis on its own, Compose's 2-D `contentAlignment` (`TopEnd`, `BottomCenter`, …).
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = Some(a);
+        self
+    }
+
+    /// The alignment in force, whichever of the two was set.
+    pub fn effective_alignment(&self) -> ContentAlignment {
+        self.content_alignment.unwrap_or_else(|| ContentAlignment::both(self.alignment))
     }
 }
 
@@ -60,33 +76,15 @@ impl MeasurePolicy for BoxLayout {
         let height = constraints.constrain_height(max_height);
 
         // 为每个子节点计算在 Box 中的位置（根据 alignment）
+        let align = self.effective_alignment();
+        let space = Size::new(width, height);
         let placements: Vec<Placement> = child_sizes
             .iter()
             .map(|child_size| {
-                let x = match self.alignment {
-                    Alignment::Start => 0.0,
-                    Alignment::End => width - child_size.width,
-                    Alignment::Center => (width - child_size.width) / 2.0,
-                    Alignment::Stretch => 0.0,
-                };
-                let y = match self.alignment {
-                    Alignment::Start => 0.0,
-                    Alignment::End => height - child_size.height,
-                    Alignment::Center => (height - child_size.height) / 2.0,
-                    Alignment::Stretch => 0.0,
-                };
-                let w = if self.alignment == Alignment::Stretch {
-                    width
-                } else {
-                    child_size.width
-                };
-                let h = if self.alignment == Alignment::Stretch {
-                    height
-                } else {
-                    child_size.height
-                };
+                let (x, y) = align.anchor(*child_size, space);
+                let size = align.child_size(*child_size, space);
                 Placement {
-                    size: Size::new(w, h),
+                    size,
                     position: Offset::new(x, y),
                 }
             })
@@ -160,5 +158,32 @@ mod tests {
         assert_eq!(placements[0].position, Offset::new(25.0, 25.0));
         // 第二个 (100,80) 居中: x=(100-100)/2=0, y=0
         assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
+    }
+
+    /// The mixed corners the one-axis [`Alignment`] cannot express: each axis on its own, Compose's
+    /// `Box(contentAlignment = Alignment.TopEnd)` and `BottomStart`.
+    #[test]
+    fn a_two_axis_alignment_puts_a_child_in_the_mixed_corners() {
+        for (alignment, expected) in [
+            // (100, 80) box, (50, 30) child: right edge, top.
+            (ContentAlignment::TOP_END, Offset::new(50.0, 0.0)),
+            // left edge, bottom.
+            (ContentAlignment::BOTTOM_START, Offset::new(0.0, 50.0)),
+            (ContentAlignment::TOP_CENTER, Offset::new(25.0, 0.0)),
+        ] {
+            let box_layout = BoxLayout::new().content_alignment(alignment);
+            let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
+            let children: Vec<usize> = (0..nodes.len()).collect();
+            let (_, placements) = box_layout.measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::UNBOUNDED,
+            );
+            assert_eq!(
+                placements[0].position, expected,
+                "{alignment:?} should place the 50x30 child at {expected:?}"
+            );
+        }
     }
 }

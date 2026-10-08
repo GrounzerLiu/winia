@@ -33,11 +33,10 @@
 //!   modifier chain; winia's `Modifier` is pure data with no composition context, so the animation
 //!   `State` could not live there (see the mechanism note above). The observable difference is that
 //!   this animates the container it builds, not an arbitrary modifier position.
-//! - **`Alignment` is one value for both axes.** Compose's parameter is 2-D, so it can ask for
-//!   `TopEnd`, `BottomCenter` and the rest of the mixed corners; winia's `Alignment`
-//!   (`layout/node.rs:57`) maps Start == `TopStart`, Center == `Center`, End == `BottomEnd`, and
-//!   `Stretch` — winia's own extra — gives the child the box's size, which Compose's alignment never
-//!   does (stretching there is `fillMaxSize()`).
+//! - **`Stretch` is winia's own extra.** On either axis of [`ContentAlignment`] it gives the child
+//!   the box's size; Compose's alignment only ever offsets, and stretches with `fillMaxSize()`. The
+//!   one-axis `alignment(Alignment)` builder is the same value on both axes — `Start` is `TopStart`,
+//!   `End` is `BottomEnd`.
 //! - **No lookahead.** Compose measures with lookahead constraints when a lookahead scope is present
 //!   (`:196-206`); winia has no lookahead scope.
 //! - **The listener runs inside the layout pass**, where Compose's runs in a coroutine. A State it
@@ -48,10 +47,9 @@ use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, Alignment, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::{Offset};
+use crate::layout::node::{measure_node, Alignment, ContentAlignment, LayoutNode, MeasurePolicy, Placement};
 use crate::modifier::Modifier;
-use crate::unit::Size;
+use crate::unit::{Offset, Size};
 
 /// Defaults matching Compose's `Modifier.animateContentSize` overloads.
 pub struct AnimatedSizeDefaults;
@@ -87,9 +85,8 @@ impl Default for AnimatedSize {
 pub struct AnimatedSize {
     spec: AnimationSpec,
     modifier: Modifier,
-    /// Where a child sits inside the animated box. `Alignment::Start` is Compose's default
-    /// (`Alignment.TopStart`).
-    alignment: Alignment,
+    /// Where a child sits inside the animated box, on both axes. `TopStart` is Compose's default.
+    alignment: ContentAlignment,
     /// Compose's `finishedListener`: called with `(size the animation started from, target)` when it
     /// ends `Finished`.
     finished_listener: Option<std::sync::Arc<dyn Fn(Size, Size) + Send + Sync>>,
@@ -101,18 +98,22 @@ impl AnimatedSize {
         Self {
             spec: spec.into(),
             modifier: Modifier::new(),
-            alignment: Alignment::Start,
+            alignment: ContentAlignment::TOP_START,
             finished_listener: None,
         }
     }
 
     /// Where the content sits inside the animated box, for the frames where the two differ — the box
     /// lags the content on every grow and leads it on every shrink. Compose's parameter is 2-D
-    /// (`Alignment.topStart()` by default, `AnimationModifier.kt:109`); winia's [`Alignment`] applies
-    /// to both axes (`layout/box_layout.rs:66-85`), so `Start` is `TopStart`, `Center` is `Center` and
-    /// `End` is `BottomEnd`, while the mixed corners Compose allows are not expressible.
-    pub fn alignment(mut self, a: Alignment) -> Self {
+    /// (`Alignment.TopStart` by default, `AnimationModifier.kt:109`).
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
         self.alignment = a;
+        self
+    }
+
+    /// The same [`Alignment`] on both axes — `Start` is `TopStart`, `End` is `BottomEnd`.
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = ContentAlignment::both(a);
         self
     }
 
@@ -183,8 +184,8 @@ struct SizePolicy {
     /// 上次目标尺寸（None = 首帧——直接跳转无动画）——Backchannel 而非
     /// RefCell：policy 实例每次 build 重建，跨重组保留且不触发通知
     target: crate::runtime::state::Backchannel<Option<Size>>,
-    /// Where a child sits inside the animated box (Compose's `alignment`).
-    alignment: Alignment,
+    /// Where a child sits inside the animated box (Compose's `alignment`, both axes).
+    alignment: ContentAlignment,
     /// The size the running animation started from, and the target it is heading for — what the
     /// listener is called with, and the guard that keeps it from firing twice for one target.
     animation_start: crate::runtime::state::Backchannel<Option<Size>>,
@@ -260,29 +261,14 @@ impl MeasurePolicy for SizePolicy {
         // The box the frame ends up with, then each child inside it.
         let box_w = constraints.constrain_width(cur.width);
         let box_h = constraints.constrain_height(cur.height);
+        let space = Size::new(box_w, box_h);
         for size in &child_sizes {
-            let x = match self.alignment {
-                Alignment::Start => 0.0,
-                Alignment::End => box_w - size.width,
-                Alignment::Center => (box_w - size.width) / 2.0,
-                Alignment::Stretch => 0.0,
-            };
-            let y = match self.alignment {
-                Alignment::Start => 0.0,
-                Alignment::End => box_h - size.height,
-                Alignment::Center => (box_h - size.height) / 2.0,
-                Alignment::Stretch => 0.0,
-            };
             // Compose's alignment never resizes the child — growing it is `fillMaxSize()`'s job. A
-            // stretching container is winia's own extra, so there it takes the box's size, the way
+            // stretching axis is winia's own extra, so there the child takes the box's size, the way
             // `BoxLayout` does.
-            let (w, h) = if self.alignment == Alignment::Stretch {
-                (box_w, box_h)
-            } else {
-                (size.width, size.height)
-            };
+            let (x, y) = self.alignment.anchor(*size, space);
             placements.push(Placement {
-                size: Size::new(w, h),
+                size: self.alignment.child_size(*size, space),
                 position: Offset::new(x, y),
             });
         }

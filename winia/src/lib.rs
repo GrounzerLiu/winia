@@ -210,7 +210,7 @@ pub mod prelude {
     pub use crate::layout::{Column, FlowColumn, FlowRow, Row, Spacer, Stack};
     pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
-    pub use crate::layout::{Arrangement, Alignment, Constraints, LayoutDirection};
+    pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch, with_frame_nanos};
     pub use crate::animation::{

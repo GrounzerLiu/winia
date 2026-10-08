@@ -3,7 +3,7 @@
 //! 这些是用户面组件，内部使用 layout 模块的 MeasurePolicy
 
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::{Arrangement, Alignment, ColumnLayout, RowLayout, BoxLayout, FlowRowLayout, FlowColumnLayout, MeasurePolicy};
+use crate::layout::{Arrangement, Alignment, ContentAlignment, ColumnLayout, RowLayout, BoxLayout, FlowRowLayout, FlowColumnLayout, MeasurePolicy};
 use crate::modifier::Modifier;
 
 /// 容器 build 样板合并（P2-4）：Column/Row/Stack 共用——
@@ -130,6 +130,7 @@ impl Default for Row {
 pub struct Stack {
     modifier: Modifier,
     alignment: Alignment,
+    content_alignment: Option<ContentAlignment>,
 }
 
 impl Stack {
@@ -137,17 +138,29 @@ impl Stack {
         Stack {
             modifier: Modifier::new(),
             alignment: Alignment::Start,
+            content_alignment: None,
         }
     }
 
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
 
+    /// Each axis on its own — Compose's 2-D `Box(contentAlignment = …)`.
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = Some(a);
+        self
+    }
+
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         // 参数暂存（参数相等跳过——同 Column）
         ctx.changed(&self.alignment);
+        ctx.changed(&self.content_alignment);
         // content 闭包自动成为组合 scope（与 Column 一致）
-        build_container(ctx, self.modifier, BoxLayout::new().alignment(self.alignment), content);
+        let policy = match self.content_alignment {
+            Some(a) => BoxLayout::new().content_alignment(a),
+            None => BoxLayout::new().alignment(self.alignment),
+        };
+        build_container(ctx, self.modifier, policy, content);
     }
 }
 

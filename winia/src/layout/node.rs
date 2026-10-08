@@ -52,13 +52,84 @@ pub enum Arrangement {
 
 // ── Alignment ──
 
-/// 交叉轴对齐方式（类似 Compose 的 Alignment）
+/// 交叉轴对齐方式（类似 Compose 的 `Alignment.Horizontal` / `Alignment.Vertical`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
     Start,
     End,
     Center,
     Stretch,
+}
+
+// ── ContentAlignment ──
+
+/// Where a child sits inside a box, on BOTH axes — Compose's 2-D `Alignment`, the parameter of
+/// `Box(contentAlignment = …)`, `AnimatedContent(contentAlignment = …)` and
+/// `Modifier.animateContentSize(alignment = …)`.
+///
+/// The one-axis [`Alignment`] stays what it is: Column and Row align a child on their CROSS axis, and
+/// that is Compose's `Alignment.Horizontal` / `Alignment.Vertical`. A box needs both, and winia had
+/// only the diagonal values (`alignment(Alignment)` puts the same value on each axis, so `Start` means
+/// `TopStart` and `End` means `BottomEnd`) — the mixed corners Compose allows were not expressible.
+/// `Stretch` is winia's own extra on either axis, and stretches that axis to the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentAlignment {
+    pub horizontal: Alignment,
+    pub vertical: Alignment,
+}
+
+impl ContentAlignment {
+    pub const TOP_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Start };
+    pub const TOP_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Start };
+    pub const TOP_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Start };
+    pub const CENTER_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Center };
+    pub const CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Center };
+    pub const CENTER_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Center };
+    pub const BOTTOM_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::End };
+    pub const BOTTOM_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::End };
+    pub const BOTTOM_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::End };
+    /// Both axes stretched to the box — winia's addition, since Compose stretches with
+    /// `fillMaxSize()` instead.
+    pub const STRETCH: Self = Self { horizontal: Alignment::Stretch, vertical: Alignment::Stretch };
+
+    pub fn new(horizontal: Alignment, vertical: Alignment) -> Self {
+        Self { horizontal, vertical }
+    }
+
+    /// The same value on both axes, which is what the one-axis builder means.
+    pub fn both(a: Alignment) -> Self {
+        Self { horizontal: a, vertical: a }
+    }
+
+    /// Compose's `Alignment.align(size, space)`: the offset for a child of `child` inside a box of
+    /// `space`.
+    pub fn anchor(&self, child: Size, space: Size) -> (f32, f32) {
+        let axis = |a: Alignment, child: f32, space: f32| match a {
+            Alignment::Start => 0.0,
+            Alignment::End => space - child,
+            Alignment::Center => (space - child) / 2.0,
+            Alignment::Stretch => 0.0,
+        };
+        (
+            axis(self.horizontal, child.width, space.width),
+            axis(self.vertical, child.height, space.height),
+        )
+    }
+
+    /// The size the child gets: its own, except on an axis that stretches to the box.
+    pub fn child_size(&self, child: Size, space: Size) -> Size {
+        Size::new(
+            if self.horizontal == Alignment::Stretch { space.width } else { child.width },
+            if self.vertical == Alignment::Stretch { space.height } else { child.height },
+        )
+    }
+}
+
+/// The `Start`-on-both-axes alignment, Compose's default everywhere a 2-D one is taken.
+impl Default for ContentAlignment {
+    fn default() -> Self {
+        Self::TOP_START
+    }
 }
 
 /// 检查 modifier 中是否包含 TextContent
