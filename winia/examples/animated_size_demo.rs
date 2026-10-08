@@ -1,7 +1,7 @@
 //! AnimatedSize demo — a container that animates its own size when its content changes
 //! (Compose's `Modifier.animateContentSize`).
 //!
-//! Four things the sections show, in the order the component's behaviour matters:
+//! Five things the sections show, in the order the component's behaviour matters:
 //!
 //! 1. **Grow and shrink** — the content takes its new size at once and the box travels to it, so the
 //!    two are different sizes for the length of the animation. That is what the clip is for.
@@ -9,13 +9,17 @@
 //!    makes that visible if it ever regresses.
 //! 3. **`alignment`** — a child that shrinks sits inside the box that has not caught up yet: `Start`
 //!    pins it to the top-left, `Center` centres it, `End` puts it at the bottom-right.
-//! 4. **`finished_listener`** — what Compose calls when the animation ends, with the size it started
+//! 4. **A card and its content animating together** — the content gets its own `AnimatedSize` on a
+//!    softer spring, so it travels to its new size on its own curve instead of snapping on the first
+//!    frame the way section 1's content does, and the card measures it and follows it out.
+//! 5. **`finished_listener`** — what Compose calls when the animation ends, with the size it started
 //!    from and the one it reached; the count and the last pair are shown under the boxes.
 //!
 //! Run with `cargo run -p winia --example animated_size_demo`.
 
 use letclone::clone;
 use winia::prelude::*;
+use winia::animation::{AnimationSpec, SpringSpec};
 use winia::components::animated_size::AnimatedSize;
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
@@ -111,7 +115,72 @@ fn animated_size_demo(ctx: &mut ComposeCtx) {
                     block(ctx, w, h, Color::from_argb(255, 219, 68, 55), "aligned child");
                 });
 
-            // ── 4. What the listener saw. It is called when an animation above finishes, so the
+            // ── 4. A card whose content animates with it. The card has one AnimatedSize and the
+            // gradient block has a second one on a SOFTER spring, so the block travels to its own
+            // new size instead of snapping on the first frame the way section 1's content does —
+            // and because the card measures that block every frame, the card follows it out.
+            // Both are centred, so the content keeps the card's centre as the card grows.
+            let theme = WiniaTheme::colors();
+            Row::new()
+                .modifier(Modifier::new().fill_max_width())
+                .arrangement(Arrangement::Center)
+                .build(ctx, |ctx| {
+                    AnimatedSize::default()
+                        .content_alignment(ContentAlignment::CENTER)
+                        .modifier(
+                            Modifier::new()
+                                .shadow_default(3.0)
+                                .clip(Shape::rounded(18.0))
+                                .background(theme.surface_container_high, Shape::rounded(18.0))
+                                .border(1.0, theme.outline_variant, Shape::rounded(18.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            // The padding belongs to the content, so the card's animated size is
+                            // padding + content and its background covers the whole card.
+                            Column::new()
+                                .modifier(Modifier::new().padding(12.0))
+                                .build(ctx, |ctx| {
+                                    AnimatedSize::new(AnimationSpec::Spring(SpringSpec {
+                                        damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+                                        stiffness: SpringSpec::STIFFNESS_LOW,
+                                        mass: 1.0,
+                                        threshold: 1.0,
+                                    }))
+                                    .content_alignment(ContentAlignment::CENTER)
+                                    .modifier(Modifier::new().background_brush(
+                                        Brush::linear_gradient([theme.primary, theme.tertiary])
+                                            .diagonal(),
+                                        Shape::rounded(14.0),
+                                    ))
+                                    .build(ctx, |ctx| {
+                                        let (w, h) = if grown.get() {
+                                            (320.0, 112.0)
+                                        } else {
+                                            (160.0, 52.0)
+                                        };
+                                        Column::new()
+                                            .modifier(Modifier::new().size(w, h))
+                                            .alignment(Alignment::Center)
+                                            .arrangement(Arrangement::Center)
+                                            .build(ctx, |ctx| {
+                                                Text::new("nested content")
+                                                    .font_size(11.0)
+                                                    .color(theme.on_primary)
+                                                    .build(ctx);
+                                            });
+                                    });
+                                });
+                        });
+                });
+            Text::new(
+                "Two springs: the card's own, and a softer one inside it, so the gradient block \
+                 travels to its new size on its own curve. Both are centred, so the content keeps \
+                 the card's centre while the card grows around it.",
+            )
+            .font_size(11.0)
+            .build(ctx);
+
+            // ── 5. What the listener saw. It is called when an animation above finishes, so the
             // count follows the clicks and the pair is the size it started from and the one it
             // reached.
             Column::new()
@@ -139,7 +208,7 @@ fn main() {
     winia::run_app!(|ctx| {
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                .size(560.0, 520.0)
+                .size(600.0, 700.0)
                 .title("AnimatedSize Demo")
                 .build(ctx, |ctx| {
                     settings::shell("AnimatedSize Demo", ctx, |ctx| animated_size_demo(ctx));
