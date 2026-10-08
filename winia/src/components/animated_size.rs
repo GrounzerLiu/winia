@@ -28,6 +28,12 @@
 //! ends, and not for the first measurement, which snaps), and the default spec
 //! ([`AnimatedSizeDefaults::size_spec`]).
 //!
+//! The default spec's MOTION matches too: `IntSize.VectorConverter` runs one spring per axis and the
+//! animation ends when every axis is at rest (`AnimationModifier.kt:70-74`), and winia's engine now
+//! runs a `Spring` on a `Size` as two component springs with the same 1 px threshold
+//! (`animation.rs`: `AnimatableValue::write_components` / `SpringLane`), so neither axis is left
+//! inside its threshold and neither drifts in the other's wake.
+//!
 //! Known differences from Compose, recorded rather than silent:
 //! - **A container component, not a `Modifier`.** Compose's node is measured inside the parent's
 //!   modifier chain; winia's `Modifier` is pure data with no composition context, so the animation
@@ -39,6 +45,12 @@
 //!   `End` is `BottomEnd`.
 //! - **No lookahead.** Compose measures with lookahead constraints when a lookahead scope is present
 //!   (`:196-206`); winia has no lookahead scope.
+//! - **No `wasInterrupted` restart.** Compose re-targets when the target is unchanged but the
+//!   running animation was cancelled (`:236-240`); nothing here cancels an animation behind the
+//!   component's back, so the retarget gate is the target comparison alone.
+//! - **One visibility threshold for every axis.** `SpringSpec::threshold` is a scalar, where
+//!   Compose's spring takes a per-axis threshold vector; the default (1 px per axis) is uniform, so
+//!   only a caller asking for different thresholds per axis would notice.
 //! - **The listener runs inside the layout pass**, where Compose's runs in a coroutine. A State it
 //!   writes still notifies (verified: the demo's counter updates from a click), but work that must
 //!   not run during measure has no other hook here.
@@ -253,16 +265,19 @@ impl MeasurePolicy for SizePolicy {
         if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
             eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
         }
-        // Fired once per target, when the animated value has arrived — Compose's coroutine does the
-        // same by awaiting `animateTo` and checking that it ended `Finished` rather than cancelled.
-        // Fired once per target, when this state's animation has left the registry — "the animation
-        // finished", which is what Compose's coroutine awaits. Comparing `cur` with `goal` is NOT
-        // equivalent: the default spec here is a spring, which approaches its target asymptotically
-        // and never equals it (measured on the demo: with the equality test the listener never ran,
-        // because the value ended 319.2 against a target of 320).
+        // Fired once per target, when the animated value HAS ARRIVED and the animation has left the
+        // registry — Compose's coroutine awaits `animateTo` and calls the listener only when it ends
+        // `Finished` (`AnimationModifier.kt:242-245`).
+        //
+        // Both halves are load-bearing. Arrival alone is not enough: a bouncy spec crosses its target
+        // mid-flight, and a cancelled animation can be sitting exactly on it. The registry alone is
+        // not enough either — but here it is the second half, so an animation that never ran (value
+        // already at the target) still reports, and an interrupted one (retargeted before arrival)
+        // reports nothing, the way `Finished`-only does upstream.
         if let (Some(listener), Some(start)) = (&self.finished_listener, self.animation_start.peek()) {
-            let settled = cur == goal || !crate::animation::is_animating_state(self.size.state_id());
-            if settled && self.notified.peek() != Some(goal) {
+            let arrived =
+                cur == goal && !crate::animation::is_animating_state(self.size.state_id());
+            if arrived && self.notified.peek() != Some(goal) {
                 self.notified.set(Some(goal));
                 listener(start, goal);
             }
@@ -640,10 +655,11 @@ mod tests {
     /// The listener runs under a spring too, and what it writes is visible — a State write from
     /// inside the layout pass (which is where the listener is called).
     ///
-    /// The equality test this replaced looked right and was not: the default spec is a spring, which
-    /// approaches its target asymptotically. It happened to land exactly here, but the demo — several
-    /// sections, a real event loop — showed the listener never running at all until the completion
-    /// test asked the animation registry instead of comparing values.
+    /// This is the test that caught the engine's substitution: it used to compare the value with
+    /// `goal` alone and the demo showed it never running, because a spring on a `Size` was silently
+    /// driven by a tween that stopped inside the threshold while the registry still held the
+    /// animation. The default spec now lands on the exact target (`SpringLane`), and the check is
+    /// arrival AND "no longer animating", which is Compose's `Finished`.
     #[test]
     fn animated_size_reports_through_the_default_spring_too() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -686,5 +702,80 @@ mod tests {
             1,
             "the listener ran once, and its State write is visible"
         );
+    }
+
+    /// Compose's default spec is a spring on the SIZE VECTOR — `spring(stiffness =
+    /// StiffnessMediumLow, visibilityThreshold = IntSize.VisibilityThreshold)` is a
+    /// `FiniteAnimationSpec<IntSize>`, and `IntSize.VectorConverter` runs one spring per axis, each
+    /// finishing when it is within a pixel (`AnimationModifier.kt:70-74`).
+    ///
+    /// This test was written as a falsification for the engine defect it now guards: winia used to
+    /// carry a single scalar displacement per animation and `AnimatableValue::from_f32` is not
+    /// injective for a `Size` (`Size::new(v, v)`), so a spring on a `Size` was silently substituted
+    /// with a plain tween, and the container's motion was that tween while the spec said spring
+    /// (measured: largest gap 47.95). The container's motion is compared against BOTH references
+    /// driven from the same tick loop: it must track the scalar spring, and it must not be that tween.
+    #[test]
+    fn the_default_spec_moves_the_size_the_way_a_spring_does() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                AnimatedSize::default().build(ctx, |ctx| {
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        // First measurement: the box snaps to the content, no animation to observe.
+        recompose(&mut composer);
+        assert_eq!(container_width(&composer), 50.0, "the first frame snaps");
+
+        let w = holder.borrow().as_ref().unwrap().clone();
+        w.set(200.0);
+        recompose(&mut composer);
+
+        // Two references on the same 50 -> 200 move, ticked by the same loop as the container: one
+        // through the spec the container claims to use, one through what the engine substitutes.
+        let spring_ref: State<f32> = State::new(50.0);
+        let tween_ref: State<f32> = State::new(50.0);
+        push_animatable(spring_ref.clone(), 200.0, AnimatedSizeDefaults::size_spec());
+        push_animatable(
+            tween_ref.clone(),
+            200.0,
+            AnimationSpec::Tween(crate::animation::TweenSpec::default()),
+        );
+
+        let mut max_spring_gap = 0.0f32;
+        let mut max_tween_gap = 0.0f32;
+        let mut frames = 0;
+        for _ in 0..2_000 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            recompose(&mut composer);
+            let box_w = container_width(&composer);
+            max_spring_gap = max_spring_gap.max((box_w - spring_ref.peek()).abs());
+            max_tween_gap = max_tween_gap.max((box_w - tween_ref.peek()).abs());
+            frames += 1;
+        }
+        recompose(&mut composer);
+
+        assert!(frames > 5, "the loop sampled the motion (frames={frames})");
+        assert!(
+            max_spring_gap < 1.0,
+            "the box follows the scalar spring the default spec names (largest gap={max_spring_gap})"
+        );
+        assert!(
+            max_tween_gap > 10.0,
+            "…and is not the tween the engine substitutes for a spring on a Size \
+             (largest gap={max_tween_gap})"
+        );
+        assert_eq!(container_width(&composer), 200.0, "the move ends exactly on the target");
     }
 }
