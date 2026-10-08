@@ -341,6 +341,25 @@ impl AlignmentLine {
     pub fn merge(&self, a: f32, b: f32) -> f32 {
         self.merger.merge(a, b)
     }
+
+    /// material3's `MinimumInteractiveLeftAlignmentLine`: how far the VISUAL content starts from the
+    /// left of a box that `Modifier::minimum_interactive_size` enlarged to the touch-target minimum.
+    ///
+    /// A parent aligns a small component by this when its icon or label has to line up with its
+    /// neighbours, rather than with the invisible padding the larger touch target adds
+    /// (`material3/InteractiveComponentSize.kt:167`). Built once: a line is identified by value, so
+    /// every call to [`AlignmentLine::vertical`] would otherwise make a different one.
+    pub fn minimum_interactive_left() -> AlignmentLine {
+        static LINE: std::sync::OnceLock<AlignmentLine> = std::sync::OnceLock::new();
+        *LINE.get_or_init(|| AlignmentLine::vertical(LineMerger::Min))
+    }
+
+    /// material3's `MinimumInteractiveTopAlignmentLine` — the vertical twin of
+    /// [`AlignmentLine::minimum_interactive_left`] (`material3/InteractiveComponentSize.kt:166`).
+    pub fn minimum_interactive_top() -> AlignmentLine {
+        static LINE: std::sync::OnceLock<AlignmentLine> = std::sync::OnceLock::new();
+        *LINE.get_or_init(|| AlignmentLine::horizontal(LineMerger::Min))
+    }
 }
 
 /// 布局树中的一个节点。
@@ -362,15 +381,15 @@ pub struct LayoutNode {
     /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
     /// lines. Usually empty, and an empty `Vec` does not allocate.
     pub alignment_lines: Vec<(AlignmentLine, f32)>,
-    /// Where a LEAF's own content sits inside its box after `Modifier::padding_from` — the measured
-    /// `(x inset, y inset, content width, content height)`, or `None` when nothing on this node asks
-    /// for a line-relative padding.
+    /// Where a LEAF's own content sits inside its box when a modifier moved it — the measured
+    /// `(x, y, content width, content height)`, or `None` for the ordinary case.
     ///
-    /// It has to be carried rather than recomputed: how much padding the line needs depends on the
-    /// content's line, which only exists once the content has been measured, and the renderer draws
-    /// the content itself (a text draws at its node's origin, inset by the padding it can query).
-    /// A container does not use this — it moves its children.
-    pub content_box_from_line: Option<(f32, f32, f32, f32)>,
+    /// It has to be carried rather than recomputed: `Modifier::padding_from` places the content
+    /// against its measured alignment line and `Modifier::minimum_interactive_size` centres it inside
+    /// a larger box, and in both cases the renderer draws the content itself (a text draws at its
+    /// node's origin, inset by the padding it can query). A container does not use this — it moves its
+    /// children.
+    pub content_box_override: Option<(f32, f32, f32, f32)>,
     /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
     pub children: Vec<usize>,
     /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
@@ -587,7 +606,7 @@ impl LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
-            content_box_from_line: None,
+            content_box_override: None,
             children: Vec::new(),
             measure_policy,
             focused: false,
@@ -673,7 +692,7 @@ impl Default for LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
-            content_box_from_line: None,
+            content_box_override: None,
             has_image_content: false,
             children: Vec::new(),
             measure_policy: None,
@@ -3441,7 +3460,60 @@ fn measure_node_inner(
     if leaf_box.is_some() {
         // The last element wins: it is the outermost, so its box is where the content ended up.
         let (ix, iy, iw, ih) = leaf_box.unwrap();
-        nodes[idx].content_box_from_line = Some((ix, iy, iw, ih));
+        nodes[idx].content_box_override = Some((ix, iy, iw, ih));
+    }
+
+    // ── `Modifier::minimum_interactive_size` ──
+    //
+    // Compose's `MinimumInteractiveModifierNode.measure` (`material3/InteractiveComponentSize.kt:98-140`):
+    // the box is `max(content, sizePx)` on BOTH axes, the content is placed CENTRED inside it, and two
+    // lines are published — where the VISUAL content begins — so a parent can align the small component
+    // by its real edge instead of by its 48 dp touch target. `sizePx <= 0` means enforcement is off
+    // (Compose's "unspecified or 0.dp"), and then nothing changes at all.
+    //
+    // Runs after `paddingFrom` because it wraps whatever is inside it, which is the padded content by
+    // then — the same order the chain of two Compose nodes would give.
+    if let Some(size_px) = nodes[idx].modifier.get_minimum_interactive_size() {
+        if size_px > 0.0 {
+            let content = result.0;
+            let width = content.width.max(size_px);
+            let height = content.height.max(size_px);
+            let left = ((size_px - content.width) / 2.0).max(0.0);
+            let top = ((size_px - content.height) / 2.0).max(0.0);
+            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_left(), left);
+            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_top(), top);
+            {
+                let cx = (width - content.width) / 2.0;
+                let cy = (height - content.height) / 2.0;
+                if let Some((ix, iy, _iw, _ih)) = leaf_box.as_mut() {
+                    *ix += cx;
+                    *iy += cy;
+                    nodes[idx].content_box_override = Some((*ix, *iy, content.width, content.height));
+                } else {
+                    let kids = nodes[idx].children.clone();
+                    for c in kids {
+                        nodes[c].position.x += cx;
+                        nodes[c].position.y += cy;
+                    }
+                }
+                // The lines published above are the VISUAL content's position inside the bigger box, so
+                // they do not move with the centring — but the lines inherited from the children do, and
+                // so does a line a caller declared with `Modifier::alignment_line`, whose closure saw the
+                // pre-enlargement size. Shifting them keeps both in the new coordinates, which is what lets
+                // an outer `align_by` land on the visual edge.
+                for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                    let line = *l;
+                    if line == AlignmentLine::minimum_interactive_left()
+                        || line == AlignmentLine::minimum_interactive_top()
+                    {
+                        continue;
+                    }
+                    *value += if line.horizontal { cy } else { cx };
+                }
+                result.0 = Size::new(width, height);
+                nodes[idx].measured_size = result.0;
+            }
+        }
     }
 
     // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）

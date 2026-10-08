@@ -706,6 +706,147 @@ mod tests {
         );
     }
 
+    /// The touch-target minimum: a 24 dp component under `Modifier::minimum_interactive_component_size`
+    /// measures 48 dp on both axes with its content centred, and reports where that content starts —
+    /// Compose's `MinimumInteractiveModifierNode` (`material3/InteractiveComponentSize.kt:98-140`).
+    ///
+    /// Measured both ways: the control is the component's own 24x24, and the enlarged box's content
+    /// sits at (12, 12), which is what the two lines say as well.
+    #[test]
+    fn minimum_interactive_size_enlarges_and_centres_the_content() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+
+        let measure = |enlarged: bool| -> ((f32, f32), (f32, f32), (f32, f32)) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                // The 24x24 is the CONTENT, the modifier is on the container around it — a tight
+                // `size()` on the same node would leave the box no room to grow (measured on
+                // `paddingFrom`'s test: `axisMax - axis` is zero there).
+                let column = crate::layout::components::Column::new();
+                let column = if enlarged {
+                    column.modifier(Modifier::new().minimum_interactive_component_size())
+                } else {
+                    column
+                };
+                column.build(ctx, |ctx| {
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().size(24.0, 24.0))
+                        .build(ctx, |_ctx| {});
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("laid out");
+            let content = nodes[root].children[0];
+            (
+                (nodes[root].measured_size.width, nodes[root].measured_size.height),
+                (nodes[content].position.x, nodes[content].position.y),
+                (
+                    nodes[root].alignment_line(AlignmentLine::minimum_interactive_left()).unwrap_or(-1.0),
+                    nodes[root].alignment_line(AlignmentLine::minimum_interactive_top()).unwrap_or(-1.0),
+                ),
+            )
+        };
+
+        let (control_size, control_pos, _) = measure(false);
+        assert_eq!(control_size, (24.0, 24.0), "the control is the component's own size");
+        assert_eq!(control_pos, (0.0, 0.0), "and its content starts at the corner");
+
+        let (size, pos, lines) = measure(true);
+        assert_eq!(size, (48.0, 48.0), "the box is the touch target on both axes");
+        assert_eq!(pos, (12.0, 12.0), "the content is centred inside it");
+        assert_eq!(lines, (12.0, 12.0), "and the lines say where the visual content starts");
+    }
+
+    /// A component already larger than the minimum is left alone, and the lines report 0 — it fills the
+    /// box, so its visual edge IS the box's edge.
+    #[test]
+    fn minimum_interactive_size_leaves_a_larger_component_alone() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            crate::layout::components::Column::new()
+                .modifier(Modifier::new().minimum_interactive_component_size())
+                .build(ctx, |ctx| {
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().size(80.0, 60.0))
+                        .build(ctx, |_ctx| {});
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        assert_eq!(
+            (nodes[root].measured_size.width, nodes[root].measured_size.height),
+            (80.0, 60.0),
+            "the box keeps the content's size"
+        );
+        assert_eq!(
+            (
+                nodes[root].alignment_line(AlignmentLine::minimum_interactive_left()),
+                nodes[root].alignment_line(AlignmentLine::minimum_interactive_top()),
+            ),
+            (Some(0.0), Some(0.0)),
+            "the content fills the box, so its edge is the box's edge"
+        );
+    }
+
+    /// The point of the lines: a parent aligning two differently-sized components by their VISUAL left
+    /// edge lines those edges up, while the touch targets stay 48 dp.
+    #[test]
+    fn aligning_by_the_interactive_left_lines_up_the_visual_edges() {
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::Column;
+        use crate::modifier::Modifier;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Column::new().build(ctx, |ctx| {
+                for content_w in [24.0f32, 10.0] {
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .minimum_interactive_component_size()
+                                .align_by(AlignmentLine::minimum_interactive_left()),
+                        )
+                        .build(ctx, |ctx| {
+                            Column::new()
+                                .modifier(Modifier::new().size(content_w, 24.0))
+                                .build(ctx, |_ctx| {});
+                        });
+                }
+            });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        let kids = nodes[root].children.clone();
+        assert_eq!(kids.len(), 2, "both components composed");
+
+        // Each component's visual content, in the ROOT's coordinates: the component's own x plus where
+        // its content sits inside it, which is what the line reports.
+        let visual_left = |c: usize| -> f32 {
+            let line = nodes[c]
+                .alignment_line(AlignmentLine::minimum_interactive_left())
+                .expect("the enlarged box reports it");
+            nodes[c].position.x + line
+        };
+        assert_eq!(
+            visual_left(kids[0]),
+            visual_left(kids[1]),
+            "the 24-wide and the 10-wide component start at the same x, so their icons line up"
+        );
+        for &c in &kids {
+            assert_eq!(
+                nodes[c].measured_size.width, 48.0,
+                "and both still carry a full touch target"
+            );
+        }
+    }
+
     /// A line-aligned child whose text WRAPS below the line makes the row taller than any child in
     /// it: Compose sizes the cross axis to `beforeCrossAxisAlignmentLine +
     /// afterCrossAxisAlignmentLine`, not to the tallest child (`RowColumnMeasurePolicy.kt:253-259`),

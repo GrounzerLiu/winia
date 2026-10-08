@@ -279,6 +279,9 @@ pub(crate) enum ModifierElement {
         line: crate::layout::AlignmentLine,
         value: std::sync::Arc<dyn Fn(crate::unit::Size) -> f32 + Send + Sync>,
     },
+    /// Reserve a touch target of at least this many logical pixels on BOTH axes, centring the content
+    /// inside it — Compose's `Modifier.minimumInteractiveComponentSize`. `size <= 0` is off.
+    MinimumInteractiveSize { size: f32 },
     /// Pad this node so its content's alignment line sits `before` from the near edge and `after`
     /// from the far one (Compose's `Modifier.paddingFrom`). `None` is Compose's
     /// `Dp.Unspecified` — that side is not constrained.
@@ -964,6 +967,33 @@ impl Modifier {
         after: Option<f32>,
     ) -> Self {
         self.push(ModifierElement::PaddingFrom { line, before, after })
+    }
+
+    /// material3's default minimum touch target, `LocalMinimumInteractiveComponentSize`'s 48.dp
+    /// (`material3/InteractiveComponentSize.kt:206-210`).
+    pub const MINIMUM_INTERACTIVE_SIZE_DP: f32 = 48.0;
+
+    /// Reserve at least a touch target's worth of space around a small component, centring it —
+    /// Compose's `Modifier.minimumInteractiveComponentSize()` (`material3/InteractiveComponentSize.kt:69`),
+    /// which material3's own Button, IconButton, Checkbox and friends apply for you.
+    ///
+    /// The box becomes `max(content, 48)` on both axes with the content centred inside it, and the two
+    /// "where the visual content starts" lines are published
+    /// ([`AlignmentLine::minimum_interactive_left`] / [`AlignmentLine::minimum_interactive_top`]) so a
+    /// parent can align the small component by its real edge rather than by its invisible padding.
+    ///
+    /// Deviation, recorded: Compose reads the size from `LocalMinimumInteractiveComponentSize`, a
+    /// CompositionLocal a screen can set to 0 to switch enforcement off for a whole subtree; winia takes
+    /// the value from the modifier, with the 48 dp default in one place, and has no per-subtree switch.
+    /// [`Modifier::minimum_interactive_size`] is there for a caller that wants another number.
+    pub fn minimum_interactive_component_size(self) -> Self {
+        self.minimum_interactive_size(Self::MINIMUM_INTERACTIVE_SIZE_DP)
+    }
+
+    /// [`Modifier::minimum_interactive_component_size`] with an explicit size. `size <= 0` disables it,
+    /// which is Compose's "unspecified or 0.dp" case.
+    pub fn minimum_interactive_size(self, size: f32) -> Self {
+        self.push(ModifierElement::MinimumInteractiveSize { size })
     }
 
     /// Compose's `Modifier.paddingFromBaseline(top, bottom)`: `top` from the container's top edge to
@@ -2159,6 +2189,15 @@ impl Modifier {
             .collect()
     }
 
+    /// The touch-target minimum this node asks for, if any — the LAST one wins, as a chain of
+    /// modifiers would leave the outermost in charge. `Some(0.0)` means "explicitly off".
+    pub fn get_minimum_interactive_size(&self) -> Option<f32> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::MinimumInteractiveSize { size } => Some(*size),
+            _ => None,
+        })
+    }
+
     /// Applied after the content is measured: it is the content's own alignment line that says how
     /// much padding the node needs.
     pub fn get_padding_from(&self) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
@@ -2430,6 +2469,9 @@ impl Debug for ModifierElement {
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
             Self::AlignmentLineValue { line, .. } => {
                 f.debug_struct("AlignmentLineValue").field("line", line).finish()
+            }
+            Self::MinimumInteractiveSize { size } => {
+                f.debug_struct("MinimumInteractiveSize").field("size", size).finish()
             }
             Self::PaddingFrom { line, before, after } => f
                 .debug_struct("PaddingFrom")
