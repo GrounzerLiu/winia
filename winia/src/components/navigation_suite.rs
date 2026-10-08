@@ -21,12 +21,21 @@
 //!
 //! Known divergence, measured: an item's `remember`ed state does NOT survive a shape switch. Compose
 //! keeps it with `movableContentOf` (`NavigationSuiteScaffold.kt:577-578`) — the same content lambda is
-//! invoked in the new location and its nodes and remembered values move with it — and winia has no
-//! equivalent, so the abandoned branch's slots are dropped when its group ends without being visited.
-//! Measured on a 3-item bar → 2-item rail → 3-item bar round trip, with the item's state encoded into
-//! its icon width (10 + marker * 50) so a rebuild is unmistakable: the markers went 3 → 3 → 6, i.e.
-//! switching BACK rebuilt all three items. Returning to a shape therefore resets whatever the caller
-//! remembered inside an `icon`/`label` payload.
+//! invoked in the new location, and its nodes and remembered values move with it — while here the
+//! abandoned branch's slots are dropped when its group ends without being visited. Measured on a
+//! 3-item bar → 2-item rail → 3-item bar round trip, with the item's state encoded into its icon width
+//! (10 + marker * 50) so a rebuild is unmistakable: the markers went 3 → 3 → 6, i.e. switching BACK
+//! rebuilt all three items. Returning to a shape therefore resets whatever the caller remembered inside
+//! an `icon`/`label` payload.
+//!
+//! The composer half of the fix now exists — `ctx.remember_movable_content` keeps content's slots (and
+//! so its state) out of the tree entirely, and it is measured to survive a move between parents — so
+//! what this component still needs is its OWN half, the item payloads. They are `Box<dyn FnOnce>` (see
+//! `NavigationSuiteItem`), which is what makes holding both shapes at once impossible: one payload
+//! cannot be invoked twice in a frame. Compose's `content` lambda is a stable value it can re-remember
+//! the movable content from; a `Vec<NavigationSuiteItem>` full of one-shot closures cannot play that
+//! role, so the payloads have to become `Arc<dyn Fn>` first and the list has to be reachable from a
+//! remembered handle (a backchannel the scaffold writes each frame).
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};

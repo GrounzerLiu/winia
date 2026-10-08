@@ -78,6 +78,7 @@ pub mod debug;
 
 // 公开核心类型
 pub use runtime::composer::{ComposeCtx, Composer};
+pub use runtime::movable::MovableContent;
 pub use runtime::state::{
     Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
 };
