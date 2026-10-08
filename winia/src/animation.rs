@@ -204,7 +204,8 @@ pub fn push_animatable_with_velocity_and_done<
         return;
     }
     let sid = handle.state_id();
-    // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
+    // 声明 `supports_spring() == false` 的类型（Color、SharedBounds 等）没有分量弹簧
+    // 可跑——Spring 降级为默认 Tween，免得落进沿范数运动的单值位移
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -251,7 +252,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         cancel_animation_by_id(sid);
     }
     let inherited_velocity;
-    // 非标量类型（Offset/Size/Color 等）Spring 无单值物理，强制降级 Tween
+    // 同 `push_animatable_with_velocity_and_done`：只有声明不支持 Spring 的类型才降级
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -449,7 +450,7 @@ pub fn animate_int_as_state(
 }
 
 /// `animateValueAsState`（对标 Compose 泛型版）——任意 `AnimatableValue` 的
-/// target 动画（f32/i32/Color；Offset/Size 等向量类型 Spring 自动降级 Tween）。
+/// target 动画（f32/i32/Color；Offset/Size 的 Spring 按分量跑，不会降级）。
 ///
 /// ```ignore
 /// let animated = animate_value_as_state(ctx, color, TweenSpec::new(300, Linear::new()));
@@ -591,10 +592,11 @@ pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
 /// Whether an animation is still running for ONE state.
 ///
 /// [`is_animating`] answers for the process; a caller that needs to know when its own animation
-/// finished — a spring approaches its target asymptotically and never equals it, so comparing values
-/// is not enough — asks about the state it animates. `AnimatedSize` uses this to decide when to call
-/// its `finishedListener`, which Compose fires when `animateTo` returns rather than when the value
-/// lands exactly on the target.
+/// finished asks about the state it animates. The value alone cannot answer that: a spring does land
+/// on its exact target once every component is at rest, but a value sitting on the target looks the
+/// same when the animation never ran or was cancelled, and a spec that keeps running (Repeatable) is
+/// indistinguishable from a settled one. `AnimatedSize` asks this AND compares the value, which is
+/// what Compose's `animateTo` returning `Finished` amounts to.
 pub fn is_animating_state(id: crate::runtime::state::StateId) -> bool {
     ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == id)
         || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == id)
@@ -634,6 +636,17 @@ struct AnimationState<T> {
     current_displacement: f32,
     // Decay 初始速度（v0 常数——解析式需要，不被 last_velocity 覆盖）
     initial_velocity: f32,
+    /// 多分量值（`Size`/`Offset`）上跑 Spring 时，每个分量一条弹簧——Compose 的
+    /// `VectorizedSpringSpec` 语义。`None` 表示单分量：走下面的标量位移
+    /// （`current_displacement`），标量类型与 Tween/Keyframes 等一律走它。
+    lanes: Option<Vec<SpringLane>>,
+}
+
+/// 一条分量弹簧：目标值 + 该分量的位移与速度（标量路径的字段按分量复制一份）。
+struct SpringLane {
+    to: f32,
+    displacement: f32,
+    velocity: f32,
 }
 
 impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
@@ -682,6 +695,30 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         };
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
+        // Spring 在多分量值（Size/Offset）上按分量推进：每轴一条弹簧、各自收敛——这样
+        // 尺寸弹簧的两个轴都能落到目标，而不是共用一条沿范数运动的单值位移。
+        let lanes = match &spec {
+            AnimationSpec::Spring(_) => {
+                let mut from_components = [0.0; MAX_ANIMATION_COMPONENTS];
+                let mut to_components = [0.0; MAX_ANIMATION_COMPONENTS];
+                let from_len = from.write_components(&mut from_components);
+                let to_len = to.write_components(&mut to_components);
+                if from_len == to_len && to_len > 1 {
+                    Some(
+                        (0..to_len)
+                            .map(|i| SpringLane {
+                                to: to_components[i],
+                                displacement: from_components[i] - to_components[i],
+                                velocity: start_velocity,
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to,
@@ -691,6 +728,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             last_update: Instant::now(),
             current_displacement: displacement,
             initial_velocity: 0.0,
+            lanes,
         });
     }
 
@@ -712,6 +750,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             last_update: Instant::now(),
             current_displacement: 0.0,
             initial_velocity,
+            lanes: None,
         });
     }
 
@@ -752,23 +791,59 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         let mut boundary_velocity = None;
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
-                let to_f32 = AnimatableValue::to_f32(&state.to);
-                let displacement = compute_spring_displacement(
-                    spec.stiffness, spec.damping_ratio, spec.mass,
-                    state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
-                );
-                state.current_displacement = displacement;
-                // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
-                // One test, shared with the integrator: see `spring_at_rest`.
-                let done = spring_at_rest(displacement, state.last_velocity, spec.threshold);
-                if done {
-                    // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
-                    // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
-                    // exit 完成检测 progress<0.001）会因残余位移卡住/误判
-                    (state.to.clone(), true)
+                if state.lanes.is_some() {
+                    // 多分量（Size/Offset）：每个分量一条弹簧，各自按可见阈值收敛，全部到位才
+                    // 算完成——Compose 的 `VectorizedSpringSpec` 同样以"所有轴都结束"为结束。
+                    // 先到位的分量写精确目标值，免得它在别的轴还在动时留下阈值内的残余位移。
+                    let (components, len, all_done, last_velocity) = {
+                        let lanes = state.lanes.as_mut().unwrap();
+                        let mut components = [0.0; MAX_ANIMATION_COMPONENTS];
+                        let mut all_done = true;
+                        let mut last_velocity = 0.0f32;
+                        for (i, lane) in lanes.iter_mut().enumerate() {
+                            lane.displacement = compute_spring_displacement(
+                                spec.stiffness, spec.damping_ratio, spec.mass,
+                                lane.displacement, &mut lane.velocity, dt, spec.threshold,
+                            );
+                            if spring_at_rest(lane.displacement, lane.velocity, spec.threshold) {
+                                // 同标量路径：done 时写精确目标值，而不是阈值内的近似值
+                                components[i] = lane.to;
+                            } else {
+                                all_done = false;
+                                components[i] = lane.to + lane.displacement;
+                            }
+                            if lane.velocity.abs() > last_velocity.abs() {
+                                last_velocity = lane.velocity;
+                            }
+                        }
+                        (components, lanes.len(), all_done, last_velocity)
+                    };
+                    // 打断时的速度延续取最快的那条分量（`push_animatable` 的 retarget 用）
+                    state.last_velocity = last_velocity;
+                    if all_done {
+                        (state.to.clone(), true)
+                    } else {
+                        (T::from_components(&components[..len]), false)
+                    }
                 } else {
-                    let spring_val = to_f32 + displacement;
-                    (AnimatableValue::from_f32(spring_val), false)
+                    let to_f32 = AnimatableValue::to_f32(&state.to);
+                    let displacement = compute_spring_displacement(
+                        spec.stiffness, spec.damping_ratio, spec.mass,
+                        state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
+                    );
+                    state.current_displacement = displacement;
+                    // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
+                    // One test, shared with the integrator: see `spring_at_rest`.
+                    let done = spring_at_rest(displacement, state.last_velocity, spec.threshold);
+                    if done {
+                        // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
+                        // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
+                        // exit 完成检测 progress<0.001）会因残余位移卡住/误判
+                        (state.to.clone(), true)
+                    } else {
+                        let spring_val = to_f32 + displacement;
+                        (AnimatableValue::from_f32(spring_val), false)
+                    }
                 }
             }
             AnimationSpec::Tween(spec) => {
@@ -1342,17 +1417,36 @@ impl RepeatableSpec {
     }
 }
 
+/// 一个值最多拆成几条独立弹簧的位移分量（`Size`/`Offset` 是 2，`Color` 若要按通道
+/// 动画会是 4）。定长数组让每帧的推进不分配。
+pub const MAX_ANIMATION_COMPONENTS: usize = 4;
+
 /// 可动画化的值类型
 pub trait AnimatableValue: Clone + PartialEq {
     fn lerp(&self, to: &Self, t: f32) -> Self;
-    /// 转换为 f32（Spring 物理引擎 + 去重用；⚠️ 非单射——Offset/Size 返回范数，仅标量类型精确）
+    /// 转换为 f32（Spring 去重用；⚠️ 非单射——Offset/Size 返回范数，仅标量类型精确）
     fn to_f32(&self) -> f32;
-    /// 从 f32 构建（⚠️ 仅标量类型可用；向量/Color 的 from_f32 是占位，Spring 会强制降级 Tween）
+    /// 从 f32 构建（⚠️ 仅标量类型精确；向量的 from_f32 是占位）
     fn from_f32(v: f32) -> Self;
     /// 精确比较目标（默认 PartialEq；f32/Dp/Offset/Size 均精确）
     fn same_target(&self, other: &Self) -> bool { self == other }
-    /// 是否支持 Spring（标量类型 true；向量/Color 无单值物理，false）
+    /// 是否支持 Spring。标量类型是一条弹簧；向量类型由 [`Self::write_components`]
+    /// 拆成每个分量一条弹簧，因此也能精确表达弹簧物理。
     fn supports_spring() -> bool { false }
+    /// 写入弹簧独立推进的分量，返回分量个数。每个分量各有一条弹簧、各自按可见阈值
+    /// 收敛——这就是 Compose 的 `VectorConverter` + `VectorizedSpringSpec`
+    /// （`IntSize.VectorConverter` 让尺寸的两个轴各有一条弹簧，因此两轴都能落到目标）。
+    ///
+    /// 默认实现不拆分（标量类型无需覆写）。向量的 `from_f32` 非单射，必须同时覆写
+    /// 本方法与 [`Self::from_components`] 才能让 `Spring` 按分量运行。
+    fn write_components(&self, out: &mut [f32; MAX_ANIMATION_COMPONENTS]) -> usize {
+        out[0] = self.to_f32();
+        1
+    }
+    /// [`Self::write_components`] 的逆运算：由各分量的当前值重组回一个值。
+    fn from_components(components: &[f32]) -> Self {
+        Self::from_f32(components[0])
+    }
 }
 
 impl AnimatableValue for f32 {
@@ -1794,16 +1888,54 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn offset_spring_downgraded_to_tween() {
+    fn offset_spring_no_longer_downgraded_to_tween() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        // blocking bug：Offset 用 Spring 会收敛到 (norm,norm) 而非目标，应强制 Tween
+        // 曾经的 blocking bug：Offset 用 Spring 会沿范数收敛到 (norm,norm) 而非目标，
+        // 因此被强制降级成 Tween。现在 Offset 声明 `write_components`（x、y 各一条弹簧），
+        // 两条弹簧各自落到目标——降级不再需要，这个测试守住"不再降级"。
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
         push_animatable(s.clone(), Offset::new(3.0, 4.0), AnimationSpec::Spring(SpringSpec::default()));
-        // 验证动画注册（Spring 被降级为 Tween 后仍正常运行）
         assert!(has_animation_for_state(s.state_id()), "Offset animation should be registered");
+        // 真实帧间隔步进到结束（update() 用真实时钟，连调 dt≈0 永不推进）
+        for _ in 0..400 {
+            if !update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        assert_eq!(
+            s.peek(),
+            Offset::new(3.0, 4.0),
+            "每条分量弹簧各写自己的精确目标（降级成 Tween 或沿范数跑都得不到 (3,4)）"
+        );
         remove_animation_by_state(s.state_id());
         assert!(!has_animation_for_state(s.state_id()), "own animation should be removed");
+    }
+
+    #[test]
+    fn size_spring_lands_each_axis_on_its_own_target() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // Compose 的 `IntSize.VectorConverter`：宽高各一条弹簧，两条都到位动画才结束
+        // （`AnimationModifier.kt:70-74`）。两轴位移差得远（宽 +10、高 −1）——单值位移
+        // 会沿范数同时拉两轴，谁也落不到自己的目标上。
+        use crate::unit::Size;
+        let s = State::new(Size::new(50.0, 10.0));
+        push_animatable(
+            s.clone(),
+            Size::new(60.0, 9.0),
+            AnimationSpec::Spring(SpringSpec::default()),
+        );
+        let mut frames = 0;
+        for _ in 0..400 {
+            if !update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            frames += 1;
+        }
+        assert!(frames > 1, "两条分量弹簧要跑若干帧，不是一次 Snap（frames={frames}）");
+        assert_eq!(s.peek(), Size::new(60.0, 9.0), "宽高各写自己的精确目标");
     }
 
     #[test]

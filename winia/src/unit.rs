@@ -244,6 +244,20 @@ impl crate::animation::AnimatableValue for Offset {
     }
     fn to_f32(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
     fn from_f32(v: f32) -> Offset { Offset::new(v, v) }
+    // 两个轴各有一条弹簧（Compose 的 `Offset.VectorConverter` 同样按分量展开），
+    // 所以 Spring 不必降级成 Tween。
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.x;
+        out[1] = self.y;
+        2
+    }
+    fn from_components(components: &[f32]) -> Offset {
+        Offset::new(components[0], components[1])
+    }
 }
 
 impl crate::animation::AnimatableValue for Size {
@@ -252,6 +266,20 @@ impl crate::animation::AnimatableValue for Size {
     }
     fn to_f32(&self) -> f32 { (self.width * self.width + self.height * self.height).sqrt() }
     fn from_f32(v: f32) -> Size { Size::new(v, v) }
+    // 宽高各有一条弹簧——Compose 的 `IntSize.VectorConverter` 也是这样，尺寸弹簧因此
+    // 两个轴都能落到目标，而不是沿对角线共用一条位移。
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.width;
+        out[1] = self.height;
+        2
+    }
+    fn from_components(components: &[f32]) -> Size {
+        Size::new(components[0], components[1])
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
