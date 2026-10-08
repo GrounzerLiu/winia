@@ -1009,6 +1009,13 @@ pub trait MeasurePolicy: std::fmt::Debug {
     // report the resulting size. That is an approximation for layouts whose geometry depends on
     // the space they are given; a policy that knows better (Row/Column, whose `weight` handling
     // needs the same arithmetic as its measure phases) overrides these.
+    //
+    // A policy whose `measure` has side effects MUST override all four: Compose's contract is that
+    // an intrinsic query never changes state ("There should be no side-effects from implementers of
+    // `maxIntrinsicWidth`", `ui/layout/MeasurePolicy.kt:133`), which is why Compose's animating nodes
+    // extend `LayoutModifierNodeWithPassThroughIntrinsics`. Here the default would instead run the
+    // side-effecting measure with the queried axis unbounded. [`max_child_intrinsic`] is the
+    // pass-through fold; see it for the two measured failures that motivated the rule.
 
     /// The smallest width this content can be laid out at, given it will be `height` tall.
     fn min_intrinsic_width(
@@ -1123,6 +1130,31 @@ impl<'a> IntrinsicCtx<'a> {
     pub fn child_weight(&self, child: usize) -> f32 {
         self.nodes[child].modifier.get_layout_weight().unwrap_or(0.0)
     }
+}
+
+/// Answer an intrinsic query with the largest of the children's own answers — the side-effect-free
+/// shape Compose uses where a layout's measure must not be consulted
+/// (`LayoutModifierNodeWithPassThroughIntrinsics`, `animation/AnimationModifier.kt:259-280`, and the
+/// max-over-measurables fold of a container, `AnimatedContent.kt:939-957`).
+///
+/// Any policy whose `measure` has SIDE EFFECTS must answer the four queries itself. The trait's
+/// defaults answer them by running `measure` with the queried axis unbounded (above: Compose's own
+/// default, and Compose's contract is explicit that intrinsics must be pure — "There should be no
+/// side-effects from implementers of `maxIntrinsicWidth`", `ui/layout/MeasurePolicy.kt:133`), so a
+/// policy that starts an animation, re-targets one, or consumes a first-measurement flag turns an
+/// intrinsic query into a state change. Measured before the helper existed: an intrinsic query above
+/// a `TabRow` made the indicator's target infinite and its placed x `NaN`, and one above an
+/// `AnimatedSize` drove its animated size to the probe's value, re-arming the spring every frame.
+pub fn max_child_intrinsic(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    query: IntrinsicQuery,
+    other: f32,
+) -> f32 {
+    children
+        .iter()
+        .map(|&child| ctx.child_intrinsic(child, query, other))
+        .fold(0.0, f32::max)
 }
 
 /// Intrinsic measurement OF a node — the answer a parent gets when it asks this node for one of its

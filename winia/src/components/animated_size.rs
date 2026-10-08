@@ -66,7 +66,7 @@ use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, Alignment, ContentAlignment, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
+use crate::layout::node::{max_child_intrinsic, measure_node, Alignment, ContentAlignment, IntrinsicCtx, IntrinsicQuery, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
 use crate::modifier::Modifier;
 use crate::unit::{Offset, Size};
 
@@ -316,6 +316,58 @@ impl MeasurePolicy for SizePolicy {
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
         }
+    }
+
+    // ── Intrinsic measurement: straight through to the content, never through the animation ──
+    //
+    // Compose's node extends `LayoutModifierNodeWithPassThroughIntrinsics`, which answers all four
+    // queries with the child's own intrinsic (`AnimationModifier.kt:259-280`). Here the policy may
+    // have several children — it measures them Stack-style — so each query is the max over the
+    // children, the same shape Compose's own container policies use (`AnimatedContent.kt:939-957`).
+    //
+    // This is not an optimisation. The trait's default answers an intrinsic by running `measure`
+    // (`node.rs:1003-1051`, Compose's own "reuse the measure method" default), and this policy's
+    // `measure` re-targets the animation: a parent asking for its children's intrinsics — any
+    // `Modifier::width(IntrinsicSize::Max)` above this box is enough — would measure the content
+    // unbounded on behalf of the probe, drive the animated value toward that probe size, and re-arm
+    // the spring on every frame from then on. Measured before this override: a 60-wide content under
+    // a `width(IntrinsicSize::Max)` ancestor left the box's animated value at 199.999 against a real
+    // content width of 60, never finishing, and the box itself showed 100 once the incoming
+    // constraints clamped it.
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        max_child_intrinsic(ctx, children, IntrinsicQuery::MinWidth, height)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        max_child_intrinsic(ctx, children, IntrinsicQuery::MaxWidth, height)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        max_child_intrinsic(ctx, children, IntrinsicQuery::MinHeight, width)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        max_child_intrinsic(ctx, children, IntrinsicQuery::MaxHeight, width)
     }
 }
 
@@ -784,5 +836,127 @@ mod tests {
              (largest gap={max_tween_gap})"
         );
         assert_eq!(container_width(&composer), 200.0, "the move ends exactly on the target");
+    }
+
+    /// The wrapping-text shape, as a policy so the numbers are exact: one long line (200) when the
+    /// width is unbounded, otherwise the width it is given, up to 60. An intrinsic probe therefore
+    /// measures a different size than the frame's own layout does.
+    static UNBOUNDED_MEASURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct FillingLeaf;
+
+    impl MeasurePolicy for FillingLeaf {
+        fn measure(
+            &self,
+            _nodes: &mut Vec<LayoutNode>,
+            _policies: &[Box<dyn MeasurePolicy>],
+            _children: &[usize],
+            constraints: Constraints,
+        ) -> (Size, Vec<Placement>) {
+            let w = if constraints.max_width == f32::MAX {
+                UNBOUNDED_MEASURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                200.0
+            } else {
+                constraints.max_width.min(60.0)
+            };
+            (Size::new(w, 40.0), Vec::new())
+        }
+
+        fn place(&self, _nodes: &mut Vec<LayoutNode>, _children: &[usize], _placements: &[Placement]) {}
+    }
+
+    /// Compose's node extends `LayoutModifierNodeWithPassThroughIntrinsics`, so all four intrinsic
+    /// queries are answered by the CHILD and the animation is never consulted
+    /// (`AnimationModifier.kt:259-280`). winia's `MeasurePolicy` default answers one by running the
+    /// policy's own `measure` (`layout/node.rs:1003-1051`, `IntrinsicCtx::approx_measure`) — for this
+    /// component that means an intrinsic probe starts, retargets or cancels the size animation.
+    ///
+    /// Reachable from ordinary code: `Modifier::width(IntrinsicSize.Max)` on any ancestor (a column
+    /// sized to its content is the usual one) asks the box for the content's intrinsic width, with the
+    /// queried axis unbounded. Before the fix the probe's first measurement snapped the box to 200 and
+    /// the frame's own measure retargeted it back to 60 — every frame, so the animated value sat at
+    /// 199.999, the spring never finished, and only the incoming constraint (100) hid the value.
+    #[test]
+    fn an_intrinsic_query_does_not_move_the_box() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
+            Default::default();
+        let sink = reported.clone();
+        let mut recompose = |composer: &mut Composer, max_h: f32| {
+            composer.compose(|ctx| {
+                // The ancestor's `width(IntrinsicSize::Max)` is what runs the probe.
+                let key = ctx.next_key();
+                let modifier = Modifier::new().width(crate::layout::IntrinsicSize::Max);
+                match ctx.start_restartable_group(
+                    key,
+                    modifier,
+                    crate::layout::column::ColumnLayout::default(),
+                ) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        AnimatedSize::default()
+                            .finished_listener({
+                                let sink = sink.clone();
+                                move |from: Size, to: Size| {
+                                    sink.lock().unwrap().push((
+                                        (from.width, from.height),
+                                        (to.width, to.height),
+                                    ));
+                                }
+                            })
+                            .build(ctx, |ctx| {
+                                let key = ctx.next_key();
+                                ctx.start_restartable_group(key, Modifier::new(), FillingLeaf);
+                                ctx.end_restartable_group();
+                            });
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, max_h));
+        };
+
+        // First frame: the box snaps to the content's layout size, 60 wide, and reports nothing.
+        recompose(&mut composer, 400.0);
+        assert_eq!(
+            child_box(&composer).2,
+            60.0,
+            "the box snaps to the content's layout size, not to the probe's unbounded measurement"
+        );
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "the first measurement snaps without reporting: {:?}",
+            reported.lock().unwrap()
+        );
+
+        // The window gets taller, so the parent re-measures and its intrinsic request runs again.
+        // The box has not changed size: nothing may animate, and nothing may be reported.
+        let before = UNBOUNDED_MEASURES.load(std::sync::atomic::Ordering::Relaxed);
+        recompose(&mut composer, 401.0);
+        assert!(
+            UNBOUNDED_MEASURES.load(std::sync::atomic::Ordering::Relaxed) > before,
+            "the ancestor's intrinsic request reached the content with the axis unbounded"
+        );
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            recompose(&mut composer, 401.0);
+        }
+        recompose(&mut composer, 401.0);
+
+        assert_eq!(
+            child_box(&composer).2,
+            60.0,
+            "the box is still the size the frame allows"
+        );
+        assert!(
+            reported.lock().unwrap().is_empty(),
+            "an intrinsic query must not move the box or report a size change: {:?}",
+            reported.lock().unwrap()
+        );
     }
 }
