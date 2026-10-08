@@ -47,7 +47,12 @@ impl MovableContent {
             (self.content)(ctx);
             return;
         }
-        ctx.begin_movable(self.id);
+        // Already composed this frame? Compose treats that as an error ("movable content must be
+        // called in exactly one place"); here the second attempt is skipped, because the navigation
+        // suite's two shapes overlap for a frame while it morphs between them.
+        if !ctx.begin_movable(self.id) {
+            return;
+        }
         (self.content)(ctx);
         ctx.end_movable();
     }

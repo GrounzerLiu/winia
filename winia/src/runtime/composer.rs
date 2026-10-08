@@ -331,9 +331,9 @@ impl<'a> ComposeCtx<'a> {
     /// Compose this content here.
     /// Hand the slot table over to movable content #id — see
     /// [`MovableContent::compose`](crate::runtime::movable::MovableContent::compose).
-    pub(crate) fn begin_movable(&mut self, id: u64) {
+    pub(crate) fn begin_movable(&mut self, id: u64) -> bool {
         let key = self.next_key();
-        self.composer.slot_table.begin_movable(key, id);
+        self.composer.slot_table.begin_movable(key, id)
     }
 
     /// Give the slot table back to the invocation site.
@@ -1064,6 +1064,14 @@ pub(crate) struct SlotTable {
     /// frame that it has to compose for real.
     movable_referenced: crate::layout::node::SlotKeySet,
     movable_referenced_last: crate::layout::node::SlotKeySet,
+    /// Which frame each content was last composed in. Compose requires movable content to be composed
+    /// in exactly ONE place per composition; winia skips the second attempt instead of failing, because
+    /// the shapes overlap for a frame during the morph. Without this the second reference composed the
+    /// content again — the same item, a second time in one frame — and its `remember` initializer ran
+    /// again (measured in the UI fixture: the marker count jumped 3 → 6 on the first shape switch).
+    movable_frame: crate::layout::node::SlotKeyMap<u64>,
+    /// The frame number `movable_frame` is compared against; `Composer::compose` sets it.
+    frame_no: u64,
     /// 当前 compose 期间活跃的 slot key（用于 State→Slot 的脏标记）
     active_slot_key: u64,
     /// 被 State 变化标记为 dirty 的 slot key 集合
@@ -1175,6 +1183,8 @@ impl SlotTable {
             movable_last_ref: crate::layout::node::SlotKeyMap::default(),
             movable_referenced: crate::layout::node::SlotKeySet::default(),
             movable_referenced_last: crate::layout::node::SlotKeySet::default(),
+            movable_frame: crate::layout::node::SlotKeyMap::default(),
+            frame_no: 0,
             active_slot_key: 0,
             dirty_keys: crate::layout::node::SlotKeySet::default(),
         }
@@ -1712,7 +1722,13 @@ impl SlotTable {
     /// content's `remember`ed values live somewhere no branch can drop them.
     ///
     /// Pair with [`SlotTable::end_movable`].
-    fn begin_movable(&mut self, key: u64, id: u64) {
+    fn begin_movable(&mut self, key: u64, id: u64) -> bool {
+        // Composed once per composition (Compose's rule): a second reference in the same frame is
+        // skipped rather than composing the content twice, which would give the same item two slots.
+        if self.movable_frame.get(&id) == Some(&self.frame_no) {
+            return false;
+        }
+        self.movable_frame.insert(id, self.frame_no);
         debug_assert!(
             self.movable_composing.is_none(),
             "movable content cannot be composed from inside movable content"
@@ -1763,6 +1779,7 @@ impl SlotTable {
         self.movable_saved_counters = std::mem::take(&mut self.child_counters);
         self.child_counters.push(0);
         self.movable_composing = Some(id);
+        true
     }
 
     /// Stop composing movable content, back at the position that invoked it.
@@ -3033,6 +3050,9 @@ impl Composer {
         let mut dependency_transaction = ComposeDependencyTransaction::new(self);
         #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
         self.compose_count += 1;
+        // Movable content is composed once per composition, so the table needs to know which
+        // composition this is.
+        self.slot_table.frame_no = self.compose_count;
         self.slot_table.reset();
         self.overlay_active.clear(); // 每帧组合期重记录（Skip 帧不记录）
         self.current_group_key = 0;
