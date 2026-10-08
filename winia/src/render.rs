@@ -1104,10 +1104,21 @@ fn render_pass1(
     // 解析与测量期 get_padding_sides 一致：静态/动态统一，RTL 时 start 在右）
     let (pad_s, pad_t, pad_e, pad_b) = node.modifier.get_padding_sides();
     let pad_rtl = node.layout_direction == crate::layout::LayoutDirection::Rtl;
-    let content_x = x + if pad_rtl { pad_e } else { pad_s };
-    let content_y = y + pad_t;
-    let content_w = (w - pad_s - pad_e).max(0.0);
-    let content_h = (h - pad_t - pad_b).max(0.0);
+    let (content_x, content_y, content_w, content_h) = match node.content_box_from_line {
+        // `paddingFrom` measured the content's own box against its alignment line — how much padding
+        // the line needs is only known after the content is measured, so the node carries the result
+        // instead of the modifier being asked again. A container moves its children and leaves this
+        // `None`, falling through to the padding arithmetic below.
+        Some((inset_x, inset_y, w_inner, h_inner)) => {
+            (x + inset_x, y + inset_y, w_inner, h_inner)
+        }
+        None => (
+            x + if pad_rtl { pad_e } else { pad_s },
+            y + pad_t,
+            (w - pad_s - pad_e).max(0.0),
+            (h - pad_t - pad_b).max(0.0),
+        ),
+    };
 
     // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
     // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——

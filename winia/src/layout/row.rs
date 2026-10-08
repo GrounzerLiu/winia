@@ -359,6 +359,231 @@ mod tests {
         );
     }
 
+    /// `Modifier::padding_from_baseline` puts the BASELINE where the caller asks, not the box's edge —
+    /// Compose's `Modifier.paddingFrom` (`foundation/layout/AlignmentLine.kt:65`), whose measure is
+    /// `paddingBefore = (before - line).coerceIn(0, axisMax - axis)`.
+    ///
+    /// Measured both ways, because a box that simply grew would satisfy nothing: the control (no
+    /// modifier) is the text's natural size, and with `top = 40` the box must be taller and the
+    /// baseline must sit exactly 40 from its top. The baseline's own distance from the text's top is
+    /// unchanged — the text did not move inside its own box; the box grew around it.
+    #[test]
+    fn padding_from_baseline_puts_the_baseline_where_it_was_asked() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::components::text::Text;
+
+        let measure = |padded: bool| -> (f32, f32, f32) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                let text = Text::new("Label").font_size(16.0);
+                let text = if padded {
+                    text.modifier(Modifier::new().padding_from_baseline(Some(40.0), None))
+                } else {
+                    text
+                };
+                text.build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("laid out");
+            let node = &nodes[root];
+            let line = node
+                .alignment_line(AlignmentLine::FIRST_BASELINE)
+                .expect("the text reports its baseline");
+            (node.measured_size.height, line, node.position.y)
+        };
+
+        let (natural_h, natural_line, _) = measure(false);
+        let (padded_h, padded_line, _) = measure(true);
+        assert!(
+            natural_line < 40.0,
+            "the control must be a case the padding actually changes (baseline {natural_line})"
+        );
+        assert_eq!(
+            padded_line, 40.0,
+            "the baseline sits 40 from the box's top"
+        );
+        assert_eq!(
+            padded_h,
+            natural_h - natural_line + 40.0,
+            "and the box grew by exactly the difference: {natural_h} (baseline {natural_line}) -> {padded_h}"
+        );
+    }
+
+    /// The line a `paddingFrom` reads is the node's OWN reported one, which for a container is the
+    /// inherited line of its content — so the padding can be asked of a Column and still land on the
+    /// text inside it.
+    #[test]
+    fn padding_from_baseline_reads_an_inherited_baseline() {
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::Column;
+        use crate::modifier::Modifier;
+        use crate::components::text::Text;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Column::new()
+                .modifier(Modifier::new().padding_from_baseline(Some(30.0), None))
+                .build(ctx, |ctx| {
+                    Text::new("inner").font_size(14.0).build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        let column = composer.layout_root_idx().expect("laid out");
+        let text = nodes[column].children[0];
+        let text_line = nodes[text]
+            .alignment_line(AlignmentLine::FIRST_BASELINE)
+            .expect("the text reports its baseline");
+        let absolute = nodes[text].position.y + text_line;
+        assert_eq!(
+            absolute, 30.0,
+            "the Column's padding is computed against the text's inherited baseline"
+        );
+        assert_eq!(
+            nodes[column].alignment_line(AlignmentLine::FIRST_BASELINE),
+            Some(30.0),
+            "and the Column's own line moved with the padding, so an outer row still sees it"
+        );
+    }
+
+    /// `after` with no `before`: the content is placed against the FAR edge instead — Compose's
+    /// `size - paddingAfter - axis` branch (`AlignmentLine.kt:348-354`), and here the line is
+    /// `LastBaseline`, whose merger is `::max`.
+    #[test]
+    fn padding_from_the_last_baseline_places_by_the_bottom() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::components::text::Text;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("one two three four five six seven eight")
+                .font_size(14.0)
+                // Narrow enough to wrap, which is what makes First and Last differ.
+                .modifier(
+                    Modifier::new()
+                        .width(60.0)
+                        .padding_from(AlignmentLine::LAST_BASELINE, None, Some(12.0)),
+                )
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        let node = &nodes[root];
+        let first = node
+            .alignment_line(AlignmentLine::FIRST_BASELINE)
+            .expect("first baseline");
+        let last = node
+            .alignment_line(AlignmentLine::LAST_BASELINE)
+            .expect("last baseline");
+        assert!(last > first, "the text wrapped: {first} vs {last}");
+        assert_eq!(
+            node.measured_size.height - last,
+            12.0,
+            "the LAST baseline sits 12 above the box's bottom"
+        );
+    }
+
+    /// The incoming maximum caps the padding, and `before` takes what there is — Compose's contract
+    /// (`foundation/layout/AlignmentLine.kt:44-49`: "when the max constraints do not allow this,
+    /// satisfying the `before` requirement will have priority over `after`"), which falls out of its
+    /// two `coerceIn`s.
+    #[test]
+    fn padding_from_gives_the_maximum_to_before() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::components::text::Text;
+
+        let measure = |padded: bool| -> (f32, f32) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                let text = Text::new("Label").font_size(16.0);
+                let text = if padded {
+                    text.modifier(Modifier::new().padding_from_baseline(
+                        Some(40.0),
+                        Some(40.0),
+                    ))
+                } else {
+                    text
+                };
+                text.build(ctx);
+            });
+            // 30 of height in total: 40 above the baseline and 40 below it cannot both fit. (The
+            // first version used 25 and 25, which DID fit — measured, and the test passed the branch
+            // it was meant to exercise without ever entering it.)
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 30.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("laid out");
+            (
+                nodes[root].measured_size.height,
+                nodes[root]
+                    .alignment_line(AlignmentLine::FIRST_BASELINE)
+                    .expect("baseline"),
+            )
+        };
+
+        let (natural_h, natural_line) = measure(false);
+        let (padded_h, padded_line) = measure(true);
+        assert_eq!(padded_h, 30.0, "the box stops at the incoming maximum");
+        assert_eq!(
+            padded_line,
+            30.0 - natural_h + natural_line,
+            "…and the content is pushed down as far as the space allows, so `after` got nothing"
+        );
+    }
+
+    /// A minimum larger than the padded content is satisfied, and the content still sits at `before`
+    /// — Compose's "position the content to satisfy the `before` requirement if specified"
+    /// (`foundation/layout/AlignmentLine.kt:50-55`).
+    #[test]
+    fn padding_from_satisfies_a_minimum_without_moving_the_line() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::components::text::Text;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Text::new("Label")
+                .font_size(16.0)
+                // Larger than the natural baseline (~13 for 16 pt), or there would be no padding to
+                // place at all — the first version asked for 10 and measured the untouched 12.9.
+                .modifier(Modifier::new().padding_from_baseline(Some(40.0), None))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 100.0, 300.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        assert_eq!(
+            nodes[root].measured_size.height, 100.0,
+            "the minimum wins over the padded content"
+        );
+        assert_eq!(
+            nodes[root]
+                .alignment_line(AlignmentLine::FIRST_BASELINE)
+                .expect("baseline"),
+            40.0,
+            "and the line is still 40 from the top, not centred in the leftover space"
+        );
+
+        // The control: without the modifier the text fills the min-height on its own, which is why
+        // the relaxation above has to happen BEFORE the content is measured — measured with the
+        // padding added on top of that 100, the box came out 122.73 tall.
+        let mut plain = crate::runtime::composer::Composer::new();
+        plain.compose(|ctx| {
+            Text::new("Label").font_size(16.0).build(ctx);
+        });
+        plain.layout(Constraints::new(0.0, 300.0, 100.0, 300.0));
+        let plain_nodes = plain.arena_nodes();
+        let plain_root = plain.layout_root_idx().expect("laid out");
+        assert_eq!(
+            plain_nodes[plain_root].measured_size.height, 100.0,
+            "the natural size under this constraint IS the minimum"
+        );
+    }
+
     /// A line-aligned child whose text WRAPS below the line makes the row taller than any child in
     /// it: Compose sizes the cross axis to `beforeCrossAxisAlignmentLine +
     /// afterCrossAxisAlignmentLine`, not to the tallest child (`RowColumnMeasurePolicy.kt:253-259`),

@@ -273,6 +273,17 @@ pub(crate) enum ModifierElement {
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },
+    /// Pad this node so its content's alignment line sits `before` from the near edge and `after`
+    /// from the far one (Compose's `Modifier.paddingFrom`). `None` is Compose's
+    /// `Dp.Unspecified` — that side is not constrained.
+    ///
+    /// The axis follows the line's orientation, and the padding is worked out AFTER the content is
+    /// measured, because it is the content's line that says how much padding is needed.
+    PaddingFrom {
+        line: crate::layout::AlignmentLine,
+        before: Option<f32>,
+        after: Option<f32>,
+    },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
     ///
     /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
@@ -908,6 +919,48 @@ impl Modifier {
     /// its siblings', which is how a label lines up with a taller icon or a larger font beside it.
     pub fn align_by_baseline(self) -> Self {
         self.align_by(crate::layout::AlignmentLine::FIRST_BASELINE)
+    }
+
+    /// Pad this node so the distance from its near edge to its content's alignment line is `before`
+    /// and from the line to the far edge is `after` — Compose's `Modifier.paddingFrom`
+    /// (`foundation/layout/AlignmentLine.kt:65`).
+    ///
+    /// Which edges those are follows the line's orientation: a horizontal line (the text baselines)
+    /// means top and bottom. The other axis is untouched, and `None` is Compose's `Dp.Unspecified` —
+    /// that side is unconstrained, and the content is then placed against the other one.
+    ///
+    /// The padding is capped by the incoming maximum on that axis, and `before` wins when both cannot
+    /// fit (Compose's contract, `:44-55`).
+    pub fn padding_from(
+        self,
+        line: crate::layout::AlignmentLine,
+        before: Option<f32>,
+        after: Option<f32>,
+    ) -> Self {
+        self.push(ModifierElement::PaddingFrom { line, before, after })
+    }
+
+    /// Compose's `Modifier.paddingFromBaseline(top, bottom)`: `top` from the container's top edge to
+    /// the FIRST text baseline, `bottom` from the LAST one to the container's bottom. Either side may
+    /// be `None` (Compose's `Dp.Unspecified`), and Compose expresses it as one `paddingFrom` per
+    /// specified side, which is what this does — the two compose, so both can be in force.
+    pub fn padding_from_baseline(self, top: Option<f32>, bottom: Option<f32>) -> Self {
+        let m = match top {
+            Some(top) => self.padding_from(
+                crate::layout::AlignmentLine::FIRST_BASELINE,
+                Some(top),
+                None,
+            ),
+            None => self,
+        };
+        match bottom {
+            Some(bottom) => m.padding_from(
+                crate::layout::AlignmentLine::LAST_BASELINE,
+                None,
+                Some(bottom),
+            ),
+            None => m,
+        }
     }
 
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
@@ -2058,6 +2111,22 @@ impl Modifier {
         None
     }
 
+    /// Every `paddingFrom` on this modifier, in chain order — one entry per element, because
+    /// `padding_from_baseline(top, bottom)` is two of them and both are in force (Compose chains the
+    /// same way, `foundation/layout/AlignmentLine.kt:144`).
+    ///
+    /// Applied after the content is measured: it is the content's own alignment line that says how
+    /// much padding the node needs.
+    pub fn get_padding_from(&self) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::PaddingFrom { line, before, after } => Some((*line, *before, *after)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
     pub fn get_align_self(&self) -> Option<crate::layout::Alignment> {
         for el in &self.elements {
@@ -2315,6 +2384,12 @@ impl Debug for ModifierElement {
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
+            Self::PaddingFrom { line, before, after } => f
+                .debug_struct("PaddingFrom")
+                .field("line", line)
+                .field("before", before)
+                .field("after", after)
+                .finish(),
             Self::LayoutWeight { weight, fill } => f.debug_struct("LayoutWeight").field("weight", weight).field("fill", fill).finish(),
             Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
             Self::RequiredSize { width, height } => f

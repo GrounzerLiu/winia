@@ -329,6 +329,15 @@ pub struct LayoutNode {
     /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
     /// lines. Usually empty, and an empty `Vec` does not allocate.
     pub alignment_lines: Vec<(AlignmentLine, f32)>,
+    /// Where a LEAF's own content sits inside its box after `Modifier::padding_from` — the measured
+    /// `(x inset, y inset, content width, content height)`, or `None` when nothing on this node asks
+    /// for a line-relative padding.
+    ///
+    /// It has to be carried rather than recomputed: how much padding the line needs depends on the
+    /// content's line, which only exists once the content has been measured, and the renderer draws
+    /// the content itself (a text draws at its node's origin, inset by the padding it can query).
+    /// A container does not use this — it moves its children.
+    pub content_box_from_line: Option<(f32, f32, f32, f32)>,
     /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
     pub children: Vec<usize>,
     /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
@@ -545,6 +554,7 @@ impl LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
+            content_box_from_line: None,
             children: Vec::new(),
             measure_policy,
             focused: false,
@@ -630,6 +640,7 @@ impl Default for LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
+            content_box_from_line: None,
             has_image_content: false,
             children: Vec::new(),
             measure_policy: None,
@@ -2956,6 +2967,27 @@ fn measure_node_inner(
         inner_constraints = inner_constraints.offset(pad_x, pad_y);
     }
 
+    // 2b. `Modifier::paddingFrom` relaxes the MINIMUM on its line's axis before the content is
+    // measured, the way Compose measures its child with `constraints.copy(minHeight = 0)`
+    // (`foundation/layout/AlignmentLine.kt:311-315`). Without it a min height handed down from above
+    // is already inside the content's own size, and the padding is then added on top of it — measured:
+    // a text under `min_height = 100` with `padding_from_baseline(Some(40))` came out 122.73 tall
+    // instead of 100, because the 100 was counted as the content.
+    //
+    // The minimum is not dropped: the padding step below puts it back, and the content still sits at
+    // `before` inside the taller box.
+    let mut pad_from_min_width = inner_constraints.min_width;
+    let mut pad_from_min_height = inner_constraints.min_height;
+    for (line, _, _) in nodes[idx].modifier.get_padding_from() {
+        if line.horizontal {
+            pad_from_min_height = pad_from_min_height.max(inner_constraints.min_height);
+            inner_constraints.min_height = 0.0;
+        } else {
+            pad_from_min_width = pad_from_min_width.max(inner_constraints.min_width);
+            inner_constraints.min_width = 0.0;
+        }
+    }
+
     // 3. 应用 FillMax 约束（在 scroll 修改 max 之前，保存 viewport 约束）
     let viewport_height = inner_constraints.max_height;
     let viewport_width = inner_constraints.max_width;
@@ -3275,6 +3307,97 @@ fn measure_node_inner(
         nodes[idx].measured_size = outer_size;
         (outer_size, Vec::new())
     };
+
+    // ── `Modifier::paddingFrom` ──
+    //
+    // Runs here, after the content is measured, because it is the content's own alignment line that
+    // says how much padding the node needs — Compose's `alignmentLineOffsetMeasure`
+    // (`foundation/layout/AlignmentLine.kt:304-358`):
+    //
+    //   linePosition = the content's line (0 when it reports none)
+    //   paddingBefore = (before - line).coerceIn(0, axisMax - axis)          // 0 when unspecified
+    //   paddingAfter  = (after - axis + line).coerceIn(0, axisMax - axis - paddingBefore)
+    //   size on the line's axis = max(paddingBefore + axis + paddingAfter, min)
+    //   content placed at paddingBefore when `before` is given, else at size - paddingAfter - axis
+    //
+    // `before` therefore wins when the two cannot both fit, and the padding never pushes the node past
+    // the incoming maximum on that axis. The other axis is untouched.
+    //
+    // Two elements can be in force at once (`padding_from_baseline(top, bottom)` is one for the first
+    // baseline and one for the last), and each sees what the one before it did — the same nesting
+    // Compose gets from stacking two layout nodes. So the running size, the content's box and the
+    // node's own lines all move along with the padding, which is what lets the second element read a
+    // line the first has already shifted, and an outer `align_by` see the padded position.
+    let mut leaf_box: Option<(f32, f32, f32, f32)> = None;
+    for (line, before, after) in nodes[idx].modifier.get_padding_from() {
+        let horizontal = line.horizontal;
+        let size = result.0;
+        let axis = if horizontal { size.height } else { size.width };
+        let axis_max = if horizontal { inner_constraints.max_height } else { inner_constraints.max_width };
+        // The minimum the padding must honour — the one from BEFORE the relaxation above, since the
+        // content was measured without it.
+        let min_axis = if horizontal { pad_from_min_height } else { pad_from_min_width };
+        let line_position = nodes[idx].alignment_line(line).unwrap_or(0.0);
+        let padding_before = (before.unwrap_or(0.0) - line_position).clamp(0.0, (axis_max - axis).max(0.0));
+        let padding_after = (after.unwrap_or(0.0) - axis + line_position)
+            .clamp(0.0, (axis_max - axis - padding_before).max(0.0));
+        let grown = (padding_before + axis + padding_after).max(min_axis).max(axis);
+        let placed_at = if before.is_some() {
+            padding_before
+        } else {
+            grown - padding_after - axis
+        };
+
+        // The content's box inside this node, tracked across the elements. A leaf's content is
+        // whatever it draws itself, inset by its `padding`; a container's is its children, which move.
+        if leaf_box.is_none() && nodes[idx].children.is_empty() {
+            let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
+            leaf_box = Some((
+                if nodes[idx].layout_direction == LayoutDirection::Rtl { pad_e } else { pad_s },
+                pad_t,
+                (size.width - pad_s - pad_e).max(0.0),
+                (size.height - pad_t - pad_b).max(0.0),
+            ));
+        }
+        if horizontal {
+            result.0 = Size::new(size.width, grown);
+            if let Some((ix, iy, iw, ih)) = leaf_box.as_mut() {
+                let _ = (ix, iw, ih);
+                *iy += placed_at;
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.y += placed_at;
+                }
+            }
+            for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                if l.horizontal {
+                    *value += placed_at;
+                }
+            }
+        } else {
+            result.0 = Size::new(grown, size.height);
+            if let Some((ix, _iy, _iw, _ih)) = leaf_box.as_mut() {
+                *ix += placed_at;
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.x += placed_at;
+                }
+            }
+            for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                if !l.horizontal {
+                    *value += placed_at;
+                }
+            }
+        }
+        nodes[idx].measured_size = result.0;
+    }
+    if leaf_box.is_some() {
+        // The last element wins: it is the outermost, so its box is where the content ended up.
+        let (ix, iy, iw, ih) = leaf_box.unwrap();
+        nodes[idx].content_box_from_line = Some((ix, iy, iw, ih));
+    }
 
     // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）
     // 推导节点尺寸（对标 Compose——aspect 的 incoming = 链中 aspect 位置的
