@@ -252,11 +252,35 @@ pub(crate) enum PaintDisposition {
     Placeholder,
 }
 
+/// How a container combines the values its children report for one line — Compose's
+/// `AlignmentLine(merger)` (`ui/layout/AlignmentLine.kt:60-66`).
+///
+/// Compose holds a closure; winia holds the two mergers Compose actually ships, so a line stays a
+/// `Copy` constant that can be compared and used in a `const`. A caller-defined merger is the part
+/// that stays unaligned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LineMerger {
+    /// The smallest child value — the FIRST of several lines, as `FirstBaseline = (::min)` is.
+    Min,
+    /// The largest — the LAST, as `LastBaseline = (::max)` is.
+    Max,
+}
+
+impl LineMerger {
+    fn merge(self, a: f32, b: f32) -> f32 {
+        match self {
+            LineMerger::Min => a.min(b),
+            LineMerger::Max => a.max(b),
+        }
+    }
+}
+
 /// A line a node reports and that a parent can align children by — Compose's `AlignmentLine`.
 ///
-/// Compose's type also carries a merger so a custom line can combine several children's values
-/// (`AlignmentLine(merger)`); winia starts with the one line that matters in practice, the first
-/// text baseline, and a line is identified by value so it is a constant.
+/// A line is identified by value, so it is a constant. A container INHERITS its children's lines and
+/// publishes the merged value, shifted into its own coordinates, which is what lets an outer Row
+/// align by a baseline that lives several levels down (`measure_node_inner` does the merging, right
+/// after the policy has placed the children).
 ///
 /// `horizontal` says which axis the line runs across, matching Compose's split: the baselines are
 /// `HorizontalAlignmentLine`s, lines that a Row reads down its cross axis.
@@ -264,13 +288,26 @@ pub(crate) enum PaintDisposition {
 pub struct AlignmentLine {
     pub horizontal: bool,
     id: u8,
+    /// How a container merges several children's values for this line.
+    merger: LineMerger,
 }
 
 impl AlignmentLine {
     /// The distance from a node's top to the baseline of its first line of text
-    /// (`AlignmentLine.FirstBaseline`). Published by text leaves, which is what makes
-    /// `Modifier::align_by_baseline` useful.
-    pub const FIRST_BASELINE: AlignmentLine = AlignmentLine { horizontal: true, id: 0 };
+    /// (`AlignmentLine.FirstBaseline`, whose merger is `::min`). Published by text leaves, which is
+    /// what makes `Modifier::align_by_baseline` useful.
+    pub const FIRST_BASELINE: AlignmentLine =
+        AlignmentLine { horizontal: true, id: 0, merger: LineMerger::Min };
+
+    /// The distance to the baseline of the LAST line of text (`AlignmentLine.LastBaseline`,
+    /// `::max`) — the line to align by when the bottom of the text block is what should line up.
+    pub const LAST_BASELINE: AlignmentLine =
+        AlignmentLine { horizontal: true, id: 1, merger: LineMerger::Max };
+
+    /// Apply this line's merger to two values, for a container combining its children's lines.
+    pub fn merge(&self, a: f32, b: f32) -> f32 {
+        self.merger.merge(a, b)
+    }
 }
 
 /// 布局树中的一个节点。
@@ -3021,6 +3058,43 @@ fn measure_node_inner(
         }
         // apply positions
         policies[pidx].place(nodes, &children, &placements);
+        // ── Alignment-line inheritance ──
+        //
+        // A container reports the lines its children report, shifted into its own coordinates, with
+        // each line's own merger combining them — Compose's rule (`ui/layout/AlignmentLine.kt:60-66`:
+        // the position of a line within a layout is the merger applied over the children's values).
+        // This is what lets a Row align by a baseline that lives inside a child: without it only a
+        // DIRECT child's own line is visible, so `align_by_baseline` on a Column wrapping text found
+        // nothing and fell back to the child's top edge.
+        //
+        // Done here rather than in every policy because this is the one point that has both the
+        // children's lines (set during their own measure) and their positions (just placed), and a
+        // policy does not even know its own node index.
+        //
+        // A leaf's own line is untouched: it has no children, so the loop below is empty for it.
+        for child in &children {
+            // Only the lines the child actually reports; a child that reports none contributes none.
+            // `alignment_lines` is a small Vec (usually empty), so this is a cheap nested loop.
+            let child_position = nodes[*child].position;
+            let child_lines = nodes[*child].alignment_lines.clone();
+            for (line, value) in child_lines {
+                // A horizontal line runs ACROSS the horizontal axis, so its position is a vertical
+                // offset from this node's top; a vertical line's position is horizontal.
+                let absolute = if line.horizontal {
+                    child_position.y + value
+                } else {
+                    child_position.x + value
+                };
+                // MERGE, not overwrite: two children reporting the same line combine through the
+                // line's own merger (`::min` for the first baseline of a block, `::max` for the
+                // last), which is what Compose's `merge` does.
+                let merged = match nodes[idx].alignment_line(line) {
+                    Some(previous) => line.merge(previous, absolute),
+                    None => absolute,
+                };
+                nodes[idx].set_alignment_line(line, merged);
+            }
+        }
         // Record whether any child asks for a paint order of its own (`Modifier::z_index`). The
         // renderer and the hit test consult this before doing any ordering work, so the common case
         // (nobody sets a z) pays nothing for the feature existing.
@@ -3123,16 +3197,33 @@ fn measure_node_inner(
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
-            // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its first
-            // text baseline, measured from the node's own top, exactly as Compose's text does. Taken
-            // from the paragraph just cached, so it is the baseline of the layout the size came from.
-            let baseline = nodes[idx]
-                .cached_paragraph
-                .borrow()
-                .as_ref()
-                .map(|para| para.alphabetic_baseline() as f32);
-            if let Some(baseline) = baseline {
-                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE, baseline);
+            // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its text
+            // baselines, measured from the node's own top, exactly as Compose's text does. Taken from
+            // the paragraph just cached, so they are the baselines of the layout the size came from.
+            //
+            // Both of Compose's baselines: `FirstBaseline` is the paragraph's own
+            // `alphabetic_baseline`, and `LastBaseline` is the last line's (`::max`, the line to align
+            // by when the bottom of a wrapped block is what should line up).
+            let (first, last) = {
+                let paragraph = nodes[idx].cached_paragraph.borrow();
+                match paragraph.as_ref() {
+                    Some(para) => {
+                        let first = para.alphabetic_baseline() as f32;
+                        let last = para
+                            .get_line_metrics()
+                            .last()
+                            .map(|m| m.baseline as f32)
+                            .unwrap_or(first);
+                        (Some(first), Some(last))
+                    }
+                    None => (None, None),
+                }
+            };
+            if let Some(first) = first {
+                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE, first);
+            }
+            if let Some(last) = last {
+                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::LAST_BASELINE, last);
             }
             // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
             // 高度 +20 预留，防与下方元素重叠）

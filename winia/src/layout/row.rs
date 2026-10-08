@@ -278,6 +278,87 @@ mod tests {
         );
     }
 
+    /// A line is INHERITED: a container reports the lines its children report, shifted into its own
+    /// coordinates and merged — Compose's rule (`ui/layout/AlignmentLine.kt:60-66`). Without it a Row
+    /// could only see a DIRECT child's line, so `align_by_baseline` on a Column wrapping text found
+    /// nothing and fell back to the Column's top edge.
+    ///
+    /// Measured both ways like the test above: the control (no modifier on the Column) has the inner
+    /// text's baseline somewhere else entirely, and the assertion only means something because of it.
+    #[test]
+    fn a_baseline_inside_a_child_is_visible_to_the_row() {
+        use crate::layout::AlignmentLine;
+        use crate::modifier::Modifier;
+        use crate::layout::components::{Column, Row};
+        use crate::components::text::Text;
+        use crate::layout::node::LayoutNode;
+
+        /// Every text's baseline in the ROOT's coordinates, walking down so a nested text is measured
+        /// where it is actually drawn.
+        fn absolute_baselines(composer: &crate::runtime::composer::Composer) -> Vec<f32> {
+            fn walk(nodes: &[LayoutNode], idx: usize, y: f32, out: &mut Vec<f32>) {
+                let y = y + nodes[idx].position.y;
+                if nodes[idx].has_text_content {
+                    if let Some(line) = nodes[idx].alignment_line(AlignmentLine::FIRST_BASELINE) {
+                        out.push(y + line);
+                    }
+                }
+                for &c in &nodes[idx].children {
+                    walk(nodes, c, y, out);
+                }
+            }
+            let nodes = composer.arena_nodes();
+            let mut out = Vec::new();
+            if let Some(root) = composer.layout_root_idx() {
+                walk(nodes, root, 0.0, &mut out);
+            }
+            out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            out
+        }
+
+        let baselines = |aligned: bool| -> Vec<f32> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Row::new().build(ctx, |ctx| {
+                    // The small text is one level down, inside a Column. BOTH children carry the
+                    // modifier: a line-aligned child is placed by ITS line, so a single aligned child
+                    // among unaligned ones has nothing to meet — the lesson the test above records.
+                    // What is under test here is that the COLUMN's line is the inner text's.
+                    let column = Column::new();
+                    let column = if aligned {
+                        column.modifier(Modifier::new().align_by_baseline())
+                    } else {
+                        column
+                    };
+                    column.build(ctx, |ctx| {
+                        Text::new("small").font_size(12.0).build(ctx);
+                    });
+                    let big = Text::new("BIG").font_size(28.0);
+                    if aligned {
+                        big.modifier(Modifier::new().align_by_baseline()).build(ctx);
+                    } else {
+                        big.build(ctx);
+                    }
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            absolute_baselines(&composer)
+        };
+
+        let control = baselines(false);
+        assert_eq!(control.len(), 2, "both texts composed");
+        assert!(
+            (control[0] - control[1]).abs() > 1.0,
+            "the control is vacuous unless the two baselines differ without it: {control:?}"
+        );
+
+        let aligned = baselines(true);
+        assert_eq!(
+            aligned[0], aligned[1],
+            "the row aligns by the baseline INSIDE the column, not by the column's top edge"
+        );
+    }
+
     /// A line-aligned child whose text WRAPS below the line makes the row taller than any child in
     /// it: Compose sizes the cross axis to `beforeCrossAxisAlignmentLine +
     /// afterCrossAxisAlignmentLine`, not to the tallest child (`RowColumnMeasurePolicy.kt:253-259`),
@@ -330,6 +411,75 @@ mod tests {
             row_height > tallest,
             "the row must make room for what hangs below the line: row {row_height} against the \
              tallest child {tallest}"
+        );
+    }
+
+    /// Both of Compose's text baselines are published, and a container MERGES its children's values
+    /// through each line's own merger: `FirstBaseline` is `::min` and `LastBaseline` is
+    /// `::max` (`ui/layout/AlignmentLine.kt:94-103`).
+    ///
+    /// A wrapped text is what separates them: its first baseline sits on the first line, its last on
+    /// the final one. The Column around it then reports the minimum for the first line and the
+    /// maximum for the last — the same values, shifted into the Column's coordinates.
+    #[test]
+    fn a_container_merges_its_childrens_baselines() {
+        use crate::layout::AlignmentLine;
+        use crate::layout::components::Column;
+        use crate::components::text::Text;
+
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            Column::new().build(ctx, |ctx| {
+                // Narrow enough to wrap into several lines.
+                Text::new("a small text that wraps").font_size(12.0).modifier(crate::modifier::Modifier::new().width(40.0)).build(ctx);
+                Text::new("second").font_size(12.0).build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let nodes = composer.arena_nodes();
+        let column = composer.layout_root_idx().expect("laid out");
+        let texts: Vec<usize> = (0..nodes.len())
+            .filter(|&i| nodes[i].has_text_content)
+            .collect();
+        assert_eq!(texts.len(), 2, "both texts composed");
+
+        let wrapped = texts[0];
+        let first = nodes[wrapped]
+            .alignment_line(AlignmentLine::FIRST_BASELINE)
+            .expect("the wrapped text reports its first baseline");
+        let last = nodes[wrapped]
+            .alignment_line(AlignmentLine::LAST_BASELINE)
+            .expect("and its last");
+        assert!(
+            last > first,
+            "a wrapped text's last baseline is below its first: {first} vs {last}"
+        );
+
+        // The Column merged: FIRST is the minimum over its children (shifted by their positions),
+        // LAST the maximum.
+        let column_first = nodes[column]
+            .alignment_line(AlignmentLine::FIRST_BASELINE)
+            .expect("the column inherits the line");
+        let column_last = nodes[column]
+            .alignment_line(AlignmentLine::LAST_BASELINE)
+            .expect("and the last one");
+        let expected_first = nodes[wrapped].position.y + first;
+        let expected_last = texts
+            .iter()
+            .map(|&t| {
+                nodes[t].position.y
+                    + nodes[t]
+                        .alignment_line(AlignmentLine::LAST_BASELINE)
+                        .expect("both texts report a last baseline")
+            })
+            .fold(f32::MIN, f32::max);
+        assert_eq!(
+            column_first, expected_first,
+            "FirstBaseline merges with ::min — the first line of the first child"
+        );
+        assert_eq!(
+            column_last, expected_last,
+            "LastBaseline merges with ::max — the last line of the lowest child"
         );
     }
 }
