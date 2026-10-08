@@ -18,6 +18,15 @@
 //!
 //! `primaryActionContent`（androidx 的 FAB 槽）暂未实现——FAB 请放入
 //! WideNavigationRail 的 header（套件内建 rail 暂无 header 槽，后续版本补）。
+//!
+//! Known divergence, measured: an item's `remember`ed state does NOT survive a shape switch. Compose
+//! keeps it with `movableContentOf` (`NavigationSuiteScaffold.kt:577-578`) — the same content lambda is
+//! invoked in the new location and its nodes and remembered values move with it — and winia has no
+//! equivalent, so the abandoned branch's slots are dropped when its group ends without being visited.
+//! Measured on a 3-item bar → 2-item rail → 3-item bar round trip, with the item's state encoded into
+//! its icon width (10 + marker * 50) so a rebuild is unmistakable: the markers went 3 → 3 → 6, i.e.
+//! switching BACK rebuilt all three items. Returning to a shape therefore resets whatever the caller
+//! remembered inside an `icon`/`label` payload.
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};

@@ -25,6 +25,7 @@ use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::unit::Dp;
 use crate::components::sheet_state::{SheetState, SheetValue};
+use crate::layout::node::ContentAlignment;
 
 pub const SCAFFOLD_SHEET_PEEK_HEIGHT: Dp = Dp(56.0);
 pub const SCAFFOLD_SHEET_SHAPE_RADIUS: f32 = 28.0;
@@ -127,7 +128,9 @@ impl BottomSheetScaffold {
         // sheet_max_width：对齐 Compose 640.dp 居中（与 Modal 同语义——手机 480 铺满、
         // 平板按 max 宽居中）。Dp(f32::INFINITY) 表 Unspecified 铺满。
         // Same geometry as the modal sheet (and the same unit rule — see the helper).
-        let (sheet_w, sheet_pad_x) =
+        // Only the width: the box's centring supplies the inset now, so the padding the geometry
+        // hands back is not used here (the modal sheet still applies it itself).
+        let (sheet_w, _sheet_pad_x) =
             crate::components::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::layout::window_size().0);
         let container_color = self.container_color;
 
@@ -139,6 +142,13 @@ impl BottomSheetScaffold {
         }
         crate::layout::components::Stack::new()
             .modifier(root_mod)
+            // The sheet is a CENTRED panel: naming the centre lets the box do the centring, which is
+            // direction-symmetric, instead of an x inset that has to be direction-independent by
+            // hand. The box mirrors `Start`/`End` under RTL now (as Compose's `Alignment.TopStart`
+            // does), so a leading-edge placement would move the sheet to the other edge and the inset
+            // would then push it off centre (measured: the sheet landed at 390 in a 900-wide RTL
+            // window, where 130 is centred).
+            .content_alignment(ContentAlignment::TOP_CENTER)
             .build(ctx, |ctx| {
                 // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
                 // 对齐 Compose BottomSheetScaffold 的 contentWindowPadding（sheet 折叠时内容不被遮挡）
@@ -190,7 +200,8 @@ impl BottomSheetScaffold {
                 // -pad_x in RTL, with as much clipped off the left as left dead on the right.
                 let sheet_mod = Modifier::new()
                     .width(sheet_w)
-                    .absolute_offset(sheet_pad_x, st_for_offset.offset_state())
+                    // x = 0: the box's centre alignment owns the horizontal placement now.
+                    .absolute_offset(0.0, st_for_offset.offset_state())
                     .shadow(
                         1.0,
                         cur_shape,

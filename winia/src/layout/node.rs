@@ -101,9 +101,24 @@ impl ContentAlignment {
         Self { horizontal: a, vertical: a }
     }
 
-    /// Compose's `Alignment.align(size, space)`: the offset for a child of `child` inside a box of
-    /// `space`.
-    pub fn anchor(&self, child: Size, space: Size) -> (f32, f32) {
+    /// Compose's `Alignment.align(size, space, layoutDirection)`: the offset for a child of `child`
+    /// inside a box of `space`, with the horizontal half mirroring under RTL.
+    ///
+    /// The mirroring is Compose's, not an extra: `Alignment.TopStart` is `BiasAlignment(-1f, -1f)`
+    /// and the horizontal bias is NEGATED under RTL, so `Start` is the left edge in LTR and the right
+    /// one in RTL (`Alignment.kt:114-121`). The vertical half never mirrors. Compose's
+    /// `AbsoluteAlignment` (`TopLeft`, `CenterRight`, …) is the way to opt out of that; winia has no
+    /// equivalent yet, which the module doc records.
+    pub fn anchor(&self, child: Size, space: Size, direction: LayoutDirection) -> (f32, f32) {
+        let horizontal = if direction == LayoutDirection::Rtl {
+            match self.horizontal {
+                Alignment::Start => Alignment::End,
+                Alignment::End => Alignment::Start,
+                other => other,
+            }
+        } else {
+            self.horizontal
+        };
         let axis = |a: Alignment, child: f32, space: f32| match a {
             Alignment::Start => 0.0,
             Alignment::End => space - child,
@@ -111,7 +126,7 @@ impl ContentAlignment {
             Alignment::Stretch => 0.0,
         };
         (
-            axis(self.horizontal, child.width, space.width),
+            axis(horizontal, child.width, space.width),
             axis(self.vertical, child.height, space.height),
         )
     }
@@ -125,6 +140,13 @@ impl ContentAlignment {
     }
 }
 
+/// Recorded, not implemented: Compose also has `AbsoluteAlignment` (`TopLeft`, `CenterRight`, …), the
+/// values that do NOT mirror under RTL, for callers that mean "the left edge, whatever the direction".
+/// winia's equivalent is per-site (`Modifier::absolute_offset`), and nothing here needs the family
+/// yet — the two components that relied on a non-mirroring box alignment now name a position that is
+/// direction-symmetric instead (`NavigationDrawer` uses `Start` and lets the mirroring put it on the
+/// trailing edge; `BottomSheetScaffold` uses `TOP_CENTER`, whose centring is symmetric).
+///
 /// The `Start`-on-both-axes alignment, Compose's default everywhere a 2-D one is taken.
 impl Default for ContentAlignment {
     fn default() -> Self {

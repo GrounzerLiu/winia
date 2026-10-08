@@ -47,7 +47,7 @@ use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, Alignment, ContentAlignment, LayoutNode, MeasurePolicy, Placement};
+use crate::layout::node::{measure_node, Alignment, ContentAlignment, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
 use crate::modifier::Modifier;
 use crate::unit::{Offset, Size};
 
@@ -149,10 +149,17 @@ impl AnimatedSize {
         let target = ctx.remember_backchannel(|| None);
         let animation_start = ctx.remember_backchannel(|| None);
         let notified = ctx.remember_backchannel(|| None);
+        // Direction captured at composition: modifier override first, then the ambient local — the
+        // pattern `Row`/`Column` use (`layout/components.rs:61`).
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         let policy = SizePolicy {
             size: size.clone(),
             target: target.clone(),
             alignment: self.alignment,
+            direction,
             animation_start: animation_start.clone(),
             notified: notified.clone(),
             finished_listener: self.finished_listener,
@@ -186,6 +193,8 @@ struct SizePolicy {
     target: crate::runtime::state::Backchannel<Option<Size>>,
     /// Where a child sits inside the animated box (Compose's `alignment`, both axes).
     alignment: ContentAlignment,
+    /// The direction its horizontal half mirrors under.
+    direction: LayoutDirection,
     /// The size the running animation started from, and the target it is heading for — what the
     /// listener is called with, and the guard that keeps it from firing twice for one target.
     animation_start: crate::runtime::state::Backchannel<Option<Size>>,
@@ -266,7 +275,7 @@ impl MeasurePolicy for SizePolicy {
             // Compose's alignment never resizes the child — growing it is `fillMaxSize()`'s job. A
             // stretching axis is winia's own extra, so there the child takes the box's size, the way
             // `BoxLayout` does.
-            let (x, y) = self.alignment.anchor(*size, space);
+            let (x, y) = self.alignment.anchor(*size, space, self.direction);
             placements.push(Placement {
                 size: self.alignment.child_size(*size, space),
                 position: Offset::new(x, y),

@@ -18,6 +18,11 @@ pub struct BoxLayout {
     /// 两个轴各自的对齐（Compose 的二维 `contentAlignment`）。设了就用它，
     /// 否则退回上面的 `alignment`。
     pub content_alignment: Option<ContentAlignment>,
+    /// The layout direction the horizontal half of the alignment mirrors under — Compose resolves
+    /// `contentAlignment` with the measure scope's `layoutDirection`, so `Start` is the LEFT edge in
+    /// LTR and the RIGHT one in RTL (`Alignment.kt:114-121`). Captured at composition, like
+    /// `Row`/`Column` do (`layout/components.rs:61`).
+    pub direction: LayoutDirection,
 }
 
 impl BoxLayout {
@@ -25,6 +30,7 @@ impl BoxLayout {
         BoxLayout {
             alignment: Alignment::Start,
             content_alignment: None,
+            direction: LayoutDirection::Ltr,
         }
     }
 
@@ -37,6 +43,11 @@ impl BoxLayout {
     /// Each axis on its own, Compose's 2-D `contentAlignment` (`TopEnd`, `BottomCenter`, …).
     pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
         self.content_alignment = Some(a);
+        self
+    }
+
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
         self
     }
 
@@ -81,7 +92,7 @@ impl MeasurePolicy for BoxLayout {
         let placements: Vec<Placement> = child_sizes
             .iter()
             .map(|child_size| {
-                let (x, y) = align.anchor(*child_size, space);
+                let (x, y) = align.anchor(*child_size, space, self.direction);
                 let size = align.child_size(*child_size, space);
                 Placement {
                     size,
@@ -158,6 +169,31 @@ mod tests {
         assert_eq!(placements[0].position, Offset::new(25.0, 25.0));
         // 第二个 (100,80) 居中: x=(100-100)/2=0, y=0
         assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
+    }
+
+    /// The horizontal half mirrors under RTL, as Compose's `Alignment` does: `Start` is the left
+    /// edge in LTR and the RIGHT one in RTL (`Alignment.kt:114-121`), and the vertical half never
+    /// mirrors.
+    #[test]
+    fn a_sided_alignment_mirrors_under_rtl() {
+        for (direction, name, expected_x) in [
+            (LayoutDirection::Ltr, "Ltr", 50.0),
+            (LayoutDirection::Rtl, "Rtl", 0.0),
+        ] {
+            let box_layout = BoxLayout::new()
+                .content_alignment(ContentAlignment::TOP_END)
+                .direction(direction);
+            let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
+            let children: Vec<usize> = (0..nodes.len()).collect();
+            let (_, placements) =
+                box_layout.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+            // TopEnd on a 100x80 box with a 50x30 child: right edge in LTR, left edge in RTL.
+            assert_eq!(
+                placements[0].position,
+                Offset::new(expected_x, 0.0),
+                "TopEnd in {name} should put the child at x={expected_x}"
+            );
+        }
     }
 
     /// The mixed corners the one-axis [`Alignment`] cannot express: each axis on its own, Compose's

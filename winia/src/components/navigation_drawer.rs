@@ -763,9 +763,11 @@ impl ModalNavigationDrawer {
 
         Stack::new()
             .modifier(host)
-            // The sheet is placed against the leading edge, so one offset convention
-            // (open at 0, closed at ∓width) covers both directions.
-            .alignment(if rtl { Alignment::End } else { Alignment::Start })
+            // The sheet is placed against the LEADING edge, so one offset convention (open at 0,
+            // closed at ∓width) covers both directions. That used to be spelled out by flipping the
+            // alignment by hand; the box mirrors `Start` under RTL now — as Compose's
+            // `Alignment.TopStart` does — so naming the leading edge is enough.
+            .alignment(Alignment::Start)
             .build(ctx, |ctx| {
                 content(ctx);
                 scrim(ctx, &state, scrim_color, sheet_w);

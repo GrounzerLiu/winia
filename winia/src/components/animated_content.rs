@@ -36,7 +36,7 @@
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{interpolator, push_animatable, AnimationSpec, SpringSpec, TweenSpec};
 use crate::layout::box_layout::BoxLayout;
-use crate::layout::node::ContentAlignment;
+use crate::layout::node::{ContentAlignment, LayoutDirection};
 use crate::layout::{MeasurePolicy, Placement};
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
@@ -106,6 +106,8 @@ struct ContentSizePolicy {
     /// Compose's `contentAlignment` — applied to every generation, resolved against the animated
     /// container size (`AnimatedContent.kt:692-694`).
     content_alignment: ContentAlignment,
+    /// The direction its horizontal half mirrors under.
+    direction: LayoutDirection,
     prev_size: State<Option<(f32, f32)>>,
     /// The incoming generation's content size, to be locked into `prev_size` at switch time (the
     /// sizeTransform's starting point). A Backchannel: it is read once, at the switch, so notifying
@@ -158,7 +160,7 @@ impl MeasurePolicy for ContentSizePolicy {
             .zip(measured.iter())
             .map(|(_, s)| {
                 let child = Size::new(s.width, s.height);
-                let (x, y) = self.content_alignment.anchor(child, space);
+                let (x, y) = self.content_alignment.anchor(child, space, self.direction);
                 Placement {
                     size: self.content_alignment.child_size(child, space),
                     position: Offset::new(x, y),
@@ -309,8 +311,13 @@ impl<T: Clone + PartialEq + 'static> AnimatedContent<T> {
             })
         };
         let modifier = self.modifier.clone().then(container_layer);
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         let policy = ContentSizePolicy {
             content_alignment: self.content_alignment,
+            direction,
             prev_size: prev_size.clone(),
             last_size: last_size.clone(),
             container_size: container_size.clone(),

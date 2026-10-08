@@ -155,10 +155,12 @@ impl Stack {
         // 参数暂存（参数相等跳过——同 Column）
         ctx.changed(&self.alignment);
         ctx.changed(&self.content_alignment);
+        // 方向：modifier 覆盖 > CompositionLocal 默认（同 Column/Row）——对齐的水平轴靠它镜像
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         // content 闭包自动成为组合 scope（与 Column 一致）
         let policy = match self.content_alignment {
-            Some(a) => BoxLayout::new().content_alignment(a),
-            None => BoxLayout::new().alignment(self.alignment),
+            Some(a) => BoxLayout::new().content_alignment(a).direction(dir),
+            None => BoxLayout::new().alignment(self.alignment).direction(dir),
         };
         build_container(ctx, self.modifier, policy, content);
     }
