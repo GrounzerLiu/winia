@@ -29,13 +29,24 @@
 //! an `icon`/`label` payload.
 //!
 //! The composer half of the fix now exists — `ctx.remember_movable_content` keeps content's slots (and
-//! so its state) out of the tree entirely, and it is measured to survive a move between parents — so
-//! what this component still needs is its OWN half, the item payloads. They are `Box<dyn FnOnce>` (see
-//! `NavigationSuiteItem`), which is what makes holding both shapes at once impossible: one payload
-//! cannot be invoked twice in a frame. Compose's `content` lambda is a stable value it can re-remember
-//! the movable content from; a `Vec<NavigationSuiteItem>` full of one-shot closures cannot play that
-//! role, so the payloads have to become `Arc<dyn Fn>` first and the list has to be reachable from a
-//! remembered handle (a backchannel the scaffold writes each frame).
+//! so its state) out of the tree entirely, and it is measured to survive both a move between parents
+//! and a structure shrink inside the content. This component still needs its own half, and an attempt
+//! is worth recording because it got further than expected and then stopped at a real wall:
+//!
+//! - The item payloads must become `Arc<dyn Fn>` (they are `Box<dyn FnOnce>`, one-shot, so they cannot
+//!   be invoked from a remembered handle). That part works.
+//! - Pairing every item with an icon handle and a label handle works too, and the shapes' item trees
+//!   come out right — but the rail's own measure then reported 0 width (`wide_window_renders_expanded_
+//!   rail`, "展开轨宽 220", left 0). A shape container sizes itself from the children its policy sees,
+//!   and a payload that materializes through an inlined movable reference is a different child tree
+//!   than the one those policies were written against, so the shapes have to be re-examined against it
+//!   rather than bolted onto it.
+//! - That attempt did find a real composer bug, now fixed: the reference slot's path frame was left
+//!   open, so everything composed after a payload landed under a slot the walk ignores
+//!   (`navigation_bar.rs:659` / `navigation_rail.rs:1396`, "index out of bounds: the len is 2 but the
+//!   index is 2").
+//!
+//! The remaining work is therefore in the shape containers, not in the composer.
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};

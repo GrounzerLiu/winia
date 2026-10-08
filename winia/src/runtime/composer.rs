@@ -1744,6 +1744,13 @@ impl SlotTable {
             None => true,
         };
         self.movable_last_ref.insert(id, key);
+        // The reference slot is COMPLETE: it holds nothing of its own (the walk inlines the store in
+        // its place), so close it before switching into the store. Leaving its path frame open put the
+        // rest of the invoking component's composition INSIDE the ref slot — measured: the navigation
+        // suite's item lost its label child, because everything composed after the payload landed
+        // under a slot the walk ignores (`navigation_bar.rs:659`, `navigation_rail.rs:1396`,
+        // "index out of bounds: the len is 2 but the index is 2").
+        self.end_slot();
         if needs_recompose {
             if let Some(store) = self.movable_store.get_mut(&id) {
                 for child in &mut store.children {
@@ -1751,6 +1758,15 @@ impl SlotTable {
                 }
             }
         }
+        self.movable_saved_path = std::mem::take(&mut self.path);
+        self.movable_saved_counters = std::mem::take(&mut self.child_counters);
+        self.child_counters.push(0);
+        self.movable_composing = Some(id);
+        self.movable_store.entry(id).or_insert_with(|| {
+            let mut store = Slot::new(id);
+            store.movable_store = Some(id);
+            store
+        });
     }
 
     /// Stop composing movable content, back at the position that invoked it.
@@ -2755,6 +2771,13 @@ impl Composer {
         // （如 AnimatedContent B(3 文本) → A(2 文本) 的第 3 槽）若保留，下帧
         // Skip 收集时结构签名（desc children vs 缓存 children）不等 → 物化
         // 降级 0x0 → 子树塌缩。Skip 槽保留（content 未执行——结构需保留供恢复）。
+        //
+        // (Measured, and NOT done: keeping unvisited children inside movable content as well would
+        // preserve an `if`-branch's state — Compose does not, a removed branch's state is gone — and
+        // the case that DOES need preserving does not go through here at all: a caller's loop that
+        // composes fewer items simply never touches the trailing slots, so they stay, and the walk
+        // restores them. Gating this on `movable_composing.is_none()` was tried and made no difference
+        // to either movable test.)
         if !was_skip {
             self.slot_table.current_slot().children.retain(|c| c.visited);
         }
