@@ -588,6 +588,18 @@ pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
 
+/// Whether an animation is still running for ONE state.
+///
+/// [`is_animating`] answers for the process; a caller that needs to know when its own animation
+/// finished — a spring approaches its target asymptotically and never equals it, so comparing values
+/// is not enough — asks about the state it animates. `AnimatedSize` uses this to decide when to call
+/// its `finishedListener`, which Compose fires when `animateTo` returns rather than when the value
+/// lands exactly on the target.
+pub fn is_animating_state(id: crate::runtime::state::StateId) -> bool {
+    ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == id)
+        || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == id)
+}
+
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()

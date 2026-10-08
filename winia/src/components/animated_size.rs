@@ -23,42 +23,108 @@
 //! clipped to its own bounds (`this.clipToBounds()`, `:77`) so a child that already took its new size
 //! does not paint outside the box still animating toward it.
 //!
+//! What else matches: `alignment` (Compose's `Alignment.TopStart` default is winia's
+//! `Alignment::Start`), `finished_listener` (called with `(start size, target)` when the animation
+//! ends, and not for the first measurement, which snaps), and the default spec
+//! ([`AnimatedSizeDefaults::size_spec`]).
+//!
 //! Known differences from Compose, recorded rather than silent:
-//! - **A container component, not a `Modifier`.** Compose's modifier node is measured by the parent's
-//!   chain; winia's `Modifier` is pure data with no composition context, so the animation `State`
-//!   could not be held there (see the mechanism note above). The observable difference is that this
-//!   animates the container it builds, not an arbitrary modifier position.
-//! - **No `alignment`.** Compose aligns the CHILD inside the animated box (`:225-230`) and defaults
-//!   to `Alignment.TopStart`; winia places children at the origin, which is that default, but there
-//!   is no way to ask for another one. Visible while the box is larger than the child — which is the
-//!   second half of every shrink.
-//! - **No `finishedListener`.** Compose calls it with `(startSize, endSize)` when the animation ends
-//!   `Finished` (`:243`), never when it is superseded.
-//! - **No default spec.** Compose defaults to `spring(stiffness = StiffnessMediumLow,
-//!   visibilityThreshold = IntSize.VisibilityThreshold)`; every caller here passes one, and the
-//!   documented example passes `TweenSpec::default()`, which is not the same motion.
+//! - **A container component, not a `Modifier`.** Compose's node is measured inside the parent's
+//!   modifier chain; winia's `Modifier` is pure data with no composition context, so the animation
+//!   `State` could not live there (see the mechanism note above). The observable difference is that
+//!   this animates the container it builds, not an arbitrary modifier position.
+//! - **`Alignment` is one value for both axes.** Compose's parameter is 2-D, so it can ask for
+//!   `TopEnd`, `BottomCenter` and the rest of the mixed corners; winia's `Alignment`
+//!   (`layout/node.rs:57`) maps Start == `TopStart`, Center == `Center`, End == `BottomEnd`, and
+//!   `Stretch` — winia's own extra — gives the child the box's size, which Compose's alignment never
+//!   does (stretching there is `fillMaxSize()`).
 //! - **No lookahead.** Compose measures with lookahead constraints when a lookahead scope is present
 //!   (`:196-206`); winia has no lookahead scope.
+//! - **The listener runs inside the layout pass**, where Compose's runs in a coroutine. A State it
+//!   writes still notifies (verified: the demo's counter updates from a click), but work that must
+//!   not run during measure has no other hook here.
 
 use crate::animation::{push_animatable, AnimationSpec};
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
-use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+use crate::layout::node::{measure_node, Alignment, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset};
 use crate::modifier::Modifier;
 use crate::unit::Size;
+
+/// Defaults matching Compose's `Modifier.animateContentSize` overloads.
+pub struct AnimatedSizeDefaults;
+
+impl AnimatedSizeDefaults {
+    /// The spec Compose animates with when the caller passes none: `spring(stiffness =
+    /// StiffnessMediumLow, visibilityThreshold = IntSize.VisibilityThreshold)`
+    /// (`AnimationModifier.kt:70-74`).
+    ///
+    /// `StiffnessMediumLow` is 400 — winia spells that constant `SpringSpec::STIFFNESS_MEDIUM`, and
+    /// `SpringSpec::default()` is 200 (Compose's `StiffnessLow`), which is why the default here is
+    /// built explicitly rather than left to `SpringSpec::default()`. `IntSize.VisibilityThreshold`
+    /// is one pixel, so the spring stops once both axes are within 1 dp instead of the 0.01 that
+    /// suits a unit-interval float.
+    pub fn size_spec() -> AnimationSpec {
+        AnimationSpec::Spring(crate::animation::SpringSpec {
+            damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
+            mass: 1.0,
+            threshold: 1.0,
+        })
+    }
+}
+
+impl Default for AnimatedSize {
+    /// Compose's default motion ([`AnimatedSizeDefaults::size_spec`]) with the default alignment.
+    fn default() -> Self {
+        Self::new(AnimatedSizeDefaults::size_spec())
+    }
+}
 
 /// 尺寸变化自动动画容器
 pub struct AnimatedSize {
     spec: AnimationSpec,
     modifier: Modifier,
+    /// Where a child sits inside the animated box. `Alignment::Start` is Compose's default
+    /// (`Alignment.TopStart`).
+    alignment: Alignment,
+    /// Compose's `finishedListener`: called with `(size the animation started from, target)` when it
+    /// ends `Finished`.
+    finished_listener: Option<std::sync::Arc<dyn Fn(Size, Size) + Send + Sync>>,
 }
 
 impl AnimatedSize {
-    /// 尺寸动画规格（默认 300ms 线性 tween）
+    /// 尺寸动画规格
     pub fn new(spec: impl Into<AnimationSpec>) -> Self {
-        Self { spec: spec.into(), modifier: Modifier::new() }
+        Self {
+            spec: spec.into(),
+            modifier: Modifier::new(),
+            alignment: Alignment::Start,
+            finished_listener: None,
+        }
+    }
+
+    /// Where the content sits inside the animated box, for the frames where the two differ — the box
+    /// lags the content on every grow and leads it on every shrink. Compose's parameter is 2-D
+    /// (`Alignment.topStart()` by default, `AnimationModifier.kt:109`); winia's [`Alignment`] applies
+    /// to both axes (`layout/box_layout.rs:66-85`), so `Start` is `TopStart`, `Center` is `Center` and
+    /// `End` is `BottomEnd`, while the mixed corners Compose allows are not expressible.
+    pub fn alignment(mut self, a: Alignment) -> Self {
+        self.alignment = a;
+        self
+    }
+
+    /// Called with `(start size, target size)` once the size animation finishes, as Compose's
+    /// `finishedListener` is (`AnimationModifier.kt:242-245`). Not called for the first measurement,
+    /// which snaps rather than animating, and not called for a target the animation abandoned.
+    pub fn finished_listener(
+        mut self,
+        f: impl Fn(Size, Size) + Send + Sync + 'static,
+    ) -> Self {
+        self.finished_listener = Some(std::sync::Arc::new(f));
+        self
     }
 
     /// 容器层外观修饰符（background/border 等）——**画在容器上跟随尺寸动画**：
@@ -80,9 +146,15 @@ impl AnimatedSize {
         // 逻辑重复→每次 Enter 都直接跳转无动画）
         let size: State<Size> = ctx.remember(|| Size::new(0.0, 0.0));
         let target = ctx.remember_backchannel(|| None);
+        let animation_start = ctx.remember_backchannel(|| None);
+        let notified = ctx.remember_backchannel(|| None);
         let policy = SizePolicy {
             size: size.clone(),
             target: target.clone(),
+            alignment: self.alignment,
+            animation_start: animation_start.clone(),
+            notified: notified.clone(),
+            finished_listener: self.finished_listener,
             spec: self.spec,
         };
         let key = ctx.next_key();
@@ -111,6 +183,13 @@ struct SizePolicy {
     /// 上次目标尺寸（None = 首帧——直接跳转无动画）——Backchannel 而非
     /// RefCell：policy 实例每次 build 重建，跨重组保留且不触发通知
     target: crate::runtime::state::Backchannel<Option<Size>>,
+    /// Where a child sits inside the animated box (Compose's `alignment`).
+    alignment: Alignment,
+    /// The size the running animation started from, and the target it is heading for — what the
+    /// listener is called with, and the guard that keeps it from firing twice for one target.
+    animation_start: crate::runtime::state::Backchannel<Option<Size>>,
+    notified: crate::runtime::state::Backchannel<Option<Size>>,
+    finished_listener: Option<std::sync::Arc<dyn Fn(Size, Size) + Send + Sync>>,
     spec: AnimationSpec,
 }
 
@@ -131,13 +210,17 @@ impl MeasurePolicy for SizePolicy {
         // 测量子内容（取最大宽高——Stack 语义）
         let mut child_w = 0.0f32;
         let mut child_h = 0.0f32;
-        let mut placements = Vec::with_capacity(children.len());
+        let mut child_sizes = Vec::with_capacity(children.len());
         for &c in children {
             let (size, _) = measure_node(nodes, policies, c, constraints);
             child_w = child_w.max(size.width);
             child_h = child_h.max(size.height);
-            placements.push(Placement { size, position: Offset::ZERO });
+            child_sizes.push(size);
         }
+        // Positions are computed AFTER the animated size is known — the child is aligned inside the
+        // box, not inside its own size, which is the whole point of Compose's `alignment.align(size =
+        // measuredSize, space = IntSize(width, height))` (`AnimationModifier.kt:225-230`).
+        let mut placements: Vec<Placement> = Vec::with_capacity(child_sizes.len());
         // 目标变化 → 启动尺寸动画（首帧 Snap 直接跳转）
         let goal = Size::new(child_w, child_h);
         let prev = self.target.peek();
@@ -145,7 +228,11 @@ impl MeasurePolicy for SizePolicy {
             if prev.is_none() {
                 // 首帧：无动画直接跳转（Compose 语义）
                 self.size.as_raw().set_animating(goal);
+                // …and no listener call: Compose's runs when `animateTo` finishes, and the first
+                // measurement creates the `Animatable` at the target instead of animating to it.
             } else {
+                // The value the animation starts from, for the listener's first argument.
+                self.animation_start.set(Some(self.size.peek()));
                 push_animatable(self.size.clone(), goal, self.spec.clone());
             }
             self.target.set(Some(goal));
@@ -156,18 +243,55 @@ impl MeasurePolicy for SizePolicy {
         if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
             eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
         }
+        // Fired once per target, when the animated value has arrived — Compose's coroutine does the
+        // same by awaiting `animateTo` and checking that it ended `Finished` rather than cancelled.
+        // Fired once per target, when this state's animation has left the registry — "the animation
+        // finished", which is what Compose's coroutine awaits. Comparing `cur` with `goal` is NOT
+        // equivalent: the default spec here is a spring, which approaches its target asymptotically
+        // and never equals it (measured on the demo: with the equality test the listener never ran,
+        // because the value ended 319.2 against a target of 320).
+        if let (Some(listener), Some(start)) = (&self.finished_listener, self.animation_start.peek()) {
+            let settled = cur == goal || !crate::animation::is_animating_state(self.size.state_id());
+            if settled && self.notified.peek() != Some(goal) {
+                self.notified.set(Some(goal));
+                listener(start, goal);
+            }
+        }
+        // The box the frame ends up with, then each child inside it.
+        let box_w = constraints.constrain_width(cur.width);
+        let box_h = constraints.constrain_height(cur.height);
+        for size in &child_sizes {
+            let x = match self.alignment {
+                Alignment::Start => 0.0,
+                Alignment::End => box_w - size.width,
+                Alignment::Center => (box_w - size.width) / 2.0,
+                Alignment::Stretch => 0.0,
+            };
+            let y = match self.alignment {
+                Alignment::Start => 0.0,
+                Alignment::End => box_h - size.height,
+                Alignment::Center => (box_h - size.height) / 2.0,
+                Alignment::Stretch => 0.0,
+            };
+            // Compose's alignment never resizes the child — growing it is `fillMaxSize()`'s job. A
+            // stretching container is winia's own extra, so there it takes the box's size, the way
+            // `BoxLayout` does.
+            let (w, h) = if self.alignment == Alignment::Stretch {
+                (box_w, box_h)
+            } else {
+                (size.width, size.height)
+            };
+            placements.push(Placement {
+                size: Size::new(w, h),
+                position: Offset::new(x, y),
+            });
+        }
         // Constrain into the INCOMING constraints, as Compose does (`constraints.constrain(it)` —
         // "so that parent doesn't force center this layout", `AnimationModifier.kt:217`). It matters
         // when the constraints tighten while an animation toward a larger size is still running: the
         // animated value is then a size the parent never allowed, and reporting it would place the
         // siblings after this one outside the parent.
-        (
-            Size::new(
-                constraints.constrain_width(cur.width),
-                constraints.constrain_height(cur.height),
-            ),
-            placements,
-        )
+        (Size::new(box_w, box_h), placements)
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -189,13 +313,15 @@ mod tests {
     /// 测试用叶子：宽度由外部 State 驱动（50 / 200）
     struct SizedLeaf {
         w: f32,
+        /// Height too, so a test can give the vertical half of an alignment something to do.
+        h: f32,
     }
     impl SizedLeaf {
         fn build(&self, ctx: &mut ComposeCtx) {
             let key = ctx.next_key();
             ctx.start_restartable_group(
                 key,
-                Modifier::new().size(self.w, 30.0),
+                Modifier::new().size(self.w, self.h),
                 crate::layout::column::ColumnLayout::default(),
             );
             ctx.end_restartable_group();
@@ -215,6 +341,142 @@ mod tests {
             }
         }
         first_container(nodes, root)
+    }
+
+    /// The child of the AnimatedSize container, as (x, y, width, height).
+    fn child_box(composer: &Composer) -> (f32, f32, f32, f32) {
+        let Some(root) = composer.layout_root_idx() else { return (-1.0, -1.0, -1.0, -1.0) };
+        let nodes = composer.arena_nodes();
+        let c = nodes[root].children.first().copied().unwrap_or(usize::MAX);
+        if c == usize::MAX {
+            return (-1.0, -1.0, -1.0, -1.0);
+        }
+        let n = &nodes[c];
+        (n.position.x, n.position.y, n.measured_size.width, n.measured_size.height)
+    }
+
+    /// A child is aligned inside the ANIMATED box, not at the origin — Compose's
+    /// `alignment.align(size = measuredSize, space = IntSize(width, height))`
+    /// (`AnimationModifier.kt:225-230`).
+    ///
+    /// The visible half of this is a shrunk child in a box that has not caught up yet, so the test
+    /// shrinks 400 -> 60 and reads the child's x while the box is still wide.
+    #[test]
+    fn animated_size_aligns_the_child_inside_the_animating_box() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 400.0);
+                *holder.borrow_mut() = Some(w.clone());
+                AnimatedSize::new(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(5000),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .alignment(Alignment::Center)
+                .build(ctx, |ctx| {
+                    // 10 tall against the box's 30: the vertical half has slack to work with.
+                    SizedLeaf { w: w.get(), h: if w.get() > 100.0 { 30.0 } else { 10.0 } }.build(ctx);
+                });
+            });
+        };
+
+        recompose(&mut composer);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
+        let shrunk = holder.borrow().as_ref().unwrap().clone();
+        shrunk.set(60.0);
+        recompose(&mut composer);
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 400.0));
+
+        let (x, y, w, h) = child_box(&composer);
+        let box_w = container_width(&composer);
+        assert_eq!((w, h), (60.0, 10.0), "the child keeps its own measured size");
+        assert!(box_w > 100.0, "the box is still wide while it shrinks (box_w={box_w})");
+        assert!(
+            (x - (box_w - 60.0) / 2.0).abs() < 0.51,
+            "the child is centred in the box, not at the origin (x={x}, box_w={box_w})"
+        );
+        let box_h = 30.0;
+        assert!(
+            (y - (box_h - 10.0) / 2.0).abs() < 0.51,
+            "and centred vertically too (y={y}, box_h={box_h})"
+        );
+    }
+
+    /// Compose's `finishedListener` runs once, with `(start size, target)`, when the animation ends
+    /// `Finished` — and never for the first measurement, which snaps (`AnimationModifier.kt:242-245`).
+    #[test]
+    fn animated_size_reports_the_size_it_animated_from_and_to() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
+            Default::default();
+        let sink = reported.clone();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                AnimatedSize::new(crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(80),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .finished_listener({
+                    let sink = sink.clone();
+                    move |from: Size, to: Size| {
+                        sink.lock().unwrap().push((
+                            (from.width, from.height),
+                            (to.width, to.height),
+                        ));
+                    }
+                })
+                .build(ctx, |ctx| {
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut advance = |composer: &mut Composer| {
+            for _ in 0..10_000 {
+                if !crate::animation::update_animations() {
+                    break;
+                }
+                recompose(composer);
+            }
+            recompose(composer);
+        };
+
+        recompose(&mut composer);
+        assert!(reported.lock().unwrap().is_empty(), "the first measurement snaps, so it reports nothing");
+
+        let w = holder.borrow().as_ref().unwrap().clone();
+        w.set(200.0);
+        recompose(&mut composer);
+        advance(&mut composer);
+        assert_eq!(
+            reported.lock().unwrap().as_slice(),
+            &[((50.0, 30.0), (200.0, 30.0))],
+            "one call, with the size it animated from and the one it animated to"
+        );
+    }
+
+    /// The default is Compose's own default motion, not `SpringSpec::default()`.
+    #[test]
+    fn the_default_spec_is_compeses_spring() {
+        match AnimatedSizeDefaults::size_spec() {
+            crate::animation::AnimationSpec::Spring(s) => {
+                assert_eq!(s.stiffness, crate::animation::SpringSpec::STIFFNESS_MEDIUM, "StiffnessMediumLow is 400");
+                assert_eq!(s.damping_ratio, crate::animation::SpringSpec::DAMPING_RATIO_NO_BOUNCY);
+                assert_eq!(s.threshold, 1.0, "IntSize.VisibilityThreshold is one pixel");
+                assert_ne!(
+                    s.stiffness,
+                    crate::animation::SpringSpec::default().stiffness,
+                    "…and SpringSpec::default() is 200, so this had to be built explicitly"
+                );
+            }
+            other => panic!("the default should be a spring, got {other:?}"),
+        }
     }
 
     /// The animated value is reported through the INCOMING constraints, as Compose does
@@ -237,7 +499,7 @@ mod tests {
                     crate::animation::interpolator::Linear::new(),
                 ))
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get() }.build(ctx);
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
                 });
             });
         };
@@ -288,7 +550,7 @@ mod tests {
                 let w: State<f32> = ctx.remember(|| 50.0);
                 *holder.borrow_mut() = Some(w.clone());
                 AnimatedSize::new(crate::animation::TweenSpec::default()).build(ctx, |ctx| {
-                    SizedLeaf { w: w.get() }.build(ctx);
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -304,7 +566,7 @@ mod tests {
                     crate::animation::interpolator::Linear::new(),
                 ))
                 .build(ctx, |ctx| {
-                    SizedLeaf { w: w.get() }.build(ctx);
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -357,7 +619,7 @@ mod tests {
                 // 内容宽度恒为 80——w 变化只触发内容重建（不改变尺寸）
                 AnimatedSize::new(crate::animation::TweenSpec::default()).build(ctx, |ctx| {
                     let _ = w.get();
-                    SizedLeaf { w: 80.0 }.build(ctx);
+                    SizedLeaf { w: 80.0, h: 30.0 }.build(ctx);
                 });
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -378,5 +640,56 @@ mod tests {
             recompose(&mut composer);
             assert_eq!(container_width(&composer), 80.0, "尺寸不变时动画推进不应改变宽度");
         }
+    }
+
+    /// The listener runs under a spring too, and what it writes is visible — a State write from
+    /// inside the layout pass (which is where the listener is called).
+    ///
+    /// The equality test this replaced looked right and was not: the default spec is a spring, which
+    /// approaches its target asymptotically. It happened to land exactly here, but the demo — several
+    /// sections, a real event loop — showed the listener never running at all until the completion
+    /// test asked the animation registry instead of comparing values.
+    #[test]
+    fn animated_size_reports_through_the_default_spring_too() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut composer = Composer::new();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let reported = std::cell::RefCell::new(None::<State<u32>>);
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                // A State the listener writes into, read by something else in the tree — the shape
+                // the demo uses for its report.
+                let calls: State<u32> = ctx.remember(|| 0);
+                *reported.borrow_mut() = Some(calls.clone());
+                AnimatedSize::default()
+                    .finished_listener({
+                        let calls = calls.clone();
+                        move |_from: Size, _to: Size| { calls.update(|v| *v += 1); }
+                    })
+                    .build(ctx, |ctx| {
+                        SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        let w = holder.borrow().as_ref().unwrap().clone();
+        w.set(200.0);
+        recompose(&mut composer);
+        for _ in 0..10_000 {
+            if !crate::animation::update_animations() { break; }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            recompose(&mut composer);
+        }
+        recompose(&mut composer);
+        assert_eq!(container_width(&composer), 200.0, "the spring reached the target");
+        assert_eq!(
+            reported.borrow().as_ref().unwrap().peek(),
+            1,
+            "the listener ran once, and its State write is visible"
+        );
     }
 }
