@@ -4323,3 +4323,49 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
         "the calendar's own content should decide the dialog's height"
     );
 }
+
+/// The acceptance case for movable content: a navigation suite's items keep their state across a shape
+/// switch, so a caller's `remember`ed value inside an icon payload is not re-initialized.
+///
+/// The evidence is the fixture's own readout — `markers N flips M`, where the marker counts how many
+/// times the payload initializer ran (once per item, so 3) and the flip count proves the shape really
+/// moved. Measured with the shape switching every 350 ms, through a bar → rail → bar → rail round trip:
+/// before movable content the count was 6 (all three rebuilt on the switch), and with it, 3.
+///
+/// It runs in the fixture BINARY rather than as a unit test on purpose: a `#[test]` build derives
+/// `remember` keys from the path hash, while this binary uses the production keys, and the bug only
+/// shows up under the latter.
+#[test]
+fn a_navigation_suites_items_keep_their_state_across_a_shape_switch() {
+    let mut app = UiTest::launch("nav_suite_state");
+    // Wait for the first readout, then let several shape switches happen.
+    app.expect_text_timeout("markers 3 flips", Duration::from_secs(10));
+    let seen_bar = wait_for_text(&mut app, "shape bar", Duration::from_secs(10));
+    assert!(seen_bar, "the fixture must show the bar shape at some point");
+    let seen_rail = wait_for_text(&mut app, "shape rail", Duration::from_secs(10));
+    assert!(seen_rail, "and the rail shape, or nothing switched");
+    // Back to the bar: the round trip the measurement is about.
+    let seen_bar_again = wait_for_text(&mut app, "shape bar", Duration::from_secs(10));
+    assert!(seen_bar_again, "and back to the bar");
+
+    // The assertion: the count is STILL 3 — nothing was rebuilt by any of those switches. A readout
+    // that had gone to 6 would match no prefix below.
+    app.expect_text_timeout("markers 3 ", Duration::from_secs(5));
+}
+
+/// Poll the fixture's readouts until `text` appears in one of them, or the deadline passes.
+fn wait_for_text(app: &mut UiTest, text: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        app.refresh();
+        if let Some(semantics) = app.semantics() {
+            if semantics.to_string().contains(text) {
+                return true;
+            }
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}

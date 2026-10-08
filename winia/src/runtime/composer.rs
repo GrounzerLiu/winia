@@ -333,12 +333,28 @@ impl<'a> ComposeCtx<'a> {
     /// [`MovableContent::compose`](crate::runtime::movable::MovableContent::compose).
     pub(crate) fn begin_movable(&mut self, id: u64) -> bool {
         let key = self.next_key();
-        self.composer.slot_table.begin_movable(key, id)
+        if !self.composer.slot_table.begin_movable(key, id) {
+            return false;
+        }
+        // Isolate the CALL CHAIN while the content composes. A statement's key base is
+        // `mix(explicit id, chain hash)` (see `try_stable_base`), and the chain includes the component
+        // the statement sits in — exactly what must NOT reach inside movable content: the same payload
+        // invoked from a bar item and from a rail item would otherwise derive two different bases, land
+        // in two different slots, and have its `remember`ed state rebuilt on the shape switch. Clearing
+        // the chain makes the content's keys depend on the content's own structure only.
+        self.composer.movable_saved_scopes =
+            std::mem::take(&mut self.composer.scope_source_stack);
+        self.composer.movable_saved_stmts =
+            STMT_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        true
     }
 
     /// Give the slot table back to the invocation site.
     pub(crate) fn end_movable(&mut self) {
         self.composer.slot_table.end_movable();
+        self.composer.scope_source_stack =
+            std::mem::take(&mut self.composer.movable_saved_scopes);
+        STMT_STACK.with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_stmts));
     }
 
     /// Remember a write-back channel: same slot stability as `remember`, but
@@ -2212,6 +2228,10 @@ pub struct Composer {
 
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
     scope_source_stack: Vec<Option<u64>>,
+    /// The call chain while movable content composes: cleared inside it (see
+    /// `ComposeCtx::begin_movable`), so the content's keys do not depend on who invoked it.
+    movable_saved_scopes: Vec<Option<u64>>,
+    movable_saved_stmts: Vec<(u32, u32)>,
     /// ctx.key() 显式 key 栈（最高优先级）
     key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
@@ -2390,6 +2410,8 @@ impl Composer {
             remember_path_counters: crate::layout::node::SlotKeyMap::default(),
             scope_source_stack: Vec::new(),
             key_override_stack: Vec::new(),
+            movable_saved_scopes: Vec::new(),
+            movable_saved_stmts: Vec::new(),
             pending_recomposition: VecDeque::new(),
             needs_recomposition: true,
             arena: crate::layout::node::NodeArena::new(),

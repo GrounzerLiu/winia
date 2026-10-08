@@ -54,6 +54,7 @@
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
+use crate::runtime::movable::MovableContent;
 use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement};
@@ -98,11 +99,17 @@ pub fn navigation_suite_type() -> NavigationSuiteType {
 
 /// 套件 item 数据（形态无关——由 scaffold 按当前形态渲染成
 /// ShortNavigationBarItem 或 WideNavigationRailItem）
+///
+/// The payloads are `Arc<dyn Fn>` rather than `Box<dyn FnOnce>` because each one is composed as movable
+/// content: a handle per item, invoked by whichever shape is showing, so the state a CALLER `remember`s
+/// inside an `icon`/`label` payload moves with the item instead of being rebuilt when the shape changes
+/// its item subtree.
+#[derive(Clone)]
 pub struct NavigationSuiteItem {
     pub(crate) selected: bool,
     pub(crate) on_click: Option<Arc<dyn Fn() + Send + Sync>>,
-    pub(crate) icon: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
-    pub(crate) label: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    pub(crate) icon: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>,
+    pub(crate) label: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
 }
 
 /// items 收集器（`NavigationSuiteScaffold::new` 的 items 闭包参数）
@@ -114,15 +121,15 @@ impl NavigationSuiteItems {
     pub fn item(
         &mut self,
         selected: bool,
-        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
-        label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        icon: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+        label: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
         on_click: impl Fn() + Send + Sync + 'static,
     ) {
         self.0.push(NavigationSuiteItem {
             selected,
             on_click: Some(Arc::new(on_click)),
-            icon: Box::new(icon),
-            label: Some(Box::new(label)),
+            icon: Arc::new(icon),
+            label: Some(Arc::new(label)),
         });
     }
 
@@ -130,13 +137,13 @@ impl NavigationSuiteItems {
     pub fn item_without_label(
         &mut self,
         selected: bool,
-        icon: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        icon: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
         on_click: impl Fn() + Send + Sync + 'static,
     ) {
         self.0.push(NavigationSuiteItem {
             selected,
             on_click: Some(Arc::new(on_click)),
-            icon: Box::new(icon),
+            icon: Arc::new(icon),
             label: None,
         });
     }
@@ -287,6 +294,64 @@ impl NavigationSuiteScaffold {
             phase.set(SuitePhase::Idle);
         }
 
+        // ── items 作为 movable content（每个 item 两个句柄：icon / label）──
+        //
+        // Compose 让两个分支调用同一个内容（`NavigationSuiteScaffold.kt:577-578`），搬过去的是组合
+        // 状态。winia 的粒度放在单个 item 的**载荷**上：两种形态的 item 子树结构不同，一个"整块
+        // items"的 movable 内容帮不上忙；把载荷本身做成 movable 内容，形态只决定外面套什么，载荷里
+        // remember 的东西就不会因为换形态而重建。
+        //
+        // 载荷每帧都是新闭包，句柄却必须跨帧稳定 —— 所以句柄在**循环位置**上 remember（同序同位置
+        // = 同一个句柄），内容闭包通过 backchannel 读当帧载荷。
+        let payloads = ctx.remember_backchannel(|| Vec::<NavigationSuiteItem>::new());
+        payloads.set(self.items.clone());
+        let mut handles: Vec<(MovableContent, MovableContent)> = Vec::with_capacity(self.items.len());
+        for index in 0..self.items.len() {
+            let icon_source = payloads.clone();
+            let icon = ctx.remember_movable_content(move |ctx| {
+                ctx.key(("suite-item-icon", index), |ctx| {
+                    if let Some(item) = icon_source.get().get(index) {
+                        (item.icon)(ctx);
+                    }
+                });
+            });
+            let label_source = payloads.clone();
+            // Always a handle, even for an item without a label: the handles are positional, and one
+            // that appears later must not shift the ones after it. Its content is the empty label a
+            // rail needs, which is what the rail branch used to pass inline.
+            let label = ctx.remember_movable_content(move |ctx| {
+                ctx.key(("suite-item-label", index), |ctx| {
+                    match label_source.get().get(index).and_then(|item| item.label.clone()) {
+                        Some(label) => label(ctx),
+                        None => {
+                            crate::components::Text::new("").build(ctx);
+                        }
+                    }
+                });
+            });
+            handles.push((icon, label));
+        }
+        let items_for_shape: Vec<NavigationSuiteItem> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let (icon, label) = handles[index].clone();
+                NavigationSuiteItem {
+                    selected: item.selected,
+                    on_click: item.on_click.clone(),
+                    icon: Arc::new(move |ctx: &mut ComposeCtx| icon.compose(ctx)),
+                    // Only when the caller gave one: an item without a label must stay without one,
+                    // or a shape would lay out a label slot that nothing composes into.
+                    label: item.label.as_ref().map(|_| {
+                        let label = label.clone();
+                        Arc::new(move |ctx: &mut ComposeCtx| label.compose(ctx))
+                            as Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>
+                    }),
+                }
+            })
+            .collect();
+
         let suite_type = cur;
 
         // 内容区背景（对标 scaffold containerColor = background）
@@ -335,7 +400,7 @@ impl NavigationSuiteScaffold {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 ShortNavigationBar::new(move |ctx| {
-                                    for item in self.items {
+                                    for item in items_for_shape.clone() {
                                         render_bar_item(ctx, item, icon_position);
                                     }
                                 })
@@ -376,13 +441,20 @@ impl NavigationSuiteScaffold {
                         match ctx.start_restartable_group(mk, morph_modifier, morph) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
-                                let items = self.items;
+                                let items = items_for_shape.clone();
                                 WideNavigationRail::new(rail_state, move |ctx| {
                                     for item in items {
+                                        let icon = item.icon.clone();
+                                        let label = item
+                                            .label
+                                            .clone()
+                                            .unwrap_or_else(|| Arc::new(|ctx: &mut ComposeCtx| {
+                                                crate::components::Text::new("").build(ctx);
+                                            }));
                                         let b = WideNavigationRailItem::new(
                                             item.selected,
-                                            item.icon,
-                                            item.label.unwrap_or_else(|| Box::new(|ctx| crate::components::Text::new("").build(ctx))),
+                                            move |ctx| icon(ctx),
+                                            move |ctx| label(ctx),
                                         )
                                         .progress(rail_item_progress.clone())
                                         .on_click(move || {
@@ -470,15 +542,18 @@ fn render_bar_item(
     item: NavigationSuiteItem,
     icon_position: NavigationItemIconPosition,
 ) {
-    let mut b = ShortNavigationBarItem::new(item.selected, item.icon)
+    // The payloads are `Arc<dyn Fn>` (each composing that item's movable handle) while the item
+    // component takes them by value once, so they are handed over as closures that call through.
+    let icon = item.icon.clone();
+    let mut b = ShortNavigationBarItem::new(item.selected, move |ctx| icon(ctx))
         .icon_position(icon_position)
         .on_click(move || {
             if let Some(cb) = item.on_click.as_ref() {
                 cb()
             }
         });
-    if let Some(label) = item.label {
-        b = b.label(label);
+    if let Some(label) = item.label.clone() {
+        b = b.label(move |ctx| label(ctx));
     }
     b.build(ctx);
 }
