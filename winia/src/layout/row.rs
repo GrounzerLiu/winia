@@ -584,6 +584,128 @@ mod tests {
         );
     }
 
+    /// A caller-defined VERTICAL line, published from a modifier and aligned by — the horizontal
+    /// mirror of [`align_by_baseline_puts_two_sizes_on_one_line`], and the case Compose needs
+    /// `VerticalAlignmentLine` for (`ui/layout/AlignmentLine.kt:71-75`).
+    ///
+    /// There is no built-in vertical line in Compose either (material3's two are internal,
+    /// `InteractiveComponentSize.kt:166-167`), so the test defines its own: a child declares where its
+    /// line sits with `Modifier::alignment_line`, which is where a custom line is published.
+    ///
+    /// Measured both ways: the control has the two lines 25 apart, and the aligned case puts them both
+    /// on the same x — a Column's cross axis is horizontal, so this is the same machinery read the
+    /// other way round.
+    #[test]
+    fn a_custom_vertical_line_aligns_children_horizontally() {
+        use crate::layout::{AlignmentLine, LineMerger};
+        use crate::layout::components::Column;
+        use crate::modifier::Modifier;
+
+        let line = AlignmentLine::vertical(LineMerger::Min);
+
+        let lines = |aligned: bool| -> (f32, f32) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    // Wide child: its line is 30 from its start (0.25 of 120).
+                    let wide = Modifier::new()
+                        .size(120.0, 20.0)
+                        .alignment_line(line, |s| s.width * 0.25);
+                    let wide = if aligned { wide.align_by(line) } else { wide };
+                    crate::layout::components::Column::new()
+                        .modifier(wide)
+                        .build(ctx, |_ctx| {});
+                    // Narrow child: its line is 5 from its start.
+                    let narrow = Modifier::new().size(40.0, 20.0).alignment_line(line, |_s| 5.0);
+                    let narrow = if aligned { narrow.align_by(line) } else { narrow };
+                    crate::layout::components::Column::new()
+                        .modifier(narrow)
+                        .build(ctx, |_ctx| {});
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+            let nodes = composer.arena_nodes();
+            // The two children of the outer Column, found by their widths.
+            let kids = &nodes[composer.layout_root_idx().unwrap()].children;
+            let mut found = Vec::new();
+            for &c in kids {
+                let w = nodes[c].measured_size.width;
+                if let Some(v) = nodes[c].alignment_line(line) {
+                    if (w - 120.0).abs() < 0.01 || (w - 40.0).abs() < 0.01 {
+                        found.push(nodes[c].position.x + v);
+                    }
+                }
+            }
+            assert_eq!(found.len(), 2, "both children report the line: {found:?}");
+            (found[0], found[1])
+        };
+
+        let (control_a, control_b) = lines(false);
+        assert!(
+            (control_a - control_b).abs() > 1.0,
+            "the control is vacuous unless the two lines differ without it: {control_a} vs {control_b}"
+        );
+
+        let (aligned_a, aligned_b) = lines(true);
+        assert_eq!(
+            aligned_a, aligned_b,
+            "with `align_by` both children's vertical lines land on the same x"
+        );
+
+        // And the two lines a caller builds the same way are different lines — they would otherwise
+        // collide, since the type compares by value.
+        assert_ne!(
+            AlignmentLine::vertical(LineMerger::Min),
+            AlignmentLine::vertical(LineMerger::Min),
+            "each call makes a new line"
+        );
+    }
+
+    /// `padding_from` with a vertical line pads the HORIZONTAL axis and leaves the height alone —
+    /// the axis follows the line's orientation (`foundation/layout/AlignmentLine.kt:44-48`).
+    #[test]
+    fn padding_from_a_vertical_line_pads_the_width_only() {
+        use crate::layout::{AlignmentLine, LineMerger};
+        use crate::modifier::Modifier;
+
+        let line = AlignmentLine::vertical(LineMerger::Min);
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            // The padded node must NOT be tightly sized: `paddingFrom` is capped by the room the
+            // incoming constraints leave (`axisMax - axis`), and a `size(80, 20)` on this very node
+            // makes that zero — measured, and Compose's own `coerceIn` does the same. So the 80x20 is
+            // the CONTENT here, and the modifier goes on the container around it.
+            crate::layout::components::Column::new()
+                .modifier(
+                    Modifier::new()
+                        .alignment_line(line, |_s| 10.0)
+                        .padding_from(line, Some(25.0), None),
+                )
+                .build(ctx, |ctx| {
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().size(80.0, 20.0))
+                        .build(ctx, |_ctx| {});
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        assert_eq!(
+            (nodes[root].measured_size.width, nodes[root].measured_size.height),
+            (95.0, 20.0),
+            "15 of padding on the left (25 - the line at 10), and the height untouched"
+        );
+        assert_eq!(
+            nodes[root].alignment_line(line),
+            Some(25.0),
+            "and the line is where the caller asked"
+        );
+        assert_eq!(
+            nodes[nodes[root].children[0]].position.x, 15.0,
+            "the content moved over by the padding"
+        );
+    }
+
     /// A line-aligned child whose text WRAPS below the line makes the row taller than any child in
     /// it: Compose sizes the cross axis to `beforeCrossAxisAlignmentLine +
     /// afterCrossAxisAlignmentLine`, not to the tallest child (`RowColumnMeasurePolicy.kt:253-259`),

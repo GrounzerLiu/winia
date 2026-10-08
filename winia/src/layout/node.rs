@@ -277,20 +277,28 @@ impl LineMerger {
 
 /// A line a node reports and that a parent can align children by — Compose's `AlignmentLine`.
 ///
-/// A line is identified by value, so it is a constant. A container INHERITS its children's lines and
-/// publishes the merged value, shifted into its own coordinates, which is what lets an outer Row
-/// align by a baseline that lives several levels down (`measure_node_inner` does the merging, right
-/// after the policy has placed the children).
+/// A container INHERITS its children's lines and publishes the merged value, shifted into its own
+/// coordinates, which is what lets an outer Row align by a baseline that lives several levels down
+/// (`measure_node_inner` does the merging, right after the policy has placed the children).
 ///
-/// `horizontal` says which axis the line runs across, matching Compose's split: the baselines are
-/// `HorizontalAlignmentLine`s, lines that a Row reads down its cross axis.
+/// `horizontal` says which axis the line runs across, Compose's `HorizontalAlignmentLine` /
+/// `VerticalAlignmentLine` split: a horizontal line is a distance from the node's TOP and a Row reads
+/// it down its cross axis, while a vertical line is a distance from the node's START and a Column
+/// aligns children by it. The two built-ins are the text baselines; anything else comes from
+/// [`AlignmentLine::new`] and is published with [`Modifier::alignment_line`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AlignmentLine {
     pub horizontal: bool,
-    id: u8,
+    id: u64,
     /// How a container merges several children's values for this line.
     merger: LineMerger,
 }
+
+/// Ids for caller-defined lines, so two lines built the same way are different lines.
+///
+/// The type compares by value, so a constant id would make every `AlignmentLine::vertical(Min)`
+/// collide with every other one — the two built-ins have fixed ids below the counter's start.
+static NEXT_ALIGNMENT_LINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
 
 impl AlignmentLine {
     /// The distance from a node's top to the baseline of its first line of text
@@ -303,6 +311,31 @@ impl AlignmentLine {
     /// `::max`) — the line to align by when the bottom of the text block is what should line up.
     pub const LAST_BASELINE: AlignmentLine =
         AlignmentLine { horizontal: true, id: 1, merger: LineMerger::Max };
+
+    /// A caller-defined line: Compose's `HorizontalAlignmentLine(merger)` /
+    /// `VerticalAlignmentLine(merger)` in one constructor, chosen by `horizontal`.
+    ///
+    /// Each call is a NEW line — they never compare equal — so a component can hold one in a
+    /// `static`/`OnceLock` and hand it out, the way material3 holds
+    /// `MinimumInteractiveLeftAlignmentLine` and `MinimumInteractiveTopAlignmentLine`
+    /// (`material3/InteractiveComponentSize.kt:166-167`).
+    pub fn new(horizontal: bool, merger: LineMerger) -> Self {
+        Self {
+            horizontal,
+            id: NEXT_ALIGNMENT_LINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            merger,
+        }
+    }
+
+    /// Compose's `HorizontalAlignmentLine(merger)`: a distance from the node's top.
+    pub fn horizontal(merger: LineMerger) -> Self {
+        Self::new(true, merger)
+    }
+
+    /// Compose's `VerticalAlignmentLine(merger)`: a distance from the node's start.
+    pub fn vertical(merger: LineMerger) -> Self {
+        Self::new(false, merger)
+    }
 
     /// Apply this line's merger to two values, for a container combining its children's lines.
     pub fn merge(&self, a: f32, b: f32) -> f32 {
@@ -3307,6 +3340,18 @@ fn measure_node_inner(
         nodes[idx].measured_size = outer_size;
         (outer_size, Vec::new())
     };
+
+    // ── Caller-declared alignment lines (`Modifier::alignment_line`) ──
+    //
+    // Published BEFORE the `paddingFrom` step below, because that step measures against the lines a
+    // node reports — including one declared here. Compose declares them as the layout is produced
+    // (`layout(w, h, alignmentLines = mapOf(…))`); a `MeasurePolicy` in winia is never told its own
+    // node index, so the declaration travels on the modifier and is evaluated here, where the
+    // measured size exists.
+    for (line, value_of) in nodes[idx].modifier.get_alignment_line_values() {
+        let value = value_of(result.0);
+        nodes[idx].set_alignment_line(line, value);
+    }
 
     // ── `Modifier::paddingFrom` ──
     //

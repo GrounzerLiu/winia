@@ -273,6 +273,12 @@ pub(crate) enum ModifierElement {
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
     /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
     AlignBy { line: crate::layout::AlignmentLine },
+    /// A line a node reports, computed from its measured size — see
+    /// [`Modifier::alignment_line`]. Compose's `layout(alignmentLines = …)` in modifier form.
+    AlignmentLineValue {
+        line: crate::layout::AlignmentLine,
+        value: std::sync::Arc<dyn Fn(crate::unit::Size) -> f32 + Send + Sync>,
+    },
     /// Pad this node so its content's alignment line sits `before` from the near edge and `after`
     /// from the far one (Compose's `Modifier.paddingFrom`). `None` is Compose's
     /// `Dp.Unspecified` — that side is not constrained.
@@ -919,6 +925,26 @@ impl Modifier {
     /// its siblings', which is how a label lines up with a taller icon or a larger font beside it.
     pub fn align_by_baseline(self) -> Self {
         self.align_by(crate::layout::AlignmentLine::FIRST_BASELINE)
+    }
+
+    /// Report an alignment line for this node: the line sits `f(measured size)` from the node's top
+    /// (a horizontal line) or start (a vertical one).
+    ///
+    /// This is where a custom line is PUBLISHED, and it is the stand-in for Compose declaring a line
+    /// as the layout is produced — `Modifier.layout { measurable, constraints -> layout(w, h,
+    /// alignmentLines = mapOf(line to offset)) { … } }`. winia cannot do it from a `MeasurePolicy`
+    /// (a policy is never told its own node index), and a `Modifier` is the dataclass a component
+    /// hands to its node, so a closure over the measured size belongs here.
+    ///
+    /// The line then behaves like any other: a container inherits it through the merger, a parent
+    /// aligns a child by it with [`Modifier::align_by`], and [`Modifier::padding_from`] measures
+    /// against it. Publish several by calling this several times.
+    pub fn alignment_line(
+        self,
+        line: crate::layout::AlignmentLine,
+        f: impl Fn(crate::unit::Size) -> f32 + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::AlignmentLineValue { line, value: std::sync::Arc::new(f) })
     }
 
     /// Pad this node so the distance from its near edge to its content's alignment line is `before`
@@ -2115,6 +2141,24 @@ impl Modifier {
     /// `padding_from_baseline(top, bottom)` is two of them and both are in force (Compose chains the
     /// same way, `foundation/layout/AlignmentLine.kt:144`).
     ///
+    /// The lines this node reports itself, each with the closure that positions it from the measured
+    /// size — [`Modifier::alignment_line`]. Read after the content is measured, since that is when a
+    /// closure over the size can run.
+    pub fn get_alignment_line_values(
+        &self,
+    ) -> Vec<(
+        crate::layout::AlignmentLine,
+        std::sync::Arc<dyn Fn(crate::unit::Size) -> f32 + Send + Sync>,
+    )> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::AlignmentLineValue { line, value } => Some((*line, value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Applied after the content is measured: it is the content's own alignment line that says how
     /// much padding the node needs.
     pub fn get_padding_from(&self) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
@@ -2384,6 +2428,9 @@ impl Debug for ModifierElement {
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
             Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
+            Self::AlignmentLineValue { line, .. } => {
+                f.debug_struct("AlignmentLineValue").field("line", line).finish()
+            }
             Self::PaddingFrom { line, before, after } => f
                 .debug_struct("PaddingFrom")
                 .field("line", line)
