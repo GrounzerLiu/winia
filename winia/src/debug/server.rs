@@ -5,8 +5,6 @@
 //!         echo r | ./app              # 截图请求
 //! WebSocket: ws://127.0.0.1:9998（可用环境变量 WINIA_DEBUG_PORT 覆盖——UI 测试并行隔离）
 //!         wscat -c ws://localhost:9998 → 输入 c 190 130
-use crate::unit::Size;
-
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use std::net::TcpStream;
@@ -237,7 +235,7 @@ fn save_frame_png(path: &str) -> Result<(u32, u32), String> {
     )
     .ok_or_else(|| String::from("could not wrap the frame as a skia image"))?;
     let png = image
-        .encode_to_data(skia_safe::EncodedImageFormat::PNG)
+        .encode(None, skia_safe::EncodedImageFormat::PNG, 100)
         .ok_or_else(|| String::from("PNG encoding failed"))?;
     std::fs::write(path, png.as_bytes()).map_err(|e| format!("writing {path}: {e}"))?;
     Ok((w, h))
@@ -576,7 +574,8 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
     let size_h = if node.measured_size.height.is_finite() { node.measured_size.height } else { 0.0 };
     out.push_str(&format!(
-        r#"{indent}{{"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","tag":{},"focused":{},"children":["#,
+        r#"{indent}{{"id":{},"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","tag":{},"focused":{},"children":["#,
+        node.id,
         mod_desc,
         node.modifier.get_test_tag().map(|t| format!("\"{}\"", t)).unwrap_or_else(|| "null".into()),
         node.focused,
@@ -591,7 +590,7 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
 fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
     let mut parts: Vec<String> = modifier.elements().iter().filter_map(|el| match el {
         ModifierElement::Size { width, height } => Some(format!("size({:?},{:?})", width, height)),
-        ModifierElement::Background { color_fn, .. } => Some("bg(<dynamic>)".into()),
+        ModifierElement::Background { .. } => Some("bg(<dynamic>)".into()),
         ModifierElement::Clickable { .. } => Some("click".into()),
         ModifierElement::Focusable { .. } => Some("focus".into()),
         ModifierElement::Hoverable { .. } => Some("hover".into()),

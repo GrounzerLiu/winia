@@ -404,6 +404,7 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             // between here and the re-attach.
             adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
             let n = &mut composer.arena.nodes[idx];
+            let children_changed = n.children.len() != children.len() + usize::from(adopted_child.is_some());
             n.children.clear();
             // 按新 modifier 重新判定内容类型（复用路径不重建节点——必须同步
             // content-kind 标记，否则 measure_node 按旧标记走错路径：
@@ -435,7 +436,9 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
             n.on_remove = on_remove;
             n.slot_key = key;
-            n.dirty = dirty; // Dirty → 重测；Clean → 折叠（保留测量）
+            // Removing the last child has no dirty descendant to bubble. A changed child count must
+            // invalidate the parent directly, or its cached placement can overwrite a removed node.
+            n.dirty = dirty || children_changed;
             // A subcomposing node is re-measured when the COMPOSITION changed, not every frame: the
             // descriptor's `dirty` (a slot that re-ran, or a node that was rebuilt) is what says its
             // content may differ, and `n.dirty = dirty` above already carries it. The unconditional
@@ -577,6 +580,11 @@ pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: 
             }
         }
         composer.arena.nodes[index].subcomposed_measurements = cached;
+    }
+    // New or changed descendants must be measured before a clean ancestor can fold. Waiting for
+    // collect_layout_index (which runs after measurement) leaves newly inserted children at 0x0.
+    if composer.arena.nodes[index].children.iter().any(|&child| composer.arena.nodes[child].dirty) {
+        composer.arena.nodes[index].dirty = true;
     }
     Some(index)
 }

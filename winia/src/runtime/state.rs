@@ -975,6 +975,39 @@ pub(crate) fn take_deps() -> Vec<(Arc<StateSignal>, u64)> {
     DEP_BUFFER.with(|b| std::mem::take(&mut *b.borrow_mut()))
 }
 
+/// Checkpoint reads within one active frame. A caught user-code panic must not turn failed reads
+/// into dependencies of a successful retry at the same stored slot identity.
+pub(crate) struct DependencyReadCheckpoint {
+    length: usize,
+    subscription: Option<Arc<ComposerSubscription>>,
+    baseline_signals: std::collections::HashSet<StateId>,
+    committed: bool,
+}
+
+pub(crate) fn checkpoint_dependency_reads() -> DependencyReadCheckpoint {
+    let subscription = RECORDER_QUEUE.with(|q| q.borrow().as_ref().and_then(Weak::upgrade));
+    let baseline_signals = subscription.as_ref().map(|queue| queue.signal_ids()).unwrap_or_default();
+    DependencyReadCheckpoint {
+        length: DEP_BUFFER.with(|b| b.borrow().len()),
+        subscription,
+        baseline_signals,
+        committed: false,
+    }
+}
+
+impl DependencyReadCheckpoint {
+    pub(crate) fn commit(&mut self) { self.committed = true; }
+}
+
+impl Drop for DependencyReadCheckpoint {
+    fn drop(&mut self) {
+        if !self.committed {
+            DEP_BUFFER.with(|b| b.borrow_mut().truncate(self.length));
+            if let Some(queue) = &self.subscription { queue.retain_signals(&self.baseline_signals); }
+        }
+    }
+}
+
 /// State::get records only while a compose/layout dependency frame is active.
 pub(crate) fn record_dep(
     signal: Arc<StateSignal>,

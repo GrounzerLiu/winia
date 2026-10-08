@@ -1,25 +1,26 @@
-//! Movable content — Compose's `movableContentOf`.
+//! Movable content with placement-independent remembered values and node identities.
 //!
-//! Content that can be composed in one place on one frame and another place on the next, taking its
-//! `remember`ed state with it. Compose uses it where a layout chooses between two branches that hold
-//! the SAME content: `NavigationSuiteScaffold` invokes one content lambda in both the bar and the rail
-//! branch (`NavigationSuiteScaffold.kt:577-578`), and the whole point is that switching between them
-//! does not rebuild what is inside.
+//! A retained handle moves between hosts in a composition without rebuilding its state. Its placement
+//! owns a separate slot tree; a live reference attaches the nodes under the current host. State reads
+//! invalidate both the stored reader and its current host. Locals come from the invocation site.
 //!
-//! winia's composer drops the slots of a branch that was not visited (`end_restartable_group`'s
-//! `children.retain(|c| c.visited)`), which is why switching a shape used to reset the items. The
-//! content therefore does not live in the tree at all: it lives in the slot table's movable store, and
-//! the invocation site holds a reference slot whose position decides only where the content's NODES are
-//! parented (the descriptor walk inlines the store's subtree there).
+//! A completed `Composer::compose` with no placement disposes the stored state and nodes, even if the
+//! callable is retained. Reinsertion starts fresh; this is not a keep-alive cache.
 //!
-//! What survives a move: everything `ctx.remember`ed, plus the materialized nodes themselves — the
-//! arena is rebuilt from the slot tree each frame and reuses nodes BY KEY, and the keys inside movable
-//! content come from statement ids, so they do not depend on where the content is invoked.
+//! Deliberate minimal-API restriction: one placement per handle per composition, with no nested movable
+//! invocation. Duplicate/nested placement is rejected rather than silently omitted. Compose supports
+//! multiple independent placements of one callable (copies as needed); use distinct handles for
+//! simultaneous copies until matching surviving placements to released instances is implemented here.
+//! This restriction is winia's, not a Compose rule.
+//!
+//! The callable is initialized once. Each invocation conservatively enters its stored child scopes so
+//! fresh captured payloads and placement locals cannot be hidden by clean wrappers; values and nodes
+//! remain reused. Unchanged hosts may skip their invocation entirely.
 
 use crate::runtime::composer::ComposeCtx;
 use std::sync::Arc;
 
-/// A handle to movable content, from [`ComposeCtx::remember_movable_content`].
+/// A retained callable from [`ComposeCtx::remember_movable_content`].
 #[derive(Clone)]
 pub struct MovableContent {
     pub(crate) id: u64,
@@ -35,402 +36,203 @@ impl MovableContent {
         }
     }
 
-    /// Compose this content here.
-    ///
-    /// Call it at most once per composition, and not from inside other movable content. A panic in the
-    /// content is covered by the composer's own transaction rollback, which restores the store state
-    /// along with the rest of the compose runtime.
+    /// Place this callable at the current host. Duplicate or nested placement is rejected by the
+    /// current single-placement API. A failed invocation restores the caller before resuming unwind.
     pub fn compose(&self, ctx: &mut ComposeCtx) {
-        // FALSIFY: bypassing the store composes the content in the tree at each site, which is the
-        // behaviour this exists to replace — its state is rebuilt on every move.
-        if std::env::var("MOVABLE_OFF").is_ok() {
+        ctx.begin_movable(self.id);
+        let mut reads = crate::runtime::state::checkpoint_dependency_reads();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (self.content)(ctx);
-            return;
+            ctx.end_movable();
+        }));
+        match result {
+            Ok(()) => reads.commit(),
+            Err(panic) => {
+                ctx.abort_movable();
+                std::panic::resume_unwind(panic);
+            }
         }
-        // Already composed this frame? Compose treats that as an error ("movable content must be
-        // called in exactly one place"); here the second attempt is skipped, because the navigation
-        // suite's two shapes overlap for a frame while it morphs between them.
-        if !ctx.begin_movable(self.id) {
-            return;
-        }
-        (self.content)(ctx);
-        ctx.end_movable();
     }
 
-    /// The content's id, for tests and diagnostics.
-    pub fn id(&self) -> u64 {
-        self.id
-    }
+    /// Stable callable identity, for diagnostics.
+    pub fn id(&self) -> u64 { self.id }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::{BoxLayout, Constraints};
     use crate::layout::components::Column;
-    use crate::layout::Constraints;
     use crate::modifier::Modifier;
     use crate::runtime::composer::Composer;
+    use crate::runtime::state::State;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A payload composed through a movable handle is still a CHILD of the component that invoked it,
-    /// in the position that component's measure policy expects.
-    ///
-    /// This is the contract the navigation suite's item policies are written against — they index
-    /// `children[1]` and `children[2]` for the icon and the label
-    /// (`navigation_bar.rs:659`, `navigation_rail.rs:1396`), and they panicked with "index out of
-    /// bounds: the len is 2 but the index is 2" while the payloads were being wired up. The ref slot
-    /// itself holds nothing, so the payload's node has to arrive as the component's own child.
-    #[test]
-    fn an_inlined_payload_is_a_child_of_the_invoking_component() {
-        use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
-
-        /// Reports how many children it was measured with, and sizes itself from them.
-        #[derive(Debug)]
-        struct CountingPolicy(std::sync::Arc<std::sync::Mutex<Vec<usize>>>);
-        impl MeasurePolicy for CountingPolicy {
-            fn measure(
-                &self,
-                nodes: &mut Vec<LayoutNode>,
-                policies: &[Box<dyn MeasurePolicy>],
-                children: &[usize],
-                constraints: Constraints,
-            ) -> (crate::unit::Size, Vec<Placement>) {
-                self.0.lock().unwrap().push(children.len());
-                let mut placements = Vec::new();
-                let mut x = 0.0;
-                let mut size = crate::unit::Size::new(0.0, 0.0);
-                for &c in children {
-                    let (cs, _) = measure_node(nodes, policies, c, constraints.loosen());
-                    placements.push(Placement { size: cs, position: crate::unit::Offset::new(x, 0.0) });
-                    x += cs.width;
-                    size = crate::unit::Size::new(x, size.height.max(cs.height));
-                }
-                let size = crate::unit::Size::new(
-                    constraints.constrain_width(size.width),
-                    constraints.constrain_height(size.height),
-                );
-                (size, placements)
-            }
-            fn place(
-                &self,
-                nodes: &mut Vec<LayoutNode>,
-                children: &[usize],
-                placements: &[Placement],
-            ) {
-                for (index, &child) in children.iter().enumerate() {
-                    nodes[child].position = placements[index].position;
-                    nodes[child].measured_size = placements[index].size;
-                }
-            }
-        }
-
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut composer = Composer::new();
-        composer.compose(|ctx| {
-            let payload = ctx.remember_movable_content(|ctx| {
-                let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(30.0, 10.0));
-                ctx.end_node();
-            });
-            // A component with a child of its own, then the payload: the policy must see TWO children.
-            // The payload is composed from INSIDE a component's content closure (a restartable group),
-            // which is where the navigation suite invokes its item payloads.
-            let key = ctx.next_key();
-            let seen_here = seen.clone();
-            ctx.start_container(
-                key,
-                Modifier::new().size(100.0, 20.0),
-                CountingPolicy(seen_here),
-            );
-            let own = ctx.next_key();
-            ctx.start_leaf(own, Modifier::new().size(20.0, 10.0));
-            ctx.end_node();
-            let payload_for_group = payload.clone();
-            Column::new().build(ctx, move |ctx| {
-                payload_for_group.compose(ctx);
-            });
-            ctx.end_node();
-        });
+    fn leaf(ctx: &mut ComposeCtx, width: f32) {
+        let key = ctx.next_key();
+        ctx.start_leaf(key, Modifier::new().size(width, 10.0));
+        ctx.end_node();
+    }
+    fn host(ctx: &mut ComposeCtx) {
+        ctx.start_container(0x8888, Modifier::new(), BoxLayout::new());
+    }
+    fn layout(composer: &mut Composer) {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-
-        assert_eq!(
-            seen.lock().unwrap().as_slice(),
-            &[2],
-            "the component's policy must be measured with its own child AND the inlined payload"
-        );
+    }
+    fn leaf_values(composer: &Composer) -> Vec<(u64, f32)> {
+        fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<(u64, f32)>) {
+            if nodes[idx].children.is_empty() { out.push((nodes[idx].id, nodes[idx].measured_size.width)); }
+            for &child in &nodes[idx].children { walk(nodes, child, out); }
+        }
+        let mut values = Vec::new();
+        if let Some(root) = composer.layout_root_idx() { walk(composer.arena_nodes(), root, &mut values); }
+        values
     }
 
-    /// The navigation suite's arrangement, reduced: the handles are remembered in a LOOP before the
-    /// place that invokes them, and the invocation happens inside a component that is itself inside a
-    /// container. Sending an item payload through its handle collapsed the whole frame there — the
-    /// descriptor walk reported one node for the entire suite, `root kids=1 descs=1`, measured 0x0 —
-    /// after a version that created the same handles but passed the payloads through unchanged rendered
-    /// normally. This pins which half of that is the problem.
+    #[test]
+    fn an_inlined_payload_is_a_child_of_the_invoking_component() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let payload = ctx.key("owner", |ctx| ctx.remember_movable_content(|ctx| {
+                ctx.key("payload", |ctx| leaf(ctx, 30.0));
+            }));
+            host(ctx);
+            ctx.key("own", |ctx| leaf(ctx, 20.0));
+            ctx.key("invoke", |ctx| payload.compose(ctx));
+            ctx.end_node();
+        });
+        layout(&mut composer);
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().unwrap();
+        assert_eq!(nodes[root].children.len(), 2);
+        let widths: Vec<_> = nodes[root].children.iter().map(|&i| nodes[i].measured_size.width).collect();
+        assert_eq!(widths, vec![20.0, 30.0], "the payload itself, not a wrapper, must materialize");
+    }
+
     #[test]
     fn handles_remembered_in_a_loop_survive_being_invoked_deeper_down() {
         let mut composer = Composer::new();
         composer.compose(|ctx| {
-            // Handles first, in a loop, exactly like the suite.
-            let mut handles = Vec::new();
-            for index in 0..(std::env::var("HANDLES").ok().and_then(|v| v.parse().ok()).unwrap_or(3)) {
-                let handle = ctx.remember_movable_content(move |ctx| {
-                    let key = ctx.next_key();
-                    ctx.start_leaf(key, Modifier::new().size(10.0 + index as f32, 5.0));
-                    ctx.end_node();
-                });
-                handles.push(handle);
-            }
-            // …then a container that renders them, two levels down.
-            Column::new()
-                .modifier(Modifier::new().size(200.0, 60.0))
-                .build(ctx, |ctx| {
-                    for handle in handles {
-                        Column::new()
-                            .modifier(Modifier::new().size(100.0, 20.0))
-                            .build(ctx, move |ctx| {
-                                handle.compose(ctx);
-                            });
-                    }
-                });
-        });
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-
-        let nodes = composer.arena_nodes();
-        let root = composer.layout_root_idx().expect("laid out");
-        assert!(
-            nodes[root].measured_size.width > 0.0 && nodes[root].measured_size.height > 0.0,
-            "the container must be measured: {:?}",
-            nodes[root].measured_size
-        );
-        // Every handle's payload must be somewhere in the tree.
-        let mut widths = Vec::new();
-        fn collect(nodes: &[crate::layout::node::LayoutNode], idx: usize, out: &mut Vec<f32>) {
-            out.push(nodes[idx].measured_size.width);
-            for &c in &nodes[idx].children {
-                collect(nodes, c, out);
-            }
-        }
-        collect(nodes, root, &mut widths);
-        for expected in [10.0f32, 11.0, 12.0] {
-            assert!(
-                widths.iter().any(|w| (*w - expected).abs() < 0.01),
-                "payload {expected} is missing from {widths:?}"
-            );
-        }
-    }
-
-    /// Compose's movable group keeps everything under it, including the parts this frame did NOT
-    /// compose — and that is what makes movable content survive a structure change INSIDE it, not just
-    /// a move between parents.
-    ///
-    /// This is the navigation suite's shape, reduced: the items are composed by the caller's loop, so a
-    /// shape that shows fewer of them simply composes fewer this frame. The third item must still be
-    /// the same item when the structure grows back — measured by its own counter, which would climb if
-    /// its slot had been dropped along with the branch that stopped composing it.
-    #[test]
-    fn a_structures_state_survives_while_the_content_shrinks_and_grows_back() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static ITEM_INITS: AtomicUsize = AtomicUsize::new(0);
-        static COUNT: AtomicUsize = AtomicUsize::new(3);
-
-        let mut composer = Composer::new();
-        let mut frame = |composer: &mut Composer| {
-            composer.compose(|ctx| {
-                let content = ctx.remember_movable_content(|ctx| {
-                    for _ in 0..COUNT.load(Ordering::SeqCst) {
-                        let index = ITEM_INITS.fetch_add(1, Ordering::SeqCst);
-                        let remembered: crate::runtime::state::State<usize> =
-                            ctx.remember(|| index);
-                        // Read it, so the slot is subscribed and the value means something.
-                        let _ = remembered.get();
-                        Column::new()
-                            .modifier(Modifier::new().size(20.0, 10.0))
-                            .build(ctx, |_ctx| {});
-                    }
-                });
-                Column::new()
-                    .modifier(Modifier::new().size(100.0, 100.0))
-                    .build(ctx, |ctx| {
-                        content.compose(ctx);
-                    });
+            let handles: Vec<_> = (0..3).map(|index| ctx.key(index, |ctx| ctx.remember_movable_content(move |ctx| {
+                ctx.key("payload", |ctx| leaf(ctx, 10.0 + index as f32));
+            }))).collect();
+            Column::new().modifier(Modifier::new().size(200.0, 60.0)).build(ctx, |ctx| {
+                for (index, handle) in handles.into_iter().enumerate() {
+                    ctx.key(index, |ctx| Column::new().modifier(Modifier::new().size(100.0, 20.0)).build(ctx, |ctx| {
+                        handle.compose(ctx);
+                    }));
+                }
             });
-            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        };
-
-        frame(&mut composer);
-        assert_eq!(ITEM_INITS.load(Ordering::SeqCst), 3, "three items composed");
-
-        // The shape shows two: the third is not composed this frame, but must not be dropped.
-        COUNT.store(2, Ordering::SeqCst);
-        frame(&mut composer);
-        assert_eq!(
-            ITEM_INITS.load(Ordering::SeqCst),
-            3,
-            "composing fewer items must not re-init the ones that remain"
-        );
-
-        // …and growing back, the third item is the SAME item.
-        COUNT.store(3, Ordering::SeqCst);
-        frame(&mut composer);
-        assert_eq!(
-            ITEM_INITS.load(Ordering::SeqCst),
-            3,
-            "the third item's remembered value survived the shrink, so it is not re-initialized"
-        );
+        });
+        layout(&mut composer);
+        assert_eq!(leaf_values(&composer).into_iter().map(|(_, w)| w).collect::<Vec<_>>(), vec![10.0, 11.0, 12.0]);
     }
 
-    /// A `remember` INSIDE movable content, under an explicit `ctx.key(…)`, keeps its value when the
-    /// shape around it changes — the arrangement the navigation suite uses to make each item's payload
-    /// its own slot whatever order the shapes compose things in.
-    ///
-    /// The key matters because a `remember` slot is identified by (base, per-frame counter), and the
-    /// suite's two payloads per item are composed in a different order by the two shapes. This is the
-    /// smallest form of that: content that remembers under a key, invoked from a bar-like parent on one
-    /// frame and a rail-like one on the next.
+    #[test]
+    fn removing_and_reinserting_a_child_preserves_only_surviving_state() {
+        let count = Arc::new(AtomicUsize::new(3));
+        let inits = Arc::new(AtomicUsize::new(0));
+        let mut composer = Composer::new();
+        let frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let count = count.clone();
+                let inits = inits.clone();
+                let content = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
+                    for index in 0..count.load(Ordering::SeqCst) {
+                        ctx.key(index, |ctx| Column::new().build(ctx, |ctx| {
+                            let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
+                            leaf(ctx, 10.0 + marker.peek() as f32);
+                        }));
+                    }
+                }));
+                host(ctx);
+                ctx.key("invoke", |ctx| content.compose(ctx));
+                ctx.end_node();
+            });
+            layout(composer);
+        };
+        frame(&mut composer);
+        let original = leaf_values(&composer);
+        assert_eq!(original.len(), 3);
+        assert_eq!(inits.load(Ordering::SeqCst), 3);
+        count.store(2, Ordering::SeqCst);
+        frame(&mut composer);
+        assert_eq!(leaf_values(&composer), original[..2]);
+        assert_eq!(inits.load(Ordering::SeqCst), 3);
+        count.store(3, Ordering::SeqCst);
+        frame(&mut composer);
+        let restored = leaf_values(&composer);
+        assert_eq!(&restored[..2], &original[..2]);
+        assert_eq!(inits.load(Ordering::SeqCst), 4, "the actually removed child initializes anew");
+        assert_eq!(restored[2].1, 13.0);
+    }
+
     #[test]
     fn a_keyed_remember_inside_movable_content_survives_a_resize_of_its_host() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static INITS: AtomicUsize = AtomicUsize::new(0);
-
+        let width = Arc::new(AtomicUsize::new(40));
+        let inits = Arc::new(AtomicUsize::new(0));
         let mut composer = Composer::new();
-        let width = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(40));
-        let mut frame = |composer: &mut Composer| {
+        let frame = |composer: &mut Composer, host_width: f32| {
             composer.compose(|ctx| {
-                let handle = ctx.remember_movable_content({
-                    let width = width.clone();
-                    move |ctx| {
-                        ctx.key("item-icon", |ctx| {
-                            let marker: crate::runtime::state::State<usize> =
-                                ctx.remember(|| INITS.fetch_add(1, Ordering::SeqCst));
-                            let _ = marker.get();
-                            let w = width.load(Ordering::SeqCst) as f32;
-                            Column::new()
-                                .modifier(Modifier::new().size(w, 10.0))
-                                .build(ctx, |_ctx| {});
-                        });
-                    }
-                });
-                Column::new()
-                    .modifier(Modifier::new().size(100.0, 40.0))
-                    .build(ctx, |ctx| {
-                        handle.compose(ctx);
-                    });
+                let width = width.clone();
+                let inits = inits.clone();
+                let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| ctx.key("payload", |ctx| {
+                    let marker = ctx.remember(|| inits.fetch_add(1, Ordering::SeqCst));
+                    assert_eq!(marker.peek(), 0);
+                    leaf(ctx, width.load(Ordering::SeqCst) as f32);
+                })));
+                ctx.start_container(0x8888, Modifier::new().size(host_width, 40.0), BoxLayout::new());
+                ctx.key("invoke", |ctx| handle.compose(ctx));
+                ctx.end_node();
             });
-            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            layout(composer);
         };
-
-        frame(&mut composer);
-        assert_eq!(INITS.load(Ordering::SeqCst), 1, "the payload composes once");
-
+        frame(&mut composer, 100.0);
+        let id = leaf_values(&composer)[0].0;
         width.store(24, Ordering::SeqCst);
-        frame(&mut composer);
-        frame(&mut composer);
-        assert_eq!(
-            INITS.load(Ordering::SeqCst),
-            1,
-            "and not again on later frames, whatever the shape around it does"
-        );
+        frame(&mut composer, 80.0);
+        assert_eq!(composer.layout_root().unwrap().measured_size.width, 80.0);
+        assert_eq!(leaf_values(&composer), vec![(id, 24.0)]);
+        assert_eq!(inits.load(Ordering::SeqCst), 1);
     }
 
-    /// The whole point, measured: content composed under one parent and then under ANOTHER keeps what
-    /// it `remember`ed, and switching back and forth does not run its `remember` initializer again.
-    ///
-    /// The counter is the evidence — it counts how many times the content's initializer ran, so a
-    /// rebuilt content shows up as a higher number and nothing else can fake it. Without movable
-    /// content the middle frame drops the first parent's slots and the count climbs on every switch;
-    /// this is the same measurement that caught the navigation suite (3 → 3 → 6).
     #[test]
     fn state_survives_a_move_between_parents() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static INITS: AtomicUsize = AtomicUsize::new(0);
-
+        let inits = Arc::new(AtomicUsize::new(0));
         let mut composer = Composer::new();
-        let mut in_second_parent = false;
-        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-
-        let mut frame = |composer: &mut Composer, in_second_parent: bool| {
+        let frame = |composer: &mut Composer, nested: bool| {
             composer.compose(|ctx| {
-                let content = ctx.remember_movable_content(|ctx| {
-                    let runs: crate::runtime::state::State<usize> =
-                        ctx.remember(|| INITS.fetch_add(1, Ordering::SeqCst));
-                    // Reading it is what subscribes this slot to the state.
-                    let _ = runs.get();
-                    Column::new()
-                        .modifier(Modifier::new().size(20.0, 20.0))
-                        .build(ctx, |_ctx| {});
-                });
-                // The two parents put the content at DIFFERENT DEPTHS, which is what makes their slot
-                // keys differ even in a test (where keys fall back to the path hash): one frame the
-                // content is the child of a Column, the next it is a grandchild. Without the store the
-                // second frame cannot match the first frame's slot and the content is rebuilt.
-                if in_second_parent {
-                    Column::new()
-                        .modifier(Modifier::new().size(60.0, 60.0))
-                        .build(ctx, |ctx| {
-                            Column::new()
-                                .modifier(Modifier::new().size(40.0, 40.0))
-                                .build(ctx, |ctx| {
-                                    content.compose(ctx);
-                                });
-                        });
+                let source = inits.clone();
+                let handle = ctx.key("owner", |ctx| ctx.remember_movable_content(move |ctx| {
+                    ctx.key("payload", |ctx| {
+                        let marker: State<usize> = ctx.remember(|| source.fetch_add(1, Ordering::SeqCst));
+                        assert_eq!(marker.peek(), 0);
+                        leaf(ctx, 20.0);
+                    });
+                }));
+                host(ctx);
+                if nested {
+                    ctx.key("nested", |ctx| Column::new().modifier(Modifier::new().size(40.0, 40.0)).build(ctx, |ctx| {
+                        ctx.key("invoke-b", |ctx| handle.compose(ctx));
+                    }));
                 } else {
-                    Column::new()
-                        .modifier(Modifier::new().size(80.0, 60.0))
-                        .build(ctx, |ctx| {
-                            content.compose(ctx);
-                        });
+                    ctx.key("invoke-a", |ctx| handle.compose(ctx));
                 }
+                ctx.end_node();
             });
-            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-            // The content must be IN the tree too — under whichever parent currently invokes it. This
-            // is the other half of the feature: the store keeps the state, and the descriptor walk
-            // inlines the content at the invocation site, so it is laid out where it is composed.
+            layout(composer);
             let nodes = composer.arena_nodes();
-            let root = composer.layout_root_idx().expect("laid out");
-            // The invoking parent IS the composition root here (it is the outermost thing composed),
-            // and the content must be its child — wherever in the composition it was invoked from.
-            let child = nodes[root]
-                .children
-                .iter()
-                .map(|&c| nodes[c].measured_size.width)
-                .find(|w| (*w - 20.0).abs() < 0.01);
-            seen.borrow_mut().push(INITS.load(Ordering::SeqCst));
-            fn dump(nodes: &[crate::layout::node::LayoutNode], idx: usize, depth: usize, out: &mut String) {
-                out.push_str(&format!(
-                    "\n{}{} {:?} kids={} text={}",
-                    "  ".repeat(depth),
-                    idx,
-                    nodes[idx].measured_size,
-                    nodes[idx].children.len(),
-                    nodes[idx].has_text_content
-                ));
-                let kids = nodes[idx].children.clone();
-                for c in kids {
-                    dump(nodes, c, depth + 1, out);
-                }
-            }
-            let mut tree = String::new();
-            dump(nodes, root, 0, &mut tree);
-            assert!(
-                child.is_some(),
-                "the content's own node is a child of the parent that invoked it: {tree}"
-            );
+            let root = composer.layout_root_idx().unwrap();
+            let invoking_parent = if nested { nodes[root].children[0] } else { root };
+            assert_eq!(nodes[invoking_parent].children.len(), 1);
+            assert_eq!(nodes[nodes[invoking_parent].children[0]].measured_size.width, 20.0);
         };
-
-        frame(&mut composer, in_second_parent);
-        assert_eq!(
-            seen.borrow().as_slice(),
-            &[1],
-            "the content's initializer runs once on the first frame"
-        );
-
-        in_second_parent = true;
-        frame(&mut composer, in_second_parent);
         frame(&mut composer, false);
-        assert_eq!(
-            seen.borrow().as_slice(),
-            &[1, 1, 1],
-            "and not again after moving to the other parent, nor after moving back: {:?}",
-            seen.borrow()
-        );
+        let original = leaf_values(&composer);
+        frame(&mut composer, true);
+        assert_eq!(leaf_values(&composer), original);
+        frame(&mut composer, false);
+        assert_eq!(leaf_values(&composer), original);
+        assert_eq!(inits.load(Ordering::SeqCst), 1);
     }
 }

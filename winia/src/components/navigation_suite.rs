@@ -19,38 +19,19 @@
 //! `primaryActionContent`（androidx 的 FAB 槽）暂未实现——FAB 请放入
 //! WideNavigationRail 的 header（套件内建 rail 暂无 header 槽，后续版本补）。
 //!
-//! Known divergence, measured: an item's `remember`ed state does NOT survive a shape switch. Compose
-//! keeps it with `movableContentOf` (`NavigationSuiteScaffold.kt:577-578`) — the same content lambda is
-//! invoked in the new location, and its nodes and remembered values move with it — while here the
-//! abandoned branch's slots are dropped when its group ends without being visited. Measured on a
-//! 3-item bar → 2-item rail → 3-item bar round trip, with the item's state encoded into its icon width
-//! (10 + marker * 50) so a rebuild is unmistakable: the markers went 3 → 3 → 6, i.e. switching BACK
-//! rebuilt all three items. Returning to a shape therefore resets whatever the caller remembered inside
-//! an `icon`/`label` payload.
+//! Each positional item's icon and label use separate movable handles. Their remembered values and
+//! node identities survive bar/rail switches, and their own State reads still invalidate the current
+//! host. The latest callback payloads are staged through a Backchannel; a scaffold build re-enters the
+//! shape hosts so changed captures reach the retained content rather than remaining behind Skip.
 //!
-//! The composer half of the fix now exists — `ctx.remember_movable_content` keeps content's slots (and
-//! so its state) out of the tree entirely, and it is measured to survive both a move between parents
-//! and a structure shrink inside the content. This component still needs its own half, and two attempts
-//! are worth recording because they narrowed it to one place:
+//! Verified by production-key tests and a deterministic UI round trip: all twelve tagged payload
+//! nodes retain their identities, independent counters keep updating before/after moves, and labels
+//! display new caller-captured values. Initializer counts or requested-shape text alone are not evidence.
 //!
-//! - The item payloads must become `Arc<dyn Fn>` (they are `Box<dyn FnOnce>`, one-shot, so they cannot
-//!   be invoked from a remembered handle), and per-item icon/label handles work. With the handles
-//!   created but the payloads still passed through unchanged, the whole suite renders normally — so the
-//!   handles themselves are not the problem.
-//! - Sending the ICON payload through its handle collapses the frame: the composition runs, the payload
-//!   composes cleanly inside the store (one slot, depth 0), and the descriptor walk then reports
-//!   `root kids=1 descs=1` — one node for the entire suite, measured 0x0. Everything after the payload
-//!   is materialized as if it had never been visited, which is the thing to chase next.
-//! - The first attempt also found a real composer bug, since fixed: the reference slot's path frame was
-//!   left open, so everything composed after a payload landed under a slot the walk ignores
-//!   (`navigation_bar.rs:659` / `navigation_rail.rs:1396`, "index out of bounds: the len is 2 but the
-//!   index is 2").
-//!
-//! A focused reproduction of the *good* half is now in `runtime/movable.rs`
-//! (`an_inlined_payload_is_a_child_of_the_invoking_component`): a payload invoked from inside a
-//! component's content closure arrives as that component's own child, which is what the item policies
-//! need. What is left is the suite's own arrangement — the handles are remembered in a loop before the
-//! shape branches, and something about that ordering is what collapses the walk.
+//! Deliberate differences: handles are positional (there is no keyed-destination API), the optional
+//! collapse/swap/expand morph is winia-specific, and only icon/label payload state moves, not the
+//! shape-specific item wrapper. Compose uses one retained content lambda and a plain `when`
+//! (`NavigationSuiteScaffold.kt:577-578`). A fully absent placement is disposed, not cached.
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
@@ -232,24 +213,11 @@ impl NavigationSuiteScaffold {
         let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
         let content = self.content;
 
-        // ── 形态过渡状态机（收拢 → 换形 → 展开）——**这是 winia 自己的东西** ──
-        // Compose 那边**没有**过渡：`NavigationSuiteScaffold.kt:577-578` 先
-        // `val movableContent = remember(content) { movableContentOf(content) }`，再一个
-        // 普通的 `when (navigationSuiteType) { … }` 直接换——形状、布局、时机都不插值，
-        // 靠 `movableContentOf` 把 items 子树在换父节点时原样搬过去（组合状态保住、
-        // 不重跑）。这个文件里那点动画只有脚手架自己的显隐（`Animatable` 推
-        // `NavigationSuiteScaffoldValue`），和形态无关。
-        //
-        // winia 的 morph 是形态切换时的一段收拢/展开：Collapsing——当前形态容器宽度/高度 →
-        // 0（clip 裁剪溢出内容）；到 0——current 切到新形态（分支换槽，旧槽回收）；
-        // Idle——新形态从 0 展开到全尺寸。要接 Compose 得先有 `movableContent` 的等价物；
-        // 现在没有，所以它是**有意偏差**，不是对齐。
-        //
-        // 为什么不能同时持两代：items 的 icon/label 载荷是 `Box<dyn FnOnce>`（见
-        // `NavigationSuiteItem`），同一个载荷没法在一帧里被两个分支各调一次。收拢期旧分支
-        // Skip、只在首次 Enter 消费，正好绕开这一点——约束来自载荷类型本身，不是引擎；
-        // 引擎自 `AnimatedContent`/`Crossfade` 起就能持两代（`Arc<dyn Fn>` 载荷的
-        // `SegmentedButton` 已经在用）。
+        // Optional winia-only morph: collapse the current container, swap the one active shape, then
+        // expand. The branches never overlap. Compose's shape switch uses movableContentOf plus a
+        // plain when (NavigationSuiteScaffold.kt:577-578); its scaffold visibility animation is a
+        // separate concern. Set transition(false) for the direct switch behavior.
+        // Payloads are repeatable Arc<dyn Fn>; the retained handles move their state between branches.
         let phase: State<SuitePhase> = ctx.remember(|| SuitePhase::Idle);
         let current: State<NavigationSuiteType> = ctx.remember(|| target_type);
         let next = ctx.remember_backchannel(|| None);
@@ -305,6 +273,10 @@ impl NavigationSuiteScaffold {
         // = 同一个句柄），内容闭包通过 backchannel 读当帧载荷。
         let payloads = ctx.remember_backchannel(|| Vec::<NavigationSuiteItem>::new());
         payloads.set(self.items.clone());
+        // This build receives fresh callbacks; their values cannot be compared through Arc<dyn Fn>.
+        // Enter the actual shape hosts so the latest payloads reach their stored child scopes. Merely
+        // staging a Backchannel would leave a clean bar/rail wrapper displaying the previous closure.
+        ctx.mark_subtree_dirty();
         let mut handles: Vec<(MovableContent, MovableContent)> = Vec::with_capacity(self.items.len());
         for index in 0..self.items.len() {
             let icon_source = payloads.clone();

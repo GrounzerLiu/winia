@@ -305,19 +305,16 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember(slot_key, || State::new(init()))
     }
 
-    /// Remember a movable content — Compose's `remember { movableContentOf { … } }`.
+    /// Remember a callable whose placed state and nodes move between hosts without changing identity.
+    /// The callable is initialized once, like `remember { movableContentOf { ... } }`; read dynamic
+    /// values through State or an explicit latest-value channel rather than replacing its captures.
     ///
-    /// The returned handle can be composed at ONE place per frame, and may be composed somewhere else
-    /// next frame; whatever the content `remember`s goes with it. That is what Compose needs it for:
-    /// `NavigationSuiteScaffold` invokes one content lambda in both the bar and the rail branch
-    /// (`NavigationSuiteScaffold.kt:577-578`), and without this the abandoned branch's slots are
-    /// dropped and a switch back rebuilds the items. Measured in winia before it existed: a
-    /// bar → rail → bar round trip rebuilt all three items (their state markers went 3 → 3 → 6).
+    /// An invocation conservatively enters its child scopes so current payloads and placement locals
+    /// are applied. A completed composition with no placement disposes its stored state and nodes.
     ///
-    /// Deviations from Compose, recorded: the content closure re-runs when its invocation site does
-    /// (Compose moves the composition without running it — the state and the nodes are what survive
-    /// either way, and the inner statements still Skip); composing one handle twice in a frame is not
-    /// diagnosed (Compose throws); nesting movable content inside movable content is not supported.
+    /// Current winia restriction: a handle has one placement per composition, and movable invocation
+    /// cannot be nested. Violations are rejected explicitly. Compose permits multiple independent
+    /// placements of a callable; use separate handles for simultaneous copies in this minimal API.
     pub fn remember_movable_content(
         &mut self,
         content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
@@ -331,30 +328,57 @@ impl<'a> ComposeCtx<'a> {
     /// Compose this content here.
     /// Hand the slot table over to movable content #id — see
     /// [`MovableContent::compose`](crate::runtime::movable::MovableContent::compose).
-    pub(crate) fn begin_movable(&mut self, id: u64) -> bool {
+    pub(crate) fn begin_movable(&mut self, id: u64) {
+        self.composer.slot_table.validate_movable(id);
         let key = self.next_key();
-        if !self.composer.slot_table.begin_movable(key, id) {
-            return false;
-        }
-        // Isolate the CALL CHAIN while the content composes. A statement's key base is
-        // `mix(explicit id, chain hash)` (see `try_stable_base`), and the chain includes the component
-        // the statement sits in — exactly what must NOT reach inside movable content: the same payload
-        // invoked from a bar item and from a rail item would otherwise derive two different bases, land
-        // in two different slots, and have its `remember`ed state rebuilt on the shape switch. Clearing
-        // the chain makes the content's keys depend on the content's own structure only.
-        self.composer.movable_saved_scopes =
-            std::mem::take(&mut self.composer.scope_source_stack);
-        self.composer.movable_saved_stmts =
-            STMT_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
-        true
+        let caller_active = self.composer.slot_table.active_slot_key;
+        let caller_group = self.composer.current_group_key;
+        self.composer.slot_table.begin_movable(key, id);
+        self.composer.movable_saved_skip_depth = self.composer.group_skip_stack.len();
+        self.composer.movable_saved_path_counters = std::mem::take(&mut self.composer.path_counters);
+        self.composer.movable_saved_remember_counters = std::mem::take(&mut self.composer.remember_path_counters);
+        self.composer.movable_saved_params = std::mem::take(&mut self.composer.pending_params);
+        self.composer.movable_saved_pending_next = std::mem::replace(&mut self.composer.pending_next, 0);
+        self.composer.movable_saved_group_key = caller_group;
+        self.composer.movable_saved_active = caller_active;
+        // A placement owns its identities and dependency targets; inherited CompositionLocals remain
+        // available, but caller statement/explicit-key/group stacks must not enter the stored tree.
+        self.composer.movable_saved_scopes = std::mem::take(&mut self.composer.scope_source_stack);
+        self.composer.movable_saved_stmts = STMT_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        self.composer.movable_saved_keys = std::mem::take(&mut self.composer.key_override_stack);
+        self.composer.movable_saved_groups = GROUP_STACK.with(|s| std::mem::take(&mut *s.borrow_mut()));
+        let root = self.composer.slot_table.current_slot().key;
+        self.composer.slot_table.active_slot_key = root;
+        ACTIVE_SLOT_KEY.with(|s| s.set(root));
+        self.composer.entered_compose_keys.insert(root);
+        GROUP_STACK.with(|s| s.borrow_mut().push(root));
     }
 
-    /// Give the slot table back to the invocation site.
+    /// Restore caller stacks even if the caller catches a panic and continues this composition.
+    pub(crate) fn abort_movable(&mut self) {
+        self.composer.slot_table.abort_movable();
+        self.restore_movable_context();
+    }
+
+    /// Give the slot table and invocation context back to the caller.
     pub(crate) fn end_movable(&mut self) {
         self.composer.slot_table.end_movable();
-        self.composer.scope_source_stack =
-            std::mem::take(&mut self.composer.movable_saved_scopes);
+        self.restore_movable_context();
+    }
+
+    fn restore_movable_context(&mut self) {
+        self.composer.scope_source_stack = std::mem::take(&mut self.composer.movable_saved_scopes);
+        self.composer.key_override_stack = std::mem::take(&mut self.composer.movable_saved_keys);
         STMT_STACK.with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_stmts));
+        GROUP_STACK.with(|s| *s.borrow_mut() = std::mem::take(&mut self.composer.movable_saved_groups));
+        self.composer.path_counters = std::mem::take(&mut self.composer.movable_saved_path_counters);
+        self.composer.remember_path_counters = std::mem::take(&mut self.composer.movable_saved_remember_counters);
+        self.composer.pending_params = std::mem::take(&mut self.composer.movable_saved_params);
+        self.composer.pending_next = self.composer.movable_saved_pending_next;
+        self.composer.group_skip_stack.truncate(self.composer.movable_saved_skip_depth);
+        self.composer.current_group_key = self.composer.movable_saved_group_key;
+        self.composer.slot_table.active_slot_key = self.composer.movable_saved_active;
+        ACTIVE_SLOT_KEY.with(|s| s.set(self.composer.movable_saved_active));
     }
 
     /// Remember a write-back channel: same slot stability as `remember`, but
@@ -504,7 +528,7 @@ impl<'a> ComposeCtx<'a> {
         // scope key = 源码哈希本身（稳定唯一——不依赖 next_group_key：scope 是
         // 组合第一条调用（STMT_STACK 空），走路径哈希在宏外（app_root!/根）会
         // 触发稳定 key panic；且路径哈希在结构变化时漂移——hash 反而更稳）
-        let key = source_hash;
+        let key = self.composer.namespace_key_base(source_hash);
         self.composer.slot_table.start_scope(key);
         self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -519,7 +543,7 @@ impl<'a> ComposeCtx<'a> {
     /// composer 存活且无并发访问（组合单线程——成立）。
     pub fn start_scope_guarded(&mut self, source_hash: u64) -> ScopeGuard {
         self.composer.scope_source_stack.push(Some(source_hash));
-        let key = source_hash;
+        let key = self.composer.namespace_key_base(source_hash);
         self.composer.slot_table.start_scope(key);
         self.composer.entered_compose_keys.insert(key);
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -532,7 +556,20 @@ impl<'a> ComposeCtx<'a> {
     /// （列表）同样隔离。⚠ scope 在函数开头创建——此刻 STMT_STACK 栈顶
     /// 即调用点（父语句），函数内部语句注入在其后——链不含自身。
     pub fn start_scope_callchain(&mut self, fallback_hash: u64) -> ScopeGuard {
-        let key = self.composer.try_stable_base().unwrap_or(fallback_hash);
+        let raw_placement = self.composer.slot_table.movable_composing.is_some()
+            && self.composer.key_override_stack.is_empty()
+            && STMT_STACK.with(|s| s.borrow().is_empty());
+        let key = if raw_placement {
+            // A raw placement is a stable source for node ordinals, not for function identity.
+            // Different composable functions must retain their own compiler fallback hashes.
+            let base = self.composer.namespace_key_base(fallback_hash);
+            let ordinal = self.composer.path_counters.entry(base).or_insert(0);
+            let key = mix_key(base, *ordinal as u64);
+            *ordinal += 1;
+            key
+        } else {
+            self.composer.try_stable_base().unwrap_or_else(|| self.composer.namespace_key_base(fallback_hash))
+        };
         #[cfg(debug_assertions)]
         if std::env::var("WINIA_SCOPE_TRACE").is_ok() {
             let stack = STMT_STACK.with(|s| s.borrow().clone());
@@ -602,10 +639,14 @@ impl<'a> ComposeCtx<'a> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hasher);
         let h = hasher.finish();
+        let depth = self.composer.key_override_stack.len();
         self.composer.key_override_stack.push(h);
-        let r = f(self);
-        self.composer.key_override_stack.pop();
-        r
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        self.composer.key_override_stack.truncate(depth);
+        match result {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
     }
 
 
@@ -1071,20 +1112,8 @@ pub(crate) struct SlotTable {
     movable_saved_path: Vec<usize>,
     /// The `child_counters` while a store is being composed — the content's positions are its own.
     movable_saved_counters: Vec<usize>,
-    /// Where each content was referenced from (id → the ref slot's key). Compared with the key of the
-    /// frame's reference to notice a MOVE: a content whose reference sits somewhere else has nodes with
-    /// a new parent, which cannot keep the measurement they took under the old one.
-    movable_last_ref: crate::layout::node::SlotKeyMap<u64>,
-    /// Contents referenced at least once this frame; the rest are parked and their nodes must survive
-    /// the compose tail's recycling. The `_last` copy is what tells a content coming back from a parked
-    /// frame that it has to compose for real.
-    movable_referenced: crate::layout::node::SlotKeySet,
-    movable_referenced_last: crate::layout::node::SlotKeySet,
-    /// Which frame each content was last composed in. Compose requires movable content to be composed
-    /// in exactly ONE place per composition; winia skips the second attempt instead of failing, because
-    /// the shapes overlap for a frame during the morph. Without this the second reference composed the
-    /// content again — the same item, a second time in one frame — and its `remember` initializer ran
-    /// again (measured in the UI fixture: the marker count jumped 3 → 6 on the first shape switch).
+    /// Frame of the last invocation, used to reject unsupported duplicate placement explicitly.
+    /// Compose supports multiple independent placements; this minimal API requires distinct handles.
     movable_frame: crate::layout::node::SlotKeyMap<u64>,
     /// The frame number `movable_frame` is compared against; `Composer::compose` sets it.
     frame_no: u64,
@@ -1101,6 +1130,7 @@ struct SlotTableRuntimeSnapshot {
     dirty_keys: crate::layout::node::SlotKeySet,
     movable_composing: Option<u64>,
     movable_saved_path: Vec<usize>,
+    movable_saved_counters: Vec<usize>,
 }
 
 struct ComposeRuntimeSnapshot {
@@ -1175,6 +1205,7 @@ impl SlotTable {
             dirty_keys: self.dirty_keys.clone(),
             movable_composing: self.movable_composing,
             movable_saved_path: self.movable_saved_path.clone(),
+            movable_saved_counters: self.movable_saved_counters.clone(),
         }
     }
 
@@ -1185,6 +1216,7 @@ impl SlotTable {
         self.dirty_keys = snapshot.dirty_keys;
         self.movable_composing = snapshot.movable_composing;
         self.movable_saved_path = snapshot.movable_saved_path;
+        self.movable_saved_counters = snapshot.movable_saved_counters;
     }
 
     fn new() -> Self {
@@ -1196,9 +1228,6 @@ impl SlotTable {
             movable_composing: None,
             movable_saved_path: Vec::new(),
             movable_saved_counters: Vec::new(),
-            movable_last_ref: crate::layout::node::SlotKeyMap::default(),
-            movable_referenced: crate::layout::node::SlotKeySet::default(),
-            movable_referenced_last: crate::layout::node::SlotKeySet::default(),
             movable_frame: crate::layout::node::SlotKeyMap::default(),
             frame_no: 0,
             active_slot_key: 0,
@@ -1233,8 +1262,18 @@ impl SlotTable {
     /// 区分。start_slot 每帧无条件执行（Skip 帧也执行）→ 链跨帧稳定（位置
     /// 而非执行次数——替代旧 STMT_SEQ，滚动时 Skip/Enter 交替不再漂移）。
     pub(crate) fn sibling_position(&self) -> u32 {
+        let mut start = 0;
+        if let Some(id) = self.movable_composing {
+            let mut slot = &self.movable_store[&id];
+            for (depth, &index) in self.path.iter().enumerate() {
+                slot = &slot.children[index];
+                if slot.is_scope { start = depth + 1; }
+            }
+        }
+        // Compiler scopes inside a placement already own stable identities. Their statement positions
+        // are local to that scope, not to the ordinal at which the scope was called in the store.
         let mut h: u64 = 0xcbf29ce484222325;
-        for &c in &self.child_counters {
+        for &c in &self.child_counters[start..] {
             h ^= c as u64;
             h = h.wrapping_mul(0x100000001b3);
         }
@@ -1256,7 +1295,10 @@ impl SlotTable {
         if idx == 0 {
             return None;
         }
-        let mut slot = &self.root_slot;
+        let mut slot = match self.movable_composing {
+            Some(id) => self.movable_store.get(&id)?,
+            None => &self.root_slot,
+        };
         for &i in &self.path {
             slot = &slot.children[i];
         }
@@ -1320,31 +1362,21 @@ impl SlotTable {
             depth: usize,
             ctx: &mut ClaimCtx,
             store: &mut std::collections::HashMap<u64, Slot>,
-            force: bool,
         ) {
-            // Movable content: this slot holds no node of its own — the content's subtree is INLINED
-            // here from the store, so its nodes are parented by whoever invokes it while its slots
-            // (and so its `remember`ed state) live outside the tree where no branch can drop them.
-            //
-            // `force` is why a content that was parked — referenced in neither branch last frame — can
-            // come back at all: the store's slots are not visited this frame, and the ordinary rule
-            // would drop them. They are restored instead, through the same skip path a Skipped
-            // container takes, which needs their arena nodes (kept alive by the compose tail, which
-            // does not recycle what a parked content owns).
+            if !slot.visited && !in_skip { return; }
+            // A live reference inlines its placement. When the invoking host skipped, replay the
+            // stored tree as a skipped subtree; never revive an unvisited reference from an entered
+            // host or an uncomposed tail from a placement whose body ran.
             if let Some(id) = slot.movable_ref {
                 // Held out of the map across the walk so the recursion can keep its own `&mut` to the
                 // store (movable content inside movable content is not supported, so nothing else can
                 // reach for this same entry).
                 let Some(mut content) = store.remove(&id) else { return };
+                let replay = !content.visited;
                 for child in &mut content.children {
-                    rec(child, out, false, depth + 1, ctx, store, true);
+                    rec(child, out, replay, depth + 1, ctx, store);
                 }
                 store.insert(id, content);
-                return;
-            }
-            if !slot.visited && !in_skip && !force {
-                // 本帧未访问且不在 Skip 子树内（结构回退残留）：不收集——
-                // 对应 arena 节点由 prev_node_by_key 回收（free）
                 return;
             }
             if let Some(desc) = slot.desc.take() {
@@ -1370,7 +1402,7 @@ impl SlotTable {
                     children: Vec::new(),
                 };
                 for child in &mut slot.children {
-                    rec(child, &mut node.children, false, depth + 1, ctx, store, force);
+                    rec(child, &mut node.children, false, depth + 1, ctx, store);
                 }
                 out.push(node);
             } else if !slot.is_scope {
@@ -1405,7 +1437,7 @@ impl SlotTable {
                 };
                 if claimed.is_none() {
                     for child in &mut slot.children {
-                        rec(child, &mut node.children, true, depth + 1, ctx, store, force); // Skip 子树内：子也按同一规则（收集）
+                        rec(child, &mut node.children, true, depth + 1, ctx, store); // Skip 子树内：子也按同一规则（收集）
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -1419,7 +1451,7 @@ impl SlotTable {
             } else {
                 // scope：不物化——children 提升到最近物化父（保持 in_skip 状态）
                 for child in &mut slot.children {
-                    rec(child, out, in_skip, depth + 1, ctx, store, force);
+                    rec(child, out, in_skip, depth + 1, ctx, store);
                 }
             }
         }
@@ -1433,7 +1465,7 @@ impl SlotTable {
             bails: 0,
         };
         for child in &mut self.root_slot.children {
-            rec(child, out, false, 0, &mut ctx, &mut self.movable_store, false);
+            rec(child, out, false, 0, &mut ctx, &mut self.movable_store);
         }
         if ctx.claims > 0 {
             let claimed = std::mem::take(&mut ctx.claimed_frame);
@@ -1603,6 +1635,9 @@ impl SlotTable {
         if idx < parent.children.len() && (parent.children[idx].key == key || same_position) {
             parent.children[idx].key = key; // 同步最新 key（counter 可能漂移）
             parent.children[idx].visited = true; // 本帧活跃（物化收集依据）
+            // An ordinary scope/node can reuse a former reference position. Only begin_movable may
+            // mark this visit as a reference; stale roles would replay an already removed payload.
+            parent.children[idx].movable_ref = None;
             if !parent.children[idx].dirty && !is_dirty {
                 self.path.push(idx);
                 self.child_counters.last_mut().map(|c| *c += 1);
@@ -1677,9 +1712,6 @@ impl SlotTable {
         for store in self.movable_store.values_mut() {
             clear_visited(store);
         }
-        // Rotate the referenced set: a content missing from the next frame's set is one that was
-        // PARKED — referenced by neither branch — and it composes for real when it comes back.
-        self.movable_referenced_last = std::mem::take(&mut self.movable_referenced);
     }
 
     fn truncate(&mut self) {
@@ -1688,13 +1720,56 @@ impl SlotTable {
         }
     }
 
+    fn dispose_unplaced_movable(&mut self) {
+        fn clear_references(slot: &mut Slot) {
+            slot.movable_ref = None;
+            for child in &mut slot.children { clear_references(child); }
+        }
+        fn references(slot: &mut Slot, in_skip: bool, live: &mut crate::layout::node::SlotKeySet) {
+            if !slot.visited && !in_skip {
+                // Scope residue can survive in the owning tree. Once omitted from an entered branch,
+                // its references must never revive when that branch skips in a later composition.
+                clear_references(slot);
+                return;
+            }
+            if let Some(id) = slot.movable_ref {
+                assert!(live.insert(id), "multiple live placements of one movable handle are not supported; use distinct handles");
+                return;
+            }
+            let child_skip = in_skip || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
+            for child in &mut slot.children { references(child, child_skip, live); }
+        }
+        let mut live = crate::layout::node::SlotKeySet::default();
+        for child in &mut self.root_slot.children { references(child, false, &mut live); }
+        self.movable_store.retain(|id, _| live.contains(id));
+        self.movable_frame.retain(|id, _| live.contains(id));
+    }
+
     /// 外部标记 slot key 为 dirty（由 State 变化触发）。
     /// 同时递归标记所有祖先 slot，确保父级 start_restartable_group 返回 Enter。
     pub(crate) fn mark_dirty(&mut self, key: u64) {
         self.dirty_keys.insert(key);
-        let root = &mut self.root_slot;
-        // 一次 DFS：找到目标 → 标其及所有祖先 dirty；若目标是 scope → 整个子树强制 Enter
-        SlotTable::mark_dirty_path_scope(root, key);
+        SlotTable::mark_dirty_path_scope(&mut self.root_slot, key);
+        // Stored readers are not descendants of their host in the ownership tree. Route their
+        // invalidation through each live reference so an otherwise clean host enters the placement.
+        let mut invalidated = Vec::new();
+        for (&id, store) in &mut self.movable_store {
+            if SlotTable::mark_dirty_path_scope(store, key) {
+                invalidated.push(id);
+            }
+        }
+        for id in invalidated {
+            SlotTable::mark_reference_path(&mut self.root_slot, id);
+        }
+    }
+
+    fn mark_reference_path(slot: &mut Slot, id: u64) -> bool {
+        let mut found = slot.movable_ref == Some(id);
+        for child in &mut slot.children {
+            found |= SlotTable::mark_reference_path(child, id);
+        }
+        if found { slot.dirty = true; }
+        found
     }
 
     /// 查找 key 的 slot：标其及所有祖先 dirty；若目标是 scope，整个子树标 dirty（失效传播）
@@ -1738,35 +1813,20 @@ impl SlotTable {
     /// content's `remember`ed values live somewhere no branch can drop them.
     ///
     /// Pair with [`SlotTable::end_movable`].
-    fn begin_movable(&mut self, key: u64, id: u64) -> bool {
-        // Composed once per composition (Compose's rule): a second reference in the same frame is
-        // skipped rather than composing the content twice, which would give the same item two slots.
-        if self.movable_frame.get(&id) == Some(&self.frame_no) {
-            return false;
-        }
+    fn validate_movable(&self, id: u64) {
+        assert!(self.movable_composing.is_none(), "nested movable placement is not supported");
+        assert!(self.movable_frame.get(&id) != Some(&self.frame_no),
+            "multiple placements of one movable handle are not supported; use distinct handles");
+    }
+
+    fn begin_movable(&mut self, key: u64, id: u64) {
         self.movable_frame.insert(id, self.frame_no);
-        debug_assert!(
-            self.movable_composing.is_none(),
-            "movable content cannot be composed from inside movable content"
-        );
         // The reference itself is an ordinary slot in the tree: the position it sits at is where the
         // content's nodes will be parented.
         let status = self.start_slot(key);
         self.current_slot().is_scope = true;
         self.current_slot().movable_ref = Some(id);
-        self.movable_referenced.insert(id);
         let _ = status;
-
-        // A content that MOVED (its reference sits at a different key) or that is coming back after a
-        // frame in which neither branch referenced it has to compose for real: its nodes have a new
-        // parent, so the measurement they took under the old one cannot stand. Marking the content's
-        // own slots dirty is what makes them Enter instead of Skip, which is what re-sets their
-        // descriptors and their `dirty` flag — the state they `remember` is untouched either way.
-        let needs_recompose = match self.movable_last_ref.get(&id) {
-            Some(&previous) => previous != key || !self.movable_referenced_last.contains(&id),
-            None => true,
-        };
-        self.movable_last_ref.insert(id, key);
 
         // The reference slot is COMPLETE: it holds nothing of its own (the walk inlines the store in
         // its place), so close it before switching into the store. Leaving its path frame open put the
@@ -1776,18 +1836,19 @@ impl SlotTable {
         // "index out of bounds: the len is 2 but the index is 2").
         self.end_slot();
 
-        if needs_recompose {
-            if let Some(store) = self.movable_store.get_mut(&id) {
-                for child in &mut store.children {
-                    child.dirty = true;
-                }
-            }
+        if let Some(store) = self.movable_store.get_mut(&id) {
+            // Calling the retained lambda can supply fresh captured values even without a move.
+            // Until lambda/parameter revisions are modeled explicitly, re-enter its readers rather
+            // than skipping clean wrappers around the latest payload. Remembered values stay intact.
+            SlotTable::mark_dirty_subtree(store);
         }
-        self.movable_store.entry(id).or_insert_with(|| {
-            let mut store = Slot::new(id);
+        let store = self.movable_store.entry(id).or_insert_with(|| {
+            let mut store = Slot::new(mix_key(0x6d6f_7661_626c_6501, id));
+            store.is_scope = true;
             store.movable_store = Some(id);
             store
         });
+        store.visited = true;
         // Save the invoking site's position and hand composition over to the store. The order matters:
         // the save must happen AFTER the ref slot is closed, or the saved path carries the ref's own
         // frame and every later invocation lands one level too deep.
@@ -1795,18 +1856,40 @@ impl SlotTable {
         self.movable_saved_counters = std::mem::take(&mut self.child_counters);
         self.child_counters.push(0);
         self.movable_composing = Some(id);
-        true
     }
 
     /// Stop composing movable content, back at the position that invoked it.
     fn end_movable(&mut self) {
+        assert!(self.path.is_empty(), "unbalanced nodes inside movable content");
+        let count = self.child_counters.first().copied().unwrap_or(0);
+        // This root is not closed by end_restartable_group. Trim its uncomposed tail here, otherwise
+        // descriptor replay resurrects removed conditional/list children.
+        self.current_slot().children.truncate(count);
         self.movable_composing = None;
+        self.path = std::mem::take(&mut self.movable_saved_path);
+        self.child_counters = std::mem::take(&mut self.movable_saved_counters);
+    }
+
+    fn abort_movable(&mut self) {
+        let id = self.movable_composing.take().expect("a movable placement is active");
+        self.movable_store.remove(&id);
+        self.movable_frame.remove(&id);
+        fn clear_reference(slot: &mut Slot, id: u64) {
+            if slot.movable_ref == Some(id) { slot.movable_ref = None; }
+            for child in &mut slot.children { clear_reference(child, id); }
+        }
+        clear_reference(&mut self.root_slot, id);
         self.path = std::mem::take(&mut self.movable_saved_path);
         self.child_counters = std::mem::take(&mut self.movable_saved_counters);
     }
 
     /// 结束组合 scope
     fn end_scope(&mut self) {
+        if self.movable_composing.is_some() {
+            // Compiler-only scopes have no restartable container to prune their removed children.
+            // Their bodies ran, so unvisited descendants are absent, not cached movable state.
+            self.current_slot().children.retain(|child| child.visited);
+        }
         self.end_slot();
     }
 
@@ -1860,16 +1943,30 @@ impl SlotTable {
     /// (`desc` and `skip_modifier` are `take()`n), so the same tree read after a frame looks like it
     /// has far more residue than it did during composition.
     fn collect_live_keys(&self, out: &mut crate::layout::node::SlotKeySet) -> usize {
-        fn visit(slot: &Slot, out: &mut crate::layout::node::SlotKeySet, in_skip: bool, skipped: &mut usize) {
+        fn visit(
+            slot: &Slot,
+            out: &mut crate::layout::node::SlotKeySet,
+            in_skip: bool,
+            skipped: &mut usize,
+            stores: &HashMap<u64, Slot>,
+        ) {
             if !slot.visited && !in_skip {
                 *skipped += 1;
                 return;
             }
             out.insert(slot.key);
+            if let Some(id) = slot.movable_ref {
+                if let Some(store) = stores.get(&id) {
+                    let replay = !store.visited;
+                    out.insert(store.key);
+                    for child in &store.children { visit(child, out, replay, skipped, stores); }
+                }
+                return;
+            }
             let child_in_skip = in_skip
                 || (slot.desc.is_none() && !slot.is_scope && slot.skip_modifier.is_some());
             for child in &slot.children {
-                visit(child, out, child_in_skip, skipped);
+                visit(child, out, child_in_skip, skipped, stores);
             }
         }
 
@@ -1878,7 +1975,7 @@ impl SlotTable {
 
         let mut skipped = 0usize;
         for child in &self.root_slot.children {
-            visit(child, out, false, &mut skipped);
+            visit(child, out, false, &mut skipped, &self.movable_store);
         }
         skipped
     }
@@ -2228,10 +2325,19 @@ pub struct Composer {
 
     /// 组合 scope 的源码哈希栈（宏传——函数级 key 基）
     scope_source_stack: Vec<Option<u64>>,
-    /// The call chain while movable content composes: cleared inside it (see
-    /// `ComposeCtx::begin_movable`), so the content's keys do not depend on who invoked it.
+    /// Invocation context restored when a movable placement finishes, including explicit keys and
+    /// dependency targets. Neither identities nor readers inside a placement belong to its caller.
     movable_saved_scopes: Vec<Option<u64>>,
     movable_saved_stmts: Vec<(u32, u32)>,
+    movable_saved_keys: Vec<u64>,
+    movable_saved_groups: Vec<u64>,
+    movable_saved_active: u64,
+    movable_saved_skip_depth: usize,
+    movable_saved_group_key: u32,
+    movable_saved_path_counters: crate::layout::node::SlotKeyMap<u32>,
+    movable_saved_remember_counters: crate::layout::node::SlotKeyMap<u32>,
+    movable_saved_params: Vec<Box<dyn ParamValue>>,
+    movable_saved_pending_next: usize,
     /// ctx.key() 显式 key 栈（最高优先级）
     key_override_stack: Vec<u64>,
     pending_recomposition: VecDeque<u64>,
@@ -2412,6 +2518,15 @@ impl Composer {
             key_override_stack: Vec::new(),
             movable_saved_scopes: Vec::new(),
             movable_saved_stmts: Vec::new(),
+            movable_saved_keys: Vec::new(),
+            movable_saved_groups: Vec::new(),
+            movable_saved_active: 0,
+            movable_saved_skip_depth: 0,
+            movable_saved_group_key: 0,
+            movable_saved_path_counters: crate::layout::node::SlotKeyMap::default(),
+            movable_saved_remember_counters: crate::layout::node::SlotKeyMap::default(),
+            movable_saved_params: Vec::new(),
+            movable_saved_pending_next: 0,
             pending_recomposition: VecDeque::new(),
             needs_recomposition: true,
             arena: crate::layout::node::NodeArena::new(),
@@ -2501,6 +2616,14 @@ impl Composer {
     /// - STMT_STACK 有宏注入的语句（`#[composable]`/keyed_stmt! 展开）→ 稳定
     ///   （base = fnv(scope_src, 语句id, 迭代seq)——编译期固定）
     /// - 都不是 → None（调用方 panic 兜底——fail-fast，不静默降级）
+    /// Namespace compiler-derived and explicit identities by their movable placement.
+    fn namespace_key_base(&self, base: u64) -> u64 {
+        match self.slot_table.movable_composing {
+            Some(id) => mix_key(base, mix_key(0x6d6f_7661_626c_6500, id)),
+            None => base,
+        }
+    }
+
     pub(crate) fn try_stable_base(&self) -> Option<u64> {
         if let Some(&k) = self.key_override_stack.last() {
             // ctx.key(id) 语义：显式 id 替代位置——但**同一 id 跨调用点**（多
@@ -2515,9 +2638,13 @@ impl Composer {
             let mut h: u64 = 0xcbf29ce484222325;
             h ^= k; h = h.wrapping_mul(0x100000001b3);
             h ^= chain; h = h.wrapping_mul(0x100000001b3);
-            return Some(h);
+            return Some(self.namespace_key_base(h));
         }
-        self.chain_hash()
+        self.chain_hash().map(|base| self.namespace_key_base(base)).or_else(|| {
+            // Raw payload closures have no compiler statement on entry. The placement itself is a
+            // stable key source; repeated children are distinguished by its local counters.
+            self.slot_table.movable_composing.map(|_| self.namespace_key_base(0))
+        })
     }
 
     /// 调用链哈希（不含迭代 seq）：fnv(scope_src, STMT栈顶语句id)——编译期
@@ -2714,6 +2841,7 @@ impl Composer {
         self.current_group_key = key as u32;
         // 容器 build 期间维护（scope 栈由 start_restartable_group 管理）
         let slot_status = self.slot_table.start_slot(key);
+        self.slot_table.set_current_scope(false);
         // 容器组件 = scope（对标 Compose RestartGroup）：push 组件 scope——
         // 组件内/ content 闭包内读取注册到本组件（最内层 scope）
         GROUP_STACK.with(|s| s.borrow_mut().push(key));
@@ -2807,12 +2935,8 @@ impl Composer {
         // Skip 收集时结构签名（desc children vs 缓存 children）不等 → 物化
         // 降级 0x0 → 子树塌缩。Skip 槽保留（content 未执行——结构需保留供恢复）。
         //
-        // (Measured, and NOT done: keeping unvisited children inside movable content as well would
-        // preserve an `if`-branch's state — Compose does not, a removed branch's state is gone — and
-        // the case that DOES need preserving does not go through here at all: a caller's loop that
-        // composes fewer items simply never touches the trailing slots, so they stay, and the walk
-        // restores them. Gating this on `movable_composing.is_none()` was tried and made no difference
-        // to either movable test.)
+        // The same pruning applies inside a movable placement. Moving a surviving subtree preserves
+        // its state; omitting a conditional/list child removes it, and reinsertion initializes anew.
         if !was_skip {
             self.slot_table.current_slot().children.retain(|c| c.visited);
         }
@@ -3165,6 +3289,9 @@ impl Composer {
         // SizeDynamic 闭包内 State::get() 也要记录依赖（kf/dp 尺寸动画），
         // 由 layout() 末尾统一 clear + drain（见 layout()）。
         self.slot_table.truncate();
+        // Skipped hosts still place their referenced content. Sweep only after composition is done,
+        // allowing a subtree removed from an earlier host to be claimed by a later host in this pass.
+        self.slot_table.dispose_unplaced_movable();
         let mut live_compose_keys = crate::layout::node::SlotKeySet::default();
         let skipped_slots = self.slot_table.collect_live_keys(&mut live_compose_keys);
         #[cfg(test)]

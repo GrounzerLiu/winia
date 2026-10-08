@@ -4324,48 +4324,261 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     );
 }
 
-/// The acceptance case for movable content: a navigation suite's items keep their state across a shape
-/// switch, so a caller's `remember`ed value inside an icon payload is not re-initialized.
+/// Movable navigation payloads retain real nodes and live State dependencies across bar -> rail -> bar.
 ///
-/// The evidence is the fixture's own readout — `markers N flips M`, where the marker counts how many
-/// times the payload initializer ran (once per item, so 3) and the flip count proves the shape really
-/// moved. Measured with the shape switching every 350 ms, through a bar → rail → bar → rail round trip:
-/// before movable content the count was 6 (all three rebuilt on the switch), and with it, 3.
-///
-/// It runs in the fixture BINARY rather than as a unit test on purpose: a `#[test]` build derives
-/// `remember` keys from the path hash, while this binary uses the production keys, and the bug only
-/// shows up under the latter.
+/// The fixture uses explicit buttons and disables transitions. Acceptance comes from the tagged
+/// suite's actual layout children and payload bounds, never from requested-layout text or an
+/// initializer count. Counters are read only inside each stored icon Column, while nested label
+/// Columns render fresh Strings captured from caller State. The fixture binary uses production keys.
 #[test]
 fn a_navigation_suites_items_keep_their_state_across_a_shape_switch() {
     let mut app = UiTest::launch("nav_suite_state");
-    // Wait for the first readout, then let several shape switches happen.
-    app.expect_text_timeout("markers 3 flips", Duration::from_secs(10));
-    let seen_bar = wait_for_text(&mut app, "shape bar", Duration::from_secs(10));
-    assert!(seen_bar, "the fixture must show the bar shape at some point");
-    let seen_rail = wait_for_text(&mut app, "shape rail", Duration::from_secs(10));
-    assert!(seen_rail, "and the rail shape, or nothing switched");
-    // Back to the bar: the round trip the measurement is about.
-    let seen_bar_again = wait_for_text(&mut app, "shape bar", Duration::from_secs(10));
-    assert!(seen_bar_again, "and back to the bar");
+    let mut counts = [0usize; 3];
+    let initial = nav_state_snapshot(&mut app, false, counts, 0);
+    let identities = nav_state_payload_ids(&initial);
+    assert_nav_state_layout(&app, &initial, false, &identities);
 
-    // The assertion: the count is STILL 3 — nothing was rebuilt by any of those switches. A readout
-    // that had gone to 6 would match no prefix below.
-    app.expect_text_timeout("markers 3 ", Duration::from_secs(5));
+    // Unequal values catch shared slots as well as a counter whose dependency never invalidates.
+    for index in 0..3 {
+        for _ in 0..=index {
+            app.refresh();
+            app.click_tag(&format!("nav-state-increment-{index}"));
+            counts[index] += 1;
+            let tree = nav_state_snapshot(&mut app, false, counts, 0);
+            assert_nav_state_layout(&app, &tree, false, &identities);
+        }
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, false, counts, 1);
+    assert_nav_state_layout(&app, &tree, false, &identities);
+
+    app.click_tag("nav-state-show-rail");
+    let rail = nav_state_snapshot(&mut app, true, counts, 1);
+    assert_nav_state_layout(&app, &rail, true, &identities);
+    for index in 0..3 {
+        app.refresh();
+        app.click_tag(&format!("nav-state-increment-{index}"));
+        counts[index] += 1;
+        let tree = nav_state_snapshot(&mut app, true, counts, 1);
+        assert_nav_state_layout(&app, &tree, true, &identities);
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, true, counts, 2);
+    assert_nav_state_layout(&app, &tree, true, &identities);
+
+    app.click_tag("nav-state-show-bar");
+    let returned = nav_state_snapshot(&mut app, false, counts, 2);
+    assert_nav_state_layout(&app, &returned, false, &identities);
+    for index in 0..3 {
+        app.refresh();
+        app.click_tag(&format!("nav-state-increment-{index}"));
+        counts[index] += 1;
+        let tree = nav_state_snapshot(&mut app, false, counts, 2);
+        assert_nav_state_layout(&app, &tree, false, &identities);
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, false, counts, 3);
+    assert_nav_state_layout(&app, &tree, false, &identities);
 }
 
-/// Poll the fixture's readouts until `text` appears in one of them, or the deadline passes.
-fn wait_for_text(app: &mut UiTest, text: &str, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        app.refresh();
-        if let Some(semantics) = app.semantics() {
-            if semantics.to_string().contains(text) {
-                return true;
+/// Search the parsed TREE, retaining duplicate tags so a leftover payload cannot pass as a move.
+fn nav_state_tagged_nodes<'a>(tree: &'a serde_json::Value, tag: &str) -> Vec<&'a serde_json::Value> {
+    fn walk<'a>(node: &'a serde_json::Value, tag: &str, out: &mut Vec<&'a serde_json::Value>) {
+        if let Some(nodes) = node.as_array() {
+            for node in nodes {
+                walk(node, tag, out);
+            }
+            return;
+        }
+        if node.get("tag").and_then(|value| value.as_str()) == Some(tag) {
+            out.push(node);
+        }
+        for key in ["root", "children"] {
+            if let Some(child) = node.get(key) {
+                walk(child, tag, out);
             }
         }
-        if Instant::now() >= deadline {
-            return false;
+    }
+    let mut out = Vec::new();
+    walk(tree, tag, &mut out);
+    out
+}
+
+fn nav_state_node<'a>(tree: &'a serde_json::Value, tag: &str) -> &'a serde_json::Value {
+    let nodes = nav_state_tagged_nodes(tree, tag);
+    assert_eq!(nodes.len(), 1, "exactly one real TREE node must carry `{tag}`");
+    nodes[0]
+}
+
+fn nav_state_rect(node: &serde_json::Value) -> Option<[f32; 4]> {
+    let pos = node.get("pos")?.as_array()?;
+    let size = node.get("size")?.as_array()?;
+    Some([
+        pos.first()?.as_f64()? as f32,
+        pos.get(1)?.as_f64()? as f32,
+        size.first()?.as_f64()? as f32,
+        size.get(1)?.as_f64()? as f32,
+    ])
+}
+
+fn nav_state_rect_matches(actual: [f32; 4], expected: [f32; 4]) -> bool {
+    actual.iter().zip(expected).all(|(actual, expected)| (actual - expected).abs() <= 1.0)
+}
+
+/// Poll only after one click: a lost dependency must fail instead of being hidden by another input.
+fn nav_state_snapshot(
+    app: &mut UiTest,
+    rail: bool,
+    counts: [usize; 3],
+    label_version: usize,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = serde_json::Value::Null;
+    loop {
+        app.refresh();
+        if let Some(tree) = app.tree() {
+            let suites = nav_state_tagged_nodes(&tree, "nav-state-suite");
+            let layout_matches = suites.first().and_then(|suite| suite.get("children"))
+                .and_then(|children| children.as_array())
+                .filter(|children| children.len() == 2)
+                .map(|children| {
+                    let expected = if rail {
+                        [[0.0, 0.0, 96.0, 360.0], [96.0, 0.0, 404.0, 360.0]]
+                    } else {
+                        [[0.0, 0.0, 500.0, 280.0], [0.0, 280.0, 500.0, 80.0]]
+                    };
+                    children.iter().zip(expected).all(|(child, expected)| {
+                        nav_state_rect(child).map(|rect| nav_state_rect_matches(rect, expected))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            let text_matches = (0..3).all(|index| {
+                [
+                    (format!("nav-state-count-{index}"), format!("text(I{index}: {})", counts[index])),
+                    (format!("nav-state-label-text-{index}"), format!("text(L{index}: {label_version})")),
+                ].iter().all(|(tag, text)| {
+                    let nodes = nav_state_tagged_nodes(&tree, tag);
+                    nodes.len() == 1 && nodes[0].get("mod").and_then(|value| value.as_str())
+                        .map(|modifier| modifier.contains(text)).unwrap_or(false)
+                })
+            });
+            if suites.len() == 1 && layout_matches && text_matches {
+                return tree;
+            }
+            last = tree;
         }
+        assert!(
+            Instant::now() < deadline,
+            "actual navigation layout and live payloads never matched rail={rail}, counters={counts:?}, label={label_version}; last TREE: {last}"
+        );
         std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+/// Numeric TREE ids come from LayoutNode.id, not slot text, arena positions, or initializer counts.
+fn nav_state_payload_ids(tree: &serde_json::Value) -> Vec<(String, u64)> {
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        for prefix in ["icon", "count", "label", "label-text"] {
+            let tag = format!("nav-state-{prefix}-{index}");
+            let id = nav_state_node(tree, &tag).get("id").and_then(|value| value.as_u64())
+                .unwrap_or_else(|| panic!("TREE must expose the real numeric node id for `{tag}`"));
+            ids.push((tag, id));
+        }
+    }
+    let unique: std::collections::HashSet<_> = ids.iter().map(|(_, id)| *id).collect();
+    assert_eq!(unique.len(), ids.len(), "each retained payload node must have its own id");
+    ids
+}
+
+fn assert_nav_state_bounds_inside(inner: [f32; 4], outer: [f32; 4], tag: &str) {
+    assert!(
+        inner[2] > 0.0 && inner[3] > 0.0
+            && inner[0] >= outer[0] - 1.0 && inner[1] >= outer[1] - 1.0
+            && inner[0] + inner[2] <= outer[0] + outer[2] + 1.0
+            && inner[1] + inner[3] <= outer[1] + outer[3] + 1.0,
+        "visible `{tag}` bounds {inner:?} must stay inside {outer:?}"
+    );
+}
+
+fn assert_nav_state_layout(
+    app: &UiTest,
+    tree: &serde_json::Value,
+    rail: bool,
+    identities: &[(String, u64)],
+) {
+    assert_eq!(nav_state_payload_ids(tree).as_slice(), identities, "payload nodes must move, never rebuild");
+    let suite = nav_state_node(tree, "nav-state-suite");
+    let (sx, sy, sw, sh) = app.find_tag("nav-state-suite").expect("actual navigation suite bounds");
+    assert!(nav_state_rect_matches([sx, sy, sw, sh], [0.0, 80.0, 500.0, 360.0]),
+        "the suite must fill the area below both control rows: {:?}", [sx, sy, sw, sh]);
+    let children = suite.get("children").and_then(|value| value.as_array()).expect("suite children");
+    assert_eq!(children.len(), 2, "the real suite root must contain content and one morph container");
+    let (content, morph) = if rail { (&children[1], &children[0]) } else { (&children[0], &children[1]) };
+    // TREE exposes node identity and geometry, not MeasurePolicy type names. Direct children pin
+    // the actual Column (content then bottom morph) or Row (leading morph then content) behavior.
+    assert_eq!(nav_state_tagged_nodes(content, "nav-state-page").len(), 1,
+        "the content child must own the page, not the navigation payloads");
+    assert!(nav_state_tagged_nodes(morph, "nav-state-page").is_empty(), "the page must not move into navigation");
+    let shape_children = morph.get("children").and_then(|value| value.as_array()).expect("morph children");
+    assert_eq!(shape_children.len(), 1, "the morph must wrap exactly one actual navigation container");
+    let shape = &shape_children[0];
+    let items = shape.get("children").and_then(|value| value.as_array()).expect("navigation items");
+    assert_eq!(items.len(), 3, "all three real navigation items must remain attached");
+    let morph_rect = nav_state_rect(morph).expect("morph layout bounds");
+    let navigation_bounds = [sx + morph_rect[0], sy + morph_rect[1], morph_rect[2], morph_rect[3]];
+    let (px, py, pw, ph) = app.find_tag("nav-state-page").expect("page content bounds");
+    let expected_page = if rail { [96.0, 80.0, 404.0, 360.0] } else { [0.0, 80.0, 500.0, 280.0] };
+    assert!(nav_state_rect_matches([px, py, pw, ph], expected_page),
+        "content must occupy the actual space left by navigation: {:?}", [px, py, pw, ph]);
+    let expected_shape = if rail { [0.0, 0.0, 96.0, 360.0] } else { [0.0, 0.0, 500.0, 80.0] };
+    assert!(nav_state_rect_matches(nav_state_rect(shape).expect("shape bounds"), expected_shape),
+        "actual navigation container must fill the 96px rail or 80px bar");
+
+    let mut previous_icon: Option<[f32; 4]> = None;
+    for index in 0..3 {
+        let icon_tag = format!("nav-state-icon-{index}");
+        let label_tag = format!("nav-state-label-{index}");
+        assert_eq!(nav_state_tagged_nodes(&items[index], &icon_tag).len(), 1, "actual navigation item {index} must own `{icon_tag}`");
+        assert_eq!(nav_state_tagged_nodes(&items[index], &label_tag).len(), 1, "actual navigation item {index} must own `{label_tag}`");
+        let item_rect = nav_state_rect(&items[index]).expect("actual navigation item bounds");
+        let expected_width = if rail { 96.0 } else { (sw - 16.0) / 3.0 };
+        assert!((item_rect[2] - expected_width).abs() <= 1.0,
+            "actual navigation item {index} must use its allocated width, got {item_rect:?}");
+        let (x, y, w, h) = app.find_tag(&icon_tag).expect("visible icon payload bounds");
+        let icon = [x, y, w, h];
+        assert!((w - (40.0 + index as f32 * 8.0)).abs() <= 1.0 && (h - 28.0).abs() <= 1.0,
+            "retained icon {index} must keep its distinct measured size: {icon:?}");
+        assert_nav_state_bounds_inside(icon, navigation_bounds, &icon_tag);
+        let (lx, ly, lw, lh) = app.find_tag(&label_tag).expect("visible label payload bounds");
+        let label = [lx, ly, lw, lh];
+        assert!((lw - 56.0).abs() <= 1.0 && (lh - 16.0).abs() <= 1.0, "label {index} must retain its visible size: {label:?}");
+        assert_nav_state_bounds_inside(label, navigation_bounds, &label_tag);
+        assert!(ly >= y + h, "label {index} must be below its actual icon in both compact layouts");
+        assert!(((x + w / 2.0) - (lx + lw / 2.0)).abs() <= 1.5,
+            "label {index} and icon must share the actual item centre");
+        let expected_centre = if rail { sx + 48.0 } else {
+            let item_width = (sw - 16.0) / 3.0;
+            sx + index as f32 * (item_width + 8.0) + item_width / 2.0
+        };
+        assert!((x + w / 2.0 - expected_centre).abs() <= 1.5,
+            "icon {index} must occupy its real {} item, got {icon:?}", if rail { "rail" } else { "bar" });
+        if let Some(previous) = previous_icon {
+            if rail {
+                assert!(y > previous[1] + previous[3], "rail icons must stack vertically without overlap");
+            } else {
+                assert!(x > previous[0] + previous[2] && (y - previous[1]).abs() <= 1.0,
+                    "bar icons must form one horizontal row without overlap");
+            }
+        }
+        previous_icon = Some(icon);
+        for (tag, owner) in [
+            (format!("nav-state-count-{index}"), icon),
+            (format!("nav-state-label-text-{index}"), label),
+        ] {
+            let (x, y, w, h) = app.find_tag(&tag).expect("live payload text bounds");
+            assert_nav_state_bounds_inside([x, y, w, h], owner, &tag);
+        }
     }
 }
