@@ -51,6 +51,13 @@
 //! - **One visibility threshold for every axis.** `SpringSpec::threshold` is a scalar, where
 //!   Compose's spring takes a per-axis threshold vector; the default (1 px per axis) is uniform, so
 //!   only a caller asking for different thresholds per axis would notice.
+//! - **Sub-pixel sizes, and the threshold is in logical units.** Compose animates an `IntSize`:
+//!   `IntSize.VectorConverter` rounds the value to whole PHYSICAL pixels every frame and clamps
+//!   negatives to zero (`animation-core/VectorConverters.kt:154-166`), with a 1-physical-pixel
+//!   visibility threshold (`VisibilityThresholds.kt:97-98`). winia animates `Size` in logical units
+//!   with no rounding step, so the motion is smoother than Compose's on a non-integer-density
+//!   display, but the 1.0 default threshold is 1 logical unit — 3 physical pixels on a 3x display —
+//!   so the stop band is that much wider than Compose's.
 //! - **The listener runs inside the layout pass**, where Compose's runs in a coroutine. A State it
 //!   writes still notifies (verified: the demo's counter updates from a click), but work that must
 //!   not run during measure has no other hook here.
