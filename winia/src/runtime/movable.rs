@@ -66,6 +66,154 @@ mod tests {
     use crate::modifier::Modifier;
     use crate::runtime::composer::Composer;
 
+    /// A payload composed through a movable handle is still a CHILD of the component that invoked it,
+    /// in the position that component's measure policy expects.
+    ///
+    /// This is the contract the navigation suite's item policies are written against — they index
+    /// `children[1]` and `children[2]` for the icon and the label
+    /// (`navigation_bar.rs:659`, `navigation_rail.rs:1396`), and they panicked with "index out of
+    /// bounds: the len is 2 but the index is 2" while the payloads were being wired up. The ref slot
+    /// itself holds nothing, so the payload's node has to arrive as the component's own child.
+    #[test]
+    fn an_inlined_payload_is_a_child_of_the_invoking_component() {
+        use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
+
+        /// Reports how many children it was measured with, and sizes itself from them.
+        #[derive(Debug)]
+        struct CountingPolicy(std::sync::Arc<std::sync::Mutex<Vec<usize>>>);
+        impl MeasurePolicy for CountingPolicy {
+            fn measure(
+                &self,
+                nodes: &mut Vec<LayoutNode>,
+                policies: &[Box<dyn MeasurePolicy>],
+                children: &[usize],
+                constraints: Constraints,
+            ) -> (crate::unit::Size, Vec<Placement>) {
+                self.0.lock().unwrap().push(children.len());
+                let mut placements = Vec::new();
+                let mut x = 0.0;
+                let mut size = crate::unit::Size::new(0.0, 0.0);
+                for &c in children {
+                    let (cs, _) = measure_node(nodes, policies, c, constraints.loosen());
+                    placements.push(Placement { size: cs, position: crate::unit::Offset::new(x, 0.0) });
+                    x += cs.width;
+                    size = crate::unit::Size::new(x, size.height.max(cs.height));
+                }
+                let size = crate::unit::Size::new(
+                    constraints.constrain_width(size.width),
+                    constraints.constrain_height(size.height),
+                );
+                (size, placements)
+            }
+            fn place(
+                &self,
+                nodes: &mut Vec<LayoutNode>,
+                children: &[usize],
+                placements: &[Placement],
+            ) {
+                for (index, &child) in children.iter().enumerate() {
+                    nodes[child].position = placements[index].position;
+                    nodes[child].measured_size = placements[index].size;
+                }
+            }
+        }
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let payload = ctx.remember_movable_content(|ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().size(30.0, 10.0));
+                ctx.end_node();
+            });
+            // A component with a child of its own, then the payload: the policy must see TWO children.
+            // The payload is composed from INSIDE a component's content closure (a restartable group),
+            // which is where the navigation suite invokes its item payloads.
+            let key = ctx.next_key();
+            let seen_here = seen.clone();
+            ctx.start_container(
+                key,
+                Modifier::new().size(100.0, 20.0),
+                CountingPolicy(seen_here),
+            );
+            let own = ctx.next_key();
+            ctx.start_leaf(own, Modifier::new().size(20.0, 10.0));
+            ctx.end_node();
+            let payload_for_group = payload.clone();
+            Column::new().build(ctx, move |ctx| {
+                payload_for_group.compose(ctx);
+            });
+            ctx.end_node();
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[2],
+            "the component's policy must be measured with its own child AND the inlined payload"
+        );
+    }
+
+    /// Compose's movable group keeps everything under it, including the parts this frame did NOT
+    /// compose — and that is what makes movable content survive a structure change INSIDE it, not just
+    /// a move between parents.
+    ///
+    /// This is the navigation suite's shape, reduced: the items are composed by the caller's loop, so a
+    /// shape that shows fewer of them simply composes fewer this frame. The third item must still be
+    /// the same item when the structure grows back — measured by its own counter, which would climb if
+    /// its slot had been dropped along with the branch that stopped composing it.
+    #[test]
+    fn a_structures_state_survives_while_the_content_shrinks_and_grows_back() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ITEM_INITS: AtomicUsize = AtomicUsize::new(0);
+        static COUNT: AtomicUsize = AtomicUsize::new(3);
+
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let content = ctx.remember_movable_content(|ctx| {
+                    for _ in 0..COUNT.load(Ordering::SeqCst) {
+                        let index = ITEM_INITS.fetch_add(1, Ordering::SeqCst);
+                        let remembered: crate::runtime::state::State<usize> =
+                            ctx.remember(|| index);
+                        // Read it, so the slot is subscribed and the value means something.
+                        let _ = remembered.get();
+                        Column::new()
+                            .modifier(Modifier::new().size(20.0, 10.0))
+                            .build(ctx, |_ctx| {});
+                    }
+                });
+                Column::new()
+                    .modifier(Modifier::new().size(100.0, 100.0))
+                    .build(ctx, |ctx| {
+                        content.compose(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        frame(&mut composer);
+        assert_eq!(ITEM_INITS.load(Ordering::SeqCst), 3, "three items composed");
+
+        // The shape shows two: the third is not composed this frame, but must not be dropped.
+        COUNT.store(2, Ordering::SeqCst);
+        frame(&mut composer);
+        assert_eq!(
+            ITEM_INITS.load(Ordering::SeqCst),
+            3,
+            "composing fewer items must not re-init the ones that remain"
+        );
+
+        // …and growing back, the third item is the SAME item.
+        COUNT.store(3, Ordering::SeqCst);
+        frame(&mut composer);
+        assert_eq!(
+            ITEM_INITS.load(Ordering::SeqCst),
+            3,
+            "the third item's remembered value survived the shrink, so it is not re-initialized"
+        );
+    }
+
     /// The whole point, measured: content composed under one parent and then under ANOTHER keeps what
     /// it `remember`ed, and switching back and forth does not run its `remember` initializer again.
     ///

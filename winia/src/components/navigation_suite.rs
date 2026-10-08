@@ -30,23 +30,27 @@
 //!
 //! The composer half of the fix now exists — `ctx.remember_movable_content` keeps content's slots (and
 //! so its state) out of the tree entirely, and it is measured to survive both a move between parents
-//! and a structure shrink inside the content. This component still needs its own half, and an attempt
-//! is worth recording because it got further than expected and then stopped at a real wall:
+//! and a structure shrink inside the content. This component still needs its own half, and two attempts
+//! are worth recording because they narrowed it to one place:
 //!
 //! - The item payloads must become `Arc<dyn Fn>` (they are `Box<dyn FnOnce>`, one-shot, so they cannot
-//!   be invoked from a remembered handle). That part works.
-//! - Pairing every item with an icon handle and a label handle works too, and the shapes' item trees
-//!   come out right — but the rail's own measure then reported 0 width (`wide_window_renders_expanded_
-//!   rail`, "展开轨宽 220", left 0). A shape container sizes itself from the children its policy sees,
-//!   and a payload that materializes through an inlined movable reference is a different child tree
-//!   than the one those policies were written against, so the shapes have to be re-examined against it
-//!   rather than bolted onto it.
-//! - That attempt did find a real composer bug, now fixed: the reference slot's path frame was left
-//!   open, so everything composed after a payload landed under a slot the walk ignores
+//!   be invoked from a remembered handle), and per-item icon/label handles work. With the handles
+//!   created but the payloads still passed through unchanged, the whole suite renders normally — so the
+//!   handles themselves are not the problem.
+//! - Sending the ICON payload through its handle collapses the frame: the composition runs, the payload
+//!   composes cleanly inside the store (one slot, depth 0), and the descriptor walk then reports
+//!   `root kids=1 descs=1` — one node for the entire suite, measured 0x0. Everything after the payload
+//!   is materialized as if it had never been visited, which is the thing to chase next.
+//! - The first attempt also found a real composer bug, since fixed: the reference slot's path frame was
+//!   left open, so everything composed after a payload landed under a slot the walk ignores
 //!   (`navigation_bar.rs:659` / `navigation_rail.rs:1396`, "index out of bounds: the len is 2 but the
 //!   index is 2").
 //!
-//! The remaining work is therefore in the shape containers, not in the composer.
+//! A focused reproduction of the *good* half is now in `runtime/movable.rs`
+//! (`an_inlined_payload_is_a_child_of_the_invoking_component`): a payload invoked from inside a
+//! component's content closure arrives as that component's own child, which is what the item policies
+//! need. What is left is the suite's own arrangement — the handles are remembered in a loop before the
+//! shape branches, and something about that ordering is what collapses the walk.
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
