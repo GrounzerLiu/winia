@@ -1026,10 +1026,17 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
 /// the spring was still ~11 % short of its target. Scaling it the other way (`velocity * FRAME <
 /// threshold * FRAME`) is exactly the code below.
 ///
-/// Compose reaches the same behaviour by a different route: a spring there runs for
-/// `estimateAnimationDurationMillis` — the time it needs to come within one `visibilityThreshold` of the
-/// target — and then reports the exact target (`FloatSpringSpec::getDurationNanos`, androidx
-/// `animation-core`).
+/// Compose settles by a different route, with a measurable difference in WHEN: a spring there computes
+/// its own duration with `estimateAnimationDurationMillis` — the time the analytic solution needs to come
+/// within one `visibilityThreshold` of the target and stay there (`animation-core/SpringEstimation.kt:36-89`
+/// and the Newton solve at `:121-190`) — runs exactly that long (`FloatSpringSpec.getDurationNanos`,
+/// `animation-core/FloatAnimationSpec.kt:172-190`) and then reports the exact target. That is a
+/// POSITION-only test, so the velocity-gated rule below can keep integrating past the point Compose stops:
+/// measured on the demo, a 140x44 → 320x120 grow with the default spec (stiffness 400, ratio 1, 1 px
+/// threshold) is within 1 px of the target at ~0.43 s, where Compose's estimator stops, while the listener
+/// reported the finished animation at ~0.5 s, once the velocity had also fallen under 1 px/s. Nothing
+/// visible differs — both end inside a pixel of the target — but a finish time reported here can be up to
+/// ~0.15 s later than Compose's.
 #[inline]
 fn spring_at_rest(displacement: f32, velocity: f32, threshold: f32) -> bool {
     displacement.abs() < threshold && velocity.abs() < threshold
