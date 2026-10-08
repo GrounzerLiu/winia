@@ -28,6 +28,55 @@ use std::time::{Duration, Instant};
 use std::sync::Arc;
 use std::sync::{Mutex, LazyLock};
 
+/// The velocity handed to a new animation when a retarget interrupts the old one, carried PER
+/// COMPONENT.
+///
+/// Compose passes the running velocity straight into the replacement animation
+/// (`AnimationState.velocity`, `animation-core/AnimationState.kt`), and `IntSize`/`Offset` have a
+/// two-dimensional `VectorConverter`, so width and height each keep their own velocity: when one
+/// axis moves fast and the other sits still, only the moving one carries momentum into the new
+/// animation. Storing a single scalar instead flings the fastest axis's velocity into every axis,
+/// which shows up as tens of pixels of phantom overshoot whenever the target moves every frame
+/// (an `AnimatedSize` whose content is animating too). Scalar values have one component.
+#[derive(Clone, Copy)]
+pub struct RetargetVelocity {
+    components: [f32; MAX_ANIMATION_COMPONENTS],
+    len: usize,
+}
+
+impl RetargetVelocity {
+    /// Nothing to inherit.
+    pub const ZERO: Self = Self { components: [0.0; MAX_ANIMATION_COMPONENTS], len: 0 };
+
+    /// One scalar component: `animate_*_as_state`, a fling hand-off, any one-dimensional motion.
+    pub fn scalar(velocity: f32) -> Self {
+        let mut components = [0.0; MAX_ANIMATION_COMPONENTS];
+        components[0] = velocity;
+        Self { components, len: 1 }
+    }
+
+    /// The velocity of component `i`. With fewer components than asked for (a scalar handing over to
+    /// a vector) it falls back to component 0 — the old "only one velocity is available" behaviour.
+    fn component(&self, i: usize) -> f32 {
+        if self.len == 0 {
+            0.0
+        } else if i < self.len {
+            self.components[i]
+        } else {
+            self.components[0]
+        }
+    }
+
+    /// The component with the largest magnitude — what the scalar path and `last_velocity()` report.
+    fn max_abs(&self) -> f32 {
+        self.components[..self.len]
+            .iter()
+            .copied()
+            .reduce(|a, b| if b.abs() > a.abs() { b } else { a })
+            .unwrap_or(0.0)
+    }
+}
+
 /// 动画实例 trait（擦除类型后存储在全局列表）
 pub trait AnimationInstance: Send {
     fn update(&mut self) -> bool;
@@ -36,6 +85,11 @@ pub trait AnimationInstance: Send {
     fn same_target(&self, target: &dyn std::any::Any) -> bool;
     /// 当前速度（px/s）——供 retarget 速度延续（P2-9）
     fn last_velocity(&self) -> f32;
+    /// The per-component velocity to inherit on a retarget; by default `last_velocity()` is the
+    /// only component.
+    fn retarget_velocity(&self) -> RetargetVelocity {
+        RetargetVelocity::scalar(self.last_velocity())
+    }
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -224,7 +278,7 @@ pub fn push_animatable_with_velocity_and_done<
         list.retain(|anim| anim.state_id() != sid);
     }
     let mut anim = Animatable::from_animating(handle);
-    anim.start_with_velocity(target, spec, velocity);
+    anim.start_with_velocity(target, spec, RetargetVelocity::scalar(velocity));
     anim.on_finish(done);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -251,7 +305,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
         cancel_animation_by_id(sid);
     }
-    let inherited_velocity;
+    let inherited_velocity: RetargetVelocity;
     // 同 `push_animatable_with_velocity_and_done`：只有声明不支持 Spring 的类型才降级
     let spec = if T::supports_spring() {
         spec
@@ -268,8 +322,9 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
         // 新目标竞争，导致值卡在旧目标路径上）；P2-9：移除前继承旧速度
         // （Spring/Decay 被打断时新动画从当前速度继续，物理连续）
+        // Each component inherits its own velocity — see `RetargetVelocity`.
         inherited_velocity = list.iter().find(|a| a.state_id() == sid)
-            .map(|a| a.last_velocity()).unwrap_or(0.0);
+            .map(|a| a.retarget_velocity()).unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
     let mut anim = Animatable::from_animating(state);
@@ -522,6 +577,9 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
     fn last_velocity(&self) -> f32 {
         self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0)
     }
+    fn retarget_velocity(&self) -> RetargetVelocity {
+        Animatable::retarget_velocity(self)
+    }
 }
 
 /// 更新所有活跃动画，返回是否有动画还在运行
@@ -673,25 +731,43 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
         self.on_boundary = Some(Box::new(f));
     }
 
+    /// The per-component velocity to inherit on a retarget (see [`RetargetVelocity`]): component
+    /// springs keep one velocity per axis, a scalar value has a single component.
+    fn retarget_velocity(&self) -> RetargetVelocity {
+        match self.anim_state.as_ref().and_then(|s| s.lanes.as_ref()) {
+            Some(lanes) => {
+                let mut velocity = RetargetVelocity::ZERO;
+                velocity.len = lanes.len().min(MAX_ANIMATION_COMPONENTS);
+                for (i, lane) in lanes.iter().take(velocity.len).enumerate() {
+                    velocity.components[i] = lane.velocity;
+                }
+                velocity
+            }
+            None => RetargetVelocity::scalar(
+                self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0),
+            ),
+        }
+    }
+
     /// 启动动画到目标值
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
         // P2-9 速度延续：被打断的动画从当前速度继续（Compose 核心语义——
         // 弹簧弹到一半改目标，新动画继承旧速度，物理连续）。
         // Spring/Decay 每帧更新 last_velocity；Tween/Keyframes/Repeatable
         // 无速度语义恒 0——继承无影响（从静止重启）。
-        let start_velocity = self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0);
+        let start_velocity = self.retarget_velocity();
         self.start_with_velocity(to, spec, start_velocity);
     }
 
     /// 内部启动入口：显式指定初始速度（`push_animatable` retarget 时从
     /// 被移除的旧动画继承；`animate_to` 从自身 anim_state 继承）。
-    fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: f32) {
+    fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: RetargetVelocity) {
         // review fix：只有 Spring/Decay 有物理速度语义——Tween/Keyframes/
         // Repeatable/Snap 被打断时从静止重启。否则"Spring→Tween→Spring"
         // 第二次打断会继承 Tween 期间的过期速度（Tween 不更新 last_velocity）。
         let start_velocity = match spec {
             AnimationSpec::Spring(_) | AnimationSpec::Decay(_) => start_velocity,
-            _ => 0.0,
+            _ => RetargetVelocity::ZERO,
         };
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
@@ -709,7 +785,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                             .map(|i| SpringLane {
                                 to: to_components[i],
                                 displacement: from_components[i] - to_components[i],
-                                velocity: start_velocity,
+                                velocity: start_velocity.component(i),
                             })
                             .collect(),
                     )
@@ -724,7 +800,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             to,
             start: Instant::now(),
             spec,
-            last_velocity: start_velocity,
+            last_velocity: start_velocity.max_abs(),
             last_update: Instant::now(),
             current_displacement: displacement,
             initial_velocity: 0.0,
@@ -1943,6 +2019,41 @@ pub(crate) mod tests {
         }
         assert!(frames > 1, "两条分量弹簧要跑若干帧，不是一次 Snap（frames={frames}）");
         assert_eq!(s.peek(), Size::new(60.0, 9.0), "宽高各写自己的精确目标");
+    }
+
+    #[test]
+    fn a_retarget_carries_each_axis_its_own_velocity() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // Compose's `Animatable.animateTo` hands the running velocity to the replacement animation
+        // PER COMPONENT (`IntSize`'s converter is two-dimensional): interrupting while the width is
+        // travelling fast must not give the height a velocity it never had. One scalar velocity
+        // (the fastest axis) drags the height along by tens of pixels.
+        use crate::unit::Size;
+        let s = State::new(Size::new(0.0, 100.0));
+        let spec = AnimationSpec::Spring(SpringSpec::default());
+        push_animatable(s.clone(), Size::new(100.0, 100.0), spec.clone());
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            update_animations();
+            assert_eq!(s.peek().height, 100.0, "the height's target never moved, so it must not move");
+        }
+        // The width is mid-flight (and fast); retarget it. Only the width carries a velocity on.
+        push_animatable(s.clone(), Size::new(20.0, 100.0), spec);
+        let mut frames = 0;
+        for _ in 0..400 {
+            if !update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            frames += 1;
+            assert_eq!(
+                s.peek().height, 100.0,
+                "the height inherited the width's velocity (height={}, frames={frames})",
+                s.peek().height
+            );
+        }
+        assert!(frames > 1, "component springs take several frames (frames={frames})");
+        assert_eq!(s.peek(), Size::new(20.0, 100.0));
     }
 
     #[test]
