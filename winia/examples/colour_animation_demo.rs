@@ -179,23 +179,24 @@ fn colour_animation_demo(ctx: &mut ComposeCtx) {
                     );
                 });
             Text::new(
-                "Both move from the same progress. Halfway, the engine is #636363 and the byte blend \
-                 #7F7F7F: Oklab keeps the lightness to the eye even, which is what Compose's \
-                 Color.VectorConverter animates.",
+                "Both move from the same progress. At the halfway mark the engine's box is #636363 \
+                 while the byte-wise blend is #808080: Oklab keeps the lightness to the eye even, \
+                 which is what Compose's Color.VectorConverter animates.",
             )
             .font_size(11.0)
             .build(ctx);
 
             // The same comparison as a still strip: five steps of each interpolation, so the
-            // divergence is readable without watching the loop.
+            // divergence is readable without watching the loop. The captions are the values the
+            // swatches are actually painted with (measured through the debug server).
             Row::new()
                 .modifier(Modifier::new().fill_max_width().padding_top(6.0))
                 .spacing(12.0)
                 .build(ctx, |ctx| {
-                    ramp(ctx, "engine: #000000 #404040 #636363 #A7A7A7 #FFFFFF", |t| {
+                    ramp(ctx, "engine: #000000 #222222 #636363 #AEAEAE #FFFFFF", |t| {
                         Color::from_oklab([1.0, t, 0.0, 0.0])
                     });
-                    ramp(ctx, "bytes:  #000000 #404040 #7F7F7F #BFBFBF #FFFFFF", |t| {
+                    ramp(ctx, "bytes:  #000000 #404040 #808080 #BFBFBF #FFFFFF", |t| {
                         byte_blend(BLACK, WHITE, t)
                     });
                 });

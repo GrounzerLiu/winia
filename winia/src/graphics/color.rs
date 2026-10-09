@@ -190,6 +190,36 @@ mod tests {
         assert_ne!(mid, encoded_mid, "and that is NOT the byte-wise midpoint");
     }
 
+    /// The five-step grey ramp the colour demo draws, pinned here because its captions print these
+    /// values: the engine's Oklab steps against a byte-wise blend of the same progress. A change to
+    /// either interpolation shows up as a failing test instead of a wrong label in the demo.
+    #[test]
+    fn the_grey_ramp_is_perceptual_not_byte_wise() {
+        let engine: Vec<(u8, u8, u8)> = (0..5)
+            .map(|i| {
+                let c = Color::from_oklab([1.0, i as f32 / 4.0, 0.0, 0.0]);
+                (c.r, c.g, c.b)
+            })
+            .collect();
+        assert_eq!(
+            engine,
+            vec![
+                (0x00, 0x00, 0x00),
+                (0x22, 0x22, 0x22),
+                (0x63, 0x63, 0x63),
+                (0xAE, 0xAE, 0xAE),
+                (0xFF, 0xFF, 0xFF),
+            ],
+            "the demo's engine strip"
+        );
+        let bytes: Vec<u8> = (0..5).map(|i| (255.0 * (i as f32 / 4.0)).round() as u8).collect();
+        assert_eq!(bytes, vec![0x00, 0x40, 0x80, 0xBF, 0xFF], "the demo's byte strip");
+        assert!(
+            engine[1].0 < bytes[1] && engine[3].0 < bytes[3],
+            "the perceptual ramp stays darker than the byte blend of the same progress"
+        );
+    }
+
     #[test]
     fn from_oklab_clamps_like_compose_does() {
         assert_eq!(Color::from_oklab([2.0, 2.0, 0.0, 0.0]), Color::WHITE);
