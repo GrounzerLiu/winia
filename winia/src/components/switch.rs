@@ -263,7 +263,10 @@ impl Switch {
         let thumb_color = colors.thumb_color(self.enabled, checked);
         let icon_color = colors.icon_color(self.enabled, checked);
 
-        // 背景/边框/中心圆颜色过渡（180ms EaseOutCubic）
+        // A winia addition, recorded rather than presented as a port: M3's `Switch` applies its
+        // track/border/thumb colours directly (`material3/Switch.kt:145-152`, the file contains no
+        // `animateColorAsState`), so this 180 ms EaseOutCubic fade is ours. The engine can animate a
+        // colour on a spring now, so M3-style motion would be `SpringSpec::effects_default()` here.
         let color_spec = crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
             std::time::Duration::from_millis(180),
             crate::animation::interpolator::EaseOutCubic::new(),

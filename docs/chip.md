@@ -61,8 +61,10 @@ Chip::suggestion(label, on_click)                   // 建议（可选 icon）
 - **统一容器**：`build_chip`（内部）——32dp 高 + shape 背景 + 条件边框 +
   clickable/ripple + 内容垂直居中（`Row` 显式 `Alignment::Center`——默认 Start
   会顶对齐，有 icon 时文字不居中）。
-- **背景色过渡动画**：`animate_color_as_state`（180ms EaseOutCubic）——selected/
-  unselected/disabled 切换时容器色平滑渐变。⚠ `background` 接受动态闭包
+- **Container colour fade**: `animate_color_as_state` (180 ms EaseOutCubic) blends the container
+  colour across selected/unselected/disabled. That fade is a winia addition — M3's `Chip.kt` applies
+  the container colour directly and has no `animateColorAsState`. Note `background` takes a dynamic
+  closure
   （`impl Fn() -> Color`），必须传 `move || bg.get()` 而非 `bg.get()` 的值——
   否则冻结在 build 时（动画不显示）；渲染期每帧求值。
 - **边框消失**：`border_width > 0` 才挂 border modifier——`border(0.0)` 仍会

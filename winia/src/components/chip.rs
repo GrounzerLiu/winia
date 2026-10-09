@@ -331,10 +331,12 @@ fn build_chip(
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let key = ctx.next_key();
-    // ⚠ 背景色过渡动画：container 是目标色——animate_color_as_state 内部
-    // remember 持 State + 注册动画，切换（选中/未选中/disabled）时平滑渐变
-    // （对齐 M3 chips 颜色过渡；Button elevation 同款 180ms EaseOutCubic）。
-    // get() 注册依赖 → 动画每帧推进重组 → 背景色跟随插值。
+    // A winia addition: `animate_color_as_state` remembers the animated colour and registers the
+    // animation, so a chip fades between its container colours (selected / unselected / disabled).
+    // M3's chips apply their container colour directly (`material3/Chip.kt` has no
+    // `animateColorAsState`), so this 180 ms EaseOutCubic fade is ours, not a port — kept because it
+    // reads better than a hard cut, and recorded rather than presented as alignment. A spring would be
+    // `SpringSpec::effects_default()` here now that the engine animates colours per Oklab component.
     let bg_anim = ctx.animate_color_as_state(
         container,
         crate::animation::AnimationSpec::Tween(

@@ -209,12 +209,11 @@ impl TopAppBar {
         let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0);
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
         let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
+            // M3 animates this one with `MotionSchemeKeyTokens.DefaultEffects.value()`
+            // (`material3/AppBar.kt:2529-2532`) — a critically damped spring, not an 180 ms tween.
             ctx.animate_color_as_state(
                 target_container,
-                crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                    std::time::Duration::from_millis(180),
-                    crate::animation::interpolator::EaseOutCubic::new(),
-                )),
+                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default()),
             )
         } else {
             crate::runtime::state::State::new(target_container)

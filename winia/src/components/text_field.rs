@@ -1486,15 +1486,12 @@ impl TextField {
                     else if self.is_error { colors.error_supporting }
                     else { colors.supporting },
             });
-            // 焦点过渡动画（M3：颜色 FastEffects 100ms / 宽度 FastSpatial 150ms）
+            // The indicator colour is M3's `FastEffects` spring
+            // (`material3/TextFieldDefaults.kt:246-248`, `:1068-1070`: `animateColorAsState(…,
+            // animationSpec = MotionSchemeKeyTokens.FastEffects.value())`), not a 100 ms tween.
             let indicator_anim = ctx.animate_color_as_state(
                 colors.indicator_color(self.enabled, self.is_error, focused),
-                crate::animation::AnimationSpec::Tween(
-                    crate::animation::TweenSpec::new(
-                        std::time::Duration::from_millis(100),
-                        crate::animation::interpolator::EaseOutCubic::new(),
-                    )
-                ),
+                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_fast()),
             );
             let focus_progress = ctx.animate_float_as_state(
                 if focused { 1.0 } else { 0.0 },

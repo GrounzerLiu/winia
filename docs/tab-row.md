@@ -86,10 +86,14 @@ Tab::new(selected, || on_click())
 
 ### Tab 颜色过渡（TabTransition 对齐）
 
-- `animate_color_as_state(selected ? sel : unsel, spring(1.0, 300))` → `State<Color>`；
-  text/icon 槽挂 `graphics_layer(color_filter: ColorFilter::Tint { SrcIn })`——渲染期
-  peek 零重组，单层动态染色（无需双文本交叉淡化）。layout_dep 由
-  `TabLayoutPolicy::measure` 开头 `color_anim.get()` 注册（动画帧重测 Tab → 重绘）。
+- `animate_color_as_state(selected ? sel : unsel, <per-direction spring>)` → `State<Color>`, following
+  Compose's `TabTransition` (`material3/Tab.kt:270-291`): `DefaultEffects` when the tab is ARRIVING at
+  the selected colour, `FastEffects` when it is leaving — `SpringSpec::effects_default()` /
+  `effects_fast()`, i.e. spring(1.0, 1600) and spring(1.0, 3800).
+  The text/icon slots carry `graphics_layer(color_filter: ColorFilter::Tint { SrcIn })`, so the
+  renderer peeks the animated colour with no recomposition and one layer does the tinting (no second
+  text copy to cross-fade). The layout dependency is registered by the `color_anim.get()` at the top of
+  `TabLayoutPolicy::measure`, so an animation frame re-measures the Tab and repaints it.
 
 ## 4. RTL——四层镜像（缺一不可）
 

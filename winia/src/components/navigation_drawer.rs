@@ -437,9 +437,11 @@ impl NavigationDrawerItem {
         let selected = self.selected;
         // `ActiveIndicatorShape` = CornerFull → the pill.
         let shape = self.shape.unwrap_or(Shape::Pill);
-        // The indicator color animates between the unselected and selected fills
-        // (Compose `animateColorAsState`). It is a *paint* value: the animation state
-        // is peeked by the background closure, so the fade costs no recomposition.
+        // The indicator colour fades between the unselected and selected fills. M3's
+        // `NavigationDrawer.kt` contains no `animateColorAsState`, so the fade is a winia addition
+        // rather than a port — kept, and recorded here instead of presented as alignment. It is a
+        // *paint* value: the animation state is peeked by the background closure, so it costs no
+        // recomposition.
         let indicator = ctx.animate_color_as_state(
             colors.container(selected),
             crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(

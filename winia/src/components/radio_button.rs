@@ -122,11 +122,13 @@ fn radio_button_impl(
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let color = colors.radio_color(enabled, selected);
 
-    // 颜色动画：Tween 300ms Linear（对齐 checkbox；Compose
-    // `animateColorAsState(MotionScheme.DefaultEffects)` = 300ms tween，
-    // `push_animatable_color` 会把 Spring 降级为 `TweenSpec::default()`）。
-    let color_spec =
-        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::default());
+    // The radio's colour, per M3: `animateColorAsState(target, MotionSchemeKeyTokens.DefaultEffects.value())`
+    // (`material3/RadioButton.kt:237`) — a critically damped spring (stiffness 1600), not a 300 ms
+    // linear tween, which is what this used to be while the engine could not animate a colour on a
+    // spring at all.
+    let color_spec = crate::animation::AnimationSpec::Spring(
+        crate::animation::SpringSpec::effects_default(),
+    );
     let color_anim = ctx.animate_color_as_state(color, color_spec);
 
     // 内点出现/消失动画：scale 0↔1（Spring StiffnessMedium(400)/NoBouncy——对齐

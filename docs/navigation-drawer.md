@@ -158,8 +158,10 @@ in either implementation.
   having to know the token. `ModalDrawerSheet::content_padding(false)` opts out.
 - **`DismissibleNavigationDrawer` / `PermanentNavigationDrawer` are not implemented** — only
   the modal form, `ModalDrawerSheet` and `NavigationDrawerItem`.
-- **The indicator color animation** uses a 150ms `EaseOutCubic` tween; Compose's
-  `animateColorAsState` default is a spring.
+- **The indicator colour animation is a winia addition**: a 150 ms `EaseOutCubic` tween. M3's
+  `NavigationDrawer.kt` contains no `animateColorAsState`, so there is no upstream spec to match — the
+  engine could run it on M3's `DefaultEffects` spring (`SpringSpec::effects_default()`) if a spring is
+  wanted.
 - `NavigationDrawerItem` has no `enabled` parameter, matching Compose (which has none
   either) — gate the callback on the caller's side if a row must be inert.
 

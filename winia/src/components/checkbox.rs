@@ -203,12 +203,15 @@ fn checkbox_impl(
         stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
         ..crate::animation::SpringSpec::default()
     });
-    // 容器/边框颜色过渡（M3 animateColorAsState）：选中/取消选中都从当前
-    // 颜色动画到目标色，而不是瞬间跳变。push_animatable_color 会把 Spring
-    // 降级为 TweenSpec::default()（300ms Linear），这里显式传 Tween 避免
-    // 规格/注释误导。
-    let color_spec =
-        crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::default());
+    // The container/border colour, animated per state the way M3 does:
+    // `animateColorAsState(target, colorAnimationSpecForState(state))` (`material3/Checkbox.kt:685-694`)
+    // picks `FastEffects` while the box empties (`Off`) and `DefaultEffects` otherwise — both
+    // critically damped springs (see `SpringSpec::effects_*`), so the arrival is slower than the exit.
+    let color_spec = crate::animation::AnimationSpec::Spring(if state == ToggleableState::Off {
+        crate::animation::SpringSpec::effects_fast()
+    } else {
+        crate::animation::SpringSpec::effects_default()
+    });
     let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
     let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
 

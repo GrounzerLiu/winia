@@ -784,18 +784,20 @@ impl Tab {
             TabRowDefaults::unselected_content_color(&theme)
         });
 
-        // 颜色过渡动画（对标 Compose TabTransition animateColor）：动画目标色
-        // State<Color> + graphics_layer(color_filter: Tint) 渲染期染色——
-        // 单层 text/icon 按插值色绘制，无需双文本交叉淡化。
-        let color_anim = ctx.animate_color_as_state(
-            if selected { sel_color } else { unsel_color },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-                damping_ratio: 1.0,
-                stiffness: 300.0,
-                mass: 1.0,
-                threshold: 0.01,
-            }),
-        );
+        // The content colour, animated per Compose's `TabTransition` (`material3/Tab.kt:270-291`):
+        // `updateTransition(selected)` + `animateColor(transitionSpec = { if (false isTransitioningTo
+        // true) DefaultEffects else FastEffects })` — so ARRIVING at the selected colour uses the
+        // slower default spring and leaving it the faster one. The remembered `was_selected` is what
+        // says which side of that transition this frame is on.
+        let was_selected = ctx.remember(|| selected);
+        let arriving = selected && !was_selected.peek();
+        was_selected.set(selected);
+        let color_spec = crate::animation::AnimationSpec::Spring(if arriving {
+            crate::animation::SpringSpec::effects_default()
+        } else {
+            crate::animation::SpringSpec::effects_fast()
+        });
+        let color_anim = ctx.animate_color_as_state(if selected { sel_color } else { unsel_color }, color_spec);
 
         let has_text = self.text.is_some();
         let has_icon = self.icon.is_some();

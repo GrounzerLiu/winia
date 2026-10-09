@@ -56,10 +56,10 @@ Selected/Unselected Hover/Focus/Pressed IconColor 与静态色同值，Compose
   `graphics_layer` scale 0↔1 动画。与 Compose 的
   `animateDpAsState(dotRadius) + drawCircle(Fill)`（半径 0→5dp 线性动画）
   视觉等价——同心圆从 0 放大到最终半径。
-- 颜色动画：`animate_color_as_state` Tween 300ms Linear（对标 Compose
-  `animateColorAsState(MotionScheme.DefaultEffects)` = 300ms tween；
-  `push_animatable_color` 会把 Spring 降级为 `TweenSpec::default()`）；
-  渲染期 `peek()` 读取动画值不触发重组。
+- Colour animation: `animate_color_as_state` with M3's `DefaultEffects` spring
+  (`material3/RadioButton.kt:237`: `animateColorAsState(…, MotionSchemeKeyTokens.DefaultEffects.value())`;
+  winia's `SpringSpec::effects_default()` is spring(1.0, 1600)). The renderer `peek()`s the animated
+  value and never recomposes.
 - 内点动画规格：Spring `StiffnessMedium(400)`/NoBouncy（对齐 checkbox 勾号
   规格；Compose `MotionScheme.FastSpatial` 为 spring(600/30)，winia 无直接
   等价——近似差异同 checkbox 文档说明）。
