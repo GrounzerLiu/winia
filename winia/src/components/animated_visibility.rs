@@ -44,8 +44,10 @@
 //!   state.
 //! - **No `label`** (Android Studio animation preview only) and no `Transition<T>.AnimatedVisibility`
 //!   overload (winia has no public `Transition` object).
-//! - **`unveilIn`/`veilOut` are not implemented.** They change only the CLIP (a reveal that does not
-//!   touch layout, `EnterExitTransition.kt:464`, `:491`); every size channel winia has is a layout one.
+//! - **`unveilIn`/`veilOut` are not implemented.** They are NOT clip reveals, which the first draft of
+//!   this note claimed: they animate a SCRIM over the content — a black 50 %-alpha veil whose alpha
+//!   rides the transition (`EnterExitTransition.kt:464-480`, `:491-508`, `@ExperimentalAnimationApi`) —
+//!   and winia has no per-node scrim draw channel. Everything else in that file's vocabulary is here.
 //! - `Modifier.animateEnterExit` has no counterpart; `build_with_scope` gives the content the same
 //!   progress a modifier would need, and winia's content applies it through its own modifier chain.
 
@@ -65,6 +67,9 @@ pub struct AnimatedVisibility {
     visible: State<bool>,
     enter: VisibilityTransition,
     exit: VisibilityTransition,
+    /// Start from the hidden end and animate in even when `visible` is already true on the first
+    /// composition — Compose's `MutableTransitionState` pattern (see `animate_on_appear`).
+    animate_on_appear: bool,
 }
 
 /// What `AnimatedVisibility` hands its content — Compose's `AnimatedVisibilityScope`, whose
@@ -73,8 +78,13 @@ pub struct AnimatedVisibility {
 /// object from the `AnimatedVisibilityScope`", `AnimatedVisibility.kt:160-163`).
 ///
 /// winia has no public `Transition` object, so the scope carries the progress itself: read it with
-/// `get()` inside a composition (the read re-runs that composition while the transition moves) or with
+/// `value()` inside a composition (the read re-runs that composition while the transition moves) or with
 /// `peek()` at render/measure time (a graphics layer, a placement — no recomposition).
+///
+/// Compose's `MutableTransitionState.isIdle` ("all the animations have finished") and `currentState`
+/// ("the initial state of the current animations") have no direct counterpart: the container's own
+/// removal already waits for the exit to finish, and `peek() == 1.0`/`== 0.0` says the same thing when a
+/// caller needs to chain an action.
 #[derive(Clone)]
 pub struct VisibilityScope {
     /// 0 = hidden, 1 = shown; a spring overshoots past 1, exactly like the container it sizes.
@@ -99,7 +109,20 @@ impl AnimatedVisibility {
             visible,
             enter: VisibilityTransition::default(),
             exit: VisibilityTransition::default(),
+            animate_on_appear: false,
         }
+    }
+
+    /// Play the enter transition on the FIRST composition even though `visible` is already true.
+    ///
+    /// Compose's `MutableTransitionState(false)` with `targetState = true` (the `InitialStateSample` its
+    /// `rememberTransition` KDoc points at, `Transition.kt:796-800`, `:864-868`) is the way to animate
+    /// content in as it first appears; a plain `MutableTransitionState(true)` — or winia's default —
+    /// starts at the target with no animation at all. winia takes one `State<bool>` instead of a
+    /// transition-state object, so the initial state is opted into here.
+    pub fn animate_on_appear(mut self) -> Self {
+        self.animate_on_appear = true;
+        self
     }
 
     /// The enter transition (played when `visible` turns true).
@@ -151,8 +174,10 @@ impl AnimatedVisibility {
         // "this function supports a different initial state than the first targetState", i.e. only THAT
         // variant can animate out of a different initial state. So a component composed already visible
         // shows at full size and runs no enter (measured before this: the container's height was 3.5e-7
-        // against a 50-unit content).
-        let progress: State<f32> = ctx.remember(|| if vis { 1.0 } else { 0.0 });
+        // against a 50-unit content) — unless the caller opted into that initial state with
+        // `animate_on_appear()`, which is Compose's `MutableTransitionState(false) + targetState = true`.
+        let progress: State<f32> =
+            ctx.remember(|| if vis && !self.animate_on_appear { 1.0 } else { 0.0 });
         let removed: State<bool> = ctx.remember(|| !vis);
         let _p = progress.get(); // the transition moving re-runs this build (the removal check runs)
         let _r = removed.get(); // the removal flag re-runs it, so the `return` below takes effect
@@ -424,6 +449,51 @@ mod tests {
             !crate::animation::update_animations(),
             "no enter animation may be running on the first composition"
         );
+    }
+
+    /// Compose's `MutableTransitionState(false)` with `targetState = true` animates content in as it
+    /// FIRST appears (`Transition.kt:796-800` points at `InitialStateSample`); a plain `State<bool>` that
+    /// is already true does not (the test above). `animate_on_appear()` is how a winia caller asks for
+    /// that initial state.
+    #[test]
+    fn animate_on_appear_plays_the_enter_on_the_first_composition() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(true);
+        let v = visible.clone();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    AnimatedVisibility::new(v.clone())
+                        .animate_on_appear()
+                        .enter(VisibilityTransition::expand_in(
+                            crate::animation::TweenSpec::default(),
+                        ))
+                        .build(ctx, |ctx| {
+                            TextLeaf::new().build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let height = |composer: &Composer| -> f32 {
+            let root = composer.layout_root_idx().expect("root");
+            let av = composer.arena_nodes()[root].children[0];
+            composer.arena_nodes()[av].measured_size.height
+        };
+        build(&mut composer);
+        let start = height(&composer);
+        assert!(
+            start < 50.0,
+            "the opted-in enter starts collapsed on the first composition (got {start})"
+        );
+        for _ in 0..40 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            build(&mut composer);
+        }
+        assert_eq!(height(&composer), 50.0, "and it reaches the content's own height");
     }
 
     /// The content can ride the same clock the container does — Compose's `AnimatedVisibilityScope`,
