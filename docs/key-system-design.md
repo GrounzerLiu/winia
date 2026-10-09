@@ -21,6 +21,17 @@ key 是组合系统**跨帧身份**——组合、物化、布局三阶段靠 ke
 | 布局 | `find_node_id_by_slot_key` 恢复焦点 | node.rs |
 | dirty 传播 | `mark_dirty_path_scope(key)` | composer.rs |
 
+**How far an invalidation spreads** (the one place winia is deliberately coarser than Compose): a
+`State` write marks the slot that READ it plus every ancestor on the path to it — the ancestors are
+marked so the walk can reach the reader at all (a clean group's body does not run, so its children are
+never visited). When the reader is a SCOPE (a `#[composable]` body reading state outside any container
+group), the scope's DIRECT children are marked with it, and nothing deeper. That one extra level exists
+because winia cannot compare a value captured by a closure the way Compose compares a lambda parameter:
+`let v = state.get(); Child::new().build(ctx, |ctx| … v …)` must re-enter `Child` or it keeps rendering
+the value it captured last frame. Compose invalidates only the reading scope. A component whose body
+feeds values that cannot be compared at all (fresh `Arc<dyn Fn>` callbacks, as `NavigationSuiteScaffold`
+hands its items) asks for the whole subtree with `ComposeCtx::mark_subtree_dirty()`.
+
 **key 不稳定 = 三阶段全部错位**。
 
 ### 1.2 漂移根因与解决

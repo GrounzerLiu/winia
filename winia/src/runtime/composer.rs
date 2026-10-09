@@ -512,9 +512,12 @@ impl<'a> ComposeCtx<'a> {
         self.composer.next_group_key()
     }
 
-    /// 开始一个组合 scope——scope 内（组件外）的 `State::get()` 注册依赖到本 scope，
-    /// State 变化 → scope 失效 → 其内组合代码整体重跑（组件不 Skip，modifier 重算）。
-    /// 与 `end_scope` 配对。
+    /// Begins a composition scope: a `State::get()` inside it (a component body, outside any container
+    /// group) registers its dependency on this scope, and a change re-enters the scope's body together
+    /// with its DIRECT children — deeper descendants skip unless their own dependencies fired. That one
+    /// level exists because winia cannot compare a value captured by a closure the way Compose compares
+    /// a lambda parameter (see `mark_dirty_path_scope`); a component that needs its whole subtree
+    /// re-entered says so with `mark_subtree_dirty()`. Pair with `end_scope`.
     pub fn start_scope(&mut self) -> u64 {
         self.composer.start_scope()
     }
@@ -1604,7 +1607,21 @@ impl SlotTable {
         let parent = self.current_slot();
         #[cfg(debug_assertions)] {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
-                eprintln!("[slot] key={} idx={} parent_kids={} dirty={}", key >> 32, idx, parent.children.len(), is_dirty);
+                // Report the slot's OWN dirty flag as well as the key-set one: the two are different
+                // sources (path marking vs a state write) and only their combination decides Skip.
+                let slot_state = match parent.children.get(idx) {
+                    Some(child) if child.key == key => format!("slot_dirty={}", child.dirty),
+                    Some(child) => format!("slot_key_mismatch={:x}", child.key),
+                    None => "no_slot".to_string(),
+                };
+                eprintln!(
+                    "[slot] key={} idx={} parent_kids={} key_dirty={} {}",
+                    key >> 32,
+                    idx,
+                    parent.children.len(),
+                    is_dirty,
+                    slot_state
+                );
             }
         }
 
@@ -1772,22 +1789,26 @@ impl SlotTable {
         found
     }
 
-    /// Find the slot holding `key`: mark it and all its ancestors dirty. When the target is a SCOPE the
-    /// whole subtree goes dirty too — an over-approximation of Compose, which invalidates only the group
-    /// that read the state and lets clean children skip.
+    /// Find the slot holding `key`: mark it and all its ancestors dirty. Ancestors are marked so the
+    /// walk can REACH the reader (a clean group's body does not run, and its children are never
+    /// visited) — Compose instead schedules the invalidated scope directly, without re-running the
+    /// groups above it.
     ///
-    /// The cost is real and was measured on `NavigationSuiteScaffold`: its build reads the morph
-    /// progress, so every morph frame invalidates the scaffold scope and, with this rule, every slot
-    /// below it — the caller's page recomposed once per frame (20 runs over 19 frames). Narrowing the
-    /// scaffold's own dirty marking (the review's suggestion at the time) changes nothing: with no
-    /// marking at all the page still ran once per frame, so THIS rule is the driver. Making it precise
-    /// (invalidate the reading group only) is an engine change with a wide blast radius — components
-    /// whose body reads state and whose children must follow rely on the conservative behaviour today.
+    /// A read that lands on a SCOPE (the common `let v = state.get(); Child { … v … }` shape inside a
+    /// `#[composable]` body) marks that scope and its DIRECT children. The body itself always runs, so
+    /// its children are what decide Skip/Enter — and winia cannot compare a captured value as a
+    /// parameter the way Compose compares a lambda, so without this the child would keep rendering the
+    /// value it captured last time. Deeper descendants still skip unless their own dependencies fired:
+    /// this is a one-level approximation of Compose's "invalidate the reading scope", not the
+    /// previously unbounded subtree re-entry, and a component that needs the whole subtree says so
+    /// explicitly with `ctx.mark_subtree_dirty()`.
     fn mark_dirty_path_scope(slot: &mut Slot, key: u64) -> bool {
         if slot.key == key {
             slot.dirty = true;
             if slot.is_scope {
-                SlotTable::mark_dirty_subtree(slot);
+                for child in &mut slot.children {
+                    child.dirty = true;
+                }
             }
             return true;
         }
@@ -3828,6 +3849,92 @@ mod tests {
         );
     }
 
+    /// How far an invalidation spreads, pinned. Compose invalidates exactly the scopes that read the
+    /// state, and a child re-runs only when its own parameters changed. winia cannot compare a captured
+    /// value as a parameter (a `#[composable]` body reads a state and feeds the child through a closure,
+    /// not through a declared parameter), so a read landing on a SCOPE re-enters that scope's DIRECT
+    /// children — and stops there. It used to re-enter the whole subtree, which meant every descendant
+    /// of a component that reads a per-frame animation value re-ran with it.
+    ///
+    /// Shape: a page container with a clean sibling and a nested component (its own scope reads
+    /// `counter`) holding a middle group and, inside that, a grandchild group.
+    #[test]
+    fn a_scope_dependency_re_enters_one_level_and_no_deeper() {
+        let mut composer = Composer::new();
+        let counter = State::new(0i32);
+        let sibling_runs = std::cell::Cell::new(0);
+        let middle_runs = std::cell::Cell::new(0);
+        let grandchild_runs = std::cell::Cell::new(0);
+        let leaf_group = |ctx: &mut ComposeCtx, runs: &std::cell::Cell<u32>| {
+            let key = ctx.next_key();
+            match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    runs.set(runs.get() + 1);
+                    let leaf = ctx.next_key();
+                    ctx.start_leaf(leaf, Modifier::new());
+                    ctx.end_node();
+                }
+            }
+            ctx.end_restartable_group();
+        };
+        let build = |ctx: &mut ComposeCtx| {
+            let page_key = ctx.next_key();
+            match ctx.start_restartable_group(page_key, Modifier::new(), BoxLayout::new()) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // (a) A clean sibling of the component: not on the invalidated path at all.
+                    leaf_group(ctx, &sibling_runs);
+                    // (b) The component, whose own scope reads the state.
+                    let _inner = ctx.start_scope();
+                    let _ = counter.get();
+                    // (c) A direct child of the reading scope: re-entered, because a captured value
+                    // cannot be compared here (this is the documented deviation).
+                    let middle_key = ctx.next_key();
+                    match ctx.start_restartable_group(middle_key, Modifier::new(), BoxLayout::new()) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => {
+                            middle_runs.set(middle_runs.get() + 1);
+                            // (d) Its child: nothing invalidated it, so it must skip.
+                            leaf_group(ctx, &grandchild_runs);
+                        }
+                    }
+                    ctx.end_restartable_group();
+                    ctx.end_scope();
+                }
+            }
+            ctx.end_restartable_group();
+        };
+        let layout = |composer: &mut Composer| {
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+        composer.compose(build);
+        layout(&mut composer);
+        assert_eq!((sibling_runs.get(), middle_runs.get(), grandchild_runs.get()), (1, 1, 1));
+        composer.recompose(build);
+        layout(&mut composer);
+        assert_eq!(
+            (sibling_runs.get(), middle_runs.get(), grandchild_runs.get()),
+            (1, 1, 1),
+            "an idle frame re-runs nothing"
+        );
+        counter.set(1);
+        assert!(composer.recompose(build), "the write must request a recomposition");
+        layout(&mut composer);
+        assert_eq!(sibling_runs.get(), 1, "a sibling of the component is untouched");
+        assert_eq!(
+            middle_runs.get(),
+            2,
+            "a direct child of the reading scope re-enters — a captured value cannot be compared here"
+        );
+        assert_eq!(
+            grandchild_runs.get(),
+            1,
+            "and the invalidation STOPS there: 2 here would mean the reader's whole subtree was marked \
+             dirty (the old conservative rule)"
+        );
+    }
+
     #[test]
     fn test_composer_new() {
         let mut composer = Composer::new();
@@ -4197,40 +4304,59 @@ use crate::layout::BoxLayout;
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+    use crate::layout::BoxLayout;
 
-    /// scope 内 remember 创建 State（owner=composer）→ 读取注册到 scope →
-    /// State.set() 进入 pending → 第二次组合 scope 子树强制 Enter（leaf 不 clean）
+    /// A `State` remembered inside a scope (owner = composer) is read there, so the read registers on
+    /// that scope and `State::set()` invalidates it.
+    ///
+    /// Compose-aligned contract, and what this pins now: invalidation reaches the scope that READ the
+    /// state, and its descendants re-run only when their own inputs changed. A child that consumes a
+    /// value the body read must DECLARE it (`ctx.changed(&v)`) — the same contract the
+    /// `group_without_declared_params_reenters_or_skips` test documents from the other side (declares
+    /// nothing and reads nothing → Skips). A component that must force children whose parameters
+    /// cannot be compared says so explicitly with `ctx.mark_subtree_dirty()`.
     #[test]
     fn test_scope_dependency_invalidation() {
         let mut composer = Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<f32>>);
+        let group_runs = std::cell::Cell::new(0);
 
         let compose_once = |composer: &mut Composer| {
             composer.compose(|ctx| {
                 ctx.start_scope();
                 let s = ctx.remember(|| 0.0f32);
                 *holder.borrow_mut() = Some(s.clone());
-                let _v = s.get();           // scope 内读取 → 注册到 scope
+                let v = s.get(); // read inside the scope → registers the dependency on the scope
+                // The child declares the value it consumes: that declaration is what re-enters it.
+                ctx.changed(&v);
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new());
-                ctx.end_node();
+                match ctx.start_restartable_group(key, Modifier::new(), BoxLayout::new()) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        group_runs.set(group_runs.get() + 1);
+                        let leaf = ctx.next_key();
+                        ctx.start_leaf(leaf, Modifier::new());
+                        ctx.end_node();
+                    }
+                }
+                ctx.end_restartable_group();
                 ctx.end_scope();
             });
         };
 
         compose_once(&mut composer);
-        // 对照帧：无 State 变化 → 至少 scope/leaf 之一 Clean（证明本测试下正常可 Skip）
         compose_once(&mut composer);
-        assert!(composer.compose_clean_count >= 1,
-            "对照帧（未失效）应至少 1 个 clean，实际 clean={}（若 0 说明永不 Skip，测试无鉴别力）",
-            composer.compose_clean_count);
+        assert_eq!(group_runs.get(), 1, "an idle frame keeps the declared child skipped");
         // 手动触发失效（State 已绑定 composer owner）
         let s = holder.borrow().clone().unwrap();
         s.set(1.0);
         compose_once(&mut composer);
-        // scope 失效 → 子树强制 Enter：leaf 必须 dirty（不 clean）
-        assert_eq!(composer.compose_clean_count, 0,
-            "scope 失效后 leaf 应强制 Enter，实际 clean={}", composer.compose_clean_count);
+        assert_eq!(
+            group_runs.get(),
+            2,
+            "the changed declaration re-enters the child (the scope's reader was invalidated, and the \
+             child's own input changed with it)"
+        );
     }
 
     /// scope 与 restartable group 配对：scope 不产生 LayoutNode，children 数稳定
