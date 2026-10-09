@@ -14,7 +14,7 @@ pub mod interpolator;
 pub mod visibility;
 
 pub use visibility::{
-    ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
+    ChannelValues, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
 };
 
 use crate::runtime::state::{State, StateId};

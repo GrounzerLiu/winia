@@ -173,7 +173,7 @@ pub mod prelude {
         AnimatedVisibility, VisibilityScope,
     };
     pub use crate::animation::{
-        ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
+        ChannelValues, ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
     };
     pub use crate::components::search_bar::{
         SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar,

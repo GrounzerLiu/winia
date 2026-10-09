@@ -231,7 +231,10 @@ impl VisibilityTransition {
     ///
     /// This is what makes per-channel timing expressible:
     /// `VisibilityTransition::fade_in(delayed_tween) + VisibilityTransition::expand_in(spring)` fades
-    /// late while the size change starts at once.
+    /// late while the size change starts at once. A channel added with a `with_*` setter AFTER this
+    /// combination carries no spec of its own, so it falls back to the shared one (the receiver's), NOT
+    /// to the builder spec of the side that enabled it — combine two builders instead when the channels
+    /// need different timing.
     pub fn plus(self, other: VisibilityTransition) -> VisibilityTransition {
         VisibilityTransition {
             fade: self.fade || other.fade,

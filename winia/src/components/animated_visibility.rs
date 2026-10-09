@@ -25,15 +25,26 @@
 //!
 //! Aligned with Compose: the default enter/exit pair (fade + size change, `spring(1.0, 400)`), no
 //! transition for the initial state, PER-CHANNEL animation specs (`fade_in(spec) + expand_in(other)` —
-//! each channel is its own animatable, so they can run out of step), the progress being readable from
-//! the content (`VisibilityScope` ≈ `AnimatedVisibilityScope.transition`), delayed removal that waits
-//! for every channel, and the full builder vocabulary (fade/slide/expand/shrink/scale, both axes,
-//! anchors, offsets).
+//! each channel is its own animatable, so they can run out of step), only the channels a transition
+//! actually enables being driven (Compose builds `TransitionData` with the rest `null`; the removal
+//! waits for those channels and no others), the progress being readable from the content
+//! (`VisibilityScope` ≈ `AnimatedVisibilityScope.transition`), delayed removal, and the full builder
+//! vocabulary (fade/slide/expand/shrink/scale, both axes, anchors, offsets).
+//!
+//! A combination the callers control, and Compose behaves the same way: a transition whose SIZE channel
+//! finishes long before its fade clips the content once the container is small (`shrinkOut`'s
+//! `clip = true` default, `EnterExitTransition.kt:569-585`) — `fade_out(tween(300, delayMillis = 400)) +
+//! shrink_out(tween(10))` hides the content at ~40 ms and keeps the (now empty) container until the fade
+//! lands. That is the combination's own doing, not a defect in the removal rule.
 //!
 //! Deliberate differences (all with their Compose counterpart):
 //! - **One shared `spec` remains the fallback.** A channel whose builder did not give it a spec runs on
 //!   the transition's shared one, which is what `fade_in(tween).with_expand()` relies on; Compose's
-//!   builders always carry one.
+//!   builders always carry one. Note the interaction with `+`: a channel added AFTER the combination
+//!   (`fade_in(tween600) + expand_in(spring)`, then `.with_slide(..)`) resolves to the shared spec, not
+//!   to any builder's — `fade_in` set the shared one, so the slide borrows its 600 ms. Combine the
+//!   builders instead (`fade_in(tween600) + slide_in(dir, other)`) when the channels need different
+//!   timing; `plus` keeps each side's own channel specs.
 //! - **One default, both axes.** Compose picks the default axis from the scope — `RowScope` expands
 //!   horizontally, `ColumnScope` vertically, the top level expands both (`AnimatedVisibility.kt:125-129`,
 //!   `:199-203`, `:272-276`) — while winia has one default (both axes) plus the explicit
@@ -207,34 +218,66 @@ impl AnimatedVisibility {
         let slide_ch: State<f32> = ctx.remember(initial);
         let scale_ch: State<f32> = ctx.remember(initial);
         let removed: State<bool> = ctx.remember(|| !vis);
-        let _p = size.get(); // the transition moving re-runs this build (the removal check runs)
+        // Subscribe to EVERY channel: an animation notifies its state each frame, but only a READ creates
+        // the dependency that makes this build run again — and the removal check below has to run while
+        // the transition moves. Reading just the size channel stops working the moment a transition does
+        // not change size (measured: a fade-only exit then never removed its content).
+        let _moving = (size.get(), alpha.get(), slide_ch.get(), scale_ch.get());
         let _r = removed.get(); // the removal flag re-runs it, so the `return` below takes effect
         // Removed and shown again → reset (the notify requests the recomposition, this frame starts).
         if removed.peek() && vis {
             removed.set(false);
         }
-        // Exit-complete detection: hidden, the size channel back at 0 and nothing left running — the
-        // container is gone (this build runs every frame: the animating values notify each frame →
-        // pending → composed on the next one). Every channel has to be settled, not just the size one:
-        // a delayed fade still has to finish before the content may be dropped.
-        let still_animating = [&size, &alpha, &slide_ch, &scale_ch]
-            .iter()
-            .any(|s| crate::animation::has_animation_for_state(s.state_id()));
-        if !vis && size.peek() < 0.001 && !still_animating && !removed.peek() {
+        // Which channels the transition in play actually enables. Compose creates an animatable only for
+        // the channels its builders turned on (`EnterTransitionImpl(TransitionData(fade = …, changeSize =
+        // …, …))` — a `None` field gets no animation at all), and so does this: driving a channel nothing
+        // consumes cost a registered animation per frame and, worse, held the removal open until a spec
+        // for another channel landed (measured before this: `VisibilityTransition::empty()` on both sides
+        // — Compose's `EnterTransition.None` + `ExitTransition.None` — delayed the removal by ~320 ms).
+        let target = if vis { 1.0 } else { 0.0 };
+        let cfg_pair = if vis { &enter } else { &exit };
+        let drive_size = cfg_pair.expand || cfg_pair.expand_h;
+        let drive_fade = cfg_pair.fade;
+        let drive_slide = cfg_pair.slide.is_some();
+        let drive_scale = cfg_pair.scale;
+        // Exit-complete detection: hidden, nothing left running, and the channels that are actually
+        // playing back at the hidden end — the container is gone (this build runs every frame: the
+        // animating values notify each frame → pending → composed on the next one). Every ENABLED channel
+        // has to be settled, not just the size one: a delayed fade still has to finish before the content
+        // may be dropped, and a channel nobody enabled must not gate anything.
+        let still_animating = [
+            (drive_size, &size),
+            (drive_fade, &alpha),
+            (drive_slide, &slide_ch),
+            (drive_scale, &scale_ch),
+        ]
+        .iter()
+        .any(|(on, s)| *on && crate::animation::has_animation_for_state(s.state_id()));
+        let settled = (!drive_size || size.peek() < 0.001)
+            && (!drive_fade || alpha.peek() < 0.001)
+            && (!drive_slide || slide_ch.peek() < 0.001)
+            && (!drive_scale || scale_ch.peek() < 0.001);
+        if !vis && settled && !still_animating && !removed.peek() {
             removed.set(true);
         }
         if removed.peek() {
             return; // removed: do not start the container → the slot stays unvisited → materialization frees it
         }
-        // Drive every channel (push on visible-change frames — same-target dedup skips). The spec comes
-        // from the transition playing NOW, per channel; a channel whose builder did not set one falls back
-        // to the transition's shared spec.
-        let target = if vis { 1.0 } else { 0.0 };
-        let cfg_pair = if vis { &enter } else { &exit };
-        push_animatable(size.clone(), target, cfg_pair.size_spec().clone());
-        push_animatable(alpha.clone(), target, cfg_pair.fade_spec().clone());
-        push_animatable(slide_ch.clone(), target, cfg_pair.slide_spec().clone());
-        push_animatable(scale_ch.clone(), target, cfg_pair.scale_spec().clone());
+        // Drive the enabled channels only (push on visible-change frames — same-target dedup skips). The
+        // spec comes from the transition playing NOW, per channel; a channel whose builder did not set one
+        // falls back to the transition's shared spec.
+        if drive_size {
+            push_animatable(size.clone(), target, cfg_pair.size_spec().clone());
+        }
+        if drive_fade {
+            push_animatable(alpha.clone(), target, cfg_pair.fade_spec().clone());
+        }
+        if drive_slide {
+            push_animatable(slide_ch.clone(), target, cfg_pair.slide_spec().clone());
+        }
+        if drive_scale {
+            push_animatable(scale_ch.clone(), target, cfg_pair.scale_spec().clone());
+        }
         // Content size write-back for Fraction slide offsets (Backchannel —
         // no recompose; the gfx closure reads it via peek at render time).
         let content_size = ctx.remember_backchannel(|| (0.0, 0.0));
@@ -626,6 +669,122 @@ mod tests {
             height(&composer)
         );
         assert_eq!(height(&composer), 50.0, "and the container still lands on the content's height");
+    }
+
+    /// Compose's `EnterTransition.None` + `ExitTransition.None`: a transition that enables nothing must
+    /// switch instantly. winia used to drive all four channels regardless, so the invisible ones ran on
+    /// the shared spec and held the removal open — measured before the fix: the content appeared at once
+    /// but the container stayed ~320 ms (16 frames of 20 ms) because `still_animating` was true for a
+    /// channel nobody had enabled.
+    #[test]
+    fn a_transition_with_nothing_enabled_removes_the_content_at_once() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(false);
+        let v = visible.clone();
+        let empty = VisibilityTransition::empty();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    AnimatedVisibility::new(v.clone())
+                        .enter(empty.clone())
+                        .exit(empty.clone())
+                        .build(ctx, |ctx| {
+                            TextLeaf::new().build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let nodes = |composer: &Composer| node_count(composer);
+        build(&mut composer);
+        let hidden = nodes(&composer);
+        visible.set(true);
+        build(&mut composer);
+        assert!(
+            nodes(&composer) > hidden,
+            "an empty enter shows the content at once (was {hidden}, now {})",
+            nodes(&composer)
+        );
+        visible.set(false);
+        build(&mut composer);
+        assert_eq!(
+            nodes(&composer),
+            hidden,
+            "an empty exit removes the content on the next build, not after an invisible animation"
+        );
+        assert!(
+            !crate::animation::update_animations(),
+            "and nothing was left animating"
+        );
+    }
+
+    /// Only the channels the transition enables are driven. Compose builds `TransitionData(fade = …,
+    /// changeSize = …)` and leaves the rest `null`, so no animation exists for them; winia used to push
+    /// every channel, which registered four animations for a two-channel transition and made the
+    /// disabled channels track the enabled ones (measured: `(size, alpha, slide, scale)` all at 1.67e-7
+    /// on the first enter frame of a `fade_in + expand_in` pair).
+    #[test]
+    fn a_disabled_channel_is_not_driven() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(false);
+        let v = visible.clone();
+        let enter = VisibilityTransition::fade_in(crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(400),
+            crate::animation::interpolator::Linear::new(),
+        )) + VisibilityTransition::expand_in(crate::animation::SpringSpec {
+            stiffness: 1400.0,
+            ..crate::animation::SpringSpec::default()
+        });
+        let held: std::rc::Rc<std::cell::RefCell<Option<VisibilityScope>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h2 = held.clone();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    let h2 = h2.clone();
+                    AnimatedVisibility::new(v.clone())
+                        .enter(enter.clone())
+                        .build_with_scope(ctx, move |scope, ctx| {
+                            if h2.borrow().is_none() {
+                                *h2.borrow_mut() = Some(scope.clone());
+                            }
+                            TextLeaf::new().build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        visible.set(true);
+        let mut seen = false;
+        for _ in 0..12 {
+            build(&mut composer);
+            if let Some(scope) = held.borrow().as_ref() {
+                seen = true;
+                let animating =
+                    |s: &State<f32>| crate::animation::has_animation_for_state(s.state_id());
+                assert!(
+                    animating(&scope.progress) && animating(&scope.alpha),
+                    "the enabled size and fade channels are driven"
+                );
+                assert!(
+                    !animating(&scope.slide) && !animating(&scope.scale),
+                    "a channel no builder enabled must not be driven"
+                );
+                assert_eq!(
+                    (scope.slide.peek(), scope.scale.peek()),
+                    (0.0, 0.0),
+                    "and its value stays where the initial state put it"
+                );
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(seen, "the content ran and held the scope");
     }
 
     /// The content can ride the same clock the container does — Compose's `AnimatedVisibilityScope`,
