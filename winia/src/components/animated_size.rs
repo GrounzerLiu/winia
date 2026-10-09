@@ -262,6 +262,13 @@ impl MeasurePolicy for SizePolicy {
             } else {
                 // The value the animation starts from, for the listener's first argument.
                 self.animation_start.set(Some(self.size.peek()));
+                // A new animation starts here, so the previous completion is history: Compose's
+                // coroutine calls the listener for EVERY `animateTo` that ends `Finished`
+                // (`AnimationModifier.kt:239-246`), including one that returns to a size it has
+                // already reported. Without this reset the goal-keyed record below suppressed that
+                // call — measured: 50 -> 200 reported, then a shrink interrupted at 138 and
+                // re-targeted back to 200 finished silently (one call where Compose makes two).
+                self.notified.set(None);
                 push_animatable(self.size.clone(), goal, self.spec.clone());
             }
             self.target.set(Some(goal));
@@ -523,10 +530,12 @@ mod tests {
         w.set(200.0);
         recompose(&mut composer);
         advance(&mut composer);
+        let calls = reported.lock().unwrap();
         assert_eq!(
-            reported.lock().unwrap().as_slice(),
+            calls.as_slice(),
             &[((50.0, 30.0), (200.0, 30.0))],
-            "one call, with the size it animated from and the one it animated to"
+            "one call, with the size it animated from and the one it animated to: {:?}",
+            *calls
         );
     }
 
@@ -870,7 +879,10 @@ mod tests {
     /// queries are answered by the CHILD and the animation is never consulted
     /// (`AnimationModifier.kt:259-280`). winia's `MeasurePolicy` default answers one by running the
     /// policy's own `measure` (`layout/node.rs:1003-1051`, `IntrinsicCtx::approx_measure`) — for this
-    /// component that means an intrinsic probe starts, retargets or cancels the size animation.
+    /// component that means an intrinsic probe starts, retargets or cancels the size animation, which
+    /// is why the four overrides below exist. (A query that arrives through a policy keeping the
+    /// default — a plain `Stack`, say — is now answered by the substitution instead; see the sibling
+    /// test and `synthetic_intrinsic_measure`.)
     ///
     /// Reachable from ordinary code: `Modifier::width(IntrinsicSize.Max)` on any ancestor (a column
     /// sized to its content is the usual one) asks the box for the content's intrinsic width, with the
@@ -925,11 +937,13 @@ mod tests {
             60.0,
             "the box snaps to the content's layout size, not to the probe's unbounded measurement"
         );
+        let calls = reported.lock().unwrap();
         assert!(
-            reported.lock().unwrap().is_empty(),
+            calls.is_empty(),
             "the first measurement snaps without reporting: {:?}",
-            reported.lock().unwrap()
+            *calls
         );
+        drop(calls);
 
         // The window gets taller, so the parent re-measures and its intrinsic request runs again.
         // The box has not changed size: nothing may animate, and nothing may be reported.
@@ -953,10 +967,160 @@ mod tests {
             60.0,
             "the box is still the size the frame allows"
         );
+        let calls = reported.lock().unwrap();
         assert!(
-            reported.lock().unwrap().is_empty(),
+            calls.is_empty(),
             "an intrinsic query must not move the box or report a size change: {:?}",
-            reported.lock().unwrap()
+            *calls
+        );
+    }
+
+    /// The same guarantee through an INTERMEDIATE defaulted container. `Stack` builds `BoxLayout`,
+    /// which implements only `measure`/`place`, so the trait's default intrinsics run its `measure`
+    /// and used to reach this box's real one — measured before the substitution existed: the box
+    /// snapped to the probe's 200 and started an animation, while the same tree without the `Stack`
+    /// stayed at 60. Nothing about the two trees should differ.
+    #[test]
+    fn an_intrinsic_query_through_a_plain_stack_does_not_move_the_box() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
+            Default::default();
+        let sink = reported.clone();
+        let mut recompose = |composer: &mut Composer, max_h: f32| {
+            composer.compose(|ctx| {
+                let key = ctx.next_key();
+                let modifier = Modifier::new().width(crate::layout::IntrinsicSize::Max);
+                match ctx.start_restartable_group(
+                    key,
+                    modifier,
+                    crate::layout::column::ColumnLayout::default(),
+                ) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        crate::layout::components::Stack::new().build(ctx, |ctx| {
+                            AnimatedSize::default()
+                                .finished_listener({
+                                    let sink = sink.clone();
+                                    move |from: Size, to: Size| {
+                                        sink.lock().unwrap().push((
+                                            (from.width, from.height),
+                                            (to.width, to.height),
+                                        ));
+                                    }
+                                })
+                                .build(ctx, |ctx| {
+                                    let key = ctx.next_key();
+                                    ctx.start_restartable_group(key, Modifier::new(), FillingLeaf);
+                                    ctx.end_restartable_group();
+                                });
+                        });
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+            composer.layout(Constraints::new(0.0, 100.0, 0.0, max_h));
+        };
+
+        recompose(&mut composer, 400.0);
+        assert_eq!(
+            child_box(&composer).2,
+            60.0,
+            "a defaulted container between the ancestor and the box must not change its first size"
+        );
+        assert!(
+            !crate::animation::is_animating(),
+            "an intrinsic query through a plain Stack must not start the size animation"
+        );
+        // The guard is bound, not spelled inline twice: `assert!(m.lock()…, "…{:?}", m.lock()…)`
+        // takes a SECOND lock while the first temporary is still alive, and std's mutex is not
+        // re-entrant — a failing assertion would hang instead of reporting (measured here).
+        let calls = reported.lock().unwrap();
+        assert!(
+            calls.is_empty(),
+            "a plain Stack between the ancestor and the box must not report a move: {:?}",
+            *calls
+        );
+    }
+
+    /// Compose's listener fires for EVERY animation that ends `Finished`, including one that returns
+    /// to a size it has already reported: the coroutine awaits each `animateTo`, and a new
+    /// `startSize = anim.value` is captured on every re-target (`AnimationModifier.kt:239-246`).
+    ///
+    /// Measured before the fix: 50 -> 200 reported once, then a shrink interrupted at 138 and
+    /// re-targeted back to 200 finished with no call at all — one call where Compose makes two.
+    #[test]
+    fn returning_to_a_previously_reported_target_reports_the_new_completion() {
+        use std::time::{Duration, Instant};
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let reported: std::sync::Arc<std::sync::Mutex<Vec<((f32, f32), (f32, f32))>>> =
+            Default::default();
+        let holder = std::cell::RefCell::new(None::<State<f32>>);
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                let w: State<f32> = ctx.remember(|| 50.0);
+                *holder.borrow_mut() = Some(w.clone());
+                let sink = reported.clone();
+                AnimatedSize::new(crate::animation::TweenSpec::new(
+                    Duration::from_millis(40),
+                    crate::animation::interpolator::Linear::new(),
+                ))
+                .finished_listener(move |from: Size, to: Size| {
+                    sink.lock().unwrap().push(((from.width, from.height), (to.width, to.height)));
+                })
+                .build(ctx, |ctx| {
+                    SizedLeaf { w: w.get(), h: 30.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let settle = |composer: &mut Composer| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while crate::animation::update_animations() {
+                assert!(Instant::now() < deadline, "the animation must finish");
+                std::thread::sleep(Duration::from_millis(8));
+                frame(composer);
+            }
+            frame(composer);
+        };
+
+        frame(&mut composer);
+        holder.borrow().as_ref().unwrap().clone().set(200.0);
+        frame(&mut composer);
+        settle(&mut composer);
+        let calls = reported.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[((50.0, 30.0), (200.0, 30.0))],
+            "the grow reports once: {:?}",
+            *calls
+        );
+        drop(calls);
+
+        // Shrink, then turn around mid-flight and go back to the size already reported.
+        holder.borrow().as_ref().unwrap().clone().set(50.0);
+        frame(&mut composer);
+        std::thread::sleep(Duration::from_millis(16));
+        crate::animation::update_animations();
+        frame(&mut composer);
+        let interrupted = container_width(&composer);
+        assert!(
+            interrupted > 50.0 && interrupted < 200.0,
+            "the shrink is interrupted mid-flight (width={interrupted})"
+        );
+        holder.borrow().as_ref().unwrap().clone().set(200.0);
+        frame(&mut composer);
+        settle(&mut composer);
+
+        let calls = reported.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "a second animation finished, so the listener runs again: {:?}",
+            *calls
         );
     }
 }
