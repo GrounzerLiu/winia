@@ -250,8 +250,7 @@ fn mid_flight_paint_stays_inside_the_lerped_rect() {
             .shared_flights
             .get_mut(&fid)
             .expect("flight")
-            .progress
-            .set(0.5);
+            .set_progress(0.5);
         frame(&mut composer);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let l = flight_probe(&composer).expect("mid-flight").1;
@@ -332,7 +331,7 @@ fn tier0_arc_flight_paints_off_the_straight_line() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             let straight = a.start.lerp(&e, p);
             let nodes = composer.arena_nodes();

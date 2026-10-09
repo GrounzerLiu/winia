@@ -51,6 +51,7 @@ fn remap_hit_identity_endpoints_miss_outside() {
         start: SharedBounds::new(0.0, 0.0, 100.0, 50.0),
         end: SharedBounds::new(200.0, 0.0, 100.0, 50.0),
         progress: 0.0,
+        flown: None,
         role: TransitionRole::Target,
         scene_alpha: None,
         radius_from: [0.0; 4],

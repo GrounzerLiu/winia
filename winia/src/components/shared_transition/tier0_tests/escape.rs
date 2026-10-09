@@ -39,8 +39,7 @@ fn mid_flight_cancel_restores_the_natural_size() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let marked = marked_in(&composer)[0];

@@ -376,7 +376,7 @@ fn nav_scene_host_pairs_one_flight_and_suppresses_the_other_copy() {
     for _ in 0..40 {
         match composer.shared_flights.get(&fid) {
             Some(a) if !is_terminal(a.flight.phase) => {
-                let p = a.progress.peek();
+                let p = a.progress_value();
                 if (0.25..=0.85).contains(&p) {
                     sampled = Some(p);
                     break;

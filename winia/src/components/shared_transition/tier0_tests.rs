@@ -377,7 +377,7 @@ fn escape_advance(
 /// (progress, lerped rect) of the single active flight.
 fn flight_probe(composer: &Composer) -> Option<(f32, SharedBounds)> {
     composer.shared_flights.values().next().map(|a| {
-        let p = a.progress.peek();
+        let p = a.progress_value();
         let end = a.flight.end.unwrap_or(a.start);
         (p, a.start.lerp(&end, p))
     })
@@ -1412,8 +1412,7 @@ fn weighted_hero_keeps_its_allocation_while_flying() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -1663,8 +1662,7 @@ fn overlay_clip_none_lets_content_overflow_the_lerped_rect() {
             .shared_flights
             .get_mut(&fid)
             .expect("flight")
-            .progress
-            .set(0.5);
+            .set_progress(0.5);
         frame(&mut composer);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         let mut surface = render_heads(&composer);

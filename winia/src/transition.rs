@@ -53,16 +53,133 @@ impl SharedBounds {
     }
 }
 
-/// Rect interpolation spec (Compose `BoundsTransform`).
+/// The four edges of a flight, in window-logical pixels — the value a flight's spec actually animates.
 ///
-/// The spec animates scalar progress 0→1; the rect is derived per frame.
-/// Spring overshoot is preserved end-to-end (engine → progress → `lerp`).
+/// This is Compose's shape: `Rect.VectorConverter` hands the animation
+/// `AnimationVector4D(left, top, right, bottom)` (`ui/unit/VectorConverters.kt` `RectToVector`), so
+/// each edge runs its own spring with `Rect.VisibilityThreshold` — one PIXEL per edge
+/// (`ui/unit/VisibilityThresholds.kt:39-42`) — and each edge inherits its own velocity when the flight
+/// is retargeted mid-way. winia animated one scalar progress and derived the rect from it, which
+/// behaved the same only while all edges moved together: with a scalar, a 300 px edge and a 3 px edge
+/// settled at the same moment, and the flight's relative stop band (0.01 of the progress) let a
+/// 1000 px flight stop 10 px short and then jump.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlightEdges {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl FlightEdges {
+    pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Self { left, top, right, bottom }
+    }
+
+    /// The edges of a rect (`right`/`bottom` are edge coordinates, like Compose's `Rect`).
+    pub fn of(bounds: &SharedBounds) -> Self {
+        Self::new(bounds.x, bounds.y, bounds.right(), bounds.bottom())
+    }
+
+    /// Back to the rect the flight paints, clipped to a non-negative size (an overshooting spring may
+    /// briefly cross its own edges on a degenerate end).
+    pub fn bounds(&self) -> SharedBounds {
+        SharedBounds::new(
+            self.left,
+            self.top,
+            (self.right - self.left).max(0.0),
+            (self.bottom - self.top).max(0.0),
+        )
+    }
+
+    /// Component-wise interpolation, unclamped so a Tween's overshoot or a spring's rebounds survive.
+    pub fn lerp(&self, to: &Self, t: f32) -> Self {
+        Self::new(
+            self.left + (to.left - self.left) * t,
+            self.top + (to.top - self.top) * t,
+            self.right + (to.right - self.right) * t,
+            self.bottom + (to.bottom - self.bottom) * t,
+        )
+    }
+
+    /// How far `self` has travelled from `start` towards `end`, as a scalar — the value the flight's
+    /// trace, its retarget continuity and the role crossfade read. Compose has no such scalar (its
+    /// content transitions carry their own specs and its rect is four independent springs); winia
+    /// derives one by averaging the axes that actually move, so an edge that never moves cannot drag
+    /// the mix away from its partner.
+    pub fn progress_towards(&self, start: &Self, end: &Self) -> f32 {
+        fn axis(start: f32, end: f32, cur: f32) -> Option<f32> {
+            let span = end - start;
+            if span.abs() > 0.01 {
+                Some((cur - start) / span)
+            } else {
+                None
+            }
+        }
+        let horizontal =
+            axis(start.left, end.left, self.left).or_else(|| axis(start.right, end.right, self.right));
+        let vertical =
+            axis(start.top, end.top, self.top).or_else(|| axis(start.bottom, end.bottom, self.bottom));
+        match (horizontal, vertical) {
+            (Some(h), Some(v)) => 0.5 * (h + v),
+            (Some(h), None) => h,
+            (None, Some(v)) => v,
+            (None, None) => 1.0,
+        }
+    }
+}
+
+impl crate::animation::AnimatableValue for FlightEdges {
+    fn lerp(&self, to: &Self, t: f32) -> Self {
+        FlightEdges::lerp(self, to, t)
+    }
+
+    /// The mean edge, for the scalar consumers that remain (spring de-duplication, the trace).
+    fn to_f32(&self) -> f32 {
+        (self.left + self.top + self.right + self.bottom) / 4.0
+    }
+
+    /// A degenerate one-edge value at that coordinate. Never reached through the flight paths — every
+    /// one of them goes through [`Self::write_components`] — but the trait asks for the inverse.
+    fn from_f32(v: f32) -> Self {
+        Self::new(v, v, v, v)
+    }
+
+    fn supports_spring() -> bool {
+        true
+    }
+
+    fn write_components(&self, out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS]) -> usize {
+        out[0] = self.left;
+        out[1] = self.top;
+        out[2] = self.right;
+        out[3] = self.bottom;
+        4
+    }
+
+    fn from_components(components: &[f32]) -> Self {
+        Self::new(components[0], components[1], components[2], components[3])
+    }
+}
+
+///
+/// The spec runs on the flight's four EDGES ([`FlightEdges`], window-logical pixels) — the same shape
+/// Compose animates: its `BoundsTransform` returns a `FiniteAnimationSpec<Rect>` and the flight runs it
+/// through `Rect.VectorConverter`, so the four edges are four springs, each with a one-pixel visibility
+/// threshold, and each keeps its own velocity across a retarget. A `PathMotion::Arc*` flight bends the
+/// rect's centre along the arc afterwards (a winia addition Compose has no counterpart for), which is
+/// why the flown edges are post-processed rather than painted verbatim.
 #[derive(Debug, Clone)]
 pub struct BoundsTransform {
     pub spec: AnimationSpec,
 }
 
 impl BoundsTransform {
+    /// Compose's `Rect.VisibilityThreshold`: one pixel per edge
+    /// (`ui/unit/VisibilityThresholds.kt:39-42`). In pixels, because the spec animates the flight's
+    /// edges (`FlightEdges`) — the same units every spring on a `Rect` uses in Compose.
+    pub const VISIBILITY_THRESHOLD_PX: f32 = 1.0;
+
     pub fn tween(spec: TweenSpec) -> Self {
         Self { spec: spec.into() }
     }
@@ -73,6 +190,23 @@ impl BoundsTransform {
 
     pub fn keyframes(spec: KeyframesSpec) -> Self {
         Self { spec: AnimationSpec::Keyframes(spec) }
+    }
+
+    /// The spec for the flight's progress CLOCK — the scalar 0→1 the content crossfade rides.
+    ///
+    /// Its threshold is in progress units, not pixels: a one-pixel stop band is meaningless on a
+    /// 0→1 ramp (it would mark the clock finished on its first frame, which is exactly what happened
+    /// before this split). Compose runs its content enter/exit transitions on their own specs; winia
+    /// approximates them with the flight's spec, so the clock keeps the old 0.01 while the GEOMETRY
+    /// (`FlightEdges`) uses Compose's one pixel per edge.
+    pub fn clock_spec(spec: &AnimationSpec) -> AnimationSpec {
+        match spec {
+            AnimationSpec::Spring(spring) => AnimationSpec::Spring(SpringSpec {
+                threshold: 0.01,
+                ..spring.clone()
+            }),
+            other => other.clone(),
+        }
     }
 }
 
@@ -347,14 +481,20 @@ pub(crate) enum TransitionRole {
 }
 
 /// Per-frame render instruction, rewritten every frame by the coordinator
-/// (Phase 2) from flight start/end + scalar progress. All fields are plain
-/// data — render only `peek`s, never subscribes (zero-recomposition rule).
+/// (Phase 2) from the flight's flown edges (or start/end + progress for an arc).
+/// All fields are plain data — render only `peek`s, never subscribes
+/// (zero-recomposition rule).
 #[derive(Debug, Clone)]
 pub(crate) struct TransitionVisual {
     pub start: SharedBounds,
     pub end: SharedBounds,
-    /// Scalar progress snapshot (0→1, possibly overshooting under spring).
+    /// Scalar progress snapshot (0→1, possibly overshooting under spring) — derived from the animated
+    /// edges, and what the role crossfade and the corner-radius mix ride.
     pub progress: f32,
+    /// The rect the flight's four springs produced, when they are driving the visual directly (a
+    /// `PathMotion::Linear` flight). `None` for an arc flight, which post-processes the flown rect, and
+    /// for the tests that build a visual by hand from start/end/progress.
+    pub flown: Option<SharedBounds>,
     pub role: TransitionRole,
     /// Opacity owned by a SCENE instead of by the flight (see [`Self::alpha`]): the visibility of the
     /// scene this end belongs to, for flights whose ends carry a scene id. `None` = the flight's own
@@ -415,6 +555,12 @@ pub(crate) struct TransitionVisual {
 
 impl TransitionVisual {
     pub(crate) fn lerped(&self) -> SharedBounds {
+        // The flown edges when the flight animates them directly (every `PathMotion::Linear` flight,
+        // which is the default): the rect the four springs produce, overshoot included. An arc flight
+        // is post-processed instead, so it keeps the parameterised form below.
+        if let Some(flown) = self.flown {
+            return flown;
+        }
         lerp_flight_rect(&self.start, &self.end, self.progress, self.path)
     }
 
@@ -625,9 +771,9 @@ impl TransitionVisual {
 
 /// Flight rect at scalar progress: size lerps linearly, the rect center
 /// follows the motion path (linear or Compose `ArcSpline.Arc`
-/// quarter-ellipse, arc-length uniform). Single home for paint, clip, hit
-/// and retarget continuity so an arc can never silently straighten on one
-/// consumer.
+/// quarter-ellipse, arc-length uniform). Used for ARC flights and for the tests that build a visual by
+/// hand; a straight flight paints its flown edges instead (`TransitionVisual::flown`). Single home for
+/// paint, clip, hit and retarget continuity so an arc can never silently straighten on one consumer.
 pub(crate) fn lerp_flight_rect(
     start: &SharedBounds,
     end: &SharedBounds,
@@ -810,8 +956,13 @@ pub(crate) fn overlay_clip_of(modifier: &crate::modifier::Modifier) -> OverlayCl
 #[derive(Debug)]
 pub(crate) struct ActiveFlight {
     pub flight: Flight,
-    /// Scalar progress (0→1) driven by `push_animatable` with the flight spec.
+    /// The crossfade clock: a scalar 0→1 driven by the flight's spec, which is what the role alphas
+    /// and the corner-radius mix ride. It runs even when the two ends are the same rect, so a switch
+    /// in place still fades its content the way Compose's enter/exit animations do.
     pub progress: State<f32>,
+    /// The flight's four edges, driven by the same spec — Compose's shape (`Rect.VectorConverter`):
+    /// one spring per edge, one pixel of threshold each. This is the geometry; `progress` is the fade.
+    pub edges: State<FlightEdges>,
     pub spec: AnimationSpec,
     /// Detached retained source arena index (frozen content).
     pub source_idx: Option<usize>,
@@ -863,6 +1014,29 @@ pub(crate) struct ActiveFlight {
     /// in the MAIN composer map (main outlives overlays).
     pub source_cid: u64,
     pub target_cid: u64,
+}
+
+impl ActiveFlight {
+    /// The flight's progress: the crossfade clock (see [`Self::progress`]).
+    pub(crate) fn progress_value(&self) -> f32 {
+        self.progress.peek()
+    }
+
+    /// Place the flight at `t` along the start→end line — both the clock and the flown edges: how a
+    /// test drives a flight without running the engine's animation.
+    pub(crate) fn set_progress(&self, t: f32) {
+        self.progress.set(t);
+        let start = FlightEdges::of(&self.start);
+        let end = FlightEdges::of(&self.flight.end.unwrap_or(self.start));
+        self.edges.set(start.lerp(&end, t));
+    }
+
+    /// Whether every animation this flight owns has stopped: the edges (geometry) and the clock
+    /// (content fade).
+    pub(crate) fn is_done(&self) -> bool {
+        !crate::animation::has_animation_for_state(self.edges.state_id())
+            && !crate::animation::has_animation_for_state(self.progress.state_id())
+    }
 }
 
 /// Detached source awaiting a cross-composer counterpart (Phase 4 Tier1).
@@ -997,4 +1171,75 @@ pub(crate) struct FlightMeasureFrame {
     /// reports the animated size so siblings reflow; `ContentSize` keeps the
     /// target size so the surrounding layout holds still.
     pub reported: Option<Size>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::{AnimatableValue, AnimationSpec, SpringSpec};
+    use crate::runtime::state::State;
+
+    /// The flown value is four components, so the engine runs one spring per edge — Compose's
+    /// `Rect.VectorConverter` shape. A single scalar (what the flight used to animate) cannot express
+    /// this.
+    #[test]
+    fn the_flown_value_is_four_edges() {
+        assert!(<FlightEdges as AnimatableValue>::supports_spring());
+        let mut out = [0.0f32; crate::animation::MAX_ANIMATION_COMPONENTS];
+        let edges = FlightEdges::new(1.0, 2.0, 30.0, 40.0);
+        assert_eq!(edges.write_components(&mut out), 4, "left, top, right, bottom");
+        assert_eq!(&out[..4], &[1.0, 2.0, 30.0, 40.0]);
+        assert_eq!(FlightEdges::from_components(&out[..4]), edges);
+        let bounds = SharedBounds::new(1.0, 2.0, 29.0, 38.0);
+        assert_eq!(FlightEdges::of(&bounds), edges, "right/bottom are edge coordinates");
+        assert_eq!(edges.bounds(), bounds);
+        assert_eq!(edges.lerp(&edges, 0.5), edges);
+    }
+
+    /// The point of four springs: an edge that barely moves settles while a far one is still
+    /// travelling, which one scalar progress could never do — it put every edge at the same fraction
+    /// of its own journey at all times.
+    #[test]
+    fn a_short_edge_settles_while_a_long_one_is_still_moving() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        // 500 px leftwards travel, 1 px downwards: the vertical edges are inside Compose's one-pixel
+        // stop band from the start.
+        let from = FlightEdges::new(0.0, 100.0, 200.0, 300.0);
+        let to = FlightEdges::new(500.0, 101.0, 700.0, 301.0);
+        let state = State::new(from);
+        crate::animation::push_animatable(
+            state.clone(),
+            to,
+            AnimationSpec::Spring(SpringSpec {
+                threshold: BoundsTransform::VISIBILITY_THRESHOLD_PX,
+                ..SpringSpec::default()
+            }),
+        );
+        let mut frames = 0usize;
+        let mut short_done_at = None;
+        let mut long_done_at = None;
+        while crate::animation::update_animations() && frames < 600 {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            crate::animation::update_animations();
+            frames += 1;
+            let now = state.peek();
+            if short_done_at.is_none() && (now.top, now.bottom) == (to.top, to.bottom) {
+                short_done_at = Some(frames);
+            }
+            if long_done_at.is_none() && (now.left - to.left).abs() < 1.0 {
+                long_done_at = Some(frames);
+            }
+        }
+        let (short_done_at, long_done_at) = (
+            short_done_at.expect("the one-pixel edges reach their target"),
+            long_done_at.expect("the 500 px edge reaches within a pixel of its target"),
+        );
+        assert!(
+            short_done_at <= long_done_at,
+            "the one-pixel edges are done no later than the 500 px one ({short_done_at} vs \
+             {long_done_at}) — one scalar progress could not order them at all"
+        );
+        assert_eq!(state.peek(), to, "and every edge still lands exactly on its target");
+    }
 }

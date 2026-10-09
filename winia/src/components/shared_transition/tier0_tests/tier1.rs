@@ -23,7 +23,7 @@ fn tier1_elevated_target_hittable_outside_its_ancestors() {
 
     let mut probed = None;
     for _ in 0..200 {
-        if let Some(p) = a.shared_flights.values().next().map(|f| f.progress.peek()) {
+        if let Some(p) = a.shared_flights.values().next().map(|f| f.progress_value()) {
             if (0.4..=0.6).contains(&p) {
                 let vis = b.arena_nodes()[tidx]
                     .transition
@@ -122,8 +122,7 @@ fn tier1_peer_drops_the_layout_override_at_teardown() {
     a.shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut a, &mut b, &show_a, &show_b);
     b.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
     let reported = b.arena_nodes()[tidx].measured_size;
@@ -198,7 +197,7 @@ fn tier0_flight_pivot_alignment_mid_flight() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             (p, a.start.lerp(&e, p))
         });
@@ -677,7 +676,7 @@ fn tier1_midflight_progress_visible() {
         if a.shared_flights.is_empty() {
             break;
         }
-        let p = a.shared_flights.values().next().map(|f| f.progress.peek()).unwrap_or(1.0);
+        let p = a.shared_flights.values().next().map(|f| f.progress_value()).unwrap_or(1.0);
         if p > 0.2 && p < 0.95 {
             mid_seen = true;
             // Both ends carry same-progress visuals across composers.

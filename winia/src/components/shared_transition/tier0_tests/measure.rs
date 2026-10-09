@@ -149,8 +149,7 @@ fn flight_layout_contract_matrix() {
             .shared_flights
             .get_mut(&fid)
             .expect("flight")
-            .progress
-            .set(0.5);
+            .set_progress(0.5);
         frame(&mut composer);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -366,8 +365,7 @@ fn shared_element_re_measures_and_honours_animated_size() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -439,8 +437,7 @@ fn elevated_remeasure_hit_lands_on_the_same_child_as_the_tree_walk() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -578,8 +575,7 @@ fn ghost_tap_maps_identity_into_a_remeasure_target() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -611,6 +607,7 @@ fn remeasure_end_is_never_scaled_by_the_frame_delta() {
         start: SharedBounds::new(0.0, 0.0, 150.0, 150.0),
         end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
         progress: 0.25,
+        flown: None,
         role: TransitionRole::Target,
         scene_alpha: None,
         radius_from: [0.0; 4],

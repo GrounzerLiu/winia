@@ -105,8 +105,7 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(P_AT_PROBE);
+        .set_progress(P_AT_PROBE);
     frame(&mut composer);
     {
         let tslot = composer

@@ -100,7 +100,7 @@ fn tier0_flight_scroll_addback_exact() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             (p, a.start.lerp(&e, p))
         });

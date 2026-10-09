@@ -16,26 +16,17 @@
 //! - Content providers: Tier 0 (same composer) / Tier 1 (main ↔ overlay);
 //!   Tier 2 bitmap deliberately unbuilt.
 //!
-//! Spring physics note: `BoundsTransform::spring` does NOT need a vector
-//! spring. It springs scalar progress 0→1 (supported by the engine) and the
-//! rect is derived per frame via [`SharedBounds::lerp`]; overshoot lerps past
-//! the target, which is exactly the Compose spring look. Hence
-//! `SharedBounds` keeps `supports_spring() == false` (Tween-exact) and spring
-//! flights go through scalar progress (Phase 2 wiring).
+//! Motion note: the spec runs on the flight's four EDGES (`FlightEdges`, window pixels), which is
+//! Compose's shape — its `BoundsTransform` returns a `FiniteAnimationSpec<Rect>` and the flight runs it
+//! through `Rect.VectorConverter` (`animation/SharedTransitionScope.kt:265-268`, `:1323`, `:1534`), so
+//! each edge is its own spring with `Rect.VisibilityThreshold` (one pixel each,
+//! `VisibilityThresholds.kt:39-42`) and each inherits its own velocity when the endpoints change
+//! mid-flight. A flight also carries a scalar 0→1 CLOCK on the same spec, which is what winia's content
+//! crossfade rides (Compose runs enter/exit transitions on their own specs instead); the clock's
+//! threshold stays in progress units — see `BoundsTransform::clock_spec`.
 //!
-//! Recorded deviation: Compose animates the bounds themselves — its
-//! `BoundsTransform` returns a `FiniteAnimationSpec<Rect>` and the flight runs it through
-//! `Rect.VectorConverter` (`animation/SharedTransitionScope.kt:265-268`, `:1323`, `:1534`), so the four
-//! edges are four springs whose visibility threshold is one PIXEL each. winia springs one scalar and
-//! derives the rect, so the stop band is a fraction of the flight's own delta (0.01, about one pixel
-//! for a hundred-pixel move) and overshoot applies to the whole rectangle uniformly rather than per
-//! edge. Same motion to the eye, different numbers underneath.
-//!
-//! The same difference shows up on a retarget: Compose's four-spring form inherits four velocities in
-//! pixels per second when the endpoints change mid-flight, while winia's single progress spring
-//! inherits one progress velocity. The visually equivalent case (both ends moving along the same
-//! axis) behaves the same; when the four edges have different displacement the per-edge recovery
-//! differs — which edge settles first during an interrupted or reversed flight.
+//! `SharedBounds` itself keeps `supports_spring() == false`: it is the public rect type the renderer and
+//! the tests pass around, while the animated value is the four-edge `FlightEdges`.
 //!
 //! The default shaping is Compose's spring — see [`BoundsTransform::default`].
 
@@ -75,7 +66,8 @@ impl AnimatableValue for SharedBounds {
     /// Scalar-engine placeholder (area). Only exercised by Spring/Decay
     /// paths, which never run for `SharedBounds`: `supports_spring()` is
     /// false so the engine degrades to Tween (pure `lerp`, see
-    /// `push_animatable`). Spring flights go through scalar progress instead.
+    /// `push_animatable`). Flights animate `FlightEdges` (four components) on a spring and keep this
+    /// rect type for the renderer and the tests.
     fn to_f32(&self) -> f32 {
         self.width * self.height
     }
@@ -98,18 +90,17 @@ impl Default for BoundsTransform {
     /// (`animation/SharedTransitionScope.kt:1534`, `:1608`; `StiffnessMediumLow` is 400,
     /// `Rect.VisibilityThreshold` is one pixel per edge, `VisibilityThresholds.kt:39-42`).
     ///
-    /// The threshold here is in PROGRESS units, not pixels, because winia springs the scalar flight
-    /// progress and derives the rect per frame (`transition.rs:56-59`): 0.01 of the flight's own
-    /// rectangle delta is about one pixel for a hundred-pixel move — the same stop band Compose has.
-    /// See the module note on `SharedBounds::supports_spring()` for why the value itself is not
-    /// animated as four components.
+    /// The threshold is one PIXEL because the spec now animates the flight's four edges, which are
+    /// window pixels — the same units Compose's `Rect.VectorConverter` hands its animation. (It used to
+    /// be 0.01 in progress units, which was the same stop band only for a hundred-pixel flight: a
+    /// thousand-pixel one used to stop ten pixels short and then jump.)
     fn default() -> Self {
         Self {
             spec: SpringSpec {
                 damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
                 stiffness: SpringSpec::STIFFNESS_MEDIUM,
                 mass: 1.0,
-                threshold: 0.01,
+                threshold: Self::VISIBILITY_THRESHOLD_PX,
             }
             .into(),
         }
@@ -698,7 +689,7 @@ mod tests {
         let b = SharedBounds::new(30.0, 40.0, 50.0, 60.0);
         // Trait entry clamps (engine contract); inherent `lerp` does not.
         assert_eq!(AnimatableValue::lerp(&a, &b, 0.5), SharedBounds::new(15.0, 20.0, 30.0, 40.0));
-        assert!(!<SharedBounds as AnimatableValue>::supports_spring(), "vector spring unsupported — spring rides scalar progress");
+        assert!(!<SharedBounds as AnimatableValue>::supports_spring(), "the rect type is not the animated value — flights animate FlightEdges");
         assert!(<SharedBounds as AnimatableValue>::same_target(&a, &a));
     }
 
@@ -773,7 +764,13 @@ mod tests {
                     SpringSpec::STIFFNESS_MEDIUM,
                     "Compose's StiffnessMediumLow is 400, which winia spells STIFFNESS_MEDIUM"
                 );
-                assert_eq!(spec.threshold, 0.01, "about one pixel of the flight's own delta");
+                assert_eq!(
+                    spec.threshold,
+                    crate::transition::BoundsTransform::VISIBILITY_THRESHOLD_PX,
+                    "Compose's Rect.VisibilityThreshold is one PIXEL per edge, and the flight's edges \
+                     are pixels — the spec runs on FlightEdges"
+                );
+                assert_eq!(spec.threshold, 1.0);
             }
             other => panic!(
                 "the default bounds transform is Compose's spring, not a tween, got {other:?}"
@@ -876,6 +873,9 @@ mod tests {
             start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
             end: SharedBounds::new(200.0, 100.0, 100.0, 100.0),
             progress,
+            // Built by hand: this test exercises the arc form, which is what a `flown` rect replaces
+            // when a flight runs on its four springs.
+            flown: None,
             role: TransitionRole::Target,
             scene_alpha: None,
             radius_from: [0.0; 4],
@@ -964,6 +964,7 @@ mod tests {
             start: SharedBounds::new(0.0, 0.0, 100.0, 100.0),
             end: SharedBounds::new(200.0, 0.0, 100.0, 100.0),
             progress: 0.25,
+            flown: None,
             role,
             scene_alpha: None,
             radius_from: [0.0; 4],
@@ -1337,14 +1338,14 @@ pub(crate) fn sync_scope_active_states(all: &[&Composer]) {
 /// same threshold covers manually-driven progress with no engine entry
 /// (headless tests).
 ///
-/// NOTE: flight specs must be finite (Tween/Spring/Keyframes settle and
-/// release). An infinite Repeatable spec would hold the flight open forever
-/// — the old engine-agnostic threshold completed those; the gate does not.
-fn flight_progress_done(a: &ActiveFlight, p: f32) -> bool {
-    if crate::animation::has_animation_for_state(a.progress.state_id()) {
-        return false;
-    }
-    p >= 0.999
+/// A flight is over when its edge animation has nothing left running — the engine registers a spring
+/// until every lane is at rest (each edge within its own visibility threshold) and a tween until it
+/// lands, which is what Compose's `animateTo` reports as `Finished`.
+///
+/// NOTE: flight specs must be finite (Tween/Spring/Keyframes settle and release). An infinite
+/// Repeatable spec would hold the flight open forever.
+fn flight_progress_done(a: &ActiveFlight) -> bool {
+    a.is_done()
 }
 
 impl Composer {
@@ -1642,8 +1643,9 @@ impl Composer {
                     // redirect of a slide-bounds flight may snap by the live
                     // offset ( folding scale pivots into a rect is
                     // ill-defined; Element retargets stay seamless).
-                    let p = a.progress.peek();
                     let end = a.flight.end.unwrap_or(a.start);
+                    // The visual rect the redirect starts from: the flown edges, arc bend included.
+                    let p = a.progress_value();
                     let s = lerp_flight_rect(&a.start, &end, p, a.path);
                     let (rf, rt) = (a.radius_from, a.radius_to);
                     start_override = Some((s, [0, 1, 2, 3].map(|i| rf[i] + (rt[i] - rf[i]) * p)));
@@ -1828,8 +1830,9 @@ impl Composer {
             id,
             ActiveFlight {
                 flight,
-                // Placeholder until StartFlight wires the real driven progress.
+                // Placeholders until the bounds resolve and both animations are pushed.
                 progress: State::new(0.0f32),
+                edges: State::new(crate::transition::FlightEdges::of(&start)),
                 spec: BoundsTransform::default().spec,
                 source_idx: Some(src_idx),
                 start,
@@ -1889,13 +1892,14 @@ impl Composer {
         // it (five of them can, and they mean different bugs). Gated: with the feature off `record` is a
         // no-op but its arguments would still be built.
         if crate::anim_trace::enabled() {
+            let p = a.progress_value();
             crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
                 format!("flight:{}", a.flight.key),
                 "cancel",
                 format!(
                     "reason={reason} id={id} has_source={} p={:.4} flight_slots=({:?},{:?})",
                     a.source_idx.is_some(),
-                    a.progress.peek(),
+                    p,
                     a.flight.source_slot,
                     a.flight.target_slot
                 ),
@@ -2315,12 +2319,9 @@ impl Composer {
                         .collect();
                     ancestor_scroll_sum(&self.arena.nodes, &id_to_idx, tidx)
                 };
-                let progress = State::new(0.0f32);
-                push_animatable(progress.clone(), 1.0, spec.clone());
                 let (start, acts) = {
                     let a = self.shared_flights.get_mut(&id).expect("polled flight exists");
                     a.spec = spec;
-                    a.progress = progress;
                     a.radius_to = radius_to;
                     a.end_scroll = end_scroll;
                     a.clip = clip;
@@ -2343,15 +2344,36 @@ impl Composer {
                 };
                 debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
                 let _ = start;
+                // Drive the flight: the four EDGES for the geometry (Compose's `Rect.VectorConverter`
+                // shape — one spring per edge, one pixel of threshold each) and a scalar 0→1 clock for
+                // the content crossfade, which must run even when the two rects are the same.
+                {
+                    let (spec, target) = self
+                        .shared_flights
+                        .get(&id)
+                        .map(|a| (a.spec.clone(), a.flight.end.unwrap_or(a.start)))
+                        .expect("the flight being started exists");
+                    let a = self.shared_flights.get_mut(&id).expect("polled flight exists");
+                    let edges = State::new(crate::transition::FlightEdges::of(&start));
+                    a.edges = edges.clone();
+                    push_animatable(
+                        edges,
+                        crate::transition::FlightEdges::of(&target),
+                        spec.clone(),
+                    );
+                    let clock = State::new(0.0f32);
+                    a.progress = clock.clone();
+                    push_animatable(clock, 1.0, crate::transition::BoundsTransform::clock_spec(&spec));
+                }
                 self.write_flight_visuals(id);
             }
             FlightPhase::Flying => {
-                let p = self.shared_flights.get(&id).map(|a| a.progress.peek()).unwrap_or(1.0);
                 if let Some(a) = self.shared_flights.get_mut(&id) {
-                    a.flight.progress = p;
+                    // The mirror the pure state machine tracks, and what the trace reports.
+                    a.flight.progress = a.progress_value();
                 }
                 self.write_flight_visuals(id);
-                let done = self.shared_flights.get(&id).is_some_and(|a| flight_progress_done(a, p));
+                let done = self.shared_flights.get(&id).is_some_and(flight_progress_done);
                 if done {
                     let acts = self
                         .shared_flights
@@ -2447,6 +2469,18 @@ impl Composer {
         start.y -= oy;
         end.x -= ox;
         end.y -= oy;
+        // The rect the flight's four springs produced, in this composer's canvas frame. A straight
+        // path paints it as it is; an arc flight leaves it `None` and bends the parameterised rect
+        // below (the arc is a winia addition Compose has no counterpart for).
+        let flown = if matches!(path, PathMotion::Linear) {
+            self.shared_flights.get(&id).map(|a| a.edges.peek().bounds()).map(|mut r| {
+                r.x -= ox;
+                r.y -= oy;
+                r
+            })
+        } else {
+            None
+        };
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
             let matched = self.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot);
             if matched {
@@ -2454,6 +2488,7 @@ impl Composer {
                     start,
                     end,
                     progress: p,
+                    flown,
                     scene_alpha: scene_alpha_for_end(&self.arena.nodes, idx, true),
                     role: TransitionRole::Source,
                     radius_from: rf,
@@ -2557,6 +2592,7 @@ impl Composer {
                         start,
                         end,
                         progress: p,
+                        flown,
                         scene_alpha: scene_alpha_for_end(&self.arena.nodes, tidx, false),
                         role,
                         radius_from: rf,
@@ -2793,13 +2829,12 @@ impl Composer {
             Self::cancel_cross_flight(all, id);
             return;
         }
-        // Drive progress + visuals.
-        let p = all[0].shared_flights.get(&id).map(|a| a.progress.peek()).unwrap_or(1.0);
+        // Drive the edges + visuals.
         if let Some(a) = all[0].shared_flights.get_mut(&id) {
-            a.flight.progress = p;
+            a.flight.progress = a.progress_value();
         }
         Self::write_cross_visuals(&mut *all, si, ti, id);
-        let done = all[0].shared_flights.get(&id).is_some_and(|a| flight_progress_done(a, p));
+        let done = all[0].shared_flights.get(&id).is_some_and(flight_progress_done);
         if done {
             let acts = all[0]
                 .shared_flights
@@ -2930,6 +2965,19 @@ impl Composer {
             None => return,
         };
         let (so, to) = (all[owner_idx].screen_origin, all[peer_idx].screen_origin);
+        // Same rule as the Tier-0 writer: a straight path paints the flown edges, an arc bends the
+        // parameterised rect instead.
+        let flown = all[0].shared_flights.get(&id).map(|a| a.edges.peek().bounds());
+        let flown_source = if matches!(path, PathMotion::Linear) {
+            flown.map(|r| off_origin(r, so))
+        } else {
+            None
+        };
+        let flown_target = if matches!(path, PathMotion::Linear) {
+            flown.map(|r| off_origin(r, to))
+        } else {
+            None
+        };
         if let (Some(slot), Some(idx)) = (sslot, sidx) {
             let owner = &mut all[owner_idx];
             if owner.arena.nodes.get(idx).is_some_and(|n| n.slot_key == slot) {
@@ -2937,6 +2985,7 @@ impl Composer {
                     start: off_origin(start, so),
                     end: off_origin(end, so),
                     progress: pr,
+                    flown: flown_source,
                     // Tier 1 (cross-composer) ends carry no scene id yet: the scene host API is
                     // published per composer, so a flight spanning main and an overlay has no shared
                     // scene visibility to read here. Keep the flight's own crossfade.
@@ -3004,6 +3053,7 @@ impl Composer {
                         start: off_origin(start, to),
                         end: off_origin(end, to),
                         progress: pr,
+                        flown: flown_target,
                         // See the Tier 1 source comment above: no scene id across composers yet.
                         scene_alpha: None,
                         role: TransitionRole::Target,
@@ -3183,8 +3233,6 @@ impl Composer {
             })();
             let Some(h) = hit else { continue };
             // --- writes (sequential &mut, never aliased) ---
-            let progress = State::new(0.0f32);
-            push_animatable(progress.clone(), 1.0, h.spec.clone());
             let owner_cid = all[owner_idx].composer_id;
             let id = all[0].next_flight_id;
             all[0].next_flight_id += 1;
@@ -3199,11 +3247,26 @@ impl Composer {
             );
             let acts = flight.on_event(FlightEvent::BoundsReady { start: p.start, end: h.end });
             debug_assert!(matches!(acts.as_slice(), [FlightAction::StartFlight { .. }]));
+            // The cross-composer flight animates its four edges, plus the scalar clock its content
+            // crossfade rides.
+            let edges = State::new(crate::transition::FlightEdges::of(&p.start));
+            push_animatable(
+                edges.clone(),
+                crate::transition::FlightEdges::of(&h.end),
+                h.spec.clone(),
+            );
+            let progress = State::new(0.0f32);
+            push_animatable(
+                progress.clone(),
+                1.0,
+                crate::transition::BoundsTransform::clock_spec(&h.spec),
+            );
             all[0].shared_flights.insert(
                 id,
                 ActiveFlight {
                     flight,
                     progress,
+                    edges,
                     spec: h.spec,
                     source_idx: Some(p.src_idx),
                     start: p.start,
@@ -3323,8 +3386,20 @@ impl Composer {
                 .collect();
             ancestor_scroll_sum(&self.arena.nodes, &id_to_idx, tidx)
         };
+        // The morph's edges, driven by its spec (Compose's `Rect.VectorConverter` shape), plus the
+        // scalar clock its content fade rides.
+        let edges = State::new(crate::transition::FlightEdges::of(&start));
+        push_animatable(
+            edges.clone(),
+            crate::transition::FlightEdges::of(&end),
+            spec.clone(),
+        );
         let progress = State::new(0.0f32);
-        push_animatable(progress.clone(), 1.0, spec.clone());
+        push_animatable(
+            progress.clone(),
+            1.0,
+            crate::transition::BoundsTransform::clock_spec(&spec),
+        );
         let id = self.next_flight_id;
         self.next_flight_id += 1;
         let mut flight = Flight::new(id, scope_id, key);
@@ -3340,6 +3415,7 @@ impl Composer {
             ActiveFlight {
                 flight,
                 progress,
+                edges,
                 spec,
                 source_idx: None,
                 start,
@@ -3426,7 +3502,7 @@ impl Composer {
                                 // Unclamped + path-aware like the render path:
                                 // reopen continuity includes spring overshoot
                                 // and any arc bend.
-                                let p = a.progress.peek();
+                                let p = a.progress_value();
                                 let end_prev = a.flight.end.unwrap_or(a.start);
                                 let s = lerp_flight_rect(&a.start, &end_prev, p, a.path);
                                 let (rf, rt) = (a.radius_from, a.radius_to);

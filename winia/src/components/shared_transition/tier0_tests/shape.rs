@@ -133,8 +133,7 @@ fn circle_radius_follows_the_lerped_rect_on_both_ends() {
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .progress
-        .set(0.5);
+        .set_progress(0.5);
     frame(&mut composer);
     composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -234,8 +233,7 @@ fn percent_to_fixed_corners_stay_aligned_end_to_end() {
             .shared_flights
             .get_mut(&fid)
             .expect("flight")
-            .progress
-            .set(p);
+            .set_progress(p);
         frame(&mut composer);
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
 
@@ -329,6 +327,7 @@ fn corner_endpoints_are_exact_for_every_shape_pair() {
             start: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
             end: SharedBounds::new(0.0, 0.0, 320.0, 170.0),
             progress,
+            flown: None,
             role: TransitionRole::Target,
             scene_alpha: None,
             radius_from: from,

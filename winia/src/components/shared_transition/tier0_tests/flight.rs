@@ -117,7 +117,7 @@ fn tier0_flight_completes_end_to_end() {
         if composer.shared_flights.is_empty() {
             break;
         }
-        let p = composer.shared_flights.values().next().map(|a| a.progress.peek()).unwrap_or(1.0);
+        let p = composer.shared_flights.values().next().map(|a| a.progress_value()).unwrap_or(1.0);
         if p > 0.2 && p < 0.95 {
             mid_seen = true;
             break;
@@ -449,7 +449,7 @@ fn tier0_bouncy_spring_overshoot_renders_then_settles() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             (p, a.start.lerp(&e, p))
         });
@@ -556,7 +556,7 @@ fn tier0_shared_bounds_enter_exit_slide_with_flight() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             let l = a.start.lerp(&e, p);
             ((l.x + l.width / 2.0) as i32, (l.y + l.height / 2.0) as i32, p)
@@ -631,7 +631,7 @@ fn tier0_shared_bounds_expand_wipes_from_edge() {
             break;
         }
         let probe = composer.shared_flights.values().next().map(|a| {
-            let p = a.progress.peek();
+            let p = a.progress_value();
             let e = a.flight.end.expect("end resolved after first poll");
             let l = a.start.lerp(&e, p);
             (p, (l.x + l.width / 2.0) as i32, l.y as i32, l.height)

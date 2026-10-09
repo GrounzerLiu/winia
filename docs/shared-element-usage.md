@@ -33,7 +33,7 @@
 |---|---|---|
 | `BoundsTransform::tween(TweenSpec)` | 300ms on Compose's `FastOutSlowIn` when constructed with `TweenSpec::default()` (pass `interpolator::Linear::new()` for a linear ramp) | Exact, no overshoot. NOT the default flight shaping any more |
 | `BoundsTransform::spring(SpringSpec)` | Compose's default: `damping_ratio: 1.0`, stiffness 400 (`SpringSpec::default()` is the softer 200) | `SpringSpec::bouncy()` (`damping_ratio: 0.6`) overshoots past the end rect — the Compose spring look |
-| `BoundsTransform::default()` | `spring(1.0, 400)` with a 0.01 progress threshold | Compose `SharedTransitionDefaults.BoundsTransform` (`SharedTransitionScope.kt:1534`, `:1608`): `spring(StiffnessMediumLow = 400, visibilityThreshold = Rect.VisibilityThreshold)`, one pixel per edge |
+| `BoundsTransform::default()` | `spring(1.0, 400)`, one pixel of threshold per edge | Compose `SharedTransitionDefaults.BoundsTransform` (`SharedTransitionScope.kt:1534`, `:1608`): `spring(StiffnessMediumLow = 400, visibilityThreshold = Rect.VisibilityThreshold)`. The spec runs on the flight's four EDGES (`FlightEdges`), so both the threshold (one pixel each) and the per-edge retarget velocity are Compose's; the flight also carries a scalar 0→1 clock on the same spec for the content crossfade, whose threshold stays in progress units (`BoundsTransform::clock_spec`) |
 | `BoundsTransform::keyframes(KeyframesSpec)` | — | Arbitrary progress curves |
 
 Specs must be **finite** (Tween/Spring/Keyframes settle and release the
@@ -119,13 +119,14 @@ SharedTransitionLayout::new().build(ctx, |ctx| {
 
 ## 4. Motion semantics
 
-- Progress is scalar 0→1; the rect is derived per frame from it —
-  spring overshoot (`t > 1`) flies past the endpoint, then
-  settles exactly onto it. One unclamped flight-t drives rect, radii,
-  clip and hit together; only opacity stays clamped.
-- Completion waits for the animation engine to release the progress
-  state (bouncy flights render their full overshoot), then tears down:
-  retained source freed, target visuals cleared, natural render resumes.
+- The GEOMETRY is four springs, one per edge (`FlightEdges`): each edge carries Compose's one-pixel
+  threshold and keeps its own velocity across a retarget, so a long edge and a short one settle when
+  each is within a pixel — not together. Overshoot puts an edge past its own endpoint and the render
+  paints that rect as it is; radii, clip and hit all follow the same rect.
+- A scalar 0→1 clock rides the same spec for the content crossfade (and stays clamped). It is what the
+  role alphas and the corner-radius mix read.
+- Completion waits for BOTH animations to be released (bouncy flights render their full overshoot),
+  then tears down: retained source freed, target visuals cleared, natural render resumes.
 - Retarget-lite: switching again mid-flight cancels the old flight and
   restarts from the current visual rect (seamless for Element flights;
   slide-bounds flights may snap by the live channel offset — documented
@@ -354,7 +355,8 @@ Three properties worth knowing before you rely on it:
   `morph_detector_skips_the_decision_but_updates_the_baseline` and
   `teardown_reaches_a_slot_that_left_the_tree`).
 - Tests driving animations hold `TEST_SERIAL` + `clear_all_animations()`.
-  Newer tests PIN the flight progress (`progress.set(t)`) instead of sampling the
+  Newer tests PIN the flight (`set_progress(t)` places the clock AND the flown edges on the
+  start→end line) instead of sampling the
   wall clock, and drive at most one extra `layout()` to consume the writer's
   seed; the remaining completion loops are wall-clock bounded, so they can only
   fail by not finishing within the loop cap.
