@@ -24,13 +24,16 @@
 //!   container, so the slot is freed and the content disappears.
 //!
 //! Aligned with Compose: the default enter/exit pair (fade + size change, `spring(1.0, 400)`), no
-//! transition for the initial state, the progress being readable from the content
-//! (`VisibilityScope` ≈ `AnimatedVisibilityScope.transition`), delayed removal, and the full builder
-//! vocabulary (fade/slide/expand/shrink/scale, both axes, anchors, offsets).
+//! transition for the initial state, PER-CHANNEL animation specs (`fade_in(spec) + expand_in(other)` —
+//! each channel is its own animatable, so they can run out of step), the progress being readable from
+//! the content (`VisibilityScope` ≈ `AnimatedVisibilityScope.transition`), delayed removal that waits
+//! for every channel, and the full builder vocabulary (fade/slide/expand/shrink/scale, both axes,
+//! anchors, offsets).
 //!
 //! Deliberate differences (all with their Compose counterpart):
-//! - **One spec per transition.** Winia's `VisibilityTransition` carries a single `AnimationSpec` for
-//!   every channel; Compose gives each channel its own (`fadeIn(spring) + expandIn(spring2)`).
+//! - **One shared `spec` remains the fallback.** A channel whose builder did not give it a spec runs on
+//!   the transition's shared one, which is what `fade_in(tween).with_expand()` relies on; Compose's
+//!   builders always carry one.
 //! - **One default, both axes.** Compose picks the default axis from the scope — `RowScope` expands
 //!   horizontally, `ColumnScope` vertically, the top level expands both (`AnimatedVisibility.kt:125-129`,
 //!   `:199-203`, `:272-276`) — while winia has one default (both axes) plus the explicit
@@ -87,12 +90,19 @@ pub struct AnimatedVisibility {
 /// caller needs to chain an action.
 #[derive(Clone)]
 pub struct VisibilityScope {
-    /// 0 = hidden, 1 = shown; a spring overshoots past 1, exactly like the container it sizes.
+    /// The SIZE channel — the clock the container's layout is sized by (0 = collapsed, 1 = full). A
+    /// spring overshoots past 1, exactly like the container it drives.
     pub progress: State<f32>,
+    /// The fade channel (Compose's `Fade.alpha`).
+    pub alpha: State<f32>,
+    /// The slide channel (Compose's `Slide.slideOffset` progress).
+    pub slide: State<f32>,
+    /// The scale channel (Compose's `Scale.scale` progress).
+    pub scale: State<f32>,
 }
 
 impl VisibilityScope {
-    /// The transition's progress right now, as a composition dependency.
+    /// The SIZE channel right now, as a composition dependency.
     pub fn value(&self) -> f32 {
         self.progress.get()
     }
@@ -100,6 +110,16 @@ impl VisibilityScope {
     /// The same value without registering a dependency — for render-time closures.
     pub fn peek(&self) -> f32 {
         self.progress.peek()
+    }
+
+    /// All three draw channels at once, for a render-time consumer that wants to apply the same
+    /// conversion the container does (`VisibilityTransition::layer_params`).
+    pub fn channels(&self) -> crate::animation::visibility::ChannelValues {
+        crate::animation::visibility::ChannelValues {
+            fade: self.alpha.peek(),
+            slide: self.slide.peek(),
+            scale: self.scale.peek(),
+        }
     }
 }
 
@@ -176,43 +196,70 @@ impl AnimatedVisibility {
         // shows at full size and runs no enter (measured before this: the container's height was 3.5e-7
         // against a 50-unit content) — unless the caller opted into that initial state with
         // `animate_on_appear()`, which is Compose's `MutableTransitionState(false) + targetState = true`.
-        let progress: State<f32> =
-            ctx.remember(|| if vis && !self.animate_on_appear { 1.0 } else { 0.0 });
+        // One animated value PER CHANNEL, as Compose's `Transition<EnterExitState>` has: `Fade.alpha`,
+        // `ChangeSize`, `Slide.slideOffset` and `Scale.scale` each carry their own `animationSpec`
+        // (`EnterExitTransition.kt:304-306`, `:529-535`, `:409-415`), so channels can run out of step —
+        // `fade_in(delayed) + expand_in(spring)` fades late while the box already grows. The SIZE channel
+        // is the one the container's layout reads, and it is the scope's `progress`.
+        let initial = || if vis && !self.animate_on_appear { 1.0 } else { 0.0 };
+        let size: State<f32> = ctx.remember(initial);
+        let alpha: State<f32> = ctx.remember(initial);
+        let slide_ch: State<f32> = ctx.remember(initial);
+        let scale_ch: State<f32> = ctx.remember(initial);
         let removed: State<bool> = ctx.remember(|| !vis);
-        let _p = progress.get(); // the transition moving re-runs this build (the removal check runs)
+        let _p = size.get(); // the transition moving re-runs this build (the removal check runs)
         let _r = removed.get(); // the removal flag re-runs it, so the `return` below takes effect
         // Removed and shown again → reset (the notify requests the recomposition, this frame starts).
         if removed.peek() && vis {
             removed.set(false);
         }
-        // Exit-complete detection: hidden and progress ≈ 0 → mark removed (this build runs every frame —
-        // the animating value notifies each frame → pending → composed on the next one).
-        if !vis && progress.peek() < 0.001 && !removed.peek() {
+        // Exit-complete detection: hidden, the size channel back at 0 and nothing left running — the
+        // container is gone (this build runs every frame: the animating values notify each frame →
+        // pending → composed on the next one). Every channel has to be settled, not just the size one:
+        // a delayed fade still has to finish before the content may be dropped.
+        let still_animating = [&size, &alpha, &slide_ch, &scale_ch]
+            .iter()
+            .any(|s| crate::animation::has_animation_for_state(s.state_id()));
+        if !vis && size.peek() < 0.001 && !still_animating && !removed.peek() {
             removed.set(true);
         }
         if removed.peek() {
             return; // removed: do not start the container → the slot stays unvisited → materialization frees it
         }
-        // Drive progress animation (push on visible-change frames — same-target dedup skips)
+        // Drive every channel (push on visible-change frames — same-target dedup skips). The spec comes
+        // from the transition playing NOW, per channel; a channel whose builder did not set one falls back
+        // to the transition's shared spec.
         let target = if vis { 1.0 } else { 0.0 };
-        let spec = if vis { enter.spec.clone() } else { exit.spec.clone() };
-        push_animatable(progress.clone(), target, spec);
+        let cfg_pair = if vis { &enter } else { &exit };
+        push_animatable(size.clone(), target, cfg_pair.size_spec().clone());
+        push_animatable(alpha.clone(), target, cfg_pair.fade_spec().clone());
+        push_animatable(slide_ch.clone(), target, cfg_pair.slide_spec().clone());
+        push_animatable(scale_ch.clone(), target, cfg_pair.scale_spec().clone());
         // Content size write-back for Fraction slide offsets (Backchannel —
         // no recompose; the gfx closure reads it via peek at render time).
         let content_size = ctx.remember_backchannel(|| (0.0, 0.0));
-        // Draw-layer params (render-time peek — no dependency, no recompose)
-        let g = progress.clone();
+        // Draw-layer params (render-time peek — no dependency, no recompose). The channels come from
+        // their own values, so a staggered pair stays staggered all the way into the layer.
+        let a = alpha.clone();
+        let sl = slide_ch.clone();
+        let sc = scale_ch.clone();
         let e = enter.clone();
         let x = exit.clone();
         let v = visible.clone();
         let cs = content_size.clone();
         let gfx = move || {
-            let p = g.peek();
             let cfg = if v.peek() { &e } else { &x };
             // The transition vocabulary has exactly one implementation
             // (`VisibilityTransition::layer_params`), shared with `AnimatedContent` — which runs the
-            // same conversion once per generation.
-            cfg.layer_params(p, cs.peek())
+            // same conversion once per generation, with one clock for every channel.
+            cfg.layer_params(
+                crate::animation::visibility::ChannelValues {
+                    fade: a.peek(),
+                    slide: sl.peek(),
+                    scale: sc.peek(),
+                },
+                cs.peek(),
+            )
         };
         // Direction-active config: the transition playing NOW (enter when visible,
         // exit when hidden). Clip, expand flags AND anchors all follow it — NOT an
@@ -225,7 +272,7 @@ impl AnimatedVisibility {
         // endpoint (fresh animation about to start) or when the config pair changes.
         let anchor_v = ctx.remember_backchannel(|| cfg.expand_from);
         let anchor_h = ctx.remember_backchannel(|| cfg.expand_from_h);
-        let settled = progress.peek() <= 0.001 || progress.peek() >= 0.999;
+        let settled = size.peek() <= 0.001 || size.peek() >= 0.999;
         if settled && (anchor_v.peek() != cfg.expand_from || anchor_h.peek() != cfg.expand_from_h)
         {
             anchor_v.set(cfg.expand_from);
@@ -245,7 +292,7 @@ impl AnimatedVisibility {
             Modifier::new().graphics_layer(gfx)
         };
         let policy = VisibilityPolicy {
-            progress: progress.clone(),
+            progress: size.clone(),
             expand: cfg.expand,
             expand_from: anchor_v.peek(),
             expand_h: cfg.expand_h,
@@ -253,10 +300,16 @@ impl AnimatedVisibility {
             content_size: content_size.clone(),
         };
         let key = ctx.next_key();
+        let scope = VisibilityScope {
+            progress: size.clone(),
+            alpha: alpha.clone(),
+            slide: slide_ch.clone(),
+            scale: scale_ch.clone(),
+        };
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                content(&VisibilityScope { progress: progress.clone() }, ctx);
+                content(&scope, ctx);
             }
         }
         ctx.end_restartable_group();
@@ -494,6 +547,85 @@ mod tests {
             build(&mut composer);
         }
         assert_eq!(height(&composer), 50.0, "and it reaches the content's own height");
+    }
+
+    /// Per-channel specs: Compose's `fadeIn(tween) + expandIn(spring)` runs the two channels on their
+    /// own clocks, because every channel is its own animatable carrying its own spec
+    /// (`EnterExitTransition.kt`'s `Fade`, `ChangeSize`, `Slide` and `Scale` each take one). The
+    /// discriminator is a RATIO, so no timing budget can mask it: with a fast size channel and a slow
+    /// fade, the container must be nearly full (`height > 30`) while the fade is still below half
+    /// (`alpha < 0.5`). A single shared clock drives both from one progress, so the height would be
+    /// `50 × alpha ≤ 25` — the predicate could not hold.
+    #[test]
+    fn a_slow_fade_runs_out_of_step_with_the_expand() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(false);
+        let v = visible.clone();
+        // The size channel is a fast spring; the fade takes 600 ms.
+        let slow_fade = crate::animation::TweenSpec::new(
+            std::time::Duration::from_millis(600),
+            crate::animation::interpolator::Linear::new(),
+        );
+        let quick_size = crate::animation::SpringSpec {
+            stiffness: 1400.0,
+            ..crate::animation::SpringSpec::default()
+        };
+        let enter = VisibilityTransition::fade_in(slow_fade)
+            + VisibilityTransition::expand_in(quick_size);
+        let held: std::rc::Rc<std::cell::RefCell<Option<VisibilityScope>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h2 = held.clone();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    let h2 = h2.clone();
+                    AnimatedVisibility::new(v.clone())
+                        .enter(enter.clone())
+                        .build_with_scope(ctx, move |scope, ctx| {
+                            // Hold the scope: its channel States are live, so the loop can peek them in
+                            // the SAME frame it measures the container in (the content closure itself
+                            // only runs when the container Enters).
+                            if h2.borrow().is_none() {
+                                *h2.borrow_mut() = Some(scope.clone());
+                            }
+                            TextLeaf::new().build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let height = |composer: &Composer| -> f32 {
+            let root = composer.layout_root_idx().expect("root");
+            let av = composer.arena_nodes()[root].children[0];
+            composer.arena_nodes()[av].measured_size.height
+        };
+        build(&mut composer); // hidden
+        visible.set(true);
+        let mut out_of_step = false;
+        for _ in 0..60 {
+            build(&mut composer);
+            let h = height(&composer);
+            let alpha_p = held
+                .borrow()
+                .as_ref()
+                .map(|s| s.alpha.peek())
+                .expect("the content ran and held the scope");
+            if h > 30.0 && alpha_p < 0.5 {
+                out_of_step = true;
+            }
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let alpha_p = held.borrow().as_ref().map(|s| s.alpha.peek()).unwrap_or(-1.0);
+        assert!(
+            out_of_step,
+            "the size channel must be nearly full while the slow fade is still below half — one shared \
+             clock would pin the height to 50 × alpha (last alpha {alpha_p}, height {})",
+            height(&composer)
+        );
+        assert_eq!(height(&composer), 50.0, "and the container still lands on the content's height");
     }
 
     /// The content can ride the same clock the container does — Compose's `AnimatedVisibilityScope`,

@@ -491,11 +491,19 @@ mod tests {
         assert!(t.iter().any(|x| x.contains("hello")), "应渲染 message: {t:?}");
         assert!(t.iter().any(|x| x.contains("undo")), "应渲染 action: {t:?}");
 
-        // dismiss：消失
+        // dismiss: the host plays the exit, then disappears. Removal waits for EVERY channel of the
+        // transition (Compose drops the content only after all of the exit animations have finished), so
+        // frames have to advance — the old assertion happened to hold because the enter had never run
+        // either and the single clock still read its initial value.
         host.dismiss();
+        for _ in 0..60 {
+            build(&mut composer);
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         build(&mut composer);
         let t = texts(&mut composer);
-        assert!(!t.iter().any(|x| x.contains("hello")), "dismiss 后应消失: {t:?}");
+        assert!(!t.iter().any(|x| x.contains("hello")), "after the exit finished it disappears: {t:?}");
     }
 
     /// 自动消失：show 启动 duration 动画 → update_animations 推进 →

@@ -99,6 +99,16 @@ pub struct VisibilityTransition {
     pub transform_origin: (f32, f32),
     /// Animation spec
     pub spec: AnimationSpec,
+    /// Per-channel specs. Compose's enter/exit transitions animate each channel with the spec its own
+    /// builder carries (`fadeIn(tween(delayMillis = 100)) + expandIn(spring)`), so the channels can run
+    /// out of step; `None` = use `spec`, which is what every builder sets as well, so a transition built
+    /// the old way behaves exactly as before.
+    pub fade_spec: Option<AnimationSpec>,
+    /// The SIZE channel's spec — Compose animates one `IntSize` for both expand axes
+    /// (`ChangeSize`), so vertical and horizontal expansion share it.
+    pub size_spec: Option<AnimationSpec>,
+    pub slide_spec: Option<AnimationSpec>,
+    pub scale_spec: Option<AnimationSpec>,
 }
 
 impl VisibilityTransition {
@@ -117,6 +127,10 @@ impl VisibilityTransition {
             scale_from: 0.8,
             transform_origin: (0.5, 0.5),
             spec: AnimationSpec::Tween(Default::default()),
+            fade_spec: None,
+            size_spec: None,
+            slide_spec: None,
+            scale_spec: None,
         }
     }
 
@@ -133,30 +147,38 @@ impl VisibilityTransition {
             scale_from: 0.8,
             transform_origin: (0.5, 0.5),
             spec,
+            fade_spec: None,
+            size_spec: None,
+            slide_spec: None,
+            scale_spec: None,
         }
     }
     pub fn fade_in(spec: impl Into<AnimationSpec>) -> Self {
-        Self { fade: true, ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { fade: true, fade_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     pub fn fade_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::fade_in(spec)
     }
     pub fn expand_in(spec: impl Into<AnimationSpec>) -> Self {
-        Self { expand: true, ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { expand: true, size_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     pub fn shrink_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::expand_in(spec)
     }
     /// Horizontal expand (cf. Compose `expandHorizontally`).
     pub fn expand_in_h(spec: impl Into<AnimationSpec>) -> Self {
-        Self { expand_h: true, ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { expand_h: true, size_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     /// Horizontal shrink (cf. Compose `shrinkHorizontally`).
     pub fn shrink_out_h(spec: impl Into<AnimationSpec>) -> Self {
         Self::expand_in_h(spec)
     }
     pub fn slide_in(dir: SlideDirection, spec: impl Into<AnimationSpec>) -> Self {
-        Self { slide: Some((dir, SlideOffset::default())), ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { slide: Some((dir, SlideOffset::default())), slide_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     pub fn slide_out(dir: SlideDirection, spec: impl Into<AnimationSpec>) -> Self {
         Self::slide_in(dir, spec)
@@ -167,7 +189,8 @@ impl VisibilityTransition {
         offset: SlideOffset,
         spec: impl Into<AnimationSpec>,
     ) -> Self {
-        Self { slide: Some((dir, offset)), ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { slide: Some((dir, offset)), slide_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     pub fn slide_out_offset(
         dir: SlideDirection,
@@ -177,10 +200,56 @@ impl VisibilityTransition {
         Self::slide_in_offset(dir, offset, spec)
     }
     pub fn scale_in(spec: impl Into<AnimationSpec>) -> Self {
-        Self { scale: true, ..Self::base(spec.into()) }
+        let spec = spec.into();
+        Self { scale: true, scale_spec: Some(spec.clone()), ..Self::base(spec) }
     }
     pub fn scale_out(spec: impl Into<AnimationSpec>) -> Self {
         Self::scale_in(spec)
+    }
+
+    /// The spec the FADE channel runs on: its own if a builder gave it one, otherwise the shared one.
+    pub fn fade_spec(&self) -> &AnimationSpec {
+        self.fade_spec.as_ref().unwrap_or(&self.spec)
+    }
+
+    /// The spec the SIZE channel runs on (both expand axes — Compose animates one `IntSize`).
+    pub fn size_spec(&self) -> &AnimationSpec {
+        self.size_spec.as_ref().unwrap_or(&self.spec)
+    }
+
+    pub fn slide_spec(&self) -> &AnimationSpec {
+        self.slide_spec.as_ref().unwrap_or(&self.spec)
+    }
+
+    pub fn scale_spec(&self) -> &AnimationSpec {
+        self.scale_spec.as_ref().unwrap_or(&self.spec)
+    }
+
+    /// Combines two transitions the way Compose's `+` does: the channels are unioned, and each channel
+    /// keeps the spec of the side that turned it on (this receiver first — `self` wins when both enable
+    /// the same channel). The shared `spec` stays this side's.
+    ///
+    /// This is what makes per-channel timing expressible:
+    /// `VisibilityTransition::fade_in(delayed_tween) + VisibilityTransition::expand_in(spring)` fades
+    /// late while the size change starts at once.
+    pub fn plus(self, other: VisibilityTransition) -> VisibilityTransition {
+        VisibilityTransition {
+            fade: self.fade || other.fade,
+            alpha_from: if self.fade { self.alpha_from } else { other.alpha_from },
+            slide: self.slide.or(other.slide),
+            expand: self.expand || other.expand,
+            expand_from: if self.expand { self.expand_from } else { other.expand_from },
+            expand_h: self.expand_h || other.expand_h,
+            expand_from_h: if self.expand_h { self.expand_from_h } else { other.expand_from_h },
+            scale: self.scale || other.scale,
+            scale_from: if self.scale { self.scale_from } else { other.scale_from },
+            transform_origin: if self.scale { self.transform_origin } else { other.transform_origin },
+            spec: self.spec.clone(),
+            fade_spec: self.fade_spec.or(other.fade_spec),
+            size_spec: self.size_spec.or(other.size_spec),
+            slide_spec: self.slide_spec.or(other.slide_spec),
+            scale_spec: self.scale_spec.or(other.scale_spec),
+        }
     }
     /// Combine: overlay fade in/out
     pub fn with_fade(mut self) -> Self {
@@ -239,19 +308,25 @@ impl VisibilityTransition {
         self.transform_origin = transform_origin;
         self
     }
-    /// The draw-layer parameters this transition produces at `progress`, for a content box of
-    /// `content_extent`.
+    /// The draw-layer parameters this transition produces, for a content box of `content_extent`.
     ///
-    /// `progress` is how SETTLED the transition is: `1.0` is the resting state (whatever the
-    /// transition's flags are, they contribute nothing), `0.0` is the far end — an enter that has
-    /// not started, or an exit that has finished. An entering content therefore runs its progress
-    /// 0 → 1 and a leaving one runs 1 → 0, both through this one function; that is what lets a
-    /// crossfade's two halves be the same code with the two different transitions.
+    /// `values` is how SETTLED each channel is: `1.0` is the resting state (whatever the transition's
+    /// flags are, they contribute nothing), `0.0` is the far end — an enter that has not started, or an
+    /// exit that has finished. An entering content therefore runs its progress 0 → 1 and a leaving one
+    /// runs 1 → 0, both through this one function; that is what lets a crossfade's two halves be the
+    /// same code with the two different transitions. Compose animates each channel on its own clock, so
+    /// the channels are passed in separately; a single-clock caller passes `p` (or
+    /// `ChannelValues::uniform(p)`) and every channel moves together.
     ///
     /// The content extent is only needed by a `SlideOffset::Fraction` slide, which resolves
     /// against it.
-    pub fn layer_params(&self, progress: f32, content_extent: (f32, f32)) -> crate::graphics::GraphicsLayerParams {
-        let p = progress;
+    pub fn layer_params(
+        &self,
+        values: impl Into<ChannelValues>,
+        content_extent: (f32, f32),
+    ) -> crate::graphics::GraphicsLayerParams {
+        let values = values.into();
+        let p = values.fade;
         let mut params = crate::graphics::GraphicsLayerParams::default();
         if self.fade {
             // `alpha_from` is the alpha at progress 0 (Compose's `fadeIn(initialAlpha)`); 0.0 is the
@@ -259,7 +334,7 @@ impl VisibilityTransition {
             params.alpha = self.alpha_from + (1.0 - self.alpha_from) * p;
         }
         if self.scale {
-            let s = self.scale_from + (1.0 - self.scale_from) * p;
+            let s = self.scale_from + (1.0 - self.scale_from) * values.scale;
             params.scale_x = s;
             params.scale_y = s;
             params.transform_origin =
@@ -273,7 +348,7 @@ impl VisibilityTransition {
                 SlideDirection::Up | SlideDirection::Down => h,
             };
             let dist = offset.resolve(extent);
-            let off = (1.0 - p) * dist;
+            let off = (1.0 - values.slide) * dist;
             match dir {
                 SlideDirection::Left => params.translation_x = -off,
                 SlideDirection::Right => params.translation_x = off,
@@ -282,6 +357,43 @@ impl VisibilityTransition {
             }
         }
         params
+    }
+}
+
+impl std::ops::Add for VisibilityTransition {
+    type Output = VisibilityTransition;
+
+    /// `fadeIn(spec) + expandIn(spec)` — Compose's combination operator.
+    fn add(self, other: VisibilityTransition) -> VisibilityTransition {
+        self.plus(other)
+    }
+}
+
+/// The per-channel values a transition converts into layer parameters. Compose animates each channel
+/// on its own clock (`EnterExitTransition.kt`'s `Fade`/`Slide`/`Scale`/`ChangeSize` each carry an
+/// `animationSpec`), so they are passed separately here; a single-clock caller — `AnimatedContent`, or
+/// an `AnimatedVisibility` whose channels share one spec — passes `ChannelValues::uniform(p)`, and a
+/// `f32` converts to that automatically.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChannelValues {
+    /// The fade channel (Compose's `Fade.alpha`).
+    pub fade: f32,
+    /// The slide channel (Compose's `Slide.slideOffset`).
+    pub slide: f32,
+    /// The scale channel (Compose's `Scale.scale`).
+    pub scale: f32,
+}
+
+impl ChannelValues {
+    /// One progress for every channel.
+    pub fn uniform(progress: f32) -> Self {
+        Self { fade: progress, slide: progress, scale: progress }
+    }
+}
+
+impl From<f32> for ChannelValues {
+    fn from(progress: f32) -> Self {
+        Self::uniform(progress)
     }
 }
 
@@ -300,8 +412,11 @@ impl Default for VisibilityTransition {
     ///
     /// Two deliberate differences: winia expands BOTH axes by default (Compose picks the axis from the
     /// scope — a Row expands horizontally, a Column vertically — and winia has one default plus the
-    /// explicit `expand_in_h`/`with_expand_h` builders), and winia keeps ONE spec for every channel of a
-    /// transition where Compose gives each channel its own (`fadeIn(spring) + expandIn(spring2)`).
+    /// explicit `expand_in_h`/`with_expand_h` builders), and the shared `spec` below doubles as the
+    /// fallback for every channel. Per-channel specs ARE supported now — build the transition out of
+    /// builders and combine them (`fade_in(spec) + expand_in(other)`), or set one channel's spec
+    /// directly; a channel without its own spec uses this shared one, which is what a transition built
+    /// the old way (`fade_in(tween).with_expand()`) relies on.
     fn default() -> Self {
         Self {
             fade: true,
@@ -319,6 +434,10 @@ impl Default for VisibilityTransition {
                 threshold: 0.01,
                 ..crate::animation::SpringSpec::default()
             }),
+            fade_spec: None,
+            size_spec: None,
+            slide_spec: None,
+            scale_spec: None,
         }
     }
 }
