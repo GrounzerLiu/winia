@@ -42,14 +42,12 @@ use std::time::Duration;
 /// it (same shape as `animated_content.rs`).
 const GENERATION_ENTRY: u64 = 0xC205_0000_0000_0001;
 
-/// Compose `tween()`'s default easing, `FastOutSlowInEasing` = `CubicBezierEasing(0.2, 0, 0, 1)`.
-fn fast_out_slow_in() -> interpolator::CubicBezier {
-    interpolator::CubicBezier::new(0.2, 0.0, 0.0, 1.0)
-}
-
 /// Compose `Crossfade`'s default `animationSpec = tween()`: 300 ms, `FastOutSlowInEasing`.
 fn default_spec() -> AnimationSpec {
-    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(300), fast_out_slow_in()))
+    AnimationSpec::Tween(TweenSpec::new(
+        Duration::from_millis(300),
+        interpolator::fast_out_slow_in(),
+    ))
 }
 
 /// Content switch transition (both generations on screen, cross-fading).
@@ -338,6 +336,27 @@ mod tests {
     use crate::layout::node::LayoutNode;
     use crate::runtime::composer::Composer;
     use crate::runtime::state::State;
+
+    /// Compose's `Crossfade` default is `animationSpec = tween()`, i.e. 300 ms on the
+    /// `FastOutSlowInEasing` curve (`animation/Crossfade.kt:53`, `core/AnimationSpec.kt:816-820`).
+    /// This used to pass M3's emphasized curve `(0.2, 0, 0, 1)` while naming FastOutSlowIn.
+    #[test]
+    fn the_default_spec_is_compares_300ms_fast_out_slow_in() {
+        match default_spec() {
+            crate::animation::AnimationSpec::Tween(spec) => {
+                assert_eq!(spec.duration, std::time::Duration::from_millis(300));
+                assert!(spec.delay.is_zero());
+                // The curve, sampled where the two easings differ most.
+                // Values solved independently (bisection on the bezier) and pinned in
+                // `animation::interpolator::tests::fast_out_slow_in_is_compares_default_easing`.
+                assert!((spec.interpolator.interpolate(0.25) - 0.2366).abs() < 0.005,
+                    "FastOutSlowIn(0.25) = {}", spec.interpolator.interpolate(0.25));
+                assert!((spec.interpolator.interpolate(0.75) - 0.9594).abs() < 0.005,
+                    "FastOutSlowIn(0.75) = {}", spec.interpolator.interpolate(0.75));
+            }
+            other => panic!("Crossfade's default must be a tween, got {other:?}"),
+        }
+    }
 
     /// Test leaf: its width reflects the state (page=0 → 50, anything else → 200).
     struct SizedLeaf {

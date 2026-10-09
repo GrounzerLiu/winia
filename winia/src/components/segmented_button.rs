@@ -688,6 +688,7 @@ impl SegmentedButton {
                                 let a_icon = icon;
                                 let i_icon = inactive_icon;
                                 crate::components::crossfade::Crossfade::new(active_state)
+                                    .animation(segmented_icon_crossfade_spec())
                                     .build(ctx, move |ctx, is_active| {
                                         let chosen = if is_active { a_icon.clone() } else { i_icon.clone() };
                                         let inner: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync> =
@@ -737,6 +738,24 @@ impl SegmentedButton {
     }
 }
 
+/// The two icons of a checked item swap through Compose's `Crossfade`, and that call passes the
+/// `DefaultEffects` token explicitly — `material3/SegmentedButton.kt:653-656`:
+/// `Crossfade(targetState = active, animationSpec = MotionSchemeKeyTokens.DefaultEffects.value())`. So
+/// this crossfade is a spring (1.0 / 1600), NOT the framework default `tween()`. winia left it at the
+/// framework default (300 ms, `FastOutSlowInEasing`), which is the difference fixed here.
+fn segmented_icon_crossfade_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
+}
+
+/// The selected-item slot's slide, on M3's `FastSpatial` token: `SegmentedButton.kt:391` builds its
+/// content measure policy with `MotionSchemeKeyTokens.FastSpatial.value<Int>()`, and that policy is the
+/// one animating the icon/content offset — the counterpart of winia's `slot_offset`. Damping 0.9 /
+/// stiffness 1400 (`tokens/StandardMotionTokens.kt:24-25`); winia used `SpringSpec::default()`
+/// (no-bouncy, 200), which neither matched the token nor matched winia's own comment.
+fn segmented_slot_offset_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
+}
+
 /// The item's content layout: an optional icon, then the label, which slides by the animated slot
 /// offset — Compose's `SegmentedButtonContentMeasurePolicy` with its `Animatable<Int>` offset.
 ///
@@ -748,15 +767,6 @@ impl SegmentedButton {
 /// mirror, so this is a deliberate difference — a check mark on the *leading* side of the text is
 /// what the rest of winia does (a `Row` mirrors its children), and a row whose items mirror while
 /// their contents do not reads as a mistake next to them.
-/// The selected-item slot's slide, on M3's `FastSpatial` token: `SegmentedButton.kt:391` builds its
-/// content measure policy with `MotionSchemeKeyTokens.FastSpatial.value<Int>()`, and that policy is the
-/// one animating the icon/content offset — the counterpart of winia's `slot_offset`. Damping 0.9 /
-/// stiffness 1400 (`tokens/StandardMotionTokens.kt:24-25`); winia used `SpringSpec::default()`
-/// (no-bouncy, 200), which neither matched the token nor matched winia's own comment.
-fn segmented_slot_offset_spec() -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
-}
-
 #[derive(Debug)]
 struct SegmentedButtonContentPolicy {
     slot_offset: crate::runtime::state::State<f32>,
@@ -938,6 +948,19 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
 mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
+    /// The icon swap's crossfade runs on M3's `DefaultEffects` spring, as
+    /// `SegmentedButton.kt:655` passes explicitly — not on the framework's `tween()` default.
+    #[test]
+    fn the_icon_crossfade_runs_on_m3s_default_effects_spring() {
+        match segmented_icon_crossfade_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (1.0, 1600.0));
+            }
+            other => panic!("the icon crossfade must be a spring, got {other:?}"),
+        }
+    }
+
     use crate::layout::LayoutDirection;
     use crate::components::text::Text;
 

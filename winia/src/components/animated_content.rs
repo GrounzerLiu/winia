@@ -49,17 +49,12 @@ use std::time::Duration;
 /// it.
 const GENERATION_ENTRY: u64 = 0xA11C_0000_0000_0001;
 
-/// Compose `tween()`'s default easing, `FastOutSlowInEasing` = `CubicBezierEasing(0.2, 0, 0, 1)`.
-fn fast_out_slow_in() -> interpolator::CubicBezier {
-    interpolator::CubicBezier::new(0.2, 0.0, 0.0, 1.0)
-}
-
 /// Compose `AnimatedContent`'s default enter: `fadeIn(tween(220, delayMillis = 90)) +
 /// scaleIn(0.92, tween(220, delayMillis = 90))` — the incoming content waits out the outgoing one's
 /// 90 ms fade before it starts, which is the staggered default the component's docs describe.
 fn default_enter() -> VisibilityTransition {
     VisibilityTransition::fade_in(
-        TweenSpec::new(Duration::from_millis(220), fast_out_slow_in())
+        TweenSpec::new(Duration::from_millis(220), interpolator::fast_out_slow_in())
             .delay(Duration::from_millis(90)),
     )
     .with_scale_from(0.92, (0.5, 0.5))
@@ -67,7 +62,7 @@ fn default_enter() -> VisibilityTransition {
 
 /// Compose's default exit: `fadeOut(tween(90))` — out fast, in slow.
 fn default_exit() -> VisibilityTransition {
-    VisibilityTransition::fade_out(TweenSpec::new(Duration::from_millis(90), fast_out_slow_in()))
+    VisibilityTransition::fade_out(TweenSpec::new(Duration::from_millis(90), interpolator::fast_out_slow_in()))
 }
 
 /// Content switch transition (both generations on screen: one layer per enter/exit, plus

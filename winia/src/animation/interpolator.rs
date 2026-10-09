@@ -1274,6 +1274,17 @@ interpolator!(
 // 运行时自定义缓动（对标 Compose CubicBezierEasing / PathEasing）
 // ═══════════════════════════════════════════════════════════
 
+/// Compose's `FastOutSlowInEasing`: the curve `tween()` uses when a spec names no easing —
+/// `CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)` (`animation/core/Easing.kt:50`), and therefore the
+/// default of every `tween(durationMillis)` in Compose.
+///
+/// It is NOT M3's `MotionTokens.EasingEmphasizedCubicBezier`, which is `(0.2, 0, 0, 1)`
+/// (`material3/tokens/MotionTokens.kt:40`) — winia's components used to pass those four numbers while
+/// naming this easing, and the two curves are visibly different (emphasized is gentler early).
+pub fn fast_out_slow_in() -> CubicBezier {
+    CubicBezier::new(0.4, 0.0, 0.2, 1.0)
+}
+
 /// 三次贝塞尔缓动（对标 Compose `CubicBezierEasing`）——运行时曲线，
 /// 不预采样查表：x→t 用牛顿迭代 + 二分兜底求解，然后采样 y。
 ///
@@ -1376,6 +1387,49 @@ impl From<PathEasing> for std::sync::Arc<dyn Interpolator> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fast_out_slow_in()` really is Compose's `CubicBezierEasing(0.4, 0.0, 0.2, 1.0)` and not M3's
+    /// emphasized curve `(0.2, 0, 0, 1)` the two components used to pass under this name.
+    ///
+    /// The expected values are solved here independently (bisection on the bezier's x, then y), so this
+    /// does not just re-run the implementation.
+    #[test]
+    fn fast_out_slow_in_is_compares_default_easing() {
+        let expected = |x: f32| -> f32 {
+            let (p1x, p1y, p2x, p2y) = (0.4f32, 0.0f32, 0.2f32, 1.0f32);
+            let bez = |a: f32, b: f32, t: f32| {
+                let mt = 1.0 - t;
+                3.0 * mt * mt * t * a + 3.0 * mt * t * t * b + t * t * t
+            };
+            let (mut lo, mut hi) = (0.0f32, 1.0f32);
+            for _ in 0..40 {
+                let mid = 0.5 * (lo + hi);
+                if bez(p1x, p2x, mid) < x {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            bez(p1y, p2y, 0.5 * (lo + hi))
+        };
+
+        let curve = fast_out_slow_in();
+        for x in [0.0f32, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0] {
+            let got = curve.interpolate(x);
+            assert!(
+                (got - expected(x)).abs() < 1e-3,
+                "fast_out_slow_in({x}) = {got}, expected {}",
+                expected(x)
+            );
+        }
+        // The two curves are far apart early — this is the bug that was fixed, so pin the difference.
+        let emphasized = CubicBezier::new(0.2, 0.0, 0.0, 1.0);
+        assert!(
+            (curve.interpolate(0.25) - emphasized.interpolate(0.25)).abs() > 0.05,
+            "FastOutSlowIn and M3's emphasized easing must not be interchangeable"
+        );
+        assert!(curve.interpolate(0.5) > 0.75, "FastOutSlowIn rushes through the middle: {}", curve.interpolate(0.5));
+    }
 
     /// CubicBezier：端点精确、对称曲线中点 ≈ 0.5、单调递增
     #[test]
