@@ -3,10 +3,12 @@
 //! 验证 compose → layout → render 端到端正确性。所有断言均为语义级
 //!（允许 ±10 颜色容差），不依赖像素精确匹配。
 
-use winia::core::composer::{Composer, ComposeCtx};
+use winia::runtime::composer::{Composer, ComposeCtx};
 use winia::layout::constraints::Constraints;
-use winia::modifier::{Modifier, Color, Shape};
-use winia::ui::{Text, Button, Column, Row, FloatingActionButton, FloatingActionButtonSize, Icon};
+use winia::modifier::{Modifier};
+use winia::graphics::{Color, Shape};
+use winia::components::{Text, Button, FloatingActionButton, FloatingActionButtonSize, Icon};
+use winia::layout::{Column, Row};
 use winia::render;
 
 // ── 辅助 ──
@@ -170,7 +172,7 @@ fn floating_action_button_renders_rounded_shape_and_content() {
         });
     }));
 
-    let theme = winia::ui::theme::ThemeColors::default_light();
+    let theme = winia::theme::ThemeColors::default_light();
     let center = pixel(&mut surface, 28, 28);
     assert!(color_close(
         (center.0, center.1, center.2),
@@ -324,7 +326,7 @@ fn z_index_reorders_sibling_painting() {
 // semantics tree names a color. Each test states the gradient's direction and then asserts what the
 // renderer actually put at the two ends and the middle.
 
-use winia::brush::{Brush, BrushTile};
+use winia::graphics::{Brush, BrushTile};
 
 const RED: (u8, u8, u8) = (255, 0, 0);
 const BLUE: (u8, u8, u8) = (0, 0, 255);
@@ -338,10 +340,10 @@ fn blue() -> Color {
 }
 
 /// Draw one `w`x`h` node filled with `brush` — a value or a closure, as the modifier takes.
-fn brush_scene(brush: impl Into<winia::brush::BrushSource>, w: f32, h: f32) -> skia_safe::Surface {
+fn brush_scene(brush: impl Into<winia::graphics::BrushSource>, w: f32, h: f32) -> skia_safe::Surface {
     let brush = brush.into();
     let (mut surface, _) = render_ui(w, h, winia::app_root!(move |ctx| {
-        use winia::ui::layout_components::Column;
+        use winia::layout::components::Column;
         Column::new()
             .modifier(Modifier::new().size(w, h).background_brush(brush, Shape::Rectangle))
             .build(ctx, |_| {});
@@ -461,7 +463,7 @@ fn explicit_stops_place_the_colors() {
 #[test]
 fn a_gradient_is_clipped_to_the_shape() {
     let (mut surface, _) = render_ui(100.0, 100.0, winia::app_root!(move |ctx| {
-        use winia::ui::layout_components::Column;
+        use winia::layout::components::Column;
         Column::new()
             .modifier(Modifier::new().size(100.0, 100.0).background_brush(
                 Brush::linear_gradient([Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)]),
@@ -486,7 +488,7 @@ fn a_tile_mode_repeats_or_mirrors_past_the_gradient() {
     // the ramp's second half stayed blue under every mode, so the stop positions were the wrong lever.)
     let ramps = |tile: BrushTile, x: i32| -> u8 {
         let (mut surface, _) = render_ui(100.0, 10.0, winia::app_root!(move |ctx| {
-            use winia::ui::layout_components::Column;
+            use winia::layout::components::Column;
             Column::new()
                 .modifier(Modifier::new().size(100.0, 10.0).background_brush(
                     Brush::linear_gradient([Color::from_argb(255, 255, 0, 0), Color::from_argb(255, 0, 0, 255)])

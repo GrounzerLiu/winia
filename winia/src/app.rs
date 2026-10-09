@@ -1,12 +1,31 @@
 //! 应用壳 — run_app + 窗口管理 + 事件循环（多窗口）
 
-use std::time::Instant;
+pub mod gesture;
+pub mod overlay_host;
 
-use crate::core::composer::{ComposeCtx, Composer};
+use gesture::{
+    GestureState, PtrDownState,    drag_scroll_up, fire_gesture_action, fire_in_gesture_arena, gesture_down,
+    gesture_move, gesture_up, inner_component_drag, path_drag_idx, path_scroll_idx,
+    press_gesture_target, process_pending_taps_on_down,
+};
+use overlay_host::{
+    OverlayHost,
+    begin_overlay_close, claim_keyboard_for_overlay, exec_overlay_click, focus_scope_is_open, hit_overlay, keyboard_scope,
+    layout_overlays, overlay_down, overlay_drag_up, overlay_exit_hover_at,
+    overlay_update_hover, render_overlays, sync_overlays,
+};
+pub mod scroll;
+pub mod window;
+
+use scroll::{
+    dispatch_nested_scroll_delta, dispatch_nested_scroll_fling,
+    find_scroll_target, scroll_delta_with_shift, DragScroll,
+};
+
+use crate::runtime::composer::{ComposeCtx, Composer};
 use crate::debug;
 use crate::layout::constraints::Constraints;
-use crate::debug_log;
-use crate::layout::node::{hit_test, hit_test_with_flights, focus_next, focus_prev, LayoutNode};
+use crate::layout::node::{hit_test_with_flights, focus_next, focus_prev, LayoutNode};
 use crate::render;
 
 /// 拖拽/嵌套滚动调试 trace 开关（debug_assertions 下 + 环境变量 WINIA_DRAG_TRACE）。
@@ -20,14 +39,14 @@ pub(crate) fn drag_trace_enabled() -> bool {
     false
 }
 
-pub(crate) struct PendingWindow {
+struct PendingWindow {
     pub width: f32,
     pub height: f32,
     pub title: String,
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
-    pub theme: Option<crate::ui::theme::WindowTheme>,
+    pub theme: Option<crate::theme::WindowTheme>,
 }
 use skiwin::capture::{request_capture, take_capture};
 use skiwin::{SkiaWindow, SkiaWindowTrait};
@@ -38,7 +57,48 @@ use winit::application::ApplicationHandler;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::WindowId;
+use winit::window::{ImeRequest, WindowId};
+
+/// Tell the window whether it takes IME text input.
+///
+/// `Window::set_ime_allowed(bool)` is deprecated; the replacement is an `ImeRequest`, which carries
+/// the cursor area and the hint/purpose alongside the flag. winia has no model for either — no
+/// component asks for a numeric keyboard and nothing reports the caret's screen box to the OS (the
+/// gap `docs/text-field.md` records) — so this reproduces what winit's own deprecated shim did
+/// (`winit-core/src/window.rs:1338-1356`) and keeps the two parts separable: the enable path is the
+/// one that has to change when the hint plumbing lands, and the disable path is `ImeRequest::Disable`
+/// exactly.
+///
+/// The request returns a `Result`; winit's platforms treat a refused IME update as non-fatal, and
+/// there is nothing here to fall back to, so it is dropped like the shim drops it.
+pub(crate) fn set_ime_enabled(sw: &SkiaWindow, enabled: bool) {
+    let request = if enabled {
+        ime_enable_request()
+    } else {
+        ImeRequest::Disable
+    };
+    let _ = sw.request_ime_update(request);
+}
+
+/// The enable half, with winit's placeholder values spelled out.
+///
+/// The cursor area is `0x0 at 0,0` — winit's own comment where this came from reads "there's nothing
+/// sensible to use here by default". A real one needs the focused node's caret rectangle in window
+/// coordinates, which is what the composed tree knows and the OS does not.
+fn ime_enable_request() -> ImeRequest {
+    use winit::window::{ImeCapabilities, ImeEnableRequest, ImeHint, ImePurpose, ImeRequestData};
+    let capabilities = ImeCapabilities::new().with_hint_and_purpose().with_cursor_area();
+    let data = ImeRequestData::default()
+        .with_hint_and_purpose(ImeHint::NONE, ImePurpose::Normal)
+        .with_cursor_area(
+            winit::dpi::LogicalPosition::new(0.0, 0.0).into(),
+            winit::dpi::LogicalSize::new(0.0, 0.0).into(),
+        );
+    ImeRequest::Enable(
+        ImeEnableRequest::new(capabilities, data)
+            .expect("the capabilities and the data above cover the same two fields"),
+    )
+}
 
 /// 方向键焦点导航方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +112,77 @@ fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
         .and_then(|v| v.refresh_rate_millihertz())
         .map(|m| m.get())?;
     Some(std::time::Duration::from_nanos(1_000_000_000_000 / mhz as u64))
+}
+
+// ── WindowThemeState ──
+
+/// What this window draws with, and what it has already drawn with.
+///
+/// The pair has to move together: `applied` is the comparison that decides whether a theme change
+/// needs the tree to run again (a component resolved its colours and type when it composed, so a
+/// new palette is invisible until it recomposes). One field on `PerWindow` now, two values that
+/// only mean anything next to each other.
+struct WindowThemeState {
+    /// The palette this window clears with, and the typography/direction its tree resolved. Shared
+    /// with the `Window` node that manages the window (which re-samples all of it every frame) —
+    /// see `theme::WindowTheme`.
+    pub(crate) cell: crate::theme::WindowTheme,
+    /// The values `cell` last resolved to, i.e. what the tree has already drawn with.
+    pub(crate) applied: crate::theme::AppliedTheme,
+}
+
+impl WindowThemeState {
+    /// A window with the given intent: its palette is whatever the caller passed (nothing to follow),
+    /// and its type scale is the default.
+    pub(crate) fn from_theme(theme: crate::theme::ThemeColors) -> Self {
+        let cell = crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Fixed(theme));
+        let applied = cell.applied();
+        Self { cell, applied }
+    }
+}
+
+// ── FrameClock ──
+
+/// The frame clock: the throttle, the counters, and the give-up state.
+///
+/// Split out of `PerWindow` because these eight fields are only ever read and written by the frame
+/// loop's own bookkeeping — nothing outside `app.rs` touches them, and together they are what makes
+/// "should this frame be drawn" have an answer.
+struct FrameClock {
+    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
+    pub(crate) frame_counter: u64,
+    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
+    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
+    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
+    pub(crate) last_request_time: std::time::Instant,
+    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
+    /// 切换）需重建窗口——当前不做动态跟踪）
+    pub(crate) frame_interval: std::time::Duration,
+    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
+    pub(crate) force_redraw: bool,
+    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
+    pub(crate) consecutive_panics: u32,
+    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
+    pub(crate) render_disabled: bool,
+    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
+    pub(crate) last_render_time: std::time::Instant,
+    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
+    pub(crate) last_refresh_check: std::time::Instant,
+}
+
+impl Default for FrameClock {
+    fn default() -> Self {
+        Self {
+            frame_counter: 0,
+            last_request_time: std::time::Instant::now(),
+            frame_interval: std::time::Duration::from_millis(16),
+            force_redraw: false,
+            consecutive_panics: 0,
+            render_disabled: false,
+            last_render_time: std::time::Instant::now(),
+            last_refresh_check: std::time::Instant::now(),
+        }
+    }
 }
 
 // ── PerWindow ──
@@ -68,93 +199,13 @@ pub(crate) struct PerWindow {
     ///   dependents (suite scaffolds reading `window_size()`) dirty for recompose.
     /// - `window_size_backchannel`: per-frame sync without notify (replaces the
     ///   old silent write on the shared State — same value, Backchannel write).
-    window_size_state: std::cell::RefCell<Option<crate::core::state::State<(f32, f32)>>>,
-    window_size_backchannel: std::cell::RefCell<Option<crate::core::state::Backchannel<(f32, f32)>>>,
+    window_size_state: std::cell::RefCell<Option<crate::runtime::state::State<(f32, f32)>>>,
+    window_size_backchannel: std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
-    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
-    pub(crate) frame_counter: u64,
-    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
-    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
-    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
-    last_request_time: std::time::Instant,
-    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
-    /// 切换）需重建窗口——当前不做动态跟踪）
-    pub(crate) frame_interval: std::time::Duration,
-    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
-    pub(crate) force_redraw: bool,
-    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
-    pub(crate) consecutive_panics: u32,
-    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
-    pub(crate) render_disabled: bool,
 
-    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
-    pub(crate) last_render_time: std::time::Instant,
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
-    /// 指针按下态（Compose 风格 click 检测）
-    pointer_down_state: Option<PtrDownState>,
-    /// 最近的 PointerKind（Move 事件继承自上一个 Down）
-    last_pointer_kind: crate::modifier::PointerKind,
-    /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
-    /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
-    /// 需记录指针位置；PointerLeft 时由调用方清空）
-    last_pointer_pos: Option<(f32, f32)>,
-    /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
-    pointer_down_slot: Option<u64>,
-    /// 手势状态机（单活动手势——down 创建，up/cancel 销毁）
-    gesture: Option<crate::input::gesture::GestureTracker>,
-    /// 手势回调路由：手势节点 id
-    gesture_node: Option<u64>,
-    /// 双击上下文（上次 tap 的节点/时刻/位置——跨手势传递；
-    /// 绑定节点——不同节点的手势不共享双击计数）
-    gesture_tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
-    /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
-    gesture_slot: Option<u64>,
-    /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
-    /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
-    /// while a gesture — or a deferred tap — is still in flight.
-    gesture_arena: Option<u64>,
-    /// Dominant axis the current gesture locked onto: decided once, on the first move that is
-    /// decisive, and kept for the rest of the gesture (see `gesture_move`). `None` while undecided.
-    gesture_axis: Option<crate::input::gesture::ScrollAxis>,
-    /// Scroll ancestor recorded for the current gesture when the press landed on an inner drag
-    /// component (a swipeable row inside a list): if the finger turns out to move along the
-    /// scroll's axis, the gesture is handed to that node and the component's drag is cancelled.
-    /// `None` for a press with no scroll on its hit path.
-    gesture_scroll_slot: Option<u64>,
-    /// The arena's screen origin, FROZEN when the gesture started. The gesture measures displacement
-    /// against it, so an overlay that MOVES under the finger must not add its own motion: the expanded
-    /// `SearchBar` slides for `SEARCH_BAR_EXPAND_MS` and is pressable while it moves, and reading the
-    /// live origin turned a stationary finger into a slop-exceeding drag that cancelled the tap
-    /// (`a_tap_survives_its_own_popup_moving`).
-    gesture_arena_origin: (f32, f32),
-    /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
-    drag_scroll: Option<DragScroll>,
-    /// 顶层弹出层（独立组合单元——渲染在主树之上）
-    overlays: Vec<OverlayWindow>,
-    /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
-    overlay_click: Option<(usize, (f32, f32), u64)>,
-    /// overlay 拖拽会话（down 命中 overlay 且有 on_drag 的节点时建立——
-    /// (overlay index, 节点 slot_key, 拖拽起点 scene)）。overlay 是独立
-    /// composer，拖拽走 overlay 内容节点的 on_drag/on_drag_end。
-    overlay_drag: Option<(usize, u64, (f32, f32))>,
-    /// The overlay's screen origin frozen when the drag started — the absolute `pos` handed to
-    /// `on_drag_start` / `on_drag` is arena-local, and an overlay that moves during the drag must not
-    /// inject its own motion into it (the deltas are scene-space and unaffected).
-    overlay_drag_origin: (f32, f32),
-    /// overlay 拖拽是否已越过 slop 触发 DragStart
-    overlay_drag_started: bool,
-    /// overlay 拖拽上一次 move 位置（增量计算用）
-    overlay_drag_last: Option<(f32, f32)>,
-    /// overlay 内的可滚动容器（独立 Composer——嵌套滚动用，列表到顶下拉拖 Sheet）
-    overlay_drag_scroll: Option<DragScroll>,
-    /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
-    /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
-    /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
-    pending_taps: Vec<crate::input::gesture::PendingTap>,
-    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
-    last_refresh_check: std::time::Instant,
     /// 当前窗口修饰键状态（ModifiersChanged 按 WindowId 维护）
     pub(crate) modifiers: winit::keyboard::ModifiersState,
     /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
@@ -163,110 +214,29 @@ pub(crate) struct PerWindow {
     /// 外层收不到 Enter（Tooltip 锚点挂 hoverable 时内部 Button 抢走事件））
     hovered_slots: std::collections::HashSet<u64>,
     /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
-    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
+    pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     focused_interaction_slot: Option<u64>,
-    /// Overlay focus interaction target (overlay id, slot) — overlay inputs
-    /// report is_focused() only after emit_focus in their own arena.
-    overlay_focused_interaction: Option<(u64, u64)>,
-    /// What this window draws with — the palette it clears the surface with, and the typography/direction
-    /// its tree resolved. Shared with the `Window` node that manages the window (which re-samples all of it
-    /// every frame) — see `ui::theme::WindowTheme`.
-    theme_cell: crate::ui::theme::WindowTheme,
-    /// The PAGE's focus while a focus-scope overlay owns the keyboard: a slot key, not a flag on the
-    /// tree. Exactly one layer shows a focus ring (the keyboard owner), and the ones below remember
-    /// theirs here — see `claim_keyboard_for_overlay` / `release_keyboard_to_lower_layer`.
-    suspended_focus_slot: Option<u64>,
-    /// The values `theme_cell` last resolved to, i.e. what the tree has already drawn with.
-    theme_applied: crate::ui::theme::AppliedTheme,
+    /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
+    theme: WindowThemeState,
+    /// The frame's clock: when it last rendered and last asked to, how fast it should be
+    /// going, and whether it has given up (see `FrameClock`).
+    clock: FrameClock,
+    /// The pointer and gesture state: what is down, what a gesture locked onto, and the
+    /// sessions it opened (see `GestureState` — fourteen fields that used to be here).
+    pub(crate) input: GestureState,
+    /// The overlay host: the layers, and the interaction state that only makes sense against
+    /// them (see `OverlayHost` — the group that used to be ten fields here).
+    pub(crate) overlay: OverlayHost,
 }
 
-/// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
-/// 渲染定位在主树之上（模态遮罩 + 内容）
-struct OverlayWindow {
-    id: u64,
-    composer: crate::core::composer::Composer,
-    anchor_slot: Option<u64>,
-    position: crate::ui::overlay::PopupPosition,
-    offset: (f32, f32),
-    /// Grow the panel out of its anchor along both axes (see `OverlayDesc::anchor_slide`).
-    anchor_slide: Option<crate::ui::overlay::AnchorSlide>,
-    modal: bool,
-    dismiss_on_outside: bool,
-    click_passthrough: bool,
-    /// Fit this overlay inside the window around its anchor (see `OverlayDesc::fit_around_anchor`).
-    fit_around_anchor: bool,
-    /// Take exactly the anchor's width (see `OverlayDesc::match_anchor_width`).
-    match_anchor_width: bool,
-    on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
-    content: Box<dyn Fn(&mut ComposeCtx)>,
-    /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
-    /// 时重放（overlay 独立 Composer 继承主树主题/方向/排版）
-    local_snapshot: crate::core::composition_local::LocalSnapshot,
-    /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
-    screen_pos: (f32, f32),
-    /// The anchor's window rect `(x, y, w, h)`, resolved each layout pass (the only pass that knows it).
-    /// Kept for the render: an animation that grows out of the anchor needs both rects, and material3's
-    /// menus compute their transform origin from exactly these two (`calculateTransformOrigin`).
-    anchor_rect: Option<(f32, f32, f32, f32)>,
-    /// 该 overlay 内当前 hover 的 hoverable slot 集合（独立于主树——
-    /// overlay 是独立 composer，slot 与主树可能重复）
-    hovered_slots: std::collections::HashSet<u64>,
-    /// 该 overlay 内当前按下 的 interaction source（Press 波纹——up/取消时释放）
-    pressed_interaction: Option<(u64, crate::ui::interaction::MutableInteractionSource)>,
-    /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
-    /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
-    /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
-    progress: Option<crate::core::state::Animating<f32>>,
-    /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
-    enter_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
-    /// 退出动画规格（None = 瞬时消失）
-    exit_anim: Option<crate::ui::overlay::OverlayAnimSpec>,
-    /// Closing in progress (exit animation playing — kept rendered until done;
-    /// no interaction meanwhile)
-    closing: bool,
-    /// When `closing` was set. The exit animation is expected to finish long before
-    /// [`CLOSING_DEADLINE`]; if it never reports done (an interrupted or never-advanced tween), a
-    /// closing overlay would otherwise keep rendering its modal scrim forever — which is exactly what a
-    /// user saw: the sheet gone, the dim layer still over the page.
-    closing_since: Option<std::time::Instant>,
-    /// Focused node id inside this overlay's own arena (overlay keyboards route
-    /// here — the main-tree focus path can never reach overlay nodes).
-    /// None = no focus in this overlay.
-    focused_id: Option<u64>,
-    /// Slot key of the focused node (stable across recompositions — focus is
-    /// restored by slot_key after layout, mirroring the main tree).
-    focused_slot_key: Option<u64>,
-    /// Whether this overlay owns the keyboard while it is open (see
-    /// [`crate::ui::overlay::OverlayDesc::focus_scope`]).
-    focus_scope: bool,
-    /// Whether Escape closes this overlay (Compose's `DialogProperties.dismissOnBackPress`). Copied
-    /// from [`crate::ui::overlay::OverlayDesc::dismiss_on_back_press`] and read by [`PerWindow::escape_key`].
-    dismiss_on_back_press: bool,
-    /// Has this overlay already suspended the page's focus? Claiming is a ONE-TIME transition, and
-    /// this is what keeps it one: re-running it every frame walked the whole main tree and called
-    /// into the IME on every frame of a modal's life.
-    claimed_keyboard: bool,
-}
-
-/// Compose 风格的 click 检测中间状态
-struct PtrDownState {
-    node_id: u64,
-    position: (f32, f32),
-    time: Instant,
-    /// 文本选区的起始字符位置（Down 时记录）
-    selection_anchor: Option<usize>,
-    /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
-    anchor_registrar: Option<crate::ui::selection_container::SelectionRegistrar>,
-}
 
 impl PerWindow {
-    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::ui::theme::ThemeColors) -> Self {
+    fn new(content: Box<dyn Fn(&mut ComposeCtx)>, width: f32, height: f32, theme: crate::theme::ThemeColors) -> Self {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
-        let theme_cell = crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Fixed(theme));
-        let theme_applied = theme_cell.applied();
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, suspended_focus_slot: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme_applied, focused_slot_key: None, pointer_down_state: None, last_pointer_kind: crate::modifier::PointerKind::Mouse { button: crate::modifier::PointerButton::Primary }, last_pointer_pos: None, pointer_down_slot: None, gesture: None, gesture_node: None, gesture_tap_ctx: None, gesture_slot: None, gesture_arena: None, gesture_arena_origin: (0.0, 0.0), gesture_axis: None, gesture_scroll_slot: None, drag_scroll: None, overlays: Vec::new(), overlay_click: None, overlay_drag: None, overlay_drag_origin: (0.0, 0.0), overlay_drag_started: false, overlay_drag_last: None, overlay_drag_scroll: None, pending_taps: Vec::new(), frame_counter: 0, last_render_time: std::time::Instant::now(), frame_interval: std::time::Duration::from_millis(16), force_redraw: false, consecutive_panics: 0, render_disabled: false, last_request_time: std::time::Instant::now(), last_refresh_check: std::time::Instant::now(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None, overlay_focused_interaction: None, theme_cell }
+        let theme = WindowThemeState::from_theme(theme);
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -308,18 +278,18 @@ impl PerWindow {
     /// no cursor, no blink, no focused colors. Tracks (overlay id, slot); called
     /// after layout_overlays (slot resolution needs overlay layout done).
     fn sync_overlay_focus_interaction(&mut self) {
-        let cur: Option<(u64, u64)> = (0..self.overlays.len()).rev().find_map(|i| {
-            let ov = &self.overlays[i];
+        let cur: Option<(u64, u64)> = (0..self.overlay.layers.len()).rev().find_map(|i| {
+            let ov = &self.overlay.layers[i];
             if ov.closing {
                 return None;
             }
             ov.focused_slot_key.map(|s| (ov.id, s))
         });
-        if cur == self.overlay_focused_interaction {
+        if cur == self.overlay.focused_interaction {
             return;
         }
-        if let Some((old_id, old_slot)) = self.overlay_focused_interaction.take() {
-            if let Some(ov) = self.overlays.iter().find(|o| o.id == old_id) {
+        if let Some((old_id, old_slot)) = self.overlay.focused_interaction.take() {
+            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == old_id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, old_slot) {
@@ -333,14 +303,14 @@ impl PerWindow {
             }
         }
         if let Some((id, slot)) = cur {
-            if let Some(ov) = self.overlays.iter().find(|o| o.id == id) {
+            if let Some(ov) = self.overlay.layers.iter().find(|o| o.id == id) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
                         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
                             if let Some(src) = nodes[idx].modifier.focusable_interaction() {
                                 src.emit_focus();
-                                self.overlay_focused_interaction = Some((id, slot));
+                                self.overlay.focused_interaction = Some((id, slot));
                             }
                         }
                     }
@@ -362,13 +332,13 @@ impl PerWindow {
     /// the IME off while moving focus inside a dialog's text field.
     fn apply_ime_for_focus_in(&self, overlay: Option<usize>, fid: Option<u64>) {
         let root = match overlay {
-            Some(i) => self.overlays.get(i).and_then(|ov| ov.composer.layout_root_idx()),
+            Some(i) => self.overlay.layers.get(i).and_then(|ov| ov.composer.layout_root_idx()),
             None => self.composer.layout_root_idx(),
         };
         let wants_ime = match (root, fid) {
             (Some(r), Some(fid)) => {
                 let nodes = match overlay {
-                    Some(i) => self.overlays[i].composer.arena_nodes(),
+                    Some(i) => self.overlay.layers[i].composer.arena_nodes(),
                     None => self.composer.arena_nodes(),
                 };
                 crate::layout::node::find_node_by_id(nodes, r, fid)
@@ -378,7 +348,7 @@ impl PerWindow {
             _ => false,
         };
         if let Some(ref sw) = self.skia_window {
-            sw.set_ime_allowed(wants_ime);
+            set_ime_enabled(&sw, wants_ime);
         }
     }
 
@@ -388,15 +358,15 @@ impl PerWindow {
     fn refresh_frame_interval(&mut self) {
         const RECHECK_MIN: std::time::Duration = std::time::Duration::from_millis(300);
         let now = std::time::Instant::now();
-        if now.duration_since(self.last_refresh_check) < RECHECK_MIN {
+        if now.duration_since(self.clock.last_refresh_check) < RECHECK_MIN {
             return;
         }
-        self.last_refresh_check = now;
+        self.clock.last_refresh_check = now;
         let Some(ref sw) = self.skia_window else { return; };
         let Some(interval) = current_frame_interval(sw) else { return; };
-        if interval != self.frame_interval {
-            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.frame_interval, interval);
-            self.frame_interval = interval;
+        if interval != self.clock.frame_interval {
+            debug_log!("[refresh] frame_interval {:?} -> {:?}", self.clock.frame_interval, interval);
+            self.clock.frame_interval = interval;
             if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
         }
     }
@@ -414,8 +384,8 @@ impl PerWindow {
                 fire_gesture_action(nodes, r, t.slot_key, action);
             }
             Some(id) => {
-                let Some(i) = self.overlays.iter().position(|o| o.id == id) else { return; };
-                let ov = &self.overlays[i];
+                let Some(i) = self.overlay.layers.iter().position(|o| o.id == id) else { return; };
+                let ov = &self.overlay.layers[i];
                 let nodes = ov.composer.arena_nodes();
                 let Some(r) = ov.composer.layout_root_idx() else { return; };
                 fire_gesture_action(nodes, r, t.slot_key, action);
@@ -424,24 +394,6 @@ impl PerWindow {
         if let Some(ref sw) = self.skia_window { sw.request_redraw(); }
     }
 
-    /// 清除焦点 + 更新缓存
-    fn clear_focus(&mut self, nodes: &mut Vec<LayoutNode>, root: usize) {
-        crate::layout::node::clear_focus(nodes, root);
-        self.focused_id = None;
-        self.focused_slot_key = None;
-        if let Some(ref sw) = self.skia_window { sw.set_ime_allowed(false); }
-    }
-
-    /// 从当前焦点节点刷新 cached 字段
-    fn refresh_focus(&mut self, nodes: &[LayoutNode], root: usize) {
-        // 如果树中已有焦点节点，直接读取
-        if let Some(fid) = crate::layout::node::get_focus_id(nodes, root) {
-            self.focused_id = Some(fid);
-            self.focused_slot_key = crate::layout::node::find_node_by_id(nodes, root, fid).map(|idx| nodes[idx].slot_key);
-        }
-        // 否则：如果之前有关焦点但树中丢失了（重组后新节点 focus=false），保留 focused_id
-        // （由后续触发的 set_focus_by_id 或 pointer 事件补上树的焦点标记）
-    }
 
     /// Escape: close the topmost overlay, or — with no overlay open — drop the page's focus.
     ///
@@ -455,12 +407,12 @@ impl PerWindow {
     /// dismissed it is still where they were instead of having to tab back. Clearing the focus is
     /// what Escape does when there is nothing to close (the collapsed field loses its ring).
     fn escape_key(&mut self) -> bool {
-        if let Some(i) = self.overlays.iter().rposition(|o| !o.closing) {
+        if let Some(i) = self.overlay.layers.iter().rposition(|o| !o.closing) {
             // A dismissal is a REQUEST: the component hides itself in `on_dismiss` and flips the
             // caller's `visible`. With no handler nobody can complete it, and starting one anyway
             // faded the overlay out only to have the deadline hand it back — the key is left to the
             // overlay's own handlers instead (a component that wants Escape can still see it).
-            if self.overlays[i].on_dismiss.is_none() {
+            if self.overlay.layers[i].on_dismiss.is_none() {
                 return false;
             }
             // `dismissOnBackPress = false` SWALLOWS the key. This is a deliberate divergence, and the
@@ -476,10 +428,10 @@ impl PerWindow {
             // Ordering matters and is not an accident: with no `on_dismiss_request` there is nothing
             // for a dismissal to ask, so the handler check above wins and the key is left alone even
             // when this flag is off.
-            if !self.overlays[i].dismiss_on_back_press {
+            if !self.overlay.layers[i].dismiss_on_back_press {
                 return true;
             }
-            let id = self.overlays[i].id;
+            let id = self.overlay.layers[i].id;
             begin_overlay_close(self, id);
             return true;
         }
@@ -507,7 +459,7 @@ impl PerWindow {
     fn tab_move_focus(&mut self, shift: bool) {
         if let Some(i) = keyboard_scope(self) {
             let (new_id, new_slot, want_ime) = {
-                let ov = &mut self.overlays[i];
+                let ov = &mut self.overlay.layers[i];
                 match ov.composer.layout_root_idx() {
                     Some(r) => {
                         let nodes = ov.composer.arena_nodes_mut();
@@ -522,10 +474,10 @@ impl PerWindow {
                     None => (None, None, false),
                 }
             };
-            self.overlays[i].focused_id = new_id;
-            self.overlays[i].focused_slot_key = new_slot;
+            self.overlay.layers[i].focused_id = new_id;
+            self.overlay.layers[i].focused_slot_key = new_slot;
             if let Some(ref sw) = self.skia_window {
-                sw.set_ime_allowed(want_ime);
+                set_ime_enabled(&sw, want_ime);
             }
         } else {
             let (new_id, new_slot) = self.composer.layout_root_idx().map(|r| {
@@ -550,14 +502,14 @@ impl PerWindow {
     fn focus_move_directional(&mut self, dir: FocusDir) -> bool {
         let overlay = keyboard_scope(self);
         let (current, root) = match overlay {
-            Some(i) => (self.overlays[i].focused_id, self.overlays[i].composer.layout_root_idx()),
+            Some(i) => (self.overlay.layers[i].focused_id, self.overlay.layers[i].composer.layout_root_idx()),
             None => (self.focused_id, self.composer.layout_root_idx()),
         };
         let (Some(fid), Some(r)) = (current, root) else { return false };
 
         let target = {
             let nodes = match overlay {
-                Some(i) => self.overlays[i].composer.arena_nodes(),
+                Some(i) => self.overlay.layers[i].composer.arena_nodes(),
                 None => self.composer.arena_nodes(),
             };
             let candidates = crate::layout::node::collect_focus_candidates(nodes, r);
@@ -589,7 +541,7 @@ impl PerWindow {
         let Some(target) = target else { return false };
 
         let (nodes, root) = match overlay {
-            Some(i) => (self.overlays[i].composer.arena_nodes_mut(), r),
+            Some(i) => (self.overlay.layers[i].composer.arena_nodes_mut(), r),
             None => (self.composer.arena_nodes_mut(), r),
         };
         crate::layout::node::clear_focus(nodes, root);
@@ -598,8 +550,8 @@ impl PerWindow {
                 .map(|idx| nodes[idx].slot_key);
             match overlay {
                 Some(i) => {
-                    self.overlays[i].focused_id = Some(target);
-                    self.overlays[i].focused_slot_key = slot;
+                    self.overlay.layers[i].focused_id = Some(target);
+                    self.overlay.layers[i].focused_slot_key = slot;
                 }
                 None => {
                     self.focused_id = Some(target);
@@ -640,9 +592,9 @@ impl PerWindow {
                     })
                 });
                 if let Some(b) = bslot.borrow().as_ref() {
-                    crate::ui::adaptive::sync_window_size_state(b, (self.width, self.height));
+                    crate::layout::adaptive::sync_window_size_state(b, (self.width, self.height));
                 }
-                crate::ui::adaptive::set_window_size_state(size_state);
+                crate::layout::adaptive::set_window_size_state(size_state);
                 (self.content)(ctx);
             });
             any_composed |= did_compose;
@@ -673,8 +625,8 @@ impl PerWindow {
     fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
-        self.frame_counter += 1;
-        debug_log!("[fps] render#{} compose#{} pending={}", self.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
+        self.clock.frame_counter += 1;
+        debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
         // scene published this frame, and flushes the previous frame's records.
         //
@@ -682,7 +634,7 @@ impl PerWindow {
         // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
         // so a build with the feature and no env var records into memory and writes nothing.
         crate::anim_trace::begin_frame(
-            self.frame_counter,
+            self.clock.frame_counter,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
@@ -692,7 +644,7 @@ impl PerWindow {
         // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
         // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
         let density = crate::unit::Density::from_density(self.scale_factor as f32);
-        crate::unit::with_density(density, || {
+        crate::runtime::density::with_density(density, || {
         // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
         self.composer.set_adaptive_window_size(self.width, self.height);
         // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
@@ -705,7 +657,7 @@ impl PerWindow {
         // Start the frame with no stale request: a request raised on a frame whose convergence hit its
         // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
         // compose the frame did not need.
-        let _ = crate::core::composer::take_compose_after_layout();
+        let _ = crate::runtime::composer::take_compose_after_layout();
         // 循环 compose 直到没有新的 pending state
         let mut any_composed = self.recompose_until_stable();
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
@@ -722,7 +674,7 @@ impl PerWindow {
         // frames). The cap keeps a policy that asks on every pass from spinning the frame.
         let mut frame_passes: u8 = 1;
         for _ in 0..8 {
-            if !crate::core::composer::take_compose_after_layout() {
+            if !crate::runtime::composer::take_compose_after_layout() {
                 break;
             }
             any_composed |= self.recompose_until_stable();
@@ -755,12 +707,12 @@ impl PerWindow {
         // overlay counterparts, drive active Tier1, free unmatched stashes.
         // Main composer first by convention (Tier1 flights live in its map).
         {
-            let mut all: Vec<&mut crate::core::composer::Composer> = Vec::with_capacity(1 + self.overlays.len());
+            let mut all: Vec<&mut crate::runtime::composer::Composer> = Vec::with_capacity(1 + self.overlay.layers.len());
             all.push(&mut self.composer);
-            for ov in self.overlays.iter_mut() {
+            for ov in self.overlay.layers.iter_mut() {
                 all.push(&mut ov.composer);
             }
-            crate::core::composer::Composer::poll_cross_flights(&mut all);
+            crate::runtime::composer::Composer::poll_cross_flights(&mut all);
         }
         // A flight that attached its layout override for the FIRST time this frame left the
         // entering end's parent stale WITHIN the frame: the override can only be attached by
@@ -773,13 +725,13 @@ impl PerWindow {
         if self.composer.take_layout_override_fresh() {
             self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
         }
-        for ov in self.overlays.iter_mut() {
+        for ov in self.overlay.layers.iter_mut() {
             if ov.composer.take_layout_override_fresh() {
                 ov.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
             }
         }
 
-        let bg = self.theme_applied.colors.background;
+        let bg = self.theme.applied.colors.background;
 
         if let Some(root_idx) = self.composer.layout_root_idx() {
             let nodes = self.composer.arena_nodes();
@@ -815,7 +767,7 @@ impl PerWindow {
                         self.composer.render_layer(canvas);
                     }
                     canvas.restore();
-                    render_overlays(&self.overlays, canvas, sf, (self.width, self.height));
+                    render_overlays(&self.overlay.layers, canvas, sf, (self.width, self.height));
                     if cross_active {
                         canvas.save();
                         canvas.scale((sf, sf));
@@ -863,13 +815,13 @@ impl ApplicationHandler for AppState {
             // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
             // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
             // 修复 request 每轮发送 → WM_PAINT 消息唤醒 Wait 的 55k/s 自驱动空转
-            let interval = self.windows.values().map(|pw| pw.frame_interval).min()
+            let interval = self.windows.values().map(|pw| pw.clock.frame_interval).min()
                 .unwrap_or(std::time::Duration::from_millis(16));
             event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + interval));
             let now = std::time::Instant::now();
             for pw in self.windows.values_mut() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
@@ -877,7 +829,7 @@ impl ApplicationHandler for AppState {
             // 动画刚停止：强制终帧渲染（最后一次 set 的 request 可能被跳过）
             for pw in self.windows.values_mut() {
                 if let Some(ref sw) = pw.skia_window {
-                    pw.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
+                    pw.clock.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
                     sw.request_redraw();
                 }
             }
@@ -889,21 +841,21 @@ impl ApplicationHandler for AppState {
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             // 渲染欠账按 last_render 对齐（force_redraw 由帧节流跳过时设置）
-            if pw.force_redraw {
-                if now.duration_since(pw.last_render_time) >= pw.frame_interval {
+            if pw.clock.force_redraw {
+                if now.duration_since(pw.clock.last_render_time) >= pw.clock.frame_interval {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
-                    let d = pw.last_render_time + pw.frame_interval;
+                    let d = pw.clock.last_render_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
             // pending state 按 last_request 节流（动画持续 pending 时每帧至多一次）
             if pw.composer.has_pending_states() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
-                    let d = pw.last_request_time + pw.frame_interval;
+                    let d = pw.clock.last_request_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
@@ -918,7 +870,7 @@ impl ApplicationHandler for AppState {
         let mut next_tap_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             let mut kept = Vec::new();
-            for t in std::mem::take(&mut pw.pending_taps) {
+            for t in std::mem::take(&mut pw.input.pending_taps) {
                 if t.deadline <= now {
                     pw.fire_pending_tap(t);
                 } else {
@@ -930,7 +882,7 @@ impl ApplicationHandler for AppState {
                     });
                 }
             }
-            pw.pending_taps = kept;
+            pw.input.pending_taps = kept;
         }
         if let Some(d) = next_tap_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
@@ -943,9 +895,9 @@ impl ApplicationHandler for AppState {
         // window, so the deadline only has to be remembered until it passes.
         let mut next_long_press: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
-            let fired = pw.gesture.as_mut().and_then(|tracker| tracker.poll_long_press(now));
+            let fired = pw.input.tracker.as_mut().and_then(|tracker| tracker.poll_long_press(now));
             if let Some(action) = fired {
-                let (slot, arena) = (pw.gesture_slot, pw.gesture_arena);
+                let (slot, arena) = (pw.input.slot, pw.input.arena);
                 if let Some(slot) = slot {
                     let fired_callback = fire_in_gesture_arena(pw, arena, slot, action);
                     if fired_callback {
@@ -953,7 +905,7 @@ impl ApplicationHandler for AppState {
                     }
                 }
             }
-            if let Some(deadline) = pw.gesture.as_ref().and_then(|tracker| tracker.long_press_deadline()) {
+            if let Some(deadline) = pw.input.tracker.as_ref().and_then(|tracker| tracker.long_press_deadline()) {
                 next_long_press = Some(match next_long_press {
                     Some(existing) => existing.min(deadline),
                     None => deadline,
@@ -1000,7 +952,7 @@ impl ApplicationHandler for AppState {
         }
         AppState::process_pending_windows(self, event_loop);
         // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
-        crate::ui::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
+        crate::app::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
         // Redraw requests raised from OUTSIDE the window they concern: a `Window` node publishing a new
         // theme intent runs in its DECLARING tree, which leaves the window's own composer with nothing
         // pending — without this its frame would never be scheduled and the new theme would sit unseen.
@@ -1019,7 +971,7 @@ impl ApplicationHandler for AppState {
         }
         // The mode moved (from an application or a background thread): every window has to look at it, and
         // a window whose content an application composed itself has no dependency to be woken by.
-        if crate::ui::theme::take_theme_redraw_all() {
+        if crate::theme::take_theme_redraw_all() {
             for pw in self.windows.values() {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
@@ -1030,12 +982,12 @@ impl ApplicationHandler for AppState {
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
             if pw.composer.has_pending_states() {
-                if now.duration_since(pw.last_request_time) >= pw.frame_interval {
-                    pw.last_request_time = now;
+                if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
+                    pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
                     // 节流命中不丢弃：到期重试（一次性更新不卡到外部事件）
-                    let d = pw.last_request_time + pw.frame_interval;
+                    let d = pw.clock.last_request_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
@@ -1057,7 +1009,7 @@ impl ApplicationHandler for AppState {
         // the change itself is process-wide: record it, and schedule the frame of every window — a window
         // that is not redrawn never notices (each one re-resolves against the epoch in its own frame).
         if let WindowEvent::ThemeChanged(theme) = &event {
-            crate::ui::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
+            crate::theme::note_platform_theme(matches!(theme, winit::window::Theme::Dark));
             for pw in self.windows.values_mut() {
                 if let Some(ref sw) = pw.skia_window {
                     sw.request_redraw();
@@ -1096,9 +1048,9 @@ impl ApplicationHandler for AppState {
                     // and without it a scrollable menu could not be scrolled at all: the main-tree search
                     // below cannot see into another arena (measured: the last item stayed at y=920 in a
                     // 520px window no matter how much the wheel moved).
-                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                    let overlay_target = pw.input.last_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
-                        let ov = &pw.overlays[i];
+                        let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
@@ -1108,7 +1060,7 @@ impl ApplicationHandler for AppState {
                         }).copied().map(|t| (i, t, r))
                     });
                     if let Some((i, target, r)) = overlay_target {
-                        let ov = &mut pw.overlays[i];
+                        let ov = &mut pw.overlay.layers[i];
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                         let nodes = ov.composer.arena_nodes();
                         if dy != 0.0 && consumed.y == 0.0 {
@@ -1133,7 +1085,7 @@ impl ApplicationHandler for AppState {
                         // 用户实测 bug）。`None`（启动后无移动/已离开窗口）也
                         // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
                         // 见 consume_debug_events）。
-                        let target = pw.last_pointer_pos.and_then(|(px, py)| {
+                        let target = pw.input.last_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
                             path.iter().rev().find(|&&idx| {
@@ -1184,7 +1136,7 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::Destroyed => {
-                if let Some(cid) = pw.created_id { crate::ui::window::CREATED.lock().unwrap().remove(&cid); }
+                if let Some(cid) = pw.created_id { crate::app::window::CREATED.lock().unwrap().remove(&cid); }
                 if let Some(ref sw) = pw.skia_window {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
@@ -1221,16 +1173,16 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 // Down/Up 也刷新指针位置（点击后不移动直接滚轮时，
                 // last_pointer_pos 否则还是旧值——命中目标错位）
-                pw.last_pointer_pos = Some(scene_pos);
+                pw.input.last_pos = Some(scene_pos);
                 let event_type = if state.is_pressed() {
-                    crate::modifier::PointerEventType::Down
+                    crate::input::PointerEventType::Down
                 } else {
-                    crate::modifier::PointerEventType::Up
+                    crate::input::PointerEventType::Up
                 };
                 if state.is_pressed() {
                     // ── Down：指针按下核心（共享——真实/Debug 防分叉）──
                     let modifiers = pw.modifiers;
-                    handle_pointer_down(pw, scene_pos, crate::modifier::PointerKind::from_button_source(&button), &modifiers, true);
+                    handle_pointer_down(pw, scene_pos, crate::input::PointerKind::from_button_source(&button), &modifiers, true);
                 }
                 // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
                 // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
@@ -1266,23 +1218,23 @@ impl ApplicationHandler for AppState {
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
                     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-                    let ptr_ev = crate::modifier::PointerEvent {
+                    let ptr_ev = crate::input::PointerEvent {
                         event_type,
                         position: (0.0, 0.0),
                         scene_position: scene_pos,
-                        kind: crate::modifier::PointerKind::from_button_source(&button),
+                        kind: crate::input::PointerKind::from_button_source(&button),
                         is_alt_pressed: pw.modifiers.alt_key(),
                         is_ctrl_pressed: pw.modifiers.control_key(),
                         is_shift_pressed: pw.modifiers.shift_key(),
                         is_meta_pressed: pw.modifiers.meta_key(),
                     };
-                    pw.last_pointer_kind = ptr_ev.kind.clone();
-                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+                    pw.input.last_kind = ptr_ev.kind.clone();
+                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
                 }
                 // Up 后清除 capture + 通知选区变化
                 if !state.is_pressed() {
                     // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
-                    if let Some(slot) = pw.pointer_down_slot {
+                    if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
@@ -1294,9 +1246,9 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
-                    pw.pointer_down_slot = None;
+                    pw.input.down_slot = None;
                     // 防御：take 可能未执行（click 检测分支外的边界）——强制清 state
-                    pw.pointer_down_state = None;
+                    pw.input.down = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -1314,14 +1266,14 @@ impl ApplicationHandler for AppState {
                 let scene_pos = (lp.x, lp.y);
                 // 记录最后指针位置（MouseWheel 命中滚动目标用——§3.7；
                 // winit 0.31 MouseWheel 事件不带 cursor position）
-                pw.last_pointer_pos = Some(scene_pos);
+                pw.input.last_pos = Some(scene_pos);
                 // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
                 // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
                 let modifiers = pw.modifiers;
-                let consumed = handle_pointer_move(pw, scene_pos, pw.last_pointer_kind.clone(), &modifiers);
+                let consumed = handle_pointer_move(pw, scene_pos, pw.input.last_kind.clone(), &modifiers);
                 // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
                 // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
-                if consumed || pw.pointer_down_state.is_some() {
+                if consumed || pw.input.down.is_some() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
@@ -1333,18 +1285,18 @@ impl ApplicationHandler for AppState {
                 for old in olds {
                     exit_hover_at(pw, old);
                 }
-                pw.last_pointer_pos = None;
+                pw.input.last_pos = None;
             }
             WindowEvent::ModifiersChanged(m) => {
                 pw.modifiers = m.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let event_type = if event.state.is_pressed() {
-                    crate::modifier::KbEventType::KeyDown
+                    crate::input::KbEventType::KeyDown
                 } else {
-                    crate::modifier::KbEventType::KeyUp
+                    crate::input::KbEventType::KeyUp
                 };
-                let ke = crate::modifier::KbEvent {
+                let ke = crate::input::KbEvent {
                     key: event.logical_key.clone(),
                     event_type,
                     is_alt_pressed: pw.modifiers.alt_key(),
@@ -1402,8 +1354,8 @@ impl ApplicationHandler for AppState {
                         // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入 leaf——
                         // 只查焦点节点自身则 Preedit 永远到不了（预输入不显示）。
                         // 从焦点节点向下找第一个 ime_callback。
-                        let overlay_target: Option<(usize, usize)> = (0..pw.overlays.len()).rev().find_map(|i| {
-                            let ov = &pw.overlays[i];
+                        let overlay_target: Option<(usize, usize)> = (0..pw.overlay.layers.len()).rev().find_map(|i| {
+                            let ov = &pw.overlay.layers[i];
                             if ov.closing { return None; }
                             let fid = ov.focused_id?;
                             let nodes = ov.composer.arena_nodes();
@@ -1413,7 +1365,7 @@ impl ApplicationHandler for AppState {
                             Some((i, ime_idx))
                         });
                         if let Some((i, ime_idx)) = overlay_target {
-                            let nodes = pw.overlays[i].composer.arena_nodes();
+                            let nodes = pw.overlay.layers[i].composer.arena_nodes();
                             if let Some(cb) = nodes[ime_idx].ime_callback.borrow_mut().as_mut() {
                                 cb(&text, cursor);
                             }
@@ -1434,8 +1386,8 @@ impl ApplicationHandler for AppState {
                     Ime::Commit(text) => {
                         // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式.
                         // Focused overlay first, then main tree (same routing rule).
-                        let overlay_target: Option<usize> = (0..pw.overlays.len()).rev().find(|&i| {
-                            let ov = &pw.overlays[i];
+                        let overlay_target: Option<usize> = (0..pw.overlay.layers.len()).rev().find(|&i| {
+                            let ov = &pw.overlay.layers[i];
                             if ov.closing { return false; }
                             ov.focused_id.and_then(|fid| {
                                 ov.composer.layout_root_idx().and_then(|r| {
@@ -1447,14 +1399,14 @@ impl ApplicationHandler for AppState {
                             // 逐字符发送 (overlay arena — bubble-only, mirroring main)
                             for ch in text.chars() {
                                 let s = ch.to_string();
-                                let ke = crate::modifier::KbEvent {
+                                let ke = crate::input::KbEvent {
                                     key: winit::keyboard::Key::Character(s.clone().into()),
-                                    event_type: crate::modifier::KbEventType::KeyDown,
+                                    event_type: crate::input::KbEventType::KeyDown,
                                     is_alt_pressed: false, is_ctrl_pressed: false,
                                     is_shift_pressed: false, is_meta_pressed: false,
                                     repeat: false,
                                 };
-                                let ov = &pw.overlays[i];
+                                let ov = &pw.overlay.layers[i];
                                 if let Some(fid) = ov.focused_id {
                                     let nodes = ov.composer.arena_nodes();
                                     if let Some(r) = ov.composer.layout_root_idx() {
@@ -1488,9 +1440,9 @@ impl ApplicationHandler for AppState {
                                 // 逐字符发送
                                 for ch in text.chars() {
                                     let s = ch.to_string();
-                                    let ke = crate::modifier::KbEvent {
+                                    let ke = crate::input::KbEvent {
                                         key: winit::keyboard::Key::Character(s.clone().into()),
-                                        event_type: crate::modifier::KbEventType::KeyDown,
+                                        event_type: crate::input::KbEventType::KeyDown,
                                         is_alt_pressed: false, is_ctrl_pressed: false,
                                         is_shift_pressed: false, is_meta_pressed: false,
                                         repeat: false,
@@ -1586,7 +1538,7 @@ impl ApplicationHandler for AppState {
                     }
                     if main_hit {
                         // Single-focus invariant: main focus clears overlay foci.
-                        for ov in pw.overlays.iter_mut() {
+                        for ov in pw.overlay.layers.iter_mut() {
                             if ov.focused_id.is_some() {
                                 if let Some(r) = ov.composer.layout_root_idx() {
                                     crate::layout::node::clear_focus(ov.composer.arena_nodes_mut(), r);
@@ -1596,9 +1548,9 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     } else {
-                        for i in (0..pw.overlays.len()).rev() {
+                        for i in (0..pw.overlay.layers.len()).rev() {
                             let hit = {
-                                let ov = &mut pw.overlays[i];
+                                let ov = &mut pw.overlay.layers[i];
                                 if ov.closing {
                                     false
                                 } else if let Some(r) = ov.composer.layout_root_idx() {
@@ -1609,7 +1561,7 @@ impl ApplicationHandler for AppState {
                             };
                             if hit {
                                 let (fid, fslot, want) = {
-                                    let ov = &pw.overlays[i];
+                                    let ov = &pw.overlay.layers[i];
                                     let nodes = ov.composer.arena_nodes();
                                     let fid = ov.composer.layout_root_idx()
                                         .and_then(|r| crate::layout::node::get_focus_id(nodes, r));
@@ -1620,8 +1572,8 @@ impl ApplicationHandler for AppState {
                                     }).unwrap_or((0, false));
                                     (fid, fslot, want)
                                 };
-                                pw.overlays[i].focused_id = fid;
-                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                pw.overlay.layers[i].focused_id = fid;
+                                pw.overlay.layers[i].focused_slot_key = fid.map(|_| fslot);
                                 // Single-focus invariant: overlay focus clears main
                                 // focus and sibling overlay foci.
                                 if pw.focused_id.is_some() {
@@ -1631,7 +1583,7 @@ impl ApplicationHandler for AppState {
                                     pw.focused_id = None;
                                     pw.focused_slot_key = None;
                                 }
-                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                for (j, other) in pw.overlay.layers.iter_mut().enumerate() {
                                     if j != i && other.focused_id.is_some() {
                                         if let Some(r) = other.composer.layout_root_idx() {
                                             crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
@@ -1641,7 +1593,7 @@ impl ApplicationHandler for AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(want);
+                                    set_ime_enabled(&sw, want);
                                 }
                                 break;
                             }
@@ -1661,7 +1613,7 @@ impl ApplicationHandler for AppState {
                                 // leaf——须向下找子树（node_or_descendant_wants_ime）
                                 let wants_ime = node_or_descendant_wants_ime(nodes, found);
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(wants_ime);
+                                    set_ime_enabled(&sw, wants_ime);
                                 }
                             }
                         }
@@ -1673,21 +1625,18 @@ impl ApplicationHandler for AppState {
                 // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
                 // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
                 let now = std::time::Instant::now();
-                if pw.render_disabled {
+                if pw.clock.render_disabled {
                     // 崩溃边界（P3-3）：连续 panic 后停更——保留最后画面
                     return;
                 }
-                if !pw.force_redraw && now.duration_since(pw.last_render_time) < pw.frame_interval {
+                if !pw.clock.force_redraw && now.duration_since(pw.clock.last_render_time) < pw.clock.frame_interval {
                     // 帧节流命中：不丢弃本次更新——记渲染欠账（force_redraw），
                     // 下一个可用帧由 new_events 补发 request_redraw。原实现直接
                     // 跳过：一次性状态变更（如双击延迟 tap）会卡到外部事件才刷新
-                    pw.force_redraw = true;
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(pw.last_render_time + pw.frame_interval));
+                    pw.clock.force_redraw = true;
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(pw.clock.last_render_time + pw.clock.frame_interval));
                 } else {
-                pw.last_render_time = now;
-                let w = pw.width;
-                let h = pw.height;
-                let sf = pw.scale_factor as f32;
+                pw.clock.last_render_time = now;
                 // 崩溃边界（P3-3）：compose/layout/draw 任一段 panic（用户 content 代码 /
                 // skia 异常）不崩窗口——捕获后跳过本帧（保留上帧画面），下帧正常重试。
                 // 连续 panic 计数防风暴：超过阈值打印错误并停更（不再自旋）。
@@ -1699,16 +1648,16 @@ impl ApplicationHandler for AppState {
                     // bridge): it is a full tree walk per frame, and `publishing_enabled` is a const,
                     // so a plain build never pays for it.
                     let mut main_nodes = Vec::new();
-                    pw.recompose_layout_render(window_id, |nodes, root_idx, surface| {
+                    pw.recompose_layout_render(window_id, |nodes, root_idx, _surface| {
                         debug::update_tree(wid, &debug::build_tree_json(nodes, root_idx));
                         if crate::semantics::publishing_enabled() {
                             main_nodes = crate::semantics::semantics_tree(nodes, root_idx);
                         }
                     });
                     // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
-                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlays
+                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlay.layers
                     // 栈序，与 render_overlays 绘制顺序一致。
-                    let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlays.iter().filter_map(|ov| {
+                    let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlay.layers.iter().filter_map(|ov| {
                         ov.composer.layout_root_idx()
                             .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
                     }).collect();
@@ -1717,7 +1666,7 @@ impl ApplicationHandler for AppState {
                         // The overlays' arenas are walked too, so a modal's contents are in the tree a
                         // screen reader descends. Each keeps its screen origin: its tree is in the
                         // overlay's own coordinates.
-                        let overlays = pw.overlays.iter().filter_map(|ov| {
+                        let overlays = pw.overlay.layers.iter().filter_map(|ov| {
                             ov.composer.layout_root_idx().map(|r| crate::semantics::OverlaySemantics {
                                 id: ov.id,
                                 origin: ov.screen_pos,
@@ -1742,8 +1691,8 @@ impl ApplicationHandler for AppState {
                 }));
                 match panic_result {
                     Ok(()) => {
-                        pw.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
-                        pw.consecutive_panics = 0;
+                        pw.clock.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                        pw.clock.consecutive_panics = 0;
                         // 动画自驱动兜底：渲染中注册的动画依赖 wake_up 启动下一轮，
                         // 但 Windows 上从事件处理内调用 EventLoopProxy::wake_up 偶发丢失
                         // （winit 已知竞态）→ 动画冻结在起始值，直到下一个外部事件
@@ -1754,14 +1703,14 @@ impl ApplicationHandler for AppState {
                         }
                     }
                     Err(e) => {
-                        pw.consecutive_panics += 1;
+                        pw.clock.consecutive_panics += 1;
                         let msg = if let Some(s) = e.downcast_ref::<&str>() { (*s).to_string() }
                                   else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
                                   else { "unknown panic".to_string() };
-                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.consecutive_panics, msg);
-                        if pw.consecutive_panics >= 30 {
+                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.clock.consecutive_panics, msg);
+                        if pw.clock.consecutive_panics >= 30 {
                             eprintln!("[render-panic] 连续 30 次 panic——停止本窗口渲染（避免 panic 风暴）");
-                            pw.render_disabled = true;
+                            pw.clock.render_disabled = true;
                         }
                         // force_redraw 保持 true——下帧继续尝试（若未停更）
                     }
@@ -1790,7 +1739,7 @@ impl ApplicationHandler for AppState {
                                         let empty = nodes[pidx].modifier.content_len() == 0;
                                         // 光标索引是编辑偏移——经映射转显示偏移
                                         // （TextFieldVisual 挂在容器——向上找）
-                                        let caret_idx = crate::ui::text_field::offset_mapping_for_node(nodes, r, pidx)
+                                        let caret_idx = crate::text::field::offset_mapping_for_node(nodes, r, pidx)
                                             .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
                                             .unwrap_or_else(|| nodes[pidx].cursor_index.get());
                                         let (cx, cy, ch) = if empty {
@@ -1805,7 +1754,7 @@ impl ApplicationHandler for AppState {
                                                 None => (0.0, 0.0, 20.0),
                                             }
                                         };
-                                        let align = nodes[pidx].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                                        let align = nodes[pidx].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                                         // CONTENT box: the painter uses it, so the IME
                                         // candidate window must too — under a flight layout
                                         // override `measured_size` is the size the PARENT was
@@ -1820,9 +1769,9 @@ impl ApplicationHandler for AppState {
                                             (abs.0 + pad_x) as f64
                                         } else {
                                             let x_off = match align {
-                                                crate::ui::TextAlign::Left | crate::ui::TextAlign::Justify => abs.0,
-                                                crate::ui::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
-                                                crate::ui::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
+                                                crate::text::TextAlign::Left | crate::text::TextAlign::Justify => abs.0,
+                                                crate::text::TextAlign::Center => abs.0 + (node_w - intrinsic_w).max(0.0) / 2.0,
+                                                crate::text::TextAlign::Right => abs.0 + (node_w - intrinsic_w).max(0.0),
                                             };
                                             (x_off + pad_x + cx) as f64
                                         };
@@ -1888,7 +1837,7 @@ impl AppState {
                         crate::layout::node::set_focus_by_id(nodes, root, node_id);
                     }
                     if let Some(ref sw) = pw.skia_window {
-                        sw.set_ime_allowed(false);
+                        set_ime_enabled(&sw, false);
                     }
                 }
             }
@@ -1911,7 +1860,7 @@ impl AppState {
                     // ⚠ Click 是合成单事件（非 down/up 分离）——overlay 命中后
                     // 必须立即执行点击（真实路径 down 记录 + up 触发；这里
                     // down 记录后直接 exec，否则 overlay 按钮永远点不动）
-                    let click_kind = pw.last_pointer_kind.clone();
+                    let click_kind = pw.input.last_kind.clone();
                     if overlay_down(pw, (x, y), click_kind) {
                         // 命中 overlay：立即执行点击（合成单事件——down 记录 +
                         // 立即 up 触发；真实路径由 PointerUp 事件触发）
@@ -1930,12 +1879,11 @@ impl AppState {
                         continue;
                     }
                     // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
-                    let (fid, sk, path_len, click_handled) = {
+                    let (fid, sk, _path_len, _click_handled) = {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
                             let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
-                            let mut click_handled = false;
                             // debug 点击聚焦：path 中最深的 focusable 节点
                             // （text-field-v2 容器化后焦点/交互在容器——空字段
                             // 输入子节点 0 宽点不中；旧逻辑只看 ime_callback
@@ -1969,17 +1917,16 @@ impl AppState {
                         }
                         pw.focused_id = Some(fid);
                         pw.focused_slot_key = Some(sk);
-                        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(true); }
+                        if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, true); }
                     }
-                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, path_len, pw.scale_factor);
-                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", click_handled, x, y);
+                    debug_log!("[debug-click] pos=({:.0},{:.0}) path_len={} sf={}", x, y, _path_len, pw.scale_factor);
+                    debug_log!("[debug-click] handled={} pos=({:.0},{:.0})", _click_handled, x, y);
                 }
                 debug::DebugEvent::Key { key } => {
                     if key == "Escape" {
                         // The same helper the real key path calls — see `PerWindow::escape_key`.
                         pw.escape_key();
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
-                        handled = true;
                     } else if key == "Tab" {
                         // The SAME helper the real key path calls: this branch used to keep its own
                         // copy of the traversal rule, which silently went stale the moment the rule
@@ -1991,9 +1938,9 @@ impl AppState {
                         // 任意按键：复用真实键盘派发路径（Preview/Bubble/激活）——
                         // WS 可模拟字符输入/删除/方向键。修饰键默认无（Ctrl 等
                         // 组合暂不支持——如需可扩展 KbEvent 修饰字段）
-                        let ke = crate::modifier::KbEvent {
+                        let ke = crate::input::KbEvent {
                             key: k,
-                            event_type: crate::modifier::KbEventType::KeyDown,
+                            event_type: crate::input::KbEventType::KeyDown,
                             is_alt_pressed: pw.modifiers.alt_key(),
                             is_ctrl_pressed: pw.modifiers.control_key(),
                             is_shift_pressed: pw.modifiers.shift_key(),
@@ -2028,9 +1975,9 @@ impl AppState {
                     if !handled {
                         // Main tree missed — try overlays topmost-first (same
                         // single-focus clearing as the frame request path).
-                        for i in (0..pw.overlays.len()).rev() {
+                        for i in (0..pw.overlay.layers.len()).rev() {
                             let hit = {
-                                let ov = &mut pw.overlays[i];
+                                let ov = &mut pw.overlay.layers[i];
                                 if ov.closing {
                                     false
                                 } else if let Some(r) = ov.composer.layout_root_idx() {
@@ -2041,7 +1988,7 @@ impl AppState {
                             };
                             if hit {
                                 let (fid, fslot, want) = {
-                                    let ov = &pw.overlays[i];
+                                    let ov = &pw.overlay.layers[i];
                                     let nodes = ov.composer.arena_nodes();
                                     let r = ov.composer.layout_root_idx();
                                     let fid = r.and_then(|r| crate::layout::node::get_focus_id(nodes, r));
@@ -2052,8 +1999,8 @@ impl AppState {
                                     }).unwrap_or((0, false));
                                     (fid, fslot, want)
                                 };
-                                pw.overlays[i].focused_id = fid;
-                                pw.overlays[i].focused_slot_key = fid.map(|_| fslot);
+                                pw.overlay.layers[i].focused_id = fid;
+                                pw.overlay.layers[i].focused_slot_key = fid.map(|_| fslot);
                                 if pw.focused_id.is_some() {
                                     if let Some(r) = pw.composer.layout_root_idx() {
                                         crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
@@ -2061,7 +2008,7 @@ impl AppState {
                                     pw.focused_id = None;
                                     pw.focused_slot_key = None;
                                 }
-                                for (j, other) in pw.overlays.iter_mut().enumerate() {
+                                for (j, other) in pw.overlay.layers.iter_mut().enumerate() {
                                     if j != i && other.focused_id.is_some() {
                                         if let Some(r) = other.composer.layout_root_idx() {
                                             crate::layout::node::clear_focus(other.composer.arena_nodes_mut(), r);
@@ -2071,7 +2018,7 @@ impl AppState {
                                     }
                                 }
                                 if let Some(ref sw) = pw.skia_window {
-                                    sw.set_ime_allowed(want);
+                                    set_ime_enabled(&sw, want);
                                 }
                                 handled = true;
                                 break;
@@ -2082,16 +2029,16 @@ impl AppState {
                 debug::DebugEvent::PointerDown { x, y } => {
                     // 模拟指针按下：与真实 PointerButton Down 共用核心
                     // （with_focus=false——调试路径不做光标/聚焦）
-                    pw.last_pointer_pos = Some((x, y));
+                    pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_down(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers, false);
+                    handle_pointer_down(pw, (x, y), pw.input.last_kind.clone(), &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
                     // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
-                    pw.last_pointer_pos = Some((x, y));
+                    pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
-                    handle_pointer_move(pw, (x, y), pw.last_pointer_kind.clone(), &modifiers);
+                    handle_pointer_move(pw, (x, y), pw.input.last_kind.clone(), &modifiers);
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 debug::DebugEvent::PointerUp { x, y } => {
@@ -2119,7 +2066,7 @@ impl AppState {
                     // 释放按下交互（与真实路径一致）
                     release_pressed_interaction(pw);
                     // 通知选区变化 + 清理
-                    if let Some(slot) = pw.pointer_down_slot {
+                    if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
@@ -2131,8 +2078,8 @@ impl AppState {
                             }
                         }
                     }
-                    pw.pointer_down_slot = None;
-                    pw.pointer_down_state = None;
+                    pw.input.down_slot = None;
+                    pw.input.down = None;
                     handled = true;
                 }
                 debug::DebugEvent::Scroll { dx, dy } => {
@@ -2140,9 +2087,9 @@ impl AppState {
                     // pointer first (a test moves the pointer with `m x y`), then the main tree's blind
                     // search — which is what makes a scrollable menu testable at all, since the blind
                     // search only ever sees the main tree's arena.
-                    let overlay_target = pw.last_pointer_pos.and_then(|(px, py)| {
+                    let overlay_target = pw.input.last_pos.and_then(|(px, py)| {
                         let (i, (lx, ly)) = hit_overlay(pw, (px, py))?;
-                        let ov = &pw.overlays[i];
+                        let ov = &pw.overlay.layers[i];
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
@@ -2152,7 +2099,7 @@ impl AppState {
                         }).copied().map(|t| (i, t, r))
                     });
                     if let Some((i, target, r)) = overlay_target {
-                        let ov = &mut pw.overlays[i];
+                        let ov = &mut pw.overlay.layers[i];
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                         handled = consumed.x != 0.0 || consumed.y != 0.0;
                     } else if let Some(r) = pw.composer.layout_root_idx() {
@@ -2192,7 +2139,7 @@ impl AppState {
                 composer.compose(|ctx| init(ctx));
                 // 临时 composer：compose 内部已 take_deps（注册到其 slot_deps）——
                 // 此处再 take 是防御性空操作（缓冲已空），确保 DEP_MODE 复位
-                crate::core::state::take_deps();
+                crate::runtime::state::take_deps();
                 // The temporary initialization Composer is not an active
                 // window owner; its lifecycle state is dropped with it.
             }
@@ -2245,7 +2192,7 @@ impl AppState {
         // means everywhere else in the API.
         let theme = pending
             .theme
-            .unwrap_or_else(|| crate::ui::theme::WindowTheme::new(crate::ui::theme::ThemeSpec::Auto));
+            .unwrap_or_else(|| crate::theme::WindowTheme::new(crate::theme::ThemeSpec::Auto));
         // The ONE place a window's content is wrapped in its theme: the declaring tree publishes the cell
         // before the first frame, and every frame after that composes under it. (`Window::build` used to do
         // this, which left windows opened through the public API unwrapped — their theme then only reached
@@ -2259,19 +2206,19 @@ impl AppState {
         // What the window has drawn is what the cell says right now — its first frame is about to compose
         // with exactly this, and a default guess here would both re-run that frame for nothing and miss a
         // publish that changed a custom type scale back to the default.
-        pw.theme_applied = theme.applied();
-        pw.theme_cell = theme;
+        pw.theme.applied = theme.applied();
+        pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
-        pw.frame_interval = frame_interval;
+        pw.clock.frame_interval = frame_interval;
         // FocusRequester created by this window's initial composition is bound
         // to this WindowId, just like later redraw compositions.
         let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
-        crate::unit::with_density(density, || {
+        crate::runtime::density::with_density(density, || {
         // 首帧同样注入窗口尺寸（自适应组件首帧即正确形态）+ 挂载响应式 State
         pw.composer.set_adaptive_window_size(pending.width, pending.height);
         let slot = &pw.window_size_state;
@@ -2287,13 +2234,13 @@ impl AppState {
                 })
             });
             if let Some(b) = pw.window_size_backchannel.borrow().as_ref() {
-                crate::ui::adaptive::sync_window_size_state(b, (w0, h0));
+                crate::layout::adaptive::sync_window_size_state(b, (w0, h0));
             }
-            crate::ui::adaptive::set_window_size_state(size_state);
+            crate::layout::adaptive::set_window_size_state(size_state);
             (pw.content)(ctx);
         });
         pw.composer.layout(Constraints::new(0.0, pending.width, 0.0, pending.height));
-        let bg = pw.theme_applied.colors.background;
+        let bg = pw.theme.applied.colors.background;
         if let Some(root_idx) = pw.composer.layout_root_idx() {
             let nodes = pw.composer.arena_nodes();
             if let Some(ref mut sw) = pw.skia_window {
@@ -2336,12 +2283,12 @@ fn take_redraw_requests() -> Vec<u64> {
     std::mem::take(&mut *PENDING_REDRAW.lock().unwrap())
 }
 
-pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::ui::theme::WindowTheme>) {
+pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
     GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
     wake_impl();
 }
 
-pub(crate) fn wake_impl() {
+fn wake_impl() {
     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() {
         let _ = proxy.wake_up();
         return;
@@ -2349,1400 +2296,10 @@ pub(crate) fn wake_impl() {
     debug::wake();
 }
 
-pub(crate) fn take_pending_windows() -> Vec<PendingWindow> {
+fn take_pending_windows() -> Vec<PendingWindow> {
     std::mem::take(&mut *GLOBAL_PENDING.lock().unwrap())
 }
 
-/// 拖拽滚动会话：slot key（跨重组稳定）+ 最近位置 + 速度样本（松手 fling 用）。
-/// 双轴跟踪（LazyRow 横向拖拽/惯性用 x 轴）——样本 (t, x, y)。
-struct DragScroll {
-    slot: u64,
-    last_x: f32,
-    last_y: f32,
-    samples: Vec<(std::time::Instant, f32, f32)>,
-}
-
-impl DragScroll {
-    /// Open a session at `pos`: the deltas that follow are measured from there. The node the
-    /// session scrolls is re-resolved by slot key on every move (the layout tree is rebuilt
-    /// between frames, so a node index would go stale).
-    fn new(slot: u64, pos: (f32, f32)) -> Self {
-        Self {
-            slot,
-            last_x: pos.0,
-            last_y: pos.1,
-            samples: vec![(std::time::Instant::now(), pos.0, pos.1)],
-        }
-    }
-}
-
-impl DragScroll {
-    /// 手指速度（px/s）：最近 ~200ms 窗口的最小二乘斜率。
-    /// ⚠ x 轴用"距离现在的时长"（越大越早）——回归斜率符号与真实时间相反，
-    /// 取负修正（实测：向上拖 100px 得 +650 而非 -650，fling 方向反了）。
-    fn regression(&self, sel: fn(&(std::time::Instant, f32, f32)) -> f32) -> f32 {
-        let now = std::time::Instant::now();
-        let cutoff = now - std::time::Duration::from_millis(200);
-        let pts: Vec<(f32, f32)> = self.samples
-            .iter()
-            .filter(|(t, _, _)| *t >= cutoff)
-            .map(|s| (now.duration_since(s.0).as_secs_f32(), sel(s)))
-            .collect();
-        if pts.len() < 2 { return 0.0; }
-        let n = pts.len() as f32;
-        let sx: f32 = pts.iter().map(|p| p.0).sum();
-        let sy: f32 = pts.iter().map(|p| p.1).sum();
-        let sxy: f32 = pts.iter().map(|p| p.0 * p.1).sum();
-        let sxx: f32 = pts.iter().map(|p| p.0 * p.0).sum();
-        let denom = n * sxx - sx * sx;
-        if denom.abs() < 1e-6 { return 0.0; }
-        -(n * sxy - sx * sy) / denom
-    }
-    fn velocity_x(&self) -> f32 { self.regression(|s| s.1) }
-    fn velocity_y(&self) -> f32 { self.regression(|s| s.2) }
-}
-
-/// Shift + 滚轮语义：把垂直滚轮 delta 转为水平滚动（保留方向，清除垂直分量）。
-/// 用于兼容 LazyRow 等横向滚动容器——多数平台不会自动把 Shift+wheel 转成 dx。
-fn scroll_delta_with_shift(dx: f32, dy: f32, shift: bool) -> (f32, f32) {
-    if shift {
-        (dy, 0.0)
-    } else {
-        (dx, dy)
-    }
-}
-
-fn dispatch_nested_scroll_delta(
-    nodes: &mut [LayoutNode],
-    root: usize,
-    target: usize,
-    delta: crate::nested_scroll::ScrollDelta,
-    source: crate::nested_scroll::NestedScrollSource,
-    density: crate::unit::Density,
-) -> crate::nested_scroll::ScrollDelta {
-    fn path_to(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
-        path.push(current);
-        if current == target { return true; }
-        for &child in &nodes[current].children {
-            if path_to(nodes, child, target, path) { return true; }
-        }
-        path.pop();
-        false
-    }
-    let mut path = Vec::new();
-    if !path_to(nodes, root, target, &mut path) { return crate::nested_scroll::ScrollDelta::ZERO; }
-    let mut remaining = delta;
-    let mut total = crate::nested_scroll::ScrollDelta::ZERO;
-    for &idx in &path {
-        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
-            #[cfg(debug_assertions)]
-            if drag_trace_enabled() {
-                eprintln!("[pre-scroll] idx={} connection=有", idx);
-            }
-            let part = connection.on_pre_scroll(remaining, source).clamp_to(remaining);
-            total = total + part;
-            remaining = remaining - part;
-        }
-    }
-    let child_consumed = apply_scroll_delta_inner(nodes, target, remaining.x, remaining.y, density, false);
-    total = total + child_consumed;
-    remaining = remaining - child_consumed;
-    // post-scroll：祖先从内到外（**含 target 自身**——TopAppBar 等 connection
-    // 挂在 scroll 容器节点上，依赖 on_post_scroll 更新 content_offset 变色；
-    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）
-    for &idx in path.iter().rev() {
-        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
-            let part = connection.on_post_scroll(child_consumed, remaining, source).clamp_to(remaining);
-            total = total + part;
-            remaining = remaining - part;
-        }
-    }
-    total
-}
-
-fn dispatch_nested_scroll_fling(
-    nodes: &mut [LayoutNode],
-    root: usize,
-    target: usize,
-    velocity: crate::nested_scroll::ScrollVelocity,
-) -> crate::nested_scroll::ScrollVelocity {
-    fn path_to(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
-        path.push(current);
-        if current == target { return true; }
-        for &child in &nodes[current].children {
-            if path_to(nodes, child, target, path) { return true; }
-        }
-        path.pop();
-        false
-    }
-    let mut path = Vec::new();
-    if !path_to(nodes, root, target, &mut path) { return velocity; }
-
-    let mut remaining = velocity;
-    let mut consumed = crate::nested_scroll::ScrollVelocity::default();
-    // pre-fling：祖先（含 target）先消费一部分速度——正序 path，target 自身
-    // connection 也参与 pre（对标 Compose：目标自身的 connection 参与 pre）
-    for &idx in &path {
-        if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
-            let part = connection.on_pre_fling(remaining).clamp_to(remaining);
-            consumed.x += part.x;
-            consumed.y += part.y;
-            remaining.x -= part.x;
-            remaining.y -= part.y;
-        }
-    }
-    // child fling：剩余速度交给目标滚动节点；撞边界时把瞬时剩余速度交给
-    // post-fling 链。post 链 = path 逆序（**含 target 自身**——TopAppBar 等
-    // connection 挂在 scroll 容器节点上，依赖 on_post_fling 弹回/复位；
-    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）。
-    let child_velocity = remaining;
-    // child 实际消费量 = 起始速度 − 边界剩余速度（在 boundary 回调内计算——
-    // fling_with_boundary 回调传入的是撞边界时的瞬时剩余速度）。
-    // ⚠ 不能传起始速度：on_post_fling 的 consumed_by_child 语义是"child 实际
-    // 消费了多少"，TopAppBar 依赖它做回弹幅度（review C1）。
-    let post_connections: Vec<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>> =
-        path.iter().rev()
-            .filter_map(|&idx| nodes[idx].modifier.nested_scroll_connection())
-            .collect();
-    let child_started = {
-        let node = &nodes[target];
-        // The 50 px/s floor below is a DEACAY floor — it stops a release that is really just the tail
-        // of a drag from banking momentum. A paging list must ignore it: its whole motion is the snap
-        // spring, so a slow drag past halfway that is let go with the finger nearly still has to still
-        // advance a page. Skipping the fling there left the list resting between two pages for good,
-        // because nothing else ever snaps it back. Compose has no such floor — `Scrollable.kt:857-881`
-        // calls `performFling` on every release.
-        if let Some(ss) = node.modifier.vertical_scroll_state() {
-            if child_velocity.y.abs() >= 50.0 || ss.snaps() {
-                let post_connections = post_connections.clone();
-                ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
-                    // child 实际消费 = 起始 − 边界剩余（剩余为 0 时全消费）
-                    let consumed_by_child = crate::nested_scroll::ScrollVelocity {
-                        x: 0.0,
-                        y: child_velocity.y - remaining_velocity,
-                    };
-                    let mut available = crate::nested_scroll::ScrollVelocity { x: 0.0, y: remaining_velocity };
-                    for connection in &post_connections {
-                        let part = connection.on_post_fling(consumed_by_child, available);
-                        available.y -= crate::nested_scroll::ScrollVelocity { x: 0.0, y: part.y }.clamp_to(available).y;
-                    }
-                });
-                true
-            } else { ss.is_scroll_in_progress.set(false); false }
-        } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
-            if child_velocity.x.abs() >= 50.0 || ss.snaps() {
-                let post_connections = post_connections.clone();
-                // ⚠ reverse（RTL）滚动：fling 速度方向与手势 delta 同需镜像
-                //（apply_scroll_delta 已镜像 delta，此处镜像速度保持一致）
-                let fling_vx = if node.scroll_reverse { -child_velocity.x } else { child_velocity.x };
-                ss.fling_with_boundary(fling_vx, move |remaining_velocity| {
-                    // child 实际消费 = 起始 − 边界剩余
-                    let consumed_by_child = crate::nested_scroll::ScrollVelocity {
-                        x: child_velocity.x - remaining_velocity,
-                        y: 0.0,
-                    };
-                    let mut available = crate::nested_scroll::ScrollVelocity { x: remaining_velocity, y: 0.0 };
-                    for connection in &post_connections {
-                        let part = connection.on_post_fling(consumed_by_child, available);
-                        available.x -= crate::nested_scroll::ScrollVelocity { x: part.x, y: 0.0 }.clamp_to(available).x;
-                    }
-                });
-                true
-            } else { ss.is_scroll_in_progress.set(false); false }
-        } else { false }
-    };
-    if child_started {
-        consumed.x += child_velocity.x;
-        consumed.y += child_velocity.y;
-    }
-    consumed
-}
-
-fn find_scroll_target(nodes: &[LayoutNode], idx: usize, dx: f32, dy: f32) -> Option<usize> {
-    for &child in nodes[idx].children.iter().rev() {
-        if let Some(target) = find_scroll_target(nodes, child, dx, dy) { return Some(target); }
-    }
-    if (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
-        || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some()) {
-        Some(idx)
-    } else { None }
-}
-
-fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density) -> crate::nested_scroll::ScrollDelta {
-    apply_scroll_delta_inner(nodes, idx, dx, dy, density, true)
-}
-
-/// `apply_scroll_delta` 实现。`recursive=true` 时，若节点自身未消费（已到
-/// 边界），回退递归子节点（旧行为——wheel/拖拽的 fallback 语义，让内层
-/// 子 scroll 消费）。`recursive=false` 时**只滚目标自身**——`dispatch_nested
-/// _scroll_delta` 的显式 target 语义：target 滚不动应留给 post 链的祖先
-/// connection 处理，**不能**偷偷滚子节点（否则"在外层顶部向下拖"会错误地
-/// 滚动内层子列表——用户报告的 bug：外层已到顶，delta 递归到内层）。
-fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density, recursive: bool) -> crate::nested_scroll::ScrollDelta {
-    let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
-    {
-        let node = &nodes[idx];
-        #[cfg(debug_assertions)]
-        if drag_trace_enabled() {
-            eprintln!("[apply-scroll] idx={} dy={} vp_h={} content_h={} has_vscroll={}",
-                idx, dy, node.scroll_viewport_height, node.scroll_content_height,
-                node.modifier.vertical_scroll_state().is_some());
-        }
-        if dy != 0.0 {
-            if let Some(state) = node.modifier.vertical_scroll_state() {
-            // 手动输入接管：取消进行中的 fling + 结束滚动中标记（拖拽路径随后置回）
-            crate::animation::cancel_animation(&state.offset);
-            state.is_scroll_in_progress.set(false);
-            let current = state.offset.get();
-            #[cfg(debug_assertions)]
-            if drag_trace_enabled() {
-                eprintln!("[apply-scroll] → state.offset 应用前 = {}", current);
-            }
-            // 滚动极限 = 内容总高度 - 可视区域高度
-            // The visible size is the node's OWN measured height — what the user sees. It used to prefer
-            // `scroll_viewport_height`, which is the padding-DEDUCTED measure constraint: for a menu
-            // (a 112x424 container holding 20 items with 8dp of padding) that gave a range of
-            // 976 - 408 = 568 where the end is 976 - 424 = 552, so the content scrolled 16px past its end
-            // and the last item sat in dead space (24px with its own padding). Falls back to the viewport
-            // while the node has not been measured yet, and to 0 (no movement) when neither is known.
-            let visible_h = if node.measured_size.height > 0.0 {
-                node.measured_size.height
-            } else if node.scroll_viewport_height > 0.0 {
-                node.scroll_viewport_height
-            } else {
-                node.modifier.fixed_size()
-                    .and_then(|(_, h)| {
-                        use crate::modifier::Dimension;
-                        match h {
-                            Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) => Some(h),
-                            Dimension::Px(p) => Some(p.to_logical(density)),
-                            _ => None,
-                        }
-                    })
-                    .unwrap_or(0.0)
-            };
-            // 内容总高：lazy 列表（scroll_content_height > 0）用其真实内容高；
-            // 否则用节点自身高度（普通 scroll 容器）
-            let content_h = if node.scroll_content_height > 0.0 {
-                node.scroll_content_height
-            } else {
-                node.measured_size.height
-            };
-            let max_offset = (content_h - visible_h).max(0.0);
-            let new = (current - dy).clamp(0.0, max_offset);
-            state.offset.set(new);
-            consumed.y = current - new;
-            }
-        }
-        // 水平滚动（LazyRow/横向 scroll 容器）——与垂直对称：dx 正 = 内容左移
-        if dx != 0.0 {
-        if let Some(state) = node.modifier.horizontal_scroll_state() {
-            crate::animation::cancel_animation(&state.offset);
-            state.is_scroll_in_progress.set(false);
-            let current = state.offset.get();
-            // Same as the vertical case above: the container's own measured width is what the range ends
-            // against, with the viewport only as a not-measured-yet fallback.
-            let visible_w = if node.measured_size.width > 0.0 {
-                node.measured_size.width
-            } else if node.scroll_viewport_width > 0.0 {
-                node.scroll_viewport_width
-            } else {
-                node.modifier.fixed_size()
-                    .and_then(|(w, _)| {
-                        use crate::modifier::Dimension;
-                        match w {
-                            Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) => Some(w),
-                            Dimension::Px(p) => Some(p.to_logical(density)),
-                            _ => None,
-                        }
-                    })
-                    .unwrap_or(0.0)
-            };
-            let content_w = if node.scroll_content_width > 0.0 {
-                node.scroll_content_width
-            } else {
-                node.measured_size.width
-            };
-            let max_offset = (content_w - visible_w).max(0.0);
-            // ⚠ reverse（RTL）滚动：render 端 offset 语义被镜像（offset 0 = 内容末端），
-            // 手势 delta 方向也需镜像——否则拖动方向反（用户实测 bug）。垂直同理见上。
-            let new = if node.scroll_reverse {
-                (current + dx).clamp(0.0, max_offset)
-            } else {
-                (current - dx).clamp(0.0, max_offset)
-            };
-            state.offset.set(new);
-            consumed.x = current - new;
-        }
-        }
-    }
-    if consumed.x != 0.0 || consumed.y != 0.0 { return consumed; }
-    // 自身未消费：recursive 模式回退递归子节点（旧 fallback 语义）；
-    // 非 recursive（dispatch 路径）不递归——target 滚不动交给 post 链
-    if !recursive { return consumed; }
-    // 子节点（clone 索引后递归，避免与 nodes 的可变借用冲突）
-    let children: Vec<usize> = nodes[idx].children.clone();
-    for c in children {
-        let child = apply_scroll_delta_inner(nodes, c, dx, dy, density, true);
-        if child.x != 0.0 || child.y != 0.0 { return child; }
-    }
-    consumed
-}
-
-/// 手势动作 → 节点回调（坐标转组件本地——对标 Compose onTap 的本地 offset）。
-/// `scene_pos` 是事件位置；tap/drag 系列动作自带 `down_pos`——坐标用动作
-/// 携带的位置（slop 内移动后 up 位置与按下位置不同，用 up 会偏）。
-/// 返回是否消费（有回调执行）。
-fn fire_gesture_action(
-    nodes: &[crate::layout::node::LayoutNode],
-    root: usize,
-    slot_key: u64,
-    action: crate::input::gesture::GestureAction,
-) -> bool {
-    // ⚠ 用 slot_key 解析节点（跨重组稳定）——node_id 在重组后会变
-    let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, root, slot_key) else {
-        return false;
-    };
-    let Some(idx) = crate::layout::node::find_node_by_id(nodes, root, nid) else {
-        return false;
-    };
-    let (ax, ay) = node_abs_position(nodes, root, nid);
-    use crate::input::gesture::GestureAction as G;
-    use crate::modifier::ModifierElement as E;
-    let mut fired = false;
-    for el in nodes[idx].modifier.elements() {
-        match (el, action) {
-            (E::TapOnPress { cb }, G::Press(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::TapOnTap { cb }, G::Tap(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::TapOnDoubleTap { cb }, G::DoubleTap(p)) => {
-                (cb)((p.0 - ax, p.1 - ay));
-                fired = true;
-            }
-            (E::TapOnLongPress { cb }, G::LongPress(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::DragOnStart { cb }, G::DragStart(p)) => { (cb)((p.0 - ax, p.1 - ay)); fired = true; }
-            (E::DragOnMove { cb }, G::DragMove(p, delta)) => {
-                (cb)((p.0 - ax, p.1 - ay), delta);
-                fired = true;
-            }
-            (E::DragOnEnd { cb }, G::DragEnd) => {
-                (cb)(); fired = true;
-            }
-            (E::DragOnCancel { cb }, G::DragCancel) => { (cb)(); fired = true; }
-            _ => {}
-        }
-    }
-    fired
-}
-
-/// 命中路径上最内层滚动容器下标（rev 第一个 vertical/horizontal scroll state）
-fn path_scroll_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
-    path.iter().rev().find(|&&n| {
-        nodes[n].modifier.vertical_scroll_state().is_some()
-            || nodes[n].modifier.horizontal_scroll_state().is_some()
-    }).copied()
-}
-
-/// 命中路径上最内层拖拽手势组件下标（has_drag_gesture）
-fn path_drag_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
-    path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied()
-}
-
-/// 「内容滚动优先」核心判定（对齐 Compose）：内层可拖组件（slider/switch 在 scroll
-/// 内部）优先于滚动；drag 是 scroll 祖先（如 BottomSheet 面板 on_drag）→ 滚动优先。
-/// 三处共享：handle_pointer_down 的 child_drag、gesture_down 目标选择、overlay_down。
-fn inner_component_drag(drag: Option<usize>, scroll: Option<usize>) -> bool {
-    match (drag, scroll) {
-        (Some(d), Some(s)) => d > s, // drag 下标更大 = 更靠叶 = 组件在 scroll 内部
-        (Some(_), None) => true,     // 无滚动容器：独立的拖拽组件（不降级）
-        _ => false,
-    }
-}
-
-/// Press-gesture target on a hit path, as `(node_id, slot_key, has_drag)`: the innermost
-/// node that can receive a press.
-///
-/// A drag gesture that is an ANCESTOR of a scroll container is skipped, so the panel
-/// `on_drag` of a bottom sheet does not build a drag tracker when a press lands in the list
-/// inside it — the two systems would run at once and the sheet would follow the finger before
-/// the list had scrolled to its end. An inner gesture component (a slider or a switch inside
-/// the scroll) still wins, because drag deeper than scroll means the component. This is
-/// Compose's "content scrolling wins" rule, and the main tree (`gesture_down`) and the overlay
-/// path (`overlay_down`) share it here so a popup behaves like the rest of the app.
-fn press_gesture_target(
-    nodes: &[crate::layout::node::LayoutNode],
-    path: &[usize],
-) -> Option<(u64, u64, bool)> {
-    let scroll_idx = path_scroll_idx(nodes, path);
-    let gid = path.iter().rev()
-        .find(|&&i| {
-            if !nodes[i].modifier.has_gesture() { return false; }
-            if !nodes[i].modifier.has_drag_gesture() { return true; } // non-drag gestures (tap) are never skipped
-            inner_component_drag(Some(i), scroll_idx)
-        })
-        .copied()?;
-    let n = &nodes[gid];
-    Some((n.id, n.slot_key, n.modifier.has_drag_gesture()))
-}
-
-/// Overlay index of a gesture arena — `None` for the main tree, and for a target whose overlay has
-/// since been removed (the gesture then has nowhere to land).
-///
-/// A `closing` overlay is deliberately still resolved: unlike a press (`hit_overlay` treats a fading
-/// overlay as transparent) the finger is already down and its nodes are still composed, so the
-/// gesture completes into the popup and dies with it when `finish_closing_overlays` removes it.
-fn gesture_arena_overlay(pw: &PerWindow, arena: Option<u64>) -> Option<usize> {
-    let id = arena?;
-    pw.overlays.iter().position(|o| o.id == id)
-}
-
-/// Convert a window position into the gesture target's arena space: unchanged for the main tree,
-/// LAYER-LOCAL inside a popup — a gesture callback receives coordinates local to the arena it was
-/// resolved in (`fire_gesture_action` subtracts the node's position there), so the tracker has to
-/// measure and report in the same space. `None` once the target's overlay is gone.
-///
-/// ⚠ The conversion uses the overlay's CURRENT `screen_pos`, so an overlay that MOVES during a
-/// gesture injects its own motion into the measured position — enough to cross the 8 px tap slop and
-/// cancel the tap family. The expanded `SearchBar` is exactly that: an anchored panel sliding to the
-/// window corner over `SEARCH_BAR_EXPAND_MS`, pressable while it moves (`anchor_slide`). Nothing
-/// shipped is visibly affected (its content is a `TextField` whose `on_press` already fired plus
-/// `clickable` rows that use `on_click`), but a component that wants a tap to survive its own
-/// overlay's motion would need the arena origin frozen at press time.
-fn gesture_arena_pos(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(f32, f32)> {
-    match pw.gesture_arena {
-        None => Some(scene_pos),
-        Some(id) => {
-            // The arena must still exist (its composer is where the action lands)...
-            pw.overlays.iter().find(|o| o.id == id)?;
-            // ...but the conversion uses the origin frozen at press time, not the live one: see
-            // `gesture_arena_origin`.
-            Some((
-                scene_pos.0 - pw.gesture_arena_origin.0,
-                scene_pos.1 - pw.gesture_arena_origin.1,
-            ))
-        }
-    }
-}
-
-/// Fire a gesture action at `slot` inside `arena` — the arena the gesture target belongs to, passed
-/// explicitly because the callers clear `pw.gesture_arena` (the gesture is over) before dispatching
-/// its last action. The main tree and each overlay have their own composer, so an action is routed
-/// together with the arena it was produced for — the same split `press_gesture_target` follows on
-/// the way in. `None` means the MAIN TREE; an arena that no longer resolves (the popup is gone) is
-/// NOT the main tree — the action is dropped instead, which is the whole point of carrying the arena.
-fn fire_in_gesture_arena(
-    pw: &mut PerWindow,
-    arena: Option<u64>,
-    slot: u64,
-    action: crate::input::gesture::GestureAction,
-) -> bool {
-    match arena {
-        None => {
-            let nodes = pw.composer.arena_nodes();
-            let Some(r) = pw.composer.layout_root_idx() else { return false; };
-            fire_gesture_action(nodes, r, slot, action)
-        }
-        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
-            Some(i) => {
-                let ov = &pw.overlays[i];
-                let nodes = ov.composer.arena_nodes();
-                let Some(r) = ov.composer.layout_root_idx() else { return false; };
-                fire_gesture_action(nodes, r, slot, action)
-            }
-            None => false,
-        },
-    }
-}
-
-/// Is `on_double_tap` registered on `slot`, in `arena`? The answer decides whether a tap is deferred
-/// to the double-tap window (see `gesture_up`).
-///
-/// `None` means the main tree only, matching `fire_in_gesture_arena`: an arena that no longer
-/// resolves answers `false` rather than consulting the main tree (the caller's vanished-arena guard
-/// has already ended the gesture; the tap that follows is dropped on dispatch).
-fn slot_has_double_tap(pw: &PerWindow, arena: Option<u64>, slot: u64) -> bool {
-    let (nodes, r) = match arena {
-        None => (pw.composer.arena_nodes(), pw.composer.layout_root_idx()),
-        Some(id) => match pw.overlays.iter().position(|o| o.id == id) {
-            Some(i) => {
-                let ov = &pw.overlays[i];
-                (ov.composer.arena_nodes(), ov.composer.layout_root_idx())
-            }
-            None => return false,
-        },
-    };
-    let Some(r) = r else { return false; };
-    crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)
-        .and_then(|nid| crate::layout::node::find_node_by_id(nodes, r, nid))
-        .map(|idx| nodes[idx].modifier.has_double_tap())
-        .unwrap_or(false)
-}
-
-/// Pending-tap bookkeeping for a new press on `node_id` (Compose double-tap semantics, rules in
-/// `pending_tap_on_down`): a due tap is fired into the arena it was recorded in, a window hit on the
-/// same node cancels it (the up decides double-tap), anything else keeps waiting for its deadline.
-fn process_pending_taps_on_down(pw: &mut PerWindow, node_id: u64) {
-    let now = std::time::Instant::now();
-    let mut kept = Vec::new();
-    for t in std::mem::take(&mut pw.pending_taps) {
-        use crate::input::gesture::PendingTapAction as A;
-        match crate::input::gesture::pending_tap_on_down(&t, now, node_id) {
-            A::Fire => pw.fire_pending_tap(t),
-            A::Cancel => {}
-            A::Keep => kept.push(t),
-        }
-    }
-    pw.pending_taps = kept;
-}
-
-/// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
-/// 后续 move/up 由 gesture_node 路由，指针移出组件仍接收）→ on_press 立即触发。
-fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
-    // 先解析手势目标（借用结束即释放——后面要可变借用 pw 处理 pending tap）
-    let hit = {
-        let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return; };
-        let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-        press_gesture_target(nodes, &path)
-    };
-    let Some((node_id, slot, has_drag)) = hit else {
-        return;
-    };
-
-    process_pending_taps_on_down(pw, node_id);
-
-    // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
-    let ctx = pw.gesture_tap_ctx.take()
-        .filter(|(n, _, _)| *n == node_id)
-        .map(|(_, t, p)| (t, p));
-    pw.gesture = Some(crate::input::gesture::GestureTracker::new(node_id, scene_pos, has_drag, ctx));
-    pw.gesture_node = Some(node_id);
-    pw.gesture_slot = Some(slot);
-    pw.gesture_arena = None; // the main tree
-    pw.gesture_axis = None;
-    pw.gesture_scroll_slot = None;
-    pw.gesture_arena_origin = (0.0, 0.0);
-    // on_press 立即触发（本地坐标）
-    let nodes = pw.composer.arena_nodes();
-    let Some(r) = pw.composer.layout_root_idx() else { return; };
-    fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(scene_pos));
-}
-
-/// 指针移动手势入口：tracker 存在即路由（capture——不依赖 hit test）。
-///
-/// A press can be claimed by two owners at once — an inner drag component (a swipeable row, a
-/// slider) and the scroll container it sits in — and the finger's dominant axis decides which one
-/// keeps the gesture (Compose arbitrates in the same place: each drag detector waits for the touch
-/// slop along its own orientation, so the direction the finger moves first decides the owner).
-/// The decision is taken ONCE and holds for the rest of the gesture: handing over mid-gesture
-/// would mean replaying the deltas the component already consumed.
-fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.gesture_slot else { return false; };
-    let Some(local) = gesture_arena_pos(pw, scene_pos) else {
-        end_gesture(pw); // the target's overlay vanished mid-drag
-        return false;
-    };
-    let mut axis_undecided = false;
-    if pw.gesture_axis.is_none() {
-        if let Some((scroll_slot, down)) = pw
-            .gesture_scroll_slot
-            .zip(pw.gesture.as_ref().map(|t| t.down_position()))
-        {
-            // The scroll is armed whenever the press passed over an inner drag component — the
-            // target of the press may still be a plain tap node inside it (a `TextField` inside a
-            // `Slider`, say), and that case needs the arbitration just as much: without it a vertical
-            // drag over such a press scrolls nothing and reaches nothing.
-            use crate::input::gesture::ScrollAxis;
-            match ScrollAxis::classify(local.0 - down.0, local.1 - down.1) {
-                // Undecided (below the slop, or an exact diagonal): neither owner starts YET. The move
-                // still reaches the tracker with the drag withheld, so crossing the touch slop keeps
-                // cancelling the tap family exactly as it did before the arbitration existed.
-                None => axis_undecided = true,
-                Some(axis) => {
-                    pw.gesture_axis = Some(axis);
-                    if axis == ScrollAxis::Vertical {
-                        // The scroll ancestor owns it: cancel the component's drag, so no
-                        // `on_drag_*` callback fires for a gesture it did not get, and open a
-                        // scroll session on the ancestor node — the rest of the gesture (and its
-                        // fling) is the ordinary drag-scroll path from here on. A target with no drag
-                        // of its own has nothing to cancel; the call is then a no-op.
-                        if let Some(t) = pw.gesture.as_mut() {
-                            t.cancel_drag_for_arbitration();
-                        }
-                        pw.drag_scroll = Some(DragScroll::new(scroll_slot, scene_pos));
-                    }
-                }
-            }
-        }
-    }
-    if pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Vertical) {
-        return false; // the scroll session owns the rest of the gesture
-    }
-    let allow_drag = !axis_undecided
-        && (pw.gesture_scroll_slot.is_none()
-            || pw.gesture_axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
-    let action = {
-        let Some(t) = pw.gesture.as_mut() else { return false; };
-        t.on_move(local, allow_drag)
-    };
-    if action == crate::input::gesture::GestureAction::None {
-        return false;
-    }
-    let arena = pw.gesture_arena;
-    fire_in_gesture_arena(pw, arena, slot, action)
-}
-
-/// Drop the gesture state (tracker + target) without firing anything.
-fn end_gesture(pw: &mut PerWindow) {
-    pw.gesture = None;
-    pw.gesture_node = None;
-    pw.gesture_slot = None;
-    pw.gesture_arena = None;
-    pw.gesture_axis = None;
-    pw.gesture_scroll_slot = None;
-    pw.gesture_arena_origin = (0.0, 0.0);
-}
-
-/// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
-/// 内容继续向上 = offset 增大）。速度不足 → 仅结束滚动中标记。
-fn drag_scroll_up(pw: &mut PerWindow) {
-    let Some(ds) = pw.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
-    let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
-    let target: Option<usize> = (|| {
-        let nodes = pw.composer.arena_nodes();
-        let Some(r) = pw.composer.layout_root_idx() else { return None };
-        let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
-        crate::layout::node::find_node_by_id(nodes, r, id)
-    })();
-    #[cfg(debug_assertions)]
-    if drag_trace_enabled() {
-        eprintln!("[drag-up] slot={:?} target_idx={:?} v=({},{})",
-            ds.slot, target, vx, vy);
-    }
-    let Some(idx) = target else { return };
-    let Some(root) = pw.composer.layout_root_idx() else { return };
-    // 手指速度 → 滚动速度（内容速度 = -手指速度），并走 nested scroll pre/post fling 链
-    let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
-    let _ = dispatch_nested_scroll_fling(pw.composer.arena_nodes_mut(), root, idx, velocity);
-}
-
-/// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
-fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
-    let Some(slot) = pw.gesture_slot else { return false; };
-    let Some(gid) = pw.gesture_node else { return false; };
-    // The tracker recorded positions in the target's arena, so its action carries arena-local
-    // coordinates already; the arena itself decides where the action is dispatched — captured here
-    // because `end_gesture` clears it before the dispatch below.
-    let arena = pw.gesture_arena;
-    if arena.is_some() && gesture_arena_overlay(pw, arena).is_none() {
-        end_gesture(pw); // the target's overlay vanished mid-gesture
-        return false;
-    }
-    let action = {
-        let Some(mut t) = pw.gesture.take() else { return false; };
-        // ⚠ 必须先 on_up（Tap 分支记录 last_tap）再取 tap_context——
-        // 顺序颠倒则双击上下文恒 None（ctx 在 up 判定前读取）
-        let action = t.on_up();
-        pw.gesture_tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
-        action
-    };
-    end_gesture(pw);
-    if action == crate::input::gesture::GestureAction::None {
-        return false;
-    }
-    // ⚠ Compose detectTapGestures 语义：节点注册 onDoubleTap 时，onTap 延迟
-    // 到双击窗口结束——窗口内第二次 up 命中双击 → 只发 DoubleTap（第一次 tap
-    // 已在第二次 down 时取消）；超时/按下其他节点 → 补发 Tap（fire_pending_tap）
-    if let crate::input::gesture::GestureAction::Tap(pos) = action {
-        if slot_has_double_tap(pw, arena, slot) {
-            pw.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
-            return false;
-        }
-        return fire_in_gesture_arena(pw, arena, slot, action);
-    }
-    if matches!(action, crate::input::gesture::GestureAction::DoubleTap(_)) {
-        // 双击命中：第一次 tap 的 pending 应已在第二次 down 时取消——防御性清理同节点残留
-        pw.pending_taps.retain(|t| t.node_id != gid);
-    }
-    fire_in_gesture_arena(pw, arena, slot, action)
-}
-
-// ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
-
-impl OverlayWindow {
-    fn new_with_composer(desc: crate::ui::overlay::OverlayDesc, composer: Composer) -> Self {
-        Self {
-            id: desc.id,
-            composer,
-            anchor_slot: desc.anchor_slot,
-            position: desc.position,
-            offset: desc.offset,
-            dismiss_on_back_press: desc.dismiss_on_back_press,
-            anchor_slide: desc.anchor_slide,
-            modal: desc.modal,
-            dismiss_on_outside: desc.dismiss_on_outside,
-            click_passthrough: desc.click_passthrough,
-            fit_around_anchor: desc.fit_around_anchor,
-            match_anchor_width: desc.match_anchor_width,
-            on_dismiss: desc.on_dismiss,
-            content: desc.content,
-            local_snapshot: desc.local_snapshot,
-            screen_pos: (0.0, 0.0),
-            anchor_rect: None,
-            hovered_slots: std::collections::HashSet::new(),
-            pressed_interaction: None,
-            // progress is driven only when an enter or exit spec exists (0->1
-            // enter, 1->0 exit); otherwise None means always visible (instant).
-            progress: (desc.enter_anim.is_some() || desc.exit_anim.is_some())
-                .then(|| crate::core::state::Animating::new(0.0)),
-            enter_anim: desc.enter_anim,
-            exit_anim: desc.exit_anim,
-            closing: false,
-            closing_since: None,
-            focused_id: None,
-            focused_slot_key: None,
-            focus_scope: desc.focus_scope,
-            claimed_keyboard: false,
-        }
-    }
-
-    /// Undo a close in progress: this overlay is visible again, so its show-progress goes back to 1.
-    ///
-    /// The exit tween drove it to 0 and nothing else brings it back — the enter animation is pushed
-    /// only when an overlay is CREATED or when its animation specs flip None<->Some. Without this the
-    /// overlay is drawn at alpha 0 while `hit_overlay` (which never looks at alpha) keeps swallowing
-    /// clicks in its rect and `keyboard_scope` keeps granting it the keyboard: an invisible panel you
-    /// cannot get rid of, reached by closing and letting the caller re-declare the overlay.
-    fn resume_after_close(&mut self) {
-        self.closing = false;
-        self.closing_since = None;
-        // It is the keyboard's owner again, so the page's suspended focus has to be suspended afresh
-        // (the release already handed it back).
-        self.claimed_keyboard = false;
-        let Some(progress) = self.progress.clone() else { return };
-        match &self.enter_anim {
-            Some(spec) => {
-                crate::animation::push_animatable_handle(progress, 1.0, spec.animation_spec());
-            }
-            // No enter animation to replay: the render path reads progress for the exit spec too, so
-            // a stale 0 would keep it hidden — show it outright.
-            None => progress.as_raw().set_backchannel(1.0),
-        }
-    }
-
-    fn update(&mut self, desc: crate::ui::overlay::OverlayDesc) {
-        // A desc only reaches this method while its overlay is still DECLARED (a closing overlay is not
-        // re-registered), so the caller bringing one back — open, close, open again inside the exit fade,
-        // where the id is reused — has to cancel the pending close: leaving `closing` set kept the overlay
-        // un-interactive (`hit_overlay` skips closing ones) and let the fade remove it a moment after it
-        // was reopened, which showed as a panel flashing.
-        let was_closing = self.closing;
-        self.closing = false;
-        self.closing_since = None;
-        self.anchor_slot = desc.anchor_slot;
-        self.position = desc.position;
-        self.anchor_slide = desc.anchor_slide;
-        self.offset = desc.offset;
-        self.modal = desc.modal;
-        self.focus_scope = desc.focus_scope;
-        self.dismiss_on_outside = desc.dismiss_on_outside;
-        self.dismiss_on_back_press = desc.dismiss_on_back_press;
-        self.click_passthrough = desc.click_passthrough;
-        self.fit_around_anchor = desc.fit_around_anchor;
-        self.match_anchor_width = desc.match_anchor_width;
-        self.on_dismiss = desc.on_dismiss;
-        self.content = desc.content;
-        self.local_snapshot = desc.local_snapshot;
-        // Animation spec update (when a reused overlay's specs change) — rebuild
-        // progress on None<->Some flip (None->Some: new driver; Some->None:
-        // leftover State retired — render falls to the `_` branch, always visible,
-        // and close removes instantly with has_exit=false).
-        let old_progress = self.progress.clone();
-        let spec_flipped = desc.enter_anim.is_some() != self.enter_anim.is_some()
-            || desc.exit_anim.is_some() != self.exit_anim.is_some();
-        self.enter_anim = desc.enter_anim;
-        self.exit_anim = desc.exit_anim;
-        if spec_flipped {
-            // Cancel any in-flight animation on the old progress handle
-            // (otherwise it lingers as an orphan until timeout — P1-4).
-            if let Some(old) = old_progress {
-                crate::animation::cancel_animation_by_id(old.state_id());
-            }
-            self.progress = (self.enter_anim.is_some() || self.exit_anim.is_some())
-                .then(|| crate::core::state::Animating::new(0.0));
-            // Update is the reuse path — overlay is already visible; progress=0
-            // would render as apply(0) hidden. If the new spec has no enter
-            // animation, keep it fully visible (Backchannel-equivalent direct
-            // write on the Animating handle — same stored value); otherwise the
-            // caller will push the 0->1 enter animation.
-            if let Some(p) = self.progress.as_ref() {
-                if self.enter_anim.is_none() {
-                    p.as_raw().set_backchannel(1.0);
-                }
-            }
-        }
-        // The caller brought back an overlay that was fading out (open, close, open inside the exit):
-        // the fade has to be undone, not just the flag.
-        if was_closing {
-            self.resume_after_close();
-        }
-    }
-}
-
-/// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/删除。
-/// 删除依据 = 组合期显式记录的 active=false（Popup/Dialog/DropdownMenu build
-/// 总执行时 record_overlay_active）——主动关闭（visible/expanded=false）→ 删；
-/// 注册方 Skip（build 未执行 → 本帧无记录）→ 保留（闪烁根因：旧 retain 把
-/// Skip 帧误判为主动关闭）。
-fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
-    let descs = pw.composer.take_overlays();
-    for desc in descs {
-        if let Some(ov) = pw.overlays.iter_mut().find(|o| o.id == desc.id) {
-            // 复用：规格翻转（None↔Some）时 update 重建 progress——新规格有
-            // enter 动画则 push 0→1（否则 update 内已 Backchannel 写 1.0 保持显示）
-            let had_enter = ov.enter_anim.is_some();
-            ov.update(desc);
-            // ⚠ The caller just recomposed and handed us a NEW content closure, so the overlay's whole
-            // content has to run again. An overlay is a separate composer: nothing inside it can see
-            // that its closure was replaced, and a group re-enters only for state it read or
-            // parameters it declared — so content built from values the caller captured (a filtered
-            // list, a formatted string) kept what the FIRST closure captured. Marking the root alone
-            // is not enough: the caller's lambda usually sits inside wrapper groups of its own (a
-            // `Column`, a `Surface`), which declare nothing and would skip. Measured on
-            // `search_bar_demo`: the fullscreen panel and the docked dropdown both stayed on their
-            // first rows while the input field updated.
-            //
-            // Cost is bounded by how often the caller's group runs, not by this call: a screen whose
-            // main tree composes every frame re-runs the overlay content every frame too, while one
-            // that idles skips both composers. Nothing leaks across frames (`Slot::dirty` is consumed
-            // by the pass that reads it), a `LazyColumn` keeps its scroll position, and a closing
-            // overlay is not re-registered at all.
-            ov.composer.mark_content_dirty();
-            let now_has_enter = ov.enter_anim.is_some();
-            if !had_enter && now_has_enter {
-                if let Some(p) = ov.progress.clone() {
-                    let spec = ov.enter_anim.as_ref().unwrap();
-                    crate::animation::push_animatable_handle(
-                        p, 1.0,
-                        spec.animation_spec(),
-                    );
-                }
-            }
-        } else {
-            // 新 overlay：创建 + 启动进入动画（progress 0→1；无 enter 规格 =
-            // 瞬时显示——但 exit 有规格时 progress 直接置 1.0，退出才能 1→0）
-            // 共享主窗 AdaptiveContext，确保 overlay 读 window_size/density 与主窗一致
-            let mut composer = Composer::new();
-            composer.adaptive = pw.composer.adaptive.clone();
-            let enter_anim = desc.enter_anim.clone();
-            pw.overlays.push(OverlayWindow::new_with_composer(desc, composer));
-            if let Some(p) = pw.overlays.last().and_then(|o| o.progress.clone()) {
-                if let Some(spec) = &enter_anim {
-                    crate::animation::push_animatable_handle(
-                        p, 1.0,
-                        spec.animation_spec(),
-                    );
-                } else {
-                    // 无进入动画（但 exit 有）：直接完整显示（progress=1）
-                    p.as_raw().set_backchannel(1.0);
-                }
-            }
-        }
-    }
-    // 组合期记录 active=false 的 overlay → 主动关闭 → 启动退出动画
-    // （先触发 on_dismiss；动画完成由 finish_closing_overlays 移除——不复位
-    // 则保留渲染播放退出动画）
-    let to_close: Vec<u64> = pw.composer.overlay_active.iter()
-        .filter(|(_, active)| !**active)
-        .map(|(&id, _)| id)
-        .collect();
-    for id in &to_close {
-        begin_overlay_close(pw, *id);
-    }
-    // 退出动画完成检测：closing 且 progress≈0（或无动画规格）→ 真正移除
-    finish_closing_overlays(pw);
-}
-
-/// 启动 overlay 关闭（退出动画）：标记 closing + 触发 on_dismiss + 驱动
-/// progress 1→0（有退出规格）——动画完成前保留渲染（对齐 Compose
-/// AnimatedVisibility exit 语义）。无退出规格 → 立即移除。
-fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
-    let Some(idx) = pw.overlays.iter().position(|o| o.id == id) else { return };
-    // 已在关闭中（重复关闭请求）→ 跳过（防重入：动画重启/on_dismiss 重复）
-    if pw.overlays[idx].closing {
-        return;
-    }
-    pw.overlays[idx].closing = true;
-    pw.overlays[idx].closing_since = Some(std::time::Instant::now());
-    if let Some(cb) = pw.overlays[idx].on_dismiss.take() {
-        (cb)();
-    }
-    // Closing surface loses focus (its nodes are about to be destroyed).
-    // IME follows: off when nothing else holds focus. Both the cache AND the tree flags go: the
-    // overlay keeps rendering through its fade, and a flag left set draws a focus ring on a panel
-    // that is on its way out — next to the ring the layer below just got back (caught by the
-    // one-ring assertion in `tab_owns_the_keyboard_inside_a_modal_overlay_and_the_page_gets_it_back`).
-    pw.overlays[idx].focused_id = None;
-    pw.overlays[idx].focused_slot_key = None;
-    if let Some(r) = pw.overlays[idx].composer.layout_root_idx() {
-        crate::layout::node::clear_focus(pw.overlays[idx].composer.arena_nodes_mut(), r);
-    }
-    // A focus-scope overlay took the keyboard when it opened; closing it hands the keyboard to the
-    // layer below (an overlay that remembers a focus, else the page) — a keyboard user keeps standing
-    // where they were instead of starting over.
-    release_keyboard_to_lower_layer(pw);
-    if pw.focused_id.is_none() && !pw.overlays.iter().any(|o| !o.closing && o.focused_id.is_some()) {
-        if let Some(ref sw) = pw.skia_window { sw.set_ime_allowed(false); }
-    }
-    cleanup_overlay_interactions(&mut pw.overlays[idx]);
-    // 启动退出动画（progress 1→0）；无退出规格 → 立即移除（不推无用动画——
-    // 否则对即将 drop 的孤儿 State 浪费 200ms 动画）
-    let has_exit = pw.overlays[idx].exit_anim.is_some();
-    if has_exit {
-        if let Some(p) = pw.overlays[idx].progress.clone() {
-            let spec = pw.overlays[idx].exit_anim.as_ref().unwrap();
-            crate::animation::push_animatable_handle(
-                p, 0.0,
-                spec.animation_spec(),
-            );
-        }
-    }
-    // An overlay the caller STILL declares is not removed here. `ModalBottomSheet` is the case that
-    // proved it: it fades out on its own 200 ms exit spec AND slides out through its `SheetState`,
-    // and it reports the dismissal back to the caller only after that slide settles
-    // (`shown && settled == Hidden`). Removing the overlay as soon as its fade finished would cut the
-    // composition that observer runs in — the caller's `visible` then stayed TRUE for good, so the
-    // sheet could never be reopened and the next recomposition rebuilt it (off-screen, with its
-    // scrim) from the still-true declaration. `finish_closing_overlays` removes it once the caller
-    // stops declaring it, and the fade path below is for overlays nobody re-declares.
-    let still_declared = pw.composer.overlay_active.get(&id).copied().unwrap_or(false);
-    if !has_exit && !still_declared {
-        pw.overlays.remove(idx);
-    }
-}
-
-/// How long a closing overlay may stay in the list before it is removed regardless of its exit
-/// animation. Every exit spec is a few hundred milliseconds; a tween that never reports done (an
-/// interrupted or never-advanced one) used to keep the overlay — and its modal scrim — rendering for the
-/// rest of the process, which is a stuck dim layer over the window that the user cannot get rid of.
-const CLOSING_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1000);
-
-/// Which arena owns the keyboard right now: `Some(i)` = that overlay's own composition,
-/// `None` = the window's main tree.
-///
-/// In two steps:
-///
-/// 1. The topmost open overlay that declares itself a focus scope takes the keys. It wins outright:
-///    asking "who already holds focus" first would hand the keys to an overlay BELOW a modal that
-///    still remembers a focused node — measured, with a dialog over the settings sheet: Tab cycled
-///    the sheet underneath.
-/// 2. With no focus scope up, an overlay something was clicked into keeps the keys (a popup, a
-///    tooltip the user is interacting with), else they belong to the main tree.
-///
-/// The focus scope does NOT have to contain anything focusable. Skipping such a layer would make it
-/// fall through to the page behind its scrim, which is the wrong answer for a modal: a dialog with
-/// nothing focusable simply has nowhere to put focus, and Tab does nothing rather than reaching
-/// behind a scrim for a target. (`focus_scope_is_open` shares that judgement for the key
-/// fall-through.)
-fn keyboard_scope(pw: &PerWindow) -> Option<usize> {
-    if let Some(i) = (0..pw.overlays.len()).rev().find(|&i| overlay_owns_keyboard(&pw.overlays[i])) {
-        return Some(i);
-    }
-    (0..pw.overlays.len())
-        .rev()
-        .find(|&i| !pw.overlays[i].closing && pw.overlays[i].focused_id.is_some())
-}
-
-/// Whether this overlay owns the keyboard: it declares itself a focus scope, has not started
-/// closing, and still has a size.
-fn overlay_owns_keyboard(ov: &OverlayWindow) -> bool {
-    !ov.closing && ov.focus_scope && overlay_has_size(ov)
-}
-
-fn overlay_has_size(ov: &OverlayWindow) -> bool {
-    ov.composer.layout_root()
-        .map(|r| r.measured_size.width > 0.0 && r.measured_size.height > 0.0)
-        .unwrap_or(false)
-}
-
-/// Is a focus-scope overlay open right now (closing ones do not count)? While one is, the page is
-/// out of reach — for keys the overlay does not consume, and for focus requests that would otherwise
-/// land on a node behind the scrim.
-///
-/// Deliberately NOT `keyboard_scope(pw).is_none()`: a focus scope with nothing focusable makes that
-/// expression `None` too, which let characters through to the page — measured against this very
-/// gate before it was split.
-fn focus_scope_is_open(pw: &PerWindow) -> bool {
-    pw.overlays.iter().any(|ov| !ov.closing && ov.focus_scope && overlay_has_size(ov))
-}
-
-/// Give the keyboard to a focus-scope overlay on the frame it appears: from here on Tab and the
-/// arrow keys work inside it and the page's keys have nowhere to go.
-///
-/// The page KEEPS its focused node. It is not the keyboard target any more, and it draws no ring
-/// while the overlay covers it, but nothing forgets it either — closing the overlay puts the
-/// keyboard user back where they were, without a fresh Tab round.
-///
-/// It deliberately does NOT focus anything inside the overlay. A focus ring appearing on its own the
-/// moment a panel opens reads as a bug — nothing the user did put it there — so the first Tab is what
-/// moves focus in, and until then the panel simply has no focus. (Compose focuses a dialog's first
-/// focusable on open; this framework shows the keyboard user the same thing with one keypress, without
-/// the ring that a mouse user would see for no reason.)
-///
-/// Runs right after the overlays have been laid out, because the choice needs their arenas: on the
-/// frame an overlay is created, the arena only exists once `layout_overlays` has run.
-///
-/// Exactly ONE layer draws a focus ring — the one that owns the keyboard — and the layers below keep
-/// their focus as a SLOT KEY with no flag on the tree. That is what makes a modal read correctly
-/// (nothing highlighted behind the scrim) while a keyboard user still comes back to where they were
-/// (see `release_keyboard_to_lower_layer`).
-fn claim_keyboard_for_overlay(pw: &mut PerWindow) {
-    let scope = (0..pw.overlays.len()).rev().find(|&i| {
-        !pw.overlays[i].claimed_keyboard
-            && pw.overlays[i].focused_id.is_none()
-            && overlay_owns_keyboard(&pw.overlays[i])
-    });
-    let Some(i) = scope else { return };
-    pw.overlays[i].claimed_keyboard = true;
-
-    // Suspend the page's focus instead of dropping it. Read from the ARENA, not from
-    // `pw.focused_slot_key`: a click focuses a node through `focus_by_id` and leaves the cached slot
-    // key alone, so that cache read as `None` while the page did have focus (measured: dismissing the
-    // sheet used to restore nothing at all).
-    if pw.suspended_focus_slot.is_none() {
-        let page_focus = pw.composer.layout_root_idx().and_then(|r| {
-            let nodes = pw.composer.arena_nodes();
-            let id = crate::layout::node::get_focus_id(nodes, r)?;
-            crate::layout::node::find_node_by_id(nodes, r, id).map(|idx| nodes[idx].slot_key)
-        });
-        pw.suspended_focus_slot = page_focus.or(pw.focused_slot_key);
-    }
-    if let Some(r) = pw.composer.layout_root_idx() {
-        crate::layout::node::clear_focus(pw.composer.arena_nodes_mut(), r);
-    }
-    pw.focused_id = None;
-    pw.focused_slot_key = None;
-    // Overlays BELOW the owner lose their ring too, and keep their memory in their own slot keys.
-    for j in 0..pw.overlays.len() {
-        if j == i || pw.overlays[j].focused_id.is_none() {
-            continue;
-        }
-        if let Some(r) = pw.overlays[j].composer.layout_root_idx() {
-            crate::layout::node::clear_focus(pw.overlays[j].composer.arena_nodes_mut(), r);
-        }
-    }
-    if let Some(ref sw) = pw.skia_window {
-        // Nothing in the panel is focused until the user tabs into it, so the IME has no target yet.
-        sw.set_ime_allowed(false);
-    }
-}
-
-/// Hand the keyboard back when the last focus-scope overlay stops owning it: the nearest layer below
-/// that remembers a focus takes the ring back (an overlay, else the page).
-///
-/// This reverses `claim_keyboard_for_overlay`: the memory was kept as a slot key, so restoring is
-/// re-marking that node. Non-destructive by construction — it only ever writes into a layer that has
-/// no focus of its own right now.
-fn release_keyboard_to_lower_layer(pw: &mut PerWindow) {
-    if pw.overlays.iter().any(|o| !o.closing && o.focus_scope && overlay_has_size(o)) {
-        return; // still covered: a focus scope that is still open keeps the keyboard
-    }
-    for i in (0..pw.overlays.len()).rev() {
-        let remembered = {
-            let ov = &pw.overlays[i];
-            if ov.closing {
-                None
-            } else {
-                match (ov.composer.layout_root_idx(), ov.focused_slot_key) {
-                    (Some(r), Some(slot)) => Some((r, slot)),
-                    _ => None,
-                }
-            }
-        };
-        let Some((r, slot)) = remembered else { continue };
-        let nodes = pw.overlays[i].composer.arena_nodes_mut();
-        if let Some(id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-            crate::layout::node::clear_focus(nodes, r);
-            if crate::layout::node::set_focus_by_id(nodes, r, id) {
-                pw.overlays[i].focused_id = Some(id);
-                return;
-            }
-        }
-    }
-    let Some(slot) = pw.suspended_focus_slot.take() else { return };
-    let Some(r) = pw.composer.layout_root_idx() else { return };
-    let nodes = pw.composer.arena_nodes_mut();
-    if let Some(id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-        crate::layout::node::clear_focus(nodes, r);
-        if crate::layout::node::set_focus_by_id(nodes, r, id) {
-            pw.focused_id = Some(id);
-            pw.focused_slot_key = Some(slot);
-            pw.apply_ime_for_focus(Some(id));
-        }
-    }
-}
-
-/// Close bookkeeping: drop a closing overlay whose fade is over AND whose caller has stopped
-/// declaring it, and hand a still-declared one back its interactivity if the close never concludes.
-///
-/// The declaration is what decides. A component can keep its overlay alive through a close — the
-/// modal sheet slides out with its own `SheetState` and reports the dismissal to the caller only
-/// after the slide settles — so removing it on the strength of "no exit animation" cut the
-/// composition that observer lives in, froze the caller's `visible` at true for good, and let the
-/// next recomposition rebuild the panel off-screen with its scrim (measured: sheet unreachable
-/// afterwards, dim layer permanent).
-fn finish_closing_overlays(pw: &mut PerWindow) {
-    let now = std::time::Instant::now();
-    // Ids the caller still declares this frame (`overlay_active` is written during compose).
-    let declared: Vec<u64> = pw.composer.overlay_active
-        .iter()
-        .filter(|(_, active)| **active)
-        .map(|(&id, _)| id)
-        .collect();
-    pw.overlays.retain_mut(|ov| {
-        if !ov.closing { return true; }
-        let is_declared = declared.contains(&ov.id);
-        // 无 progress（无动画）不应到这里（begin 已移除）；有则等动画完成
-        let progress = ov.progress.as_ref().map(|p| p.peek());
-        let done = closing_overlay_is_done(progress, ov.closing_since, now);
-        if is_declared {
-            // The fade finished (or timed out) and the caller still wants this overlay: it is not
-            // going away, so give it back rather than leaving a panel the user can see and not touch.
-            if done && closing_overlay_timed_out(ov.closing_since, now) {
-                ov.resume_after_close();
-            }
-            return true;
-        }
-        if !done {
-            return true;
-        }
-        if let Some(p) = ov.progress.as_ref() {
-            // A fade that never reported done: drop it and stop driving the state (it is about to be
-            // dropped, and a stray animation would keep writing to it). This cut IS visible — the fade
-            // was still somewhere between 1 and 0 — which is the price of the deadline; it only happens
-            // when the animation system already failed.
-            crate::animation::cancel_animation_by_id(p.state_id());
-        }
-        false
-    });
-}
-
-/// Whether a close has been pending past [`CLOSING_DEADLINE`] — the safety net for a tween that never
-/// reports done, and the trigger for handing a still-declared overlay back its interactivity.
-fn closing_overlay_timed_out(closing_since: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE)
-}
-
-/// Whether a closing overlay may be dropped: its fade finished, or it has been closing past
-/// [`CLOSING_DEADLINE`]. The deadline is the safety net for a tween that never reports done — without it
-/// the overlay stayed in the list forever, rendering its modal scrim over a page the user could no longer
-/// dim away (the sheet itself had already slid out of view).
-fn closing_overlay_is_done(
-    progress: Option<f32>,
-    closing_since: Option<std::time::Instant>,
-    now: std::time::Instant,
-) -> bool {
-    match progress {
-        // No progress channel at all — nothing to wait for (`begin_overlay_close` removes those at once).
-        None => true,
-        Some(p) if p < 0.001 => true,
-        Some(_) => closing_since.is_some_and(|since| now.duration_since(since) >= CLOSING_DEADLINE),
-    }
-}
-
-/// overlay 移除前清理交互状态（hover 补 Exit + press 释放）——
-/// overlay 删除后其节点销毁，交互 source 悬空 → 必须在移除前发射
-fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
-    let olds: Vec<u64> = ov.hovered_slots.drain().collect();
-    for slot in olds {
-        overlay_exit_hover_at(ov, slot);
-    }
-    if let Some((_, src)) = ov.pressed_interaction.take() {
-        src.emit_release();
-    }
-}
-
-/// The window rect `(x, y, w, h)` of an overlay's anchor, resolved from the MAIN tree (already laid out).
-///
-/// Shared by the two passes that need it: the measure pass, for an overlay that matches its anchor's width
-/// (material3's `matchAnchorWidth`, which forces `minWidth = maxWidth = menuWidth`), and the positioning
-/// pass, which places the overlay against it. Takes the arena rather than the window so callers can hold
-/// their own borrows.
-fn overlay_anchor_rect(
-    nodes: &[crate::layout::node::LayoutNode],
-    root: usize,
-    slot: u64,
-) -> Option<(f32, f32, f32, f32)> {
-    let id = crate::layout::node::find_node_id_by_slot_key(nodes, root, slot)?;
-    let index = crate::layout::node::find_node_by_id(nodes, root, id)?;
-    let (x, y) = node_abs_position(nodes, root, id);
-    let size = nodes[index].measured_size;
-    Some((x, y, size.width, size.height))
-}
-
-/// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
-fn layout_overlays(pw: &mut PerWindow) {
-    // material3's `matchAnchorWidth` FORCES a menu's width to its anchor's (`minWidth = maxWidth =
-    // menuWidth` in `exposedDropdownSize`), so those widths are needed at MEASURE time — before this pass
-    // reaches the positioning code. Resolved up front into owned values: the loop below holds
-    // `&mut pw.overlays` and mutates `pw.composer`, so no borrow of the arena can stay alive across it.
-    let anchor_widths: Vec<f32> = {
-        let nodes = pw.composer.arena_nodes();
-        let root = pw.composer.layout_root_idx();
-        pw.overlays
-            .iter()
-            .map(|ov| {
-                if !ov.match_anchor_width {
-                    return 0.0;
-                }
-                let rect = ov
-                    .anchor_slot
-                    .and_then(|slot| root.and_then(|r| overlay_anchor_rect(nodes, r, slot)));
-                rect.map(|(_, _, w, _)| w).unwrap_or(0.0)
-            })
-            .collect()
-    };
-    for (overlay_index, ov) in pw.overlays.iter_mut().enumerate() {
-        // 关闭中：仍需 recompose/layout 以驱动 BottomSheet 的 slide（offset 动画）
-        // —— Dialog 等静态内容重组无副作用；冻结仅针对交互（hit_overlay 已跳过 closing）
-        // 之前 `if closing { continue; }` 导致 hide() 的 offset 动画不被布局，面板
-        // 卡在 401 仅 fade，视觉上“淡出而非下滑”。
-        if ov.closing {
-            // 仍执行 recompose/layout，但不处理输入（hit_overlay 已过滤 closing）
-        }
-        // ⚠ 重放 CompositionLocal 快照（主树捕获时的主题/方向/排版）——
-        // overlay 独立 Composer 在 provides 弹栈后 recompose，需快照继承。
-        let snap = ov.local_snapshot.clone();
-        // Same same-frame contract as the main tree (a measure whose window cannot fill the viewport it
-        // is measured in asks for one more compose). Consuming the request HERE, right after this
-        // overlay's own layout, is what scopes it to this composer: an overlay that asks nothing leaves
-        // the flag clear for the next one, so nothing is consumed on another tree's behalf.
-        for _ in 0..8 {
-            crate::core::composition_local::with_snapshot(&snap, || {
-                ov.composer.recompose(|ctx| (ov.content)(ctx));
-            });
-            // An overlay that fits itself around its anchor also keeps material3's
-            // `MenuVerticalMargin` (48dp) clear of the top and bottom window edges, so a menu that ends
-            // up as tall as the space allows still reads as a panel floating over the page instead of a
-            // full-bleed column. The margin is a MEASURE constraint here and a placement clamp below:
-            // without it a 30-item menu took the whole window height and sat flush against both edges.
-            let constraints = if ov.fit_around_anchor {
-                // material3's `matchAnchorWidth` FORCES the width (`minWidth = maxWidth = menuWidth` in
-                // `exposedDropdownSize`), so the anchor's rect is needed at measure time — before the
-                // positioning pass — and the anchor lives in the main tree, already laid out.
-                let anchor_width = anchor_widths[overlay_index];
-                let margin = crate::ui::overlay::MENU_VERTICAL_MARGIN;
-                crate::layout::Constraints::new(
-                    anchor_width,
-                    if ov.match_anchor_width { anchor_width } else { pw.width },
-                    margin,
-                    (pw.height - margin * 2.0).max(0.0),
-                )
-            } else {
-                crate::layout::Constraints::new(0.0, pw.width, 0.0, pw.height)
-            };
-            ov.composer.layout(constraints);
-            if !crate::core::composer::take_compose_after_layout() {
-                break;
-            }
-        }
-    }
-    // 定位（需主树锚点位置——在 draw 前算）
-    let nodes = pw.composer.arena_nodes();
-    let root = pw.composer.layout_root_idx();
-    let (w, h) = (pw.width, pw.height);
-    for ov in &mut pw.overlays {
-        let size = ov.composer.layout_root()
-            .map(|r| (r.measured_size.width, r.measured_size.height))
-            .unwrap_or((0.0, 0.0));
-        // 锚点位置（主树）
-        let anchor = ov.anchor_slot.and_then(|s| root.and_then(|r| {
-            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
-        })).and_then(|nid| root.map(|r| {
-            node_abs_position(nodes, r, nid)
-        }));
-        let anchor_size = ov.anchor_slot.and_then(|s| root.and_then(|r| {
-            crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
-        })).and_then(|nid| root.and_then(|r| {
-            crate::layout::node::find_node_by_id(nodes, r, nid).map(|i| nodes[i].measured_size)
-        }));
-        let anchored = anchor.is_some() && anchor_size.is_some();
-        let (ax, ay, aw, ah) = match (anchor, anchor_size) {
-            (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
-            _ => (0.0, 0.0, 0.0, 0.0),
-        };
-        use crate::ui::overlay::PopupPosition as P;
-        let pos = match ov.position {
-            // 窗口对齐（无锚点）
-            P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
-            P::TopLeft => (0.0, 0.0),
-            P::TopCenter => ((w - size.0) / 2.0, 0.0),
-            P::TopRight => (w - size.0, 0.0),
-            P::BottomLeft => (0.0, h - size.1),
-            P::BottomCenter => ((w - size.0) / 2.0, h - size.1),
-            P::BottomRight => (w - size.0, h - size.1),
-        };
-        // 有锚点（且在主树中找到）时：按位置相对锚点（Bottom* = 锚点下方，
-        // Top* = 锚点上方）；锚点缺失/未物化（scope）回退窗口对齐——避免 (0,0)
-        let pos = if anchored && ov.fit_around_anchor {
-            // material3's candidate lists, in `overlay::dropdown_menu_position`: below the anchor, above it,
-            // centred on its top edge, then pinned to the nearer window edge — each taken only if the menu
-            // fits inside `MenuVerticalMargin` (48dp). winia's placement used to do the first alone, which is
-            // why a long menu hung off the bottom edge with its last rows unreachable.
-            crate::ui::overlay::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
-        } else if anchored {
-            match ov.position {
-                P::BottomLeft => (ax, ay + ah),
-                P::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),
-                P::BottomRight => (ax + aw - size.0, ay + ah),
-                P::TopLeft => (ax, ay - size.1),
-                P::TopCenter => (ax + (aw - size.0) / 2.0, ay - size.1),
-                P::TopRight => (ax + aw - size.0, ay - size.1),
-                P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
-            }
-        } else { pos };
-        // Anchor slide: the panel starts at the anchor's corner and ends at the window's, both axes moving
-        // together — Compose's `(lerp(collapsedBounds.left, offsetX, progress),
-        // lerp(collapsedBounds.top, offsetY, progress))` with both offsets 0. Only this pass knows the
-        // anchor's coordinates, so the interpolation happens here; the caller supplies the progress reader.
-        let pos = if let (Some(slide), true) = (&ov.anchor_slide, anchored) {
-            let p = slide.progress();
-            (
-                crate::ui::overlay::anchor_slide_lerp(ax, p),
-                crate::ui::overlay::anchor_slide_lerp(ay, p),
-            )
-        } else {
-            pos
-        };
-        ov.screen_pos = (pos.0 + ov.offset.0, pos.1 + ov.offset.1);
-        // The anchor rect, for the render's transform origin (see `OverlayWindow::anchor_rect`).
-        ov.anchor_rect = anchored.then_some((ax, ay, aw, ah));
-        // Flight coordinate frame (Phase 4 Tier1): overlay canvas renders
-        // translated by screen_pos — visuals store window-minus-origin.
-        ov.composer.screen_origin = ov.screen_pos;
-    }
-    // Shared-element Tier0 polls (mirrors the main-tree post-layout poll —
-    // overlay composers drive their own flights; Tier1 spans composers and
-    // is driven by cross-poll in the main flow below).
-    for ov in &mut pw.overlays {
-        ov.composer.poll_shared_flights();
-    }
-    // Overlay focus restore across recompositions (mirrors the main-tree
-    // focused_slot_key restore in recompose_layout_render): arena node ids are
-    // rebuilt, slot keys are stable.
-    for ov in &mut pw.overlays {
-        let Some(slot) = ov.focused_slot_key else { continue; };
-        let Some(r) = ov.composer.layout_root_idx() else { continue; };
-        let nodes = ov.composer.arena_nodes_mut();
-        if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-            crate::layout::node::clear_focus(nodes, r);
-            crate::layout::node::set_focus_by_id(nodes, r, new_id);
-            ov.focused_id = Some(new_id);
-        } else {
-            ov.focused_id = None;
-            ov.focused_slot_key = None;
-        }
-    }
-}
 
 /// Apply a change of this window's theme: re-resolve it, and when what was drawn is now wrong, re-run the
 /// tree — no component looks at the theme by itself, they resolved their colours, type scale and direction
@@ -3755,13 +2312,13 @@ fn layout_overlays(pw: &mut PerWindow) {
 /// nothing.
 impl PerWindow {
     fn refresh_theme(&mut self) -> bool {
-        if !self.theme_cell.refresh(&mut self.theme_applied) {
+        if !self.theme.cell.refresh(&mut self.theme.applied) {
             return false;
         }
         // The window's own snapshot (the surface clear color) is `theme_applied.colors`, refreshed above;
         // the tree has to run again for the new values to reach the components that resolved them.
         self.composer.mark_content_dirty();
-        for ov in &mut self.overlays {
+        for ov in &mut self.overlay.layers {
             ov.composer.mark_content_dirty();
         }
         if let Some(ref sw) = self.skia_window {
@@ -3771,208 +2328,6 @@ impl PerWindow {
     }
 }
 
-/// overlay 命中测试——返回 (overlay 索引, 本地坐标)——从最上层（最后一个）往下
-fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f32))> {
-    for i in (0..pw.overlays.len()).rev() {
-        let ov = &pw.overlays[i];
-        // 关闭中（退出动画播放）：不响应交互——命中视同穿透（下层/主树）
-        if ov.closing {
-            continue;
-        }
-        let local = (scene_pos.0 - ov.screen_pos.0, scene_pos.1 - ov.screen_pos.1);
-        if let Some(r) = ov.composer.layout_root_idx() {
-            let nodes = ov.composer.arena_nodes();
-            if !hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1).is_empty() {
-                return Some((i, local));
-            }
-        }
-    }
-    None
-}
-
-/// overlay 渲染（主树之后——上层；模态先画遮罩）
-fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
-    for ov in overlays {
-        // 显示进度 → (scale, alpha, dy, reveal)：progress State 驱动（peek——
-        // 渲染期零重组）。打开：progress 0→1，apply() 正向；关闭（closing）：
-        // progress 1→0，apply_exit() 反向。dy = 高度倍数位移；reveal = 揭示
-        // 高度倍数（顶部展开用）。
-        let (anim_scale, anim_alpha, anim_dy, anim_reveal) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
-            (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // 进入
-            (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // 退出
-            _ => (1.0, 1.0, 0.0, 1.0),                                     // 无动画
-        };
-        // 模态遮罩（淡入淡出——跟随内容 alpha）
-        if ov.modal {
-            let mut mask = skia_safe::Paint::default();
-            mask.set_color(skia_safe::Color::from_argb((110.0 * anim_alpha) as u8, 0, 0, 0));
-            canvas.draw_rect(
-                skia_safe::Rect::from_xywh(0.0, 0.0, window.0 * scale, window.1 * scale),
-                &mask,
-            );
-        }
-        let Some(r) = ov.composer.layout_root_idx() else { continue; };
-        let nodes = ov.composer.arena_nodes();
-        canvas.save();
-        canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
-        // 进入/退出动画：围绕 overlay 中心缩放 + 内容淡入淡出 + 垂直滑入。
-        // ⚠ scale 在 translate 之后——先定位再缩放（缩放中心 = overlay 左上角 +
-        // 内容半尺寸，即内容中心）；slide 在缩放之后、内容绘制之前（布局空间位移）
-        let size = ov.composer.layout_root()
-            .map(|r| (r.measured_size.width, r.measured_size.height))
-            .unwrap_or((0.0, 0.0));
-        // Slide/揭示期间裁到内容框（对齐上游下拉 `.clip(dropdownShape)` 与
-        // 展开揭示）——否则滑入起点整个面板压住 bar。clip 在 settled bounds 上；
-        // 动画结束内容恰好落回框内 → 无跳变。reveal<1 时按揭示高度裁。
-        // (anim_dy != 0.0) 或 (anim_reveal < 1.0) 时裁剪。
-        // The clip height comes from `overlay_reveal_clip_height`, which also keeps "no clip" (`None`)
-        // distinct from "clipped to zero" — the distinction the render trace needs.
-        let clip_h = crate::ui::overlay::overlay_reveal_clip_height(size.1, anim_dy, anim_reveal)
-            .unwrap_or(-1.0);
-        // Render-time trace: the overlay's reveal/alpha/offset exist only here, at paint time — the debug
-        // server's tree reports POST-LAYOUT sizes, so a reveal (a clip) was invisible to every other
-        // channel (`reveal` and `dy` are fractions; `clip_h` is what is actually applied).
-        if crate::anim_trace::enabled() {
-            let mut r = crate::anim_trace::TraceRecord::render(ov.id);
-            r.phase = Some(if ov.closing { "closing" } else { "opening" });
-            r.alpha = Some(anim_alpha);
-            r.clip = Some(clip_h >= 0.0);
-            // `painted.h` is the height actually drawn: `clip_h` when revealing, and the FULL height when
-            // the animation is settled (`clip_h == -1` means "no clip", not "zero height" — reporting 0
-            // there made a fully open panel look empty).
-            let painted_h = if clip_h >= 0.0 { clip_h } else { size.1 };
-            r.painted = Some(crate::anim_trace::TraceRect {
-                x: ov.screen_pos.0,
-                y: ov.screen_pos.1,
-                w: size.0,
-                h: painted_h,
-            });
-            r.detail = Some(format!(
-                "reveal={anim_reveal:.4} dy={anim_dy:.4} scale={anim_scale:.4} layout_h={:.1}",
-                size.1
-            ));
-            crate::anim_trace::record(r);
-        }
-        if clip_h >= 0.0 {
-            // clip_rect is affected by the current matrix (screen_pos translate
-            // applied above, no content scale yet) — coordinates are device px,
-            // so multiply layout units by scale (same as the scrim rect above).
-            canvas.clip_rect(
-                skia_safe::Rect::from_xywh(0.0, 0.0, size.0 * scale, clip_h * scale),
-                None,
-                Some(false),
-            );
-        }
-        if anim_scale != 1.0 {
-            // Scale around the pivot the animation asks for: material3's menus grow out of their anchor
-            // (`anchor_pivot`, the origin `calculateTransformOrigin` picks), everything else keeps the
-            // content centre it has always used.
-            let (px_frac, py_frac) = match (ov.closing, &ov.enter_anim, &ov.exit_anim) {
-                (false, Some(spec), _) if spec.anchor_pivot => ov
-                    .anchor_rect
-                    .map(|anchor| {
-                        crate::ui::overlay::overlay_transform_origin(
-                            anchor,
-                            (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
-                        )
-                    })
-                    .unwrap_or((0.5, 0.5)),
-                (true, _, Some(spec)) if spec.anchor_pivot => ov
-                    .anchor_rect
-                    .map(|anchor| {
-                        crate::ui::overlay::overlay_transform_origin(
-                            anchor,
-                            (ov.screen_pos.0, ov.screen_pos.1, size.0, size.1),
-                        )
-                    })
-                    .unwrap_or((0.5, 0.5)),
-                _ => (0.5, 0.5),
-            };
-            canvas.translate(((px_frac * size.0) * scale, (py_frac * size.1) * scale));
-            canvas.scale((anim_scale, anim_scale));
-            canvas.translate((-(px_frac * size.0) * scale, -(py_frac * size.1) * scale));
-        }
-        if anim_dy != 0.0 {
-            canvas.translate((0.0, anim_dy * size.1 * scale));
-        }
-        if anim_alpha < 1.0 {
-            // 内容淡入/淡出：整体 alpha 层（save_layer_alpha_f——Skia 层叠 alpha）
-            canvas.save_layer_alpha_f(None, anim_alpha);
-        }
-        // overlay 内容与主树一致按 scale 绘制（坐标均为逻辑单位）——
-        // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
-        canvas.scale((scale, scale));
-        render::render(nodes, r, canvas);
-        // Transition layer (sources + elevated endpoints), overlay-local coords.
-        ov.composer.render_layer(canvas);
-        if anim_alpha < 1.0 {
-            canvas.restore();
-        }
-        canvas.restore();
-    }
-}
-
-/// overlay 拖拽结束（含嵌套滚动 fling）。overlay 内可滚列表的 fling 走 overlay Composer。
-fn overlay_drag_up(pw: &mut PerWindow) -> bool {
-    let mut handled = false;
-    if let Some(ds) = pw.overlay_drag_scroll.take() {
-        // 复用主树 drag_scroll_up 逻辑：样本估速 → overlay 的 dispatch_nested_scroll_fling
-        //（此前为空壳——注释"由 overlay 内 NestedScrollConnection on_post_fling 兜底"未接通，
-        // 导致松手后列表不 fling、sheet 不 settle → "松手没有动画"）
-        let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
-        // target 反查：ds.slot 是 down 时 overlay composer 的 scroll 节点 slot_key
-        let target: Option<usize> = (|| {
-            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-            let ov = pw.overlays.get(ov_idx)?;
-            let r = ov.composer.layout_root_idx()?;
-            let nodes = ov.composer.arena_nodes();
-            let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, ds.slot)?;
-            crate::layout::node::find_node_by_id(nodes, r, id)
-        })();
-        #[cfg(debug_assertions)]
-        if drag_trace_enabled() {
-            eprintln!("[overlay-drag-up] slot={:?} target={:?} v=({},{})", ds.slot, target, vx, vy);
-        }
-        let Some(idx) = target else { handled = true; return handled; };
-        let Some(ov) = pw.overlays.last_mut() else { handled = true; return handled; };
-        let Some(r) = ov.composer.layout_root_idx() else { handled = true; return handled; };
-        // 手指速度 → 滚动速度（内容速度 = -手指速度），走 nested scroll pre/post fling 链
-        let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
-        let _ = dispatch_nested_scroll_fling(ov.composer.arena_nodes_mut(), r, idx, velocity);
-        handled = true;
-    }
-    let Some((idx, slot, _down)) = pw.overlay_drag.take() else { return handled; };
-    let started = pw.overlay_drag_started;
-    pw.overlay_drag_started = false;
-    pw.overlay_drag_last = None;
-    if !started {
-        return handled;
-    }
-    if let Some(ov) = pw.overlays.get(idx) {
-        let nodes = ov.composer.arena_nodes();
-        if let Some(r) = ov.composer.layout_root_idx() {
-            fire_gesture_action(nodes, r, slot,
-                crate::input::gesture::GestureAction::DragEnd);
-        }
-    }
-    true
-}
-
-fn exec_overlay_click(pw: &mut PerWindow) -> bool {
-    let Some((idx, local, _nid)) = pw.overlay_click.take() else { return false; };
-    let Some(ov) = pw.overlays.get(idx) else { return false; };
-    // 关闭中（down 后外部 dismiss 等）→ 不 fire click（避免对已关闭的
-    // overlay 误触发——极窄边界但语义正确）
-    if ov.closing {
-        return false;
-    }
-    let Some(r) = ov.composer.layout_root_idx() else { return false; };
-    let nodes = ov.composer.arena_nodes();
-    let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-    // 沿路径找 clickable（最内层优先）
-    let r = fire_click_along_path(nodes, &path);
-    r
-}
 
 /// 沿命中路径从内到外触发第一个 on_click——返回是否触发。
 /// 主树 click 与 overlay 点击共用（消除重复）
@@ -3992,286 +2347,6 @@ fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usiz
     false
 }
 
-/// 指针按下：先测 overlay（最上层）——命中 → 记录点击目标；外部 → dismiss
-fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::modifier::PointerKind) -> bool {
-    if pw.overlays.is_empty() {
-        return false;
-    }
-    if let Some((i, local)) = hit_overlay(pw, scene_pos) {
-        // 命中 overlay 内容——记录点击目标（v1：仅 clickable——up 时执行）
-        // ⚠ click_passthrough（Tooltip）：命中浮层但**放行主树**——浮层盖住
-        // 锚点（锚点上方 tooltip 与锚点本身重叠）时点击锚点仍生效（否则
-        // tooltip 挡住锚点按钮 → 外部 visible 控制关不了）
-        let ov = &mut pw.overlays[i];
-        if ov.click_passthrough {
-            return false;
-        }
-        // overlay：按 drag 相对 scroll 的深度判定（对齐主树 child_drag「最内层手势优先」：
-        // app.rs:2922-2926）——内层可拖组件（slider/switch）优先于滚动；外层面板 on_drag 让位
-        // 于内层滚动（列表滚动优先，到边后由 SheetNested.on_post_scroll 折叠 sheet）。
-        // path 下标从根到叶递增；rev() 找到的第一个命中即最内层（下标最大）。
-        // - drag 更深（组件在 scroll 内部，didx_last > scroll_idx 且更内层）→ 拖拽组件优先
-        // - 否则若有 scroll → 滚动优先（列表滚；面板 on_drag 让位）
-        // - 否则若有 drag → 面板 on_drag 拖 sheet（背景/文字/空白）
-        {
-            let nodes = ov.composer.arena_nodes();
-            if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-                let scroll_idx = path_scroll_idx(nodes, &path);
-                let drag_idx = path_drag_idx(nodes, &path);
-                let inner_comp_drag = inner_component_drag(drag_idx, scroll_idx);
-                // The axis arbitration in `gesture_move` is main-tree only: an overlay drag runs
-                // through `overlay_drag` (its own session, which fires the callbacks itself), not
-                // through the tracker, so there is nothing to hand over here.
-                pw.gesture_axis = None;
-                pw.gesture_scroll_slot = None;
-                if inner_comp_drag {
-                    if let Some(didx) = drag_idx {
-                        pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
-                        pw.overlay_drag_origin = ov.screen_pos;
-                        pw.overlay_drag_started = false;
-                        pw.overlay_drag_last = None;
-                        pw.overlay_drag_scroll = None;
-                    }
-                } else if let Some(t) = scroll_idx {
-                    // 列表区（面板 on_drag 让位）：内容滚动优先
-                    pw.overlay_drag = None;
-                    pw.overlay_drag_started = false;
-                    pw.overlay_drag_last = None;
-                    pw.overlay_drag_scroll = Some(DragScroll::new(nodes[t].slot_key, scene_pos));
-                } else if let Some(didx) = drag_idx {
-                    // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
-                    pw.overlay_drag = Some((i, nodes[didx].slot_key, scene_pos));
-                    pw.overlay_drag_origin = ov.screen_pos;
-                    pw.overlay_drag_started = false;
-                    pw.overlay_drag_last = None;
-                    pw.overlay_drag_scroll = None;
-                } else {
-                    pw.overlay_drag = None;
-                    pw.overlay_drag_started = false;
-                    pw.overlay_drag_last = None;
-                    pw.overlay_drag_scroll = None;
-                }
-            }
-        }
-        // 发射 Press（按下波纹——对标 Compose PressInteraction.Press；
-        // ripple 渲染已支持 overlay，缺的只是事件触发）
-        {
-            // ⚠ 找不到 clickable_interaction 时**跳过 Press 但不阻断**——
-            // 否则普通 clickable（无 interaction source，如 ModalBottomSheet
-            // Scrim 层）的点击永远到不了 overlay_click → 点击丢失。
-            let nodes = ov.composer.arena_nodes();
-            if let Some(r) = ov.composer.layout_root_idx() {
-                let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-                if let Some(&idx) = path.iter().rev().find(|&&i| {
-                    nodes[i].modifier.clickable_interaction().is_some()
-                        || nodes[i].modifier.node_click_interaction().is_some()
-                }) {
-                    if let Some(src) = nodes[idx]
-                        .modifier
-                        .clickable_interaction()
-                        .cloned()
-                        .or_else(|| nodes[idx].modifier.node_click_interaction())
-                    {
-                        // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
-                        let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
-                        src.emit_press_at(local_press);
-                        ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
-                    }
-                }
-            }
-        }
-        // Press gesture — the same dispatch the main tree does from `gesture_down`. The overlay
-        // path used to fire only `on_click` (on up, through `fire_click_along_path`), so a
-        // component whose reaction lives on `on_press` was dead inside a popup: a popup
-        // `TextField` focuses through `on_press → FocusRequester::request_focus`, which is why
-        // this handler used to need a focus rule of its own. With the gesture dispatched, popup
-        // content reacts like main-tree content and that rule is gone (the focus lands one frame
-        // later, through the ordinary focus-request queue — see `take_focus_requests`).
-        //
-        // The tracker goes with it, so the rest of the tap family (`on_tap` / `on_double_tap` /
-        // `on_long_press`) fires in a popup too; `gesture_move` / `gesture_up` route their actions
-        // back into this arena (`pw.gesture_arena`). A target WITH drag gestures is tracked as well:
-        // the overlay drag session for that same node is stood down below, because both dispatchers
-        // would otherwise fire its `on_drag_*` callbacks for one gesture.
-        {
-            // Immutable scope: resolve the target and fire the Press, then leave the overlay borrow
-            // before the tracker bookkeeping below needs `pw` mutably.
-            let target = {
-                let ov = &pw.overlays[i];
-                let nodes = ov.composer.arena_nodes();
-                match ov.composer.layout_root_idx() {
-                    None => None,
-                    Some(r) => {
-                        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-                        press_gesture_target(nodes, &path).map(|(nid, slot, has_drag)| {
-                            fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(local));
-                            (nid, slot, has_drag, ov.id)
-                        })
-                    }
-                }
-            };
-            if let Some((nid, slot, has_drag, ov_id)) = target {
-                if has_drag {
-                    // The tracker owns this node's drag as well as its tap family: the arbitration
-                    // above gave the same node to `pw.overlay_drag`, and both dispatchers would fire
-                    // `on_drag_start` / `on_drag` / `on_drag_end` for one gesture. Stand the overlay
-                    // session down instead — the tracker routes the drag through
-                    // `fire_in_gesture_arena` into this same arena, so nothing is lost, and the node
-                    // gains its `on_tap` / `on_double_tap` / `on_long_press` (the tap family of a
-                    // popup drag target used to be unreachable, `Slider` included).
-                    if pw.overlay_drag.map(|(idx, key, _)| (idx == i && key == slot)).unwrap_or(false) {
-                        pw.overlay_drag = None;
-                        pw.overlay_drag_started = false;
-                        pw.overlay_drag_last = None;
-                    }
-                    // A scroll session belongs to a DIFFERENT node (the arbitration picks scroll when
-                    // the drag is its ancestor); leave it alone.
-                }
-                // Same bookkeeping as the main tree for both kinds of target: a deferred tap on this
-                // node is due, or this press is its double-tap candidate.
-                process_pending_taps_on_down(pw, nid);
-                let ctx = pw.gesture_tap_ctx.take()
-                    .filter(|(n, _, _)| *n == nid)
-                    .map(|(_, t, p)| (t, p));
-                pw.gesture = Some(crate::input::gesture::GestureTracker::new(nid, local, has_drag, ctx));
-                pw.gesture_node = Some(nid);
-                pw.gesture_slot = Some(slot);
-                pw.gesture_arena = Some(ov_id);
-                pw.gesture_axis = None;
-                pw.gesture_scroll_slot = None;
-                pw.gesture_arena_origin = pw
-                    .overlays
-                    .iter()
-                    .find(|o| o.id == ov_id)
-                    .map(|o| o.screen_pos)
-                    .unwrap_or((0.0, 0.0));
-            }
-        }
-        // Overlay pointer dispatch + caret placement — the main-tree sequence from
-        // `handle_pointer_down`: Down goes to the overlay arena for its `on_ptr` handlers, and a
-        // tap places the text caret from the grapheme anchor (tap-to-place).
-        //
-        // Focus is deliberately NOT set here. A component that wants the keyboard asks for it,
-        // and the press gesture above just gave it that chance (the popup `TextField` container
-        // does `on_press → FocusRequester::request_focus`), so a tap on a popup button leaves the
-        // field beside it alone — the rule Compose's `Clickable` follows by never calling
-        // `requestFocus` for a click. This handler used to focus the deepest focusable node on the
-        // hit path (the debug-click rule, see `consume_debug_events`), which stole the keyboard
-        // from a field as soon as any button in the same popup was tapped. Drag-select inside
-        // overlay inputs is v1-out.
-        {
-            let ptr_ev = crate::modifier::PointerEvent {
-                event_type: crate::modifier::PointerEventType::Down,
-                position: (0.0, 0.0),
-                scene_position: local,
-                kind: kind.clone(),
-                is_alt_pressed: pw.modifiers.alt_key(),
-                is_ctrl_pressed: pw.modifiers.control_key(),
-                is_shift_pressed: pw.modifiers.shift_key(),
-                is_meta_pressed: pw.modifiers.meta_key(),
-            };
-            // Read phase (immutable): hit path + caret anchor.
-            // (Root is guaranteed by hit_overlay above; the None arm only
-            // satisfies the compiler and still falls through to click recording.)
-            let (path, caret): (Vec<usize>, Option<(usize, usize)>) = match {
-                let ov = &pw.overlays[i];
-                let nodes = ov.composer.arena_nodes();
-                // Owned roots: the scrutinee borrow ends here, but the arm
-                // below needs them (and `ov` there is the outer `&mut` binding).
-                let troots: Vec<usize> = ov.composer.transition_roots().to_vec();
-                match ov.composer.layout_root_idx() {
-                    None => None,
-                    Some(r) => Some((nodes, r, troots)),
-                }
-            } {
-                None => (Vec::new(), None),
-                Some((nodes, r, troots)) => {
-                let path = hit_test_with_flights(nodes, r, &troots, local.0, local.1);
-                let caret = (|| {
-                    let &innermost = path.last()?;
-                    let anchor_node = find_anchor_text_node(nodes, &path, innermost)?;
-                    let borrow = nodes[anchor_node].cached_paragraph.try_borrow().ok()?;
-                    let para = borrow.as_ref()?;
-                    let (ax, ay) = node_abs_position(nodes, r, nodes[anchor_node].id);
-                    let (pad_s, pad_t, pad_e, _) = nodes[anchor_node].modifier.get_padding_sides();
-                    let pad_x = if nodes[anchor_node].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-                    let tl = crate::text::TextLayout::new(para, 0);
-                    let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(local.0 - ax - pad_x, local.1 - ay - pad_t));
-                    let edit = crate::ui::text_field::offset_mapping_for_node(nodes, r, anchor_node)
-                        .map(|m| m.transformed_to_original(hit))
-                        .unwrap_or(hit);
-                    Some((anchor_node, edit))
-                })();
-                (path, caret)
-                }
-            };
-            // Pointer dispatch (immutable arena borrow, ends immediately).
-            if !path.is_empty() {
-                let ov = &pw.overlays[i];
-                if let Some(r) = ov.composer.layout_root_idx() {
-                    let nodes = ov.composer.arena_nodes();
-                    dispatch_ptr_event(nodes, r, &path, &ptr_ev, local, None);
-                }
-            }
-            if let Some((aidx, aoff)) = caret {
-                let nodes = pw.overlays[i].composer.arena_nodes();
-                if let Some(n) = nodes.get(aidx) {
-                    n.cursor_index.set(aoff);
-                    if let Some(cb) = n.cursor_callback.borrow_mut().as_mut() {
-                        cb(aoff);
-                    }
-                }
-            }
-        }
-        // (ov borrow ended at the Press block above; re-index here.)
-        let nid = pw.overlays[i].composer.layout_root_idx().and_then(|r| {
-            let nodes = pw.overlays[i].composer.arena_nodes();
-            hit_test_with_flights(nodes, r, pw.overlays[i].composer.transition_roots(), local.0, local.1).last().map(|&idx| nodes[idx].id)
-        });
-        pw.overlay_click = Some((i, local, nid.unwrap_or(0)));
-        return true; // 事件消费——不进主树
-    }
-    // Outside press: an overlay that dismisses on an outside press closes; an overlay that does
-    // not still CONSUMES the press when it is modal (its scrim blocks what is behind it).
-    //
-    // ⚠ `dismiss_on_outside == false` has to be honoured for a modal overlay too: `modal` alone
-    // says "blocks the content behind", not "closes on any press". Compose's
-    // `DialogProperties(dismissOnClickOutside = false)` and `PopupProperties.dismissOnClickOutside`
-    // keep the overlay open, and callers pass the flag for exactly that — Nav3's
-    // `dialogProperties` (`nav.rs`) and `AlertDialog`'s own builder. Treating `modal` as
-    // "dismiss" made those flags silent no-ops.
-    // ⚠ 同步移除（不等 recompose）——否则残留 overlay 会吞掉关闭后
-    // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
-    for i in (0..pw.overlays.len()).rev() {
-        // A closing overlay is on its way out: it must not be dismissed again and must not swallow
-        // the press — `hit_overlay` treats it as transparent for the same reason. Without this a
-        // dialog that was just closed (Escape, a button, an outside press) eats the next press for
-        // the length of its exit animation, which is the "click twice to open" complaint.
-        if pw.overlays[i].closing {
-            continue;
-        }
-        let dismiss = pw.overlays[i].dismiss_on_outside;
-        if !dismiss && !pw.overlays[i].modal {
-            continue;
-        }
-        let passthrough = pw.overlays[i].click_passthrough;
-        let id = pw.overlays[i].id;
-        if dismiss {
-            // 启动退出动画（不复位——动画完成后移除；passthrough Tooltip 的
-            // on_dismiss 同步置 visible=false → 组合期记录 active=false 走
-            // begin_overlay_close；这里先直接触发——两者幂等（closing 防重入））
-            begin_overlay_close(pw, id);
-        }
-        // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
-        // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
-        if passthrough {
-            continue;
-        }
-        return true;
-    }
-    false
-}
 
 /// 按下：命中路径最内层 clickable 绑定的交互源 → 发射 Press
 /// （对标 Compose clickable 的 PressInteraction.Press）
@@ -4350,7 +2425,7 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
         src.emit_release();
     }
     // overlay 的按下交互同步释放（overlay 独立 composer——独立 pressed 状态）
-    for ov in &mut pw.overlays {
+    for ov in &mut pw.overlay.layers {
         if let Some((_, src)) = ov.pressed_interaction.take() {
             src.emit_release();
         }
@@ -4366,7 +2441,7 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     // 同时主树 + **其他 overlay** 全部退出 hover（overlay 盖住下层——
     // 对齐真实指针层叠；堆叠 overlay 时下层按钮 hover 不残留）
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
-        let ov = &mut pw.overlays[i];
+        let ov = &mut pw.overlay.layers[i];
         overlay_update_hover(ov, local);
         // 主树 hover 全清（指针在 overlay 上——主树不可见）
         let olds: Vec<u64> = pw.hovered_slots.drain().collect();
@@ -4374,25 +2449,25 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
             exit_hover_at(pw, slot);
         }
         // 其他 overlay（下层）hover 全清
-        for j in 0..pw.overlays.len() {
+        for j in 0..pw.overlay.layers.len() {
             if j == i { continue; }
-            let olds: Vec<u64> = pw.overlays[j].hovered_slots.drain().collect();
+            let olds: Vec<u64> = pw.overlay.layers[j].hovered_slots.drain().collect();
             for slot in olds {
-                overlay_exit_hover_at(&mut pw.overlays[j], slot);
+                overlay_exit_hover_at(&mut pw.overlay.layers[j], slot);
             }
         }
         return;
     }
     // 未命中任何 overlay：主树 hover 更新 + 所有 overlay hover 全清
     // （指针离开 overlay——overlay 的 hover 状态清理）
-    for ov in &mut pw.overlays {
+    for ov in &mut pw.overlay.layers {
         let olds: Vec<u64> = ov.hovered_slots.drain().collect();
         for slot in olds {
             overlay_exit_hover_at(ov, slot);
         }
     }
     // 当前路径上所有 hoverable 的 (slot, interaction)
-    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
+    let hit: Vec<(u64, crate::interaction::MutableInteractionSource)> = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -4417,42 +2492,6 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     }
 }
 
-/// overlay 内 hover 更新（overlay composer + 本地坐标）
-fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
-    let hit: Vec<(u64, crate::ui::interaction::MutableInteractionSource)> = {
-        let nodes = ov.composer.arena_nodes();
-        let Some(r) = ov.composer.layout_root_idx() else { return; };
-        let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-        path.iter()
-            .filter(|&&i| nodes[i].modifier.has_hoverable())
-            .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
-            .collect()
-    };
-    let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
-    for (slot, src) in &hit {
-        if ov.hovered_slots.insert(*slot) {
-            src.emit_hover_enter();
-        }
-    }
-    let gone: Vec<u64> = ov.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
-    for slot in gone {
-        ov.hovered_slots.remove(&slot);
-        overlay_exit_hover_at(ov, slot);
-    }
-}
-
-/// 对 overlay 内指定 slot 的节点补发 Hover Exit
-fn overlay_exit_hover_at(ov: &mut OverlayWindow, slot: u64) {
-    let nodes = ov.composer.arena_nodes();
-    let Some(r) = ov.composer.layout_root_idx() else { return; };
-    if let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot) {
-        if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, nid) {
-            if let Some(src) = nodes[idx].modifier.hoverable_interaction() {
-                src.emit_hover_exit();
-            }
-        }
-    }
-}
 
 /// 对指定 slot 的节点补发 Hover Exit（节点已移除则跳过——hover 状态自然清理）
 fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
@@ -4472,13 +2511,13 @@ fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
 fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-    let Some(down) = pw.pointer_down_state.take() else {
+    let Some(down) = pw.input.down.take() else {
         return false;
     };
     // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
     // （如聚焦触发），arena 节点重建 → node_id 变化 → 旧 id 匹配必然失败；
     // slot_key 按组合位置稳定，不受重组影响）
-    let down_slot = pw.pointer_down_slot;
+    let down_slot = pw.input.down_slot;
     let dx = scene_pos.0 - down.position.0;
     let dy = scene_pos.1 - down.position.1;
     let dist = (dx * dx + dy * dy).sqrt();
@@ -4505,7 +2544,7 @@ fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
 ///
 /// 真实 KeyboardInput 与 debug 模拟共用（防行为分叉）：Escape/Tab 等
 /// 框架级按键由调用方前置处理（聚焦导航/清焦），不进入本函数。
-fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
     let Some(fid) = pw.focused_id else { return false };
     let Some(r) = pw.composer.layout_root_idx() else { return false };
     dispatch_key_in_arena(pw.composer.arena_nodes(), r, fid, ke)
@@ -4515,13 +2554,13 @@ fn dispatch_key_to_focus(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool 
 /// independent composers — the main-tree focus path can never reach them).
 /// Falls through (returns false) when no overlay has focus, so callers can
 /// continue with the main tree.
-fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::modifier::KbEvent) -> bool {
+fn dispatch_key_to_overlay(pw: &PerWindow, ke: &crate::input::KbEvent) -> bool {
     // Only the arena that OWNS the keyboard gets the key. Walking "the first overlay that has focus"
     // would hand keys to a layer below the modal that is actually on top (an overlay keeps a
     // remembered focus now, see `claim_keyboard_for_overlay`), and falling through to lower surfaces
     // would double-handle a key the owner already acted on.
     let Some(i) = keyboard_scope(pw) else { return false };
-    let ov = &pw.overlays[i];
+    let ov = &pw.overlay.layers[i];
     let Some(fid) = ov.focused_id else { return false };
     let Some(r) = ov.composer.layout_root_idx() else { return false };
     // The owner did not consume — stop here.
@@ -4535,7 +2574,7 @@ fn dispatch_key_in_arena(
     nodes: &[crate::layout::node::LayoutNode],
     r: usize,
     fid: u64,
-    ke: &crate::modifier::KbEvent,
+    ke: &crate::input::KbEvent,
 ) -> bool {
     // 收集焦点路径：root → ... → focused
     let mut path: Vec<usize> = Vec::new();
@@ -4577,7 +2616,7 @@ fn dispatch_key_in_arena(
     // 触发 onClick——仅聚焦节点自身的 clickable 响应，不向祖先冒泡）
     let is_activate = matches!(&ke.key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
         || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
-    if ke.event_type == crate::modifier::KbEventType::KeyDown && !ke.repeat && is_activate {
+    if ke.event_type == crate::input::KbEventType::KeyDown && !ke.repeat && is_activate {
         if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
             if let Some(on_click) = nodes[idx].modifier.on_click() {
                 on_click();
@@ -4700,7 +2739,7 @@ fn find_descendant_ime_callback(nodes: &[LayoutNode], idx: usize) -> Option<usiz
 fn handle_pointer_down(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
-    kind: crate::modifier::PointerKind,
+    kind: crate::input::PointerKind,
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
@@ -4740,7 +2779,7 @@ fn handle_pointer_down(
             // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
             // 转回编辑偏移（密码掩码/格式化输入）。
             // ⚠ TextFieldVisual 挂在**容器**——须向上找（offset_mapping_for_node）
-            crate::ui::text_field::offset_mapping_for_node(nodes, r, ai)
+            crate::text::field::offset_mapping_for_node(nodes, r, ai)
                 .map(|m| m.transformed_to_original(hit))
                 .unwrap_or(hit)
         })
@@ -4756,14 +2795,14 @@ fn handle_pointer_down(
                 .and_then(|reg| reg.segment_info(nodes[ai].slot_key).map(|(off, _)| off + a))
         })
     });
-    pw.pointer_down_state = Some(PtrDownState {
+    pw.input.down = Some(PtrDownState {
         node_id: nodes[innermost].id,
         position: scene_pos,
         time: std::time::Instant::now(),
         selection_anchor: anchor_global,
         anchor_registrar: own_reg, // None（不可选节点）→ 无 anchor 容器
     });
-    pw.pointer_down_slot = Some(nodes[innermost].slot_key);
+    pw.input.down_slot = Some(nodes[innermost].slot_key);
 
     if with_focus {
         // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）。
@@ -4788,7 +2827,7 @@ fn handle_pointer_down(
 
     // 拖拽滚动目标：按下点向上找最近滚动容器。文本选择/组件 drag 手势优先
     // （拖选文本/组件拖拽不滚动——对齐 Compose 最内层 pointerInput 消费）
-    pw.drag_scroll = (|| {
+    pw.input.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -4805,8 +2844,8 @@ fn handle_pointer_down(
                     n.modifier.vertical_scroll_state().is_some());
             }
         }
-        let Some(&innermost) = path.last() else { return None };
-        let selecting = pw.pointer_down_state.as_ref()
+        let Some(&_innermost) = path.last() else { return None };
+        let selecting = pw.input.down.as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);
         // 内层手势优先，但**滚动优先于外层面板拖拽**（对齐 Compose：BottomSheet 面板
@@ -4821,7 +2860,7 @@ fn handle_pointer_down(
         // fallback owner here. `None` when the component stands alone (it owns every direction), and
         // `None` while a text selection is in progress: the selection keeps the pointer (it is
         // extended from every move below), so the list must not start scrolling under the finger.
-        pw.gesture_scroll_slot = if child_drag && !selecting {
+        pw.input.scroll_slot = if child_drag && !selecting {
             scroll_idx.map(|i| nodes[i].slot_key)
         } else {
             None
@@ -4835,8 +2874,8 @@ fn handle_pointer_down(
 
     // 分发 on_pointer_event（Down）
     let nodes = pw.composer.arena_nodes();
-    let ptr_ev = crate::modifier::PointerEvent {
-        event_type: crate::modifier::PointerEventType::Down,
+    let ptr_ev = crate::input::PointerEvent {
+        event_type: crate::input::PointerEventType::Down,
         position: (0.0, 0.0),
         scene_position: scene_pos,
         kind,
@@ -4845,8 +2884,8 @@ fn handle_pointer_down(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.last_pointer_kind = ptr_ev.kind.clone();
-    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    pw.input.last_kind = ptr_ev.kind.clone();
+    dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     true
 }
 
@@ -4857,21 +2896,21 @@ fn handle_pointer_down(
 fn handle_pointer_move(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
-    kind: crate::modifier::PointerKind,
+    kind: crate::input::PointerKind,
     modifiers: &winit::keyboard::ModifiersState,
 ) -> bool {
     // 手势驱动（drag capture：tracker 存在即路由——指针移出组件仍接收）
     // ⚠ 必须在 nodes 借用之前（gesture_move 内部自取 nodes/pw mut）
     let mut handled = false;
-    if pw.gesture_node.is_some() && gesture_move(pw, scene_pos) {
+    if pw.input.node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
     }
     // overlay 点击 slop 取消：按下 overlay 后拖出 18px → 取消 click（对齐
     // 主树 detect_click 的 slop 判定；down 位置 = overlay screen_pos + local）
-    if pw.overlay_click.is_some() {
-        let cancel = match pw.overlay_click {
+    if pw.overlay.click.is_some() {
+        let cancel = match pw.overlay.click {
             Some((idx, local, _)) => {
-                match pw.overlays.get(idx) {
+                match pw.overlay.layers.get(idx) {
                     Some(ov) => {
                         let down_screen = (ov.screen_pos.0 + local.0, ov.screen_pos.1 + local.1);
                         let dx = scene_pos.0 - down_screen.0;
@@ -4884,17 +2923,17 @@ fn handle_pointer_move(
             None => false,
         };
         if cancel {
-            pw.overlay_click = None;
+            pw.overlay.click = None;
             release_pressed_interaction(pw);
         }
     }
-    if let Some((idx, slot, down_pos)) = pw.overlay_drag {
+    if let Some((idx, slot, down_pos)) = pw.overlay.drag {
         let (dx, dy) = (scene_pos.0 - down_pos.0, scene_pos.1 - down_pos.1);
-        if !pw.overlay_drag_started {
+        if !pw.overlay.drag_started {
             if dx * dx + dy * dy >= 8.0 * 8.0 {
-                pw.overlay_drag_started = true;
-                pw.overlay_drag_last = Some(scene_pos);
-                if let Some(ov) = pw.overlays.get(idx) {
+                pw.overlay.drag_started = true;
+                pw.overlay.drag_last = Some(scene_pos);
+                if let Some(ov) = pw.overlay.layers.get(idx) {
                     let nodes = ov.composer.arena_nodes();
                     if let Some(r) = ov.composer.layout_root_idx() {
                         // ⚠ The overlay arena is LAYER-local, and a gesture callback receives
@@ -4904,8 +2943,8 @@ fn handle_pointer_move(
                         // origin, which is why dragging a Slider inside a popup landed on the wrong
                         // value (deltas are unaffected: the layer offset cancels in a difference).
                         let local = (
-                            scene_pos.0 - pw.overlay_drag_origin.0,
-                            scene_pos.1 - pw.overlay_drag_origin.1,
+                            scene_pos.0 - pw.overlay.drag_origin.0,
+                            scene_pos.1 - pw.overlay.drag_origin.1,
                         );
                         fire_gesture_action(nodes, r, slot,
                             crate::input::gesture::GestureAction::DragStart(local));
@@ -4916,15 +2955,15 @@ fn handle_pointer_move(
                 handled = true;
             }
         } else {
-            let last = pw.overlay_drag_last.unwrap_or(down_pos);
+            let last = pw.overlay.drag_last.unwrap_or(down_pos);
             let inc = (scene_pos.0 - last.0, scene_pos.1 - last.1);
-            pw.overlay_drag_last = Some(scene_pos);
-            if let Some(ov) = pw.overlays.get(idx) {
+            pw.overlay.drag_last = Some(scene_pos);
+            if let Some(ov) = pw.overlay.layers.get(idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(r) = ov.composer.layout_root_idx() {
                     let local = (
-                        scene_pos.0 - pw.overlay_drag_origin.0,
-                        scene_pos.1 - pw.overlay_drag_origin.1,
+                        scene_pos.0 - pw.overlay.drag_origin.0,
+                        scene_pos.1 - pw.overlay.drag_origin.1,
                     );
                     fire_gesture_action(nodes, r, slot,
                         crate::input::gesture::GestureAction::DragMove(local, inc));
@@ -4936,18 +2975,18 @@ fn handle_pointer_move(
     // overlay 内拖拽滚动（独立 Composer——BottomSheet 内 LazyColumn）
     // 列表滚动走 overlay Composer 的 dispatch_nested_scroll_delta，Sheet 通过 panel 上的
     // SheetNested（nested_scroll）吃剩余 available。此分支仅消费列表，能否拖 Sheet 取决于 nested。
-    if pw.overlay_drag_scroll.is_some() {
+    if pw.overlay.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
-            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-            let slot = pw.overlay_drag_scroll.as_ref().unwrap().slot;
-            let ov = pw.overlays.get(ov_idx)?;
+            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            let slot = pw.overlay.drag_scroll.as_ref().unwrap().slot;
+            let ov = pw.overlay.layers.get(ov_idx)?;
             let r = ov.composer.layout_root_idx()?;
             let nodes = ov.composer.arena_nodes();
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
         })();
         let (dx, dy) = {
-            let ds = pw.overlay_drag_scroll.as_mut().unwrap();
+            let ds = pw.overlay.drag_scroll.as_mut().unwrap();
             let dx = scene_pos.0 - ds.last_x;
             let dy = scene_pos.1 - ds.last_y;
             ds.last_x = scene_pos.0;
@@ -4960,16 +2999,16 @@ fn handle_pointer_move(
         };
         if let Some(idx) = target {
             let (ax, ay) = {
-                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-                let ov = &pw.overlays[ov_idx];
+                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                let ov = &pw.overlay.layers[ov_idx];
                 let nodes = ov.composer.arena_nodes();
                 if nodes[idx].modifier.vertical_scroll_state().is_some() { (0.0, dy) }
                 else if nodes[idx].modifier.horizontal_scroll_state().is_some() { (dx, 0.0) }
                 else { (0.0, 0.0) }
             };
             if ax != 0.0 || ay != 0.0 {
-                let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-                if let Some(ov) = pw.overlays.get_mut(ov_idx) {
+                let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+                if let Some(ov) = pw.overlay.layers.get_mut(ov_idx) {
                     if let Some(root) = ov.composer.layout_root_idx() {
                         let density = crate::unit::Density::from_density(pw.scale_factor as f32);
                         let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), root, idx, crate::nested_scroll::ScrollDelta::new(ax, ay), crate::nested_scroll::NestedScrollSource::Drag, density);
@@ -4979,8 +3018,8 @@ fn handle_pointer_move(
                     }
                 }
             }
-            let ov_idx = pw.overlays.len().checked_sub(1).unwrap_or(0);
-            if let Some(ov) = pw.overlays.get(ov_idx) {
+            let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
+            if let Some(ov) = pw.overlay.layers.get(ov_idx) {
                 let nodes = ov.composer.arena_nodes();
                 if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() { ss.is_scroll_in_progress.set(true); }
                 else if let Some(ss) = nodes[idx].modifier.horizontal_scroll_state() { ss.is_scroll_in_progress.set(true); }
@@ -4989,16 +3028,16 @@ fn handle_pointer_move(
     }
     // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本
     // 选择之前——但按下时已排除组件 drag 手势与文本选择，此处无冲突
-    if pw.drag_scroll.is_some() {
+    if pw.input.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
             let nodes = pw.composer.arena_nodes();
             let Some(r) = pw.composer.layout_root_idx() else { return None };
-            let slot = pw.drag_scroll.as_ref().unwrap().slot;
+            let slot = pw.input.drag_scroll.as_ref().unwrap().slot;
             let id = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot)?;
             crate::layout::node::find_node_by_id(nodes, r, id)
         })();
         let (dx, dy) = {
-            let ds = pw.drag_scroll.as_mut().unwrap();
+            let ds = pw.input.drag_scroll.as_mut().unwrap();
             let dx = scene_pos.0 - ds.last_x;
             let dy = scene_pos.1 - ds.last_y;
             ds.last_x = scene_pos.0;
@@ -5017,7 +3056,7 @@ fn handle_pointer_move(
                     idx,
                     nodes[idx].modifier.vertical_scroll_state().is_some(),
                     nodes[idx].modifier.horizontal_scroll_state().is_some(),
-                    pw.drag_scroll.as_ref().map(|d| d.slot));
+                    pw.input.drag_scroll.as_ref().map(|d| d.slot));
             }
             // 轴感知：垂直容器吃 dy，水平容器吃 dx（apply_scroll_delta 按节点轴取）
             let (ax, ay) = {
@@ -5054,15 +3093,15 @@ fn handle_pointer_move(
     // 悬停更新（自身 hit test——不依赖下方 nodes 借用）
     update_hover(pw, scene_pos);
     // 越界 slop：按下交互取消（Compose：press 超过 touch slop → Cancel）
-    if pw.pointer_down_state.is_some() {
-        let down = pw.pointer_down_state.as_ref().unwrap();
+    if pw.input.down.is_some() {
+        let down = pw.input.down.as_ref().unwrap();
         let dx = scene_pos.0 - down.position.0;
         let dy = scene_pos.1 - down.position.1;
         if (dx * dx + dy * dy).sqrt() > 18.0 {
             release_pressed_interaction(pw);
             // overlay 点击同步取消（对齐主树 detect_click 的 slop 判定——
             // 拖出 slop 后 up 不应 fire overlay click）
-            pw.overlay_click = None;
+            pw.overlay.click = None;
         }
     }
     let nodes = pw.composer.arena_nodes();
@@ -5070,9 +3109,9 @@ fn handle_pointer_move(
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
     // 拖拽选中文本
-    if pw.pointer_down_state.is_some() {
+    if pw.input.down.is_some() {
         if let Some(&innermost) = path.last() {
-            let down = pw.pointer_down_state.as_ref().unwrap();
+            let down = pw.input.down.as_ref().unwrap();
             let dx = scene_pos.0 - down.position.0;
             let dy = scene_pos.1 - down.position.1;
             const CLICK_SLOP: f32 = 18.0;
@@ -5088,10 +3127,10 @@ fn handle_pointer_move(
                         // 对齐偏移（匹配渲染侧 x_off）——绘制用内容盒，选区高亮须一致
                         //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
                         let node_w = nodes[innermost].content_box().width;
-                        let align = nodes[innermost].modifier.align().unwrap_or(crate::ui::TextAlign::Left);
+                        let align = nodes[innermost].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                         let x_off = match align {
-                            crate::ui::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                            crate::ui::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
+                            crate::text::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
+                            crate::text::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
                             _ => abs_x,
                         };
                         // 段落局部坐标：扣节点 padding（与渲染侧 content 区一致——
@@ -5100,7 +3139,7 @@ fn handle_pointer_move(
                         let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                         let tl = crate::text::TextLayout::new(para, 0);
                         {
-                            let down = pw.pointer_down_state.as_ref().unwrap();
+                            let down = pw.input.down.as_ref().unwrap();
                             // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
                             // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
@@ -5108,18 +3147,18 @@ fn handle_pointer_move(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
                                 // 显示偏移 → 编辑偏移（密码掩码/格式化输入；
                                 // TextFieldVisual 在容器——向上找）
-                                let current_index = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                let current_index = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                     .map(|m| m.transformed_to_original(current_index))
                                     .unwrap_or(current_index);
                                 let cur_off = reg.segment_info(nodes[innermost].slot_key).map(|(off, _)| off);
-                                if let Some((target, s, e)) = crate::ui::selection_container::compute_selection(
+                                if let Some((target, s, e)) = crate::components::selection_container::compute_selection(
                                     down.anchor_registrar.as_ref(), down.selection_anchor,
                                     &reg, cur_off, current_index,
                                     scene_pos.1, down.position.1, abs_y,
                                 ) {
                                     // 范围是编辑偏移（anchor/current 已转回）——
                                     // reg 空间 = 显示偏移，写入选区前转换
-                                    let (ts, te) = crate::ui::text_field::offset_mapping_for_node(nodes, r, innermost)
+                                    let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                         .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
                                         .unwrap_or((s, e));
                                     target.set_selection(ts, te);
@@ -5135,8 +3174,8 @@ fn handle_pointer_move(
 
     // 分发 on_pointer_event（悬停 Move 也可能更新 State）
     let nodes = pw.composer.arena_nodes();
-    let ptr_ev = crate::modifier::PointerEvent {
-        event_type: crate::modifier::PointerEventType::Move,
+    let ptr_ev = crate::input::PointerEvent {
+        event_type: crate::input::PointerEventType::Move,
         position: (0.0, 0.0),
         scene_position: scene_pos,
         kind,
@@ -5145,8 +3184,8 @@ fn handle_pointer_move(
         is_shift_pressed: modifiers.shift_key(),
         is_meta_pressed: modifiers.meta_key(),
     };
-    pw.last_pointer_kind = ptr_ev.kind.clone();
-    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.pointer_down_slot);
+    pw.input.last_kind = ptr_ev.kind.clone();
+    let consumed = dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
     handled || consumed
 }
 
@@ -5178,7 +3217,7 @@ fn dispatch_ptr_event(
     nodes: &[LayoutNode],
     root: usize,
     path: &[usize],
-    event: &crate::modifier::PointerEvent,
+    event: &crate::input::PointerEvent,
     scene_pos: (f32, f32),
     captured_id: Option<u64>,
 ) -> bool {
@@ -5259,14 +3298,15 @@ fn dispatch_ptr_event(
 /// 距上次 request >= 帧间隔才允许请求（WM_PAINT 生成频率受控为刷新率）。
 /// 独立于渲染节流（last_render_time）——避免 WM_PAINT 晚于 request（ε>0）导致
 /// 定时器唤醒时 now-last_render = I-ε < I 恒拦截 → 渲染频率减半（2I 间隔）。
-pub(crate) fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
+#[allow(dead_code)] // the tests in this file call it
+fn should_request_redraw(last_request: std::time::Instant, now: std::time::Instant, interval: std::time::Duration) -> bool {
     now.duration_since(last_request) >= interval
 }
 
 #[cfg(test)]
 mod window_theme_tests {
     use super::PerWindow;
-    use crate::ui::theme::{ThemeColors, ThemeSpec, WindowTheme};
+    use crate::theme::{ThemeColors, ThemeSpec, WindowTheme};
 
     /// Every window follows a system theme change — each from its OWN applied state.
     ///
@@ -5275,202 +3315,53 @@ mod window_theme_tests {
     /// platform path they did not even run a frame). Measured on a two-window app in the fixtures.
     #[test]
     fn a_theme_change_reaches_every_window() {
-        let _serial = crate::ui::theme::theme_mode_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = crate::theme::theme_mode_test_lock().lock().unwrap_or_else(|e| e.into_inner());
         let light = ThemeColors::default_light();
         let dark = ThemeColors::default_dark();
 
-        crate::ui::theme::set_system_dark_mode(Some(false));
+        crate::theme::set_system_dark_mode(Some(false));
         let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         let mut pinned = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
         // What a `Window` node passes: a cell whose intent follows the system.
-        first.theme_cell = WindowTheme::new(ThemeSpec::Auto);
-        second.theme_cell = WindowTheme::new(ThemeSpec::Auto);
+        first.theme.cell = WindowTheme::new(ThemeSpec::Auto);
+        second.theme.cell = WindowTheme::new(ThemeSpec::Auto);
         // A window whose application pinned a palette: its cell stays `Fixed`.
-        pinned.theme_cell = WindowTheme::new(ThemeSpec::Fixed(light));
+        pinned.theme.cell = WindowTheme::new(ThemeSpec::Fixed(light));
         first.refresh_theme();
         second.refresh_theme();
-        assert_eq!(first.theme_applied.colors.background, light.background);
-        assert_eq!(second.theme_applied.colors.background, light.background);
+        assert_eq!(first.theme.applied.colors.background, light.background);
+        assert_eq!(second.theme.applied.colors.background, light.background);
 
-        crate::ui::theme::set_system_dark_mode(Some(true));
+        crate::theme::set_system_dark_mode(Some(true));
         assert!(first.refresh_theme(), "the first window re-resolves");
         assert!(second.refresh_theme(), "so does the second — the state is per window");
-        assert_eq!(first.theme_applied.colors.background, dark.background);
+        assert_eq!(first.theme.applied.colors.background, dark.background);
         assert_eq!(
-            second.theme_applied.colors.background, dark.background,
+            second.theme.applied.colors.background, dark.background,
             "the second window must not be left behind"
         );
 
         // A pinned window resolves the same palette again and has nothing to redraw.
         assert!(!pinned.refresh_theme(), "a pinned window has nothing to re-run");
-        assert_eq!(pinned.theme_applied.colors.background, light.background);
+        assert_eq!(pinned.theme.applied.colors.background, light.background);
 
         // An idle window does no work either.
         assert!(!first.refresh_theme(), "nothing changed since the last frame");
 
         // A published TYPE SCALE is a reason to re-run too, with no color change at all: components
         // resolved their type when they built.
-        crate::ui::theme::set_system_dark_mode(Some(false));
-        let big = crate::ui::theme::Typography { body_large: crate::ui::text::TextStyle::new().font_size(24.0), ..Default::default() };
-        assert!(first.theme_cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
+        crate::theme::set_system_dark_mode(Some(false));
+        let big = crate::theme::Typography { body_large: crate::text::TextStyle::new().font_size(24.0), ..Default::default() };
+        assert!(first.theme.cell.publish(ThemeSpec::Auto, big, crate::layout::LayoutDirection::Ltr));
         assert!(first.refresh_theme(), "a type-scale change has to reach the tree");
-        assert_eq!(first.theme_applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
+        assert_eq!(first.theme.applied.typography.body_large.font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(24.0))));
         assert!(!first.refresh_theme(), "and then it is idle again");
 
-        crate::ui::theme::set_system_dark_mode(None);
+        crate::theme::set_system_dark_mode(None);
     }
 }
 
-#[cfg(test)]
-mod overlay_close_tests {
-    use super::{closing_overlay_is_done, OverlayWindow, PerWindow, CLOSING_DEADLINE};
-    use crate::core::composer::Composer;
-    use crate::ui::overlay::{OverlayAnimSpec, OverlayDesc, PopupPosition};
-    use crate::ui::theme::ThemeColors;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-
-    /// A closing overlay is dropped when its fade finished — and, failing that, past the deadline. The
-    /// case in between is the reason the deadline exists: a tween that never reports done kept the overlay
-    /// (and its modal scrim) rendering forever, which a user hit as a stuck dim layer over the page with
-    /// the sheet already gone.
-    #[test]
-    fn a_closing_overlay_waits_for_its_fade_but_not_forever() {
-        // The deadline has to stay in the same order of magnitude as the exit specs (a few hundred
-        // milliseconds): the test below derives its instants from it, so a constant of minutes would pass
-        // the test and still leave a stuck scrim on screen for minutes.
-        assert!(
-            CLOSING_DEADLINE <= Duration::from_millis(2000),
-            "CLOSING_DEADLINE is a safety net, not a grace period: {CLOSING_DEADLINE:?}"
-        );
-        let now = Instant::now();
-        assert!(closing_overlay_is_done(None, None, now), "no progress channel: nothing to wait for");
-        assert!(closing_overlay_is_done(Some(0.0), None, now), "the fade reached its end");
-        assert!(
-            !closing_overlay_is_done(Some(1.0), Some(now), now),
-            "a fade in flight is not dropped"
-        );
-        assert!(
-            !closing_overlay_is_done(Some(1.0), Some(now - CLOSING_DEADLINE / 2), now),
-            "…and not before its time"
-        );
-        assert!(
-            closing_overlay_is_done(Some(1.0), Some(now - CLOSING_DEADLINE - Duration::from_millis(1)), now),
-            "…and it is dropped once the deadline passes"
-        );
-    }
-
-    /// An overlay that stops closing has to be VISIBLE again, not merely non-closing: the exit tween
-    /// left its show-progress at 0, and that number is what the render path draws with (while the hit
-    /// test never looks at it). Left there, the overlay is an invisible panel that still swallows
-    /// clicks in its rect and still owns the keyboard — the state a close-then-reopen used to land in,
-    /// and the state the deadline's "hand it back its interactivity" arm would have landed in too.
-    #[test]
-    fn an_overlay_that_stops_closing_is_shown_again() {
-        let desc = |enter: Option<OverlayAnimSpec>, exit: Option<OverlayAnimSpec>| OverlayDesc {
-            id: 7,
-            anchor_slot: None,
-            position: PopupPosition::Center,
-            offset: (0.0, 0.0),
-            anchor_slide: None,
-            modal: true,
-            focus_scope: true,
-            dismiss_on_outside: true,
-            dismiss_on_back_press: true,
-            click_passthrough: false,
-            fit_around_anchor: false,
-            match_anchor_width: false,
-            on_dismiss: None,
-            enter_anim: enter,
-            exit_anim: exit,
-            content: Box::new(|_| {}),
-            local_snapshot: Vec::new(),
-        };
-        let fade = || OverlayAnimSpec::fade_only(Duration::from_millis(50));
-
-        // Nothing to animate back up (no enter spec): the value must land on 1 outright.
-        let mut ov = OverlayWindow::new_with_composer(desc(None, Some(fade())), Composer::new());
-        let progress = ov.progress.clone().expect("the exit spec gives it a progress channel");
-        progress.as_raw().set_backchannel(0.0);
-        ov.closing = true;
-        ov.closing_since = Some(Instant::now());
-        ov.resume_after_close();
-        assert!(!ov.closing, "resuming undoes the close");
-        assert_eq!(
-            ov.progress.as_ref().map(|p| p.peek()),
-            Some(1.0),
-            "with no enter animation the panel is shown outright, not left at the exit tween's 0"
-        );
-
-        // With one, the 0->1 enter is scheduled again — the push is the observable proof.
-        let _serial = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let mut ov = OverlayWindow::new_with_composer(desc(Some(fade()), Some(fade())), Composer::new());
-        let progress = ov.progress.clone().expect("an animated overlay has a progress channel");
-        progress.as_raw().set_backchannel(0.0);
-        ov.closing = true;
-        ov.closing_since = Some(Instant::now());
-        ov.resume_after_close();
-        assert!(
-            crate::animation::has_animation_for_state(progress.state_id()),
-            "resuming an overlay that was fading out schedules its enter animation again"
-        );
-        crate::animation::clear_all_animations();
-    }
-
-    /// `DialogProperties.dismissOnBackPress = false` still SWALLOWS Escape — the page behind the scrim
-    /// must not react to a key the dialog kept — but does not close the dialog. That swallow is winia's
-    /// own, not Compose's: see the note on [`PerWindow::escape_key`].
-    #[test]
-    fn escape_respects_dismiss_on_back_press() {
-        let desc = |dismiss_on_back_press: bool| OverlayDesc {
-            id: 9,
-            anchor_slot: None,
-            position: PopupPosition::Center,
-            offset: (0.0, 0.0),
-            anchor_slide: None,
-            modal: true,
-            focus_scope: true,
-            dismiss_on_outside: true,
-            dismiss_on_back_press,
-            click_passthrough: false,
-            fit_around_anchor: false,
-            match_anchor_width: false,
-            on_dismiss: Some(Arc::new(|| {})),
-            enter_anim: None,
-            exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
-            content: Box::new(|_| {}),
-            local_snapshot: Vec::new(),
-        };
-
-        // True (the default): the escape starts the close.
-        let light = ThemeColors::default_light();
-        let mut kept = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
-        kept.overlays
-            .push(OverlayWindow::new_with_composer(desc(true), Composer::new()));
-        assert!(kept.escape_key(), "escape is consumed");
-        assert!(
-            kept.overlays[0].closing,
-            "and it closes the dialog that opted in"
-        );
-
-        // False: consumed, but nothing closes.
-        let light = ThemeColors::default_light();
-        let mut stubborn = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
-        stubborn
-            .overlays
-            .push(OverlayWindow::new_with_composer(desc(false), Composer::new()));
-        assert!(
-            stubborn.escape_key(),
-            "escape is still SWALLOWED so the page behind does not see it"
-        );
-        assert!(
-            !stubborn.overlays[0].closing,
-            "but the dialog that opted out stays open"
-        );
-    }
-}
 
 #[cfg(test)]
 mod frame_throttle_tests {
@@ -5524,7 +3415,7 @@ mod frame_throttle_tests {
 
     #[test]
     fn per_window_modifiers_are_independent() {
-        let theme = crate::ui::theme::ThemeColors::default_light();
+        let theme = crate::theme::ThemeColors::default_light();
         let mut first = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme.clone());
         let mut second = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, theme);
         first.modifiers = winit::keyboard::ModifiersState::default();
@@ -5540,23 +3431,23 @@ mod frame_throttle_tests {
             .build()
             .unwrap();
         let _guard = rt.enter();
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         composer.compose(crate::compose!(|ctx| {
-            crate::ui::Column::new()
+            crate::layout::Column::new()
                 .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(scroll2))
                 .build(ctx, |ctx| {
                     // 内容总高 > 视口 600（每行 ~19px × 40 行 ≈ 760）
                     for _ in 0..40 {
-                        crate::ui::Text::new("line content line content").build(ctx);
+                        crate::components::Text::new("line content line content").build(ctx);
                     }
                 });
         }));
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
         let root = composer.layout_root_idx().unwrap();
         assert_eq!(scroll.offset.get(), 0.0);
-        let consumed = super::apply_scroll_delta(
+        let consumed = super::scroll::apply_scroll_delta(
             composer.arena_nodes_mut(),
             root,
             0.0,
@@ -5646,8 +3537,9 @@ mod press_target_tests {
 mod pointer_dispatch_coord_tests {
     use super::dispatch_ptr_event;
     use crate::layout::node::{hit_test, scene_to_node_local, LayoutNode};
-    use crate::layout::{Point, Size};
-    use crate::modifier::{Modifier, PointerButton, PointerEvent, PointerEventType, PointerKind, ScrollState};
+    use crate::unit::{Offset, Size};
+    use crate::modifier::{Modifier, ScrollState};
+    use crate::input::{PointerButton, PointerEvent, PointerEventType, PointerKind};
 
     /// 构造 scroll 容器(0,0,100×200) + 子节点(0,100,100×60，带 PointerEvent handler)。
     /// scroll offset=50 → 子节点视觉顶边 y=50。
@@ -5672,7 +3564,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 60.0);
-        nodes[1].position = Point::new(0.0, 100.0);
+        nodes[1].position = Offset::new(0.0, 100.0);
         nodes[0].children.push(1);
         (nodes, received, container_recv, scroll)
     }
@@ -5777,7 +3669,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(20.0, 30.0);
+        nodes[1].position = Offset::new(20.0, 30.0);
         nodes[0].children.push(1);
         let path = vec![0, 1];
         // 场景 (50,60) → 子本地 (30,30)
@@ -5837,7 +3729,7 @@ mod pointer_dispatch_coord_tests {
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(20.0, 20.0);
+        nodes[1].position = Offset::new(20.0, 20.0);
         nodes[0].children.push(1);
         // 点内层 (50,50)：命中路径 [0,1]
         let path = hit_test(&nodes, 0, 50.0, 50.0);
@@ -5863,8 +3755,9 @@ mod key_node_dual_track_tests {
     use super::dispatch_key_to_focus;
     use super::PerWindow;
     use crate::layout::Constraints;
-    use crate::modifier::{KbEvent, KbEventType, KeyNode, Modifier};
-    use crate::ui::theme::ThemeColors;
+    use crate::modifier::{KeyNode, Modifier};
+    use crate::input::{KbEvent, KbEventType};
+    use crate::theme::ThemeColors;
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
@@ -5906,7 +3799,7 @@ mod key_node_dual_track_tests {
         let (pre_c, ev_c) = (pre_log.clone(), ev_log.clone());
         pw.content = Box::new(move |ctx| {
             let enum_log3 = enum_log2.clone();
-            crate::ui::Text::new("k")
+            crate::components::Text::new("k")
                 .modifier(
                     Modifier::new()
                         .focusable()
@@ -5965,227 +3858,8 @@ mod key_node_dual_track_tests {
 /// 1. pre 按 R→M→T 正序
 /// 2. child 消费后 post 按 M→T→R 逆序（**含 target T**——TopAppBar 等
 ///    connection 挂在 scroll 容器节点上，排除 target 会破坏 post 回调）
-#[cfg(test)]
-mod nested_scroll_chain_tests {
-    use super::dispatch_nested_scroll_delta;
-    use crate::layout::node::LayoutNode;
-    use crate::layout::{Point, Size};
-    use crate::modifier::{Modifier, ScrollState};
-    use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
-
-    /// 记录器 connection：记录 on_pre_scroll/on_post_scroll 的调用顺序。
-    /// pre 消费一半，post 消费全部 available——便于验证顺序与消费量。
-    /// `global_log`（可选）记录**跨节点**顺序（如 "pre-R" "post-T"）——
-    /// 独立 log 只能验证单节点内部顺序，无法捕获 pre-R→M→T→post-T→M→R。
-    struct Recorder {
-        name: String,
-        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-        global_log: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-        order: std::sync::atomic::AtomicUsize,
-    }
-    impl Recorder {
-        fn new(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
-            Self { name: name.to_string(), log, global_log: None, order: std::sync::atomic::AtomicUsize::new(0) }
-        }
-        fn with_global(name: &str, log: std::sync::Arc<std::sync::Mutex<Vec<String>>>, global: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
-            Self { name: name.to_string(), log, global_log: Some(global), order: std::sync::atomic::AtomicUsize::new(0) }
-        }
-    }
-    impl NestedScrollConnection for Recorder {
-        fn on_pre_scroll(&self, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
-            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.log.lock().unwrap().push(format!("pre-{}-{}", self.name, n));
-            if let Some(g) = &self.global_log {
-                g.lock().unwrap().push(format!("pre-{}", self.name));
-            }
-            ScrollDelta::new(available.x / 2.0, available.y / 2.0)
-        }
-        fn on_post_scroll(&self, _: ScrollDelta, available: ScrollDelta, _: NestedScrollSource) -> ScrollDelta {
-            let n = self.order.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.log.lock().unwrap().push(format!("post-{}-{}", self.name, n));
-            if let Some(g) = &self.global_log {
-                g.lock().unwrap().push(format!("post-{}", self.name));
-            }
-            ScrollDelta::new(available.x, available.y)
-        }
-        fn on_pre_fling(&self, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
-        fn on_post_fling(&self, _: ScrollVelocity, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
-    }
-
-    #[test]
-    fn delta_chain_pre_post_order_includes_target() {
-        // 构造 root(connection R) → mid(connection M) → target(scroll + connection T)
-        let r_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let m_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        let t_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        // 共享全局 log：验证跨节点顺序 pre-R→M→T→post-T→M→R
-        let global = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-
-        let conn_r = Recorder::with_global("R", r_log.clone(), global.clone());
-        let conn_m = Recorder::with_global("M", m_log.clone(), global.clone());
-        let conn_t = Recorder::with_global("T", t_log.clone(), global.clone());
-
-        let scroll = ScrollState::new();
-        scroll.offset.set(0.0);
-        let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().nested_scroll(conn_r).size(200.0, 200.0)),
-            LayoutNode::leaf(Modifier::new().nested_scroll(conn_m).size(200.0, 200.0)),
-            LayoutNode::leaf(Modifier::new().vertical_scroll(scroll.clone()).nested_scroll(conn_t).size(100.0, 100.0)),
-        ];
-        nodes[0].measured_size = Size::new(200.0, 200.0);
-        nodes[1].measured_size = Size::new(200.0, 200.0);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[2].measured_size = Size::new(100.0, 100.0);
-        nodes[2].position = Point::new(0.0, 100.0);
-        nodes[2].scroll_viewport_height = 100.0;
-        nodes[2].scroll_content_height = 200.0; // 可滚动 100
-        nodes[0].children.push(1);
-        nodes[1].children.push(2);
-
-        let density = crate::unit::Density::from_density(1.0);
-        // 消费推演（dy=-20，负 delta = 内容上移 = offset 增加；每个 pre 吃一半）：
-        //   R pre -10 → M pre -5 → T pre -2.5 → child 剩余 -2.5 → child 消费 2.5
-        //   post 链（含 T）：M post 全吃 available → T post 全吃 → R post 全吃剩余
-        let consumed = dispatch_nested_scroll_delta(
-            &mut nodes, 0, 2,
-            ScrollDelta::new(0.0, -20.0),
-            NestedScrollSource::Wheel,
-            density,
-        );
-
-        // R：pre 一次（吃 10）+ post 一次（child 消费后，吃剩余）——R 是最后 post
-        assert_eq!(*r_log.lock().unwrap(), vec!["pre-R-0", "post-R-1"], "R pre 后 post");
-        // M：pre 一次 + post 一次（在 T/R 之前——逆序 M→T→R）
-        assert_eq!(*m_log.lock().unwrap(), vec!["pre-M-0", "post-M-1"], "M pre 后 post");
-        // T：pre + post（TopAppBar 类 connection 挂在 target 上，post 必须被调用——
-        // 修复前的关键回归点：排除 target 会破坏 content_offset 变色/回弹）
-        assert_eq!(*t_log.lock().unwrap(), vec!["pre-T-0", "post-T-1"], "T 也参与 post（TopAppBar 依赖）");
-
-        // consumed 应为负（负 delta 方向消费），且 child 已实际滚动 offset>0
-        assert!(consumed.y < 0.0, "应沿 delta 方向消费，实际 {:?}", consumed);
-        assert!(scroll.offset.get() > 0.0, "child 应实际滚动（pre 只吃一半），实际 {}", scroll.offset.get());
-
-        // 跨节点全局顺序：pre 正序 R→M→T，post 逆序 T→M→R（含 target T）
-        let g = global.lock().unwrap().clone();
-        assert_eq!(g, vec!["pre-R", "pre-M", "pre-T", "post-T", "post-M", "post-R"],
-            "全局顺序应为 pre-R→M→T→post-T→M→R（含 target T 参与 post）——实际 {g:?}");
-    }
-}
 
 /// The release-velocity floor at the fling call site, and the exception a paged list gets from it.
-#[cfg(test)]
-mod release_velocity_floor_tests {
-    use super::dispatch_nested_scroll_fling;
-    use crate::layout::node::LayoutNode;
-    use crate::layout::{Point, Size};
-    use crate::modifier::{Modifier, ScrollState, SnapSpec};
-    use crate::nested_scroll::ScrollVelocity;
-
-    const STEP: f32 = 336.0;
-    /// Below the 50 px/s floor the call site uses for the DECAY, and below the snap's own 400 dp/s
-    /// threshold too — so the snap that runs here is the "settle on the nearer page" branch, which is
-    /// the one a slow drag-and-release needs.
-    const GENTLE: f32 = 12.0;
-
-    /// A root with one scrollable child, mid-page so the snap has somewhere to go.
-    ///
-    /// The offset matters: at an exact page boundary the snap target equals the current offset and the
-    /// spring is never registered (`push_animatable_with_velocity_and_done` short-circuits on
-    /// `peek() == target`), which would make a `has_animation` assertion vacuous.
-    fn tree(snap: Option<SnapSpec>, offset: f32) -> (Vec<LayoutNode>, ScrollState) {
-        let scroll = ScrollState::new();
-        scroll.offset.set(offset);
-        scroll.fling_limit.set(STEP * 9.0);
-        scroll.snap.set(snap);
-        let mut nodes = vec![
-            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
-            LayoutNode::leaf(
-                Modifier::new()
-                    .vertical_scroll(scroll.clone())
-                    .size(400.0, STEP),
-            ),
-        ];
-        nodes[0].measured_size = Size::new(400.0, 600.0);
-        nodes[1].measured_size = Size::new(400.0, STEP);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[1].scroll_viewport_height = STEP;
-        nodes[1].scroll_content_height = STEP * 10.0;
-        nodes[0].children.push(1);
-        (nodes, scroll)
-    }
-
-    fn snap_spec() -> SnapSpec {
-        SnapSpec { step: STEP, min_fling_velocity: 400.0 }
-    }
-
-    /// A paged list released below the 50 px/s floor still flings — because its whole motion is the
-    /// snap spring, and the floor was written for a decay it does not run.
-    ///
-    /// This is the half no unit test reached before: `ScrollState::fling` enters `fling_with_boundary`
-    /// directly and never crosses this call site, so the existing
-    /// `a_paged_list_settles_even_when_it_is_released_at_rest` is green whether or not the bypass here
-    /// exists. Without `|| ss.snaps()`, the release below is dropped before any fling starts and the
-    /// list comes to rest between two pages with nothing left to snap it back.
-    #[test]
-    fn a_paged_list_flings_below_the_decay_floor() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-
-        // Mid-page, so the nearer-page snap target is a real move.
-        let (mut nodes, scroll) = tree(Some(snap_spec()), STEP * 0.6);
-        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
-
-        assert!(
-            crate::animation::has_animation_for_state(scroll.offset.state_id()),
-            "a paging list released at {GENTLE} px/s must still run its snap spring — the 50 px/s \
-             floor is the decay's, and this list has no decay phase"
-        );
-
-        // And it is the SNAP that ran, not a decay: one page, on the boundary.
-        let mut frames = 0;
-        while crate::animation::has_animation_for_state(scroll.offset.state_id()) && frames < 400 {
-            crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            frames += 1;
-        }
-        let end = scroll.offset.get();
-        assert!(
-            (end / STEP - (end / STEP).round()).abs() < 1e-3,
-            "the gentle release settled at {end}, which is not a page boundary — a decay would stop \
-             wherever the friction ran out"
-        );
-        assert!(
-            end >= STEP,
-            "and it advanced to the nearer page ahead ({end} should be at least one page in)"
-        );
-    }
-
-    /// The control, and the reason the test above is about the exception rather than about the number:
-    /// the SAME velocity on a container with no snap spec is still dropped by the floor, so a plain
-    /// scroll view does not bank a fling out of the tail of a slow drag.
-    #[test]
-    fn an_ordinary_container_keeps_the_decay_floor() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-
-        let (mut nodes, scroll) = tree(None, STEP * 0.6);
-        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
-
-        assert!(
-            !crate::animation::has_animation_for_state(scroll.offset.state_id()),
-            "without a snap spec a {GENTLE} px/s release must start nothing — the 50 px/s floor still \
-             guards the decay, which is what it was written for"
-        );
-        assert_eq!(scroll.offset.get(), STEP * 0.6, "and the offset is untouched");
-
-        // The floor is a floor, not a wall: the same container released fast does fling.
-        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: 900.0 });
-        assert!(
-            crate::animation::has_animation_for_state(scroll.offset.state_id()),
-            "a fast release on an ordinary container still flings"
-        );
-    }
-}
 
 /// 拖拽滚动目标复现（用户报告：鼠标在外层内容上按下拖拽，内层却滚动了）。
 /// 构造与 nested_scroll_demo 同几何的树：外层 scroll 视口 536（y=184..720），
@@ -6195,7 +3869,7 @@ mod release_velocity_floor_tests {
 #[cfg(test)]
 mod drag_target_selection_tests {
     use crate::layout::node::{hit_test, LayoutNode};
-    use crate::layout::{Point, Size};
+    use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState};
 
     /// 构造：root(Column) → outer_scroll(0,184,420×536) → [内容0..7, 内层scroll, 内容8..]
@@ -6208,7 +3882,7 @@ mod drag_target_selection_tests {
         nodes[0].measured_size = Size::new(420.0, 720.0);
         // idx 1: 外层 scroll（视口 536，顶部 y=184）
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(outer).size(420.0, 536.0)));
-        nodes[1].position = Point::new(0.0, 184.0);
+        nodes[1].position = Offset::new(0.0, 184.0);
         nodes[1].measured_size = Size::new(420.0, 536.0);
         nodes[1].scroll_viewport_height = 536.0;
         nodes[0].children.push(1); // 外层 scroll 挂到 root
@@ -6216,20 +3890,20 @@ mod drag_target_selection_tests {
         for i in 0..8 {
             let idx = nodes.len();
             nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 37.0)));
-            nodes[idx].position = Point::new(0.0, i as f32 * 37.0);
+            nodes[idx].position = Offset::new(0.0, i as f32 * 37.0);
             nodes[idx].measured_size = Size::new(420.0, 37.0);
             nodes[1].children.push(idx);
         }
         // 内层 scroll：内容流 y = 8*37 = 296，视口 180
         let inner_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(inner).size(420.0, 180.0)));
-        nodes[inner_idx].position = Point::new(0.0, 296.0);
+        nodes[inner_idx].position = Offset::new(0.0, 296.0);
         nodes[inner_idx].measured_size = Size::new(420.0, 180.0);
         nodes[inner_idx].scroll_viewport_height = 180.0;
         // 内层子项：一列（可滚动内容）
         let item_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 32.0)));
-        nodes[item_idx].position = Point::new(0.0, 0.0);
+        nodes[item_idx].position = Offset::new(0.0, 0.0);
         nodes[item_idx].measured_size = Size::new(420.0, 32.0);
         nodes[inner_idx].children.push(item_idx);
         nodes[1].children.push(inner_idx);
@@ -6314,16 +3988,17 @@ mod drag_target_selection_tests {
     /// 在 move 阶段定位节点——key 漂移会滚错目标）。
     #[test]
     fn scroll_slot_keys_stable_across_recompose() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let outer = ScrollState::new();
         let inner = ScrollState::new();
 
         let build = |composer: &mut Composer, outer: &ScrollState, inner: &ScrollState| {
             composer.compose(|ctx| {
-                crate::ui::Column::new()
+                crate::layout::Column::new()
                     .modifier(Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
                         // 状态行（文本随 offset 变化 → 触发重组）
@@ -6384,9 +4059,10 @@ mod drag_target_selection_tests {
     /// 滚动容器，measured_size 必须精确为 180（内容再多也不撑开）。
     #[test]
     fn scroll_container_height_clamps_to_fixed_height() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {
@@ -6412,9 +4088,10 @@ mod drag_target_selection_tests {
     /// scroll 容器无固定高度 + 无限父约束：随内容撑开（clamp 是 no-op）。
     #[test]
     fn scroll_container_grows_with_unbounded_parent() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use crate::layout::Constraints;
-        use crate::ui::{Column, Text};
+        use crate::layout::Column;
+        use crate::components::Text;
         let mut composer = Composer::new();
         let inner = ScrollState::new();
         composer.compose(|ctx| {
@@ -6457,7 +4134,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     debug::set_event_loop_proxy(proxy.clone());
     let proxy2 = proxy.clone();
     *APP_PROXY.lock().unwrap() = Some(proxy);
-    crate::core::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
+    crate::runtime::state::set_wake_fn(move || { let _ = proxy2.wake_up(); });
     debug::start_stdin_channel();
     debug::start_ws_server();
     let state = AppState {

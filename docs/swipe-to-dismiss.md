@@ -4,7 +4,7 @@ A row that can be swiped horizontally to dismiss it: the content translates with
 caller-supplied background is revealed underneath, and on release the row either settles back or leaves
 in the swipe direction. `on_dismiss` reports the direction it left in and the caller removes the item.
 
-Source: `winia/src/ui/swipe_to_dismiss.rs`. Demo: `cargo run -p winia --example swipe_to_dismiss_demo`.
+Source: `winia/src/components/swipe_to_dismiss.rs`. Demo: `cargo run -p winia --example swipe_to_dismiss_demo`.
 Modeled on Compose Material 3 `SwipeToDismissBox`: the tokens and the callback order below come from
 reading the androidx source (not part of this checkout), and where winia deviates it is called out below.
 
@@ -163,7 +163,7 @@ threshold.
 
 ## Tests
 
-- **Unit** (`winia/src/ui/swipe_to_dismiss.rs`): anchors for the four direction-flag combinations; the
+- **Unit** (`winia/src/components/swipe_to_dismiss.rs`): anchors for the four direction-flag combinations; the
   56 px threshold at a boundary just under and just over it; a fling below the distance threshold; the
   direction and progress derivation; a resize keeping a parked row on its anchor; a row parked in a
   direction that is switched off coming back to `Settled`.

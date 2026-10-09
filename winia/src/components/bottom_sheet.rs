@@ -1,0 +1,584 @@
+//! `ModalBottomSheet`——底部模态面板（完整复刻 Compose Material3
+//! `ModalBottomSheet` 语义）。
+//!
+//! 结构（对齐 Compose `ModalBottomSheet.kt` + `BottomSheet.kt`）：
+//! - **ModalBottomSheetDialog**：winia 用 `open_overlay`（modal 遮罩 +
+//!   全屏内容）承载
+//! - **Scrim**：overlay `modal` 自动渲染半透明遮罩（淡入淡出）
+//! - **BottomSheet 面板**：`SheetState` 驱动 offset → `graphics_layer`
+//!   `translation_y` 实现上下滑动（Hidden/PartiallyExpanded/Expanded 三态锚点）
+//! - **dragHandle**：顶部把手（M3 视觉特征）
+//! - **拖拽**：`sheet_gestures_enabled`——面板 `on_drag` 增量喂入
+//!   `SheetState::drag_delta`，`on_drag_end` 吸附
+//!
+//! 锚点计算（对齐 Compose `BottomSheetImpl` 的 `draggableAnchors`）：
+//! - `Hidden at fullHeight`（面板顶滑出视口底部）
+//! - `PartiallyExpanded at fullHeight - min(fullHeight/2, sheetHeight)`
+//! - `Expanded at max(0, fullHeight - sheetHeight)`
+//!
+//! 与 Compose 的差异（winia 降级）：
+//! - 无 suspend——`show/hide/expand/partial_expand` 用 `push_animatable`
+//!   动画驱动（非挂起）
+//! - `onDismissRequest`：点击遮罩触发 sheet 下滑动画 + 回调（overlay 移除时
+//!   exit fade 与下滑重叠——非严格"动画完成后再回调"）
+//! - `sheetMaxWidth` 已对齐（默认 `640.dp`，`Dp::from(f32::INFINITY)` 表铺满，居中）
+//! - 拖拽 velocity 用内部估算（winia 拖拽事件无原生 velocity）
+
+use std::sync::Arc;
+use crate::composable;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
+use crate::modifier::{Modifier};
+use crate::graphics::{Color, Shape};
+use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
+use crate::components::sheet_state::{SheetState, SheetValue};
+use crate::unit::Dp;
+
+/// 默认 sheet 顶部圆角（M3 `BottomSheetDefaults.ExpandedShape` 28dp）
+pub const SHEET_TOP_CORNER_RADIUS: f32 = 28.0;
+
+/// The modal sheet's panel geometry in LOGICAL px: `(width, horizontal padding)` for a
+/// `max_width` token inside a `window_width` window.
+///
+/// The unit is the reason this is a function rather than two lines at each call site. One dp
+/// is one LOGICAL px in this framework, so the token is used as-is; `Dp::to_px` returns the
+/// PHYSICAL value and asked for `density` times the intended width, which the `min` then
+/// clipped to the whole window — a 640dp sheet filled an 800-wide window at 1.5x density
+/// instead of centring at 640 with 80px margins. Both modal sheets (this one and
+/// `BottomSheetScaffold`'s) go through here.
+pub(crate) fn sheet_panel_geometry(max_width: Option<Dp>, window_width: f32) -> (f32, f32) {
+    let sheet_w = max_width
+        .map(|dp| dp.to_logical())
+        .map(|w| w.min(window_width))
+        .unwrap_or(window_width);
+    (sheet_w, (window_width - sheet_w) / 2.0)
+}
+
+/// 底部模态面板（对标 Compose Material3 `ModalBottomSheet`）。
+pub struct ModalBottomSheet {
+    on_dismiss_request: Option<Arc<dyn Fn() + Send + Sync>>,
+    sheet_state: Option<SheetState>,
+    /// 是否启用拖拽手势（Compose `sheetGesturesEnabled`，默认 true）
+    sheet_gestures_enabled: bool,
+    /// 面板顶部圆角
+    corner_radius: f32,
+    /// 面板背景色（默认主题 surface）
+    container_color: Option<Color>,
+    /// 是否显示顶部把手（默认 true）
+    drag_handle: bool,
+    /// 最大宽度（对标 `sheetMaxWidth = 640.dp`，`Dp::from(f32::INFINITY)` 表 `Unspecified` 铺满）
+    sheet_max_width: Option<Dp>,
+    /// 是否跳过半展开锚点（对齐 Compose `sheetState: rememberModalBottomSheetState(skipPartiallyExpanded=...)`）
+    skip_partially_expanded: bool,
+    /// 是否可见（true 时注册 overlay）
+    visible: bool,
+}
+
+impl ModalBottomSheet {
+    pub fn new(visible: bool) -> Self {
+        Self {
+            on_dismiss_request: None,
+            sheet_state: None,
+            sheet_gestures_enabled: true,
+            corner_radius: SHEET_TOP_CORNER_RADIUS,
+            container_color: None,
+            drag_handle: true,
+            sheet_max_width: Some(Dp(640.0)),
+            skip_partially_expanded: false,
+            visible,
+        }
+    }
+
+    /// 点击遮罩回调（对标 Compose `onDismissRequest`——点击外部后触发。
+    /// Compose 先动画到 Hidden 再回调；winia 触发 sheet 下滑动画 + 回调）
+    pub fn on_dismiss_request(mut self, cb: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_dismiss_request = Some(Arc::new(cb));
+        self
+    }
+
+    /// 显式传入 SheetState（对标 Compose `sheetState`；不传则内部 remember）
+    pub fn sheet_state(mut self, s: SheetState) -> Self {
+        self.sheet_state = Some(s);
+        self
+    }
+
+    /// 是否启用拖拽手势
+    pub fn sheet_gestures_enabled(mut self, v: bool) -> Self {
+        self.sheet_gestures_enabled = v;
+        self
+    }
+
+    /// 面板顶部圆角
+    pub fn corner_radius(mut self, r: f32) -> Self {
+        self.corner_radius = r;
+        self
+    }
+
+    /// 面板背景色（默认主题 surface）
+    pub fn container_color(mut self, c: Color) -> Self {
+        self.container_color = Some(c);
+        self
+    }
+
+    /// 是否显示顶部把手
+    pub fn drag_handle(mut self, v: bool) -> Self {
+        self.drag_handle = v;
+        self
+    }
+
+    /// 最大宽度（对标 `sheetMaxWidth`，默认 `640.dp`，`Dp(f32::INFINITY)` 表铺满）
+    pub fn sheet_max_width(mut self, w: Dp) -> Self {
+        if w.0.is_infinite() {
+            self.sheet_max_width = None;
+        } else {
+            self.sheet_max_width = Some(w);
+        }
+        self
+    }
+
+    /// 是否跳过半展开锚点（对齐 Compose `rememberModalBottomSheetState(skipPartiallyExpanded)`）。
+    /// true：面板只在 Expanded 与 Hidden 之间切换（无 Partial 中间态，下滑直接折到关闭）。
+    pub fn skip_partially_expanded(mut self, skip: bool) -> Self {
+        self.skip_partially_expanded = skip;
+        self
+    }
+
+    /// #[composable]：`visible` 为 true 时注册 overlay（模态底部面板）。
+    /// 面板外壳（底部对齐 + 圆角 + 把手 + offset 滑动 + 拖拽）由本组件
+    /// 自动包装——用户只需提供面板主体内容。
+    /// ⚠ `visible` 参数化（对齐 Popup/Dialog）：build 总执行并记录 active——
+    /// `sync_overlays` 按 active=false 删除 overlay（主动关闭），无记录保留（Skip）
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + 'static) {
+        let id = ctx.remember(|| next_overlay_id());
+        // ⚠ 这两个 remember 必须在 `if !visible {return}` 之前——否则 visible=false
+        // 时不执行，`prev_visible` 永远卡在 true，第二次 visible=true 时边沿检测
+        // `!prev_visible` 为 false → 不再 show() → 面板停在 Hidden(560) 不显示。
+        // 放在记录前保证 Slot 稳定且每帧更新。
+        let prev_visible: State<bool> = ctx.remember(|| false);
+        let holder = ctx.remember(|| SheetState::new(SheetValue::Hidden));
+        let should_show = self.visible && !prev_visible.get();
+        ctx.record_overlay_active(id.get(), self.visible);
+        prev_visible.set(self.visible);
+        if !self.visible {
+            return;
+        }
+        // SheetState：外部传入或内部 remember（holder 在上方已稳定 remember）
+        let sheet_state = match self.sheet_state {
+            Some(s) => s,
+            None => holder.get(),
+        };
+        // 应用 skipPartiallyExpanded（每次 build 刷新——方便外部在 show 前设置；
+        // SheetState.set_skip_partially_expanded 是在 update_anchors 时生效）
+        sheet_state.set_skip_partially_expanded(self.skip_partially_expanded);
+        if should_show {
+            sheet_state.show();
+        }
+        let gestures = self.sheet_gestures_enabled;
+        let radius = self.corner_radius;
+        let container_color = self.container_color;
+        let drag_handle = self.drag_handle;
+        let sheet_max_width = self.sheet_max_width; // 对齐 Compose sheetMaxWidth=640.dp，平板居中；手机 480<640 时铺满
+        let on_dismiss_req = self.on_dismiss_request;
+        // content 闭包也要用 on_dismiss——clone 一份（map 会 move 走原值）
+        let content_dismiss = on_dismiss_req.clone();
+        ctx.open_overlay(OverlayDesc {
+            id: id.get(),
+            anchor_slot: None,
+            position: PopupPosition::Center, // 面板 fill_max_size 占满 overlay；内容 Stack(End) 贴底
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: true,
+            // The modal sheet owns the keyboard while it is up: Tab works inside the sheet, and the
+            // page behind the scrim cannot be reached.
+            focus_scope: true,
+            dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            click_passthrough: false,
+            // A modal sheet is anchored to the window edge by its own layout, not fitted around an anchor.
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            on_dismiss: on_dismiss_req.map(|cb| {
+                let st = sheet_state.clone();
+                let f: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    // 仅 hide，visible=false 由内部 `shown && settled==Hidden` 观察者
+                    // 在 hide 动画完成后触发（保证下滑可见；之前 hide+cb 立即重叠
+                    // 且 closing 跳过 recompose 导致下滑不可见，仅淡出）
+                    st.hide();
+                    let _ = cb; // 保留 cb 供观察者用（on_dismiss 仅 hide）
+                });
+                f
+            }),
+            enter_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
+            exit_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
+            content: Box::new(move |ctx| {
+                let theme = crate::theme::WiniaTheme::colors();
+                // 对齐 Compose BottomSheetDefaults.ContainerColor = surfaceContainerLow
+                // + ExpandedShape 28dp + Elevation 1dp（SheetBottomTokens.DockedModalContainerElevation）
+                let bg = container_color.unwrap_or(theme.surface_container_low);
+                let st = sheet_state.clone();
+                let anchors_st = sheet_state.clone();
+                let drag_st = sheet_state.clone();
+                let dismiss_cb = content_dismiss.clone();
+                let sheet_h: State<f32> = ctx.remember(|| 0.0);
+                // 仅全屏（sheetH≈fullH）时 28→0 过渡，非全屏保持 28（M3 满屏变直角）
+                // progress 基准用 Partial→Expanded 才能半展开保持 28（Hidden→Expanded 会在 Partial 已掉角）
+                let full_h = crate::layout::window_size().1;
+                // winia's own rule (kept from the original implementation): an expanded sheet whose panel
+                // reaches the window height drops its top corners. It is NOT from Material 3 — current M3
+                // passes `shape` through untouched and never switches on the sheet's state (checked against
+                // `SheetDefaults.kt` / `ModalBottomSheet.kt`), so this is a local choice, not an alignment.
+                //
+                // The radius is derived from the sheet's VALUE through tracked reads, so it is recomputed
+                // when the sheet crosses an anchor — the offset alone would never recompose anything here
+                // (the sheet expands by ANIMATING the offset), which is how the corners used to arrive
+                // square only after some unrelated compose re-ran this closure.
+                let clipped_full = sheet_h.get() >= full_h - 1.0 && st.current_value() == SheetValue::Expanded;
+                let cur_shape = Shape::TopRoundedRect {
+                    radius: if clipped_full { 0.0 } else { radius },
+                };
+                // 拖拽/动画到 Hidden → 触发 on_dismiss_request（对齐 Compose
+                // `if (!state.isVisible) onDismissRequest()`）。用 remember + once 门闩
+                // 保证 cb 仅在 settled 到 Hidden 且**动画完成**后触发一次（此前：
+                // settled 提前变 Hidden 就回调 → 父级 visible=false → overlay 立即消失，
+                // 下滑动画被截断看不到。加 is_animation_running 判定严格对齐 M3
+                // 「动画完成后再回调」）。
+                let shown: State<bool> = ctx.remember(|| false);
+                let fired: State<bool> = ctx.remember(|| false);
+                let settled_hidden = sheet_state.settled_value() == SheetValue::Hidden;
+                if !settled_hidden {
+                    shown.set(true);
+                    fired.set(false);
+                }
+                // "The panel has slid out of view", measured GEOMETRICALLY while the hide runs: the
+                // settle flag flips when the animation is *requested*, so the old
+                // `!is_animation_running()` gate was only ever evaluated on that one compose — where the
+                // tween is still registered — and the callback then never fired. That left the overlay
+                // OPEN with nothing but its scrim drawn: a dim layer over the page that no further
+                // interaction removed (reported by a user; the panel itself had already slid away).
+                // Reading the offset TRACKED here is what makes the condition re-evaluate as the panel
+                // slides, and only while a hide is in flight.
+                let slid_out = if settled_hidden {
+                    let dd = sheet_state.anchored_draggable();
+                    let hidden_at = dd.peek_position_of(&SheetValue::Hidden);
+                    let off = dd.offset();
+                    !off.is_nan() && !hidden_at.is_nan() && off >= hidden_at - 0.5
+                } else {
+                    false
+                };
+                if shown.get() && settled_hidden && (slid_out || !sheet_state.is_animation_running()) && !fired.get() {
+                    fired.set(true);
+                    if let Some(cb) = &dismiss_cb {
+                        (cb)();
+                    }
+                }
+                // 全屏容器：Scrim（可点击关闭）+ 面板（offset 定位——面板布局在
+                // 顶部，translation_y = offset 推下：Expanded=fullHeight-sheetHeight
+                // 贴底，Hidden=fullHeight 滑出视口。⚠ 不能用 Stack(End) 贴底——
+                // 会与 offset 双重偏移，面板被推到屏幕外）
+                crate::layout::components::Stack::new()
+                    .modifier(crate::modifier::Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                        // Scrim 层：占满全屏、透明、点击关闭（面板之上由 overlay
+                        // 自动画遮罩；此层只捕获点击——Compose Scrim 语义）
+                        // 仅 hide，下滑完成后由 `shown && settled==Hidden` 观察者
+                        // 触发 onDismiss（保证下滑可见；之前 hide+cb 立即
+                        // visible=false 导致 closing 冻结，下滑不可见仅淡出）
+                        if dismiss_cb.is_some() {
+                            let st_hide = st.clone();
+                            crate::layout::components::Stack::new()
+                                .modifier(Modifier::new()
+                                    .fill_max_size()
+                                    .clickable(move || {
+                                        st_hide.hide();
+                                    }))
+                                .build(ctx, |_| {});
+                        }
+                        // 面板（布局在顶部，offset 推下——用布局 offset 而非
+                        // graphics_layer：布局位置与渲染一致，hit_test 命中正确）
+                        // ⚠ graphics_layer 位移不参与 hit_test → 面板布局在顶部、
+                        // 渲染在底部，点击命中错位（面板外点不到 Scrim）。
+                        // sheetMaxWidth 640.dp 平板居中（Compose 语义），手机 480 铺满
+                        let (sheet_w, sheet_pad_x) =
+                            sheet_panel_geometry(sheet_max_width, crate::layout::window_size().0);
+                        let mut panel_mod = Modifier::new()
+                            .width(sheet_w)
+                            // `absolute_offset`, not `offset` — see the scaffold: the x is a
+                            // centring inset, and a plain offset mirrors x under RTL.
+                            .absolute_offset(sheet_pad_x, st.offset_state())
+                            .shadow(
+                                1.0,
+                                cur_shape,
+                                false,
+                                Color::from_argb(40, 0, 0, 0),
+                            )
+                            // The panel's own surface is PAINTED by a draw node rather than composed into the
+                            // modifier chain, because the radius cannot be composed here at all: this
+                            // closure's reads of the sheet's state register NOTHING (they happen outside any
+                            // composition group), so a "value-driven" shape never updates — measured twice,
+                            // first as the original build-time shape and again as one derived from an
+                            // explicit tracked read. Either way the corners went square only after an
+                            // unrelated compose (a list scroll) re-ran this closure, and stayed square after
+                            // collapsing. The CLIP behind it stays value-driven and can therefore lag the
+                            // surface by one anchor crossing: do not paint content into the panel's top
+                            // corners (docs/bottom-sheet.md, Known limits).
+                            .draw_node(SheetPanelNode {
+                                state: st.clone(),
+                                color: bg,
+                                radius,
+                                window_height: full_h,
+                            })
+                            .clip(cur_shape);
+                        // 高度上报 → 更新锚点（window_size 需在回调内重读，捕获值 resize 后 stale）
+                        let up_st = anchors_st.clone();
+                        let sheet_h_for_size = sheet_h.clone();
+                        panel_mod = panel_mod.on_size_changed(move |_w, h| {
+                            sheet_h_for_size.set(h);
+                            let s = up_st.clone();
+                            s.update_anchors(crate::layout::window_size().1, h);
+                        });
+                        let mut panel_mod_with_nested = panel_mod;
+                        if gestures {
+                            #[derive(Clone)]
+                            struct SheetNested {
+                                st: crate::components::sheet_state::SheetState,
+                            }
+                            impl SheetNested {
+                                /// sheet 实际消费的 deltay（offset 前后差——drag_delta
+                                /// clamp 到锚点[min,max]，已在 Expanded 时 offset 不动
+                                /// → consumed=0，剩余自动放行给列表）
+                                fn consume(
+                                    st: &crate::components::sheet_state::SheetState,
+                                    delta_y: f32,
+                                ) -> crate::nested_scroll::ScrollDelta {
+                                    if delta_y == 0.0 {
+                                        return crate::nested_scroll::ScrollDelta::ZERO;
+                                    }
+                                    let before = st.offset();
+                                    st.drag_delta(delta_y);
+                                    let consumed = st.offset() - before;
+                                    crate::nested_scroll::ScrollDelta::new(0.0, consumed)
+                                }
+                            }
+                            impl crate::nested_scroll::NestedScrollConnection for SheetNested {
+                                fn on_pre_scroll(
+                                    &self,
+                                    available: crate::nested_scroll::ScrollDelta,
+                                    _source: crate::nested_scroll::NestedScrollSource,
+                                ) -> crate::nested_scroll::ScrollDelta {
+                                    // 对齐 Compose M3：向上拖(available.y<0)先展开 sheet
+                                    // （expands-first），列表只在 sheet 已到 Expanded 后滚动。
+                                    if available.y >= 0.0 {
+                                        return crate::nested_scroll::ScrollDelta::ZERO;
+                                    }
+                                    Self::consume(&self.st, available.y)
+                                }
+                                fn on_post_scroll(
+                                    &self,
+                                    _consumed: crate::nested_scroll::ScrollDelta,
+                                    available: crate::nested_scroll::ScrollDelta,
+                                    _source: crate::nested_scroll::NestedScrollSource,
+                                ) -> crate::nested_scroll::ScrollDelta {
+                                    // 向下拖/列表到顶后的剩余增量（折叠/关闭方向）。
+                                    // 用 consumed 度量——avoid over-consumption
+                                    Self::consume(&self.st, available.y)
+                                }
+                                fn on_post_fling(
+                                    &self,
+                                    _consumed: crate::nested_scroll::ScrollVelocity,
+                                    available: crate::nested_scroll::ScrollVelocity,
+                                ) -> crate::nested_scroll::ScrollVelocity {
+                                    // 向下滑松手：dispatch 传 available.y = -vy（手指向下→负）。
+                                    // sheet 折叠（收向 Hidden）需正 velocity（offset 增大），故取反。
+                                    // ⚠ 直接用 available.y 会得到负 velocity → 朝 Expanded → 回弹。
+                                    self.st.settle_with_velocity(-available.y);
+                                    crate::nested_scroll::ScrollVelocity::default()
+                                }
+                                fn on_pre_fling(
+                                    &self,
+                                    available: crate::nested_scroll::ScrollVelocity,
+                                ) -> crate::nested_scroll::ScrollVelocity {
+                                    // 方向约定：dispatch 传 available.y = -vy（手指向上→正）。
+                                    // sheet 展开需 velocity<0（offset 减小），故取反。
+                                    // 向上拖(available.y>0)且 sheet 未到 Expanded → 吸附展开；
+                                    // 向下(available.y<=0)或已展开 → 放行（给 on_post_fling/列表）。
+                                    if available.y <= 0.0 {
+                                        return crate::nested_scroll::ScrollVelocity::default();
+                                    }
+                                    let expanded_pos = self.st.anchored_draggable().position_of(&SheetValue::Expanded);
+                                    if !expanded_pos.is_nan() && self.st.offset() <= expanded_pos {
+                                        return crate::nested_scroll::ScrollVelocity::default();
+                                    }
+                                    // 吸附展开并消费速度（阻止列表抢——Compose M3 语义）
+                                    self.st.settle_with_velocity(-available.y);
+                                    crate::nested_scroll::ScrollVelocity { x: 0.0, y: available.y }
+                                }
+                            }
+                            let sheet_conn = SheetNested { st: drag_st.clone() };
+                            panel_mod_with_nested = panel_mod_with_nested.nested_scroll(sheet_conn);
+                        }
+                        let panel_mod_with_gesture = panel_mod_with_nested;
+                        // 面板任意位置可拖（对齐 Compose anchoredDraggable——整个面板 Surface 可拖，
+                        // 不只把手）。背景/顶部文字/空白区拖拽也驱动 sheet；列表区由内层 scroll 优先
+                        //（overlay_down 命中滚动优先，见 app.rs），此处 on_drag 作为非滚动区 fallback。
+                        let pd = drag_st.clone();
+                        let pe = drag_st.clone();
+                        let panel_mod_with_panel_drag = panel_mod_with_gesture
+                            .on_drag(move |_pos, (_dx, dy)| pd.drag_delta(dy))
+                            .on_drag_end(move || {
+                                pe.settle_with_velocity(pe.last_velocity());
+                            });
+                        crate::layout::components::Column::new()
+                            .modifier(panel_mod_with_panel_drag)
+                            .build(ctx, |ctx| {
+                                if drag_handle {
+                                    let d = drag_st.clone();
+                                    let e = drag_st.clone();
+                                    crate::layout::components::Row::new()
+                                        .modifier(
+                                            Modifier::new()
+                                                .fill_max_width()
+                                                .padding_vertical(12.0)
+                                                .on_drag(move |_pos, (_dx, dy)| d.drag_delta(dy))
+                                                .on_drag_end(move || {
+                                                    e.settle_with_velocity(e.last_velocity());
+                                                }),
+                                        )
+                                        .arrangement(crate::layout::Arrangement::Center)
+                                        .build(ctx, |ctx| {
+                                            crate::layout::components::Stack::new()
+                                                .modifier(Modifier::new().size(32.0, 4.0).background(
+                                                    theme.outline_variant,
+                                                    Shape::RoundedRect { corner_radius: 2.0 },
+                                                ))
+                                                .build(ctx, |_| {});
+                                        });
+                                }
+                                content(ctx);
+                            });
+                    });
+            }),
+            local_snapshot: Vec::new(),
+        });
+    }
+}
+
+impl Default for ModalBottomSheet {
+    fn default() -> Self { Self::new(false) }
+}
+
+/// The sheet panel's own surface, painted on every frame.
+///
+/// winia's rule (kept from the original implementation; NOT Material 3 — current M3 passes `shape`
+/// through untouched and never switches on the sheet's state): a panel that reaches the window height
+/// drops its top corners.
+///
+/// It has to be painted here rather than composed, because the content closure CANNOT observe the sheet's
+/// state: its reads happen outside any composition group and register nothing, so a shape derived from
+/// them never updates (measured both as the original build-time shape and as one driven by an explicit
+/// tracked read — the corners went square only after an unrelated compose re-ran the closure, and stayed
+/// square after collapsing). Paint-time reads use `peek`, so nothing here marks a slot dirty.
+#[derive(Clone)]
+pub(crate) struct SheetPanelNode {
+    pub(crate) state: SheetState,
+    pub(crate) color: Color,
+    /// The token radius (28 dp), used while the sheet is not full height.
+    pub(crate) radius: f32,
+    /// The window's client height as of the last COMPOSE. Passed in rather than read at paint time
+    /// because `layout::window_size()` answers from a compose-time `AdaptiveContext` and falls back to
+    /// `(800, 600)` outside one — in the draw phase that made a 560-tall panel look "not full" forever.
+    pub(crate) window_height: f32,
+}
+
+impl SheetPanelNode {
+    /// The radius this panel is painted with right now: `radius` until the panel fills the window, then
+    /// `radius * (1 - progress)` so the corners reach square exactly when the sheet settles expanded (and
+    /// come back on the way out).
+    fn current_radius(&self, panel_height: f32) -> f32 {
+        if panel_height < self.window_height - 1.0 {
+            return self.radius;
+        }
+        // Progress is measured from the state the sheet came from: a sheet WITH a partially expanded
+        // anchor keeps its radius while it sits there (the corners must not go square on the way
+        // through), one without it (`skip_partially_expanded`) starts from Hidden.
+        let from = if self.state.peek_has_partially_expanded_state() {
+            SheetValue::PartiallyExpanded
+        } else {
+            SheetValue::Hidden
+        };
+        let p = self.state.anchored_draggable().peek_progress(&from, &SheetValue::Expanded);
+        if p.is_nan() { self.radius } else { self.radius * (1.0 - p.clamp(0.0, 1.0)) }
+    }
+}
+
+impl std::fmt::Debug for SheetPanelNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SheetPanelNode").field("radius", &self.radius).finish()
+    }
+}
+
+impl crate::modifier::DrawNode for SheetPanelNode {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let r = self.current_radius(rect.height()).clamp(0.0, rect.height() / 2.0);
+        let rrect = skia_safe::RRect::new_rect_radii(
+            rect,
+            &[
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(r, r),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ],
+        );
+        let mut paint = skia_safe::Paint::default();
+        paint.set_anti_alias(true);
+        paint.set_color(skia_safe::Color::from_argb(
+            self.color.a,
+            self.color.r,
+            self.color.g,
+            self.color.b,
+        ));
+        canvas.draw_rrect(&rrect, &paint);
+    }
+
+    /// Static visual parameters only: the colour, the token radius and the window height. The radius it is
+    /// PAINTED with is transient (read per frame) and must not enter the key, or every drag frame would
+    /// re-run the group.
+    fn node_key(&self) -> String {
+        let argb = ((self.color.a as u32) << 24)
+            | ((self.color.r as u32) << 16)
+            | ((self.color.g as u32) << 8)
+            | (self.color.b as u32);
+        format!("SheetPanelNode|{argb:08x}|{}|{}", self.radius, self.window_height)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::unit::Density;
+
+    #[test]
+    fn the_panel_is_the_token_wide_and_centred_in_logical_px() {
+        // At 1.5x density a 640dp sheet inside an 800-wide window is 640 logical px with 80px
+        // of margin. The bug this pins asked for `Dp::to_px` (960 PHYSICAL) and the `min`
+        // clipped it to the whole window, i.e. no margin and no maximum at all.
+        crate::runtime::density::with_density(Density::from_density(1.5), || {
+            assert_eq!(
+                sheet_panel_geometry(Some(Dp(640.0)), 800.0),
+                (640.0, 80.0),
+                "the token is a logical length, not a physical one"
+            );
+        });
+        assert_eq!(
+            sheet_panel_geometry(Some(Dp(640.0)), 500.0),
+            (500.0, 0.0),
+            "narrower than the token: the sheet fills the window"
+        );
+        assert_eq!(
+            sheet_panel_geometry(None, 500.0),
+            (500.0, 0.0),
+            "Unspecified (no maximum) fills"
+        );
+    }
+}

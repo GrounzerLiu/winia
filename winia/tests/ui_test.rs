@@ -2494,6 +2494,12 @@ fn dropdown_menu_a_long_menu_fits_the_window_and_scrolls_to_its_end() {
 
     app.send(&format!("m {} {}", (cx + cw / 2.0) as i32, (cy + ch / 2.0) as i32));
     std::thread::sleep(Duration::from_millis(150));
+    // Known flake, left as it is: the injected wheel events do not all reach the menu — measured
+    // offsets of 120 and 240 against the 552 range, i.e. one or two of these twelve landed. Sending
+    // forty instead made it WORSE (four runs in five), so the loss is not "not enough events" and
+    // the cause is in the debug input path, not here. Reproduced on the tree before the module
+    // restructure (two of three runs passed alone), so it is not that either. The assertion below
+    // is exact and stays that way: it is about where the scroll STOPS.
     for _ in 0..12 {
         app.scroll_delta(0.0, -120.0);
     }
@@ -3767,6 +3773,13 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     );
     let (_yx, _yy, yw, yh) = app.find_tag("dp-year-2024").expect("the displayed year's cell");
     assert_eq!((yw, yh), (72.0, 36.0), "a year cell is 72 x 36");
+    // …and the calendar it covers is still composed, which is material3's structure: a `Box` whose first
+    // child is the weekdays plus the grid, with the panel expanding over it (`DatePicker.kt:1596-1617`).
+    // winia used to swap the calendar out, so this is the assertion that pins the overlay.
+    assert!(
+        app.find_tag("dp-calendar-panel").is_some(),
+        "the calendar stays composed under the year panel"
+    );
 
     // A test tag inside a scrolled list reports the item's position in the list's CONTENT coordinates, so a
     // year cell cannot be tapped through the rectangle `find_tag` returns — it comes back 2079 dp (this list's
@@ -3779,11 +3792,115 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
     app.tap(nx + nw / 2.0, cell_y);
     app.expect_text_timeout("month: September 2025", Duration::from_secs(5));
     app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
-    app.refresh();
+    // The panel leaves with an exit transition (material3's `shrinkVertically + fadeOut`), so it is still
+    // composed for a moment after the pick — wait for it rather than reading the tree once, which is what the
+    // instant swap this replaced allowed.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.find_tag("dp-year-2025").is_some() {
+        app.refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(
         app.find_tag("dp-year-2025").is_none(),
         "picking a year closes the panel"
     );
+}
+
+/// What:  an `AnimatedSize` whose content takes its new size long before the container reaches it.
+/// When:  the child grows 60 → 400 dp under a 6 s spec, and a pixel just outside the container is read
+///        mid-animation.
+/// Then:  nothing of the child is drawn outside the container: Compose's `animateContentSize` starts
+///        with `clipToBounds()` (`AnimationModifier.kt:77`) and winia's container used to draw the
+///        overflowing child.
+///
+/// Measured before the clip was added: with the container at 142 dp the pixel 91 dp past its right edge
+/// came back `255 0 0` — the child's own colour — against a black page. The two points are read from
+/// ONE frame, because the container is moving: a second capture would be a different width.
+#[test]
+fn animated_size_clips_the_content_it_outgrows() {
+    let mut app = UiTest::launch("animated_size_overflow");
+    app.expect_text("grow");
+    app.click_tag("grow");
+
+    // Let the container start moving: the child is already 400 dp wide.
+    let mut outside = None;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        app.refresh();
+        let Some((bx, by, bw, bh)) = app.find_tag("animated-box") else { continue };
+        if bw < 100.0 {
+            // Still near its resting width — the window where the child is far wider than the box.
+            outside = Some((bx + bw + 40.0, by + bh / 2.0));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (ox, oy) = outside.expect("the container is still animating and narrower than the child");
+
+    let (bx, by, bw, bh) = app.find_tag("animated-box").expect("the animated container");
+    let inside = (bx + bw / 2.0, by + bh / 2.0);
+    let px = app.pixels_at_logical(&[inside, (ox, oy)]);
+    assert_eq!(px[0], Some((255, 0, 0, 255)), "inside the container the child is visible");
+    assert_eq!(
+        px[1],
+        Some((0, 0, 0, 255)),
+        "outside it the page shows through — the child is clipped to the container"
+    );
+}
+
+/// What:  the DOCKED picker's panel switch (calendar ⇄ year).
+/// When:  the year menu is clicked.
+/// Then:  the two panels overlap — the frame the year panel first shows up, the calendar panel is still
+///        composed, and only once the switch settles does the calendar panel go away.
+///
+/// Why this and not just "the year panel appears": the panels are two generations of the docked `Crossfade`,
+/// and the crossfade is the point. It used to fade the outgoing panel out to nothing, swap, then fade the
+/// incoming one in, which can never show both; the default is now Compose's `tween()` — one 300 ms cross-fade
+/// — and this is the only coverage that 300 ms has. It is also the assertion that would catch a return to
+/// the serial fade, which no geometry check can see.
+#[test]
+fn date_picker_panel_switch_cross_fades_both_panels() {
+    let mut app = UiTest::launch("date_picker_docked");
+    assert!(
+        app.find_tag("dp-calendar-panel").is_some(),
+        "the docked picker opens on the calendar panel"
+    );
+    assert!(
+        app.find_tag("dp-year-2024").is_none(),
+        "…and the year panel is not composed yet"
+    );
+
+    app.click_tag("dp-year-menu");
+
+    // Poll instead of sampling once: the click lands ~120 ms in and the tween is 300 ms, so under load a
+    // single refresh can arrive after it ended — but the frame the incoming panel first appears is by
+    // definition inside the window, and that is where the outgoing one has to still be there.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut overlaps = false;
+    while Instant::now() < deadline {
+        app.refresh();
+        if app.find_tag("dp-year-2024").is_some() {
+            overlaps = app.find_tag("dp-calendar-panel").is_some();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        overlaps,
+        "both panels are composed while the switch cross-fades — a serial fade can only ever show one"
+    );
+
+    // Settled: the outgoing generation is torn down and the year panel is what remains.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && app.find_tag("dp-calendar-panel").is_some() {
+        app.refresh();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        app.find_tag("dp-calendar-panel").is_none(),
+        "the outgoing panel is removed once the cross-fade ends"
+    );
+    assert!(app.find_tag("dp-year-2024").is_some(), "and the year panel remains");
 }
 
 /// What:  the modal date picker's dialog.
@@ -3797,13 +3914,18 @@ fn date_picker_opens_its_year_panel_and_picks_a_year() {
 fn date_picker_dialog_is_the_modal_picker() {
     let mut app = UiTest::launch("date_picker_dialog");
     app.expect_text_timeout("selected: Sep 10, 2024", Duration::from_secs(5));
-    assert_eq!(app.overlay_count(), 1, "the modal picker is an overlay");
+    wait_for_one_overlay(&mut app);
 
     let (x, y, w, h) = app.find_tag_in_overlay("dpd-dialog").expect("the dialog");
     assert_eq!(w, 360.0, "ContainerWidth is 360 dp");
+    // The dialog is its content, not the cap: the picker's 120 dp header + 56 dp month navigation +
+    // 48 dp weekday row + 288 dp month, then the action row's 40 dp button under an 8 dp inset.
+    // `ContainerHeight` (568) is a MAXIMUM (`DatePickerDialog.android.kt:84 heightIn(max = ...)`,
+    // with `:95`'s `weight(1f, fill = false)` box keeping the dialog free to be shorter), so the
+    // content decides and it lands 8 dp short of the cap.
     assert_eq!(
-        h, 568.0,
-        "the docked picker plus the action row reach ContainerHeight exactly"
+        h, 560.0,
+        "the modal picker is as tall as its own content (120 + 56 + 48 + 288 + 48)"
     );
 
     // The same lattice as the docked picker: today is the first row's fifth column, the selection the second
@@ -3856,4 +3978,607 @@ fn date_picker_selects_the_day_that_is_tapped() {
     let (cx, cy) = date_picker_cell_centre(x, y, 4.0, 0.0);
     app.tap(cx, cy);
     app.expect_text_timeout("selected: Sep 5, 2024", Duration::from_secs(5));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// fixture_date_picker_input：真实窗口 Input 模式交互
+// ═══════════════════════════════════════════════════════════════
+
+/// The header toggle swaps the picker between the calendar and the text field, and the state says
+/// which one it is on.
+///
+/// This is the guard on the defect the mode existed but nothing reached: `set_display_mode` wrote a
+/// value the build path never read, so the picker stayed a calendar and the mode was a silent
+/// no-op. Both directions are checked because a picker that ignored the state and always drew a
+/// calendar would pass the calendar half alone.
+#[test]
+fn the_date_picker_mode_toggle_swaps_the_calendar_for_the_entry_field() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    wait_for_one_overlay(&mut app);
+    // The calendar's own month navigation is gone: the field replaced it.
+    assert!(
+        !app.overlay_texts().iter().any(|text| text == "2024"),
+        "input mode still composes the month navigation: {:?}",
+        app.overlay_texts()
+    );
+
+    let toggle = app
+        .find_tag_in_overlay("date-picker-mode-toggle")
+        .expect("the mode toggle");
+    app.tap(toggle.0 + toggle.2 / 2.0, toggle.1 + toggle.3 / 2.0);
+    app.expect_text_timeout("mode: picker", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("2024", Duration::from_secs(5));
+
+    // The toggle is looked up again rather than reused: the dialog is only as tall as the mode it
+    // shows, so switching re-centres every node inside it and the coordinates read a moment ago now
+    // point into the calendar (measured: reusing them selected the 7th and left the picker open).
+    let toggle = app
+        .find_tag_in_overlay("date-picker-mode-toggle")
+        .expect("the mode toggle after the switch");
+    app.tap(toggle.0 + toggle.2 / 2.0, toggle.1 + toggle.3 / 2.0);
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    assert!(
+        app.find_tag_in_overlay("date-picker-input-field").is_some(),
+        "the field is back after the second toggle"
+    );
+}
+
+/// Wait until the fixture has registered exactly one overlay entry.
+///
+/// An overlay is registered by its own composer, so it can land a frame after the page's own text:
+/// reading `overlay_count()` once right after a launch races that frame — measured under a
+/// full-suite run as `left: 0, right: 1` at the modal picker's own assertion. Polling with a
+/// deadline keeps a genuinely missing overlay a failure, just a slower one.
+fn wait_for_one_overlay(app: &mut UiTest) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 1 {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "expected exactly one overlay entry, got {}",
+            app.overlay_count()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The rect of a tagged overlay node, read only once two consecutive refreshes agree on it.
+///
+/// The page's own text is not a synchronisation point for the overlay: the readout updates from the
+/// state while the overlay's tree is published by its own layout a frame later, so a single read
+/// right after a mode switch can still see the previous frame's dialog (measured: this test failed
+/// under a full-suite run and passed alone). Waiting for the value to STOP changing keeps the exact
+/// assertion below meaningful — a poll that waited for the expected value would pass on any
+/// transient that happened to end up there.
+fn settled_overlay_rect(app: &mut UiTest, tag: &str) -> (f32, f32, f32, f32) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut previous = None;
+    loop {
+        app.refresh();
+        let rect = app.find_tag_in_overlay(tag);
+        if rect.is_some() && rect == previous {
+            return rect.expect("checked above");
+        }
+        previous = rect;
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the overlay's `{tag}` never settled"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Click a tagged node inside an overlay entry. [`UiTest::click_tag`] only looks in the main tree,
+/// and a modal picker's own tree lives in the overlay.
+fn click_overlay_tag(app: &mut UiTest, tag: &str) {
+    app.refresh();
+    let (x, y, w, h) = app
+        .find_tag_in_overlay(tag)
+        .unwrap_or_else(|| panic!("no overlay tag `{tag}`"));
+    app.click(x + w / 2.0, y + h / 2.0);
+    std::thread::sleep(Duration::from_millis(120));
+}
+
+/// Digits typed into the field become the selection, and the delimiters the field draws never reach
+/// what it holds — the field is given the eight digits `03122024`, shows `03/12/2024`, and the
+/// selection is March 12, 2024. The entry the field opened with has to be cleared first, because
+/// the field refuses anything past a full entry's width rather than growing.
+#[test]
+fn typing_digits_into_the_date_field_selects_that_date() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    // The field opens on the initial selection, already written out as digits.
+    app.expect_overlay_text_timeout("09/10/2024", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+
+    for key in ["0", "3", "1", "2", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("selected: Mar 12, 2024", Duration::from_secs(5));
+    // Ten characters shown, eight held: the two delimiters are the visual transformation's work.
+    app.expect_overlay_text_timeout("03/12/2024", Duration::from_secs(5));
+}
+
+/// Wait for some node to publish this error message.
+///
+/// The walk is recursive because a clickable container — a dialog, whose scrim dismisses it —
+/// claims its whole subtree as children rather than sitting above it (`semantics.rs:645`), and a
+/// modal picker is exactly that. The answer is `{"main":[…],"overlays":[…]}` and the picker's tree
+/// is an overlay, so both sides are walked.
+fn expect_semantics_error(app: &mut UiTest, expected: &str) {
+    fn carries(items: &[serde_json::Value], expected: &str) -> bool {
+        items.iter().any(|node| {
+            node.get("state")
+                .and_then(|state| state.get("error"))
+                .and_then(|error| error.as_str())
+                == Some(expected)
+                || carries(
+                    node.get("children")
+                        .and_then(|children| children.as_array())
+                        .map_or(&[][..], Vec::as_slice),
+                    expected,
+                )
+        })
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.refresh();
+        let found = app.semantics().is_some_and(|snapshot| {
+            let main = snapshot
+                .get("main")
+                .and_then(|main| main.as_array())
+                .is_some_and(|items| carries(items, expected));
+            let overlays = snapshot
+                .get("overlays")
+                .and_then(|overlays| overlays.as_array())
+                .is_some_and(|entries| {
+                    entries.iter().filter_map(|entry| entry.get("tree")).any(|tree| {
+                        tree.as_array().is_some_and(|items| carries(items, expected))
+                    })
+                });
+            main || overlays
+        });
+        if found {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no node published the error `{expected}` within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How many pixels in the band under the date field carry material3's `error` role.
+///
+/// The field draws its supporting text inside its own visual rather than as a child node, so no tree
+/// names it — the pixels are where it actually is. `error` is the one red in the picker, so counting
+/// red in that band is counting the message. Sampled a row at a time because supporting text is a
+/// thin line of glyphs and a single scan line can miss it.
+fn error_pixels_below_field(app: &mut UiTest) -> usize {
+    app.refresh();
+    let (x, y, w, h) = app
+        .find_tag_in_overlay("date-picker-input-field")
+        .expect("the date field");
+    let mut points = Vec::new();
+    for row in 0..14 {
+        let py = y + h + 1.0 + row as f32 * 1.5;
+        for column in 0..90 {
+            points.push((x + 2.0 + column as f32 * (w - 4.0) / 90.0, py));
+        }
+    }
+    app.pixels_at_logical(&points)
+        .into_iter()
+        .flatten()
+        .filter(|(r, g, b, _)| *r > 120 && *r > *g + 50 && *r > *b + 50)
+        .count()
+}
+
+/// An entry the validator refuses is reported under the field and does not become the selection.
+/// `13312024` names month 13, which is not a month, so it parses to nothing; the pattern message is
+/// what Compose gives for an entry that is a full field's width and still names no date
+/// (`DateInput.kt:171-200`).
+#[test]
+fn an_unparseable_entry_is_reported_and_does_not_become_the_selection() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    assert_eq!(
+        error_pixels_below_field(&mut app),
+        0,
+        "a field with no error is drawing one"
+    );
+
+    for key in ["1", "3", "3", "1", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    assert!(
+        error_pixels_below_field(&mut app) > 20,
+        "the refused entry is not drawn under the field at all"
+    );
+    expect_semantics_error(&mut app, "Date does not match expected pattern: MM/DD/YYYY");
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+}
+
+/// A full entry naming a real date outside the picker's year range is refused too, and the message
+/// is the range's rather than the pattern's — the ordering of `DateInputValidator.validate` is what
+/// makes it so. `01051800` is January 5, 1800: a date, well below the default 1900..=2100 range, so
+/// the year check is the only one that can refuse it.
+#[test]
+fn a_date_outside_the_year_range_is_reported_too() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    click_overlay_tag(&mut app, "date-picker-input-field");
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    for key in ["0", "1", "0", "5", "1", "8", "0", "0"] {
+        app.key(key);
+    }
+    assert!(
+        error_pixels_below_field(&mut app) > 20,
+        "the out-of-range entry is not drawn under the field at all"
+    );
+    expect_semantics_error(&mut app, "Date out of expected year range 1900 - 2100");
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+}
+
+/// An entry the field accepts carries no error, so the semantics tree has to say "not in error"
+/// rather than stay silent — a reader has to be able to tell an invalid value from a valid one
+/// nobody mentioned.
+#[test]
+fn a_field_with_no_error_says_nothing_about_one() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    app.expect_overlay_text_timeout("09/10/2024", Duration::from_secs(5));
+    assert!(
+        !app.overlay_texts().iter().any(|text| text.starts_with("Date ")),
+        "a valid entry left an error message behind: {:?}",
+        app.overlay_texts()
+    );
+}
+
+/// The field asks for focus itself a moment after the modal opens — Compose's delayed
+/// `focusRequester?.requestFocus()` (`DateInput.kt:259-266`, after `DurationMedium2`) — and the keys
+/// that follow arrive on that focus with no click in between.
+///
+/// Only a real window can show where a key lands, which is why this is here and not in the lib
+/// tests: `winit` delivers the key to the window, then the framework routes it to whatever holds
+/// focus in the arena that owns the keyboard.
+#[test]
+fn the_entry_field_takes_focus_and_typing_without_a_click() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+
+    // Nothing is clicked: the picker's own delayed request is the only thing that can focus this.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while app.focused_tags().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        app.focused_tags(),
+        vec!["date-picker-input-field".to_string()],
+        "the entry field should be the one node the picker focused"
+    );
+
+    // Keys go to that focus. A cleared field drops the selection; a full entry commits one.
+    for _ in 0..8 {
+        app.key("Backspace");
+    }
+    app.expect_text_timeout("selected: none", Duration::from_secs(5));
+    for key in ["0", "3", "1", "2", "2", "0", "2", "4"] {
+        app.key(key);
+    }
+    app.expect_text_timeout("selected: Mar 12, 2024", Duration::from_secs(5));
+}
+
+/// The dialog is only as tall as the mode it is showing, which is what material3's
+/// `Box(Modifier.weight(1f, fill = false))` is for: the box's share is a MAXIMUM, so the picker's
+/// own height decides and the column ends up content + buttons instead of the whole 568 dp cap
+/// (`DatePickerDialog.android.kt:90-95`, whose comment reads "Fill is false to support collapsing
+/// the dialog's height when switching to input mode").
+///
+/// The numbers are the assertion, not a screenshot: before that box existed winia reported the cap
+/// in both modes — measured 568 dp with the field's content ending around 274.
+///
+/// Both figures assume the dialog's DEFAULT content, whose title is what gives the header its 120 dp
+/// (`DatePicker` supplies `DatePickerDefaults::TITLE`); a caller's `.title(None)` drops the header to
+/// 44 and the dialog with it, so this test would have to be re-derived for such a caller.
+#[test]
+fn the_dialog_is_as_tall_as_the_mode_it_shows() {
+    let mut app = UiTest::launch("date_picker_input");
+    app.expect_text_timeout("mode: input", Duration::from_secs(5));
+    // Settled, not read once: the overlay's tree is published by its own layout, which can lag the
+    // page's readout by a frame.
+    let (_, _, _, input_h) = settled_overlay_rect(&mut app, "dpi-dialog");
+    // 120 dp header + the outlined field's 56 + its 16 dp bottom inset + the 48 dp action row.
+    assert_eq!(
+        input_h, 240.0,
+        "the entry field's content should decide the dialog's height"
+    );
+
+    app.click_overlay_tag("date-picker-mode-toggle");
+    app.expect_text_timeout("mode: picker", Duration::from_secs(5));
+    let (_, _, _, picker_h) = settled_overlay_rect(&mut app, "dpi-dialog");
+    // 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month + 48 dp action row.
+    // The 568 dp cap is a MAXIMUM, so this content lands 8 dp short of it rather than being padded
+    // out — asserting the exact number is what stops a stretch creeping back in unnoticed.
+    assert_eq!(
+        picker_h, 560.0,
+        "the calendar's own content should decide the dialog's height"
+    );
+}
+
+/// Movable navigation payloads retain real nodes and live State dependencies across bar -> rail -> bar.
+///
+/// The fixture uses explicit buttons and disables transitions. Acceptance comes from the tagged
+/// suite's actual layout children and payload bounds, never from requested-layout text or an
+/// initializer count. Counters are read only inside each stored icon Column, while nested label
+/// Columns render fresh Strings captured from caller State. The fixture binary uses production keys.
+#[test]
+fn a_navigation_suites_items_keep_their_state_across_a_shape_switch() {
+    let mut app = UiTest::launch("nav_suite_state");
+    let mut counts = [0usize; 3];
+    let initial = nav_state_snapshot(&mut app, false, counts, 0);
+    let identities = nav_state_payload_ids(&initial);
+    assert_nav_state_layout(&app, &initial, false, &identities);
+
+    // Unequal values catch shared slots as well as a counter whose dependency never invalidates.
+    for index in 0..3 {
+        for _ in 0..=index {
+            app.refresh();
+            app.click_tag(&format!("nav-state-increment-{index}"));
+            counts[index] += 1;
+            let tree = nav_state_snapshot(&mut app, false, counts, 0);
+            assert_nav_state_layout(&app, &tree, false, &identities);
+        }
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, false, counts, 1);
+    assert_nav_state_layout(&app, &tree, false, &identities);
+
+    app.click_tag("nav-state-show-rail");
+    let rail = nav_state_snapshot(&mut app, true, counts, 1);
+    assert_nav_state_layout(&app, &rail, true, &identities);
+    for index in 0..3 {
+        app.refresh();
+        app.click_tag(&format!("nav-state-increment-{index}"));
+        counts[index] += 1;
+        let tree = nav_state_snapshot(&mut app, true, counts, 1);
+        assert_nav_state_layout(&app, &tree, true, &identities);
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, true, counts, 2);
+    assert_nav_state_layout(&app, &tree, true, &identities);
+
+    app.click_tag("nav-state-show-bar");
+    let returned = nav_state_snapshot(&mut app, false, counts, 2);
+    assert_nav_state_layout(&app, &returned, false, &identities);
+    for index in 0..3 {
+        app.refresh();
+        app.click_tag(&format!("nav-state-increment-{index}"));
+        counts[index] += 1;
+        let tree = nav_state_snapshot(&mut app, false, counts, 2);
+        assert_nav_state_layout(&app, &tree, false, &identities);
+    }
+    app.click_tag("nav-state-label-next");
+    let tree = nav_state_snapshot(&mut app, false, counts, 3);
+    assert_nav_state_layout(&app, &tree, false, &identities);
+}
+
+/// Search the parsed TREE, retaining duplicate tags so a leftover payload cannot pass as a move.
+fn nav_state_tagged_nodes<'a>(tree: &'a serde_json::Value, tag: &str) -> Vec<&'a serde_json::Value> {
+    fn walk<'a>(node: &'a serde_json::Value, tag: &str, out: &mut Vec<&'a serde_json::Value>) {
+        if let Some(nodes) = node.as_array() {
+            for node in nodes {
+                walk(node, tag, out);
+            }
+            return;
+        }
+        if node.get("tag").and_then(|value| value.as_str()) == Some(tag) {
+            out.push(node);
+        }
+        for key in ["root", "children"] {
+            if let Some(child) = node.get(key) {
+                walk(child, tag, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, tag, &mut out);
+    out
+}
+
+fn nav_state_node<'a>(tree: &'a serde_json::Value, tag: &str) -> &'a serde_json::Value {
+    let nodes = nav_state_tagged_nodes(tree, tag);
+    assert_eq!(nodes.len(), 1, "exactly one real TREE node must carry `{tag}`");
+    nodes[0]
+}
+
+fn nav_state_rect(node: &serde_json::Value) -> Option<[f32; 4]> {
+    let pos = node.get("pos")?.as_array()?;
+    let size = node.get("size")?.as_array()?;
+    Some([
+        pos.first()?.as_f64()? as f32,
+        pos.get(1)?.as_f64()? as f32,
+        size.first()?.as_f64()? as f32,
+        size.get(1)?.as_f64()? as f32,
+    ])
+}
+
+fn nav_state_rect_matches(actual: [f32; 4], expected: [f32; 4]) -> bool {
+    actual.iter().zip(expected).all(|(actual, expected)| (actual - expected).abs() <= 1.0)
+}
+
+/// Poll only after one click: a lost dependency must fail instead of being hidden by another input.
+fn nav_state_snapshot(
+    app: &mut UiTest,
+    rail: bool,
+    counts: [usize; 3],
+    label_version: usize,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = serde_json::Value::Null;
+    loop {
+        app.refresh();
+        if let Some(tree) = app.tree() {
+            let suites = nav_state_tagged_nodes(&tree, "nav-state-suite");
+            let layout_matches = suites.first().and_then(|suite| suite.get("children"))
+                .and_then(|children| children.as_array())
+                .filter(|children| children.len() == 2)
+                .map(|children| {
+                    let expected = if rail {
+                        [[0.0, 0.0, 96.0, 360.0], [96.0, 0.0, 404.0, 360.0]]
+                    } else {
+                        [[0.0, 0.0, 500.0, 280.0], [0.0, 280.0, 500.0, 80.0]]
+                    };
+                    children.iter().zip(expected).all(|(child, expected)| {
+                        nav_state_rect(child).map(|rect| nav_state_rect_matches(rect, expected))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            let text_matches = (0..3).all(|index| {
+                [
+                    (format!("nav-state-count-{index}"), format!("text(I{index}: {})", counts[index])),
+                    (format!("nav-state-label-text-{index}"), format!("text(L{index}: {label_version})")),
+                ].iter().all(|(tag, text)| {
+                    let nodes = nav_state_tagged_nodes(&tree, tag);
+                    nodes.len() == 1 && nodes[0].get("mod").and_then(|value| value.as_str())
+                        .map(|modifier| modifier.contains(text)).unwrap_or(false)
+                })
+            });
+            if suites.len() == 1 && layout_matches && text_matches {
+                return tree;
+            }
+            last = tree;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "actual navigation layout and live payloads never matched rail={rail}, counters={counts:?}, label={label_version}; last TREE: {last}"
+        );
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+/// Numeric TREE ids come from LayoutNode.id, not slot text, arena positions, or initializer counts.
+fn nav_state_payload_ids(tree: &serde_json::Value) -> Vec<(String, u64)> {
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        for prefix in ["icon", "count", "label", "label-text"] {
+            let tag = format!("nav-state-{prefix}-{index}");
+            let id = nav_state_node(tree, &tag).get("id").and_then(|value| value.as_u64())
+                .unwrap_or_else(|| panic!("TREE must expose the real numeric node id for `{tag}`"));
+            ids.push((tag, id));
+        }
+    }
+    let unique: std::collections::HashSet<_> = ids.iter().map(|(_, id)| *id).collect();
+    assert_eq!(unique.len(), ids.len(), "each retained payload node must have its own id");
+    ids
+}
+
+fn assert_nav_state_bounds_inside(inner: [f32; 4], outer: [f32; 4], tag: &str) {
+    assert!(
+        inner[2] > 0.0 && inner[3] > 0.0
+            && inner[0] >= outer[0] - 1.0 && inner[1] >= outer[1] - 1.0
+            && inner[0] + inner[2] <= outer[0] + outer[2] + 1.0
+            && inner[1] + inner[3] <= outer[1] + outer[3] + 1.0,
+        "visible `{tag}` bounds {inner:?} must stay inside {outer:?}"
+    );
+}
+
+fn assert_nav_state_layout(
+    app: &UiTest,
+    tree: &serde_json::Value,
+    rail: bool,
+    identities: &[(String, u64)],
+) {
+    assert_eq!(nav_state_payload_ids(tree).as_slice(), identities, "payload nodes must move, never rebuild");
+    let suite = nav_state_node(tree, "nav-state-suite");
+    let (sx, sy, sw, sh) = app.find_tag("nav-state-suite").expect("actual navigation suite bounds");
+    assert!(nav_state_rect_matches([sx, sy, sw, sh], [0.0, 80.0, 500.0, 360.0]),
+        "the suite must fill the area below both control rows: {:?}", [sx, sy, sw, sh]);
+    let children = suite.get("children").and_then(|value| value.as_array()).expect("suite children");
+    assert_eq!(children.len(), 2, "the real suite root must contain content and one morph container");
+    let (content, morph) = if rail { (&children[1], &children[0]) } else { (&children[0], &children[1]) };
+    // TREE exposes node identity and geometry, not MeasurePolicy type names. Direct children pin
+    // the actual Column (content then bottom morph) or Row (leading morph then content) behavior.
+    assert_eq!(nav_state_tagged_nodes(content, "nav-state-page").len(), 1,
+        "the content child must own the page, not the navigation payloads");
+    assert!(nav_state_tagged_nodes(morph, "nav-state-page").is_empty(), "the page must not move into navigation");
+    let shape_children = morph.get("children").and_then(|value| value.as_array()).expect("morph children");
+    assert_eq!(shape_children.len(), 1, "the morph must wrap exactly one actual navigation container");
+    let shape = &shape_children[0];
+    let items = shape.get("children").and_then(|value| value.as_array()).expect("navigation items");
+    assert_eq!(items.len(), 3, "all three real navigation items must remain attached");
+    let morph_rect = nav_state_rect(morph).expect("morph layout bounds");
+    let navigation_bounds = [sx + morph_rect[0], sy + morph_rect[1], morph_rect[2], morph_rect[3]];
+    let (px, py, pw, ph) = app.find_tag("nav-state-page").expect("page content bounds");
+    let expected_page = if rail { [96.0, 80.0, 404.0, 360.0] } else { [0.0, 80.0, 500.0, 280.0] };
+    assert!(nav_state_rect_matches([px, py, pw, ph], expected_page),
+        "content must occupy the actual space left by navigation: {:?}", [px, py, pw, ph]);
+    let expected_shape = if rail { [0.0, 0.0, 96.0, 360.0] } else { [0.0, 0.0, 500.0, 80.0] };
+    assert!(nav_state_rect_matches(nav_state_rect(shape).expect("shape bounds"), expected_shape),
+        "actual navigation container must fill the 96px rail or 80px bar");
+
+    let mut previous_icon: Option<[f32; 4]> = None;
+    for index in 0..3 {
+        let icon_tag = format!("nav-state-icon-{index}");
+        let label_tag = format!("nav-state-label-{index}");
+        assert_eq!(nav_state_tagged_nodes(&items[index], &icon_tag).len(), 1, "actual navigation item {index} must own `{icon_tag}`");
+        assert_eq!(nav_state_tagged_nodes(&items[index], &label_tag).len(), 1, "actual navigation item {index} must own `{label_tag}`");
+        let item_rect = nav_state_rect(&items[index]).expect("actual navigation item bounds");
+        let expected_width = if rail { 96.0 } else { (sw - 16.0) / 3.0 };
+        assert!((item_rect[2] - expected_width).abs() <= 1.0,
+            "actual navigation item {index} must use its allocated width, got {item_rect:?}");
+        let (x, y, w, h) = app.find_tag(&icon_tag).expect("visible icon payload bounds");
+        let icon = [x, y, w, h];
+        assert!((w - (40.0 + index as f32 * 8.0)).abs() <= 1.0 && (h - 28.0).abs() <= 1.0,
+            "retained icon {index} must keep its distinct measured size: {icon:?}");
+        assert_nav_state_bounds_inside(icon, navigation_bounds, &icon_tag);
+        let (lx, ly, lw, lh) = app.find_tag(&label_tag).expect("visible label payload bounds");
+        let label = [lx, ly, lw, lh];
+        assert!((lw - 56.0).abs() <= 1.0 && (lh - 16.0).abs() <= 1.0, "label {index} must retain its visible size: {label:?}");
+        assert_nav_state_bounds_inside(label, navigation_bounds, &label_tag);
+        assert!(ly >= y + h, "label {index} must be below its actual icon in both compact layouts");
+        assert!(((x + w / 2.0) - (lx + lw / 2.0)).abs() <= 1.5,
+            "label {index} and icon must share the actual item centre");
+        let expected_centre = if rail { sx + 48.0 } else {
+            let item_width = (sw - 16.0) / 3.0;
+            sx + index as f32 * (item_width + 8.0) + item_width / 2.0
+        };
+        assert!((x + w / 2.0 - expected_centre).abs() <= 1.5,
+            "icon {index} must occupy its real {} item, got {icon:?}", if rail { "rail" } else { "bar" });
+        if let Some(previous) = previous_icon {
+            if rail {
+                assert!(y > previous[1] + previous[3], "rail icons must stack vertically without overlap");
+            } else {
+                assert!(x > previous[0] + previous[2] && (y - previous[1]).abs() <= 1.0,
+                    "bar icons must form one horizontal row without overlap");
+            }
+        }
+        previous_icon = Some(icon);
+        for (tag, owner) in [
+            (format!("nav-state-count-{index}"), icon),
+            (format!("nav-state-label-text-{index}"), label),
+        ] {
+            let (x, y, w, h) = app.find_tag(&tag).expect("live payload text bounds");
+            assert_nav_state_bounds_inside([x, y, w, h], owner, &tag);
+        }
+    }
 }

@@ -1,6 +1,5 @@
 use crate::text::Paragraph;
 use skia_safe::textlayout::TextDirection;
-use skia_safe::Point;
 
 pub struct TextLayout<'a> {
     paragraph: &'a Paragraph,
@@ -65,7 +64,7 @@ impl<'a> TextLayout<'a> {
         }
     }
 
-    pub fn get_closest_grapheme_cluster_cluster_at(&self, point: impl Into<Point>) -> usize {
+    pub fn get_closest_grapheme_cluster_cluster_at(&self, point: impl Into<skia_safe::Point>) -> usize {
         let point = point.into();
         let point_clone = point.clone();
         let glyph_info = self.paragraph.inner_paragraph().get_closest_glyph_cluster_at(point);

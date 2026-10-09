@@ -3,7 +3,6 @@ use crate::text::paragraph::Paragraph;
 use skia_safe::textlayout::{FontCollection, ParagraphBuilder as SkParagraphBuilder, ParagraphStyle, PlaceholderAlignment, PlaceholderStyle, TextBaseline, TextStyle};
 use std::collections::HashSet;
 use std::ops::Range;
-use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 pub struct ParagraphBuilder {

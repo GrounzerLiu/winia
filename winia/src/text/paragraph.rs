@@ -6,20 +6,20 @@ use std::ops::Range;
 use crate::text::{IndexBiMap, ParagraphBuilder};
 
 /// Build a laid-out paragraph for one plain text run — the same construction `Text` goes through,
-/// exposed for the public drawing surface (`crate::ui::draw_scope`'s `draw_text`) so canvas text is
+/// exposed for the public drawing surface (`crate::components::draw_scope`'s `draw_text`) so canvas text is
 /// shaped by one path rather than two.
 ///
 /// `width` is the layout width in logical pixels; pass a large value for a single unwrapped line.
 pub fn build_plain_paragraph(
     text: &str,
     font_size: f32,
-    color: crate::modifier::Color,
+    color: crate::graphics::Color,
     width: f32,
 ) -> Paragraph {
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
     let mut ts = TextStyle::new();
     ts.set_font_size(font_size);
-    ts.set_color(crate::render::skia_color(color));
+    ts.set_color(crate::graphics::skia_color(color));
     let mut style = ParagraphStyle::default();
     style.set_text_style(&ts);
     let mut b = ParagraphBuilder::new(&style, fc);

@@ -8,7 +8,7 @@
 //! setting), and a popup with a theme-painted panel to pin what an OPEN popup does.
 
 use winia::prelude::*;
-use winia::ui::overlay::{Popup, PopupPosition};
+use winia::overlay::{Popup, PopupPosition};
 
 #[composable]
 fn theme_follow_fixture(ctx: &mut ComposeCtx) {
@@ -28,7 +28,7 @@ fn theme_follow_fixture(ctx: &mut ComposeCtx) {
                         ("Dark", "theme-dark", Some(true)),
                     ] {
                         Button::text()
-                            .on_click(move || winia::ui::set_system_dark_mode(mode))
+                            .on_click(move || winia::theme::set_system_dark_mode(mode))
                             .modifier(Modifier::new().test_tag(tag))
                             .build(ctx, |ctx| {
                                 Text::new(label).build(ctx);

@@ -3,6 +3,7 @@
 //! 所有子节点获得相同的空间，类似 FrameLayout / Box
 
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
 use super::node::*;
 use super::node::measure_node;
 
@@ -12,20 +13,47 @@ use super::node::measure_node;
 /// Box 的尺寸取所有子节点中的最大值。
 #[derive(Debug, Clone)]
 pub struct BoxLayout {
-    /// 子节点在 Box 中的对齐方式
+    /// 子节点在 Box 中的对齐方式（单轴值同时作用于两个轴——见 [`ContentAlignment`]）
     pub alignment: Alignment,
+    /// 两个轴各自的对齐（Compose 的二维 `contentAlignment`）。设了就用它，
+    /// 否则退回上面的 `alignment`。
+    pub content_alignment: Option<ContentAlignment>,
+    /// The layout direction the horizontal half of the alignment mirrors under — Compose resolves
+    /// `contentAlignment` with the measure scope's `layoutDirection`, so `Start` is the LEFT edge in
+    /// LTR and the RIGHT one in RTL (`Alignment.kt:114-121`). Captured at composition, like
+    /// `Row`/`Column` do (`layout/components.rs:61`).
+    pub direction: LayoutDirection,
 }
 
 impl BoxLayout {
     pub fn new() -> Self {
         BoxLayout {
             alignment: Alignment::Start,
+            content_alignment: None,
+            direction: LayoutDirection::Ltr,
         }
     }
 
+    /// The same value on both axes — `Start` is Compose's `TopStart`, `End` is `BottomEnd`.
     pub fn alignment(mut self, a: Alignment) -> Self {
         self.alignment = a;
         self
+    }
+
+    /// Each axis on its own, Compose's 2-D `contentAlignment` (`TopEnd`, `BottomCenter`, …).
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = Some(a);
+        self
+    }
+
+    pub fn direction(mut self, d: LayoutDirection) -> Self {
+        self.direction = d;
+        self
+    }
+
+    /// The alignment in force, whichever of the two was set.
+    pub fn effective_alignment(&self) -> ContentAlignment {
+        self.content_alignment.unwrap_or_else(|| ContentAlignment::both(self.alignment))
     }
 }
 
@@ -59,34 +87,16 @@ impl MeasurePolicy for BoxLayout {
         let height = constraints.constrain_height(max_height);
 
         // 为每个子节点计算在 Box 中的位置（根据 alignment）
+        let align = self.effective_alignment();
+        let space = Size::new(width, height);
         let placements: Vec<Placement> = child_sizes
             .iter()
             .map(|child_size| {
-                let x = match self.alignment {
-                    Alignment::Start => 0.0,
-                    Alignment::End => width - child_size.width,
-                    Alignment::Center => (width - child_size.width) / 2.0,
-                    Alignment::Stretch => 0.0,
-                };
-                let y = match self.alignment {
-                    Alignment::Start => 0.0,
-                    Alignment::End => height - child_size.height,
-                    Alignment::Center => (height - child_size.height) / 2.0,
-                    Alignment::Stretch => 0.0,
-                };
-                let w = if self.alignment == Alignment::Stretch {
-                    width
-                } else {
-                    child_size.width
-                };
-                let h = if self.alignment == Alignment::Stretch {
-                    height
-                } else {
-                    child_size.height
-                };
+                let (x, y) = align.anchor(*child_size, space, self.direction);
+                let size = align.child_size(*child_size, space);
                 Placement {
-                    size: Size::new(w, h),
-                    position: Point::new(x, y),
+                    size,
+                    position: Offset::new(x, y),
                 }
             })
             .collect();
@@ -156,8 +166,60 @@ mod tests {
         // max w=100, h=80 → 居中子节点
         assert_eq!(size, Size::new(100.0, 80.0));
         // 第一个 (50,30) 居中: x=(100-50)/2=25, y=(80-30)/2=25
-        assert_eq!(placements[0].position, Point::new(25.0, 25.0));
+        assert_eq!(placements[0].position, Offset::new(25.0, 25.0));
         // 第二个 (100,80) 居中: x=(100-100)/2=0, y=0
-        assert_eq!(placements[1].position, Point::new(0.0, 0.0));
+        assert_eq!(placements[1].position, Offset::new(0.0, 0.0));
+    }
+
+    /// The horizontal half mirrors under RTL, as Compose's `Alignment` does: `Start` is the left
+    /// edge in LTR and the RIGHT one in RTL (`Alignment.kt:114-121`), and the vertical half never
+    /// mirrors.
+    #[test]
+    fn a_sided_alignment_mirrors_under_rtl() {
+        for (direction, name, expected_x) in [
+            (LayoutDirection::Ltr, "Ltr", 50.0),
+            (LayoutDirection::Rtl, "Rtl", 0.0),
+        ] {
+            let box_layout = BoxLayout::new()
+                .content_alignment(ContentAlignment::TOP_END)
+                .direction(direction);
+            let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
+            let children: Vec<usize> = (0..nodes.len()).collect();
+            let (_, placements) =
+                box_layout.measure(&mut nodes, &[], &children, Constraints::UNBOUNDED);
+            // TopEnd on a 100x80 box with a 50x30 child: right edge in LTR, left edge in RTL.
+            assert_eq!(
+                placements[0].position,
+                Offset::new(expected_x, 0.0),
+                "TopEnd in {name} should put the child at x={expected_x}"
+            );
+        }
+    }
+
+    /// The mixed corners the one-axis [`Alignment`] cannot express: each axis on its own, Compose's
+    /// `Box(contentAlignment = Alignment.TopEnd)` and `BottomStart`.
+    #[test]
+    fn a_two_axis_alignment_puts_a_child_in_the_mixed_corners() {
+        for (alignment, expected) in [
+            // (100, 80) box, (50, 30) child: right edge, top.
+            (ContentAlignment::TOP_END, Offset::new(50.0, 0.0)),
+            // left edge, bottom.
+            (ContentAlignment::BOTTOM_START, Offset::new(0.0, 50.0)),
+            (ContentAlignment::TOP_CENTER, Offset::new(25.0, 0.0)),
+        ] {
+            let box_layout = BoxLayout::new().content_alignment(alignment);
+            let mut nodes = vec![make_leaf(50.0, 30.0), make_leaf(100.0, 80.0)];
+            let children: Vec<usize> = (0..nodes.len()).collect();
+            let (_, placements) = box_layout.measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::UNBOUNDED,
+            );
+            assert_eq!(
+                placements[0].position, expected,
+                "{alignment:?} should place the 50x30 child at {expected:?}"
+            );
+        }
     }
 }

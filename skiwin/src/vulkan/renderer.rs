@@ -192,9 +192,13 @@ impl VulkanRenderer {
                 Ok(result) => result,
                 Err(e) => {
                     log::error!("Failed to recreate swapchain: {e}");
+                    // Debug: fail loudly. Release: keep `swapchain_is_valid` false and retry on
+                    // the next frame — the `return` is only reachable in a release build, which is
+                    // why gating it on the same condition the panic is gated on keeps the compiler
+                    // from calling it unreachable.
                     #[cfg(debug_assertions)]
                     panic!("Failed to recreate swapchain: {e}");
-                    // Release: 保持 swapchain_is_valid = false，下一帧重试
+                    #[cfg(not(debug_assertions))]
                     return;
                 }
             };
@@ -208,8 +212,11 @@ impl VulkanRenderer {
                         Ok(v) => v,
                         Err(e) => {
                             log::error!("Failed to create image view: {e}");
+                            // Debug: fail loudly. Release: skip this image — same gating as above,
+                            // so the compiler does not call the skip unreachable.
                             #[cfg(debug_assertions)]
                             panic!("Failed to create image view: {e}");
+                            #[cfg(not(debug_assertions))]
                             return None;
                         }
                     };
@@ -225,6 +232,7 @@ impl VulkanRenderer {
                             log::error!("Failed to create framebuffer: {e}");
                             #[cfg(debug_assertions)]
                             panic!("Failed to create framebuffer: {e}");
+                            #[cfg(not(debug_assertions))]
                             None
                         }
                     }

@@ -3,21 +3,22 @@
 //! The matrix deliberately uses explicit theme/direction inputs and semantic pixel
 //! checks instead of platform-dependent golden images.
 
-use winia::core::composer::{ComposeCtx, Composer};
+use winia::runtime::composer::{ComposeCtx, Composer};
 use winia::layout::constraints::Constraints;
 use winia::layout::LayoutDirection;
-use winia::modifier::{Color, Modifier, ScrollState};
+use winia::modifier::{Modifier, ScrollState};
+use winia::graphics::{Color};
 use winia::render;
 use winia::State;
 use winia::unit::{Sp, TextUnit};
-use winia::ui::{
-    Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar,
-    NavigationBarItem, Text, TextField, TextFieldValue, ThemeColors, TopAppBar, TopAppBarColors,
-    TopAppBarScrollBehavior, TopAppBarVariant, Scaffold, Typography, WiniaTheme,
-};
+use winia::components::{Button, Chip, FloatingActionButton, FloatingActionButtonSize, Icon, NavigationBar, NavigationBarItem, Text, TextField, TextFieldValue, TopAppBar, TopAppBarColors, TopAppBarScrollBehavior, TopAppBarVariant, Scaffold};
+use winia::theme::{ThemeColors, Typography, WiniaTheme};
 
 const WIDTH: i32 = 520;
-const HEIGHT: i32 = 420;
+// Tall enough for everything the matrix builds. It was 420, which the matrix had outgrown:
+// the last components were laid out past the bottom edge, and `size()` coerces into the
+// incoming constraints (Compose's `SizeNode`), so the disabled FAB measured 56 x 0.
+const HEIGHT: i32 = 1200;
 const SEED: u32 = 0xff6750a4;
 
 fn raster_surface() -> skia_safe::Surface {
@@ -63,9 +64,9 @@ fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: Top
     let scroll = ScrollState::new();
     scroll.offset.set(offset);
     let expanded = match variant {
-        TopAppBarVariant::Medium => winia::ui::TOP_APP_BAR_MEDIUM_HEIGHT,
-        TopAppBarVariant::Large => winia::ui::TOP_APP_BAR_LARGE_HEIGHT,
-        _ => winia::ui::TOP_APP_BAR_HEIGHT,
+        TopAppBarVariant::Medium => winia::components::TOP_APP_BAR_MEDIUM_HEIGHT,
+        TopAppBarVariant::Large => winia::components::TOP_APP_BAR_LARGE_HEIGHT,
+        _ => winia::components::TOP_APP_BAR_HEIGHT,
     };
     let mut composer = Composer::new();
     composer.compose(winia::app_root!(|ctx| {
@@ -93,22 +94,22 @@ fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe:
         WiniaTheme::with_theme_typography_and_direction(theme, typography, direction, ctx, |ctx| {
             Scaffold::new(|ctx, _| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::modifier::Shape::Rectangle).test_tag("scaffold-content"));
+                ctx.start_leaf(key, Modifier::new().fill_max_size().background(Color::from_argb(255, 245, 245, 245), winia::graphics::Shape::Rectangle).test_tag("scaffold-content"));
                 ctx.end_node();
             })
             .top_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::modifier::Shape::Rectangle).test_tag("scaffold-top"));
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(64.0).background(Color::from_argb(255, 220, 220, 225), winia::graphics::Shape::Rectangle).test_tag("scaffold-top"));
                 ctx.end_node();
             })
             .bottom_bar(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::modifier::Shape::Rectangle).test_tag("scaffold-bottom"));
+                ctx.start_leaf(key, Modifier::new().fill_max_width().height(80.0).background(Color::from_argb(255, 230, 225, 235), winia::graphics::Shape::Rectangle).test_tag("scaffold-bottom"));
                 ctx.end_node();
             })
             .floating_action_button(|ctx| {
                 let key = ctx.next_key();
-                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::modifier::Shape::Circle).test_tag("scaffold-fab"));
+                ctx.start_leaf(key, Modifier::new().size(56.0, 56.0).background(Color::from_argb(255, 103, 80, 164), winia::graphics::Shape::Circle).test_tag("scaffold-fab"));
                 ctx.end_node();
             })
             .build(ctx);
@@ -124,19 +125,19 @@ fn render_scaffold_case(direction: LayoutDirection, custom: bool) -> (skia_safe:
 
 fn custom_typography() -> Typography {
     Typography {
-        body_large: winia::ui::TextStyle::new()
+        body_large: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(18.0)))
             .line_height(28.0)
             .letter_spacing(0.9),
-        body_small: winia::ui::TextStyle::new()
+        body_small: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(13.0)))
             .line_height(19.0)
             .letter_spacing(0.6),
-        label_large: winia::ui::TextStyle::new()
+        label_large: winia::text::TextStyle::new()
             .font_size(TextUnit::Sp(Sp(15.0)))
             .line_height(22.0)
             .letter_spacing(0.4)
-            .font_weight(winia::ui::FontWeight::BOLD),
+            .font_weight(winia::text::FontWeight::BOLD),
         ..Typography::default()
     }
 }
@@ -168,7 +169,7 @@ fn render_case(dark: bool, direction: LayoutDirection, custom: bool) -> (skia_sa
 }
 
 fn build_matrix(ctx: &mut ComposeCtx) {
-    winia::ui::Column::new()
+    winia::layout::Column::new()
         .modifier(Modifier::new().fill_max_width().padding(16.0))
         .build(ctx, |ctx| {
             Chip::assist(|ctx| Text::new("Assist").build(ctx), || {})
@@ -282,7 +283,7 @@ fn material_visual_matrix_covers_theme_direction_and_typography() {
 }
 
 fn build_rtl_probe(ctx: &mut ComposeCtx) {
-    winia::ui::Row::new()
+    winia::layout::Row::new()
         .modifier(Modifier::new().width(200.0).test_tag("rtl-probe"))
         .build(ctx, |ctx| {
             let leading_key = ctx.next_key();
@@ -467,7 +468,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
                         },
                     )
                     .label(move |ctx| Text::new(format!("Tab{i}")).build(ctx))
-                    .icon_position(winia::ui::NavigationItemIconPosition::Start)
+                    .icon_position(winia::components::NavigationItemIconPosition::Start)
                     .on_click(|| {})
                     .build(ctx);
                 }
@@ -486,7 +487,7 @@ fn navigation_bar_horizontal_item_pill_wraps_icon_label_group() {
     let nodes = composer.arena_nodes();
     let item0 = nodes[nodes[root].children[0]].children[0];
     let pill = &nodes[item0];
-    assert_eq!(pill.measured_size.height, winia::ui::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
+    assert_eq!(pill.measured_size.height, winia::components::NAVIGATION_BAR_H_INDICATOR_HEIGHT,
         "水平指示器高应为 40");
     let px = pill.position.x;
     let py = pill.position.y;

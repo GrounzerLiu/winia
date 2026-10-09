@@ -10,6 +10,7 @@
 //! 实现委托到 `flex::measure_flex::<VerticalAxis>()`。
 
 use super::constraints::Constraints;
+use crate::unit::Size;
 use super::flex;
 use super::node::*;
 
@@ -50,7 +51,7 @@ impl MeasurePolicy for ColumnLayout {
         children: &[usize],
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
-        flex::measure_flex::<flex::VerticalAxis>(
+        flex::measure_flex::<super::axis::VerticalAxis>(
             self.arrangement,
             self.alignment,
             self.spacing,
@@ -141,6 +142,187 @@ mod tests {
         let mut node = LayoutNode::leaf(Modifier::new().size(width, height));
         node.measured_size = Size::new(width, height);
         node
+    }
+
+    /// A weighted child with a height of its own, the shape material3's date picker dialog uses
+    /// (`Box(Modifier.weight(1f, fill = false))` around a picker that sizes itself).
+    fn make_weighted(height: f32, fill: bool) -> LayoutNode {
+        use crate::modifier::Modifier;
+        LayoutNode::leaf(Modifier::new().layout_weight_fill(1.0, fill).height(height))
+    }
+
+    /// Compose's `weight(weight, fill = false)`: the share is the child's MAXIMUM, and the container
+    /// keeps what the child asked for. This is the half that lets a dialog be shorter than the cap
+    /// it is allowed (`DatePickerDialog.android.kt:90-95`), so it is pinned here rather than only
+    /// through a window.
+    #[test]
+    fn a_weight_that_does_not_fill_keeps_the_childs_own_height() {
+        let mut nodes = vec![make_weighted(20.0, false), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(
+            size.height, 50.0,
+            "the column is content + sibling, not the 500 the parent offered"
+        );
+        assert_eq!(placements[0].size.height, 20.0, "the child keeps its own height");
+        assert_eq!(placements[1].position.y, 20.0, "the sibling follows the content");
+    }
+
+    /// The default `Modifier::layout_weight` still fills: the share is exact, so the same two
+    /// children come out at the parent's whole height.
+    #[test]
+    fn a_weight_that_fills_takes_its_whole_share() {
+        let mut nodes = vec![make_weighted(20.0, true), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(size.height, 500.0, "a filling weight takes the whole bounded axis");
+        assert_eq!(placements[0].size.height, 470.0, "500 less the sibling's 30");
+    }
+
+    /// A spreading arrangement does not grow a content-sized container: the same two children as the
+    /// test above come out at their own 50 dp, and the sibling sits directly under the first rather
+    /// than at the parent's bottom.
+    ///
+    /// This is Compose's rule — `mainAxisLayoutSize = max((fixedSpace + weightedSpace)
+    /// .fastCoerceAtLeast(0), mainAxisMin)` (`RowColumnMeasurePolicy.kt:252`) never consults
+    /// `mainAxisMax`, so a container with no explicit size hugs its content and SpaceBetween has no
+    /// leftover to distribute. winia used to grow the container to the offered maximum instead; the
+    /// pair of tests here is what pins which of the two it does.
+    ///
+    /// It also makes the date picker dialog's collapse work: a `weight(1f, fill = false)` box can only
+    /// shorten the column if the arrangement leaves the size alone (`DatePickerDialog.android.kt:89-95`
+    /// writes `SpaceBetween` there, and winia's dialog uses `Start` — after this alignment the two
+    /// place identically).
+    #[test]
+    fn a_spreading_arrangement_does_not_grow_a_content_sized_container() {
+        let mut nodes = vec![make_weighted(20.0, false), make_leaf(100.0, 30.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new()
+            .arrangement(Arrangement::SpaceBetween)
+            .measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(0.0, 100.0, 0.0, 500.0),
+            );
+        assert_eq!(
+            size.height, 50.0,
+            "content height, not the 500 dp the parent offered"
+        );
+        assert_eq!(
+            placements[1].position.y, 20.0,
+            "with no leftover the sibling follows the content"
+        );
+    }
+
+    /// A child that asks for more than its share comes out at its share, which is what Compose's
+    /// `size()` does (`enforceIncoming = true`: `SizeNode.measure` runs
+    /// `constraints.constrain(Constraints.fixed(...))` on the request). It used to come out at its
+    /// own request and push its sibling out of the column; this test asserted that, as a recorded
+    /// divergence, until `layout/node.rs` started coercing a `Size` into the incoming range.
+    ///
+    /// The overflow that a caller really wants is still available through `Modifier::required_size`,
+    /// which keeps writing over the range — `shared_transition.rs`'s spilling hero relies on it.
+    ///
+    /// The companion cases are above: `a_weight_that_fills_takes_its_whole_share` (the share wins
+    /// over a smaller request) and `a_weight_that_does_not_fill_keeps_the_childs_own_height`.
+    #[test]
+    fn an_oversized_non_filling_weight_is_coerced_into_its_share() {
+        use crate::modifier::Modifier;
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .layout_weight_fill(1.0, false)
+                    .size(100.0, 600.0),
+            ),
+            make_leaf(100.0, 30.0),
+        ];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new().measure(
+            &mut nodes,
+            &[],
+            &children,
+            Constraints::new(0.0, 100.0, 0.0, 500.0),
+        );
+        assert_eq!(
+            size.height, 500.0,
+            "the share plus the sibling still add up to the parent's bound"
+        );
+        assert_eq!(
+            placements[0].size.height, 470.0,
+            "600 was coerced into the 470 dp share rather than overflowing it"
+        );
+        assert_eq!(
+            placements[1].position.y, 470.0,
+            "so the sibling stays inside the column"
+        );
+    }
+
+    /// A spacing that does not fit collapses the child after it — in Compose too.
+    ///
+    /// Compose charges the gap to `fixedSpace` as it goes, so the next child is measured against what
+    /// is left and can end up with nothing: `remaining = mainAxisMax - fixedSpace`, then
+    /// `spaceAfterLastNoWeight = min(arrangementSpacingInt, (remaining - placeableMainAxisSize)
+    /// .fastCoerceAtLeast(0))` and `fixedSpace += placeableMainAxisSize + spaceAfterLastNoWeight`
+    /// (`RowColumnMeasurePolicy.kt:123-145`). The `min` there only stops `fixedSpace` from exceeding
+    /// the axis — a 60 dp gap after a 40 dp child in a 100 dp column consumes the whole hundred, so
+    /// the second child measures 0. winia's phase 1 subtracts the spacing up front and clamps the
+    /// remaining at 0 (`layout/flex.rs`), which lands in the same place.
+    ///
+    /// This was written as a "known divergence" first, from reading the `min` alone and assuming
+    /// Compose kept the child. It does not: the two agree, and this pins that they agree.
+    #[test]
+    fn a_spacing_too_large_for_the_axis_collapses_the_child_after_it() {
+        let mut nodes = vec![make_leaf(100.0, 40.0), make_leaf(100.0, 40.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (size, placements) = ColumnLayout::new()
+            .spacing(60.0)
+            .measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(0.0, 100.0, 0.0, 100.0),
+            );
+        assert_eq!(placements[0].size.height, 40.0, "the first child keeps its height");
+        assert_eq!(
+            placements[1].size.height, 0.0,
+            "the 60 dp gap took the rest of the axis, as it does in Compose"
+        );
+        assert_eq!(size.height, 100.0, "the column is still its bound");
+    }
+
+    /// A zero-sized child still charges its gap in Compose; winia skips children that measured zero
+    /// when it counts the spacings to subtract (the `width > 0.0 || height > 0.0` filter in
+    /// `layout/flex.rs`'s phase 1), so the child after it gets more room than Compose would give it.
+    ///
+    /// Compose: the empty child measures 0, `spaceAfterLastNoWeight = min(30, 100 - 0) = 30`, so the
+    /// second child is measured against 70 (`RowColumnMeasurePolicy.kt:123-145`).
+    #[test]
+    fn a_zero_sized_child_charges_its_gap() {
+        let mut nodes = vec![make_leaf(0.0, 0.0), make_leaf(100.0, 100.0)];
+        let children: Vec<usize> = (0..nodes.len()).collect();
+        let (_, placements) = ColumnLayout::new()
+            .spacing(30.0)
+            .measure(
+                &mut nodes,
+                &[],
+                &children,
+                Constraints::new(0.0, 100.0, 0.0, 100.0),
+            );
+        assert_eq!(
+            placements[1].size.height, 70.0,
+            "the second child is measured against the axis less the empty child's 30 dp gap"
+        );
     }
 
     #[test]

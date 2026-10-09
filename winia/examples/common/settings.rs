@@ -23,7 +23,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::ui::set_system_dark_mode;
+use winia::theme::set_system_dark_mode;
 
 /// Material Symbols `settings` (24dp, filled), copied from fonts.google.com/icons. The path is
 /// wrapped in a minimal SVG document by `Icon::svg_path` and handed to the SVG parser, so the

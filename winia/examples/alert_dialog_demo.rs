@@ -1,7 +1,9 @@
 //! AlertDialog demo — Material 3 alert dialogs.
 //!
 //! Shows: the two-action dialog (confirm + dismiss), a one-action dialog, an icon above the
-//! title, a long body that stops at the 560dp maximum width, and a case that exercises the
+//! title, a long body that stops at the 560dp maximum width, a body TALLER than the window (the
+//! text slot takes the slack, so the buttons keep their height and the body scrolls), a dialog
+//! wider than 560dp (`platform_default_width(false)`), and a case that exercises the
 //! `DialogProperties` knobs with a custom shape and colour and both dismissal routes off.
 //! The buttons really open and close, so the overlay's lifetime (and the scrim's dismissal)
 //! can be driven by hand.
@@ -30,12 +32,19 @@ enum Open {
     LongBody,
     /// `DialogProperties` knobs: a square container, a custom colour, and both dismissal routes off.
     Custom,
+    /// A body taller than the window: the text slot takes the slack, so the buttons survive.
+    TallBody,
+    /// `usePlatformDefaultWidth = false`: the content's own width, not the 280..560 range.
+    Wide,
 }
 
 #[composable]
 fn alert_dialog_demo(ctx: &mut ComposeCtx) {
     let open = ctx.remember(|| Open::None);
     let theme = WiniaTheme::colors();
+    // The tall-body case scrolls, which is what material3 asks of a long dialog body: the text slot
+    // is clamped to the space the dialog has left, so the body needs a scroll of its own.
+    let body_scroll = ctx.remember(|| ScrollState::new()).get();
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(24.0))
@@ -47,6 +56,8 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                 ("One action", Open::OneAction),
                 ("Icon above the title", Open::WithIcon),
                 ("Long body (560dp maximum)", Open::LongBody),
+                ("Body taller than the window (scrolls, buttons stay)", Open::TallBody),
+                ("Wider than 560dp (platform default width off)", Open::Wide),
                 ("Custom shape, colour, non-dismissible", Open::Custom),
             ] {
                 Button::new()
@@ -112,17 +123,51 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
         .dismiss_on_outside(!custom)
         .dismiss_on_back_press(!custom)
         .focusable(!custom)
+        // `DialogProperties(usePlatformDefaultWidth = false)`, which is what material3's own
+        // `DatePickerDialog` passes so its fixed 360dp calendar is not put through the platform's
+        // width policy. Here it is the only way to ask for a dialog wider than the 560dp cap: with
+        // it on, the 640dp block below comes out at 560.
+        .platform_default_width(current != Open::Wide)
         .title(move |ctx| {
             let title = match current {
                 Open::OneAction => "Saved",
                 Open::WithIcon => "Location access",
                 Open::LongBody => "Terms of service",
+                Open::TallBody => "Terms of service",
+                Open::Wide => "A wide body",
                 Open::Custom => "Dismissible only by its button",
                 _ => "Discard draft?",
             };
             Text::new(title).build(ctx);
         })
         .text(move |ctx| {
+            // The tall case puts a scrolling column here instead of a paragraph, so its body is
+            // built on its own below.
+            if current == Open::TallBody {
+                let scroll = body_scroll.clone();
+                Column::new()
+                    .modifier(Modifier::new().fill_max_size().vertical_scroll(scroll))
+                    .spacing(8.0)
+                    .build(ctx, |ctx| {
+                        for i in 1..=24 {
+                            Text::new(format!("Clause {i}: a body taller than the window."))
+                                .build(ctx);
+                        }
+                    });
+                return;
+            }
+            // The wide case is a fixed 640dp block: the point is the width, and a paragraph would
+            // report whatever the window allows instead.
+            if current == Open::Wide {
+                Stack::new()
+                    .modifier(
+                        Modifier::new()
+                            .size(640.0, 120.0)
+                            .background(theme.secondary_container, Shape::rounded(8.0)),
+                    )
+                    .build(ctx, |_| {});
+                return;
+            }
             let body = match current {
                 Open::OneAction => "Your changes are in the cloud.",
                 Open::WithIcon => "Allow Winia to use your location while the app is open?",
@@ -197,7 +242,7 @@ fn alert_dialog_demo(ctx: &mut ComposeCtx) {
                 let label = match current {
                     Open::OneAction => "Ok",
                     Open::WithIcon => "Allow",
-                    Open::LongBody => "Accept",
+                    Open::LongBody | Open::TallBody | Open::Wide => "Accept",
                     Open::Custom => "Close it",
                     _ => "Discard",
                 };

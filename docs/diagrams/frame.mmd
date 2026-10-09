@@ -1,0 +1,16 @@
+---
+title: a frame
+---
+%% See docs/architecture.md § A frame.
+%% The whole loop is `PerWindow::recompose_layout_render` in app.rs.
+flowchart TB
+    ev["winit event<br/>routed by app.rs"]
+    st["State::set / update<br/>schedules the composers that read it"]
+    rec["Composer::recompose<br/>repeat until nothing is pending"]
+    mat["materialize<br/>slot tree becomes the LayoutNode arena<br/>nodes reused by slot key"]
+    lay["Composer::layout(constraints)<br/>measure + place"]
+    ovh["per overlay: its own Composer and tree<br/>laid out at the window size,<br/>positioned against its anchor"]
+    drw["render::render(nodes, root, canvas)<br/>then render_overlays"]
+
+    ev --> st --> rec --> mat --> lay --> ovh --> drw
+    drw -. "layout-time writes<br/>(Backchannel / State)" .-> st

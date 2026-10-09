@@ -1,5 +1,7 @@
 # Frame cost, measured outside the benchmark (probe round)
 
+> ⚠ **Historical record — the round of 2026-09-26, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > Status: **measurement round, no framework change.** Everything here was taken with throwaway
 > probes that were reverted before the round ended: `git status` is empty at `9d404e5`, and the two
 > probes are saved as patches under `target/probe/` (`compose_sections_probe.patch`,

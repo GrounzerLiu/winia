@@ -15,14 +15,14 @@
 //!    selection from when the popup opened and closes.
 use letclone::clone;
 use winia::composable;
-use winia::core::composer::{ComposeCtx, GroupStatus};
+use winia::runtime::composer::{ComposeCtx, GroupStatus};
 use winia::layout::BoxLayout;
 use winia::prelude::*;
-use winia::ui::date_picker::{
-    remember_date_picker_state, CalendarLocale, DockedDatePicker, CALENDAR_MONTH_PATH,
+use winia::components::date_picker::{
+    remember_date_picker_state, CalendarLocale, DatePickerStateInit, DockedDatePicker, CALENDAR_MONTH_PATH,
 };
-use winia::ui::icon::Icon;
-use winia::ui::overlay::{OverlayAnimSpec, Popup, PopupPosition};
+use winia::components::icon::Icon;
+use winia::overlay::{OverlayAnimSpec, Popup, PopupPosition};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
@@ -45,7 +45,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
     let confirmed = ctx.remember(|| None::<i64>);
     let baseline = ctx.remember(|| None::<i64>);
     let field_value = ctx.remember(|| TextFieldValue::new(""));
-    let picker_state = remember_date_picker_state(ctx, CalendarLocale::default());
+    let picker_state = remember_date_picker_state(ctx, CalendarLocale::default(), DatePickerStateInit::default());
 
     Column::new()
         .spacing(16.0)
@@ -58,7 +58,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
 
                 Text::new("Docked date picker (click the calendar button)")
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
 
                 // ── Anchor: a form field with a calendar button, wrapped in an explicit group ──
@@ -189,7 +189,7 @@ fn docked_demo(ctx: &mut ComposeCtx) {
                     .unwrap_or_else(|| String::from("(none)"));
                 Text::new(format!("Confirmed: {status}"))
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
             }
         });

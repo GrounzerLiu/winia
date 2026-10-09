@@ -11,7 +11,6 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 pub struct VulkanSkiaWindow {
-    render_ctx: VulkanRenderContext, // the shared vulkan device, queue, etc.
     renderer: Option<VulkanRenderer>, // the window-specific skia <-> vulkan bridge
     window: Arc<Box<dyn Window>>,
 }
@@ -23,10 +22,12 @@ impl VulkanSkiaWindow {
         event_loop: &dyn ActiveEventLoop,
         window: Arc<Box<dyn Window>>,
     ) -> SkiwinResult<Self> {
+        // The context is a factory, not a keeper: the renderer it builds holds `Arc`s to the queue
+        // and the skia context it needs, and the queue itself lives in `SHARED_QUEUE`. Holding the
+        // context here as well was a field nothing ever read.
         let mut render_ctx = VulkanRenderContext::default();
         let renderer = render_ctx.renderer_for_window(event_loop, window.clone())?;
         Ok(Self {
-            render_ctx,
             renderer: Some(renderer),
             window,
         })

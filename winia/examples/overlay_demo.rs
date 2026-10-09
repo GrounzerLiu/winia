@@ -8,8 +8,9 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::{Dialog, DropdownMenu, DropdownMenuItem, OverlayAnimSpec, Popup, PopupPosition};
-use winia::core::composer::ComposeCtx;
+use winia::overlay::{Dialog, OverlayAnimSpec, Popup, PopupPosition};
+use winia::components::dropdown_menu::{DropdownMenu, DropdownMenuItem};
+use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 
 #[composable]
@@ -31,7 +32,7 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
 
             Text::new(format!("上次选择: {}", last_display.get()))
                 .font_size(14.0)
-                .color(winia::modifier::Color::from_argb(255, 120, 120, 120))
+                .color(winia::graphics::Color::from_argb(255, 120, 120, 120))
                 .build(ctx);
 
             // ── Popup：锚点下方弹出 ──
@@ -61,25 +62,25 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                             .modifier(
                                 winia::modifier::Modifier::new()
                                     .size(200.0, 90.0)
-                                    .padding(winia::modifier::Dimension::Fixed(14.0))
+                                    .padding(winia::layout::Dimension::Fixed(14.0))
                                     .background(
-                                        winia::modifier::Color::from_argb(255, 250, 250, 250),
-                                        winia::modifier::Shape::RoundedRect { corner_radius: 8.0 },
+                                        winia::graphics::Color::from_argb(255, 250, 250, 250),
+                                        winia::graphics::Shape::RoundedRect { corner_radius: 8.0 },
                                     )
                                     .border(
                                         1.0,
-                                        winia::modifier::Color::from_argb(255, 210, 210, 210),
-                                        winia::modifier::Shape::RoundedRect { corner_radius: 8.0 },
+                                        winia::graphics::Color::from_argb(255, 210, 210, 210),
+                                        winia::graphics::Shape::RoundedRect { corner_radius: 8.0 },
                                     ),
                             )
                             .build(ctx, |ctx| {
                                 Text::new("这是一个 Popup")
                                     .font_size(14.0)
-                                    .color(winia::modifier::Color::from_argb(255, 60, 60, 60))
+                                    .color(winia::graphics::Color::from_argb(255, 60, 60, 60))
                                     .build(ctx);
                                 Text::new("点击外部关闭")
                                     .font_size(12.0)
-                                    .color(winia::modifier::Color::from_argb(255, 140, 140, 140))
+                                    .color(winia::graphics::Color::from_argb(255, 140, 140, 140))
                                     .build(ctx);
                             });
                     });
@@ -185,20 +186,20 @@ fn overlay_ui(ctx: &mut ComposeCtx) {
                             .modifier(
                                 winia::modifier::Modifier::new()
                                     .size(300.0, 170.0)
-                                    .padding(winia::modifier::Dimension::Fixed(20.0))
+                                    .padding(winia::layout::Dimension::Fixed(20.0))
                                     .background(
-                                        winia::modifier::Color::from_argb(255, 255, 255, 255),
-                                        winia::modifier::Shape::RoundedRect { corner_radius: 12.0 },
+                                        winia::graphics::Color::from_argb(255, 255, 255, 255),
+                                        winia::graphics::Shape::RoundedRect { corner_radius: 12.0 },
                                     ),
                             )
                             .build(ctx, |ctx| {
                                 Text::new("确认操作？")
                                     .font_size(17.0)
-                                    .color(winia::modifier::Color::from_argb(255, 40, 40, 40))
+                                    .color(winia::graphics::Color::from_argb(255, 40, 40, 40))
                                     .build(ctx);
                                 Text::new("对话框内容区——模态遮罩下主树不可交互")
                                     .font_size(12.0)
-                                    .color(winia::modifier::Color::from_argb(255, 130, 130, 130))
+                                    .color(winia::graphics::Color::from_argb(255, 130, 130, 130))
                                     .build(ctx);
                                 Row::new()
                                     .spacing(12.0)

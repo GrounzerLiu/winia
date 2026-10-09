@@ -18,12 +18,14 @@
 //!   的 ContentTransform——`NavEnter`/`NavExit` 原语成对组合，默认 fade；
 //!   graphics_layer 渲染期 peek 零重组）。
 
-use crate::core::state::State;
+use crate::runtime::state::State;
 use crate::composable;
-use crate::core::composer::ComposeCtx;
+use crate::runtime::composer::ComposeCtx;
 use crate::modifier::Modifier;
 use crate::animation::push_animatable;
-use crate::modifier::GraphicsLayerParams;
+// The slide distance is shared with `AnimatedVisibility`; nav used to declare its own copy.
+use crate::animation::SlideOffset;
+use crate::graphics::GraphicsLayerParams;
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -49,7 +51,7 @@ use std::collections::HashMap;
 pub(crate) struct EntryStateScope {
     pool: std::sync::Arc<std::sync::Mutex<HashMap<(u64, u32, std::any::TypeId), Box<dyn Any>>>>,
     key: u64,
-    counter: crate::core::state::Backchannel<u32>,
+    counter: crate::runtime::state::Backchannel<u32>,
     /// 过渡滑出层（previous）用只读作用域：命中返回现存槽，miss **不入池**。
     /// 滑出期间旧页内容每帧重跑，若照常 miss→insert 会把刚被 removeState
     /// 清理的槽重新插回（下次 pop 才再清）——破坏 Nav3 removeState 语义。
@@ -58,10 +60,10 @@ pub(crate) struct EntryStateScope {
 
 /// entry 状态作用域 CompositionLocal——NavDisplay 渲染 entry 时 provides，
 /// `remember_entry_state` 读 current（try_current 区分作用域内外）
-static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<EntryStateScope>> =
+static ENTRY_STATE_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<EntryStateScope>> =
     std::sync::LazyLock::new(|| {
         // default 不可达（try_current 不调 default）——占位
-        crate::core::composition_local::CompositionLocal::new(|| {
+        crate::runtime::composition_local::CompositionLocal::new(|| {
             panic!("ENTRY_STATE_SCOPE 无默认值——必须经 NavDisplay 提供")
         })
     });
@@ -357,9 +359,9 @@ impl ResultEventBus {
 /// 结果总线 CompositionLocal——NavDisplay 渲染 entry 时 provides（对标 Nav3
 /// `LocalResultEventBus` + `ResultEventBusNavEntryDecorator`）；entry 内容经
 /// [`result_event_bus`] 读取。try_current 区分作用域内外。
-static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<ResultEventBus>> =
+static RESULT_EVENT_BUS_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<ResultEventBus>> =
     std::sync::LazyLock::new(|| {
-        crate::core::composition_local::CompositionLocal::new(|| {
+        crate::runtime::composition_local::CompositionLocal::new(|| {
             panic!("RESULT_EVENT_BUS_SCOPE 无默认值——必须经 NavDisplay 提供")
         })
     });
@@ -409,8 +411,8 @@ pub fn nav_is_draining() -> bool {
 /// ```
 pub fn result_event_bus_consume<T: Clone + PartialEq + 'static>(
     key: &str,
-) -> crate::core::state::State<Option<T>> {
-    let stored: crate::core::state::State<Option<T>> = remember_entry_state(|| None);
+) -> crate::runtime::state::State<Option<T>> {
+    let stored: crate::runtime::state::State<Option<T>> = remember_entry_state(|| None);
     if nav_is_draining() {
         return stored;
     }
@@ -421,9 +423,9 @@ pub fn result_event_bus_consume<T: Clone + PartialEq + 'static>(
 }
 
 /// draining 渲染标记作用域（NavDisplay 的 render_entry 按 draining 参数 provides）
-static DRAINING_SCOPE: std::sync::LazyLock<crate::core::composition_local::CompositionLocal<bool>> =
+static DRAINING_SCOPE: std::sync::LazyLock<crate::runtime::composition_local::CompositionLocal<bool>> =
     std::sync::LazyLock::new(|| {
-        crate::core::composition_local::CompositionLocal::new(|| false)
+        crate::runtime::composition_local::CompositionLocal::new(|| false)
     });
 
 /// Identity for one `NavDisplay` instance, used to namespace the scenes it publishes.
@@ -700,27 +702,6 @@ impl<K: NavKey> NavEntry<K> {
 // NavTransition — 导航滑动过渡（对标 Nav3 transitionSpec 的 push/pop 动画）
 // ═══════════════════════════════════════════════════════════
 
-/// 滑动位移来源（对标 Compose `slideInHorizontally(initialOffsetX: (Int) -> Int)`
-/// 的常用取值——Compose 闭包入参为内容宽度：`{ it }` = 全宽、`{ -it / 3 }` =
-/// 反向 1/3 视差；winia 组合模型无布局期闭包，声明式表达为比例或固定值）。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SlideOffset {
-    /// 容器宽度比例（1.0 = 全宽——对标 `{ it }`；-0.3 = 反向 30%——对标 `{ -it / 3 }`）
-    Fraction(f32),
-    /// 固定逻辑 px（对标固定 dp 位移——M3 shared-axis 的 30dp；当前按逻辑 px
-    /// 解析、随密度缩放后续接）
-    Px(f32),
-}
-
-impl SlideOffset {
-    fn resolve(&self, width: f32) -> f32 {
-        match self {
-            SlideOffset::Fraction(f) => f * width,
-            SlideOffset::Px(d) => *d,
-        }
-    }
-}
-
 /// 进入过渡（对标 Compose `EnterTransition`；仅枚举常用组合——同侧 Slide+Fade，
 /// 其余 Compose `+` 组合需扩变体）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -875,12 +856,12 @@ impl NavTransitionSpec {
     pub fn shared_axis() -> (Self, Self) {
         (
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Px(30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Px(-30.0) },
+                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(30.0) },
+                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(-30.0) },
             ),
             Self::new(
-                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Px(-30.0) },
-                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Px(30.0) },
+                NavEnter::SlideAndFadeIn { initial_offset_x: SlideOffset::Fixed(-30.0) },
+                NavExit::SlideAndFadeOut { target_offset_x: SlideOffset::Fixed(30.0) },
             ),
         )
     }
@@ -922,7 +903,7 @@ struct NavTransition<K: NavKey> {
     /// 过渡启动时固化的规格快照（对标 Nav3 在过渡启动时求值 transitionSpec——
     /// 中途改配置不影响进行中的过渡；完成时清空）。Backchannel：快照只在
     /// 过渡启动/完成瞬间读写，无订阅者需要通知（progress 的动画通知已驱动帧）。
-    active_spec: crate::core::state::Backchannel<Option<NavTransitionSpec>>,
+    active_spec: crate::runtime::state::Backchannel<Option<NavTransitionSpec>>,
     /// This display's identity, used to namespace the scenes it publishes (`layer_scene_id`).
     ///
     /// Remembered in `init`, which runs OUTSIDE the per-scene `ctx.key(scene_holder.key, …)` group: the
@@ -1160,7 +1141,7 @@ impl<K: NavKey> NavTransition<K> {
                 }
                 params
             });
-            crate::ui::layout_components::Column::new()
+            crate::layout::components::Column::new()
                 .modifier(m)
                 .build(ctx, |ctx| {
                     // 场景 key 驱动槽身份（对标 Nav3 AnimatedSceneKey(KClass, key)
@@ -1193,8 +1174,8 @@ impl<K: NavKey> NavTransition<K> {
                                 1.0
                             }
                         });
-                        crate::ui::shared_transition::with_nav_scene(
-                            crate::ui::shared_transition::NavSceneInfo {
+                        crate::components::shared_transition::with_nav_scene(
+                            crate::components::shared_transition::NavSceneInfo {
                                 id: scene_id,
                                 scene_key: scene.scene_key(),
                                 visibility,
@@ -1210,7 +1191,7 @@ impl<K: NavKey> NavTransition<K> {
                     });
                 });
         };
-        crate::ui::layout_components::Stack::new()
+        crate::layout::components::Stack::new()
             .modifier(Modifier::new().fill_max_size().on_size_changed({
                 let width = width.clone();
                 move |w, _| width.set(w)
@@ -1259,7 +1240,7 @@ impl<K: NavKey> NavTransition<K> {
                     NavEnter::SlideIn { .. } | NavEnter::SlideAndFadeIn { .. } | NavEnter::ScaleIn { .. }
                 );
                 if active && displaces {
-                    crate::ui::layout_components::Column::new()
+                    crate::layout::components::Column::new()
                         .modifier(Modifier::new().fill_max_size().clickable(|| {}))
                         .build(ctx, |_| {});
                 }
@@ -1356,28 +1337,28 @@ pub struct SharedEntryInSceneDecorator;
 
 impl<K: NavKey> NavEntryDecorator<K> for SharedEntryInSceneDecorator {
     fn wrap(&self, ctx: &mut ComposeCtx, entry: &NavEntry<K>, inner: &dyn Fn(&mut ComposeCtx)) {
-        let Some(scope) = crate::ui::shared_transition::current_shared_scope() else {
+        let Some(scope) = crate::components::shared_transition::current_shared_scope() else {
             inner(ctx);
             return;
         };
         let key = format!("entry:{}", entry.content_key());
-        crate::ui::layout_components::Column::new()
+        crate::layout::components::Column::new()
             .modifier(
                 Modifier::new().fill_max_size().shared_bounds_with_overlay_clip(
                     scope.shared_content_state(&key),
-                    crate::ui::animated_visibility::VisibilityTransition::fade_in(
+                    crate::components::animated_visibility::VisibilityTransition::fade_in(
                         crate::animation::TweenSpec::default(),
                     ),
-                    crate::ui::animated_visibility::VisibilityTransition::fade_out(
+                    crate::components::animated_visibility::VisibilityTransition::fade_out(
                         crate::animation::TweenSpec::default(),
                     ),
-                    crate::ui::shared_transition::BoundsTransform::default(),
-                    crate::ui::shared_transition::ResizeMode::scale_to_bounds(),
-                    crate::ui::shared_transition::PlaceHolderSize::AnimatedSize,
-                    crate::ui::shared_transition::PathMotion::Linear,
+                    crate::transition::BoundsTransform::default(),
+                    crate::transition::ResizeMode::scale_to_bounds(),
+                    crate::transition::PlaceHolderSize::AnimatedSize,
+                    crate::transition::PathMotion::Linear,
                     0.0,
                     true,
-                    crate::ui::shared_transition::OverlayClip::Bounds,
+                    crate::transition::OverlayClip::Bounds,
                 ),
             )
             .build(ctx, |ctx| inner(ctx));
@@ -1517,13 +1498,13 @@ impl<K: NavKey> Scene<K> for ListDetailScene<K> {
         let (Some(list), Some(detail)) = (self.entries.first(), self.entries.get(1)) else {
             return;
         };
-        crate::ui::layout_components::Row::new()
+        crate::layout::components::Row::new()
             .modifier(Modifier::new().fill_max_size())
             .build(ctx, |ctx| {
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_height().layout_weight(2.0))
                     .build(ctx, |ctx| render_entry(ctx, list, false));
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_height().layout_weight(3.0))
                     .build(ctx, |ctx| render_entry(ctx, detail, false));
             });
@@ -1967,7 +1948,7 @@ impl<'a, K: NavKey> NavDisplay<'a, K> {
             .map(|p| p.dismiss_on_click_outside)
             .unwrap_or(true);
         let dialog_content: Option<(u64, NavEntry<K>)> = dialog_top.map(|t| (t.content_key(), t));
-        let mut dialog = crate::ui::overlay::Dialog::new(dialog_visible);
+        let mut dialog = crate::overlay::Dialog::new(dialog_visible);
         if !dialog_dismiss_outside {
             dialog = dialog.dismiss_on_outside(false);
         }
@@ -2157,21 +2138,21 @@ mod tests {
         struct MyMeta { id: u32 }
 
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
-        let mut composer = crate::core::composer::Composer::new();
+        let mut composer = crate::runtime::composer::Composer::new();
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         composer.compose(|ctx| {
             NavDisplay::new(&bs, |ctx, key| match key {
                 TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                    crate::ui::Text::new("HomeScreen").build(ctx);
+                    crate::components::Text::new("HomeScreen").build(ctx);
                 })
                 .metadata(NavMetadata::new().with(MyMeta { id: 7 })),
                 TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                    crate::ui::Text::new("SettingsScreen").build(ctx);
+                    crate::components::Text::new("SettingsScreen").build(ctx);
                 }),
                 TestRoute::Detail(id) => {
                     let id = *id;
                     NavEntry::new(key.clone(), move |ctx, _| {
-                        crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                        crate::components::Text::new(format!("Detail{id}")).build(ctx);
                     })
                 }
             })
@@ -2274,7 +2255,7 @@ mod tests {
 
     #[test]
     fn nav_display_renders_top_entry() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2283,15 +2264,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id; // 复制（&u64 → u64）——move 闭包需 owned
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2340,7 +2321,7 @@ mod tests {
     /// ListDetail 双栏 Scene：栈 ≥2 时同时渲染 list（倒数第二）与 detail（栈顶）
     #[test]
     fn list_detail_scene_renders_both_entries() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2348,15 +2329,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2431,7 +2412,7 @@ mod tests {
     /// （固定组合 key——对标 Nav3 SaveableStateHolder 的 contentKey 状态保持）
     #[test]
     fn remember_state_decorator_preserves_entry_state() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2440,10 +2421,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2451,7 +2432,7 @@ mod tests {
                         // 状态池保持（对标 Nav3 SaveableStateHolder）
                         let counter = remember_entry_state(|| 0i32);
                             counter.update(|v| *v += 1);
-                            crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                         })
                     }
                 })
@@ -2519,7 +2500,7 @@ mod tests {
     /// `transition_spec_fade_and_none` 覆盖。
     #[test]
     fn transition_midframe_renders_both_pages() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2529,15 +2510,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2598,7 +2579,7 @@ mod tests {
             Home,
             About,
         }
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<DialogRoute>::with_initial(DialogRoute::Home);
         let mut composer = Composer::new();
@@ -2606,10 +2587,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     DialogRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("AboutScreen").build(ctx);
+                        crate::components::Text::new("AboutScreen").build(ctx);
                     })
                     .as_dialog(),
                 })
@@ -2662,7 +2643,7 @@ mod tests {
         enum DialogRoute {
             About,
         }
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<DialogRoute>::new(); // 空栈开始
         let mut composer = Composer::new();
@@ -2670,7 +2651,7 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     DialogRoute::About => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("AboutScreen").build(ctx);
+                        crate::components::Text::new("AboutScreen").build(ctx);
                     })
                     .as_dialog(),
                 })
@@ -2720,7 +2701,7 @@ mod tests {
     /// 若无 draining，滑出 12 帧会把计数累加进重插的槽，重进首帧远大于 1）
     #[test]
     fn pop_slideout_does_not_repollute_entry_state_pool() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2729,10 +2710,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2740,7 +2721,7 @@ mod tests {
                             // 组合期写入（重污染路径的最小复现）
                             let counter = remember_entry_state(|| 0i32);
                             counter.update(|v| *v += 1);
-                            crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                         })
                     }
                 })
@@ -2786,7 +2767,7 @@ mod tests {
     /// 同 contentKey 多实例时弹出其一不清理（"最后一个实例"语义）
     #[test]
     fn content_key_shares_state_across_routes() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2795,10 +2776,10 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
@@ -2809,13 +2790,13 @@ mod tests {
                             NavEntry::with_content_key(key, 42, move |ctx, _| {
                                 let counter = remember_entry_state(|| 0i32);
                                 counter.update(|v| *v += 1);
-                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                                crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                             })
                         } else {
                             NavEntry::new(key, move |ctx, _| {
                                 let counter = remember_entry_state(|| 0i32);
                                 counter.update(|v| *v += 1);
-                                crate::ui::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
+                                crate::components::Text::new(format!("Detail{id}-counter{}", counter.get())).build(ctx);
                             })
                         };
                         entry
@@ -2885,7 +2866,7 @@ mod tests {
     /// ExitTransition.None）瞬时切换——无旧页、无动画
     #[test]
     fn transition_spec_fade_and_none() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2894,15 +2875,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2963,7 +2944,7 @@ mod tests {
     /// 切瞬切符合平台惯例）；切换后单帧即稳态、可反复切换
     #[test]
     fn scene_strategy_switch_converges() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -2971,15 +2952,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -2992,15 +2973,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3052,7 +3033,7 @@ mod tests {
     /// （<2 条返回 None 落空）、SinglePane 兜底——验证链序与回退语义
     #[test]
     fn scene_strategy_chain_priority_and_fallback() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         /// 三栏场景：一列渲染全部 entries（自定义 Scene 形态）
         struct TriPaneScene<K: NavKey> { entries: Vec<NavEntry<K>> }
@@ -3066,7 +3047,7 @@ mod tests {
                 ctx: &mut ComposeCtx,
                 render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K>, bool),
             ) {
-                crate::ui::layout_components::Column::new().build(ctx, |ctx| {
+                crate::layout::components::Column::new().build(ctx, |ctx| {
                     for e in &self.entries {
                         render_entry(ctx, e, false);
                     }
@@ -3089,15 +3070,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3148,7 +3129,7 @@ mod tests {
     /// （若覆盖失效回退默认 fade，旧页会保留一整个过渡期）
     #[test]
     fn entry_transition_override_wins_over_display_default() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3157,16 +3138,16 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         // Detail 覆盖双向为 none（瞬时）——Settings 不覆盖（对照组）
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                         .transition_spec(NavTransitionSpec::none())
                         .pop_transition_spec(NavTransitionSpec::none())
@@ -3238,7 +3219,7 @@ mod tests {
     /// 求值与 `SlideAndFade*` 原语分支：中间帧双页同树、完成后旧页移除
     #[test]
     fn transition_shared_axis_midframe() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3248,15 +3229,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3300,7 +3281,7 @@ mod tests {
     /// `pop_transition_spec`（none——瞬时单页）；两个 setter 必须独立生效
     #[test]
     fn transition_specs_selected_per_direction() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let bs = NavBackStack::<TestRoute>::with_initial(TestRoute::Home);
         let mut composer = Composer::new();
@@ -3310,15 +3291,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })
@@ -3363,7 +3344,7 @@ mod tests {
     /// 原 scene 内容；scene_key/entries 透传；链式应用（外层后加入）
     #[test]
     fn scene_decorator_wraps_content() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
 
         /// 记录式装饰器——在 scene 内容前追加一行文本（模拟底部导航栏）
         struct BannerDecorator { label: &'static str }
@@ -3382,7 +3363,7 @@ mod tests {
                         render_entry: &dyn Fn(&mut ComposeCtx, &NavEntry<K2>, bool),
                     ) {
                         // 装饰内容（顶部）
-                        crate::ui::Text::new(format!("[{}]", self.label)).build(ctx);
+                        crate::components::Text::new(format!("[{}]", self.label)).build(ctx);
                         // 原 scene 内容
                         self.inner.content(ctx, render_entry);
                     }
@@ -3398,15 +3379,15 @@ mod tests {
             composer.compose(|ctx| {
                 NavDisplay::new(&bs, |ctx, key| match key {
                     TestRoute::Home => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("HomeScreen").build(ctx);
+                        crate::components::Text::new("HomeScreen").build(ctx);
                     }),
                     TestRoute::Settings => NavEntry::new(key.clone(), |ctx, _| {
-                        crate::ui::Text::new("SettingsScreen").build(ctx);
+                        crate::components::Text::new("SettingsScreen").build(ctx);
                     }),
                     TestRoute::Detail(id) => {
                         let id = *id;
                         NavEntry::new(key.clone(), move |ctx, _| {
-                            crate::ui::Text::new(format!("Detail{id}")).build(ctx);
+                            crate::components::Text::new(format!("Detail{id}")).build(ctx);
                         })
                     }
                 })

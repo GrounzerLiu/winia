@@ -1,650 +1,454 @@
-# Winia v2 — 架构设计文档
+# Winia — architecture
 
-> ⚠ 早期设计稿，部分内容过时。本文"设计原则现状对照"章节已随 compose-core 更新。
-> 版本: 0.2.0  
-> 状态: 设计阶段  
-> 目标: 基于 winit + skia-safe 的声明式跨平台 GUI 框架，架构对标 Jetpack Compose
+Winia is a declarative GUI framework for Rust. `winit` owns the window and the event loop,
+`skia-safe` does the drawing, and everything between the two is modelled on Jetpack Compose:
+composition over a slot table, an incremental recompose loop, an immutable `Modifier` chain, and a
+`Constraints → Measure → Place` layout pass.
 
+This document describes the tree as it is. For how the rewrite was planned, and for the decisions
+taken along the way, see [`v2-design-notes.md`](v2-design-notes.md) — a dated record.
+
+- crate `winia` 0.2.0, edition 2024
+- `winit` 0.31.0-beta.3, `skia-safe` 0.99.0
+
+## Workspace
+
+| crate | what it is |
+| --- | --- |
+| `winia` | the framework: runtime, layout, components, renderer, app |
+| `winia-macros` | the two attribute macros (`composable`, `composable_keyed`) and the four function macros (`app_root!`, `run_app!`, `compose!`, `keyed_stmt!`) a caller uses |
+| `skiwin` | window creation and the Skia surface: Vulkan → GL → CPU/softbuffer, first that opens wins |
+| `material-shapes` | Material 3 shape geometry (the morphing used by `MaterialShapes`) |
+
+`winia` depends on the other three by path. Nothing depends on `winia`.
+
+## Layers
+
+```mermaid
 ---
-
-## 一、项目哲学
-
-### 为什么重构？
-
-Winia v1 (D:\winia) 是一个功能可用的原型，但存在以下结构性问题：
-
-| 问题 | 影响 |
-|------|------|
-| `ItemData` 25+ 字段，职责混乱 | 布局/状态/动画/事件全耦合在一个 struct |
-| `ItemEvent` 22 个字段，1100+ 行 | 事件系统无法扩展，`impl_noop!` 宏难以调试 |
-| `Shared<T>` 用 PhantomData 区分读写 | 类型别名爆炸（SharedF32, SharedBool...），tokio 强依赖 |
-| 缺少组合引擎层 | 状态变化直接触发全量重算，无批处理/依赖追踪 |
-| 布局与绘制耦合 | Flex 布局 60000 行，测量/布局/绘制逻辑交错 |
-| `unwrap()`/`panic!()` 泛滥 | 渲染路径 crash = 整个窗口消失 |
-
-### 设计原则
-
-1. **声明式优先** — 用户描述 UI 是什么，框架处理如何渲染
-2. **分层清晰** — 每层有明确的职责边界，可独立测试
-3. **纯 Rust** — 不使用宏 DSL，Builder + 闭包实现声明式 API
-4. **零魔法** — 不依赖 proc-macro 做语法变换（现有 proc-macro 仅用于属性生成）
-5. **增量更新** — 状态变化只触发受影响的 composable 重组
-6. **错误可恢复** — 崩溃边界，渲染失败不影响窗口存活
-
-### 设计原则现状对照（2026-08，compose-core 分支）
-
-> 上述原则是**设计意图**。演进后部分偏离，如实记录，避免后来者按过时原则推断现状。
-
-| 原则 | 现状 | 说明 |
-|------|------|------|
-| 1 声明式优先 | ✅ 落实 | Builder + 闭包 + `ComposeCtx`，组合/物化/布局三层分离 |
-| 2 分层清晰 | ⚠️ 部分 | 物化器已拆出（`core/materialize.rs`）；`app.rs`（事件+焦点+选择+IME）与 `composer.rs`（组合+依赖调度）仍偏大 |
-| 3 纯 Rust / 不用宏 DSL | ❌ 已偏离 | `#[composable]` 过程宏（`winia-macros`）是组合 API 的核心——嵌套 composable 靠它注入语句上下文；"宏最小化"为当前口径 |
-| 4 零魔法 | ❌ 已偏离 | 宏 + thread_local 依赖追踪（`DEP_BUFFER`/`DEP_MODE`——P2-3 已去裸指针，数据缓冲方案）；依赖注册是隐式桥接 |
-| 5 增量更新 | ✅ 落实 | slot 级 dirty + Skip 子树恢复 + 两段式依赖（组合依赖→重组 / 布局依赖→只重测不重组） |
-| 6 错误可恢复 | ❌ 未落实 | 渲染/测量路径 panic 直接崩窗口，无崩溃边界（cleanup-plan P3-3 待办） |
-
+title: winia module layers
 ---
+%% See docs/architecture.md § Layers.
+%% Solid edges are the direction a module may depend in; dashed edges are the
+%% upward ones that exist on purpose, each labelled with what it is.
+flowchart TB
+    subgraph L6["layer 6"]
+        app["app<br/>winit application · window · frame loop"]
+    end
+    subgraph L5["layer 5"]
+        cmp["components"]
+        thm["theme"]
+        ovl["overlay"]
+        nav["nav"]
+    end
+    subgraph L4["layer 4"]
+        rnd["render"]
+    end
+    subgraph L3["layer 3"]
+        rt["runtime"]
+        itr["interaction"]
+        smt["semantics"]
+        sel["selection"]
+        nsc["nested_scroll"]
+        eff["effect"]
+        trs["transition"]
+    end
+    subgraph L2["layer 2"]
+        lay["layout"]
+        mod["modifier"]
+    end
+    subgraph L1["layer 1"]
+        txt["text"]
+        ani["animation"]
+        inp["input"]
+    end
+    subgraph L0["layer 0"]
+        unt["unit"]
+        gfx["graphics"]
+    end
 
-## 二、整体分层
+    L6 --> L5
+    L5 --> L4
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+    L1 --> L0
 
+    acc["accessibility"]
+    rt -. "the overlay queue — the one inversion" .-> ovl
+    unt -. "AnimatableValue impls" .-> ani
+    gfx -. "AxisValue can be animated" .-> rt
+    itr -. "the ripple's animation state" .-> ani
+    acc -. "publishes semantics' tree" .-> smt
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    App / Platform                         │
-│  run_app(), winit 集成, 窗口生命周期, 事件循环              │
-├──────────────────────────────────────────────────────────┤
-│                    UI Components                          │
-│  Button, Text, TextField, Slider, Checkbox, Switch, ...   │
-│  纯 composable 函数，不包含布局逻辑                         │
-├──────────────────────────────────────────────────────────┤
-│                    Modifier System                        │
-│  size, padding, background, border, clip, clickable, ...  │
-│  不可变链式调用，解耦外观/行为/布局                          │
-├──────────────────────────────────────────────────────────┤
-│                    Layout System                          │
-│  Column, Row, Box, LazyColumn, 自定义 MeasurePolicy        │
-│  标准三阶段: Constraints → Measure → Place → Draw          │
-├──────────────────────────────────────────────────────────┤
-│                 Composition Engine                        │
-│  SlotTable / Composer / Recomposer / ComposeCtx            │
-│  增量更新、生命周期、状态依赖追踪、重组调度                   │
-├──────────────────────────────────────────────────────────┤
-│                   Snapshot State                          │
-│  State<T> — 可观察值容器，读自动追踪依赖，写触发重组         │
-│  derived() — 派生状态                                      │
-│  remember() — 在组合中持久化状态                            │
-├──────────────────────────────────────────────────────────┤
-│              Render / Platform                            │
-│  skiwin (Skia + Vulkan/GL/CPU 渲染后端)                    │
-│  material_color_utilities (Material Design 颜色工具)        │
-└──────────────────────────────────────────────────────────┘
-```
 
-### 各层职责
+The tree is layered, but not strictly: a module may name the ones below it freely, and a handful of
+edges do point up. One rule **is** enforced, because breaking it would mean a lower layer drifting
+into the component model — `layout`, `runtime`, `modifier`, `interaction`, `input`, `selection`,
+`semantics`, `accessibility`, `unit`, `text`, `render`, `animation`, `graphics` and `transition` must
+not name `components`, `theme`, `app` or `overlay` in production code. There is exactly one exception,
+the overlay queue below.
 
-| 层 | 核心文件 | 职责 |
-|----|---------|------|
-| State | `core/state.rs` | 响应式值容器，依赖追踪，变化通知 |
-| Composition | `core/composer.rs` | 组合树管理，SlotTable，重组调度 |
-| Modifier | `modifier/mod.rs` | 链式修饰符抽象，Layout/Draw/Input 三类 |
-| Layout | `layout/*.rs` | Constraints，MeasurePolicy trait，Column/Row/Box/LazyColumn |
-| Components | `ui/*.rs` | 具体的 composable 函数（Button, Text 等） |
-| Render | `render/*.rs` | Skia 绘制桥接，脏区域追踪 |
-| Input | `input/*.rs` | 事件枚举，命中测试，手势识别，焦点管理 |
-| Animation | `animation/*.rs` | `animateFloatAsState`, `AnimatedVisibility`, 过渡 |
-| Theme | `theme/*.rs` | Material Theme，Colors，Typography，Shapes |
-| App | `app/*.rs` | `run_app()` 入口，winit 窗口封装 |
+| layer | modules | what lives there |
+| --- | --- | --- |
+| 0 | `unit` | `Dp`, `Sp`, `Px`, `Density`, `Offset`, `Size`, `TextUnit` |
+| 0 | `graphics` | `Color`, `Shape`, `Brush`, `ContentScale`, the icon/image payloads, `skia_color` |
+| 1 | `text` | font faces, `TextStyle`, paragraph building and caching, `TextField`'s text engine, selection |
+| 1 | `animation` | `Animatable`, specs, interpolators, `AnimatedVisibility`'s vocabulary |
+| 1 | `input` | the pointer and keyboard event vocabulary, the gesture state machine |
+| 2 | `layout` | `Constraints`, `LayoutNode` and its arena, `MeasurePolicy`, `Column`/`Row`/`Stack`/`Flow`, lazy lists, subcomposition |
+| 2 | `modifier` | the `Modifier` chain: what it is, how it is walked, what each element means |
+| 3 | `runtime` | `Composer`, the slot table, `ComposeCtx`, `State` and its handles, composition locals, materialization |
+| 3 | `interaction`, `semantics`, `selection`, `nested_scroll`, `effect` | the interaction source, the accessibility tree, text selection, nested-scroll plumbing, effects |
+| 3 | `transition` | the shared-element machinery: flights, bounds, the measure override |
+| 4 | `render` | walking the arena onto a Skia canvas |
+| 5 | `components`, `theme`, `overlay`, `nav` | the 51 components, the M3 theme, the overlay runtime, Navigation 3 |
+| 6 | `app` | the winit application, the window, the frame loop |
+| — | `debug`, `accessibility`, `anim_trace`, `icon` | the dev-server channel, the UIA bridge, the frame trace, the icon tables |
 
+The edges that go up, and why each is there:
+
+| edge | what it is |
+| --- | --- |
+| `runtime` → `overlay` | the overlay queue — the one sanctioned inversion, below |
+| `unit` → `animation` | `impl AnimatableValue for Dp/i32/Sp/Offset/Size`: the unit types say how they interpolate, which is the alternative to `animation` knowing every unit type |
+| `graphics` → `runtime` | `impl From<&Animating<f32>> for AxisValue` — a variable-font axis can be animated, so `graphics` has to name the handle |
+| `interaction` → `animation`, `runtime` | `MutableInteractionSource` drives the ripple's animation state |
+| `accessibility` → `semantics` | the UIA bridge publishes the tree `semantics` builds; the frame loop fills the snapshot once per rendered frame |
+| `layout` → `text` | a paragraph's measured size is a constraint input |
+| `modifier` → everything at layer ≤ 3 | the chain is what a caller attaches to any of them |
+
+`text` is the one module whose *facade* (`text.rs`) has no dependencies at all: the submodules do
+the naming (`text/field.rs` reaches `layout` and `modifier`, because a text field is a measure-time
+policy as well as a text engine).
+
+### The one inversion
+
+`runtime` names `crate::overlay::OverlayDesc` in three places: `ComposeCtx::open_overlay` queues one,
+`Composer` holds the queue, and `Composer::take_overlays` hands it to the frame that hosts it. The
+record is the overlay layer's — `PopupPosition`, `OverlayAnimSpec`, the dismissal flags — and the
+runtime does exactly one thing to it: it stamps `local_snapshot` with the composition locals captured
+at the call site, because an overlay composes in its own `Composer` after those providers have
+popped and cannot read the main tree's theme or direction otherwise. Moving the record down to
+satisfy the direction would take `PopupPosition`, `OverlayAnimSpec` and the four presentation helpers
+with it, which places five things worse than it fixes one. The edge is deliberate and narrow.
+
+## The module tree
+
+"Lines" below is production code: the file minus whatever `#[cfg(test)] mod …` blocks it carries.
+
+| module | production lines | holds |
+| --- | --- | --- |
+| `runtime/` | 7 submodules | `composer.rs` (7.0k), `materialize.rs`, `state.rs`, `composition_local.rs`, `state_list.rs`, `density.rs`, `lifecycle.rs` |
+| `layout/` | 15 submodules | `node.rs` (the arena), `constraints.rs`, `flex.rs` + `column.rs`/`row.rs`/`flow.rs`, `lazy_column.rs`, `components.rs` (`Column`/`Row`/`Stack`/`Spacer`/`Flow*`), `subcompose.rs`, `box_with_constraints.rs`, `adaptive.rs`, `axis.rs`, `direction.rs`, `sizing.rs` |
+| `components/` | 51 files, flat | one file per component (`button.rs`, `text_field.rs`, `date_picker.rs`, …) plus `components.rs`, the facade |
+| `modifier.rs` | 3.0k | `Modifier`, `ModifierElement`, the node traits |
+| `render.rs` | 2.3k | the arena walk, layers, clips, per-element painting |
+| `app/` | 4 submodules | `app.rs` (3.4k — the loop and the routing), `window.rs`, `overlay_host.rs`, `gesture.rs`, `scroll.rs` |
+| `graphics/` | 4 submodules | `color.rs`, `shape.rs`, `layer.rs`, `brush.rs` |
+| `text/` | 11 submodules | `font.rs`, `style.rs`, `paragraph.rs`, `text_layout.rs`, `field.rs`, `selection.rs`, `transformation.rs`, `decor.rs`, `inline_drawable.rs`, `index_bimap.rs` |
+| `nav.rs` | 2.0k | Navigation 3: back stack, scene transitions |
+| `transition.rs` | 1.0k | flights, `SharedBounds`, the measure override, overlay clips |
+| `theme.rs` | 753 | `WiniaTheme`, `ThemeColors`, `Typography`, `WindowTheme`, `AppliedTheme` |
+| `semantics.rs` | 862 | the accessibility tree and its JSON |
+| `accessibility.rs` | 1.3k | the Windows UIA bridge (feature `accessibility`) |
+| `overlay.rs` | 597 | the overlay runtime: `Popup`, `Dialog`, `OverlayDesc` |
+| `animation/` | 2 submodules | `animation.rs` (the facade), `interpolator.rs`, `visibility.rs` |
+| `unit.rs`, `interaction.rs`, `nested_scroll.rs`, `effect.rs`, `selection.rs`, `debug/`, `icon/`, `anim_trace.rs` | | as the layers table says |
+
+## A frame
+
+```mermaid
 ---
-
-## 三、核心系统设计
-
-### 3.1 State 响应式系统
-
-**类比**: Compose 的 `MutableState<T>` + `derivedStateOf`
-
-```
-用户代码                     框架内部
-─────────                    ────────
-ctx.remember(|| 0)     →    SlotTable 存储 State<T>
-state.get()             →    thread-local 追踪依赖
-state.set(1)            →    通知 Composer 标记 dirty
-                          →  下一帧批量重组
-```
-
-**关键决策**:
-- 使用 `thread_local!` 而非显式传参来追踪依赖——让 `State::get()` 在 composable 函数中自动生效
-- 使用 `PartialEq` 去重——`set()` 值未变化时跳过通知
-- `Clone` 廉价（Arc clone），可安全地在闭包间传递
-- 不再区分 Source/Derived 类型参数，统一为 `State<T>`
-- 不依赖 tokio（异步功能作为 optional feature）
-
-**API**:
-
-```rust
-// 创建
-let count = ctx.remember(|| 0i32);         // 组合内状态
-let name = State::new(String::new());       // 外部状态，可传入 composable
-
-// 读写
-let v = count.get();                        // 读，自动追踪依赖
-count.set(10);                              // 写，PartialEq 去重
-count.update(|v| *v += 1);                  // 原地更新，始终通知
-
-// 派生
-let doubled = count.derive(|v| v * 2);      // 自动追踪 count 的变化
-```
-
-### 3.2 Composition 引擎
-
-**类比**: Compose 的 Composer + SlotTable
-
-**核心数据结构**: SlotTable（槽位表）
-
-```
-组合过程:
-  Composer.compose(|ctx| {
-      ctx.start_node(key=1)          // 写入 SlotTable[0] → Group(key=1)
-          ctx.remember(|| "hello")   //    在 SlotTable[0] 中存状态
-          ctx.start_node(key=2)      //    写入 SlotTable[1] → Group(key=2)
-              ctx.remember(|| 42)    //        在 SlotTable[1] 中存状态
-          ctx.end_node()             //    current++
-      ctx.end_node()                 // current++
-  })
-```
-
-**重组算法**（简化版）:
-
-1. `State.set()` → 通知 `Composer.request_recomposition()`
-2. Recomposer 批量收集 → 下一帧执行
-3. `Composer.recompose()` → 从根开始重新遍历
-4. SlotTable.reset() → 指针归零
-5. 重新执行 composable 函数，复用 key 匹配的 Slot
-6. 多余 Slot 被 truncate() 清理
-7. 只对变化的 LayoutNode 执行 `measure()` + `place()` + `draw()`
-
-**待优化**: 当前原型使用 `Vec<Slot>` + 索引指针。后续迁移到 **Gap Buffer** 实现 O(1) 插入/删除。
-
-### 3.3 Modifier 系统
-
-**类比**: Compose 的 `Modifier` 链
-
-**核心抽象**:
-
-```rust
-pub trait ModifierNode {
-    /// 在测量约束上施加限制（LayoutModifier）
-    fn measure(&self, constraints: Constraints, next: &dyn MeasureFn) -> Size;
-    
-    /// 调整子节点位置（LayoutModifier）
-    fn place(&self, position: Point, next: &dyn PlaceFn);
-    
-    /// 在绘制前后插入逻辑（DrawModifier）
-    fn draw(&self, canvas: &Canvas, bounds: Rect, next: &dyn DrawFn);
-
-    /// 处理输入事件（PointerInputModifier）
-    fn on_pointer_event(&self, event: &PointerEvent) -> bool;
-}
-```
-
-**链式语义**（从左到右 = 从外到内）:
-
-```rust
-Modifier::size(100, 100)     // ① 最外层: 限制盒子 100×100
-    .padding(10)              // ② 往内: 留 10px 边距
-    .background(Color::RED, RoundedCornerShape(8))  // ③ 最内层: 红底圆角
-    .clickable(on_click)      // ④ 点击区域 = ② 的 inner bounds
-// 内容绘制在 ③ 之上
-```
-
-**三类 Modifier**:
-
-| 类型 | 示例 | 影响阶段 |
-|------|------|---------|
-| LayoutModifier | size, padding, margin, fillMaxWidth | Measure + Place |
-| DrawModifier | background, border, clip, shadow | Draw |
-| PointerInputModifier | clickable, focusable, scrollable | Input |
-
-### 3.4 Layout 系统
-
-**三阶段**: Constraints → Measure → Place → Draw
-
-```
-1. Constraints: 父节点告诉子节点可用空间范围 (min/max width/height)
-2. Measure:    子节点根据 Constraints 计算所需尺寸
-3. Place:      父节点为子节点分配位置 (x, y)
-4. Draw:       按顺序绘制
-```
-
-**核心类型**:
-
-```rust
-#[derive(Copy, Clone)]
-pub struct Constraints {
-    pub min_width: f32,
-    pub max_width: f32,
-    pub min_height: f32,
-    pub max_height: f32,
-}
-
-pub trait MeasurePolicy {
-    fn measure(&self, children: &[LayoutNode], constraints: Constraints) 
-        -> (Size, Vec<Placement>);  // 返回自身尺寸 + 每个子节点的位置
-}
-```
-
-**布局原语**:
-
-| 原语 | Compose 对应 | 功能 |
-|------|-------------|------|
-| Column | Column | 垂直排列子元素 |
-| Row | Row | 水平排列子元素 |
-| Box | Box | 层叠子元素（Z 轴） |
-| LazyColumn | LazyColumn | 虚拟滚动列表（仅渲染可见项） |
-| 自定义 | Layout composable | 实现 MeasurePolicy trait |
-
-### 3.5 事件 / 输入系统
-
-**分层事件处理**:
-
-```
-winit WindowEvent
-    │
-    ▼
-Event Adapter  ──→  内部 UiEvent 枚举
-    │
-    ▼
-Hit Test  ──→  确定事件目标（按 LayoutNode 的 bounds 碰撞检测）
-    │
-    ▼
-Event Dispatch  ──→  冒泡/捕获传播
-    │
-    ▼
-Gesture Detector  ──→  识别手势（单击/双击/长按/滑动/拖拽）
-    │
-    ▼
-Focus Manager  ──→  Tab 键焦点链
-```
-
-**统一事件枚举**（替代 v1 的 22 个字段）:
-
-```rust
-pub enum UiEvent {
-    Pointer(PointerEvent),     // 合并 click_input + pointer_button + pointer_moved + cursor_move
-    Key(KeyEvent),             // keyboard_input
-    Focus(FocusEvent),         // focus_changed
-    Scroll(ScrollEvent),       // mouse_wheel
-    Ime(ImeEvent),             // ime_input
-}
-```
-
-### 3.6 用户 API（最终形态）
-
-```rust
-use winia::prelude::*;
-
-fn counter(ctx: &mut ComposeCtx) {
-    let count = ctx.remember(|| 0i32);
-
-    Column::new()
-        .modifier(Modifier::fill_max_size().padding(16.0))
-        .arrangement(Arrangement::Center)
-        .alignment(Alignment::CenterHorizontally)
-        .build(ctx, |ctx| {
-            // 标题
-            Text::new(format!("Count: {}", count.get()))
-                .style(TextStyle::headline_large())
-                .build(ctx);
-
-            Spacer::vertical(16.0).build(ctx);
-
-            // 按钮
-            Button::new()
-                .on_click({ let count = count.clone(); move || count.update(|v| *v += 1) })
-                .build(ctx, |ctx| {
-                    Text::new("Increment").build(ctx);
-                });
-
-            // 条件渲染
-            if count.get() > 0 {
-                Spacer::vertical(8.0).build(ctx);
-                OutlinedButton::new()
-                    .on_click(move || count.set(0))
-                    .build(ctx, |ctx| {
-                        Text::new("Reset").build(ctx);
-                    });
-            }
-        });
-}
-
-fn main() {
-    run_app(counter)
-        .title("Counter")
-        .size(400, 300);
-}
-```
-
-### 3.7 与 Jetpack Compose 的对照
-
-| Compose | Winia v2 | 差异 |
-|---------|---------|------|
-| `MutableState<T>` | `State<T>` | 概念一致，实现用 RwLock 而非 snapshot |
-| `remember { }` | `ctx.remember(|| ...)` | 需要 ctx 参数（Rust 无隐式 receiver） |
-| `derivedStateOf { }` | `state.derive(|| ...)` | 同步语义 |
-| `Modifier.xxx()` | `Modifier::xxx()` → `.modifier(m)` | 链式 API |
-| `Column { }` | `Column::new().build(ctx, \|ctx\| { })` | 需要 `.build()` 终结器 |
-| `LaunchedEffect` | `ctx.launch_effect(key, ...)` | 基于 async/await |
-| `@Composable` 函数 | 普通 Rust 函数，接收 `&mut ComposeCtx` | 无特殊标记 |
-| Snapshot 系统 | 简化版（单线程，无 MVCC） | 无需并发快照隔离 |
-
-### 3.8 ScrollState — 滚动控制
-
-**类比**: Compose 的 `ScrollState`
-
-`ScrollState` 是 Winia 中可滚动容器的状态句柄。它存储当前滚动偏移并提供编程滚动能力。
-
-```rust
-/// 创建 ScrollState（须在 composable 中用 remember 保持）
-let scroll_state = ctx.remember(|| ScrollState::new()).get();
-
-/// 应用于可滚动容器
-Column::new()
-    .modifier(Modifier::new()
-        .size(200.0, 150.0)
-        .vertical_scroll(scroll_state))  // ← 绑定 ScrollState
-    .build(ctx, |ctx| {
-        for i in 0..30 {
-            Text::new(format!("Line {}", i)).build(ctx);
-        }
-    });
-```
-
-**核心字段**:
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `offset` | `State<f32>` | 当前滚动偏移量（像素），可读写 |
-| `is_scroll_in_progress` | `State<bool>` | 是否正在滚动 |
-
-**方法**:
-- `ScrollState::new()` — 创建偏移为 0 的滚动状态
-- `scroll_to(value, max_offset)` — 立即跳到指定位置（自动 clamp 到 `[0, max_offset]`）
-
-**注意事项**:
-- `ScrollState` 不是 `State`，它是内部包含 `State<f32>` 的容器。需要 `ctx.remember().get()` 获得克隆（廉价 Arc clone）。
-- 滚动偏移由 `MouseWheel` 事件自动更新，不需要手动管理。
-- 渲染时自动应用 `canvas.translate(0, -offset)` 进行视口平移。
-- 命中测试 (`hit_test`) 自动加上 scroll offset，保证点击坐标正确映射。
-
-### 3.9 remember 与 remember_at_key — 状态持久化
-
-**类比**: Compose 的 `remember { mutableStateOf(...) }`
-
-`remember` 是 Winia 中跨组合（compose）持久化状态的核心原语。每次调用 `compose()` 时，slot 系统会匹配 key，返回上一次的同一个实例。
-
-```rust
-// 基本用法
-let count = ctx.remember(|| 0i32);
-
-// 状态管理
-let show_window = ctx.remember(|| false);
-let scroll_state = ctx.remember(|| ScrollState::new()).get();
-let focus_req = ctx.remember(|| FocusRequester::new()).get();
-```
-
-**内部机制**:
-1. `remember` 为每个调用分配递增的 `remember_counter` 作为 slot key
-2. 在 SlotTable 中查找 key → 存在则返回已有的 `State<T>`
-3. 不存在则执行 `init` 创建新 `State<T>` 并存入 slot
-4. slot 跨 compose 保持，直到对应的 composable 被移除
-
-**跨分支持久化陷阱**:
-
-`remember` 的 key 由 `remember_counter` 决定。如果同一个 composable 在不同分支中（如 `if`/`else`）的 `remember` 调用次数不同，后续 compose 中 key 会偏移，导致状态丢失。
-
-```rust
-// ❌ 问题代码：show_alt 分支改变 remember_counter
-let show_window = ctx.remember(|| false);
-if show_alt.get() {
-    ctx.remember(|| "alt");  // ← 消耗了一个 key
-} else {
-    // else 分支没有 remember，key 少了一个
-    Button::new()...build(ctx, |ctx| { ... });  // ← Button 内部有 remember
-}
-// 这里 ctx.remember(|| 0u64) 的 key 取决于 show_alt →
-// 结果：每次 show_alt 变化时，这个 remember 得到不同的 key，
-// 导致旧的 State 找不到，值重置为 0！
-```
-
-**解决方案：`remember_at_key`**
-
-```rust
-// ✅ 固定 key 存储，不受分支影响
-let created_id = ctx.remember_at_key(u64::MAX, || 0u64);
-```
-
-`remember_at_key(key, init)` 使用指定的固定 key 存储状态，而非自动递增的 `remember_counter`。适合需要跨分支稳定持久化的关键值，如窗口句柄、组件 ID 等。
-
-**何时使用**:
-| 场景 | 使用 |
-|------|------|
-| 普通状态（计数、开关） | `ctx.remember(|| ...)` |
-| 跨分支稳定持久化 | `ctx.remember_at_key(fixed_key, || ...)` |
-| 引用外部 State | 直接传入 `State::new(...)` |
-
-
+title: a frame
 ---
+%% See docs/architecture.md § A frame.
+%% The whole loop is `PerWindow::recompose_layout_render` in app.rs.
+flowchart TB
+    ev["winit event<br/>routed by app.rs"]
+    st["State::set / update<br/>schedules the composers that read it"]
+    rec["Composer::recompose<br/>repeat until nothing is pending"]
+    mat["materialize<br/>slot tree becomes the LayoutNode arena<br/>nodes reused by slot key"]
+    lay["Composer::layout(constraints)<br/>measure + place"]
+    ovh["per overlay: its own Composer and tree<br/>laid out at the window size,<br/>positioned against its anchor"]
+    drw["render::render(nodes, root, canvas)<br/>then render_overlays"]
 
-## 四、模块目录结构
-
-```
-winia/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs                    # 公开 re-export
-│   │
-│   ├── core/                     # 运行时核心
-│   │   ├── mod.rs
-│   │   ├── state.rs              # State<T>, derive(), 依赖追踪
-│   │   └── composer.rs           # ComposeCtx, Composer, SlotTable
-│   │
-│   ├── modifier/                 # 修饰符系统
-│   │   ├── mod.rs                # Modifier 链, ModifierNode trait
-│   │   ├── layout_modifier.rs    # size, padding, margin, fillMax...
-│   │   ├── draw_modifier.rs      # background, border, clip, shadow
-│   │   └── input_modifier.rs     # clickable, focusable, scrollable
-│   │
-│   ├── layout/                   # 布局系统
-│   │   ├── mod.rs
-│   │   ├── constraints.rs        # Constraints
-│   │   ├── node.rs               # LayoutNode
-│   │   ├── policy.rs             # MeasurePolicy trait
-│   │   ├── column.rs             # Column
-│   │   ├── row.rs                # Row
-│   │   ├── box.rs                # Box
-│   │   └── lazy_column.rs        # LazyColumn（虚拟滚动）
-│   │
-│   ├── ui/                       # UI 组件 (composable 函数)
-│   │   ├── mod.rs
-│   │   ├── text.rs               # Text
-│   │   ├── button.rs             # Button, OutlinedButton, TextButton
-│   │   ├── text_field.rs         # TextField
-│   │   ├── checkbox.rs           # Checkbox（v2 新增）
-│   │   ├── switch.rs             # Switch（v2 新增）
-│   │   ├── slider.rs             # Slider
-│   │   ├── icon.rs               # Icon
-│   │   ├── image.rs              # Image
-│   │   ├── divider.rs            # Divider
-│   │   ├── progress.rs           # LinearProgress, CircularProgress
-│   │   └── scaffold.rs           # Scaffold（v2 新增）
-│   │
-│   ├── input/                    # 输入系统
-│   │   ├── mod.rs
-│   │   ├── event.rs              # UiEvent 枚举
-│   │   ├── hit_test.rs           # 命中测试
-│   │   ├── gesture.rs            # GestureDetector trait
-│   │   └── focus.rs              # FocusManager
-│   │
-│   ├── render/                   # 渲染
-│   │   ├── mod.rs
-│   │   ├── skia.rs               # Skia 绘制管道
-│   │   └── damage.rs             # 脏区域追踪
-│   │
-│   ├── theme/                    # 主题
-│   │   ├── mod.rs
-│   │   ├── colors.rs             # 基于 material_color_utilities
-│   │   ├── typography.rs         # TypeScale
-│   │   └── shapes.rs             # Shape 定义
-│   │
-│   ├── animation/                # 动画
-│   │   ├── mod.rs
-│   │   ├── core.rs               # animateFloatAsState, Animation<T>
-│   │   └── transition.rs         # AnimatedVisibility, 进入/退出过渡
-│   │
-│   └── app/                      # 应用壳
-│       ├── mod.rs
-│       ├── window.rs             # winit Window 封装
-│       └── runtime.rs            # run_app() 入口
+    ev --> st --> rec --> mat --> lay --> ovh --> drw
+    drw -. "layout-time writes<br/>(Backchannel / State)" .-> st
 ```
 
+The whole loop is `PerWindow::recompose_layout_render` in `app.rs`.
+
+1. **Event.** winit delivers a `WindowEvent`; `app.rs` routes it — pointer and key into
+   `app/gesture.rs`, wheel and drag into `app/scroll.rs`, and anything that lands on an overlay into
+   `app/overlay_host.rs`. A routed event usually writes a `State`, which is what schedules the rest.
+2. **Compose.** `Composer::recompose` runs the pending recompositions and repeats until no state is
+   left pending — a compose that dirties another composable is not a second frame.
+3. **Materialize.** The slot tree becomes the `LayoutNode` arena: slots are reused by stable key,
+   nodes that left the tree run their `on_remove`, and descriptions are turned into nodes.
+4. **Layout.** `Composer::layout(constraints)` measures and places the arena from the root.
+5. **Overlays.** Each overlay is its own `Composer` and its own tree, laid out at the window's size,
+   positioned against its anchor, and hit-tested before the page.
+6. **Draw.** `render::render(nodes, root, canvas)` walks the arena and paints. Overlays draw on top,
+   through `render_overlays`.
+7. **Read back.** State written during layout (a size the parent needs, a scroll extent) is read by
+   the next frame's compose through the dependency frames below.
+
+Density is provided for the whole pass: `runtime::density::with_density` wraps compose, layout and
+draw so that `Dp`/`Sp`/`Px` resolve against the window's scale factor rather than the standard 1.0.
+
+## The composition runtime
+
+`Composer` (`runtime/composer.rs`) owns the slot table, the recomposition queue, the dependency
+maps, and the node arena. `ComposeCtx` is the handle a `#[composable]` body uses: `remember`,
+`next_key`, `start_restartable_group`, `compose`, `layout`, the providers.
+
+**The slot table** is the tree of positions. A composable's call site and its keys identify a slot;
+a value remembered in that slot survives recomposition, and a slot that disappears runs its
+teardown. `composable_keyed` and `keyed_stmt` are how a loop says which key identifies each
+iteration — without them, inserting at the front of a list re-associates every slot below it.
+
+**Materialization** (`runtime/materialize.rs`) turns the composed description tree into the
+`LayoutNode` arena the layout and the renderer use. Reuse happens here: a node whose slot key is
+unchanged keeps its identity, so measure caches and animation state survive.
+
+**Composition locals** (`runtime/composition_local.rs`) are the implicit context: theme, layout
+direction, density, text style. A provider pushes a value for its subtree; a reader asks for the
+current one. Values are captured in the tree, never read from a global at draw time.
+
+**Dependency frames** are what makes recomposition incremental. A read inside a compose pass records
+a dependency on that `State`; a write schedules exactly the subscribers that read it. Three modes
+exist — compose, layout, and draw — and `begin_*_deps_with_queue` is how a pass declares what its
+reads should subscribe.
+
+## State
+
+```mermaid
 ---
-
-### 3.8 增量重组（v2 最新）
-
-**类比**：Compose 的 Positional Memoization
-
-```
-State:count.set(1) → notify_state_changed
-  → Composer.compose() 消费 PENDING_STATES
-  → 查 slot_deps[state_id] → 标记 SlotTable.dirty_keys
-  → 重组时 start_slot 检查 dirty → clean 跳过 composable 执行
-```
-
-**三层脏追踪**：
-
-| 层 | 位置 | 说明 |
-|----|------|------|
-| 全局脏标志 | `State::notify → set_global_dirty` | AtomicBool，快速检查 |
-| State→Slot 依赖 | `get() → registrar → record_dep` | 知道哪个 slot 读了哪个 state |
-| Slot 跳过 | `SlotTable::start_slot` 检查 `dirty_keys` | clean 分支不执行 |
-
-### 3.9 焦点系统（v2 最新）
-
-- **FocusRequester** — `ctx.remember(|| FocusRequester::new()).get()`，`request_focus()` 请求焦点
-- **Modifier.focus_requester(&fr)** — 不消耗所有权（`From<&FocusRequester>`）
-- **Tab 键遍历** — `focus_next()` 深度优先 + `focus_next` 事件
-- **焦点持久化** — `AppState.focused_id: Option<u64>` 跨 compose 保持，compose 后 `focus_by_id` 恢复
-
-### 3.10 动画系统（v2 最新）
-
-- `animate_as_state(initial, target, duration, easing)` → `State<f32>`，每帧自动插值
-- `animate_to(state, target, duration, easing, on_finish)` — 改变目标+完成回调
-- 5 种缓动 + 全局动画列表 + `tick()` 每帧推进 + 自动 request_redraw
-
-### 3.11 DevTools（v2 最新，可选 feature）
-
-- `debug-server` feature flag，默认不启用
-- 本地 HTTP 服务器 `http://localhost:9999`
-- `/screenshot` BMP 按需截图，`/tree` 组件树 JSON，`/click?x&y` 模拟点击
-- `/shutdown` 优雅退出，`/event?type=...` 通用事件
-- EventLoopProxy 唤醒 + ControlFlow::Poll 响应
-
+title: what a read and a write each do
 ---
+%% See docs/architecture.md § State.
+%% There is no second delivery channel: a write goes through the cell's
+%% StateSignal and reaches exactly the composers that read it.
+flowchart TB
+    get["x.get() inside a pass"] --> dep["records a dependency<br/>DepMode::Compose / Layout / Draw"]
+    dep --> cell[("the cell<br/>value + StateSignal id")]
 
-## 五、开发路线图
+    set["x.set(v) / x.update(f)"] --> eq{"equal to the current value?"}
+    eq -- "yes — PartialEq dedupe" --> noop["nothing happens"]
+    eq -- no --> fan["fan out to the composers<br/>that are still alive"]
+    cell --> fan
+    fan --> act["compose pass: recompose that subtree<br/>layout pass: re-measure next frame<br/>draw pass: repaint"]
+```
 
-> Status: **historical — this is the v1 plan, kept for its reasoning, NOT a backlog.** Every phase below
-> has shipped: `Text`/`Button`/`Column`/`Row`/`Box`, the modifier chain, `LazyColumn`, the animation
-> system, the theme, the examples, the benchmark. The unchecked boxes are the plan as it was written —
-> most predate the code that closed them. Do not read an empty box here as outstanding work: the live
-> backlog is `docs/state-architecture-progress.md`, plus the per-area gap docs
-> (`docs/semantics-gap.md`, `docs/animation-gap-analysis.md`, `docs/shared-element-gaps.md`).
->
-> Companions: `docs/architecture-audit.md` (current structural review) and `docs/benchmarks.md`
-> (measured state of the frame).
+A write never names a channel: it goes through the cell's `StateSignal` and reaches exactly the
+composers that read it. What a write *does* when it arrives is the handle's whole contract:
 
-### Phase 1 — State + ComposeCtx 核心 ✅ 进行中
+| handle | a read | a write |
+| --- | --- | --- |
+| `State<T>` / `Reactive<T>` | subscribes | recompose **and** wake the event loop |
+| `Animating<T>` | subscribes | recompose only — the animation engine already asked for the frame |
+| `Visual<T>` | `peek`, no subscription | no recompose; the renderer reads it while drawing |
+| `Backchannel<T>` | `peek` | nothing; the next frame reads what was written |
 
-- [x] `State<T>` 响应式容器（读追踪、写通知、PartialEq 去重）
-- [x] `ComposeCtx` + `Composer` 骨架（SlotTable、key 管理）
-- [ ] `ctx.remember()` 功能完成
-- [ ] 单元测试：State 读写通知、remember 跨重组保持
+`runtime/state.rs`. A `State<T>` is an observable cell. Creation is **ownerless**: `State::new` is
+not bound to a composer, and `get()` is what subscribes the current pass. That is why a component can
+build a state in its constructor and hand it out without threading a composition context through.
 
-### Phase 2 — Modifier 链
+`StateList`/`StateMap` (`runtime/state_list.rs`) are the observable collections behind
+`mutableStateListOf`/`mutableStateMapOf`; they hand out snapshots so an iteration cannot observe a
+mutation mid-loop.
 
-- [ ] `Modifier` 链式结构
-- [ ] `LayoutModifier`: size, padding, margin, fillMaxWidth/Height
-- [ ] `DrawModifier`: background, border, clip
-- [ ] `PointerInputModifier`: clickable
+## Modifier
 
-### Phase 3 — Layout 布局
+`modifier.rs`. A `Modifier` is an immutable chain: every builder returns a new one, and
+`left to right` is `outer to inner`. The chain is a `Vec<ModifierElement>`, an enum whose variants
+carry the payload — `Layout`, `Draw`, `TextContent`, `TextFieldVisual`, `Background`, `GraphicsLayer`,
+and the rest.
 
-- [ ] `Constraints` 约束模型
-- [ ] `LayoutNode` + `MeasurePolicy`
-- [ ] `Column` / `Row` / `Box`
-- [ ] 完整的 Measure → Place → Draw 管道
+Elements are interpreted by kind, through the node traits: `DrawNode` and `DrawWrapNode` for
+painting, `ClickNode`/`PointerNode`/`KeyNode` for input, `LayoutModifierNode` for a measure-time
+transformation. A node trait's `measure` receives the constraints and returns the child's; `draw`
+receives the canvas and the node's rect. Both are called while walking the arena, so a modifier never
+allocates an object per frame to be honoured.
 
-### Phase 4 — 基础组件
+`LayoutWeight` and baselines are the two places where a child needs information from its parent
+across the chain: `layout_weight` records intent and the flex policy reads it, `align_by` records an
+alignment line and the container reads it after measuring.
 
-- [ ] `Text`
-- [ ] `Button`
-- [ ] `Column` / `Row` / `Box` 集成
-- [ ] 首个可运行示例（Counter）
+## Layout
 
-### Phase 5 — 输入事件
+`layout/node.rs` is the arena, `layout/constraints.rs` the constraint algebra, and the primitives
+follow Compose's three phases:
 
-- [ ] `UiEvent` 统一枚举
-- [ ] 命中测试
-- [ ] 事件分发（冒泡/捕获）
-- [ ] 手势检测器
+```rust
+fn measure(&self, nodes: &mut Vec<LayoutNode>, policies: &[Box<dyn MeasurePolicy>],
+           children: &[usize], constraints: Constraints) -> (Size, Vec<Placement>);
+fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
+```
 
-### Phase 6 — 更多组件 + 主题
+`MeasurePolicy` is implemented by every container. `Column` and `Row` are the same algorithm
+parameterised by `axis::Axis` — which physical axis is the main one, and where a size's main extent
+lives — so the two share one measure pass; `Flow` adds line breaking, `Stack` a z-ordered overlay.
+`LazyColumn`/`LazyRow` compose only the items near the viewport and reuse the height they measured.
 
-- [ ] `TextField`, `Slider`, `Checkbox`, `Switch`
-- [ ] `Scaffold`, `LazyColumn`
-- [ ] Material Theme 完整集成
-- [ ] 动画系统
+`subcompose.rs` is `SubcomposeLayout`: composing during measurement, with the constraints the pass
+just produced. That is what lets a component choose content by measured space (`BoxWithConstraints`,
+the lazy list's window, `TabRow`'s indicator).
 
-### Phase 7 — 清理与稳定
+## Drawing
 
-- [ ] 删除 v1 遗留代码
-- [ ] 文档完善
-- [ ] 示例项目
-- [ ] 性能基准
+`render.rs` walks the arena from the root. For each node it applies the clip and the graphics layer,
+paints the background/border/shadow the modifier chain describes, paints the content, and recurses
+into children. `graphics/` holds the values it consumes: `Color`, `Shape`, `Brush`, the graphics
+layer parameters, the icon and image payloads, and the one conversion to `skia_safe::Color`.
 
+Text is drawn by the text layout (`text/text_layout.rs`), which caches shaped paragraphs keyed on
+content and style, so a frame that does not change text does not re-shape it.
+
+## Components
+
+`components/` is flat: 51 files, one per component or component family, plus `components.rs`, which
+declares them and re-exports the names the prelude uses. A component is a builder plus a
+`#[composable]`-annotated `build(ctx, content)`. Conventions, uniform across the directory:
+
+- a `XDefaults` type holds the token values (`ButtonDefaults::shape()`, `…::button_colors(&theme, style)`),
+  with `pub const` names for the sizes and paddings material3 names;
+- `XColors`, `XElevation`, `XSize`, `XStyle` are the parameter groups a caller can override;
+- a `test_tag("…")` on the modifier is how a UI test finds the node.
+
+## Text
+
+`text/` is its own layer because text is where layout and drawing meet: `font.rs` owns the faces,
+`style.rs` the resolved style, `paragraph.rs` the shaped paragraph and its cache, `text_layout.rs`
+the positioning used by both measure and draw. `field.rs` is the text-edit engine `TextField`
+drives — cursor, offsets, transformation — and `selection.rs` the registrar that tells the framework
+which runs of text are selectable. `transformation.rs` is the `VisualTransformation`/`OffsetMapping`
+pair (password masking, formatting), and `decor.rs` the underline/overline/strikethrough vocabulary.
+
+## Animation and transition
+
+`animation.rs` is the facade over `Animatable` (a value with a target and a spec), the specs
+(`TweenSpec`, `SpringSpec`, `KeyframesSpec`, `DecaySpec`, `RepeatableSpec`) and the interpolators.
+State-driven entry points — `animate_float_as_state`, `animate_size_as_state`, … — return an
+`Animating<T>` handle whose writes only ask for a recomposition, because the animation engine has
+already asked for the frame.
+
+`transition.rs` is the shared-element machinery: a `Flight` moves a subject's rect from one marked
+node to another, and the frame draws the source as a ghost and the target at the animated bounds.
+`ResizeMode` and `PlaceHolderSize` decide whether the target is re-measured at the animated size or
+its content is scaled into it; a Tier-1 flight can lift its subject into an overlay layer.
+
+`components/shared_transition.rs` is the component side (`SharedTransitionLayout`, the
+`sharedElement` modifier builder), and its tests live beside it in `shared_transition/tier0_tests/`,
+grouped by subject.
+
+## Overlays
+
+```mermaid
 ---
-
-## 六、关键设计决策记录
-
-| 决策 | 选择 | 理由 |
-|------|------|------|
-| 不用宏 DSL | ✅ | IDEA 难以展开 proc-macro，纯 Rust Builder 可读性足够 |
-| Builder 模式做主力 | ✅ | IDE 补全完美，编译错误清晰，零学习成本 |
-| thread_local 追踪依赖 | ✅ | 避免在 composable 函数签名中添加额外参数 |
-| RwLock 而非 Mutex | ✅ | State 读多写少，RwLock 性能更好 |
-| 不需要 Snapshot/MVCC | ✅ | 单线程 UI 无需并发快照隔离，简化实现 |
-| SlotTable 用 Vec 起步 | ✅ | 先跑通逻辑，后续升级 Gap Buffer |
-| 不依赖 tokio（默认） | ✅ | 减小二进制体积，异步作为 optional feature |
-
+title: the overlay host
 ---
+%% See docs/architecture.md § Overlays.
+%% An overlay is a second composition: its own Composer, its own tree.
+flowchart TB
+    subgraph PW["PerWindow"]
+        page["composer — the page's Composer + tree"]
+        inp["input — GestureState"]
+        clk["clock — FrameClock"]
+        subgraph OH["overlay — OverlayHost"]
+            o1["OverlayWindow id 1<br/>Composer #2, its own tree"]
+            o2["OverlayWindow id 2<br/>Composer #3, its own tree"]
+        end
+    end
 
-## 七、Workspace 结构
+    open["Composer::open_overlay(Desc)<br/>while composing"] --> q["queued on the Composer<br/>local_snapshot stamped with the locals<br/>in scope at that moment"]
+    q --> o1
+    q --> o2
 
+    o1 --> policy["laid out at the window size,<br/>positioned against the anchor"]
+    o2 --> policy
+    policy --> hit["hit test: overlays first,<br/>topmost to bottom, then the page"]
+    policy --> dra["draw: the page, then the overlays"]
+    policy --> kbd["keyboard: a focus-scope overlay owns it,<br/>the page's focus is suspended"]
 ```
-D:\Projects\winia\          # workspace root
-├── Cargo.toml              # [workspace] 配置
-├── docs/                   # 本文档目录
-├── winia/                  # UI 框架核心库
-├── skiwin/                 # Skia 渲染后端（从 v1 复制）
-├── proc-macro/             # 过程宏（从 v1 复制）
-└── material_color_utilities/  # Material Design 颜色工具（从 v1 复制）
-```
 
-### 依赖关系
+An overlay is a second composition: its own `Composer`, its own tree, drawn and hit-tested above the
+page. `overlay.rs` builds the descriptor, `Composer::open_overlay` queues it and captures the
+composition locals, and `app/overlay_host.rs` hosts them — layout against the anchor, z-order,
+outside-press dismissal, the keyboard and focus a modal takes from the page, and the exit animation
+before the layer is dropped.
 
-```
-winia ──→ proc-macro (path)
-     ├──→ skiwin (path, features: vulkan/gl)
-     └──→ skia-safe, parking_lot, log, thiserror
+## The application
 
-skiwin ──→ skia-safe, winit, softbuffer, ash/vulkano/glutin (optional)
-```
+`app.rs` is the winit application: `run_app` (or the `run_app!`/`app_root!` macros) installs the
+handler, `AppState` creates windows, and `PerWindow` is one window's frame. `PerWindow` is the
+window itself — its `Composer`, its surface, its size and scale, its content closure — plus four
+named groups:
+
+| group | holds |
+| --- | --- |
+| `theme` (`WindowThemeState`) | the palette it draws with and what it has already drawn with |
+| `clock` (`FrameClock`) | the throttle, the frame counters, the give-up flags |
+| `input` (`GestureState`) | the press that may become a click, the gesture it opened, the axis it locked onto, the pending double-tap windows |
+| `overlay` (`OverlayHost`) | the layers, and the click/drag/focus state that only means something against them |
+
+`app/window.rs` is the declarative `Window` node, `app/gesture.rs` turns a pointer path into gesture
+actions, `app/scroll.rs` applies a scroll delta to the tree (including nested scroll and fling), and
+`app/overlay_host.rs` hosts the overlays.
+
+## Semantics and accessibility
+
+`semantics.rs` builds the accessibility tree from the arena: role, name, state, bounds per element,
+published with each rendered frame. `accessibility.rs` is the Windows bridge that exposes that tree
+over UIA (feature `accessibility`, off by default). The tree is also what the debug server's `sem`
+command returns, so a UI test can assert on roles and names rather than pixels.
+
+## Debug server and the UI test harness
+
+With the `debug-server` feature, the process opens stdin and a WebSocket and accepts the commands in
+[`debug-server.md`](debug-server.md): `c x y` click, `d`/`m`/`u` the pointer sequence, `k` a key,
+`s` a wheel, `r` then `p` a frame, `t` the layout tree, `sem` the semantics tree, `px` one pixel.
+The module is a stub without the feature, so call sites stay unconditional.
+
+The UI tests are real windows driven through that channel: one fixture binary (`bin/fixture_all`)
+dispatches on `argv[1]` to a scenario, and `tests/ui/mod.rs` is the client. See
+[`ui-testing.md`](ui-testing.md).
+
+## Compose, side by side
+
+| winia | Compose |
+| --- | --- |
+| `Composer`, `ComposeCtx` | `Composer`, `Composer`'s context |
+| `#[composable] fn f(ctx, …)` | `@Composable fun f(…)` |
+| `ctx.remember { … }` | `remember { … }` |
+| `Modifier` chain | `Modifier` |
+| `MeasurePolicy::measure/place` | `MeasurePolicy.measure` |
+| `Constraints` | `Constraints` |
+| `LayoutNode` + arena | `LayoutNode` |
+| `State<T>` / `Animating` / `Visual` / `Backchannel` | `MutableState`, `SnapshotStateObserver` scheduling |
+| `CompositionLocal` | `CompositionLocal` |
+| `SubcomposeLayout` | `SubcomposeLayout` |
+| `LazyColumn`, `LazyRow` | `LazyColumn`, `LazyRow` |
+| `Popup`, `Dialog` | `Popup`, `Dialog` |
+| `SharedTransitionLayout`, `Modifier.sharedElement` | the same names in `androidx.compose.animation` |
+| `WiniaTheme` | `MaterialTheme` |
+
+Where winia differs on purpose, the deviation and its reason are recorded at the definition rather
+than here — `Modifier::align_by_baseline`'s contract, the `Axis` traits, `ContentScale`, and
+`Alignment::Stretch` are the usual examples.
+
+## Where to read more
+
+The diagrams in this document are Mermaid. [`diagrams/`](diagrams/) holds the same text as
+`.mmd` files — one per diagram — for a viewer that opens files rather than code fences.
+
+`docs/` has a page per subsystem: [`state-handles.md`](state-handles.md) (why there are five
+handles), [`modifier-node.md`](modifier-node.md), [`lazy-column.md`](lazy-column.md),
+[`text-field.md`](text-field.md), [`nested-scroll.md`](nested-scroll.md), [`theme.md`](theme.md),
+[`semantics.md`](semantics.md), [`shared-element-transition.md`](shared-element-transition.md),
+[`navigation3.md`](navigation3.md), [`rendering-backends.md`](rendering-backends.md),
+[`debug-server.md`](debug-server.md), [`ui-testing.md`](ui-testing.md), and one per component.
+[`developer-guide.md`](developer-guide.md) is the how-to. The `*-round.md`, `*-progress.md`,
+`*-gap*.md` and `*-handover.md` files are dated logs of individual work rounds, each carrying its own
+banner: they record what was decided *then*, not what the code is now.

@@ -271,7 +271,7 @@ of measuring can add them. The frame is CONVERGED instead of showing an empty re
   then again while the measure asks (`take_compose_after_layout`), because a single pass is not what a user
   sees when the measure finds the window short — the app converges it within the frame (`docs/
   frame-cost-probe-round.md` §4b).
-- **Measured** (`ui::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
+- **Measured** (`layout::lazy_column::tests::the_window_that_misses_its_viewport_asks_for_a_same_frame_compose`,
   compose + layout passes per frame): first frame 1, settled frame 1, resize 400 -> 2500 **2**, a fresh
   composer's first frame 3, scrolling one row per frame `[1, 1, 1, 1, 1]`. The acceptance test
   (`the_frame_the_viewport_grows_on_already_covers_the_new_bottom`) renders the resize frame ALONE and
@@ -340,7 +340,7 @@ cargo run -p winia --example lazy_column_demo
 cargo run -p winia --example lazy_row_demo
 cargo run -p winia --example sticky_header_demo
 cargo run -p winia --example reverse_list_demo
-cargo test -p winia --lib ui::lazy_column
+cargo test -p winia --lib layout::lazy_column
 # 集成（fixture 需 debug-server feature 构建）：
 cargo test -p winia --features debug-server --test ui_test
 ```

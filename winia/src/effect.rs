@@ -8,8 +8,8 @@
 //! 依赖 tokio 运行时（已作为项目依赖）。
 
 use crate::composable;
-use crate::core::composer::ComposeCtx;
-use crate::core::state::State;
+use crate::runtime::composer::ComposeCtx;
+use crate::runtime::state::State;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::runtime::Handle;
@@ -109,7 +109,7 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     ) {
         let scope = remember_coroutine_scope(ctx);
 
-        let state: crate::core::state::State<Arc<Mutex<LaunchedEffectState<T>>>> =
+        let state: crate::runtime::state::State<Arc<Mutex<LaunchedEffectState<T>>>> =
             ctx.remember(|| Arc::new(Mutex::new(LaunchedEffectState { prev_key: None, abort_handle: None })));
 
         let state_clone = Arc::clone(&state.get());
@@ -170,7 +170,7 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
         ctx: &mut ComposeCtx,
         effect: impl Fn(T) -> F + Send + Sync + 'static,
     ) {
-        let state: crate::core::state::State<Arc<Mutex<DisposableState<T>>>> =
+        let state: crate::runtime::state::State<Arc<Mutex<DisposableState<T>>>> =
             ctx.remember(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
 
         let state_clone = Arc::clone(&state.get());

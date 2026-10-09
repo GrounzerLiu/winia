@@ -1,0 +1,802 @@
+//! 物化器：组合树（Slot desc）→ 布局树（arena LayoutNode）。
+//!
+//! 从 composer.rs 拆分（SRP）——物化是"组合产物 → 布局树"的独立关注点：
+//! - `collect_desc_tree`（SlotTable）产出 `DescNode` 树（保留在 composer.rs——需访问 slot 私有字段）
+//! - 本模块消费 DescNode → arena 树（Skip 恢复 / 节点复用 / 降级重建）
+//! - `collect_layout_index` / `collect_node_keys`：物化后的 arena 收集（slot_key → 节点索引）
+
+use crate::runtime::composer::Composer;
+use crate::layout::node::NodeArena;
+
+/// 组合产物描述树节点（物化输入）。
+pub(crate) struct DescNode {
+    pub(crate) key: u64,
+    /// Skip 节点（组合期 content 未执行——desc 空但非 scope）：
+    /// 物化时从 prev_node_by_key 按 key 恢复缓存节点（不新建）
+    pub(crate) skip: bool,
+    /// Set when this skipped subtree was claimed IN PLACE while the slot tree was walked
+    /// (`SlotTable::collect_desc_tree`): the arena already holds this subtree, verified node for node
+    /// against the slot tree, and `children` is empty because there was nothing to re-encode. The
+    /// materializer then only attaches the node and applies the root's own payload — the per-node
+    /// rebuild the descriptor tree exists for happened on an earlier frame and nothing changed since.
+    /// `None` means the descriptor (and its children) describe the subtree as usual.
+    pub(crate) claimed: Option<usize>,
+    pub(crate) modifier: crate::modifier::Modifier,
+    /// Skip 子树内：本帧 build 是否被调用（容器自身调了 set_skip_modifier——
+    /// modifier 是父层重跑传入的新值，应应用；后代未执行——modifier 为 default，
+    /// 应保留缓存节点的 modifier，避免视觉被清空）
+    pub(crate) preserve_modifier: bool,
+    pub(crate) policy: Option<Box<dyn crate::layout::MeasurePolicy>>,
+    pub(crate) on_remove: Option<Box<dyn FnOnce() + Send>>,
+    pub(crate) dirty: bool,
+    /// 文本选择 registrar（物化时写入节点——组合期与物化期分离的传递通道）
+    pub(crate) registrar: Option<crate::text::selection::SelectionRegistrar>,
+    /// 焦点环颜色（物化时写入节点——组合期捕获，渲染期读取）
+    pub(crate) focus_color: Option<crate::graphics::Color>,
+    /// IME 组合下划线颜色（物化时写入节点——组合期捕获主题 primary，渲染期
+    /// 不能读 CompositionLocal，Phase 4.2）
+    pub(crate) composing_color: Option<crate::graphics::Color>,
+    /// 光标（TextField）——组合期写入 desc，物化时应用到节点
+    pub(crate) cursor_index: Option<usize>,
+    pub(crate) cursor_visible: Option<bool>,
+    pub(crate) cursor_callback: Option<Box<dyn Fn(usize) + Send>>,
+    /// 显示聚焦标记（text-field-v2 容器化——渲染光标/选区用，回退 node.focused）
+    pub(crate) display_focused: Option<bool>,
+    pub(crate) ime_callback: Option<Box<dyn Fn(&str, Option<(usize, usize)>) + Send>>,
+    /// 外层 Option：None = 非 TextField 未设置；Some(r) = 渲染值（r 可为 None 清空）
+    pub(crate) composing_range: Option<Option<std::ops::Range<usize>>>,
+    /// 布局方向（组合期捕获——物化直接用，不读 CompositionLocal）
+    pub(crate) direction: crate::layout::LayoutDirection,
+    pub(crate) children: Vec<DescNode>,
+}
+
+/// 物化：组合树（Slot desc）→ 布局树（arena LayoutNode）——完整分离的核心。
+/// 由 compose 末尾调用（layout 只测量）。
+/// descs 为空时：同帧二次 compose（prev 已被首次物化 drain）保留现有树；
+/// 内容确实消失（prev 非空——正常 compose 无产物）清空树（旧行为——避免旧树持续渲染）。
+pub(crate) fn materialize(composer: &mut Composer) {
+    let mut descs = Vec::new();
+    let claims = composer.slot_table.collect_desc_tree(
+        &mut descs,
+        &composer.arena,
+        &mut composer.prev_node_by_key,
+        &mut composer.reused_nodes,
+    );
+    #[cfg(test)]
+    {
+        composer.skip_claims = claims.0;
+        composer.skip_claim_bails = claims.1;
+    }
+    if descs.is_empty() {
+        if !(composer.prev_node_by_key.is_empty() && composer.arena.root.is_some()) {
+            composer.arena.root = None;
+        }
+        return; // 无组合产物（layout 防御调用——树保留；compose 末尾已物化）
+    }
+    // 同帧多次 compose：第一次已物化并 drain 了 prev_node_by_key——第二次
+    // materialize 若直接重建，Skip 恢复全部失败（prev 空）→ 走防御降级（按
+    // Enter 重建）——但**降级重建的 Skip 容器会丢失子内容**（desc=None →
+    // 空节点 → collect 缓存空 → 按钮等永久消失）。8548718 的守卫（prev 空
+    // 直接保留旧树）则错误阻断二次 compose 的真实 Enter 内容（AnimatedContent
+    // 切换帧 B 内容被丢弃 → 树永远停留旧内容）。
+    // 正解：用**现有树**重建 prev 索引（collect_node_keys）——Skip 节点复用
+    // 现有节点（子内容保留），Enter 节点走正常复用+更新路径——内容正确且
+    // 不丢失子树（一帧全树重挂的代价仅发生在同帧二次 compose——频率低）。
+    //
+    // The empty index means two different things, and only one of them wants the repair. It is empty
+    // before the first layout of a Composer's life, and on any frame composed without a layout in
+    // between (`test_same_frame_second_compose_retains_tree` covers the latter) — there the repair is
+    // the only thing that lets the next materialize reuse nodes instead of rebuilding them. It is
+    // ALSO empty right after an in-place claim took the whole tree (`try_claim_skipped_subtree`), and
+    // there the repair is pure waste: reuse is already guaranteed, and rebuilding the index would add
+    // a whole-tree walk to the frame the claim just made cheap. `claims.0` tells the two apart.
+    if claims.0 == 0
+        && composer.prev_node_by_key.is_empty()
+        && composer.arena.root.is_some()
+    {
+        crate::runtime::materialize::collect_node_keys(&composer.arena, composer.arena.root.unwrap(), &mut composer.prev_node_by_key);
+    }
+    composer.arena.root = None;
+    // Size the arena before building into it: `alloc` pushes, and a node `Vec` growing 0 → 4000 does it
+    // by doubling, moving every node already in it (~500 bytes each) about a dozen times. See
+    // `NodeArena::reserve_nodes`.
+    composer.arena.reserve_nodes(composer.slot_table.slot_count_bound());
+    for desc in descs {
+        materialize_node(composer, desc, None);
+    }
+    // The prune is NOT called here: at this point the shared-element retention has not run yet,
+    // so a node that is about to be detached for a flight (the leaving end of a shared marker)
+    // still looks unreachable, and clearing ITS children left the ghost flying empty — measured:
+    // the retained card had `children=0` while its rect, alpha and layer order were all correct,
+    // which is the reported "the animation starts fully transparent". The compose tail calls
+    // `prune_stale_child_links` after `retain_shared_sources`, when "unreachable" really means
+    // "not part of this frame's tree or its transition layer".
+}
+
+/// A node must be reachable from the root exactly ONCE. Materialize reaches the tree through
+/// several paths (fresh Enter, Skip reuse, re-parenting a reused node, the shared element
+/// detach), and a listing can survive in a parent that no longer owns the child; with two live
+/// paths to one node, the walk in `collect_node_keys` visits it twice and panics with
+/// `[dup-key]` — where BOTH printed indices are the same, which is the tell that this is a
+/// double listing rather than two nodes sharing a key. (Measured: clicking Back in
+/// `shared_transition_image_demo` produced 30 render panics in a row.)
+///
+/// IMPORTANT: `parent_id` is NOT a tie-breaker, and must not become one — measured, a 0x0 child
+/// listed under the live parent carried `parent_id = Some(96)` naming a node that no longer
+/// existed, so pruning by that kept the DEAD listing and dropped the live one (the hero vanished
+/// from the tree on the return flight). What decides is reachability from `arena.root` or from
+/// `transition_layer`: a listing owned by a parent that is not reachable belongs to no tree in
+/// this frame and goes away; a listing under a reachable parent survives.
+pub(crate) fn prune_stale_child_links(composer: &mut Composer) {
+    let nodes = &mut composer.arena.nodes;
+    let len = nodes.len();
+    // An empty arena has nothing to repair. Anything else is repaired even with no tree at all:
+    // with no tree every listing IS stale (nothing is reachable), and an early return on a
+    // missing `arena.root` would silently skip exactly the states this function exists to clean.
+    if len == 0 {
+        return;
+    }
+    // Which nodes are actually reachable from the root, following the listings as they are
+    // now? A listing owned by an UNREACHABLE parent is garbage — that parent is not in the
+    // tree this frame — and it is what made a node reachable twice (the panic) or reachable
+    // only through a dead parent (the 0x0 hero: it sat in the arena, never measured, and drew
+    // nothing). The visited set also makes the walk safe if the lists ever contain a cycle.
+    let mut reachable = vec![false; len];
+    let mut stack: Vec<usize> = composer.arena.root.into_iter().collect();
+    // Detached flight ghosts are rootless BY DESIGN: the transition layer is their home (the
+    // source writer's own comment says so). Seeding only `arena.root` marked a ghost unreachable
+    // and cleared ITS children — the retained card kept its rect, its opaque alpha and its place
+    // in the layer, but drew nothing. That is the reported "the animation starts fully
+    // transparent" (measured: the hero region read the theme background on the frame right after
+    // the click, while the layer probe showed idx=3 drawn at (16,57) 96x96 with alpha 1.0). The
+    // layer's roots are roots.
+    stack.extend(composer.transition_layer.iter().copied());
+    while let Some(i) = stack.pop() {
+        if i >= len || reachable[i] {
+            continue;
+        }
+        reachable[i] = true;
+        for &c in nodes[i].children.iter() {
+            stack.push(c);
+        }
+    }
+    // Drop duplicate listings inside one parent, and every listing of a child under a parent
+    // that is not reachable. A child keeps at least one listing whenever it has one from a
+    // reachable parent, which is exactly the case that renders.
+    //
+    // Duplicates are found with a generation stamp per node instead of a set per parent. The set was
+    // two allocations per parent per frame (a `HashSet` and the filtered `Vec`) — at 800 rows, ~1600
+    // allocations to check lists that are almost always already correct, and it measured ~180 µs of an
+    // idle frame. The stamp buffer is allocated once (indices are dense), and a parent whose list has
+    // no duplicate never allocates or rewrites anything at all.
+    //
+    // The stamp is u64 because it increments once per parent per frame: at 60 fps with 1000 parents
+    // that is 60k/s, and a 32-bit counter would wrap in about 20 hours of continuous running.
+    let mut dup_stamp: Vec<u64> = vec![0; len];
+    let mut stamp: u64 = 0;
+    for p in 0..len {
+        if nodes[p].children.is_empty() {
+            continue;
+        }
+        if !reachable[p] {
+            // Unreachable parents are not part of this frame's tree; their listings only create
+            // a second path to live nodes.
+            nodes[p].children.clear();
+            continue;
+        }
+        stamp += 1;
+        let has_duplicate = nodes[p].children.iter().any(|&c| {
+            if c >= len || dup_stamp[c] == stamp {
+                true
+            } else {
+                dup_stamp[c] = stamp;
+                false
+            }
+        });
+        if !has_duplicate {
+            continue;
+        }
+        // Rewrite the list in place with a fresh stamp, so the surviving listings keep their order.
+        stamp += 1;
+        let mut write = 0usize;
+        for read in 0..nodes[p].children.len() {
+            let c = nodes[p].children[read];
+            if c < len && dup_stamp[c] != stamp {
+                dup_stamp[c] = stamp;
+                nodes[p].children[write] = c;
+                write += 1;
+            } else {
+                crate::debug_log!(
+                    "[prune] parent idx={p} drops duplicate child idx={c} (key={:#x}, size={:?})",
+                    nodes.get(c).map(|n| n.slot_key).unwrap_or(0),
+                    nodes.get(c).map(|n| n.measured_size)
+                );
+            }
+        }
+        nodes[p].children.truncate(write);
+    }
+}
+
+/// 清除 LayoutNode 上残留的 TextField 专用字段（内容类型切换时调用）。
+/// 内容类型切换时的**全量**清理：节点从 TextField 输入叶子切为普通
+/// Text/Image/RichText 时，旧 cursor/IME/selection/registrar/focus 值都会污染
+/// 新节点的渲染路径。此函数在 desc 字段应用**之前**调用（reuse 块内），
+/// desc 若有新值会随后覆盖，因此清空 registrar/focus_color 是安全的。
+fn clear_textfield_state(n: &mut crate::layout::node::LayoutNode) {
+    *n.cursor_callback.borrow_mut() = None;
+    *n.ime_callback.borrow_mut() = None;
+    *n.composing_range.borrow_mut() = None;
+    *n.registrar.borrow_mut() = None;
+    n.cursor_x.set(0.0);
+    n.cursor_height.set(0.0);
+    n.cursor_index.set(0);
+    n.cursor_visible.set(false);
+    n.display_focused.set(false);
+    n.focus_color.set(crate::graphics::Color::TRANSPARENT);
+    n.composing_color.set(crate::graphics::Color::TRANSPARENT);
+    n.focused = false;
+}
+
+/// Enter 兜底（语义角色切换）的**轻量**清理：只清 TextField 专用 IME/cursor/
+/// selection 字段，**保留** `registrar`/`focus_color`——此清理在 desc 字段
+/// 应用之后执行（review 2026-08：误清 registrar 会丢失 SelectionContainer
+/// 内普通 Text 的选择功能；focus_color 同理由 desc 维护）。
+fn clear_textfield_input_state(n: &mut crate::layout::node::LayoutNode) {
+    *n.cursor_callback.borrow_mut() = None;
+    *n.ime_callback.borrow_mut() = None;
+    *n.composing_range.borrow_mut() = None;
+    n.cursor_x.set(0.0);
+    n.cursor_height.set(0.0);
+    n.cursor_index.set(0);
+    n.cursor_visible.set(false);
+    n.display_focused.set(false);
+    n.focused = false;
+}
+
+/// 物化单个 desc 节点（递归子节点）——Skip 恢复 / 节点复用 / 降级重建。
+pub(crate) fn materialize_node(composer: &mut Composer, desc: DescNode, parent: Option<usize>) -> Option<usize> {
+    let DescNode { key, skip, claimed, modifier, preserve_modifier, policy, on_remove, dirty, registrar, focus_color, composing_color, cursor_index, cursor_visible, cursor_callback, display_focused, ime_callback, composing_range, direction, children } = desc;
+    // Detached across this node's descriptor-driven child rebuild and re-attached at the end: the
+    // subcomposed child has no descriptor (see `LayoutNode::subcomposed_child`).
+    let mut adopted_child: Option<usize> = None;
+    let index = if let Some(idx) = claimed {
+        // Claimed in place while the slot tree was walked: the node AND its subtree are already this
+        // frame's materialization (verified node for node by `try_claim_skipped_subtree`), so there is
+        // nothing to rebuild and — importantly — nothing to clear: the children are the same children.
+        // Only the root's own payload is applied, exactly as the skip path below would.
+        let n = &mut composer.arena.nodes[idx];
+        if !preserve_modifier {
+            n.modifier = modifier;
+            n.layout_direction = direction;
+        }
+        Some(idx)
+    } else if skip {
+        // Skip：恢复上帧节点（key 匹配——保留测量/内容；children 清空后
+        // 按 slot 树结构重新挂接（子节点逐个从 prev_node_by_key 恢复——
+        // 不残留不 free）。无缓存为异常——防御跳过。
+        // 结构签名（P3-1）：本帧 desc 直接子数 vs 缓存节点直接子数——子树结构
+        // 增删（if 分支/列表项）后同位置 slot_key 仍相同，签名不等则放弃恢复
+        // （走 None 降级 → Enter 重建），防旧内容缓存张冠李戴（塌缩类 bug 根因）。
+        // 注意：签名不等时**不 remove**——key 留待 compose 末尾回收（free），
+        // 否则旧节点成为 arena 孤儿（泄漏）。所以这里的 `remove` 成功与否要先看签名，
+        // 不匹配时把 key 放回去（罕见路径，代价是一次 insert）。
+        match composer.prev_node_by_key.remove(&key) {
+            Some(idx)
+                if children.len()
+                    == composer.arena.nodes[idx].children.len()
+                        - usize::from(composer.arena.nodes[idx].subcomposed_child.is_some()) =>
+            {
+                composer.reused_nodes.insert(idx);
+                // The subcomposed child is not in the descriptor list, so it is detached across the
+                // rebuild and re-attached after it. See `LayoutNode::subcomposed_child`.
+                adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
+                let n = &mut composer.arena.nodes[idx];
+                n.children.clear();
+                // 应用本帧组合产物 modifier（容器自身 Skip——外层构造的 modifier
+                // 参数可能变化（offset/background 等视觉属性）——不更新则视觉卡旧值；
+                // 后代（preserve_modifier）保留缓存节点 modifier——不清空视觉）
+                if !preserve_modifier {
+                    n.modifier = modifier;
+                    // 刷新方向快照（组合期捕获值——复用节点必须与新建路径一致）
+                    n.layout_direction = desc.direction;
+                }
+                #[cfg(debug_assertions)]
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    let sz = n.measured_size;
+                    eprintln!(
+                        "[mat] skip key={:x} preserve={} size=({:.0},{:.0}) text={:?}",
+                        key, preserve_modifier, sz.width, sz.height,
+                        n.modifier.elements().iter().find_map(|el| match el {
+                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
+                            _ => None,
+                        })
+                    );
+                }
+                // 恢复缓存——测量折叠（保留测量）。⚠ 不能无条件清 dirty：
+                // 同帧二次 compose 时（动画/交互状态 pending 触发），父容器
+                // Skip 恢复会覆盖第一次物化刚设置的 dirty=true（文本内容已变需
+                // 重测）→ cached_paragraph 保留旧内容 → 渲染画旧文本，直到外部
+                // 事件触发重组。正常 Skip 的节点来自上帧 layout（dirty 恒 false），
+                // 保留现状即可；同帧二次物化则保留第一次设置的 dirty。
+                Some(idx)
+            }
+            removed_idx => {
+                // 防御降级：Skip 恢复失败（无缓存/结构签名不等）→ 按 Enter 重建
+                // （dirty=true 重测）。否则节点缺失 → 子树塌缩（间歇性坐标错乱）。
+                // 子树完整优先于测量折叠——下一帧 key 稳定后恢复 Skip。
+                // 注意：不能 return（会跳过尾部 add_child/children 挂接）——
+                // 返回 Some(idx) 走统一挂接路径。
+                //
+                // Signature mismatch means the key was removed above but must stay for the
+                // compose tail to recycle its node; a missing node means there was nothing to
+                // remove. Putting a *present* key back is the only case that has to restore it.
+                if let Some(idx) = removed_idx {
+                    composer.prev_node_by_key.insert(key, idx);
+                }
+                let pidx = policy.map(|p| composer.arena.alloc_policy(p));
+                let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
+                // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal
+                node.layout_direction = desc.direction;
+                node.on_remove = on_remove;
+                node.slot_key = key;
+                // 降级节点：Skip 的 desc 通常已带 policy（skip_policy 保存外层传入值），
+                // 此处为最终兜底——恢复旧测量折叠（policy 仍缺失时避免测量出 0 尺寸）。
+                //
+                // The measurements come from the node this key named — the one just taken out of the
+                // reuse index, which no path has written since layout. They must travel with the
+                // content box: after `place()` `measured_size` holds the size the PARENT was told, so
+                // restoring it without `flight_content_size` resurrects a flight's placeholder as the
+                // node's own box (review round 3: this third restore site was missed when the cache
+                // gained the field).
+                //
+                // No node means no measurement to fold, and the rebuild stays dirty — it measures
+                // once, which is the conservative direction and what this arm did on a cache miss
+                // anyway (measured: the arm itself fires once in the whole library suite).
+                if let Some(idx) = removed_idx {
+                    let prev = &composer.arena.nodes[idx];
+                    node.restore_layout(prev);
+                    // 文本内容差异检测（与 Enter 路径一致）：dirty=false 折叠测量时
+                    // 若 TextContent 变化（输入/选择）→ 强制重测，避免缓存 paragraph 旧内容
+                    if let Some(snap) = &prev.last_text {
+                        if !crate::layout::node::text_content_matches(&node.modifier, snap) {
+                            node.dirty = true;
+                        }
+                    }
+                } else {
+                    node.dirty = true;
+                }
+                node.refresh_text_snapshot();
+                let idx = composer.arena.alloc(node);
+                #[cfg(debug_assertions)]
+                if std::env::var("WINIA_MAT_PROBE").is_ok() {
+                    eprintln!(
+                        "[mat-fb] key={:x} text={:?}",
+                        key,
+                        composer.arena.nodes[idx].modifier.elements().iter().find_map(|el| match el {
+                            crate::modifier::ModifierElement::TextContent { content, .. } => Some(content.clone()),
+                            _ => None,
+                        })
+                    );
+                }
+                Some(idx)
+            }
+        }
+    } else {
+        // 复用节点：policy 替换旧槽（本帧参数生效 + 池不增长——否则每帧 alloc 泄漏）
+        let reused_idx = composer.prev_node_by_key.remove(&key);
+        let pidx = if let Some(ridx) = reused_idx {
+            if let Some(p) = policy {
+                let old = composer.arena.nodes[ridx].measure_policy;
+                if let Some(op) = old {
+                    composer.arena.policies[op] = p;
+                    Some(op)
+                } else {
+                    Some(composer.arena.alloc_policy(p))
+                }
+            } else { None }
+        } else {
+            policy.map(|p| composer.arena.alloc_policy(p))
+        };
+        let idx = if let Some(idx) = reused_idx {
+            composer.reused_nodes.insert(idx);
+            // Detach the subcomposed child before the descriptor-driven rebuild, re-attach after
+            // (see `LayoutNode::subcomposed_child`). Its index stays valid: no arena slot is reused
+            // between here and the re-attach.
+            adopted_child = composer.arena.nodes[idx].subcomposed_child.take();
+            let n = &mut composer.arena.nodes[idx];
+            let children_changed = n.children.len() != children.len() + usize::from(adopted_child.is_some());
+            n.children.clear();
+            // 按新 modifier 重新判定内容类型（复用路径不重建节点——必须同步
+            // content-kind 标记，否则 measure_node 按旧标记走错路径：
+            // 文本→普通叶子（宽度塌缩）或普通→文本（误走文本排版））
+            let old_has_text = n.has_text_content;
+            let old_has_richtext = n.has_richtext_content;
+            let old_has_image = n.has_image_content;
+            n.has_text_content = crate::layout::node::modifier_has_text(&modifier);
+            n.has_richtext_content = crate::layout::node::modifier_has_richtext(&modifier);
+            n.has_image_content = crate::layout::node::modifier_has_image(&modifier);
+            // 仅当内容类型变化时清空缓存段落（静态文本跨帧复用保留缓存——
+            // 每帧清空会导致渲染时每帧重建 Skia Paragraph，影响性能）
+            if n.has_text_content != old_has_text
+                || n.has_richtext_content != old_has_richtext
+                || n.has_image_content != old_has_image
+            {
+                *n.cached_paragraph.borrow_mut() = None;
+                // The text snapshot travels with the paragraph it was compared against: the compare
+                // below is skipped for a node with no text, so a stale snapshot would survive a
+                // text→box→text round trip and let a node whose paragraph was cleared fold over it.
+                n.last_text = None;
+                // 内容类型切换时重置 TextField 专用字段（旧语义残留不适用新类型；
+                // 新类型若需要这些字段，由 desc 条件覆盖写回正确值）
+                clear_textfield_state(n);
+            }
+            n.modifier = modifier;
+            // 刷新方向快照（复用节点与新建路径一致——组合期捕获值）
+            n.layout_direction = desc.direction;
+            n.measure_policy = pidx; // 显式赋值（None 清空——防类型切换残留旧 policy）
+            n.on_remove = on_remove;
+            n.slot_key = key;
+            // Removing the last child has no dirty descendant to bubble. A changed child count must
+            // invalidate the parent directly, or its cached placement can overwrite a removed node.
+            n.dirty = dirty || children_changed;
+            // A subcomposing node is re-measured when the COMPOSITION changed, not every frame: the
+            // descriptor's `dirty` (a slot that re-ran, or a node that was rebuilt) is what says its
+            // content may differ, and `n.dirty = dirty` above already carries it. The unconditional
+            // version of this rule is what re-composed every subcomposition on every frame — measured on
+            // the bench's `subcompose` scene as 63233 µs for an idle 800-row frame against 621 µs for the
+            // same tree with plain containers, ≈78 µs per node (docs/benchmarks.md, "What a
+            // measure-time subcomposition costs a frame").
+            // 重置 scroll metadata：按轴分别判断（垂直/水平轴 viewport 独立）——
+            // vertical↔horizontal 单轴切换时，被移除轴的值也须清零
+            // （场景：节点从垂直 scroll 切为水平 scroll，旧垂直 viewport 残留）
+            let has_vscroll = n.modifier.vertical_scroll_state().is_some();
+            let has_hscroll = n.modifier.horizontal_scroll_state().is_some();
+            if !has_vscroll {
+                n.scroll_viewport_height = 0.0;
+                n.scroll_content_height = 0.0;
+            }
+            if !has_hscroll {
+                n.scroll_viewport_width = 0.0;
+                n.scroll_content_width = 0.0;
+            }
+            if !has_vscroll && !has_hscroll {
+                n.scroll_reverse = false;
+            }
+            // 防御性重置 parent_id（add_child 在末尾重新设置正确的值）
+            n.parent_id = None;
+            // 文本内容变化检测：依赖注册在父容器 → leaf Slot Clean 但 TextContent 变了
+            // （输入/选择）——不重测则 cached_paragraph 旧内容（输入不显示）。
+            // The comparison reads the snapshot of the node's LAST materialization, which is exactly
+            // what the node now carries: this needs no map lookup (that lookup was one hash per reused
+            // node per frame), and it is gated on the text flags so a node with no text — the vast
+            // majority in a box tree — never walks its modifier here at all.
+            if !dirty && !n.text_snapshot_matches() {
+                n.dirty = true;
+            }
+            idx
+        } else {
+            // A node that is neither reused nor restored: the previous frame's node for this key would
+            // have been in the reuse index, and it is not (the branch above would have taken it). There
+            // is therefore nothing to fold, and the node starts dirty — it measures once and settles.
+            let mut node = crate::layout::node::LayoutNode::new(modifier, pidx);
+            // 方向用组合期捕获值（desc.direction）——物化期读不到 CompositionLocal
+            node.layout_direction = desc.direction;
+            node.on_remove = on_remove;
+            node.slot_key = key;
+            composer.arena.alloc(node)
+        };
+        Some(idx)
+    };
+    let Some(index) = index else {
+        // Skip 恢复失败已在上方降级为 Enter（重建节点）——此处仅 Enter 恒 Some
+        // 兜底（children 已由降级/Enter 路径递归处理）
+        return None;
+    };
+    // Keep the produced node's `last_text` in step with the modifier it now carries — including the
+    // claimed and skip paths above, which may have replaced it. ONE place, after every arm, because
+    // the reuse arm's compare reads the value this replaces and the arms that do not compare at all
+    // would otherwise leave a snapshot from before their modifier was applied (the next frame's
+    // compare would then see a difference and re-measure a node nothing changed). It allocates only
+    // when the text actually moved.
+    composer.arena.nodes[index].refresh_text_snapshot();
+    // 应用文本选择 registrar（组合期写入 desc——物化时落到节点；
+    // Skip 恢复路径的节点保留缓存 registrar，不走此处）
+    if let Some(reg) = registrar {
+        *composer.arena.nodes[index].registrar.borrow_mut() = Some(reg);
+    }
+    // 应用焦点环颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
+    if let Some(color) = focus_color {
+        composer.arena.nodes[index].focus_color.set(color);
+    }
+    // 应用 IME 组合下划线颜色（组合期捕获——Enter 路径写入；Skip 恢复保留缓存值）
+    if let Some(color) = composing_color {
+        composer.arena.nodes[index].composing_color.set(color);
+    }
+    // 应用光标/IME/选区（组合期写入 desc——Enter 路径；Skip 恢复保留缓存值）
+    // 先记录 desc 是否提供这些字段（条件式会 move 值，需提前缓存）
+    let desc_has_ime = ime_callback.is_some();
+    let desc_has_cursor = cursor_callback.is_some();
+    if let Some(ci) = cursor_index {
+        composer.arena.nodes[index].cursor_index.set(ci);
+    }
+    if let Some(cv) = cursor_visible {
+        composer.arena.nodes[index].cursor_visible.set(cv);
+    }
+    if let Some(cb) = cursor_callback {
+        *composer.arena.nodes[index].cursor_callback.borrow_mut() = Some(cb);
+    }
+    if let Some(df) = display_focused {
+        composer.arena.nodes[index].display_focused.set(df);
+    }
+    if let Some(icb) = ime_callback {
+        *composer.arena.nodes[index].ime_callback.borrow_mut() = Some(icb);
+    }
+    // 组合范围：Some(r) 即应用（r=None 清空；None = 非 TextField 不碰）
+    if let Some(r) = composing_range {
+        *composer.arena.nodes[index].composing_range.borrow_mut() = r;
+    }
+    // Enter 路径且 desc 不提供 IME/cursor 回调时，若旧节点有残留 TextField 状态，
+    // 清理之（语义角色切换：TextField 输入叶子→普通 Text）。Skip 路径保留旧值。
+    // ⚠ 用轻量版（不清 registrar/focus_color）——此处在 desc 字段应用之后，
+    // 误清 registrar 会丢失 SelectionContainer 内普通 Text 的选择功能（review 2026-08）。
+    if !skip && !desc_has_ime && !desc_has_cursor {
+        let n = &mut composer.arena.nodes[index];
+        if n.ime_callback.borrow().is_some() || n.cursor_callback.borrow().is_some() {
+            clear_textfield_input_state(n);
+        }
+    }
+    if let Some(p) = parent {
+        composer.arena.add_child(p, index);
+    } else {
+        // NOTE: a second top-level desc silently REPLACES the first as the root — the first stays
+        // materialized but unreachable, so it is never measured and its callbacks never run. That is
+        // pinned by `test_only_one_top_level_node_becomes_the_root` (the behaviour is kept: making the
+        // root a synthetic container would move every node index and id, which reuse, shared elements
+        // and semantics all key off). A debug guard for it was written and removed: it fired in 17
+        // existing tests across `loading_indicator`, `progress_indicator`, `wavy_progress_indicator`
+        // and `switch`, i.e. components whose tests compose a multi-node component at the top level.
+        // Enabling it means deciding per call site (wrap in a container, or keep emitting siblings),
+        // which is its own round — recorded in `docs/state-architecture-progress.md`.
+        composer.arena.root = Some(index);
+    }
+    for child in children {
+        materialize_node(composer, child, Some(index));
+    }
+    // Re-attach the subcomposed child last, and keep the field in step so the next frame's rebuild
+    // can detach it again — and so the Skip arm's shape check can subtract it.
+    if let Some(child) = adopted_child {
+        composer.arena.add_child(index, child);
+        composer.arena.nodes[index].subcomposed_child = Some(child);
+        composer.reused_nodes.insert(child);
+        // Replay the subtree's measurements: they were taken when the subcomposition laid itself out,
+        // and this node has no policy to measure the adopted child with (see
+        // `LayoutNode::subcomposed_measurements`).
+        let cached = std::mem::take(&mut composer.arena.nodes[index].subcomposed_measurements);
+        for (offset, size) in &cached {
+            let target = child + offset;
+            if target < composer.arena.nodes.len() {
+                composer.arena.nodes[target].measured_size = *size;
+                composer.reused_nodes.insert(target);
+            }
+        }
+        composer.arena.nodes[index].subcomposed_measurements = cached;
+    }
+    // New or changed descendants must be measured before a clean ancestor can fold. Waiting for
+    // collect_layout_index (which runs after measurement) leaves newly inserted children at 0x0.
+    if composer.arena.nodes[index].children.iter().any(|&child| composer.arena.nodes[child].dirty) {
+        composer.arena.nodes[index].dirty = true;
+    }
+    Some(index)
+}
+
+/// Rebuilds the reuse index (`slot_key` → arena index, what `start_node` and the claim walk use to
+/// find last frame's node) in one post-order walk, bubbling `dirty` from child to parent on the way.
+///
+/// This walk used to fill a SECOND map in the same visit — a per-node cache (`slot_key` →
+/// `CachedNode`) that materialize read back — and that half was the expensive one: measured by
+/// ablation at **~200 µs of an idle 800-row layout** against **~52 µs** for this index, because the
+/// cost is the value's memory traffic (a whole node snapshot against a `usize`) and not the hashing
+/// (`docs/benchmarks.md`). The cache is gone (see `LayoutNode::last_text` and the readers in
+/// `materialize`): its content lived in the nodes the arena already keeps.
+///
+/// Post-order is required: `dirty` bubbles from child to parent here, so a parent with a dirty
+/// descendant is marked dirty and cannot fold its measurement. The duplicate-key check is
+/// order-independent (it fires on whichever node is inserted second).
+///
+/// The map is RESERVED up front. `LayoutTransaction` moves the previous frame's map out for rollback,
+/// so it starts empty with no capacity — and growing a `HashMap` into 4000 entries rehashes it
+/// several times, measured at 128 µs of an idle 800-row layout, more than the clone the move removed.
+/// `arena.nodes.len()` is an upper bound (slots not reachable from the root are never inserted), and a
+/// map that already has capacity pays a comparison here instead of an allocation.
+///
+/// Children are read by INDEX rather than cloned. The original cloned each node's `children` (a `Vec`)
+/// to satisfy the borrow checker while recursing — one heap allocation per node, per frame, for zero
+/// information: the recursive call takes `&mut NodeArena`, but copying one `usize` out of it ends the
+/// borrow just as well.
+pub(crate) fn collect_layout_index(
+    arena: &mut NodeArena,
+    idx: usize,
+    keys: &mut crate::layout::node::SlotKeyMap<usize>,
+) {
+    keys.reserve(arena.nodes.len());
+    collect_layout_index_rec(arena, idx, None, 0, keys);
+}
+
+fn collect_layout_index_rec(
+    arena: &mut NodeArena,
+    idx: usize,
+    parent: Option<usize>,
+    depth: usize,
+    keys: &mut crate::layout::node::SlotKeyMap<usize>,
+) {
+    // 先递归子节点（后序），以便 dirty 从子向父冒泡
+    let child_count = arena.nodes[idx].children.len();
+    for i in 0..child_count {
+        let c = arena.nodes[idx].children[i];
+        collect_layout_index_rec(arena, c, Some(idx), depth + 1, keys);
+        if arena.nodes[c].dirty {
+            arena.nodes[idx].dirty = true;
+        }
+    }
+    insert_reuse_key(arena, idx, parent, depth, keys);
+}
+
+/// 收集 arena 树中所有节点的 slot_key → 索引映射（阶段D 节点复用用）。
+/// 同 slot_key 两节点 = key 冲突（fail-fast panic——不静默覆盖：
+/// 覆盖意味着前一节点状态丢失 + 节点身份错位——dup-key 是组合 bug
+/// 的最终防线，调试信息含 key/节点索引/被覆盖位置）。
+///
+/// Standalone because `materialize`'s repair path (`compose` without a `layout` in between) rebuilds
+/// ONLY the index from the tree it already has; the cache it does not touch.
+pub(crate) fn collect_node_keys(
+    arena: &NodeArena,
+    idx: usize,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
+) {
+    map.reserve(arena.nodes.len());
+    collect_node_keys_with_parent(arena, idx, None, map, 0);
+}
+
+fn collect_node_keys_with_parent(
+    arena: &NodeArena,
+    idx: usize,
+    parent: Option<usize>,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
+    depth: usize,
+) {
+    insert_reuse_key(arena, idx, parent, depth, map);
+    // Same index-not-clone rule as the fused walk (110 µs of an idle 800-row layout).
+    let child_count = arena.nodes[idx].children.len();
+    for i in 0..child_count {
+        let c = arena.nodes[idx].children[i];
+        collect_node_keys_with_parent(arena, c, Some(idx), map, depth + 1);
+    }
+}
+
+/// Inserts `slot_key → idx`, panicking on a collision. Shared by the fused walk and the index-only
+/// one so the diagnostic — which is the whole point of this being a fail-fast — cannot drift.
+fn insert_reuse_key(
+    arena: &NodeArena,
+    idx: usize,
+    parent: Option<usize>,
+    depth: usize,
+    map: &mut crate::layout::node::SlotKeyMap<usize>,
+) {
+    if let Some(prev) = map.insert(arena.nodes[idx].slot_key, idx) {
+        let (a, b) = (&arena.nodes[idx], &arena.nodes[prev]);
+        let parent_desc = parent
+            .map(|p| format!("父 idx={} sk={:#x}", p, arena.nodes[p].slot_key))
+            .unwrap_or_else(|| "根".to_string());
+        panic!(
+            "[dup-key] slot_key 冲突：sk={:#x} 节点 idx={} pos={:?} size={:?} {}（depth={}）             覆盖了已有节点 idx={} pos={:?} size={:?}             ——同一组合位置出现两个节点（key 漂移/结构变化漏配 ctx.key？）。             修复：①结构变化处加 ctx.key() ②检查列表实例隔离 ③组件调用点在              #[composable] 内",
+            arena.nodes[idx].slot_key, idx, a.position, a.measured_size, parent_desc, depth,
+            prev, b.position, b.measured_size
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CALL SITE, not the rule: the repair has to happen on every compose. When it lived
+    /// inside `retain_shared_sources` — a hook that returns early for a composer with no shared
+    /// content — a stale listing survived and walked into the `[dup-key]` guard during layout
+    /// (measured in review: `mid.children after retain = [2, 2]` for a composer with no shared
+    /// content, versus `[2]` with one shared endpoint present). This fails if the prune stops
+    /// running on the default path, which no other test covers.
+    #[test]
+    fn a_composer_without_shared_content_still_prunes() {
+        use crate::layout::node::LayoutNode;
+        let mut composer = Composer::new();
+        let leaf = composer.arena.alloc(LayoutNode::default());
+        let orphan = composer.arena.alloc(LayoutNode::default());
+        // Not reachable from any tree, and listing the same child twice: the stale shape.
+        composer.arena.nodes[orphan].children.push(leaf);
+        composer.arena.nodes[orphan].children.push(leaf);
+
+        composer.compose(|_ctx| {});
+
+        assert!(
+            composer.arena.nodes[orphan].children.is_empty(),
+            "every compose must clear the listings of an unreachable parent, shared content or not"
+        );
+    }
+
+    /// The listing rule the image demo's Back crash rests on, pinned at the rule level: a node
+    /// ends up with ONE listing, and listings owned by a parent that is not reachable from the
+    /// root go away — those parents are not part of this frame, and a second path to a live node
+    /// is what makes the walk in `collect_node_keys` visit it twice (`[dup-key]`, both printed
+    /// indices equal) or leaves it reachable only through a dead parent (present but never
+    /// measured, 0x0, drawing nothing).
+    ///
+    /// The arena is constructed here because the precondition cannot be produced through
+    /// composition instead: measured, six attempts at that all came back clean, since the
+    /// compose that follows rebuilds a parent's `children` before the key walk runs. This is
+    /// therefore a rule-level lock, NOT a reproduction of the demo's runtime path — the runtime
+    /// evidence is the debug-server run (`[dup-key]` 90 -> 0 over three round trips).
+    #[test]
+    fn prune_keeps_one_listing_and_drops_unreachable_parents() {
+        use crate::layout::node::LayoutNode;
+        let mut composer = Composer::new();
+        let root = composer.arena.alloc(LayoutNode::default());
+        let mid = composer.arena.alloc(LayoutNode::default());
+        let leaf = composer.arena.alloc(LayoutNode::default());
+        let orphan = composer.arena.alloc(LayoutNode::default());
+        composer.arena.root = Some(root);
+        composer.arena.add_child(root, mid);
+        composer.arena.add_child(mid, leaf);
+        // A stale listing under a parent that is NOT reachable from the root, plus a duplicate
+        // listing under the reachable one: both shapes seen in the demo.
+        composer.arena.nodes[orphan].children.push(leaf);
+        composer.arena.nodes[mid].children.push(leaf);
+
+        prune_stale_child_links(&mut composer);
+
+        assert_eq!(
+            composer.arena.nodes[mid]
+                .children
+                .iter()
+                .filter(|&&c| c == leaf)
+                .count(),
+            1,
+            "the reachable parent keeps exactly one listing"
+        );
+        assert!(
+            composer.arena.nodes[mid].children.contains(&leaf),
+            "…and it is the listing that survives"
+        );
+        assert!(
+            composer.arena.nodes[orphan].children.is_empty(),
+            "an unreachable parent keeps no listings"
+        );
+    }
+
+    /// The duplicate repair rewrites the list IN PLACE (a stamp per node, no per-parent set), so its
+    /// two properties are worth pinning: the surviving listings keep their relative order, and an
+    /// out-of-range index is dropped like a duplicate rather than kept.
+    #[test]
+    fn prune_rewrites_a_duplicate_list_in_place_keeping_order() {
+        use crate::layout::node::LayoutNode;
+        let mut composer = Composer::new();
+        let root = composer.arena.alloc(LayoutNode::default());
+        let a = composer.arena.alloc(LayoutNode::default());
+        let b = composer.arena.alloc(LayoutNode::default());
+        let c = composer.arena.alloc(LayoutNode::default());
+        composer.arena.root = Some(root);
+        composer.arena.add_child(root, a);
+        composer.arena.add_child(root, b);
+        composer.arena.add_child(root, c);
+        // [a, b, a, c, OUT-OF-RANGE] — the duplicate is not adjacent, and the last entry names no node.
+        let out_of_range = composer.arena.nodes.len() + 7;
+        composer.arena.nodes[root].children = vec![a, b, a, c, out_of_range];
+
+        prune_stale_child_links(&mut composer);
+
+        assert_eq!(
+            composer.arena.nodes[root].children,
+            vec![a, b, c],
+            "duplicates and out-of-range listings are dropped, the rest keep their order"
+        );
+    }
+}

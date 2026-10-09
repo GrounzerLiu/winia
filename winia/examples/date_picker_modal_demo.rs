@@ -22,9 +22,9 @@
 
 use letclone::clone;
 use winia::composable;
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::prelude::*;
-use winia::ui::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerDialog};
+use winia::components::date_picker::{remember_date_picker_state, CalendarLocale, DatePickerStateInit, DatePickerDialog};
 
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
@@ -36,7 +36,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
     let dialog_open = ctx.remember(|| false);
     // The selection as it stood when the dialog opened, so Cancel can put it back.
     let baseline = ctx.remember(|| None::<i64>);
-    let state = remember_date_picker_state(ctx, CalendarLocale::default());
+    let state = remember_date_picker_state(ctx, CalendarLocale::default(), DatePickerStateInit::default());
 
     Column::new()
         .modifier(Modifier::new().fill_max_size().padding(24.0))
@@ -49,7 +49,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
                      below follows the selection the dialog holds.",
                 )
                 .font_size(12.0)
-                .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                 .build(ctx);
 
                 Button::text()
@@ -81,7 +81,7 @@ fn modal_demo(ctx: &mut ComposeCtx) {
                     .unwrap_or_else(|| "selected: No date selected".to_string());
                 Text::new(selected)
                     .font_size(12.0)
-                    .color(winia::modifier::Color::from_argb(255, 150, 150, 150))
+                    .color(winia::graphics::Color::from_argb(255, 150, 150, 150))
                     .build(ctx);
 
                 // Composed UNCONDITIONALLY, with `visible` carrying the state — as

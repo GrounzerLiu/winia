@@ -129,7 +129,7 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        winia::ui::theme::WiniaTheme::auto(ctx, |ctx| {
+        winia::theme::WiniaTheme::auto(ctx, |ctx| {
             Window::new()
                 .size(720.0, 520.0)
                 .title("Floating Action Button Demo")

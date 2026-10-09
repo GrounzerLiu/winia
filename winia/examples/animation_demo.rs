@@ -63,7 +63,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
 
 /// 第 1 节：Spring 弹跳宽度。
 #[composable]
-fn section1(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section1(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("1. Spring Bouncy — box width")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -89,7 +89,7 @@ fn section1(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 
 /// 第 2 节：Tween 颜色过渡。
 #[composable]
-fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section2(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("2. Tween 300ms — background color")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -98,9 +98,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 
     let alpha = ctx.animate_float_as_state(
         if clicked.get() { 0.9 } else { 0.2 },
-        AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(300),
-            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
+        AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     // 表达式直接写（非闭包非宏非中间变量）——注册到本函数 scope
@@ -120,7 +118,7 @@ fn section2(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 
 /// 第 3 节：updateTransition 位置偏移。
 #[composable]
-fn section3(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section3(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("3. updateTransition — offset")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -160,7 +158,7 @@ fn section3(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 
 /// 第 4 节：animate_color_as_state 颜色过渡。
 #[composable]
-fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section4(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("4. animate_color_as_state (Tween 500ms)")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -170,9 +168,7 @@ fn section4(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
     let bg = ctx.animate_color_as_state(
         if clicked.get() { Color::from_argb(255, 76, 175, 80) }
         else { Color::from_argb(255, 156, 39, 176) },
-        AnimationSpec::Tween(TweenSpec {
-            duration: std::time::Duration::from_millis(500),
-            interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
+        AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(500), delay: Duration::ZERO, interpolator: std::sync::Arc::new(winia::animation::interpolator::Linear::new()),
         }),
     );
     Column::new()
@@ -221,7 +217,7 @@ fn section5(ctx: &mut ComposeCtx) {
             .size(40.0, 40.0)
             .graphics_layer({
                 clone!(pulse);
-                move || winia::modifier::GraphicsLayerParams {
+                move || winia::graphics::GraphicsLayerParams {
                     alpha: pulse.peek(),
                     ..Default::default()
                 }
@@ -236,7 +232,7 @@ fn section5(ctx: &mut ComposeCtx) {
 
 /// 第 6 节：Keyframes 关键帧。
 #[composable]
-fn section6(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section6(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("6. Keyframes (400ms, overshoot)")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -260,7 +256,7 @@ fn section6(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 
 /// 第 7 节：animateDpAsState Dp 动画。
 #[composable]
-fn section7(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section7(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     Text::new("7. animateDpAsState (Dp)")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
@@ -279,7 +275,7 @@ fn section7(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
 }
 
 #[composable]
-fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section8(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     // 8a. AnimatedSize——尺寸变化自动动画（对标 animateContentSize）
     Text::new("8a. AnimatedSize (尺寸变化动画)")
         .font_size(14.0)
@@ -305,7 +301,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
         .build(ctx);
-    let page: winia::core::state::State<u32> = ctx.remember(|| 0u32);
+    let page: winia::runtime::state::State<u32> = ctx.remember(|| 0u32);
     Crossfade::new(page.clone())
         .animation(TweenSpec::default())
         .build(ctx, |ctx, p| {
@@ -369,7 +365,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
         .build(ctx);
 }
 
-fn section9(ctx: &mut ComposeCtx, clicked: &winia::core::state::State<bool>) {
+fn section9(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
     // 9a. animateIntAsState——target 变化自动动画（对标 Compose animateIntAsState）
     Text::new("9a. animateIntAsState (整数动画)")
         .font_size(14.0)

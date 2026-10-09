@@ -72,14 +72,14 @@ together with a new `SceneDecoratorStrategy`. So Compose has both levels: a hero
 
 A flight is triggered when a marked key **disappears from the live tree**: `retain_shared_sources`
 collects the keys of `prev_shared_endpoints` that are not in the new `live` map
-(`winia/src/ui/shared_transition.rs`, the `gone` loop), then `detach_source` freezes that node as
+(`winia/src/components/shared_transition.rs`, the `gone` loop), then `detach_source` freezes that node as
 the leaving end.
 
 The live map tolerated two ends with the same key but **kept only the last one** and only logged (the
 code below no longer exists — it is the shape the diagnosis started from):
 
 ```rust
-// winia/src/ui/shared_transition.rs — REMOVED; this is the pre-fix shape quoted for the diagnosis
+// winia/src/components/shared_transition.rs — REMOVED; this is the pre-fix shape quoted for the diagnosis
 if out.insert((m.scope_id, m.key.clone()), node.slot_key).is_some() {
     crate::debug_log!("[shared] duplicate live endpoint scope={} key={}", …);
 }

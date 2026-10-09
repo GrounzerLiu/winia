@@ -1,5 +1,7 @@
 # 动画系统差距分析（对标 Jetpack Compose）
 
+> ⚠ **Historical record — the round of 2026-08-05, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > 分支：`animation-system`（基于 text-field 02ce48c）
 > 方法：官方文档（developer.android.com/develop/ui/compose/animation/value-based 等）+ 本地代码盘点
 > 目的：完整对照 Compose 动画 API 面，给出实现/优化清单
@@ -116,7 +118,7 @@
 | High-level value anim | `animate_rect_as_state` / `animate_bounds_as_state` | ⏸️ skipped by design (no `Rect` unit type exists; bounds animate via `Offset`+`Size`, both animatable — add when a consumer needs it) |
 | High-level value anim | `label` / `finished_listener` params | ⚠️ partial (`on_finish` + `push_animatable_with_done` done; `label` skipped — Transition already has it) |
 | Container anim | **`AnimatedVisibility`** enter/exit set | ✅ done (params aligned + horizontal expand, P0-1) |
-| Container anim | `AnimatedContent` / `Crossfade` | ✅ done (single content generation — engine limit, documented) |
+| Container anim | `AnimatedContent` / `Crossfade` | ✅ both keep every state on screen (Compose's `currentlyVisible`: one alpha per entry, incoming on top, a target already visible replaced in place; `AnimatedContent` also animates and clips the container's size, `Crossfade` has no size animation by design). `TweenSpec` carries `delayMillis`, so `AnimatedContent`'s default is Compose's staggered `fadeIn(220, delay 90) + scaleIn(0.92)` against `fadeOut(90)`. `contentAlignment` is in too (`ContentAlignment`, 2-D with the nine Compose constants) |
 | Transition | `animate_color/dp/size/offset/value` + `create_child_transition` + `label` | ✅ done (P0-2) |
 | Infinite anim | `animate_value` (generic) | ❌ missing (float/color only) |
 | Spec | `cubic_bezier`/`PathEasing` custom easing | ✅ done (P2-11) |
@@ -164,8 +166,8 @@
 
 ### P1 — 常见需求
 4. **`Crossfade`**（两内容交叉淡入淡出——简单版 AnimatedContent）✅ `7d85252`
-   - 实现为**顺序淡入淡出**（非交叉）：组合引擎单内容世代（无 Compose 双世代
-     outgoing 组合）——旧内容淡出完成才切换新内容淡入；`Crossfade::new(target).build(ctx, |ctx, t| ...)`
+   - Originally implemented as a SEQUENTIAL fade (out to nothing, swap, fade in) — which is not what the name or Compose promises. It now keeps both generations composed like `AnimatedContent`; the earlier note here blamed an engine limit that never existed (`NavDisplay` had composed two scenes at once all along)
+   - `Crossfade::new(target)` + `.animation(spec)` / `.modifier(..)` / `.content_key(..)` + `.build(ctx, |ctx, t| ...)`
 5. **`animate_content_size`**（尺寸变化自动动画）✅ `7d85252`
    - 实现为**容器组件 `AnimatedSize`**（非 Modifier）：本框架 Modifier 是纯数据
      （构建期无组合上下文）无法内嵌 remember——容器组件在组合期创建 State（机制等价）
@@ -200,11 +202,15 @@
     - 测试：`frame_clock_ticks_and_waits`；prelude 导出
 13. **graphics_layer 补属性**（shadow/clip/shape/blur——渲染层能力）
 14. **`animate_item`**（列表增删/移动动画——需先有 LazyList 或简单列表容器）
-15. **`AnimatedContent`** ✅ 本分支
-    - `AnimatedContent<T>::new(target)` + `.animation(spec)`（fade）+ `.size_animation(spec)`（sizeTransform，默认 Spring bouncy）
-    - 机制：target 变 → 旧内容淡出 → 淡出完成（progress<0.001）→ 锁定旧尺寸 → current.set → 内容重建 → 淡入；**容器尺寸 = lerp(prev_size, 新内容尺寸, progress)**（布局层 layout_dep 每帧重测）；alpha 绘制层 peek（零重组）
-    - 单内容世代（无 Compose 双世代 outgoing——组合引擎限制，文档注明）
-    - 测试：`animated_content_switches_with_size_transform`；demo：`animated_content_demo`
+15. **`AnimatedContent`** / **`Crossfade`** ✅ 本分支
+    - `AnimatedContent<T>::new(target)` + `.enter(...)` / `.exit(...)` + `.size_animation(spec)` (sizeTransform, a spring by default) + `.clip(bool)` / `.modifier(...)` / `.content_key(...)`; `Crossfade<T>::new(target)` + `.animation(spec)` / `.modifier(...)` / `.content_key(...)` — the same component without a size animation, which is exactly how Compose splits the two
+    - Mechanism (both generations on screen, Compose's `currentlyVisible`): a target change moves the old value into `previous` and the new one into `current` IMMEDIATELY and the two compose into their own container slots, the incoming last so it draws on top; the outgoing runs `exit` 1→0 while the incoming runs `enter` 0→1, overlapping in time; `AnimatedContent` also animates the container's size — lerp(old content size, new content size, size) on its OWN progress and spec, re-measured every frame through a layout dep — and clips to it by default
+    - Both need per-generation composition keys plus `ctx.changed(&value)`: a fixed key replays the previous generation's slots instead of re-running the content closure, and a same-`content_key` value change otherwise never re-runs it either. Both bugs were measured (a switch made mid-transition left the old pair on screen for four frames; a same-key update left the leaf at its old size)
+    - Aligned later: `contentAlignment` — `ContentAlignment` (2-D, both axes independently) is
+      what `AnimatedContent::content_alignment`, `Stack::content_alignment`, `BoxLayout::content_alignment`
+      and `AnimatedSize::content_alignment` take now; the one-axis `Alignment` remains for the
+      cross-axis role Column and Row use it for
+    - Tests: `both_generations_are_composed_during_a_transition`, `the_switch_takes_one_spec_duration_not_two`, `the_same_content_key_does_not_animate`, `a_switch_during_a_transition_shows_the_new_pair_at_once` (AnimatedContent), `animated_content_switches_with_size_transform`, `size_animation_independent_of_fade`; demos: `animated_content_demo`
 
 ### 缺陷修复（随上述实施顺带）
 - dedup 忽略 spec（P0-2 时修）

@@ -10,7 +10,7 @@
 
 use letclone::clone;
 use winia::animation::{exponential_decay, push_decay};
-use winia::modifier::GraphicsLayerParams;
+use winia::graphics::GraphicsLayerParams;
 use winia::prelude::*;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]

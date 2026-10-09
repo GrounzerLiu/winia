@@ -11,7 +11,7 @@ use letclone::clone;
 use std::sync::Arc;
 use winia::animation::interpolator::Interpolator;
 use winia::animation::{AnimationSpec, TweenSpec};
-use winia::modifier::GraphicsLayerParams;
+use winia::graphics::GraphicsLayerParams;
 use winia::prelude::*;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]

@@ -89,7 +89,7 @@ private fun Modifier.surface(shape, backgroundColor, border, shadowElevation) =
 ## 6. 待办（下一步）
 
 ### 6.1 Surface 组件 ✅ 已完成（本次会话）
-- **新建 `winia/src/ui/surface.rs`**：对齐 Compose `Surface`。字段 `shape/color/content_color/tonal_elevation/shadow_elevation/border` + 交互字段 `enabled/interaction/interaction_source`。
+- **新建 `winia/src/components/surface.rs`**：对齐 Compose `Surface`。字段 `shape/color/content_color/tonal_elevation/shadow_elevation/border` + 交互字段 `enabled/interaction/interaction_source`。
 - 内部 modifier 链 = `shadow(graphics_layer) → border → background → clip`（对齐 Compose `Modifier.surface`）。`content_color` 经 `WiniaTheme::with_content_color` 下传（默认 `color==surface→on_surface` 匹配；非标准色→保持上层 `content_color()`）。
 - 已注册：`ui.rs`（`pub mod surface;` + `pub use surface::{Surface, SurfaceBorder};`）、`lib.rs` prelude（`Card...CardStyle, Surface, SurfaceBorder`）。
 - 已写示例 `winia/examples/surface_demo.rs`（验证 shape/color/border/shadow/content_color + 三个交互重载），实测渲染正常（点击注入在本会话不稳定，见 §8 注意）。

@@ -1,6 +1,6 @@
 # AlertDialog
 
-M3 alert dialogs: `winia/src/ui/alert_dialog.rs`. Demo:
+M3 alert dialogs: `winia/src/components/alert_dialog.rs`. Demo:
 `cargo run -p winia --example alert_dialog_demo`.
 
 ## API
@@ -116,7 +116,7 @@ Its per-state numbers (`OutlinedCardTokens.kt:30,34`) are `shadowElevation` only
 is `ElevationTokens.Level0 = 0.dp`. So in practice no stock Compose component tints: the capability is on
 `Surface` because that is where Compose puts it, not because a stock caller uses it.
 
-Six tests in `ui::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
+Six tests in `components::surface` pin it: the tint and the formula (with the Level2 8.24% alpha), the non-`surface`
 colours staying untouched, zero elevation and the switch each doing nothing, the content colour still
 following the UNTINTED base colour, the tint reaching the rendered pixels, and the accumulation across two
 and three nested surfaces.
@@ -131,12 +131,26 @@ screenshots.
 **Width** is the content's own width clamped into `280..560dp` — Compose's `sizeIn`. That needs
 both halves of `widthIn`: `min_width` alone would let a long body grow the dialog to the window.
 `Modifier::max_width` was added for it (`winia/src/modifier.rs`, `layout/node.rs`): the cap
-lowers the incoming max and is then held at or above the min. When a min and a max conflict the
-min wins here, which is a DEVIATION from Compose — its `widthIn(min, max)` coerces the min down
-to the max, and two separate calls are order-dependent, which winia cannot express at all
-(its elements are scanned chain-wide, position-independently). Min-wins is CSS's precedence and
-the reason the clamp exists: `Constraints::constrain_*` are `f32::clamp`, which panics on
-min > max. Verified on a 900-wide window: the dialog stays 560.
+lowers the incoming max and is then held at or above the min.
+
+`platform_default_width(false)` is Compose's `DialogProperties.usePlatformDefaultWidth = false`:
+the range is not applied, so the content sizes itself. That is how a caller asks for a dialog wider
+than `DIALOG_MAX_WIDTH`, or one that fills the window. On both `AlertDialog` and `BasicAlertDialog`,
+default `true`.
+
+**The text slot takes the slack.** Compose wraps it in `Box(Modifier.weight(1f, fill = false))`
+(`AlertDialog.kt:350`) and so does winia — `layout_weight_fill(1.0, false)`. When a height is
+imposed, the text box is clamped to the leftover space so the action row keeps its own height.
+Measured in the tests' 800x600 window with a 2000px text: without the weight the dialog is
+`280x600` with the action row at `y=576, h=0`; with it, `y=536, h=40`.
+
+When a min and a max conflict the winner is Compose's chain-order rule, replayed by
+`Modifier::min_max_steps`: each Compose modifier is its own node and constrains into what the node
+before it produced, so `.max_width(200).min_width(300)` measures 200 while the reverse measures
+300. This used to be a recorded deviation — "the min always wins", which is CSS's precedence and
+matches only the second order — and the clamp is what keeps `Constraints` consistent either way
+(`Constraints::constrain_*` are `f32::clamp`, which panics on min > max). Verified on a 900-wide
+window: the dialog stays 560.
 
 **The action row** is a `FlowRow` whose layout direction is FLIPPED while the buttons keep the
 original one (`AlertDialogFlowRow`). With the content in the order confirm-then-dismiss, that
@@ -152,10 +166,12 @@ The caller's `modifier` is a WRAPPER around the surface — as in Compose's
 of eating into it alongside the 24dp content padding.
 
 A slot is laid out inside the content box with its own bottom padding and cross-axis alignment.
-A slot that demands more than the box (`.size(w, h)` larger than the dialog) OVERFLOWS it:
-winia's `size()` overrides the incoming constraints where Compose's coerces them
-(`requiredSize` is Compose's override), so the surface's `clip` is what keeps it inside the
-rounded corners; the node still starts at the padding, so nothing else moves.
+A slot that demands more than the box (`.size(w, h)` larger than the dialog) is COERCED into it:
+a `Size` is clamped into the incoming range, which is Compose's `size()` (`enforceIncoming = true`
+— a request only overrides the range through `required_size`, Compose's `requiredSize`), so such a
+slot comes out at the width it is offered and still starts at the padding. winia used to write the
+request over the constraints and let the surface's `clip` hide the spill; the alignment with Compose
+removed that, and `required_size` is what a caller reaches for if the spill is wanted.
 
 `confirm_button` is a slot like the rest, so a dialog without one builds (Compose's two-action
 overload requires it; its `content` overload is `BasicAlertDialog` here).
@@ -173,7 +189,7 @@ them, but the group holds nothing winia acts on differently):
 | `dismissOnClickOutside` | `dismiss_on_outside` | true |
 | `dismissOnBackPress` | `dismiss_on_back_press` | true |
 | `isFocusable` | `focusable` (drives the overlay's `focus_scope`) | true |
-| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | — | `usePlatformDefaultWidth` is a common `DialogProperties` field with no counterpart in an overlay that sizes itself; `decorFitsSystemWindows` is an Android-window concept. Deliberately not stubbed |
+| `usePlatformDefaultWidth`, `decorFitsSystemWindows` | `platform_default_width` | `decorFitsSystemWindows` is an Android-window concept with no desktop meaning and is deliberately not stubbed |
 
 `dismiss_on_back_press(false)` still SWALLOWS Escape rather than letting it through, so the page behind the
 scrim never reacts to a key this dialog kept. **That swallow is winia's own, not a copy of Compose's** —
@@ -199,12 +215,19 @@ state is needed on top of that, because the enter animation runs on registration
 an edge for is its own sheet slide, which a dialog has none of) — and see "Composing it" above for why
 `visible` has to be an argument rather than a surrounding `if`.
 
-Tests (10) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
+Tests (12) cover: no overlay when hidden and exactly one modal, centred overlay when shown; the
 `dismiss_on_outside`, `dismiss_on_back_press` and `focusable` flags reaching the overlay, each with
-Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap; the slot order
-with its 16/16/24 paddings; the title centring with an icon and start-alignment without one; the
-button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
+Compose's default; the `role = Dialog` the surface publishes; the 280 floor and the 560 cap BY
+DEFAULT — and, with `platform_default_width(false)`, a body wider than the cap escaping it while the
+window still bounds it; a text slot taller than the window leaving the action row its own height; the
+slot order with its 16/16/24 paddings; the title centring with an icon and start-alignment without
+one; the button row's end alignment with the confirm action last; the WRAPPED row putting the confirm
 above the dismiss; and the over-sized-slot overflow above.
+
+The `fill = false` in the text slot's weight is pinned by `slots_stack_in_order_with_their_paddings`,
+NOT by the tall-text test: with `fill = true` the box is stretched to its share whether it needs it
+or not, which that test catches through its fixed 40-tall text (swapping the call for
+`layout_weight(1.0)` measures 11 passed / 1 failed), while the tall-text test passes on both.
 
 The escape gate itself is tested at the key path, not just on the flag:
 `app::overlay_close_tests::escape_respects_dismiss_on_back_press` builds two overlays and asserts Escape is
@@ -226,16 +249,15 @@ consumed and closes the first, and is consumed but closes neither when `dismiss_
   within when no focus-scope overlay is up (`app.rs:3346`), so focus does not reach the page behind.
   Every other key does fall through (`focus_scope_is_open` is false), so this is Tab only. Not fixed: the
   unconditional consume is load-bearing for every other overlay.
-- **No `weight(1f, fill = false)` on the text.** Compose gives it so the text absorbs the slack
-  when the *caller* imposes a height, which puts the action row at the bottom of that height;
-  winia's `layout_weight` has no `fill` flag and would stretch the node, so it is omitted and the
-  slack stays BELOW the buttons instead (the column stacks from the top). A dialog sizes to its
-  content by default, so this only shows with a caller-imposed height.
-- **No `DialogProperties` object** — the three cross-platform fields are flat on the builder
-  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`) rather than grouped.
-  `usePlatformDefaultWidth` is a common `DialogProperties` field (`DatePickerDialog.kt:59`) that winia's
-  overlay has no counterpart for, and `decorFitsSystemWindows` is an Android-window concept; both are
-  deliberately absent. See the table under "Structure and behaviour" for which is which.
+- **Text slot weight — ALIGNED (was a deviation).** Compose gives the text slot
+  `weight(1f, fill = false)` so it absorbs the slack when a height is imposed; winia now does the
+  same, and two tests cover the two halves: a 2000px text in a 600px window leaves the action row at
+  its own 40px instead of crushing it to 0, and a 40px text is not stretched to its share.
+- **No `DialogProperties` object** — the cross-platform fields are flat on the builder
+  (`dismiss_on_outside`, `dismiss_on_back_press`, `focusable`, `platform_default_width`) rather than
+  grouped. `decorFitsSystemWindows` and the rest of the Android-window fields have no desktop
+  meaning; `usePlatformDefaultWidth` does, and is `platform_default_width`. See the table under
+  "Structure and behaviour" for which is which.
 - The tests find the dialog's nodes through `Modifier::test_tag` and a real overlay layout (the
   registered overlay's content is composed in its own `Composer`, as the app does), so they
   check the geometry the user sees rather than the builder's fields.

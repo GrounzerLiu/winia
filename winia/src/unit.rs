@@ -10,7 +10,6 @@
 //! - 均实现 `AnimatableValue`，可直接用于动画系统
 
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
-use std::sync::LazyLock;
 
 // ═══════════════════════════════════════════════════════════
 // Dp — 密度无关像素（1dp ≈ 1/160 inch）
@@ -162,6 +161,8 @@ pub struct Offset {
 }
 
 impl Offset {
+    pub const ZERO: Offset = Offset { x: 0.0, y: 0.0 };
+
     pub fn new(x: f32, y: f32) -> Self { Offset { x, y } }
 }
 
@@ -243,6 +244,20 @@ impl crate::animation::AnimatableValue for Offset {
     }
     fn to_f32(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
     fn from_f32(v: f32) -> Offset { Offset::new(v, v) }
+    // 两个轴各有一条弹簧（Compose 的 `Offset.VectorConverter` 同样按分量展开），
+    // 所以 Spring 不必降级成 Tween。
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.x;
+        out[1] = self.y;
+        2
+    }
+    fn from_components(components: &[f32]) -> Offset {
+        Offset::new(components[0], components[1])
+    }
 }
 
 impl crate::animation::AnimatableValue for Size {
@@ -251,6 +266,20 @@ impl crate::animation::AnimatableValue for Size {
     }
     fn to_f32(&self) -> f32 { (self.width * self.width + self.height * self.height).sqrt() }
     fn from_f32(v: f32) -> Size { Size::new(v, v) }
+    // 宽高各有一条弹簧——Compose 的 `IntSize.VectorConverter` 也是这样，尺寸弹簧因此
+    // 两个轴都能落到目标，而不是沿对角线共用一条位移。
+    fn supports_spring() -> bool { true }
+    fn write_components(
+        &self,
+        out: &mut [f32; crate::animation::MAX_ANIMATION_COMPONENTS],
+    ) -> usize {
+        out[0] = self.width;
+        out[1] = self.height;
+        2
+    }
+    fn from_components(components: &[f32]) -> Size {
+        Size::new(components[0], components[1])
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -333,11 +362,16 @@ pub enum TextUnit {
 }
 
 impl TextUnit {
-    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）
-    pub fn to_logical_px(&self) -> f32 {
+    /// 解析为逻辑像素（Sp 直接取值；Px 需 Density 转换）。
+    ///
+    /// The density is a parameter and not an ambient lookup: asking for it would make this module —
+    /// the lowest one — name the composition runtime. Compose does the same
+    /// (`TextUnit.toPx(density)`), and the caller that has a `Density` in hand is the one that
+    /// knows which subtree it is resolving for.
+    pub fn to_logical_px(&self, density: Density) -> f32 {
         match self {
             TextUnit::Sp(s) => s.value(),
-            TextUnit::Px(p) => p.to_logical(current_density()),
+            TextUnit::Px(p) => p.to_logical(density),
         }
     }
 }
@@ -350,26 +384,6 @@ impl From<Sp> for TextUnit {
 }
 impl From<Px> for TextUnit {
     fn from(p: Px) -> Self { TextUnit::Px(p) }
-}
-
-// ═══════════════════════════════════════════════════════════
-// LOCAL_DENSITY — CompositionLocal（对标 Compose LocalDensity）
-// ═══════════════════════════════════════════════════════════
-
-use crate::core::composition_local::CompositionLocal;
-
-static LOCAL_DENSITY: LazyLock<CompositionLocal<Density>> = LazyLock::new(|| {
-    CompositionLocal::new(|| Density::standard())
-});
-
-/// 读取当前子树 Density（默认 standard=1.0）
-pub fn current_density() -> Density {
-    LOCAL_DENSITY.current()
-}
-
-/// 在子树中提供 Density
-pub fn with_density<R>(density: Density, content: impl FnOnce() -> R) -> R {
-    LOCAL_DENSITY.provides(density, content)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -464,18 +478,14 @@ mod tests {
         assert_eq!(pxf, Px(3.5));
 
         // Dp/Px → Dimension（供 .size() 消费）
-        use crate::modifier::Dimension;
+        use crate::layout::Dimension;
         let d: Dimension = 10.dp().into();
         assert_eq!(d, Dimension::Dp(Dp(10.0)));
         let p: Dimension = 20.px().into();
         assert_eq!(p, Dimension::Px(Px(20.0)));
 
-        // Dp → 逻辑像素 = dp 值；Px → 逻辑像素 = px/density
-        with_density(Density::from_density(2.0), || {
-            assert_eq!(Dimension::Dp(Dp(10.0)).to_logical_px(), 10.0);
-            assert_eq!(Dimension::Px(Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0 = 10 逻辑
-            assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
-        });
+        // `Dimension::to_logical_px` needs the ambient density, so its assertion lives beside it
+        // in `layout/sizing.rs` rather than here.
     }
     /// Guard for the class of bug this module's doc comments describe.
     ///

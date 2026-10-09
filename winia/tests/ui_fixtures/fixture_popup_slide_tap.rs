@@ -14,7 +14,7 @@
 
 use letclone::clone;
 use winia::prelude::*;
-use winia::ui::{Popup, PopupPosition};
+use winia::overlay::{Popup, PopupPosition};
 
 /// How far the popup jumps, in logical px — far beyond the 8 px tap slop.
 const JUMP: f32 = 300.0;

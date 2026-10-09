@@ -28,8 +28,8 @@ use winia::prelude::*;
 mod settings;
 // The menu the trailing button opens (the same component the dropdown demo shows on its own), and the
 // published path data of the trigger glyph.
-use winia::ui::overlay::ExposedDropdownMenuDefaults;
-use winia::ui::{DropdownMenu, DropdownMenuItem};
+use winia::components::dropdown_menu::ExposedDropdownMenuDefaults;
+use winia::components::dropdown_menu::{DropdownMenu, DropdownMenuItem};
 
 /// Material Icons `add` (24 dp, filled), from <https://fonts.google.com/icons>: the leading button's
 /// action glyph, at the size `ButtonSmallTokens.IconSize` names for the leading icon.

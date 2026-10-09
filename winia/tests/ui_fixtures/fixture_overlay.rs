@@ -1,7 +1,7 @@
 //! UI 测试 fixture：Popup overlay 开关——验证 overlay 树条目随 visible 出现/消失。
 
 use winia::prelude::*;
-use winia::ui::overlay::{Popup, PopupPosition};
+use winia::overlay::{Popup, PopupPosition};
 
 #[composable]
 fn overlay_fixture(ctx: &mut ComposeCtx) {

@@ -7,7 +7,7 @@
 //! step to, and the day a tap selects.
 
 use winia::prelude::*;
-use winia::ui::date_picker::{CalendarDate, CalendarLocale, DatePicker, DatePickerState, DatePickerStateInit};
+use winia::components::date_picker::{CalendarDate, CalendarLocale, DatePicker, DatePickerState, DatePickerStateInit};
 
 /// The start of a fixed UTC day, so nothing in the fixture depends on the clock.
 fn millis(year: i32, month: u32, day: u32) -> i64 {

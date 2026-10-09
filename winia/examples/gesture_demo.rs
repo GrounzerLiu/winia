@@ -2,19 +2,22 @@
 //! 测试 Compose 风格 click 检测 + on_pointer_event 完整生命周期
 
 use letclone::clone;
-use winia::core::composer::ComposeCtx;
+use winia::runtime::composer::ComposeCtx;
 use winia::composable;
-use winia::modifier::{Modifier, Color, Dimension, PointerEvent, PointerEventType};
-use winia::ui::text::Text;
-use winia::ui::Window;
+use winia::modifier::{Modifier};
+use winia::layout::{Dimension};
+use winia::input::{PointerEvent, PointerEventType};
+use winia::graphics::{Color};
+use winia::components::text::Text;
+use winia::app::window::Window;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::theme::WiniaTheme;
-use winia::ui::Column;
-use winia::ui::layout_components::Row;
-use winia::ui::button::{Button, ButtonStyle};
+use winia::theme::WiniaTheme;
+use winia::layout::Column;
+use winia::layout::components::Row;
+use winia::components::button::{Button, ButtonStyle};
 use winia::app;
 
 #[composable]
@@ -46,7 +49,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     .modifier(
                         Modifier::new()
                             .padding(8.0)
-                            .background(Color::from_argb(40, 100, 149, 237), winia::modifier::Shape::rounded(4.0))
+                            .background(Color::from_argb(40, 100, 149, 237), winia::graphics::Shape::rounded(4.0))
                             .on_pointer_event({
                                 clone!(count, last);
                                 move |e: &PointerEvent| {
@@ -78,7 +81,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                         Modifier::new()
                             .padding(12.0)
                             .size(200.0, Dimension::Auto)
-                            .background(Color::from_argb(60, 200, 200, 80), winia::modifier::Shape::rounded(6.0))
+                            .background(Color::from_argb(60, 200, 200, 80), winia::graphics::Shape::rounded(6.0))
                             .on_pointer_event({
                                 clone!(last, drag);
                                 move |e: &PointerEvent| {
@@ -114,7 +117,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                         Modifier::new()
                             .padding(12.0)
                             .size(240.0, Dimension::Auto)
-                            .background(Color::from_argb(80, 156, 39, 176), winia::modifier::Shape::rounded(6.0))
+                            .background(Color::from_argb(80, 156, 39, 176), winia::graphics::Shape::rounded(6.0))
                             .on_press({ clone!(tap_info); move |p: (f32, f32)| {
                                 tap_info.set(format!("press at ({:.0},{:.0})", p.0, p.1));
                             } })
@@ -146,7 +149,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                                 Modifier::new()
                                     .size(70.0, 70.0)
                                     .offset(drag_x.clone(), drag_y.clone())
-                                    .background(Color::from_argb(255, 255, 87, 34), winia::modifier::Shape::rounded(8.0))
+                                    .background(Color::from_argb(255, 255, 87, 34), winia::graphics::Shape::rounded(8.0))
                                     .on_drag_start({ clone!(drag_state); move |_p: (f32, f32)| {
                                         drag_state.set(String::from("拖拽开始"));
                                     } })

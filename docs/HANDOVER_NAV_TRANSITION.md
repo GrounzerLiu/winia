@@ -182,7 +182,7 @@ python tools/ws_conv_shot.py 9998 /tmp/frame.png
 | `winia/src/animation.rs` | `push_animatable`（151 行起）——同目标 dedup、不同目标取消旧动画、继承速度；`Animatable` 内部 |
 | `winia/src/modifier.rs` | `GraphicsLayerParams`（1955 行）——`translation_x/y` 单位是 **逻辑 px**；graphics_layer 应用（2634 行 `current += next`） |
 | `winia/src/render.rs` | 62 行 `canvas.translate((gl.translation_x, gl.translation_y))`——translation 应用方式 |
-| `winia/src/ui/animated_visibility.rs` | 170-216 行——**正确的滑动实现参考**（`off = (1-p)*48`，`SlideDirection::Left => translation_x = -off`）——注意它是 **visible 0→1 语义**（p=0 隐藏，p=1 显示），与 NavTransition 的 1→0 相反 |
+| `winia/src/components/animated_visibility.rs` | 170-216 行——**正确的滑动实现参考**（`off = (1-p)*48`，`SlideDirection::Left => translation_x = -off`）——注意它是 **visible 0→1 语义**（p=0 隐藏，p=1 显示），与 NavTransition 的 1→0 相反 |
 | `winia/src/core/composer.rs` | `remember`（227 行）、`remember_at_key`（259 行）、`key()`、slot_table 机制 |
 | `winia/src/core/state.rs` | `State::get/set/set_silent/peek` 语义——get 注册依赖触发重组，set_silent 不通知，peek 渲染期读零重组 |
 | `winia/examples/nav_demo.rs` | demo 页面（Home/Detail/Settings）与按钮布局 |

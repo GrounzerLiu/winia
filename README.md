@@ -70,7 +70,8 @@ cargo test --test ui_test --features debug-server  # UI 集成测试（真实窗
 - [Nested Scroll 文档](docs/nested-scroll.md) — pre/post scroll、TopAppBarState 与行为工厂
 - [动画差距分析](docs/animation-gap-analysis.md) — 动画系统全景与实现状态
 - [Debug Server 指南](docs/debug-server.md) — WS/stdin 调试通道：事件注入、布局树（含 overlay）、帧抓取
-- [架构设计文档](docs/architecture.md) — 早期设计稿（部分过时）
+- [架构文档](docs/architecture.md) — 当前的模块分层、一帧的流程、各子系统与 Compose 对照
+- [v2 设计稿](docs/v2-design-notes.md) — v1→v2 那轮的设计意图与决策记录（历史，路径已过时）
 - [UI 测试框架](docs/ui-testing.md) — 集成测试的用法与坑
 
 ## Workspace 结构

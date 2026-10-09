@@ -79,6 +79,7 @@ pub(crate) enum GestureAction {
     /// 拖拽结束（up）
     DragEnd,
     /// 拖拽取消（cancel——up 前被系统打断）
+    #[allow(dead_code)] // reserved: the winit side does not deliver the cancel event yet
     DragCancel,
     /// 无动作（事件被消费但不产生回调）
     None,
@@ -86,7 +87,9 @@ pub(crate) enum GestureAction {
 
 /// 手势跟踪状态——每轮 down 创建，up/cancel 销毁
 pub(crate) struct GestureTracker {
-    /// 手势节点 id（回调路由目标）
+    /// 手势节点 id（回调路由目标）。跟踪器构造时由被跟踪的节点给出，是它代表谁的身份；
+    /// 目前没有读者，保留以免丢掉调用方已经交出来的信息。
+    #[allow(dead_code)]
     pub(crate) node_id: u64,
     /// 按下位置
     down_pos: (f32, f32),
@@ -279,6 +282,7 @@ impl GestureTracker {
     /// 取消（系统打断）——返回 drag cancel（拖拽中）或 None。
     /// ⚠ 当前 winit 未接入 PointerCanceled/TouchCanceled 事件——此分支为
     /// 预留 API（未来窗口失焦/触控取消时驱动）；状态机逻辑已单测覆盖。
+    #[allow(dead_code)] // reserved: see the doc comment above; the state machine is unit-tested
     pub(crate) fn on_cancel(&mut self) -> GestureAction {
         if self.dragging {
             GestureAction::DragCancel

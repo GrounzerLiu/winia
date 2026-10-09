@@ -22,8 +22,8 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::ui::{TextField, TextFieldValue};
-use winia::ui::text_transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
+use winia::components::{TextField, TextFieldValue};
+use winia::text::transformation::{OffsetMapping, PasswordTransformation, TransformedText, VisualTransformation};
 
 /// 自定义视觉变换：仅保留数字，每 4 位加空格分组（123456789012 → 1234 5678 9012）。
 ///

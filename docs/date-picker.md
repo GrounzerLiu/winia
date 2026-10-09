@@ -204,7 +204,7 @@ the day is today; `null` when nothing applies. The range words come from `DateRa
   `formatHeadlineDescription`, `formatDatePickerNavigateToYearString`. Behind them: `java.time`, `WeekFields`,
   `android.icu.text.DateFormat` / `android.text.format.DateFormat.getBestDateTimePattern`, and `java.text`
   (`SimpleDateFormat`, `DateFormatSymbols`, `NumberFormat`). winia replaces the lot with the date arithmetic in
-  `winia/src/ui/date_picker.rs` plus a caller-supplied locale and formatter.
+  `winia/src/components/date_picker.rs` plus a caller-supplied locale and formatter.
 - **Not mirrored on purpose**: `DatePickerColors.equals`/`hashCode` ignore `navigationContentColor`,
   `dividerColor` and `dateTextFieldColors` (`DatePicker.kt:1045-1102`) — an upstream omission, not behaviour.
 
@@ -214,7 +214,7 @@ Compose mirrors two independent things, and a picker needs both:
 
 1. **Layout** — `Row` puts its first child at the *start* (the right edge under RTL), and
    `Arrangement.Start`/`End`, `paddingStart`/`paddingEnd` swap meaning with it. winia mirrors placements
-   in `layout/flex.rs:288` and every container reads the ambient direction at compose time
+   in `layout/flex.rs:302-303` and every container reads the ambient direction at compose time
    (`ui/layout_components.rs:110`), so this half needed no date picker work.
 2. **Artwork** — only glyphs the caller marks auto-mirrored flip. material3's two month arrows are
    `Icons.AutoMirrored.Filled.KeyboardArrowLeft` / `…KeyboardArrowRight` (`DatePicker.kt:2225`, `:2232`),
@@ -270,7 +270,7 @@ them directly on screen.
 
 ## winia status
 
-`winia/src/ui/date_picker.rs` holds the calendar model the rest of the component needs:
+`winia/src/components/date_picker.rs` holds the calendar model the rest of the component needs:
 `CalendarDate` (proleptic Gregorian, `days_from_civil`/`civil_from_days`, day-of-week in `java.time`'s
 Monday-is-1 numbering), `CalendarMonth` (length, `days_from_start_of_week_to_first_of_month`,
 `start_utc_time_millis`, `end_utc_time_millis`, `index_in`), `CalendarLocale` (weekday and month names plus the
@@ -336,11 +336,14 @@ month at a time because "winia has no lazy row", with the arrows stepping the mo
 shape — a paged `LazyRow` over every month in the year range, with the arrows animating the list rather than
 writing the month — see "Swiping between months".
 
-The year panel carries the second deviation. material3 overlays it on the month calendar inside an
-`AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia swaps the calendar out,
-which shows the same picture because the panel is exactly as tall as what it replaces (335 + 1 dp of divider
-against the weekday row's 48 plus the grid's 288) and paints the picker's own container colour behind the years —
-the difference is the missing animation. Its list is a `LazyColumn` of *row* items rather than a
+The year panel carries the second deviation — now only half of one. material3 overlays it on the month calendar
+inside an `AnimatedVisibility` (expand plus fade) and keeps the calendar composed underneath; winia used to swap
+the calendar out, which showed the same picture because the panel is exactly as tall as what it replaces (335 +
+1 dp of divider against the weekday row's 48 plus the grid's 288). It now composes the same shape: a `Stack`
+whose first child is the calendar and whose second is `AnimatedVisibility(expand + fade from 0.6, clipped)`,
+matching `DatePicker.kt:1596-1617`. What is still winia's own is the animation spec: Compose reads motion-scheme
+tokens (`DefaultEffects` for the expand and for the fade in, `FastEffects` for the fade out) and winia has no
+motion scheme, so both directions run one spring. Its list is a `LazyColumn` of *row* items rather than a
 `LazyVerticalGrid`, and it opens on `year_panel_first_row = max(0, displayedYear - yearRange.first) / 3 - 1`,
 which is material3's `initialFirstVisibleItemIndex` converted from a cell index to a row. material3 also scrolls
 its month list to the picked year and lets the list write the displayed month back; winia has no month list, so
@@ -354,10 +357,12 @@ The modal variant, `DatePickerDialog`, is that modal picker in a dialog: winia o
 `max_height(MODAL_CONTAINER_HEIGHT)` on the wrapper, no content padding, shape 28 (`CONTAINER_CORNER`), filled
 with `colors.container` — and the action row under the content (`Row` at `MODAL_BUTTONS_SPACING` 8, padded 8
 bottom and 6 end, inside `WiniaTheme::with_content_color(Primary)` and `ProvideTextStyle(LabelLarge)`).
-Measured on the fixture: the dialog is `360 × 568` exactly, matching material3's `ContainerHeight`. winia
-applies that number as a `max_height` cap rather than a fixed height, so a shorter content column collapses
-instead of being padded out; whether the 568 the fixture sees is the content reaching it or the cap holding
-it is not established here. The content defaults to a `DatePicker` over the dialog's state, carrying the
+Measured on the fixture: the dialog is `360 × 560` — the picker's own content, not the cap. That number is
+the 120 dp header, 56 dp month navigation, 48 dp weekday row and 288 dp month, then the action row's 40 dp
+button under its 8 dp inset. winia applies `CONTAINER_HEIGHT` as a `max_height` cap rather than a fixed
+height, so a shorter content column collapses instead of being padded out; the 568 the fixture used to report
+was the cap holding, not the content reaching it, and the two were only told apart once the box below had a
+size of its own to report. See "The dialog is its content" below. The content defaults to a `DatePicker` over the dialog's state, carrying the
 dialog's own `DatePickerColors`, and `DatePickerDialog::content` replaces it.
 
 That forwarding is a winia convenience rather than a copy of Compose's wiring, and it is worth being
@@ -370,11 +375,12 @@ itself, so the dialog does it, and `DatePicker::colors` exists for that. Either 
 before: `DatePickerDialog::colors()` reached the surface and stopped, so an overridden dialog showed a
 theme-coloured calendar inside a caller-coloured container.
 
-Two deviations there. material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog collapses
-when the input mode is shorter than the calendar; winia has no weights, so the content and the action row follow
-one another in the `Column` — the row still lands at the end, because the column is only as tall as its content.
-And `AlertDialogFlowRow`'s `crossAxisSpacing` (12) only matters when the two buttons wrap onto two lines, which
-winia's `Row` does not do; the row here is not a `FlowRow`.
+One deviation there: `AlertDialogFlowRow`'s `crossAxisSpacing` (12) only matters when the two buttons wrap
+onto two lines, which winia's `Row` does not do; the row here is not a `FlowRow` (`date_picker.rs:2221`).
+The content box is not one — material3 puts the content in a `Box(weight(1f, fill = false))` so the dialog
+collapses when the input mode is shorter than the calendar, and winia does the same with
+`layout_weight_fill(1.0, false)` (`date_picker.rs:2211`), whose share is a MAXIMUM: the box reports the size
+the picker actually asked for, and the dialog ends up content + action row rather than the whole cap.
 
 That needed one change outside this component: winia's `BasicAlertDialog` carried the alert dialog's 24 dp of
 content padding on its surface, where Compose's `BasicAlertDialog` has none — the padding belongs to
@@ -495,7 +501,7 @@ Measured with a debug trace, that is exactly what happened: clicking a month arr
 ping-pong between two pages forever, one `scroll_to_item` per frame, each cancelling the animation the last
 one had started — `page=1500 month_index=1520` then `page=1520 month_index=1500`, repeating. Remembering
 what we published instead removed the feedback path, and the arrows now settle with a single transition.
-The versioned guard on the outcome is `ui::date_picker::tests::a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`,
+The versioned guard on the outcome is `components::date_picker::tests::a_stuck_scroll_flag_cannot_freeze_the_month_sync_forever`,
 which pins the OTHER half of the same mechanism — that the wait the guard introduces is bounded, so a
 leaked `is_scrolling` cannot turn into a frozen month.
 
@@ -534,7 +540,7 @@ presses behave exactly as before. Measured after the fix, same gesture: `prev` 6
 120 ms; `prev` 5/5 and `next` 5/5 at 60 ms; and three settled presses still move `[+1, +1, +1]` and
 `[-1, -1, -1]`.
 
-The guard is `ui::date_picker::tests::a_second_press_during_the_animation_steps_again_in_both_directions`,
+The guard is `components::date_picker::tests::a_second_press_during_the_animation_steps_again_in_both_directions`,
 which asserts the whole trajectory of targets (101/102/103 forward, 99/98/97 back) rather than a final
 state — a fix that landed on the right page while skipping one would pass a last-value check.
 
@@ -637,7 +643,7 @@ were re-run.
 
 
 A second fixture drives the modal variant (`fixture_date_picker_dialog.rs`, one test): the dialog is an
-overlay, measures 360 × 568, a tap on the today cell moves the selection the page reads out, the dismiss button
+overlay, measures 360 × 560, a tap on the today cell moves the selection the page reads out, the dismiss button
 closes it and the page's button re-opens it. The overlay entry outlives the state that closes it while the
 dialog's exit motion plays, so that test polls `overlay_count` rather than reading it once — the same wait the
 popup test uses.
@@ -693,14 +699,16 @@ Each is a real divergence, not a guess.
 
 ### State and API surface
 
-- **`remember_date_picker_state` exposes none of Compose's five parameters**
-  (`initialSelectedDateMillis`, `initialDisplayedMonthMillis`, `yearRange`, `initialDisplayMode`,
-  `selectableDates` — `DatePicker.kt:368-374`). A hoisted picker cannot be given an initial selection,
-  displayed month, year range or date policy without hand-rolling `DatePickerState::with(..)` plus a
-  `remember`, which is what both fixtures do.
-- **`selectable_dates` is frozen at construction.** Compose holds it in a `mutableStateOf`
-  (`DatePicker.kt:1133`) and re-applies the caller's instance every composition (`:386-389`), so a policy
-  closing over state stays live. winia's is captured when the state is built and a grid goes stale.
+- **`remember_date_picker_state` takes Compose's parameters** (`initialSelectedDateMillis`,
+  `initialDisplayedMonthMillis`, `yearRange`, `initialDisplayMode`, `selectableDates` —
+  `DatePicker.kt:368-374`), out of a `DatePickerStateInit` since Rust has no default arguments, plus
+  the locale Compose takes from the platform. A hoisted picker can be given an initial selection,
+  displayed month, year range or date policy without hand-rolling `DatePickerState::with(..)`.
+- **`selectable_dates` is live.** Compose holds it in a `mutableStateOf` (`DatePicker.kt:1133`) and
+  re-applies the caller's instance every composition (`:384-389` — the `.apply` at the end of
+  `rememberDatePickerState`), so a policy closing over state stays live. winia stores it in a `State`
+  and `remember_date_picker_state` writes it back each composition, so the two agree: the initial
+  values are taken once and the policy is not.
 - **Small things worth a pass**: `horizontalScrollAxisRange = 0..0` on the months list so AT traverses days
   instead of scrolling months (`DatePicker.kt:1726-1729`); `paneTitle` on the year panel (`:1634`);
   `PlainTooltip` on the month arrows (`:2281-2289`); `CHECK_PATH` is a public constant nothing draws, and
@@ -711,3 +719,118 @@ Each is a real divergence, not a guess.
   whenever there is no mode toggle (`DatePicker.kt:1373-1378`); and the header height is pinned to exactly
   120 where Compose applies it as a `defaultMinSize` minimum (`DatePicker.kt:1680-1685`), so a long locale
   title clips.
+
+## Input mode
+
+`DisplayMode::Input` swaps the calendar for a text field the user types a date into. It exists on the
+modal picker only; `DockedDatePicker` is calendar-only, as in Material 3. The swap happens where the
+build path reads the mode, and the header's toggle writes it — before that, `set_display_mode` stored a
+value nothing read and switching did nothing at all.
+
+The entry is eight digits with the locale's delimiters between them. What the user sees is ten
+characters; what the field holds is eight. `DateVisualTransformation` owns the difference in both
+directions.
+
+| Piece | Where | Material 3 |
+| --- | --- | --- |
+| `DateInputFormat`, `DateInputFieldOrder` | `date_picker.rs` (locale-driven) | `DateInput.kt:392` |
+| `CalendarModel::parse`, `format_with_pattern` | `date_picker.rs` | `CalendarModel.kt` |
+| `DatePickerState::validate_date_input` | `date_picker.rs` | `DateInputValidator`, `DateInput.kt:282-358` |
+| `DateVisualTransformation`, `DateOffsetMapping` | `date_picker.rs` | `DateInput.kt:392-439` |
+| `date_input_content` | `date_picker.rs` | `DateInputContent`, `DateInput.kt:59-113` |
+| `display_mode_toggle` | `date_picker.rs` | `DisplayModeToggleButton`, `DatePicker.kt:1402-1424` |
+
+The pattern belongs to `CalendarLocale` rather than to a platform locale lookup: winia carries no
+locale database, so a caller that wants a locale supplies one whose input format carries its own
+pattern.
+
+Both of the header's own strings follow the mode, not just the headline: the title reads
+`Enter date` while the field is showing, because a field that asks for a date is not headed
+`Select date` (`DatePicker.kt:654`). Only the default follows — a title the caller passes stands in
+both modes, which is why `DatePicker` remembers whether its title is still the default rather than
+comparing the string.
+
+Validation runs in Compose's order, so a real date outside `yearRange` reports the range rather than
+the pattern, and a date the policy refuses reports the policy:
+
+1. the digits do not parse — `Date does not match expected pattern: MM/DD/YYYY`
+2. the year is outside the range — `Date out of expected year range 1900 - 2100`
+3. the date is not selectable — `Date not allowed: {date}`
+
+A refused entry is refused as a whole: it is drawn, it is announced through `SemanticsState::error`,
+and it does not become the selection. A shorter entry is not judged at all — it clears the error and
+leaves the selection empty, so a half-typed date never looks like a rejected one.
+
+### Deliberate deviations
+
+- **Offset mapping is one position looser than Compose's.** `DateInput.kt:413-420` branches on
+  `<= firstDelimiterOffset - 1` and `<= secondDelimiterOffset - 1`, which is one too tight: for
+  `MM/dd/yyyy` its forward map puts typed offset 4 at displayed offset 5, and its backward map reads
+  that 5 as 3, so the caret jumps back a character the moment it crosses a delimiter. Winia branches
+  on the offsets themselves, which makes each side the exact inverse of the other at every position.
+  Backward to forward stays non-bijective on purpose: a delimiter is zero-width in the stored text,
+  so both sides of one belong at the same offset. `every_caret_position_maps_to_the_same_digit_both_ways`
+  pins this.
+- **No animated mode switch.** Compose runs the two modes through `AnimatedContent` with a 48 dp
+  parallax and a clipped `SizeTransform` (`DatePicker.kt:1457-1524`). winia swaps them and resizes at
+  once.
+- **No soft-keyboard hints.** Compose sets `KeyboardType.Number`, `autoCorrectEnabled = false` and
+  `ImeAction.Done` (`DateInput.kt:163-227`). winia has no IME hint channel at all — no
+  `ImeAction`, no keyboard type — and no autocorrect to switch off, so the three have no target. The
+  field refuses non-digits on entry, which is the part a user notices on a desktop.
+- **The field takes focus by itself, and the keys that follow land on it.** The field asks for focus
+  300 ms after it appears, Material 3's `MotionTokens.DurationMedium2` (`DateInput.kt:259-266`);
+  `focused_tags()` reports `date-picker-input-field` with no click, and keys typed straight after it
+  reach the field — eight Backspaces clear the selection and a full entry commits one. Only a real
+  window can show where a key lands, so `the_entry_field_takes_focus_and_typing_without_a_click`
+  measures it there. An earlier note here said the key did not arrive; nothing between that reading
+  and this one touched key or focus routing, and `UiTest::launch` only checks that
+  `target/debug/fixture_all.exe` exists rather than rebuilding it, so the likeliest explanation is a
+  fixture binary older than the focus work. That is an inference, not a measurement — what is
+  measured is that the current build delivers the keys, and the test is what holds it there.
+
+### The dialog is its content
+
+material3 wraps the dialog's content in `Box(Modifier.weight(1f, fill = false))`
+(`DatePickerDialog.android.kt:95`) and says why: "Fill is false to support collapsing the dialog's height
+when switching to input mode". The box's share is a MAXIMUM rather than the exact size a weight normally
+hands out, so the box reports whatever the picker asks for and the column ends up content + buttons.
+
+winia had no `fill` on a weight at all — `Modifier::layout_weight` always took the whole share — so the
+dialog could only ever be as tall as the `CONTAINER_HEIGHT` cap. `Modifier::layout_weight_fill(weight, fill)`
+is that missing half: with `fill = false` the share becomes the child's main-axis maximum and the parent
+keeps the child's own measurement. The measure half is `FlexAxis::build_phase2`, matching Compose's
+`createConstraints(mainAxisMin = if (parentData.fill) childMainAxisSize else 0, mainAxisMax =
+childMainAxisSize, isPrioritizing = true)` (`RowColumnMeasurePolicy.kt:195-207`).
+
+Measured on the fixture, the dialog's rect (`find_tag_in_overlay` on `dpi-dialog`):
+
+| Mode | Before | After |
+| --- | --- | --- |
+| Input | 360 × 568 (the cap, with the content ending around y = 274) | 360 × 240 |
+| Picker | 360 × 568 | 360 × 560 |
+
+Both figures are the picker's own content, so they can be re-derived: 240 is the 120 dp header, the
+outlined field's 56, its 16 dp bottom inset while no error shows and the 48 dp action row; 560 is the
+120 dp header, 56 dp month navigation, 48 dp weekday row, 288 dp month and the same 48 dp action row.
+
+`the_dialog_is_as_tall_as_the_mode_it_shows` asserts both, in each mode, so a stretch creeping back
+into either fails rather than passing under a loose bound. The comparison is against the whole logical
+pixel: the debug tree serialises measured sizes with `{:.0}` (`debug.rs:593`), so the assertion's real
+tolerance is ±0.5 rather than zero. Both figures also assume the dialog's default content — the title is
+what gives the header its 120 dp, and a caller passing `.title(None)` drops the header to 44 and the
+dialog with it.
+
+One deviation was retired rather than kept: the dialog's `Column` used to say `Arrangement::Start` where the
+source says `SpaceBetween`, because winia's `SpaceBetween` stretched a container to the main axis its parent
+offered, and that alone would have held the dialog at the 568 dp cap whatever the `weight(1f, fill = false)`
+box did. The `Arrangement` variants have since been aligned with Compose: a content-sized container no longer
+grows to the maximum its parent offers — `RowColumnMeasurePolicy.kt:252` resolves
+`mainAxisLayoutSize = max((fixedSpace + weightedSpace).fastCoerceAtLeast(0), mainAxisMin)` and never consults
+`mainAxisMax`, and `layout/flex.rs`'s `measured_main` now does the same — so the column says `SpaceBetween`
+exactly as material3 writes it, and the box is the only thing that decides the height.
+
+### Still open
+
+- Day and year cells contribute no `Role.Button`, `selected` or `enabled`; the headline's
+  `headlineDescription` and the toggle's polite live region are done, the rest are not.

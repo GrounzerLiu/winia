@@ -3,7 +3,7 @@
 > 分支：`tab-row`（基于 v2；当前未合并回 v2）
 > 对标：androidx-main `TabRow.kt` + `Tab.kt`（Primary/Secondary/Scrollable 变体）
 > M3 规格：https://m3.material.io/components/tabs/specs
-> 源码：`winia/src/ui/tab_row.rs`；示例：`examples/tab_row_demo.rs`
+> 源码：`winia/src/components/tab_row.rs`；示例：`examples/tab_row_demo.rs`
 > （含 RTL/LTR 切换、Primary/Secondary 切换、LeadingIconTab 展示）
 
 ## 1. 变体总览
@@ -163,7 +163,7 @@ Tab::new(selected, || on_click())
 - **TabIndicatorScope 自定义指示器 API 已实现**（分支 `exp/tab-indicator`，两个变体都有）：
   `TabRow::indicator(|ctx, scope| ...)` 与 `ScrollableTabRow::indicator(...)` 的闭包在**测量期**运行，
   `scope` 提供 `tab_positions()` / `selected_index()` / `selected_position()`，与 Compose 的 indicator
-  槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `ui::subcompose`）；供应自定义指示器时行自身的
+  槽同语义（Compose 靠 SubcomposeLayout，winia 靠 `layout::subcompose`）；供应自定义指示器时行自身的
   指示条不再绘制，与 Compose 的 `indicator` 参数一致。
   可滚动版的位置在**滚动内容坐标系**里，因此调用方画出的指示器随 tab 一起滚（与 Compose 同）。
   四条落地才暴露、且已修的框架级问题（详见 `docs/lookahead-probe-handover.md`）：
@@ -206,7 +206,7 @@ Tab::new(selected, || on_click())
     makes the animation end at a TURNING POINT of the oscillation, the first moment the amplitude has
     decayed under the threshold. That is what lets a bouncy spring overshoot before it settles, and it
     was verified the hard way: scaling the velocity into frames (`velocity * FRAME < threshold`) cut the
-    bounce, and `ui::shared_transition`'s `tier0_bouncy_spring_overshoot_renders_then_settles`
+    bounce, and `components::shared_transition`'s `tier0_bouncy_spring_overshoot_renders_then_settles`
     (damping 0.6, threshold 0.1 on a 0..1 progress) went from overshooting past 1.0 to settling at
     0.886 — a flight ending 11 % short of its target. Reverted, and now pinned by
     `animation::tests::a_spring_crossing_its_target_is_not_at_rest` plus that same transition test, so
@@ -221,7 +221,7 @@ Tab::new(selected, || on_click())
 - 固定/可滚动变体间无动画过渡（Compose 亦无——用户显式选择）。
 - windowInsets 不适用（桌面无系统栏叠加）。
 
-## 8. 测试（`ui::tab_row::tests`，26 个；外加 UI fixture 测试 1 个）
+## 8. 测试（`components::tab_row::tests`，26 个；外加 UI fixture 测试 1 个）
 
 | 测试 | 覆盖 |
 |---|---|

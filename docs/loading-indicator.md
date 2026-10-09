@@ -76,8 +76,8 @@ LoadingIndicator::new()
 
 ## 4. 代码位置
 
-- 组件：`winia/src/ui/loading_indicator.rs`
-- 导出：`winia::ui::LoadingIndicator` + `winia::prelude::*`
+- 组件：`winia/src/components/loading_indicator.rs`
+- 导出：`winia::components::LoadingIndicator` + `winia::prelude::*`
 - 示例：`winia/examples/loading_indicator_demo.rs`
 - 依赖：`material-shapes`（workspace member，feature `shape_util`）
 

@@ -77,7 +77,7 @@ Column::new()
             Column::new()
                 .modifier(Modifier::new()
                     .size(120.0, 60.0)
-                    .drop_shadow(Shape::rounded(12.0), winia::modifier::ShadowParams::new(6.0, 4.0, 6.0, Color::from_argb(180, 100, 60, 0), 0.8))
+                    .drop_shadow(Shape::rounded(12.0), winia::graphics::ShadowParams::new(6.0, 4.0, 6.0, Color::from_argb(180, 100, 60, 0), 0.8))
                     .background(Color::from_argb(255, 255, 152, 0), Shape::rounded(12.0)))
                 .build(ctx, |ctx| {
                     Text::new("drop 自定义").color(Color::WHITE).font_size(13.0).build(ctx);
@@ -158,22 +158,22 @@ Column::new()
             .modifier(Modifier::new().padding_vertical(8.0))
             .build(ctx);
         // 单行 + placeholder
-        let v1 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new(""));
+        let v1 = ctx.remember(|| winia::components::text_field::TextFieldValue::new(""));
         TextField::new(v1.clone())
             .no_container()
-            .placeholder(|ctx| { winia::ui::Text::new("请输入内容…").build(ctx); })
+            .placeholder(|ctx| { winia::components::Text::new("请输入内容…").build(ctx); })
             .single_line(true)
             .modifier(Modifier::new().size(300.0, 36.0))
             .build(ctx);
         // 只读
-        let v2 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("只读文本"));
+        let v2 = ctx.remember(|| winia::components::text_field::TextFieldValue::new("只读文本"));
         TextField::new(v2.clone())
             .no_container()
             .read_only(true)
             .modifier(Modifier::new().size(300.0, 36.0))
             .build(ctx);
         // 禁用
-        let v3 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("禁用"));
+        let v3 = ctx.remember(|| winia::components::text_field::TextFieldValue::new("禁用"));
         TextField::new(v3.clone())
             .no_container()
             .enabled(false)
@@ -181,7 +181,7 @@ Column::new()
             .build(ctx);
         // 多行 + minLines=3（宽度限定——size 含 Fixed(0) 高度会覆盖
         // minLines 动态高度）
-        let v4 = ctx.remember(|| winia::ui::text_field::TextFieldValue::new("多行输入\n第二行\n第三行"));
+        let v4 = ctx.remember(|| winia::components::text_field::TextFieldValue::new("多行输入\n第二行\n第三行"));
         TextField::new(v4.clone())
             .no_container()
             .min_lines(3)

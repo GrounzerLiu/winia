@@ -10,454 +10,36 @@ use std::sync::Arc;
 use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::layout::LayoutDirection;
-use crate::ui::interaction::MutableInteractionSource;
+use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
+use crate::input::{KbEvent, PointerEvent};
+use crate::layout::{Dimension, IntrinsicSize, SizeValue};
+use crate::text::RichSpanStyle;
+use crate::interaction::MutableInteractionSource;
+use crate::graphics::{
+    BackgroundColor, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
+    GraphicsLayerSpec, ShadowParams, Shape, TransformOrigin,
+};
+
 
 // ── Dimension ──
 
-/// 尺寸值，用于 Modifier 和 Layout
-///
-/// 支持多种单位：`Fixed(f32)`（逻辑像素）、`Dp`（密度无关，== 逻辑像素）、
-/// `Px`（物理像素，需 Density 转换）、`Fill`、`Auto`。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Dimension {
-    /// 固定逻辑像素值
-    Fixed(f32),
-    /// 密度无关像素（本项目 1dp == 1 逻辑像素，无需转换）
-    Dp(crate::unit::Dp),
-    /// 物理像素（需 Density 转逻辑像素）
-    Px(crate::unit::Px),
-    /// 填满可用空间
-    Fill,
-    /// 自适应内容大小
-    Auto,
-}
-
-/// Which of the content's intrinsic measurements a size modifier asks for — Compose's
-/// `androidx.compose.foundation.layout.IntrinsicSize`.
-///
-/// An intrinsic measurement is what the content would be with NO incoming space to fill: `Min` is
-/// the smallest it can be laid out at (for text, the longest unbreakable run), `Max` is the size it
-/// takes with nothing wrapped. `Modifier::width(IntrinsicSize::Max)` therefore sizes a node to its
-/// own content instead of to its parent, which is how Compose makes a menu exactly as wide as its
-/// widest item (`material3/Menu.kt` uses `Column(width(IntrinsicSize.Max))`).
-///
-/// The incoming constraints still win afterwards: Compose documents the modifier as "the incoming
-/// measurement constraints may override this value", and `requiredWidth/requiredHeight` are the
-/// variant that ignores them (`enforceIncoming = false`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntrinsicSize {
-    /// The smallest size the content can be laid out at (Compose `IntrinsicSize.Min`).
-    Min,
-    /// The size the content takes when nothing is wrapped or compressed (Compose `IntrinsicSize.Max`).
-    Max,
-}
-
-/// 尺寸值：静态 `Dimension` 或动态求值（布局属性动画用）。
-///
-/// `size()` 统一入口——传 `f32`/`Dimension`（静态）或 `State<f32>`/闭包（动态）：
-/// - `.size(50.0, 24.0)` 静态
-/// - `.size(&scale, 24.0)` 动画（State 直接传，测量时 `get()` 注册依赖到本节点）
-/// - `.size(|| scale.get() * 2.0, 24.0)` 复杂表达式（闭包）
-pub enum SizeValue {
-    Static(Dimension),
-    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
-    /// Size this axis to one of the content's own intrinsic measurements instead of to the
-    /// incoming space — Compose's `Modifier.width/height(IntrinsicSize)`.
-    Intrinsic(IntrinsicSize),
-}
-
-impl From<Dimension> for SizeValue {
-    fn from(d: Dimension) -> Self { SizeValue::Static(d) }
-}
-
-impl From<f32> for SizeValue {
-    fn from(v: f32) -> Self { SizeValue::Static(Dimension::Fixed(v)) }
-}
-
-impl From<crate::unit::Dp> for SizeValue {
-    fn from(v: crate::unit::Dp) -> Self { SizeValue::Static(Dimension::Dp(v)) }
-}
-
-impl From<crate::unit::Px> for SizeValue {
-    fn from(v: crate::unit::Px) -> Self { SizeValue::Static(Dimension::Px(v)) }
-}
-
-impl From<crate::core::state::State<f32>> for SizeValue {
-    fn from(s: crate::core::state::State<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::core::state::State<f32>> for SizeValue {
-    fn from(s: &crate::core::state::State<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::core::state::Animating<f32>> for SizeValue {
-    fn from(s: crate::core::state::Animating<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::core::state::Animating<f32>> for SizeValue {
-    fn from(s: &crate::core::state::Animating<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::core::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: crate::core::state::DerivedValue<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-impl From<&crate::core::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: &crate::core::state::DerivedValue<f32>) -> Self {
-        let d = d.clone();
-        SizeValue::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-impl From<&crate::core::state::State<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::core::state::State<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl From<&crate::core::state::Animating<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::core::state::Animating<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
-    fn from(f: F) -> Self { SizeValue::Dynamic(Arc::new(f)) }
-}
-
-impl Clone for SizeValue {
-    fn clone(&self) -> Self {
-        match self {
-            SizeValue::Static(d) => SizeValue::Static(*d),
-            SizeValue::Dynamic(f) => SizeValue::Dynamic(f.clone()),
-            SizeValue::Intrinsic(s) => SizeValue::Intrinsic(*s),
-        }
-    }
-}
-
-impl std::fmt::Debug for SizeValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SizeValue::Static(d) => write!(f, "{:?}", d),
-            SizeValue::Dynamic(_) => write!(f, "<dynamic>"),
-            SizeValue::Intrinsic(s) => write!(f, "intrinsic({:?})", s),
-        }
-    }
-}
-
-impl From<IntrinsicSize> for SizeValue {
-    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
-}
-
-impl Dimension {
-    pub fn is_fixed(&self) -> bool {
-        matches!(self, Dimension::Fixed(_) | Dimension::Dp(_) | Dimension::Px(_))
-    }
-
-    pub fn is_fill(&self) -> bool {
-        matches!(self, Dimension::Fill)
-    }
-
-    /// 解析为逻辑像素（Px 需要 Density，Dp/Fixed 直接是逻辑像素）
-    pub fn to_logical_px(&self) -> f32 {
-        match self {
-            Dimension::Fixed(v) => *v,
-            Dimension::Dp(d) => d.value(),
-            Dimension::Px(p) => p.to_logical(crate::unit::current_density()),
-            Dimension::Fill | Dimension::Auto => 0.0,
-        }
-    }
-}
-
-impl From<f32> for Dimension {
-    fn from(v: f32) -> Self {
-        Dimension::Fixed(v)
-    }
-}
-
-impl From<crate::unit::Dp> for Dimension {
-    fn from(d: crate::unit::Dp) -> Self {
-        Dimension::Dp(d)
-    }
-}
-
-impl From<crate::unit::Px> for Dimension {
-    fn from(p: crate::unit::Px) -> Self {
-        Dimension::Px(p)
-    }
-}
 
 // ── Shape ──
 
-/// 形状描述（用于 background / border / clip）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Shape {
-    /// 矩形（可带圆角）
-    RoundedRect { corner_radius: f32 },
-    /// 仅顶部圆角（对齐 M3 BottomSheet 顶部 28dp——底部直角贴屏）
-    TopRoundedRect { radius: f32 },
-    /// Rounded on the two RIGHT corners only (upper-right + lower-right), left edge
-    /// square. Geometric rather than direction-resolved: a modal navigation drawer
-    /// docks at the leading edge and rounds the side facing the content, so an LTR
-    /// drawer picks this one and its RTL counterpart picks [`Shape::LeftRoundedRect`].
-    /// (Compose reaches the same pair through a single `CornerLargeEnd` token whose
-    /// side follows the layout direction; a winia `Shape` carries no direction.)
-    RightRoundedRect { radius: f32 },
-    /// Mirror of [`Shape::RightRoundedRect`] — rounded on the two LEFT corners only.
-    LeftRoundedRect { radius: f32 },
-    /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
-    /// Button 默认形状；宽高变化时自动跟随）
-    Pill,
-    /// Percent-50 corner, i.e. Compose's `CircleShape` == `RoundedCornerShape(50)`: on a
-    /// square box that is a circle, and on a NON-square box a stadium that fills the whole
-    /// box (identical to `Pill`). A true inscribed circle was the old behaviour and was
-    /// wrong against Compose.
-    Circle,
-    /// A rectangle with an independent radius per corner, Compose's
-    /// `RoundedCornerShape(topStart, topEnd, bottomEnd, bottomStart)`. Geometric rather than
-    /// direction-resolved, like [`Shape::RightRoundedRect`] and [`Shape::LeftRoundedRect`]: a
-    /// caller that wants start/end semantics resolves the direction itself (material3's split
-    /// button does; `SplitButtonDefaults` reads it from `WiniaTheme::direction`).
-    ///
-    /// The radii are pixels of *this* box, so a caller that needs Compose's `CornerFull` — a
-    /// percent-50 corner, which is half the SHORT side — computes `height / 2` for a button that
-    /// is wider than it is tall. Feeding a percent-shaped corner as a fixed radius keeps
-    /// `Shape::Pill`'s behaviour only while that holds, which is why the split button derives it
-    /// from its own container height.
-    Corners {
-        top_left: f32,
-        top_right: f32,
-        bottom_right: f32,
-        bottom_left: f32,
-    },
-    /// 直角矩形
-    Rectangle,
-}
-
-impl Shape {
-    pub fn rounded(corner_radius: f32) -> Self {
-        Shape::RoundedRect { corner_radius }
-    }
-
-    pub fn top_rounded(radius: f32) -> Self {
-        Shape::TopRoundedRect { radius }
-    }
-
-    /// Rounded on the two right corners (see [`Shape::RightRoundedRect`]).
-    pub fn right_rounded(radius: f32) -> Self {
-        Shape::RightRoundedRect { radius }
-    }
-
-    /// Rounded on the two left corners (see [`Shape::LeftRoundedRect`]).
-    pub fn left_rounded(radius: f32) -> Self {
-        Shape::LeftRoundedRect { radius }
-    }
-
-    /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）
-    pub fn pill() -> Self {
-        Shape::Pill
-    }
-
-    /// Per-corner radii, in the order Compose's `RoundedCornerShape` takes them
-    /// (top-start, top-end, bottom-end, bottom-start) but in GEOMETRIC corners — see
-    /// [`Shape::Corners`].
-    pub fn corners(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
-        Shape::Corners { top_left, top_right, bottom_right, bottom_left }
-    }
-}
 
 // ── Color (占位) ──
 
-/// 颜色（占位，后续由 skia Color 或 material theme 替代）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
-}
-
-impl Color {
-    pub const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
-    pub const BLACK: Color = Color { r: 0, g: 0, b: 0, a: 255 };
-    pub const WHITE: Color = Color { r: 255, g: 255, b: 255, a: 255 };
-    pub const RED: Color = Color { r: 255, g: 0, b: 0, a: 255 };
-    pub const GREEN: Color = Color { r: 0, g: 255, b: 0, a: 255 };
-    pub const BLUE: Color = Color { r: 0, g: 0, b: 255, a: 255 };
-
-    pub fn from_argb(a: u8, r: u8, g: u8, b: u8) -> Self {
-        Color { r, g, b, a }
-    }
-}
-
-impl Color {
-    /// 状态层叠加（对标 Material3 state layer）：
-    /// 把 `overlay` 以 `alpha` 透明度叠到当前颜色上——hover 8% / press/focus 12% /
-    /// drag 16% 的近似实现（Material3 的容器状态层）。
-    pub fn overlay(&self, overlay: Color, alpha: f32) -> Color {
-        let a = alpha.clamp(0.0, 1.0);
-        let lerp = |b: u8, o: u8| (b as f32 * (1.0 - a) + o as f32 * a).round() as u8;
-        Color::from_argb(
-            self.a,
-            lerp(self.r, overlay.r),
-            lerp(self.g, overlay.g),
-            lerp(self.b, overlay.b),
-        )
-    }
-}
 
 // ── Modifier ──
 
 // ── KbEvent ──
 
-#[derive(Debug, Clone)]
-pub struct KbEvent {
-    pub key: winit::keyboard::Key,
-    pub event_type: KbEventType,
-    pub is_alt_pressed: bool,
-    pub is_ctrl_pressed: bool,
-    pub is_shift_pressed: bool,
-    pub is_meta_pressed: bool,
-    pub repeat: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KbEventType {
-    Unknown,
-    KeyDown,
-    KeyUp,
-}
 
 // ── PointerEvent ──
 
-/// 指针按钮
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PointerButton {
-    Primary,
-    Secondary,
-    Middle,
-    Other(u16),
-}
-
-impl PointerKind {
-    pub fn from_button_source(button: &winit::event::ButtonSource) -> Self {
-        match button {
-            winit::event::ButtonSource::Mouse(m) => PointerKind::Mouse {
-                button: match m {
-                    winit::event::MouseButton::Left => PointerButton::Primary,
-                    winit::event::MouseButton::Right => PointerButton::Secondary,
-                    winit::event::MouseButton::Middle => PointerButton::Middle,
-                    other => PointerButton::Other(*other as u16),
-                },
-            },
-            winit::event::ButtonSource::Touch { finger_id, force } => PointerKind::Touch {
-                finger_id: finger_id.into_raw() as u64,
-                force: force.map(|f| f.normalized(None) as f32),
-            },
-            winit::event::ButtonSource::TabletTool { kind, data, .. } => PointerKind::Pen {
-                kind: match kind {
-                    winit::event::TabletToolKind::Eraser => PenKind::Eraser,
-                    _ => PenKind::Stylus,
-                },
-                pressure: data.force.map(|f| f.normalized(None) as f32),
-            },
-            _ => PointerKind::Mouse { button: PointerButton::Primary },
-        }
-    }
-}
-
-/// 指针事件类型
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PointerEventType {
-    Down,
-    Up,
-    Move,
-    Scroll { delta: f32, is_vertical: bool },
-}
-
-/// 指针类型（对齐 Compose PointerType）
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PointerKind {
-    Mouse { button: PointerButton },
-    Touch { finger_id: u64, force: Option<f32> },
-    Pen { kind: PenKind, pressure: Option<f32> },
-}
-
-/// 触控笔类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PenKind {
-    Stylus,
-    Eraser,
-    Unknown,
-}
-
-/// 指针事件
-#[derive(Debug, Clone)]
-pub struct PointerEvent {
-    pub event_type: PointerEventType,
-    pub position: (f32, f32),
-    pub scene_position: (f32, f32),
-    pub kind: PointerKind,
-    pub is_alt_pressed: bool,
-    pub is_ctrl_pressed: bool,
-    pub is_shift_pressed: bool,
-    pub is_meta_pressed: bool,
-}
 
 // ── 图片绘制类型（ColorFilter / FilterQuality / BlendMode——对齐 Compose ui.graphics）──
 
-/// 混合模式（对标 Compose `BlendMode`，与 skia 同源 29 值——
-/// 渲染期映射 `skia_safe::BlendMode`）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlendMode {
-    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
-    SrcATop, DstATop, Xor, Plus, Modulate, Screen, Overlay, Darken, Lighten,
-    ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Multiply,
-    Hue, Saturation, Color, Luminosity,
-}
-
-/// 颜色滤镜（对标 Compose `ColorFilter`——Image/Icon 渲染期挂到 paint）
-#[derive(Debug, Clone, PartialEq)]
-pub enum ColorFilter {
-    /// 染色（对标 `ColorFilter.tint`——默认 SrcIn 保留形状 alpha）
-    Tint { color: Color, blend_mode: BlendMode },
-    /// 颜色矩阵（20 值行主序——对标 `ColorFilter.colorMatrix`）
-    Matrix([f32; 20]),
-    /// 光照效果（像素 × multiply + add——对标 `ColorFilter.lighting`）
-    Lighting { multiply: Color, add: Color },
-}
-
-/// 采样质量（对标 Compose `FilterQuality`）——缩放位图时的过滤策略
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FilterQuality {
-    /// 最近邻（无过滤——像素风/精确采样）
-    None,
-    /// 双线性（默认——缩小放大平滑）
-    Low,
-    /// 双线性 + 最近 mipmap（缩小更平滑）
-    Medium,
-    /// 三线性（双线性 + 线性 mipmap——最高质量）
-    High,
-}
-
-impl Default for FilterQuality {
-    fn default() -> Self { Self::Low }
-}
 
 // ── ModifierElement ──
 
@@ -560,7 +142,7 @@ pub trait DrawWrapNode: std::fmt::Debug + Send + Sync {
 pub trait ClickNode: std::fmt::Debug + Send + Sync {
     fn on_click(&self);
     /// 绑定的交互源（press 波纹用；无则 None）。
-    fn interaction(&self) -> Option<crate::ui::interaction::MutableInteractionSource> {
+    fn interaction(&self) -> Option<crate::interaction::MutableInteractionSource> {
         None
     }
     /// Skip 指纹 MUST 规范（同 DrawNode）：静态参数进 key；回写/瞬态动画值
@@ -622,7 +204,7 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
 /// 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”的纯函数——
 /// 禁止读外部可变（Atomic/时钟/RefCell/全局）。常量折叠按 incoming 缓存，
 /// 同 key 同约束直接返回旧尺寸；非纯读取即 stale（枚举侧无此口子，node 独有）。
-pub trait LayoutNode: std::fmt::Debug + Send + Sync {
+pub trait LayoutModifierNode: std::fmt::Debug + Send + Sync {
     fn transform(&self, inner: crate::layout::Constraints) -> crate::layout::Constraints;
     /// Skip 指纹 MUST 规范（同 DrawNode）。默认 = TypeId 名。
     fn node_key(&self) -> String {
@@ -640,7 +222,7 @@ pub enum ModifierNode {
     Click(std::sync::Arc<dyn ClickNode>),
     Pointer(std::sync::Arc<dyn PointerNode>),
     Key(std::sync::Arc<dyn KeyNode>),
-    Layout(std::sync::Arc<dyn LayoutNode>),
+    Layout(std::sync::Arc<dyn LayoutModifierNode>),
 }
 
 /// Modifier 链中的单个元素。
@@ -660,9 +242,11 @@ pub(crate) enum ModifierElement {
     MinHeight { value: SizeValue },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
     /// constraint, so content that would be wider is constrained to it, and is then held at or
-    /// above the min. When a min and a max conflict the MIN wins, unlike Compose's `widthIn`
-    /// (which coerces the min down to the max); that deviation is deliberate — see the measure
-    /// block in `layout/node.rs`. Supports a dynamic value.
+    /// above the min. Supports a dynamic value.
+    ///
+    /// A min and a max on the same axis may conflict; which one wins is Compose's chain-order rule,
+    /// replayed by [`Modifier::min_max_steps`] — the max written first yields the max, the min
+    /// written first yields the min.
     MaxWidth { value: SizeValue },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
     MaxHeight { value: SizeValue },
@@ -686,8 +270,48 @@ pub(crate) enum ModifierElement {
     AbsoluteOffset { x: SizeValue, y: SizeValue },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
+    /// Align this child by one of its own alignment lines instead of by its edge (Compose's
+    /// `RowScope`/`ColumnScope` `Modifier.alignBy`). See [`Modifier::align_by`].
+    AlignBy { line: crate::layout::AlignmentLine },
+    /// A line a node reports, computed from its measured size — see
+    /// [`Modifier::alignment_line`]. Compose's `layout(alignmentLines = …)` in modifier form.
+    AlignmentLineValue {
+        line: crate::layout::AlignmentLine,
+        value: std::sync::Arc<dyn Fn(crate::unit::Size) -> f32 + Send + Sync>,
+    },
+    /// Reserve a touch target of at least this many logical pixels on BOTH axes, centring the content
+    /// inside it — Compose's `Modifier.minimumInteractiveComponentSize`. `size <= 0` is off.
+    MinimumInteractiveSize { size: f32 },
+    /// Pad this node so its content's alignment line sits `before` from the near edge and `after`
+    /// from the far one (Compose's `Modifier.paddingFrom`). `None` is Compose's
+    /// `Dp.Unspecified` — that side is not constrained.
+    ///
+    /// The axis follows the line's orientation, and the padding is worked out AFTER the content is
+    /// measured, because it is the content's line that says how much padding is needed.
+    PaddingFrom {
+        line: crate::layout::AlignmentLine,
+        before: Option<f32>,
+        after: Option<f32>,
+    },
     /// 布局权重（Row 中分配宽度，Column 中分配高度）
-    LayoutWeight { weight: f32 },
+    ///
+    /// `fill` mirrors Compose's `weight(weight, fill)`: with `fill = true` the child is measured
+    /// tight to its share and the parent keeps that share (`ColumnScope.weight`'s documented
+    /// behaviour). With `fill = false` the child is measured with its share as the MAXIMUM and the
+    /// parent keeps the size the child actually asked for. That is the half material3's date picker
+    /// dialog depends on to collapse in input mode — `DatePickerDialog.android.kt:95` wraps its
+    /// content in `Box(Modifier.weight(1f, fill = false))`, commented "Fill is false to support
+    /// collapsing the dialog's height when switching to input mode". The arrangement does not matter:
+    /// since the `Arrangement` variants were aligned with Compose (`layout/flex.rs`'s
+    /// `measured_main`), a spreading arrangement no longer grows a content-sized container to the
+    /// maximum its parent offers, so the collapse survives `SpaceBetween` as well — which is what
+    /// material3 itself relies on.
+    ///
+    /// The share really is a MAXIMUM for a `fill = false` child: a child asking for more is coerced
+    /// into it, because a `Size` is clamped into the incoming range (`layout/node.rs`'s measure, the
+    /// same rule `Modifier::size` documents) before anything flex computes. `Modifier::required_size`
+    /// is the escape hatch for a child that must leave the share on purpose.
+    LayoutWeight { weight: f32, fill: bool },
     /// 宽高比约束（对标 Compose `Modifier.aspectRatio`——ratio = 宽/高）
     AspectRatio { ratio: f32, match_height_first: bool },
     /// 强制尺寸（对标 Compose `Modifier.requiredSize`——忽略 incoming
@@ -716,7 +340,7 @@ pub(crate) enum ModifierElement {
     /// TextField 容器子节点角色标记（text-field-v2 容器化——自定义
     /// MeasurePolicy 按角色布局：leading/label/placeholder/prefix/
     /// input/suffix/trailing；仅标记，不参与测量/绘制）
-    TextFieldSlot { role: crate::ui::text_field::TextFieldSlotRole },
+    TextFieldSlot { role: crate::text::field::TextFieldSlotRole },
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
@@ -728,7 +352,7 @@ pub(crate) enum ModifierElement {
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
-        brush_fn: Arc<dyn Fn() -> crate::brush::Brush + Send + Sync>,
+        brush_fn: Arc<dyn Fn() -> crate::graphics::Brush + Send + Sync>,
         shape: Shape,
     },
     /// 边框
@@ -744,12 +368,10 @@ pub(crate) enum ModifierElement {
     /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
     /// 状态过渡动画由后续迭代接入。
     TextFieldVisual {
-        variant: crate::ui::TextFieldVariant,
+        variant: crate::text::field::TextFieldVariant,
         shape: Shape,
-        colors: crate::ui::TextFieldColors,
+        colors: crate::text::field::TextFieldColors,
         enabled: bool,
-        focused: bool,
-        is_error: bool,
         /// material3's `readOnly`, carried here because the RENDER needs it: material3 draws its caret as
         /// `showCursor = enabled && !readOnly && …` (`foundation/text/CoreTextField.kt`), so a read-only
         /// field shows no caret. winia drew one whenever the field had focus.
@@ -758,12 +380,12 @@ pub(crate) enum ModifierElement {
         cursor_color: Color,
         /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
         /// CAM16-UCS 插值；渲染期 peek 读取）
-        indicator_color: crate::core::state::State<crate::modifier::Color>,
+        indicator_color: crate::runtime::state::State<crate::graphics::Color>,
         /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
-        focus_progress: crate::core::state::State<f32>,
+        focus_progress: crate::runtime::state::State<f32>,
         /// 视觉变换偏移映射（密码掩码/格式化——渲染/定位跨界转换；
         /// None = 恒等）
-        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
         /// 支持文本（画在容器底部外侧 4dp）
         supporting: Option<SupportingVisual>,
     },
@@ -773,12 +395,12 @@ pub(crate) enum ModifierElement {
     /// 可达（点击定位/渲染光标查找 None → 显示偏移直写 selection 越界）。
     /// 仅存映射、无渲染/绘制副作用（render 各 match 走 `_ =>` 兜底）。
     TextFieldOffsetMapping {
-        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
     },
 
     // ── Content 类 ──
     /// 文本内容（由 Text 组件设置，渲染阶段消费）
-    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::ui::text::FontWeight, font_style: crate::ui::text::FontSlant, max_lines: usize, align: crate::ui::TextAlign, overflow: crate::ui::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32> },
+    TextContent { content: String, font_size: f32, color: Color, font_weight: crate::text::FontWeight, font_style: crate::text::FontSlant, max_lines: usize, align: crate::text::TextAlign, overflow: crate::text::TextOverflow, soft_wrap: bool, letter_spacing: f32, line_height: Option<f32> },
     /// 富文本内容（含内联 drawable，由 RichText 组件设置）
     RichTextContent {
         content: String,
@@ -824,13 +446,13 @@ pub(crate) enum ModifierElement {
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
     /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
     NoFocusRing,
-    DrawIcon { spec: crate::ui::icon::IconSpec },
+    DrawIcon { spec: crate::graphics::IconSpec },
     /// 图片内容（Image 组件——位图/SVG，ContentScale + 对齐 + alpha；
     /// 与 DrawIcon 的区别：不染色、按 ContentScale 缩放、对齐可控）
     ImageContent {
-        source: crate::ui::icon::IconSource,
-        content_scale: crate::ui::image::ContentScale,
-        alignment: crate::ui::image::ImageAlignment,
+        source: crate::graphics::IconSource,
+        content_scale: crate::graphics::ContentScale,
+        alignment: crate::graphics::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,
@@ -853,22 +475,22 @@ pub(crate) enum ModifierElement {
     VerticalScroll { state: ScrollState },
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
-    LazyScroll { content_height: crate::core::state::Backchannel<f32>, reverse: bool },
+    LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
     /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
     GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
-    /// 共享元素转场标记（ui::shared_transition——纯数据标记：配对身份 + 变形规格；
+    /// 共享元素转场标记（components::shared_transition——纯数据标记：配对身份 + 变形规格；
     /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
     /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
     SharedTransition {
         scope_id: u64,
         key: String,
-        kind: crate::ui::shared_transition::SharedKind,
-        transform: crate::ui::shared_transition::BoundsTransform,
-        path: crate::ui::shared_transition::PathMotion,
+        kind: crate::transition::SharedKind,
+        transform: crate::transition::BoundsTransform,
+        path: crate::transition::PathMotion,
         /// Overlay z-order for the flying pair (Compose `zIndexInOverlay`,
         /// default 0). Orders retained ghosts back-to-front; in-tree targets
         /// keep tree order (documented Tier 0 limitation).
@@ -876,8 +498,8 @@ pub(crate) enum ModifierElement {
         /// sharedBounds enter/exit (Compose `enter`/`exit` — target plays
         /// enter, source plays exit; `None` on sharedElement markers, which
         /// have no such parameters and always crossfade).
-        enter: Option<crate::ui::animated_visibility::VisibilityTransition>,
-        exit: Option<crate::ui::animated_visibility::VisibilityTransition>,
+        enter: Option<crate::animation::visibility::VisibilityTransition>,
+        exit: Option<crate::animation::visibility::VisibilityTransition>,
         /// Render this endpoint in the transition layer during the flight
         /// (Compose `renderInOverlayDuringTransition`, default `true`): the
         /// flying element escapes ancestor clips and ancestor layer
@@ -888,7 +510,7 @@ pub(crate) enum ModifierElement {
         render_in_overlay: bool,
         /// Which SCENE this end belongs to, when it is composed inside a scene host that publishes
         /// one (winia's nav: each transition layer provides its scene id, see
-        /// `ui::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
+        /// `components::shared_transition::provide_nav_scene`). `None` outside such a host. The flight
         /// system uses it to pair ends that are BOTH alive — during a nav transition the outgoing
         /// and incoming scenes both carry the same shared key, and without a scene the winner is
         /// whichever the tree walk happened to visit last, which reads as a new switch every frame.
@@ -993,7 +615,7 @@ impl Modifier {
     }
 
     /// 追加一个布局节点 A 型（约束变换——resolved_size 之后、padding 之前串行）。
-    pub fn layout_node(self, node: impl LayoutNode + 'static) -> Self {
+    pub fn layout_node(self, node: impl LayoutModifierNode + 'static) -> Self {
         self.push_node(ModifierNode::Layout(std::sync::Arc::new(node)))
     }
 
@@ -1003,6 +625,7 @@ impl Modifier {
     }
 
     /// 返回所有开放节点的只读引用
+    #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn modifier_nodes(&self) -> &[ModifierNode] {
         &self.nodes
     }
@@ -1041,7 +664,7 @@ impl Modifier {
     }
 
     /// 开放布局节点迭代（测量管线用——resolved_size 之后串行变换约束）。
-    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutNode>> {
+    pub(crate) fn layout_nodes(&self) -> impl Iterator<Item = &std::sync::Arc<dyn LayoutModifierNode>> {
         self.nodes.iter().filter_map(|n| match n {
             ModifierNode::Layout(l) => Some(l),
             _ => None,
@@ -1070,6 +693,10 @@ impl Default for Modifier {
 
 impl Modifier {
     /// 设置固定宽高
+    ///
+    /// 对标 Compose `Modifier.size`：请求值会被**夹进** incoming 范围（`enforceIncoming = true`
+    /// ——`SizeNode.measure` 对 `Constraints.fixed(w, h)` 做 `constraints.constrain`）。所以
+    /// 请求超出父给的 max 时结果取 max，而不是溢出；想真的溢出用 [`Modifier::required_size`]。
     pub fn size(self, width: impl Into<SizeValue>, height: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::Size {
             width: width.into(),
@@ -1210,8 +837,8 @@ impl Modifier {
         self.push(ModifierElement::MaxWidth { value: value.into() })
     }
 
-    /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min wins, see
-    /// [`Self::max_width`])
+    /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min resolves by chain
+    /// order, see [`Self::max_width`])
     pub fn max_height(self, value: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::MaxHeight { value: value.into() })
     }
@@ -1285,9 +912,128 @@ impl Modifier {
         self.push(ModifierElement::AlignSelf { alignment })
     }
 
+    /// Align this child by one of its own alignment lines instead of by its edge — Compose's
+    /// `RowScope.Modifier.alignBy` / `ColumnScope.Modifier.alignBy`.
+    ///
+    /// The child reports the line (a text leaf reports its first baseline) and the parent offsets it
+    /// so that every such child's line lands on the same cross-axis position, growing the cross axis
+    /// if the line plus what hangs below it needs more room. It takes precedence over
+    /// [`Modifier::align_self`] and the parent's own alignment, as Compose's `getCrossAxisPosition`
+    /// does (`RowColumnMeasurePolicy.kt:228-251`, `Row.kt:216-231`).
+    pub fn align_by(self, line: crate::layout::AlignmentLine) -> Self {
+        self.push(ModifierElement::AlignBy { line })
+    }
+
+    /// `Modifier.alignByBaseline()` — the common case: align this child's first text baseline with
+    /// its siblings', which is how a label lines up with a taller icon or a larger font beside it.
+    pub fn align_by_baseline(self) -> Self {
+        self.align_by(crate::layout::AlignmentLine::FIRST_BASELINE)
+    }
+
+    /// Report an alignment line for this node: the line sits `f(measured size)` from the node's top
+    /// (a horizontal line) or start (a vertical one).
+    ///
+    /// This is where a custom line is PUBLISHED, and it is the stand-in for Compose declaring a line
+    /// as the layout is produced — `Modifier.layout { measurable, constraints -> layout(w, h,
+    /// alignmentLines = mapOf(line to offset)) { … } }`. winia cannot do it from a `MeasurePolicy`
+    /// (a policy is never told its own node index), and a `Modifier` is the dataclass a component
+    /// hands to its node, so a closure over the measured size belongs here.
+    ///
+    /// The line then behaves like any other: a container inherits it through the merger, a parent
+    /// aligns a child by it with [`Modifier::align_by`], and [`Modifier::padding_from`] measures
+    /// against it. Publish several by calling this several times.
+    pub fn alignment_line(
+        self,
+        line: crate::layout::AlignmentLine,
+        f: impl Fn(crate::unit::Size) -> f32 + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::AlignmentLineValue { line, value: std::sync::Arc::new(f) })
+    }
+
+    /// Pad this node so the distance from its near edge to its content's alignment line is `before`
+    /// and from the line to the far edge is `after` — Compose's `Modifier.paddingFrom`
+    /// (`foundation/layout/AlignmentLine.kt:65`).
+    ///
+    /// Which edges those are follows the line's orientation: a horizontal line (the text baselines)
+    /// means top and bottom. The other axis is untouched, and `None` is Compose's `Dp.Unspecified` —
+    /// that side is unconstrained, and the content is then placed against the other one.
+    ///
+    /// The padding is capped by the incoming maximum on that axis, and `before` wins when both cannot
+    /// fit (Compose's contract, `:44-55`).
+    pub fn padding_from(
+        self,
+        line: crate::layout::AlignmentLine,
+        before: Option<f32>,
+        after: Option<f32>,
+    ) -> Self {
+        self.push(ModifierElement::PaddingFrom { line, before, after })
+    }
+
+    /// material3's default minimum touch target, `LocalMinimumInteractiveComponentSize`'s 48.dp
+    /// (`material3/InteractiveComponentSize.kt:206-210`).
+    pub const MINIMUM_INTERACTIVE_SIZE_DP: f32 = 48.0;
+
+    /// Reserve at least a touch target's worth of space around a small component, centring it —
+    /// Compose's `Modifier.minimumInteractiveComponentSize()` (`material3/InteractiveComponentSize.kt:69`),
+    /// which material3's own Button, IconButton, Checkbox and friends apply for you.
+    ///
+    /// The box becomes `max(content, 48)` on both axes with the content centred inside it, and the two
+    /// "where the visual content starts" lines are published
+    /// ([`AlignmentLine::minimum_interactive_left`] / [`AlignmentLine::minimum_interactive_top`]) so a
+    /// parent can align the small component by its real edge rather than by its invisible padding.
+    ///
+    /// Deviation, recorded: Compose reads the size from `LocalMinimumInteractiveComponentSize`, a
+    /// CompositionLocal a screen can set to 0 to switch enforcement off for a whole subtree; winia takes
+    /// the value from the modifier, with the 48 dp default in one place, and has no per-subtree switch.
+    /// [`Modifier::minimum_interactive_size`] is there for a caller that wants another number.
+    pub fn minimum_interactive_component_size(self) -> Self {
+        self.minimum_interactive_size(Self::MINIMUM_INTERACTIVE_SIZE_DP)
+    }
+
+    /// [`Modifier::minimum_interactive_component_size`] with an explicit size. `size <= 0` disables it,
+    /// which is Compose's "unspecified or 0.dp" case.
+    pub fn minimum_interactive_size(self, size: f32) -> Self {
+        self.push(ModifierElement::MinimumInteractiveSize { size })
+    }
+
+    /// Compose's `Modifier.paddingFromBaseline(top, bottom)`: `top` from the container's top edge to
+    /// the FIRST text baseline, `bottom` from the LAST one to the container's bottom. Either side may
+    /// be `None` (Compose's `Dp.Unspecified`), and Compose expresses it as one `paddingFrom` per
+    /// specified side, which is what this does — the two compose, so both can be in force.
+    pub fn padding_from_baseline(self, top: Option<f32>, bottom: Option<f32>) -> Self {
+        let m = match top {
+            Some(top) => self.padding_from(
+                crate::layout::AlignmentLine::FIRST_BASELINE,
+                Some(top),
+                None,
+            ),
+            None => self,
+        };
+        match bottom {
+            Some(bottom) => m.padding_from(
+                crate::layout::AlignmentLine::LAST_BASELINE,
+                None,
+                Some(bottom),
+            ),
+            None => m,
+        }
+    }
+
     /// 布局权重（Row 中按比例分配宽度，Column 中按比例分配高度）
+    ///
+    /// The child occupies its whole share, which is Compose's `weight(weight, fill = true)`.
     pub fn layout_weight(self, weight: f32) -> Self {
-        self.push(ModifierElement::LayoutWeight { weight })
+        self.push(ModifierElement::LayoutWeight { weight, fill: true })
+    }
+
+    /// 布局权重，是否填满自己的份额（对标 Compose `Modifier.weight(weight, fill)`）。
+    ///
+    /// With `fill = false` the share becomes the child's MAXIMUM main-axis size instead of an exact
+    /// one, and the parent uses the size the child measured, so a child shorter than its share lets
+    /// the container be shorter too. The arrangement is free to be a spreading one as well, because a
+    /// content-sized container no longer grows to the maximum its parent offers.
+    pub fn layout_weight_fill(self, weight: f32, fill: bool) -> Self {
+        self.push(ModifierElement::LayoutWeight { weight, fill })
     }
 
     /// `aspect_ratio(ratio)`（对标 Compose `Modifier.aspectRatio`）——
@@ -1295,7 +1041,7 @@ impl Modifier {
     ///
     /// `match_height_first = true` 时优先按高度约束推导宽度
     /// （对标 `matchHeightConstraintsFirst`）。
-    pub fn aspect_ratio(mut self, ratio: f32, match_height_first: bool) -> Self {
+    pub fn aspect_ratio(self, ratio: f32, match_height_first: bool) -> Self {
         assert!(ratio > 0.0, "aspectRatio {ratio} must be > 0（Compose 前置校验）");
         self.push(ModifierElement::AspectRatio { ratio, match_height_first })
     }
@@ -1378,7 +1124,7 @@ impl Modifier {
 
     /// TextField 容器子节点角色标记（text-field-v2 容器化内部使用——
     /// TextFieldLayout policy 按角色布局）
-    pub(crate) fn text_field_slot(self, role: crate::ui::text_field::TextFieldSlotRole) -> Self {
+    pub(crate) fn text_field_slot(self, role: crate::text::field::TextFieldSlotRole) -> Self {
         self.push(ModifierElement::TextFieldSlot { role })
     }
 
@@ -1463,7 +1209,7 @@ impl Modifier {
         })
     }
 
-    /// Fill the node with a [`crate::brush::Brush`] — a gradient, or a solid color chosen at
+    /// Fill the node with a [`crate::graphics::Brush`] — a gradient, or a solid color chosen at
     /// runtime (Compose `Modifier.background(brush, shape)`).
     ///
     /// ```ignore
@@ -1475,10 +1221,10 @@ impl Modifier {
     ///
     /// Accepts a value or a closure, so a gradient can follow animated state the same way
     /// `background` accepts an animated color. Gradient coordinates are FRACTIONS of the node's
-    /// bounds — see the module docs on [`crate::brush`] for why that differs from Compose.
+    /// bounds — see the module docs on [`crate::graphics::brush`] for why that differs from Compose.
     pub fn background_brush(
         self,
-        brush: impl Into<crate::brush::BrushSource>,
+        brush: impl Into<crate::graphics::BrushSource>,
         shape: impl Into<Shape>,
     ) -> Self {
         let source = brush.into();
@@ -1489,16 +1235,17 @@ impl Modifier {
     }
 
     /// 统一构造 TextContent 元素（Text/TextField 共用——字段单一来源，P3-6）
+    #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn text_content(
-        mut self,
+        self,
         content: String,
         font_size: f32,
-        color: crate::modifier::Color,
-        font_weight: crate::ui::text::FontWeight,
-        font_style: crate::ui::text::FontSlant,
+        color: crate::graphics::Color,
+        font_weight: crate::text::FontWeight,
+        font_style: crate::text::FontSlant,
         max_lines: usize,
-        align: crate::ui::TextAlign,
-        overflow: crate::ui::TextOverflow,
+        align: crate::text::TextAlign,
+        overflow: crate::text::TextOverflow,
         soft_wrap: bool,
     ) -> Self {
         self.text_content_full(
@@ -1511,15 +1258,15 @@ impl Modifier {
     /// 全参版（含 letter_spacing/line_height——Text 组件用，对标 Compose
     /// TextStyle.letterSpacing/lineHeight）
     pub(crate) fn text_content_full(
-        mut self,
+        self,
         content: String,
         font_size: f32,
-        color: crate::modifier::Color,
-        font_weight: crate::ui::text::FontWeight,
-        font_style: crate::ui::text::FontSlant,
+        color: crate::graphics::Color,
+        font_weight: crate::text::FontWeight,
+        font_style: crate::text::FontSlant,
         max_lines: usize,
-        align: crate::ui::TextAlign,
-        overflow: crate::ui::TextOverflow,
+        align: crate::text::TextAlign,
+        overflow: crate::text::TextOverflow,
         soft_wrap: bool,
         letter_spacing: f32,
         line_height: Option<f32>,
@@ -1583,17 +1330,15 @@ impl Modifier {
     /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
     pub fn text_field_visual(
         self,
-        variant: crate::ui::TextFieldVariant,
+        variant: crate::text::field::TextFieldVariant,
         shape: Shape,
-        colors: crate::ui::TextFieldColors,
+        colors: crate::text::field::TextFieldColors,
         enabled: bool,
-        focused: bool,
-        is_error: bool,
         read_only: bool,
         cursor_color: Color,
-        indicator_color: crate::core::state::State<crate::modifier::Color>,
-        focus_progress: crate::core::state::State<f32>,
-        offset_mapping: Option<std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>>,
+        indicator_color: crate::runtime::state::State<crate::graphics::Color>,
+        focus_progress: crate::runtime::state::State<f32>,
+        offset_mapping: Option<std::sync::Arc<dyn crate::text::transformation::OffsetMapping>>,
         supporting: Option<SupportingVisual>,
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
@@ -1601,8 +1346,6 @@ impl Modifier {
             shape,
             colors,
             enabled,
-            focused,
-            is_error,
             read_only,
             cursor_color,
             indicator_color,
@@ -1617,7 +1360,7 @@ impl Modifier {
     /// 查找 TextFieldVisual.offset_mapping 或本元素）
     pub fn text_field_offset_mapping(
         self,
-        offset_mapping: std::sync::Arc<dyn crate::ui::text_transformation::OffsetMapping>,
+        offset_mapping: std::sync::Arc<dyn crate::text::transformation::OffsetMapping>,
     ) -> Self {
         self.push(ModifierElement::TextFieldOffsetMapping { offset_mapping })
     }
@@ -1751,16 +1494,16 @@ pub fn no_focus_ring(self) -> Self {
     self.push(ModifierElement::NoFocusRing)
 }
 
-pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
+pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::DrawIcon { spec })
     }
 
     /// 图片内容元素（Image 组件用——绘制按 ContentScale/对齐/alpha）
     pub fn image_content(
         self,
-        source: crate::ui::icon::IconSource,
-        content_scale: crate::ui::image::ContentScale,
-        alignment: crate::ui::image::ImageAlignment,
+        source: crate::graphics::IconSource,
+        content_scale: crate::graphics::ContentScale,
+        alignment: crate::graphics::ImageAlignment,
         alpha: f32,
         color_filter: Option<ColorFilter>,
         filter_quality: FilterQuality,
@@ -1813,7 +1556,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
     /// **静态用法**：
     /// ```
     /// # use winia::prelude::*;
-    /// # use winia::modifier::GraphicsLayerParams;
+    /// # use winia::graphics::GraphicsLayerParams;
     /// let _m = Modifier::new().graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() });
     /// ```
     ///
@@ -1989,7 +1732,7 @@ pub fn draw_icon(self, spec: crate::ui::icon::IconSpec) -> Self {
 
     /// 水平滚动
     /// 标记为 lazy 滚动容器（LazyColumn 内部使用——内容总高 State）
-    pub fn lazy_scroll(self, content_height: crate::core::state::Backchannel<f32>) -> Self {
+    pub fn lazy_scroll(self, content_height: crate::runtime::state::Backchannel<f32>) -> Self {
         self.push(ModifierElement::LazyScroll { content_height, reverse: false })
     }
 
@@ -2061,7 +1804,8 @@ impl Modifier {
     }
 
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => *v,
@@ -2114,7 +1858,8 @@ impl Modifier {
     /// 解析 Size 元素的尺寸（静态/动态单轴独立解析）——返回 (width, height) 解析值，
     /// None 表示该轴不约束（Auto/Fill）。
     pub fn resolved_size(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         // 合并所有 Size 元素（链序：后 push 的外层胜出——非 None 覆盖）。
         // ⚠ 不能只返回第一个：`width(300).height(dyn)` 是两个 Size 元素，
         // 只取第一个会丢 height（min_lines 动态高度失效的根因）
@@ -2147,7 +1892,8 @@ impl Modifier {
     /// 该轴无最小约束。动态值在布局期求值（State::get 注册 layout_dep——
     /// 动画可驱动 min 尺寸，只重测不重组）。
     pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -2172,11 +1918,48 @@ impl Modifier {
         out
     }
 
+    /// The min/max size elements in CHAIN ORDER, as `(is_width, is_min, value)`.
+    ///
+    /// Compose nests one node per call and `constrain`s each node's target constraints into what it
+    /// was handed (`Size.kt`: `SizeNode.targetConstraints`), so every node's output range is a
+    /// sub-range of its input's and the OUTER call decides a conflict:
+    /// `.widthIn(max = 200.dp).widthIn(min = 300.dp)` measures 200, the reverse measures 300.
+    /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
+    /// and collapse that away, so the measure pipeline replays the order with this instead.
+    pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
+        let resolve = |sv: &SizeValue| -> Option<f32> {
+            match sv {
+                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
+                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
+                SizeValue::Dynamic(f) => Some(f()),
+                SizeValue::Intrinsic(_) => None,
+            }
+        };
+        let mut out = Vec::new();
+        for el in &self.elements {
+            let (is_width, is_min, value) = match el {
+                ModifierElement::MinWidth { value } => (true, true, value),
+                ModifierElement::MaxWidth { value } => (true, false, value),
+                ModifierElement::MinHeight { value } => (false, true, value),
+                ModifierElement::MaxHeight { value } => (false, false, value),
+                _ => continue,
+            };
+            if let Some(v) = resolve(value) {
+                out.push((is_width, is_min, v));
+            }
+        }
+        out
+    }
+
     /// Resolve the MaxWidth/MaxHeight elements — `(max_width, max_height)`, `None` for an
     /// axis with no cap. Dynamic values are evaluated during layout (a `State::get` registers
     /// a layout dependency, so an animation can drive the cap without recomposing).
     pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -2226,7 +2009,7 @@ impl Modifier {
     }
 
     /// lazy 列表内容高度 State（如果有 LazyScroll modifier）
-    pub fn lazy_scroll_content_height(&self) -> Option<&crate::core::state::Backchannel<f32>> {
+    pub fn lazy_scroll_content_height(&self) -> Option<&crate::runtime::state::Backchannel<f32>> {
         for el in &self.elements {
             if let ModifierElement::LazyScroll { content_height, .. } = el {
                 return Some(content_height);
@@ -2267,8 +2050,19 @@ impl Modifier {
     /// 布局权重（供 Column/Row 使用）
     pub fn get_layout_weight(&self) -> Option<f32> {
         for el in &self.elements {
-            if let ModifierElement::LayoutWeight { weight } = el {
+            if let ModifierElement::LayoutWeight { weight, .. } = el {
                 return Some(*weight);
+            }
+        }
+        None
+    }
+
+    /// Whether a weighted node fills its share. `None` when the node carries no weight; a node
+    /// with a weight but no explicit `fill` reads as `true`, the `Modifier::layout_weight` default.
+    pub fn get_layout_weight_fill(&self) -> Option<bool> {
+        for el in &self.elements {
+            if let ModifierElement::LayoutWeight { fill, .. } = el {
+                return Some(*fill);
             }
         }
         None
@@ -2303,7 +2097,8 @@ impl Modifier {
     /// pipeline together with `Modifier::width/height(IntrinsicSize)` — see
     /// [`Modifier::intrinsic_width_request`].
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{current_density, Dp, Px};
+        use crate::unit::{Dp};
+        use crate::runtime::density::current_density;
         let resolve = |sv: &SizeValue| -> Option<f32> {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
@@ -2360,6 +2155,59 @@ impl Modifier {
             }
         }
         None
+    }
+
+    /// The alignment line this child asks to be aligned by, if any (Compose's `alignBy`).
+    pub fn get_align_by(&self) -> Option<crate::layout::AlignmentLine> {
+        for el in &self.elements {
+            if let ModifierElement::AlignBy { line } = el {
+                return Some(*line);
+            }
+        }
+        None
+    }
+
+    /// Every `paddingFrom` on this modifier, in chain order — one entry per element, because
+    /// `padding_from_baseline(top, bottom)` is two of them and both are in force (Compose chains the
+    /// same way, `foundation/layout/AlignmentLine.kt:144`).
+    ///
+    /// The lines this node reports itself, each with the closure that positions it from the measured
+    /// size — [`Modifier::alignment_line`]. Read after the content is measured, since that is when a
+    /// closure over the size can run.
+    pub fn get_alignment_line_values(
+        &self,
+    ) -> Vec<(
+        crate::layout::AlignmentLine,
+        std::sync::Arc<dyn Fn(crate::unit::Size) -> f32 + Send + Sync>,
+    )> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::AlignmentLineValue { line, value } => Some((*line, value.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The touch-target minimum this node asks for, if any — the LAST one wins, as a chain of
+    /// modifiers would leave the outermost in charge. `Some(0.0)` means "explicitly off".
+    pub fn get_minimum_interactive_size(&self) -> Option<f32> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::MinimumInteractiveSize { size } => Some(*size),
+            _ => None,
+        })
+    }
+
+    /// Applied after the content is measured: it is the content's own alignment line that says how
+    /// much padding the node needs.
+    pub fn get_padding_from(&self) -> Vec<(crate::layout::AlignmentLine, Option<f32>, Option<f32>)> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::PaddingFrom { line, before, after } => Some((*line, *before, *after)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// 交叉轴对齐覆盖（供 Column/Row 使用）
@@ -2519,7 +2367,7 @@ impl Modifier {
     }
 
     /// 获取文本对齐方式
-    pub fn align(&self) -> Option<crate::ui::TextAlign> {
+    pub fn align(&self) -> Option<crate::text::TextAlign> {
         for el in &self.elements {
             if let ModifierElement::TextContent { align, .. } = el {
                 return Some(*align);
@@ -2547,7 +2395,7 @@ impl Modifier {
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
                 SizeValue::Intrinsic(_) => 0.0,
@@ -2566,7 +2414,7 @@ impl Modifier {
         let resolve = |sv: &SizeValue| -> f32 {
             match sv {
                 SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::unit::current_density()),
+                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
                 SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
                 SizeValue::Dynamic(f) => f(),
                 SizeValue::Intrinsic(_) => 0.0,
@@ -2618,7 +2466,20 @@ impl Debug for ModifierElement {
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
-            Self::LayoutWeight { weight } => f.debug_struct("LayoutWeight").field("weight", weight).finish(),
+            Self::AlignBy { line } => f.debug_struct("AlignBy").field("line", line).finish(),
+            Self::AlignmentLineValue { line, .. } => {
+                f.debug_struct("AlignmentLineValue").field("line", line).finish()
+            }
+            Self::MinimumInteractiveSize { size } => {
+                f.debug_struct("MinimumInteractiveSize").field("size", size).finish()
+            }
+            Self::PaddingFrom { line, before, after } => f
+                .debug_struct("PaddingFrom")
+                .field("line", line)
+                .field("before", before)
+                .field("after", after)
+                .finish(),
+            Self::LayoutWeight { weight, fill } => f.debug_struct("LayoutWeight").field("weight", weight).field("fill", fill).finish(),
             Self::AspectRatio { ratio, .. } => f.debug_struct("AspectRatio").field("ratio", ratio).finish(),
             Self::RequiredSize { width, height } => f
                 .debug_struct("RequiredSize")
@@ -2716,81 +2577,14 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
 
 // ── ScrollState ──
 
-// Skia's native shadow utility consumes the alpha directly. These values match
-// the low-opacity ambient/spot defaults used by Skia's shadow examples.
-const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x20 };
-const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x50 };
-
-/// 图形层变换参数
-///
-/// ⚠ 只影响**绘制**（外观），不参与布局与命中测试（对标 Compose
-/// graphicsLayer：命中区域始终是布局 bounds）。命中测试唯一考虑的
-/// 位移是 scroll（布局层）；此处变换（translation/scale/rotate/
-/// rotationX/Y/camera）不会改变可点击区域或按压点本地坐标。
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphicsLayerParams {
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub alpha: f32,
-    pub translation_x: f32,
-    pub translation_y: f32,
-    pub rotation_z: f32,
-    /// 变换原点（pivot 分数——0..1，相对节点宽高）——对标 Compose
-    /// `transformOrigin`（默认 Center——scale/rotate 绕中心）
-    pub transform_origin: TransformOrigin,
-    /// 裁剪到节点 bounds（对标 Compose graphicsLayer `clip`；
-    /// `Modifier.alpha` 便捷版默认 clip=true）
-    pub clip: bool,
-    /// 绕 X 轴 3D 旋转（度——带 cameraDistance 透视）
-    pub rotation_x: f32,
-    /// 绕 Y 轴 3D 旋转（度——带 cameraDistance 透视）
-    pub rotation_y: f32,
-    /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
-    pub camera_distance: f32,
-    /// 图层阴影高度（逻辑 px——>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，
-    /// 对标 Compose graphicsLayer.shadowElevation）
-    pub shadow_elevation: f32,
-    /// 图层阴影形状（None = 矩形）
-    pub shadow_shape: Option<Shape>,
-    /// 环境光阴影颜色（默认约 10% 黑，对标 Compose ambientShadowColor）。
-    pub ambient_shadow_color: Color,
-    /// 投射光阴影颜色（默认约 25% 黑，对标 Compose spotShadowColor）。
-    pub spot_shadow_color: Color,
-    /// 颜色滤镜（对标 Compose graphicsLayer `colorFilter`——渲染期 saveLayer
-    /// paint 挂 color filter，层内所有内容被染色；Text/Icon 用 `Tint` 做动态颜色动画）
-    pub color_filter: Option<ColorFilter>,
-}
-
-impl Default for GraphicsLayerParams {
-    fn default() -> Self {
-        Self {
-            scale_x: 1.0, scale_y: 1.0, alpha: 1.0,
-            translation_x: 0.0, translation_y: 0.0, rotation_z: 0.0,
-            transform_origin: TransformOrigin::CENTER,
-            clip: false,
-            rotation_x: 0.0, rotation_y: 0.0,
-            camera_distance: 8.0,
-            shadow_elevation: 0.0,
-            shadow_shape: None,
-            ambient_shadow_color: DEFAULT_AMBIENT_SHADOW_COLOR,
-            spot_shadow_color: DEFAULT_SPOT_SHADOW_COLOR,
-            color_filter: None,
-        }
-    }
-}
-
-/// 变换原点（对标 Compose `TransformOrigin`）——pivot 分数坐标，
-/// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct TransformOrigin(pub f32, pub f32);
 
 /// TextField 支持文本绘制参数（画在容器底部外侧 4dp）
 #[derive(Clone, Debug)]
 pub struct SupportingVisual {
     pub content: String,
     pub font_size: f32,
-    pub font_weight: crate::ui::text::FontWeight,
-    pub font_style: crate::ui::text::FontSlant,
+    pub font_weight: crate::text::FontWeight,
+    pub font_style: crate::text::FontSlant,
     pub letter_spacing: f32,
     pub line_height: Option<f32>,
     pub color: Color,
@@ -2802,68 +2596,6 @@ impl SupportingVisual {
     }
 }
 
-/// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。
-/// 绘制对齐 DropShadowPainter：扩边画布 → 形状路径（模糊）画进离屏 mask →
-/// 颜色 SrcIn 着色 → 按 offset 平移到画布。
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct ShadowParams {
-    /// 模糊半径（逻辑 px，对标 radius）
-    pub radius: f32,
-    /// 扩展半径（阴影比形状大多少——超出部分另画 stroke，对标 spread）
-    pub spread: f32,
-    /// 阴影偏移（对标 offset）
-    pub offset_x: f32,
-    pub offset_y: f32,
-    /// 阴影颜色（对标 color，默认黑）
-    pub color: Color,
-    /// 独立透明度 0-1（对标 alpha）
-    pub alpha: f32,
-}
-
-impl ShadowParams {
-    /// 便捷构造（radius/offset/color/alpha；spread=0）
-    pub fn new(radius: f32, offset_x: f32, offset_y: f32, color: Color, alpha: f32) -> Self {
-        Self { radius, spread: 0.0, offset_x, offset_y, color, alpha }
-    }
-}
-
-impl Default for ShadowParams {
-    fn default() -> Self {
-        Self {
-            radius: 0.0,
-            spread: 0.0,
-            offset_x: 0.0,
-            offset_y: 0.0,
-            color: Color::from_argb(255, 0, 0, 0),
-            alpha: 1.0,
-        }
-    }
-}
-
-impl TransformOrigin {
-    /// 中心（Compose 默认）
-    pub const CENTER: Self = Self(0.5, 0.5);
-    /// 左上角
-    pub const TOP_LEFT: Self = Self(0.0, 0.0);
-    /// 右下角
-    pub const BOTTOM_RIGHT: Self = Self(1.0, 1.0);
-}
-
-impl Default for TransformOrigin {
-    fn default() -> Self {
-        Self::CENTER
-    }
-}
-
-/// 背景色规格：静态 `Color` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<BackgroundColor>` 统一 `background()` 入口——传 `Color` 或闭包均可。
-pub struct BackgroundColor(pub(crate) Arc<dyn Fn() -> Color + Send + Sync>);
-
-impl From<Color> for BackgroundColor {
-    fn from(color: Color) -> Self {
-        Self(Arc::new(move || color))
-    }
-}
 
 impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     fn from(f: F) -> Self {
@@ -2871,28 +2603,14 @@ impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
     }
 }
 
-impl From<crate::core::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: crate::core::state::DerivedValue<Color>) -> Self {
-        Self(Arc::new(move || d.get()))
-    }
-}
 
-impl From<&crate::core::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: &crate::core::state::DerivedValue<Color>) -> Self {
+impl From<&crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
+    fn from(d: &crate::runtime::state::DerivedValue<Color>) -> Self {
         let d = d.clone();
         Self(Arc::new(move || d.get()))
     }
 }
 
-/// 图形层规格：静态 `GraphicsLayerParams` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<GraphicsLayerSpec>` 统一 `graphics_layer()` 入口。
-pub struct GraphicsLayerSpec(pub(crate) Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync>);
-
-impl From<GraphicsLayerParams> for GraphicsLayerSpec {
-    fn from(params: GraphicsLayerParams) -> Self {
-        Self(Arc::new(move || params.clone()))
-    }
-}
 
 impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for GraphicsLayerSpec {
     fn from(f: F) -> Self {
@@ -2904,9 +2622,9 @@ impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for Graphic
 #[derive(Debug, Clone)]
 pub struct ScrollState {
     /// 当前偏移
-    pub offset: crate::core::state::State<f32>,
+    pub offset: crate::runtime::state::State<f32>,
     /// 是否正在滚动
-    pub is_scroll_in_progress: crate::core::state::State<bool>,
+    pub is_scroll_in_progress: crate::runtime::state::State<bool>,
     /// How far a fling may travel: written back by the layout as `content height - viewport height`, or
     /// `f32::MAX` while that is still unknown.
     ///
@@ -2915,14 +2633,14 @@ pub struct ScrollState {
     /// exactly fitted still flinged: a drag was correctly clamped by the node's own `content - viewport`,
     /// but the momentum after the release was not (measured on a three-item menu: a drag that moved
     /// nothing left the offset at 74).
-    pub(crate) fling_limit: crate::core::state::Backchannel<f32>,
+    pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——offset 到界无变化时脉冲检测不到，
     /// 故分发层在"命中但消费为 0"的 wheel 上自增本计数，scrollbar 侧以变化
     /// 为脉冲点亮 fade。u64 单调，set 恒变→恒通知，无需 PartialEq 去重顾虑）。
-    pub(crate) scroll_pulse: crate::core::state::State<u64>,
+    pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
     /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
-    pub(crate) snap: crate::core::state::Backchannel<Option<SnapSpec>>,
+    pub(crate) snap: crate::runtime::state::Backchannel<Option<SnapSpec>>,
 }
 
 /// How a PAGED list's fling settles, written back by the list's measure and read by
@@ -2997,11 +2715,11 @@ fn snap_settle() -> crate::animation::AnimationSpec {
 impl ScrollState {
     pub fn new() -> Self {
         ScrollState {
-            offset: crate::core::state::State::new(0.0),
-            is_scroll_in_progress: crate::core::state::State::new(false),
-            fling_limit: crate::core::state::Backchannel::new(f32::MAX),
-            scroll_pulse: crate::core::state::State::new(0),
-            snap: crate::core::state::Backchannel::new(None),
+            offset: crate::runtime::state::State::new(0.0),
+            is_scroll_in_progress: crate::runtime::state::State::new(false),
+            fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            scroll_pulse: crate::runtime::state::State::new(0),
+            snap: crate::runtime::state::Backchannel::new(None),
         }
     }
 
@@ -3438,9 +3156,19 @@ mod tests {
             FocusRequester::new()
         };
         requester.request_focus();
-        assert!(take_focus_requests().is_empty(), "request must not leak to the unbound window context");
+        // Asserted about THIS request, not about the queue being empty: `FOCUS_REQUESTS` is a global
+        // and another test's leftover is not this test's business. It used to assert emptiness and
+        // passed only because of where it fell in the single-threaded order — renaming `ui` to
+        // `components` moved it and it started failing with an unrelated request in the queue.
+        assert!(
+            !take_focus_requests().contains(&requester.id),
+            "this request must not leak to the unbound window context"
+        );
         let _window = focus_window(33);
-        assert_eq!(take_focus_requests(), vec![requester.id]);
+        assert!(
+            take_focus_requests().contains(&requester.id),
+            "the bound window context must receive it"
+        );
     }
 
     #[test]
@@ -3492,7 +3220,7 @@ mod tests {
     #[test]
     fn test_padding_dynamic_value() {
         // 动态 padding：State 驱动（动画作用于 padding 的机制）
-        let s = crate::core::state::State::new(4.0f32);
+        let s = crate::runtime::state::State::new(4.0f32);
         let m = Modifier::new().padding_start(s.clone());
         let (start, _, _, _) = m.get_padding_sides();
         assert_eq!(start, 4.0);
@@ -3535,7 +3263,7 @@ mod tests {
     #[test]
     fn test_offset_dynamic_animation() {
         // 动态 offset：State 驱动（动画作用于 offset——Compose offset 动画语义）
-        let s = crate::core::state::State::new(0.0f32);
+        let s = crate::runtime::state::State::new(0.0f32);
         let m = Modifier::new().offset(s.clone(), 10.0);
         assert_eq!(m.get_offset(), Some((0.0, 10.0)));
         s.set(50.0);
@@ -3569,7 +3297,7 @@ mod tests {
         match &elements[0] {
             ModifierElement::Size { width, height } => {
                 match (width, height) {
-                    (crate::modifier::SizeValue::Static(w), crate::modifier::SizeValue::Static(h)) => {
+                    (crate::layout::SizeValue::Static(w), crate::layout::SizeValue::Static(h)) => {
                         assert_eq!(*w, Dimension::Fixed(100.0));
                         assert_eq!(*h, Dimension::Fill);
                     }
@@ -3613,60 +3341,6 @@ mod tests {
 
 // ── RichSpanStyle ──
 
-/// 装饰线样式（对应 Skia TextDecorationStyle）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoStyle { Solid, Double, Dotted, Dashed, Wavy }
-
-/// 装饰线模式（对应 Skia TextDecorationMode）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoMode { Gaps, Through }
-
-/// 字体渲染边缘
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontEdge { Alias, AntiAlias, SubpixelAntiAlias }
-
-/// 字体提示
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontHint { None, Slight, Normal, Full }
-
-/// 富文本中每段的已解析样式（含范围）。
-/// 存储在 RichTextContent modifier 中供测量/渲染使用。
-#[derive(Debug, Clone, PartialEq)]
-pub struct RichSpanStyle {
-    /// 范围起（字符索引，含）
-    pub start: usize,
-    /// 范围止（字符索引，不含）
-    pub end: usize,
-    pub font_size: f32,
-    pub color: Color,
-    pub font_weight: crate::ui::text::FontWeight,
-    pub font_style: crate::ui::text::FontSlant,
-    // ── 装饰线 ──
-    pub underline: bool,
-    pub overline: bool,
-    pub strikethrough: bool,
-    pub decoration_color: Option<Color>,
-    pub decoration_style: Option<DecoStyle>,
-    pub decoration_mode: Option<DecoMode>,
-    // ── 基线 ──
-    pub baseline_shift: f32,
-    // ── 间距 ──
-    pub letter_spacing: f32,
-    pub word_spacing: f32,
-    pub height_multiple: f32,
-    pub half_leading: bool,
-    // ── 字体 ──
-    pub font_families: Vec<String>,
-    pub font_width: i32,
-    pub font_edging: Option<FontEdge>,
-    pub font_hinting: Option<FontHint>,
-    pub subpixel: bool,
-    // ── 前景/背景 ──
-    pub foreground_color: Option<Color>,
-    pub background: Option<Color>,
-    // ── 其他 ──
-    pub locale: Option<String>,
-}
 
 // ── 参数相等性（Skip 判定） ──
 
@@ -3725,7 +3399,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
-        (LayoutWeight { weight: aw }, LayoutWeight { weight: bw }) => aw == bw,
+        (AlignBy { line: a }, AlignBy { line: b }) => a == b,
+        (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
         (AspectRatio { ratio: ar, match_height_first: am }, AspectRatio { ratio: br, match_height_first: bm }) => {
             ar == br && am == bm
         }
@@ -4061,18 +3736,18 @@ mod param_eq_tests {
     /// 尺寸未变化不重复回调，约束变化引发新尺寸时再次回调
     #[test]
     fn on_size_changed_reports_and_dedups() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         let reported: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>> = Default::default();
         let mut composer = Composer::new();
         {
             let rep = reported.clone();
             composer.compose(|ctx| {
-                crate::ui::layout_components::Column::new()
+                crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_width().on_size_changed(move |w, h| {
                         rep.lock().unwrap().push((w, h));
                     }))
                     .build(ctx, |ctx| {
-                        crate::ui::Text::new("hello").build(ctx);
+                        crate::components::Text::new("hello").build(ctx);
                     });
             });
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -4098,7 +3773,10 @@ mod param_eq_tests {
 #[cfg(test)]
 mod node_track_tests {
     use super::*;
-    use crate::core::composer::Composer;
+    use crate::input::PointerButton;
+    use crate::input::PointerEventType;
+    use crate::input::PointerKind;
+    use crate::runtime::composer::Composer;
 
     /// 试点绘制节点：Background(color, shape) 的 node 等价物（第三方可照抄）。
     #[derive(Debug)]
@@ -4379,7 +4057,7 @@ mod node_track_tests {
         // holds black text; parent after paints an opaque overlay rect. Sampled pixels
         // inside the overlay must show the overlay color, not text-darkened pixels —
         // i.e. after runs after the children recursion in render_pass1.
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         use skia_safe::surfaces;
         let overlay = Color::from_argb(255, 30, 200, 30);
         #[derive(Debug)]
@@ -4424,11 +4102,11 @@ mod node_track_tests {
                     "CoverMe".to_string(),
                     14.0,
                     Color::BLACK,
-                    crate::ui::text::FontWeight::NORMAL,
-                    crate::ui::text::FontSlant::Upright,
+                    crate::text::FontWeight::NORMAL,
+                    crate::text::FontSlant::Upright,
                     usize::MAX,
-                    crate::ui::TextAlign::Left,
-                    crate::ui::TextOverflow::Clip,
+                    crate::text::TextAlign::Left,
+                    crate::text::TextOverflow::Clip,
                     true,
                 ),
             );
@@ -4483,8 +4161,8 @@ mod node_track_tests {
         // future RippleNode migration needs): enum ripple pressed to mid-expand, after
         // paints an opaque bar over the press point. The press pixel must show the bar
         // color, not the ripple color.
-        use crate::core::composer::Composer;
-        use crate::ui::interaction::MutableInteractionSource;
+        use crate::runtime::composer::Composer;
+        use crate::interaction::MutableInteractionSource;
         use skia_safe::surfaces;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
@@ -4626,7 +4304,7 @@ mod node_track_tests {
     #[test]
     fn node_track_pointer_bubble_receives_local_coords() {
         use crate::layout::node::LayoutNode;
-        use crate::layout::{Point, Size};
+        use crate::unit::{Offset, Size};
         let pre_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let event_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut nodes = vec![LayoutNode::leaf(
@@ -4637,7 +4315,7 @@ mod node_track_tests {
             }),
         )];
         nodes[0].measured_size = Size::new(100.0, 100.0);
-        nodes[0].position = Point::new(10.0, 20.0);
+        nodes[0].position = Offset::new(10.0, 20.0);
         let path = vec![0];
         let ev = PointerEvent {
             event_type: PointerEventType::Move,
@@ -4731,7 +4409,7 @@ mod node_track_tests {
         min_w: f32,
     }
 
-    impl LayoutNode for TestMinWidthNode {
+    impl LayoutModifierNode for TestMinWidthNode {
         fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
             inner.min_width = inner.min_width.max(self.min_w).min(inner.max_width);
             inner
@@ -4743,7 +4421,7 @@ mod node_track_tests {
 
     #[test]
     fn node_track_layout_transform_applies_and_folds() {
-        use crate::core::composer::Composer;
+        use crate::runtime::composer::Composer;
         // 约束 max 400：node 提 min_w=200 → 叶子宽应为 200（tighten 生效）
         let mut composer = Composer::new();
         composer.compose(|ctx| {
@@ -4780,14 +4458,14 @@ mod node_track_tests {
 
     #[test]
     fn node_track_layout_node_state_driven_remeasures() {
-        use crate::core::composer::Composer;
-        use crate::core::state::State;
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
         // 动态值在 transform 内 get → 注册布局依赖 → set 后重测（与 SizeValue::Dynamic 同）
         #[derive(Debug)]
         struct DynMinNode {
             s: State<f32>,
         }
-        impl LayoutNode for DynMinNode {
+        impl LayoutModifierNode for DynMinNode {
             fn transform(&self, mut inner: crate::layout::Constraints) -> crate::layout::Constraints {
                 let v = self.s.get();
                 inner.min_width = inner.min_width.max(v).min(inner.max_width);
@@ -4828,7 +4506,7 @@ mod node_track_tests {
     /// 依赖）或动画引擎 Animating 写 + request_redraw。node 无特殊通道，老实跟枚举一致。
     #[derive(Debug)]
     struct TestStatefulBgNode {
-        color_state: crate::core::state::State<Color>,
+        color_state: crate::runtime::state::State<Color>,
     }
 
     impl DrawNode for TestStatefulBgNode {
@@ -4847,7 +4525,7 @@ mod node_track_tests {
 
     #[test]
     fn node_track_stateful_draw_follows_state() {
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         use skia_safe::surfaces;
         let red = Color::from_argb(255, 200, 30, 30);
         let blue = Color::from_argb(255, 30, 30, 200);
@@ -4934,7 +4612,7 @@ mod node_track_tests {
     /// their plain tree-order loops for every node that does not use the feature.
     #[test]
     fn children_have_z_is_recorded_by_the_layout_pass() {
-        use crate::core::composer::{Composer, GroupStatus};
+        use crate::runtime::composer::{Composer, GroupStatus};
         use crate::layout::BoxLayout;
         use crate::layout::constraints::Constraints;
 

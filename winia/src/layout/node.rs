@@ -1,11 +1,15 @@
 //! 布局节点 — LayoutNode 及相关的尺寸/位置/排列/对齐类型
 
-use crate::modifier::{IntrinsicSize, Modifier, ModifierElement, RichSpanStyle};
-use crate::ui::shared_transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
-use crate::ui::text::FontSlant;
+use crate::modifier::{Modifier, ModifierElement};
+use crate::layout::{IntrinsicSize};
+use crate::text::{RichSpanStyle};
+use crate::transition::{abs_rect_upward, find_idx_by_slot, TransitionRole};
+use crate::text::FontSlant;
 use skia_safe::FontStyle as SkFontStyle;
 use skia_safe::textlayout::TextStyle as SkTextStyle;
 use super::constraints::Constraints;
+use crate::unit::{Offset, Size};
+use crate::transition::{FlightMeasure, FlightMeasureFrame};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 全局节点 ID 生成器
@@ -22,40 +26,6 @@ pub enum LayoutDirection {
     Rtl,
 }
 
-// ── Size ──
-
-/// 2D 尺寸
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Size {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Size {
-    pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
-
-    pub fn new(width: f32, height: f32) -> Self {
-        Size { width, height }
-    }
-}
-
-// ── Point ──
-
-/// 2D 位置
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Point {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Point {
-    pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
-
-    pub fn new(x: f32, y: f32) -> Self {
-        Point { x, y }
-    }
-}
-
 // ── Placement ──
 
 /// 子节点在父节点中的放置结果（测量阶段产出尺寸，布局阶段产出位置）
@@ -64,7 +34,7 @@ pub struct Placement {
     /// 分配给子节点的尺寸
     pub size: Size,
     /// 子节点在父节点中的位置
-    pub position: Point,
+    pub position: Offset,
 }
 
 // ── Arrangement ──
@@ -82,13 +52,106 @@ pub enum Arrangement {
 
 // ── Alignment ──
 
-/// 交叉轴对齐方式（类似 Compose 的 Alignment）
+/// 交叉轴对齐方式（类似 Compose 的 `Alignment.Horizontal` / `Alignment.Vertical`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {
     Start,
     End,
     Center,
     Stretch,
+}
+
+// ── ContentAlignment ──
+
+/// Where a child sits inside a box, on BOTH axes — Compose's 2-D `Alignment`, the parameter of
+/// `Box(contentAlignment = …)`, `AnimatedContent(contentAlignment = …)` and
+/// `Modifier.animateContentSize(alignment = …)`.
+///
+/// The one-axis [`Alignment`] stays what it is: Column and Row align a child on their CROSS axis, and
+/// that is Compose's `Alignment.Horizontal` / `Alignment.Vertical`. A box needs both, and winia had
+/// only the diagonal values (`alignment(Alignment)` puts the same value on each axis, so `Start` means
+/// `TopStart` and `End` means `BottomEnd`) — the mixed corners Compose allows were not expressible.
+/// `Stretch` is winia's own extra on either axis, and stretches that axis to the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentAlignment {
+    pub horizontal: Alignment,
+    pub vertical: Alignment,
+}
+
+impl ContentAlignment {
+    pub const TOP_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Start };
+    pub const TOP_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Start };
+    pub const TOP_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Start };
+    pub const CENTER_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::Center };
+    pub const CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::Center };
+    pub const CENTER_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::Center };
+    pub const BOTTOM_START: Self = Self { horizontal: Alignment::Start, vertical: Alignment::End };
+    pub const BOTTOM_CENTER: Self = Self { horizontal: Alignment::Center, vertical: Alignment::End };
+    pub const BOTTOM_END: Self = Self { horizontal: Alignment::End, vertical: Alignment::End };
+    /// Both axes stretched to the box — winia's addition, since Compose stretches with
+    /// `fillMaxSize()` instead.
+    pub const STRETCH: Self = Self { horizontal: Alignment::Stretch, vertical: Alignment::Stretch };
+
+    pub fn new(horizontal: Alignment, vertical: Alignment) -> Self {
+        Self { horizontal, vertical }
+    }
+
+    /// The same value on both axes, which is what the one-axis builder means.
+    pub fn both(a: Alignment) -> Self {
+        Self { horizontal: a, vertical: a }
+    }
+
+    /// Compose's `Alignment.align(size, space, layoutDirection)`: the offset for a child of `child`
+    /// inside a box of `space`, with the horizontal half mirroring under RTL.
+    ///
+    /// The mirroring is Compose's, not an extra: `Alignment.TopStart` is `BiasAlignment(-1f, -1f)`
+    /// and the horizontal bias is NEGATED under RTL, so `Start` is the left edge in LTR and the right
+    /// one in RTL (`Alignment.kt:114-121`). The vertical half never mirrors. Compose's
+    /// `AbsoluteAlignment` (`TopLeft`, `CenterRight`, …) is the way to opt out of that; winia has no
+    /// equivalent yet, which the module doc records.
+    pub fn anchor(&self, child: Size, space: Size, direction: LayoutDirection) -> (f32, f32) {
+        let horizontal = if direction == LayoutDirection::Rtl {
+            match self.horizontal {
+                Alignment::Start => Alignment::End,
+                Alignment::End => Alignment::Start,
+                other => other,
+            }
+        } else {
+            self.horizontal
+        };
+        let axis = |a: Alignment, child: f32, space: f32| match a {
+            Alignment::Start => 0.0,
+            Alignment::End => space - child,
+            Alignment::Center => (space - child) / 2.0,
+            Alignment::Stretch => 0.0,
+        };
+        (
+            axis(horizontal, child.width, space.width),
+            axis(self.vertical, child.height, space.height),
+        )
+    }
+
+    /// The size the child gets: its own, except on an axis that stretches to the box.
+    pub fn child_size(&self, child: Size, space: Size) -> Size {
+        Size::new(
+            if self.horizontal == Alignment::Stretch { space.width } else { child.width },
+            if self.vertical == Alignment::Stretch { space.height } else { child.height },
+        )
+    }
+}
+
+/// Recorded, not implemented: Compose also has `AbsoluteAlignment` (`TopLeft`, `CenterRight`, …), the
+/// values that do NOT mirror under RTL, for callers that mean "the left edge, whatever the direction".
+/// winia's equivalent is per-site (`Modifier::absolute_offset`), and nothing here needs the family
+/// yet — the two components that relied on a non-mirroring box alignment now name a position that is
+/// direction-symmetric instead (`NavigationDrawer` uses `Start` and lets the mirroring put it on the
+/// trailing edge; `BottomSheetScaffold` uses `TOP_CENTER`, whose centring is symmetric).
+///
+/// The `Start`-on-both-axes alignment, Compose's default everywhere a 2-D one is taken.
+impl Default for ContentAlignment {
+    fn default() -> Self {
+        Self::TOP_START
+    }
 }
 
 /// 检查 modifier 中是否包含 TextContent
@@ -104,16 +167,16 @@ pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
 /// any of them has to invalidate a folded measurement even when the slot stayed clean.
 pub(crate) type TextSnapshot = (
     String,
-    crate::ui::TextAlign,
-    crate::modifier::Color,
+    crate::text::TextAlign,
+    crate::graphics::Color,
     f32,
-    crate::ui::text::FontWeight,
-    crate::ui::text::FontSlant,
+    crate::text::FontWeight,
+    crate::text::FontSlant,
     usize,
     bool,
     f32,
     Option<f32>,
-    crate::ui::TextOverflow,
+    crate::text::TextOverflow,
 );
 
 /// The text a modifier carries, or `None` if it has no text element. Rich text is deliberately
@@ -124,7 +187,7 @@ pub(crate) fn text_snapshot(modifier: &Modifier) -> Option<TextSnapshot> {
         ModifierElement::TextContent { content, align, color, font_size, font_weight, font_style, max_lines, soft_wrap, letter_spacing, line_height, overflow, .. } => {
             Some((content.clone(), *align, *color, *font_size, *font_weight, *font_style, *max_lines, *soft_wrap, *letter_spacing, *line_height, *overflow))
         }
-        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::ui::TextAlign::Left, crate::modifier::Color::TRANSPARENT, 0.0, crate::ui::text::FontWeight::NORMAL, crate::ui::text::FontSlant::Upright, 0, true, 0.0, None, crate::ui::TextOverflow::Clip)),
+        ModifierElement::RichTextContent { .. } => Some(("<richtext>".to_string(), crate::text::TextAlign::Left, crate::graphics::Color::TRANSPARENT, 0.0, crate::text::FontWeight::NORMAL, crate::text::FontSlant::Upright, 0, true, 0.0, None, crate::text::TextOverflow::Clip)),
         _ => None,
     })
 }
@@ -189,6 +252,116 @@ pub(crate) enum PaintDisposition {
     Placeholder,
 }
 
+/// How a container combines the values its children report for one line — Compose's
+/// `AlignmentLine(merger)` (`ui/layout/AlignmentLine.kt:60-66`).
+///
+/// Compose holds a closure; winia holds the two mergers Compose actually ships, so a line stays a
+/// `Copy` constant that can be compared and used in a `const`. A caller-defined merger is the part
+/// that stays unaligned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LineMerger {
+    /// The smallest child value — the FIRST of several lines, as `FirstBaseline = (::min)` is.
+    Min,
+    /// The largest — the LAST, as `LastBaseline = (::max)` is.
+    Max,
+}
+
+impl LineMerger {
+    fn merge(self, a: f32, b: f32) -> f32 {
+        match self {
+            LineMerger::Min => a.min(b),
+            LineMerger::Max => a.max(b),
+        }
+    }
+}
+
+/// A line a node reports and that a parent can align children by — Compose's `AlignmentLine`.
+///
+/// A container INHERITS its children's lines and publishes the merged value, shifted into its own
+/// coordinates, which is what lets an outer Row align by a baseline that lives several levels down
+/// (`measure_node_inner` does the merging, right after the policy has placed the children).
+///
+/// `horizontal` says which axis the line runs across, Compose's `HorizontalAlignmentLine` /
+/// `VerticalAlignmentLine` split: a horizontal line is a distance from the node's TOP and a Row reads
+/// it down its cross axis, while a vertical line is a distance from the node's START and a Column
+/// aligns children by it. The two built-ins are the text baselines; anything else comes from
+/// [`AlignmentLine::new`] and is published with [`Modifier::alignment_line`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AlignmentLine {
+    pub horizontal: bool,
+    id: u64,
+    /// How a container merges several children's values for this line.
+    merger: LineMerger,
+}
+
+/// Ids for caller-defined lines, so two lines built the same way are different lines.
+///
+/// The type compares by value, so a constant id would make every `AlignmentLine::vertical(Min)`
+/// collide with every other one — the two built-ins have fixed ids below the counter's start.
+static NEXT_ALIGNMENT_LINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2);
+
+impl AlignmentLine {
+    /// The distance from a node's top to the baseline of its first line of text
+    /// (`AlignmentLine.FirstBaseline`, whose merger is `::min`). Published by text leaves, which is
+    /// what makes `Modifier::align_by_baseline` useful.
+    pub const FIRST_BASELINE: AlignmentLine =
+        AlignmentLine { horizontal: true, id: 0, merger: LineMerger::Min };
+
+    /// The distance to the baseline of the LAST line of text (`AlignmentLine.LastBaseline`,
+    /// `::max`) — the line to align by when the bottom of the text block is what should line up.
+    pub const LAST_BASELINE: AlignmentLine =
+        AlignmentLine { horizontal: true, id: 1, merger: LineMerger::Max };
+
+    /// A caller-defined line: Compose's `HorizontalAlignmentLine(merger)` /
+    /// `VerticalAlignmentLine(merger)` in one constructor, chosen by `horizontal`.
+    ///
+    /// Each call is a NEW line — they never compare equal — so a component can hold one in a
+    /// `static`/`OnceLock` and hand it out, the way material3 holds
+    /// `MinimumInteractiveLeftAlignmentLine` and `MinimumInteractiveTopAlignmentLine`
+    /// (`material3/InteractiveComponentSize.kt:166-167`).
+    pub fn new(horizontal: bool, merger: LineMerger) -> Self {
+        Self {
+            horizontal,
+            id: NEXT_ALIGNMENT_LINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            merger,
+        }
+    }
+
+    /// Compose's `HorizontalAlignmentLine(merger)`: a distance from the node's top.
+    pub fn horizontal(merger: LineMerger) -> Self {
+        Self::new(true, merger)
+    }
+
+    /// Compose's `VerticalAlignmentLine(merger)`: a distance from the node's start.
+    pub fn vertical(merger: LineMerger) -> Self {
+        Self::new(false, merger)
+    }
+
+    /// Apply this line's merger to two values, for a container combining its children's lines.
+    pub fn merge(&self, a: f32, b: f32) -> f32 {
+        self.merger.merge(a, b)
+    }
+
+    /// material3's `MinimumInteractiveLeftAlignmentLine`: how far the VISUAL content starts from the
+    /// left of a box that `Modifier::minimum_interactive_size` enlarged to the touch-target minimum.
+    ///
+    /// A parent aligns a small component by this when its icon or label has to line up with its
+    /// neighbours, rather than with the invisible padding the larger touch target adds
+    /// (`material3/InteractiveComponentSize.kt:167`). Built once: a line is identified by value, so
+    /// every call to [`AlignmentLine::vertical`] would otherwise make a different one.
+    pub fn minimum_interactive_left() -> AlignmentLine {
+        static LINE: std::sync::OnceLock<AlignmentLine> = std::sync::OnceLock::new();
+        *LINE.get_or_init(|| AlignmentLine::vertical(LineMerger::Min))
+    }
+
+    /// material3's `MinimumInteractiveTopAlignmentLine` — the vertical twin of
+    /// [`AlignmentLine::minimum_interactive_left`] (`material3/InteractiveComponentSize.kt:166`).
+    pub fn minimum_interactive_top() -> AlignmentLine {
+        static LINE: std::sync::OnceLock<AlignmentLine> = std::sync::OnceLock::new();
+        *LINE.get_or_init(|| AlignmentLine::horizontal(LineMerger::Min))
+    }
+}
+
 /// 布局树中的一个节点。
 ///
 /// 每个 LayoutNode 对应 UI 树中的一个可测量/可布局的单元。
@@ -198,7 +371,25 @@ pub struct LayoutNode {
     pub id: u64,
     pub modifier: Modifier,
     pub measured_size: Size,
-    pub position: Point,
+    pub position: Offset,
+    /// The alignment lines this node reports, as offsets from its own top edge — Compose's
+    /// `Measured[alignmentLine]`.
+    ///
+    /// Written by whoever measures the node (a text leaf publishes its baseline — see
+    /// `measure_and_cache_text`), read by a Row/Column that a parent aligns children by
+    /// (`Modifier::align_by`). Cleared at the start of every measure, so a line never outlives the
+    /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
+    /// lines. Usually empty, and an empty `Vec` does not allocate.
+    pub alignment_lines: Vec<(AlignmentLine, f32)>,
+    /// Where a LEAF's own content sits inside its box when a modifier moved it — the measured
+    /// `(x, y, content width, content height)`, or `None` for the ordinary case.
+    ///
+    /// It has to be carried rather than recomputed: `Modifier::padding_from` places the content
+    /// against its measured alignment line and `Modifier::minimum_interactive_size` centres it inside
+    /// a larger box, and in both cases the renderer draws the content itself (a text draws at its
+    /// node's origin, inset by the padding it can query). A container does not use this — it moves its
+    /// children.
+    pub content_box_override: Option<(f32, f32, f32, f32)>,
     /// 子节点索引（arena 树——节点存于 NodeArena.nodes，跨重组复用）
     pub children: Vec<usize>,
     /// 测量策略索引（NodeArena.policies 池——独立于节点，避免借用冲突）
@@ -243,7 +434,7 @@ pub struct LayoutNode {
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
-    pub(crate) registrar: std::cell::RefCell<Option<crate::ui::selection_container::SelectionRegistrar>>,
+    pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
     pub(crate) cursor_x: std::cell::Cell<f32>,
     pub(crate) cursor_height: std::cell::Cell<f32>,
@@ -262,15 +453,15 @@ pub struct LayoutNode {
     pub(crate) composing_range: std::cell::RefCell<Option<std::ops::Range<usize>>>,
     /// 焦点环颜色（组合期由组件从主题捕获写入——渲染期 CompositionLocal
     /// 已退出，不能读主题；未设置时回退默认蓝色）
-    pub(crate) focus_color: std::cell::Cell<crate::modifier::Color>,
+    pub(crate) focus_color: std::cell::Cell<crate::graphics::Color>,
     /// IME 组合下划线颜色（组合期捕获主题 primary——渲染期不能读
     /// CompositionLocal（Phase 4.2）；未设置时回退默认色）
-    pub(crate) composing_color: std::cell::Cell<crate::modifier::Color>,
+    pub(crate) composing_color: std::cell::Cell<crate::graphics::Color>,
     /// 共享元素转场视觉（Phase 2）：`Some` 时渲染期按起止矩形做 morph
     /// （位移/缩放/淡入淡出/圆角），命中测试跳过。逐帧由协调器重写；
     /// 转场结束即清 `None`。刻意不进节点缓存——飞行态是瞬态，
     /// 复用命中必须从干净状态重建（协调器按 slot 回填）。
-    pub(crate) transition: Option<crate::ui::shared_transition::TransitionVisual>,
+    pub(crate) transition: Option<crate::transition::TransitionVisual>,
     /// Where this node's pixels come from while a shared-element transition runs. One enum instead of
     /// several booleans: the three dispositions are mutually exclusive, the render walk becomes a
     /// single comparison, and an illegal combination (a node that is both elevated chrome and a
@@ -297,8 +488,8 @@ pub struct LayoutNode {
     /// Written only when it DIFFERS (see `text_content_matches`): a node whose text does not change
     /// clones nothing, so a settled frame does no work here at all.
     pub(crate) last_text: Option<TextSnapshot>,
-    /// Whether this node's OWN measure policy subcomposed content (`ui::subcompose`), recorded by
-    /// [`crate::core::composer::Composer::park_subcomposition`] at the moment it parked the composition.
+    /// Whether this node's OWN measure policy subcomposed content (`layout::subcompose`), recorded by
+    /// [`crate::runtime::composer::Composer::park_subcomposition`] at the moment it parked the composition.
     ///
     /// It is one of the two ways `Composer::compose`'s compose-end seeding recognizes a node that has to
     /// be re-measured (the other asks the policy, which covers a node that was just REBUILT and has not
@@ -314,7 +505,7 @@ pub struct LayoutNode {
     /// flag, and one row's update re-measured — and re-subcomposed — all 800).
     pub(crate) subcomposed: bool,
     /// The arena index of this node's subcomposed child, if its policy composed one
-    /// (`ui::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
+    /// (`layout::subcompose`). Kept out of the descriptor-driven `children` bookkeeping on purpose: the
     /// adopted subtree has NO descriptor, so materialize's "clear and rebuild from descriptors" would
     /// drop it, and the shape check ("does the cached child count match the descriptors?") would
     /// refuse the reuse path every frame. Both arms therefore treat this index as separate: the child
@@ -330,6 +521,21 @@ pub struct LayoutNode {
 }
 
 impl LayoutNode {
+    /// Reports `line` at `value` px from this node's top edge — the measure side of an alignment
+    /// line. Whoever measures the node calls this; a line has one position per measurement.
+    pub fn set_alignment_line(&mut self, line: AlignmentLine, value: f32) {
+        match self.alignment_lines.iter_mut().find(|(l, _)| *l == line) {
+            Some(slot) => slot.1 = value,
+            None => self.alignment_lines.push((line, value)),
+        }
+    }
+
+    /// Where this node reports `line`, or `None` when it does not report that line at all — Compose's
+    /// `AlignmentLine.Unspecified`.
+    pub fn alignment_line(&self, line: AlignmentLine) -> Option<f32> {
+        self.alignment_lines.iter().find(|(l, _)| *l == line).map(|(_, v)| *v)
+    }
+
     /// Whether this node's text still matches the snapshot taken when it was last materialized. A
     /// node with no text matches by definition; `None` (never materialized, or materialized before
     /// the text arrived) does NOT — which forces the caller's re-measure, the conservative direction.
@@ -398,7 +604,9 @@ impl LayoutNode {
             has_image_content: modifier_has_image(&modifier),
             modifier,
             measured_size: Size::ZERO,
-            position: Point::ZERO,
+            position: Offset::ZERO,
+            alignment_lines: Vec::new(),
+            content_box_override: None,
             children: Vec::new(),
             measure_policy,
             focused: false,
@@ -423,8 +631,8 @@ impl LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
-            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
-            composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
             flight_measure: None,
@@ -482,7 +690,9 @@ impl Default for LayoutNode {
             id: NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed),
             modifier: Modifier::new(),
             measured_size: Size::ZERO,
-            position: Point::ZERO,
+            position: Offset::ZERO,
+            alignment_lines: Vec::new(),
+            content_box_override: None,
             has_image_content: false,
             children: Vec::new(),
             measure_policy: None,
@@ -510,8 +720,8 @@ impl Default for LayoutNode {
             cursor_callback: std::cell::RefCell::new(None),
             ime_callback: std::cell::RefCell::new(None),
             composing_range: std::cell::RefCell::new(None),
-            focus_color: std::cell::Cell::new(crate::modifier::Color::from_argb(204, 77, 153, 255)),
-            composing_color: std::cell::Cell::new(crate::modifier::Color::TRANSPARENT),
+            focus_color: std::cell::Cell::new(crate::graphics::Color::from_argb(204, 77, 153, 255)),
+            composing_color: std::cell::Cell::new(crate::graphics::Color::TRANSPARENT),
             transition: None,
             paint: PaintDisposition::InTree,
             flight_measure: None,
@@ -686,7 +896,7 @@ impl NodeArena {
     /// `skip`：本帧已复用的节点集合——复用节点已挂入本帧树，free 它会导致
     /// 递归进本帧树形成环（无限递归栈溢出），必须跳过。
     /// `visited`：防环防御（树异常成环时终止递归）。
-    pub fn free_node_skip(
+    pub(crate) fn free_node_skip(
         &mut self,
         idx: usize,
         skip: &NodeMarks,
@@ -780,7 +990,7 @@ pub trait MeasurePolicy: std::fmt::Debug {
     /// 布局阶段：给定已分配的尺寸，为子节点分配位置。
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]);
 
-    /// Whether this policy composes content DURING measurement (`ui::subcompose`).
+    /// Whether this policy composes content DURING measurement (`layout::subcompose`).
     ///
     /// Such a node must be re-measured whenever it is materialized: its content is composed inside
     /// the measurement, so a folded size freezes the content at the previous frame's parameters. The
@@ -799,6 +1009,13 @@ pub trait MeasurePolicy: std::fmt::Debug {
     // report the resulting size. That is an approximation for layouts whose geometry depends on
     // the space they are given; a policy that knows better (Row/Column, whose `weight` handling
     // needs the same arithmetic as its measure phases) overrides these.
+    //
+    // A policy whose `measure` has side effects MUST override all four: Compose's contract is that
+    // an intrinsic query never changes state ("There should be no side-effects from implementers of
+    // `maxIntrinsicWidth`", `ui/layout/MeasurePolicy.kt:133`), which is why Compose's animating nodes
+    // extend `LayoutModifierNodeWithPassThroughIntrinsics`. Here the default would instead run the
+    // side-effecting measure with the queried axis unbounded. [`max_child_intrinsic`] is the
+    // pass-through fold; see it for the two measured failures that motivated the rule.
 
     /// The smallest width this content can be laid out at, given it will be `height` tall.
     fn min_intrinsic_width(
@@ -913,6 +1130,31 @@ impl<'a> IntrinsicCtx<'a> {
     pub fn child_weight(&self, child: usize) -> f32 {
         self.nodes[child].modifier.get_layout_weight().unwrap_or(0.0)
     }
+}
+
+/// Answer an intrinsic query with the largest of the children's own answers — the side-effect-free
+/// shape Compose uses where a layout's measure must not be consulted
+/// (`LayoutModifierNodeWithPassThroughIntrinsics`, `animation/AnimationModifier.kt:259-280`, and the
+/// max-over-measurables fold of a container, `AnimatedContent.kt:939-957`).
+///
+/// Any policy whose `measure` has SIDE EFFECTS must answer the four queries itself. The trait's
+/// defaults answer them by running `measure` with the queried axis unbounded (above: Compose's own
+/// default, and Compose's contract is explicit that intrinsics must be pure — "There should be no
+/// side-effects from implementers of `maxIntrinsicWidth`", `ui/layout/MeasurePolicy.kt:133`), so a
+/// policy that starts an animation, re-targets one, or consumes a first-measurement flag turns an
+/// intrinsic query into a state change. Measured before the helper existed: an intrinsic query above
+/// a `TabRow` made the indicator's target infinite and its placed x `NaN`, and one above an
+/// `AnimatedSize` drove its animated size to the probe's value, re-arming the spring every frame.
+pub fn max_child_intrinsic(
+    ctx: &mut IntrinsicCtx<'_>,
+    children: &[usize],
+    query: IntrinsicQuery,
+    other: f32,
+) -> f32 {
+    children
+        .iter()
+        .map(|&child| ctx.child_intrinsic(child, query, other))
+        .fold(0.0, f32::max)
 }
 
 /// Intrinsic measurement OF a node — the answer a parent gets when it asks this node for one of its
@@ -1625,7 +1867,7 @@ mod tests {
     fn test_hit_test_basic() {
         let mut nodes = vec![LayoutNode::leaf(Modifier::new().size(100.0, 100.0))];
         nodes[0].measured_size = Size::new(100.0, 100.0);
-        nodes[0].position = Point::new(0.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
 
         let path = hit_test(&nodes, 0, 50.0, 50.0);
         assert_eq!(path, vec![0]);
@@ -1643,8 +1885,8 @@ mod tests {
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
         nodes[2].measured_size = Size::new(40.0, 40.0);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[2].position = Point::new(30.0, 30.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[2].position = Offset::new(30.0, 30.0);
         nodes[0].children = vec![1, 2];
 
         // (40,40) 同时落在 leaf1 与 leaf2 内——上层（后画 leaf2）优先
@@ -1677,8 +1919,8 @@ mod tests {
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
         nodes[2].measured_size = Size::new(100.0, 100.0);
-        nodes[1].position = Point::new(0.0, 0.0);
-        nodes[2].position = Point::new(0.0, 0.0);
+        nodes[1].position = Offset::new(0.0, 0.0);
+        nodes[2].position = Offset::new(0.0, 0.0);
         nodes[0].children = vec![1, 2];
         nodes[0].children_have_z = true;
 
@@ -1759,7 +2001,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 100.0);
         nodes[1].measured_size = Size::new(50.0, 30.0);
-        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
         // 点击子节点
@@ -1775,7 +2017,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 100.0);
         nodes[1].measured_size = Size::new(50.0, 30.0);
-        nodes[1].position = Point::new(10.0, 60.0);
+        nodes[1].position = Offset::new(10.0, 60.0);
         nodes[0].children.push(1);
 
         // 点击父节点但不在子节点范围内
@@ -1798,7 +2040,7 @@ mod tests {
         ];
         nodes[0].measured_size = Size::new(100.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 60.0);
-        nodes[1].position = Point::new(0.0, 100.0);
+        nodes[1].position = Offset::new(0.0, 100.0);
         nodes[0].children.push(1);
 
         // 渲染时画布 translate(0, -50) → 子节点视觉顶边在场景 y=50
@@ -1833,8 +2075,8 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(100.0, 100.0)),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
         ];
-        nodes[0].position = Point::new(10.0, 20.0);
-        nodes[1].position = Point::new(30.0, 40.0);
+        nodes[0].position = Offset::new(10.0, 20.0);
+        nodes[1].position = Offset::new(30.0, 40.0);
         nodes[0].children.push(1);
 
         let (lx, ly) = scene_to_node_local(&nodes, &[0, 1], 1, 45.0, 62.0);
@@ -1852,9 +2094,9 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
             LayoutNode::leaf(Modifier::new().size(50.0, 50.0)),
         ];
-        nodes[0].position = Point::new(0.0, 0.0);
-        nodes[1].position = Point::new(50.0, 100.0);
-        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
+        nodes[1].position = Offset::new(50.0, 100.0);
+        nodes[2].position = Offset::new(100.0, 0.0);
         nodes[0].children.push(1);
         nodes[1].children.push(2);
 
@@ -1872,9 +2114,9 @@ mod tests {
             LayoutNode::leaf(Modifier::new().size(200.0, 200.0).vertical_scroll(scroll)),
             LayoutNode::leaf(Modifier::new().size(20.0, 20.0).focusable()),
         ];
-        nodes[0].position = Point::new(0.0, 0.0);
-        nodes[1].position = Point::new(50.0, 100.0);
-        nodes[2].position = Point::new(100.0, 0.0);
+        nodes[0].position = Offset::new(0.0, 0.0);
+        nodes[1].position = Offset::new(50.0, 100.0);
+        nodes[2].position = Offset::new(100.0, 0.0);
         // 测试不执行 measure——显式设置测量尺寸（与 scene_to_node_local 系列一致）
         nodes[0].measured_size = Size::new(300.0, 300.0);
         nodes[1].measured_size = Size::new(200.0, 200.0);
@@ -1970,7 +2212,7 @@ mod tests {
     #[test]
     fn min_width_dynamic_state() {
         // 动态 min（动画）：measure 期 get() 注册布局依赖——值变化重测生效
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let s = State::new(58.0);
         let m = Modifier::new().min_width(&s);
         let mut nodes = vec![LayoutNode::leaf(m)];
@@ -1999,14 +2241,30 @@ mod tests {
         assert_eq!(size.width, 200.0, "max_width 限制内容宽度");
     }
 
+    /// A conflicting min and max resolve by CHAIN ORDER, which is Compose's rule: each modifier is
+    /// its own node and `constrain`s into what the node before it produced, so the outer call's
+    /// range is the one that survives (`Size.kt`: `SizeNode.targetConstraints`).
+    ///
+    /// Both directions are asserted because either single answer is wrong on its own — this used to
+    /// be "the min always wins", a documented deviation that matched the second order only.
     #[test]
-    fn max_width_yields_to_a_larger_min() {
-        // A conflicting min and max resolve to the MIN here, which is a documented deviation
-        // from Compose's `widthIn` (it coerces the min down to the max) — see the measure block.
-        let m = Modifier::new().max_width(200.0).min_width(300.0);
-        let mut nodes = vec![LayoutNode::leaf(m)];
-        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
-        assert_eq!(size.width, 300.0, "min 高于 max 时 min 胜出");
+    fn a_conflicting_min_and_max_resolve_by_chain_order() {
+        let measure = |m: Modifier| {
+            let mut nodes = vec![LayoutNode::leaf(m)];
+            let (size, _) =
+                measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
+            size.width
+        };
+        assert_eq!(
+            measure(Modifier::new().max_width(200.0).min_width(300.0)),
+            200.0,
+            "the max written first is the outer node, so it wins the conflict"
+        );
+        assert_eq!(
+            measure(Modifier::new().min_width(300.0).max_width(200.0)),
+            300.0,
+            "and the min written first wins it, as in Compose"
+        );
     }
 
     #[test]
@@ -2036,7 +2294,7 @@ mod tests {
         // A dynamic cap is re-resolved on re-measure, like the min counterpart's. (The
         // dependency registration happens in the same `SizeValue::Dynamic` path; this test pins
         // the re-resolution, not the registration — it marks the nodes dirty itself.)
-        use crate::core::state::State;
+        use crate::runtime::state::State;
         let s = State::new(200.0);
         let mut nodes = vec![
             LayoutNode::new(Modifier::new().max_width(&s), Some(0)),
@@ -2102,14 +2360,14 @@ mod tests {
     // ── Image 叶子测量（固有尺寸布局——对齐 Compose：未指定维度以固有尺寸为基准）──
 
     fn image_modifier() -> Modifier {
-        use crate::ui::image::{ContentScale, ImageAlignment};
+        use crate::graphics::{ContentScale, ImageAlignment};
         Modifier::new().image_content(
-            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::graphics::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
             ContentScale::Fit,
             ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         )
     }
 
@@ -2134,12 +2392,12 @@ mod tests {
     fn test_leaf_image_size_modifier_overrides() {
         // modifier size 覆盖固有尺寸（Compose 语义：size 指定即以此为准）
         let m = Modifier::new().size(64.0, 32.0).image_content(
-            crate::ui::icon::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
-            crate::ui::image::ContentScale::Fit,
-            crate::ui::image::ImageAlignment::Center,
+            crate::graphics::IconSource::svg("<svg viewBox=\"0 0 48 24\"/>"),
+            crate::graphics::ContentScale::Fit,
+            crate::graphics::ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         );
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
@@ -2151,14 +2409,14 @@ mod tests {
         // 无 viewBox/width 的 SVG：测量回退 24×24（与解码回退一致——
         // 否则 Image 测量 0 尺寸空白而 Icon 正常显示的不一致）
         let m = Modifier::new().image_content(
-            crate::ui::icon::IconSource::svg(
+            crate::graphics::IconSource::svg(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0h24v24H0z\"/></svg>",
             ),
-            crate::ui::image::ContentScale::Fit,
-            crate::ui::image::ImageAlignment::Center,
+            crate::graphics::ContentScale::Fit,
+            crate::graphics::ImageAlignment::Center,
             1.0,
             None,
-            crate::modifier::FilterQuality::Low,
+            crate::graphics::FilterQuality::Low,
         );
         let mut nodes = vec![LayoutNode::leaf(m)];
         let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::UNBOUNDED);
@@ -2279,17 +2537,17 @@ mod tests {
     /// too; the rest are checked as one set.
     #[test]
     fn text_snapshot_compare_sees_every_field_and_refresh_settles() {
-        fn text_node(content: &str, color: crate::modifier::Color) -> LayoutNode {
+        fn text_node(content: &str, color: crate::graphics::Color) -> LayoutNode {
             LayoutNode::new(
                 Modifier::new().push(crate::modifier::ModifierElement::TextContent {
                     content: content.to_string(),
                     font_size: 14.0,
                     color,
-                    font_weight: crate::ui::text::FontWeight::NORMAL,
-                    font_style: crate::ui::text::FontSlant::Upright,
+                    font_weight: crate::text::FontWeight::NORMAL,
+                    font_style: crate::text::FontSlant::Upright,
                     max_lines: usize::MAX,
-                    align: crate::ui::TextAlign::Left,
-                    overflow: crate::ui::TextOverflow::Clip,
+                    align: crate::text::TextAlign::Left,
+                    overflow: crate::text::TextOverflow::Clip,
                     soft_wrap: true,
                     letter_spacing: 0.0,
                     line_height: None,
@@ -2298,8 +2556,8 @@ mod tests {
             )
         }
 
-        let black = crate::modifier::Color::from_argb(255, 0, 0, 0);
-        let transparent = crate::modifier::Color::from_argb(0, 0, 0, 0);
+        let black = crate::graphics::Color::from_argb(255, 0, 0, 0);
+        let transparent = crate::graphics::Color::from_argb(0, 0, 0, 0);
         let mut node = text_node("hello", black);
 
         // Never materialized: nothing to compare against, and the caller must be told so.
@@ -2513,9 +2771,6 @@ pub fn get_focus_id(nodes: &[LayoutNode], root: usize) -> Option<u64> {
     None
 }
 
-fn modifier_focus_id(node: &LayoutNode) -> Option<u64> {
-    node.modifier.focus_requester_id()
-}
 
 // ── 递归测量引擎 ──
 
@@ -2560,36 +2815,6 @@ pub(crate) fn apply_layout_dirty(nodes: &mut [LayoutNode], root_idx: usize, dirt
     walk(nodes, root_idx, dirty_keys);
 }
 
-/// Per-frame layout override for a shared-element flight (Compose `ResizeMode`
-/// / `PlaceHolderSize`). The coordinator rewrites the frame every frame and
-/// re-seeds the node's slot key into the layout invalidation set, so the layout
-/// actually descends into it (a folded parent never would); reading the frame
-/// during measure registers a LAYOUT dependency as well.
-#[derive(Clone)]
-pub(crate) struct FlightMeasure {
-    pub frame: crate::core::state::State<FlightMeasureFrame>,
-    /// Identity of the flight that owns this override. Flight ids are
-    /// COMPOSER-local (every composer's counter starts at 1) while a Tier-1
-    /// override is written onto a PEER's node, so the composer id is part of the
-    /// key — otherwise an unrelated peer flight with the same number could clear
-    /// it. Teardown AND writes must match it: slot keys are positional identities
-    /// a SUCCESSOR flight can resurrect, so acting blindly would destroy the
-    /// newer flight's override.
-    pub owner: crate::ui::shared_transition::FlightKey,
-}
-
-/// One frame of that override; `None` on a field means "no override there".
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) struct FlightMeasureFrame {
-    /// Tight constraints the child content is measured at — Compose
-    /// `RemeasureToBounds`: the subtree re-lays-out at the animated size
-    /// instead of being scaled into it.
-    pub content: Option<Size>,
-    /// Size reported to the PARENT — Compose `PlaceHolderSize::AnimatedSize`
-    /// reports the animated size so siblings reflow; `ContentSize` keeps the
-    /// target size so the surrounding layout holds still.
-    pub reported: Option<Size>,
-}
 
 impl FlightMeasureFrame {
     pub(crate) const IDLE: Self = Self { content: None, reported: None };
@@ -2612,7 +2837,7 @@ struct ActiveSlotKeyGuard(u64);
 
 impl Drop for ActiveSlotKeyGuard {
     fn drop(&mut self) {
-        crate::core::composer::set_active_slot_key(self.0);
+        crate::runtime::composer::set_active_slot_key(self.0);
     }
 }
 
@@ -2634,12 +2859,12 @@ pub(crate) fn measure_node(
     if !nodes[idx].dirty && !nodes[idx].layout_dirty && nodes[idx].cached_constraints == Some(constraints) {
         return (nodes[idx].measured_size, Vec::new());
     }
-    let displaced = crate::ui::subcompose::swap_measuring_node(Some(idx));
-    let sub_before = crate::ui::subcompose::subcomposition_count();
+    let displaced = crate::layout::subcompose::swap_measuring_node(Some(idx));
+    let sub_before = crate::layout::subcompose::subcomposition_count();
     let out = measure_node_inner(nodes, policies, idx, constraints);
-    crate::ui::subcompose::swap_measuring_node(displaced);
+    crate::layout::subcompose::swap_measuring_node(displaced);
     // Remember whether this node's policy composed anything, so the next frame does not fold it.
-    nodes[idx].subcomposed = crate::ui::subcompose::subcomposition_count() > sub_before;
+    nodes[idx].subcomposed = crate::layout::subcompose::subcomposition_count() > sub_before;
     out
 }
 
@@ -2676,8 +2901,8 @@ fn measure_node_inner(
     // silently stops tracking the state. Measured before this guard existed: a parent's post-child
     // read landed on a slot that was neither the parent's nor its last child's
     // (`test_layout_dep_of_a_parent_post_child_read_lands_on_the_parent`).
-    let displaced_key = crate::core::composer::active_slot_key();
-    crate::core::composer::set_active_slot_key(nodes[idx].slot_key);
+    let displaced_key = crate::runtime::composer::active_slot_key();
+    crate::runtime::composer::set_active_slot_key(nodes[idx].slot_key);
     let _restore_key = ActiveSlotKeyGuard(displaced_key);
 
     // Flight layout contract (Compose `ResizeMode` / `PlaceHolderSize`), read
@@ -2689,14 +2914,32 @@ fn measure_node_inner(
     // ancestors — never a recomposition.
     let flight = nodes[idx].flight_measure.clone().map(|f| f.frame.get());
 
+    // A line belongs to the measurement that produced it: clearing here means a node that stops
+    // reporting one (text that became empty, a leaf that became a container) cannot leave a stale
+    // position for a Row/Column to align by. Folded nodes never reach this, so they keep theirs.
+    nodes[idx].alignment_lines.clear();
+
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
     // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
     // 测量时求值并注册依赖到本节点）
+    //
+    // The requested size is CLAMPED into the incoming range, not written over it — Compose's
+    // `Modifier.size`/`width`/`height` are `enforceIncoming = true`: `SizeNode.measure` builds
+    // `Constraints.fixed(w, h)` and runs `constraints.constrain(targetConstraints)` on it, so a
+    // request wider than the parent allows comes out at the parent's maximum rather than overflowing
+    // it, and one narrower than the parent's minimum comes out at the minimum. `required_size` is the
+    // escape hatch for the other semantics and keeps writing over the range (see below).
     if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
-        if let Some(w) = sw { inner_constraints = inner_constraints.tighten_width(w); }
-        if let Some(h) = sh { inner_constraints = inner_constraints.tighten_height(h); }
+        if let Some(w) = sw {
+            let w = inner_constraints.constrain_width(w);
+            inner_constraints = inner_constraints.tighten_width(w);
+        }
+        if let Some(h) = sh {
+            let h = inner_constraints.constrain_height(h);
+            inner_constraints = inner_constraints.tighten_height(h);
+        }
     }
 
     // 开放布局节点 A 型（exp/modifier-node）：resolved_size 之后串行变换约束。
@@ -2705,7 +2948,7 @@ fn measure_node_inner(
     // （measure 期 State::get 注册布局依赖——与 SizeValue::Dynamic 同机制）。
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
     // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
-    let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutNode>> =
+    let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
         if nodes[idx].modifier.has_layout_nodes() {
             nodes[idx].modifier.layout_nodes().cloned().collect()
         } else {
@@ -2715,35 +2958,27 @@ fn measure_node_inner(
         inner_constraints = t.transform(inner_constraints);
     }
 
-    // 最小尺寸（MinWidth/MinHeight——对标 Compose widthIn/heightIn）：
-    // 提升 incoming min，受 max 夹住（min 不得越过 max——tight size 下
-    // 最小约束让位于固定尺寸，与 Compose constraints 合并语义一致）。
-    let (min_w, min_h) = nodes[idx].modifier.min_size_constraint();
-    if let Some(w) = min_w {
-        inner_constraints.min_width = inner_constraints.min_width.max(w).min(inner_constraints.max_width);
-    }
-    if let Some(h) = min_h {
-        inner_constraints.min_height = inner_constraints.min_height.max(h).min(inner_constraints.max_height);
-    }
-    // Maximum sizes (MaxWidth/MaxHeight — the other half of Compose's widthIn/heightIn):
-    // lower the incoming max, then hold it at or above the min.
+    // Min/max sizes (MinWidth/MinHeight/MaxWidth/MaxHeight — Compose's widthIn/heightIn), replayed
+    // in CHAIN ORDER because that is what decides a conflict in Compose.
     //
-    // When a min and a max CONFLICT the min wins here (`.min_width(300).max_width(200)` is 300),
-    // which is a documented DEVIATION from Compose: its `SizeNode` coerces the min down to the
-    // max instead, so one `widthIn(min = 300.dp, max = 200.dp)` yields 200 — and its two separate
-    // calls are even order-dependent (`.widthIn(max = 200).widthIn(min = 300)` -> 200 but the
-    // reverse -> 300). winia scans its elements chain-wide and position-independently, so it
-    // cannot express that order-dependence at all; min-wins is CSS's `min-width`/`max-width`
-    // precedence, and the clamp is what keeps `Constraints` consistent — `constrain_width`/
-    // `constrain_height` are `f32::clamp`, which PANICS when min > max.
-    let (max_w, max_h) = nodes[idx].modifier.max_size_constraint();
-    if let Some(w) = max_w {
-        inner_constraints.max_width = inner_constraints.max_width.min(w);
-        inner_constraints.max_width = inner_constraints.max_width.max(inner_constraints.min_width);
-    }
-    if let Some(h) = max_h {
-        inner_constraints.max_height = inner_constraints.max_height.min(h);
-        inner_constraints.max_height = inner_constraints.max_height.max(inner_constraints.min_height);
+    // Each Compose modifier is its own node whose constraints are `constrain`ed into what the node
+    // before it produced, so every node's range is a sub-range of its input's and the OUTER call
+    // wins: `.widthIn(max = 200).widthIn(min = 300)` is 200 while the reverse is 300. A min lowers
+    // to the current max and a max rises to the current min, which is that same nesting expressed
+    // as one pass; the clamp also keeps `Constraints` consistent, since `constrain_width`/
+    // `constrain_height` are `f32::clamp` and panic when min > max.
+    for (is_width, is_min, v) in nodes[idx].modifier.min_max_steps() {
+        if is_width {
+            if is_min {
+                inner_constraints.min_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            } else {
+                inner_constraints.max_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            }
+        } else if is_min {
+            inner_constraints.min_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+        } else {
+            inner_constraints.max_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+        }
     }
 
     // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
@@ -2761,23 +2996,13 @@ fn measure_node_inner(
         }
     }
 
-    // 1. 固定尺寸（仅 Static+Static 的 Size——由 resolved_size 已处理，此分支保留兼容其他查询）
-    if let Some((width, height)) = nodes[idx].modifier.fixed_size() {
-        use crate::modifier::Dimension;
-        if let Dimension::Fixed(w) | Dimension::Dp(crate::unit::Dp(w)) = width {
-            inner_constraints = inner_constraints.tighten_width(w);
-        }
-        if let Dimension::Fixed(h) | Dimension::Dp(crate::unit::Dp(h)) = height {
-            inner_constraints = inner_constraints.tighten_height(h);
-        }
-        // Px 需 Density 转换
-        if let Dimension::Px(p) = width {
-            inner_constraints = inner_constraints.tighten_width(p.to_logical(crate::unit::current_density()));
-        }
-        if let Dimension::Px(p) = height {
-            inner_constraints = inner_constraints.tighten_height(p.to_logical(crate::unit::current_density()));
-        }
-    }
+    // Step 1 (a fixed `Size`) used to be applied here as well, reading `Modifier::fixed_size()`.
+    // It was redundant — `resolved_size` above already turns every `Static(Fixed)`/`Static(Dp)`/
+    // `Static(Px)` axis into a number and tightens with it, `fixed_size` only reports the subset
+    // where BOTH axes are static, and merging is a superset of "the first element with both static"
+    // — but it was not harmless: it re-wrote the RAW request after the clamp, so a `.size(100, 600)`
+    // in a 470 dp slot came out at 600 again and undid the alignment with Compose. Removed rather
+    // than duplicated so there is one place that decides a node's size from its modifier.
 
     // 1.5 固有尺寸请求（`Modifier.width/height(IntrinsicSize)`）——该轴取内容自己的固有测量。
     // Compose 由 `IntrinsicWidthNode.calculateContentConstraints` 做这件事：先算出内容在该轴上的
@@ -2824,6 +3049,27 @@ fn measure_node_inner(
     let pad_y = pad_top + pad_bottom;
     if pad_x > 0.0 || pad_y > 0.0 {
         inner_constraints = inner_constraints.offset(pad_x, pad_y);
+    }
+
+    // 2b. `Modifier::paddingFrom` relaxes the MINIMUM on its line's axis before the content is
+    // measured, the way Compose measures its child with `constraints.copy(minHeight = 0)`
+    // (`foundation/layout/AlignmentLine.kt:311-315`). Without it a min height handed down from above
+    // is already inside the content's own size, and the padding is then added on top of it — measured:
+    // a text under `min_height = 100` with `padding_from_baseline(Some(40))` came out 122.73 tall
+    // instead of 100, because the 100 was counted as the content.
+    //
+    // The minimum is not dropped: the padding step below puts it back, and the content still sits at
+    // `before` inside the taller box.
+    let mut pad_from_min_width = inner_constraints.min_width;
+    let mut pad_from_min_height = inner_constraints.min_height;
+    for (line, _, _) in nodes[idx].modifier.get_padding_from() {
+        if line.horizontal {
+            pad_from_min_height = pad_from_min_height.max(inner_constraints.min_height);
+            inner_constraints.min_height = 0.0;
+        } else {
+            pad_from_min_width = pad_from_min_width.max(inner_constraints.min_width);
+            inner_constraints.min_width = 0.0;
+        }
     }
 
     // 3. 应用 FillMax 约束（在 scroll 修改 max 之前，保存 viewport 约束）
@@ -2928,6 +3174,43 @@ fn measure_node_inner(
         }
         // apply positions
         policies[pidx].place(nodes, &children, &placements);
+        // ── Alignment-line inheritance ──
+        //
+        // A container reports the lines its children report, shifted into its own coordinates, with
+        // each line's own merger combining them — Compose's rule (`ui/layout/AlignmentLine.kt:60-66`:
+        // the position of a line within a layout is the merger applied over the children's values).
+        // This is what lets a Row align by a baseline that lives inside a child: without it only a
+        // DIRECT child's own line is visible, so `align_by_baseline` on a Column wrapping text found
+        // nothing and fell back to the child's top edge.
+        //
+        // Done here rather than in every policy because this is the one point that has both the
+        // children's lines (set during their own measure) and their positions (just placed), and a
+        // policy does not even know its own node index.
+        //
+        // A leaf's own line is untouched: it has no children, so the loop below is empty for it.
+        for child in &children {
+            // Only the lines the child actually reports; a child that reports none contributes none.
+            // `alignment_lines` is a small Vec (usually empty), so this is a cheap nested loop.
+            let child_position = nodes[*child].position;
+            let child_lines = nodes[*child].alignment_lines.clone();
+            for (line, value) in child_lines {
+                // A horizontal line runs ACROSS the horizontal axis, so its position is a vertical
+                // offset from this node's top; a vertical line's position is horizontal.
+                let absolute = if line.horizontal {
+                    child_position.y + value
+                } else {
+                    child_position.x + value
+                };
+                // MERGE, not overwrite: two children reporting the same line combine through the
+                // line's own merger (`::min` for the first baseline of a block, `::max` for the
+                // last), which is what Compose's `merge` does.
+                let merged = match nodes[idx].alignment_line(line) {
+                    Some(previous) => line.merge(previous, absolute),
+                    None => absolute,
+                };
+                nodes[idx].set_alignment_line(line, merged);
+            }
+        }
         // Record whether any child asks for a paint order of its own (`Modifier::z_index`). The
         // renderer and the hit test consult this before doing any ordering work, so the common case
         // (nobody sets a z) pays nothing for the feature existing.
@@ -3030,6 +3313,34 @@ fn measure_node_inner(
             // 对于可滚动容器，inner_constraints.max_width 已被设为 f32::MAX。
             let layout_width = inner_constraints.max_width;
             let text_size = measure_and_cache_text(&nodes[idx], layout_width);
+            // A text leaf is what makes `Modifier::align_by_baseline` useful: it reports its text
+            // baselines, measured from the node's own top, exactly as Compose's text does. Taken from
+            // the paragraph just cached, so they are the baselines of the layout the size came from.
+            //
+            // Both of Compose's baselines: `FirstBaseline` is the paragraph's own
+            // `alphabetic_baseline`, and `LastBaseline` is the last line's (`::max`, the line to align
+            // by when the bottom of a wrapped block is what should line up).
+            let (first, last) = {
+                let paragraph = nodes[idx].cached_paragraph.borrow();
+                match paragraph.as_ref() {
+                    Some(para) => {
+                        let first = para.alphabetic_baseline() as f32;
+                        let last = para
+                            .get_line_metrics()
+                            .last()
+                            .map(|m| m.baseline as f32)
+                            .unwrap_or(first);
+                        (Some(first), Some(last))
+                    }
+                    None => (None, None),
+                }
+            };
+            if let Some(first) = first {
+                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE, first);
+            }
+            if let Some(last) = last {
+                nodes[idx].set_alignment_line(crate::layout::AlignmentLine::LAST_BASELINE, last);
+            }
             // 支持文本（TextField supporting——渲染画在容器底部外 4dp，
             // 高度 +20 预留，防与下方元素重叠）
             let supporting_h = supporting_text_height(&nodes[idx]);
@@ -3080,6 +3391,162 @@ fn measure_node_inner(
         nodes[idx].measured_size = outer_size;
         (outer_size, Vec::new())
     };
+
+    // ── Caller-declared alignment lines (`Modifier::alignment_line`) ──
+    //
+    // Published BEFORE the `paddingFrom` step below, because that step measures against the lines a
+    // node reports — including one declared here. Compose declares them as the layout is produced
+    // (`layout(w, h, alignmentLines = mapOf(…))`); a `MeasurePolicy` in winia is never told its own
+    // node index, so the declaration travels on the modifier and is evaluated here, where the
+    // measured size exists.
+    for (line, value_of) in nodes[idx].modifier.get_alignment_line_values() {
+        let value = value_of(result.0);
+        nodes[idx].set_alignment_line(line, value);
+    }
+
+    // ── `Modifier::paddingFrom` ──
+    //
+    // Runs here, after the content is measured, because it is the content's own alignment line that
+    // says how much padding the node needs — Compose's `alignmentLineOffsetMeasure`
+    // (`foundation/layout/AlignmentLine.kt:304-358`):
+    //
+    //   linePosition = the content's line (0 when it reports none)
+    //   paddingBefore = (before - line).coerceIn(0, axisMax - axis)          // 0 when unspecified
+    //   paddingAfter  = (after - axis + line).coerceIn(0, axisMax - axis - paddingBefore)
+    //   size on the line's axis = max(paddingBefore + axis + paddingAfter, min)
+    //   content placed at paddingBefore when `before` is given, else at size - paddingAfter - axis
+    //
+    // `before` therefore wins when the two cannot both fit, and the padding never pushes the node past
+    // the incoming maximum on that axis. The other axis is untouched.
+    //
+    // Two elements can be in force at once (`padding_from_baseline(top, bottom)` is one for the first
+    // baseline and one for the last), and each sees what the one before it did — the same nesting
+    // Compose gets from stacking two layout nodes. So the running size, the content's box and the
+    // node's own lines all move along with the padding, which is what lets the second element read a
+    // line the first has already shifted, and an outer `align_by` see the padded position.
+    let mut leaf_box: Option<(f32, f32, f32, f32)> = None;
+    for (line, before, after) in nodes[idx].modifier.get_padding_from() {
+        let horizontal = line.horizontal;
+        let size = result.0;
+        let axis = if horizontal { size.height } else { size.width };
+        let axis_max = if horizontal { inner_constraints.max_height } else { inner_constraints.max_width };
+        // The minimum the padding must honour — the one from BEFORE the relaxation above, since the
+        // content was measured without it.
+        let min_axis = if horizontal { pad_from_min_height } else { pad_from_min_width };
+        let line_position = nodes[idx].alignment_line(line).unwrap_or(0.0);
+        let padding_before = (before.unwrap_or(0.0) - line_position).clamp(0.0, (axis_max - axis).max(0.0));
+        let padding_after = (after.unwrap_or(0.0) - axis + line_position)
+            .clamp(0.0, (axis_max - axis - padding_before).max(0.0));
+        let grown = (padding_before + axis + padding_after).max(min_axis).max(axis);
+        let placed_at = if before.is_some() {
+            padding_before
+        } else {
+            grown - padding_after - axis
+        };
+
+        // The content's box inside this node, tracked across the elements. A leaf's content is
+        // whatever it draws itself, inset by its `padding`; a container's is its children, which move.
+        if leaf_box.is_none() && nodes[idx].children.is_empty() {
+            let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
+            leaf_box = Some((
+                if nodes[idx].layout_direction == LayoutDirection::Rtl { pad_e } else { pad_s },
+                pad_t,
+                (size.width - pad_s - pad_e).max(0.0),
+                (size.height - pad_t - pad_b).max(0.0),
+            ));
+        }
+        if horizontal {
+            result.0 = Size::new(size.width, grown);
+            if let Some((ix, iy, iw, ih)) = leaf_box.as_mut() {
+                let _ = (ix, iw, ih);
+                *iy += placed_at;
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.y += placed_at;
+                }
+            }
+            for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                if l.horizontal {
+                    *value += placed_at;
+                }
+            }
+        } else {
+            result.0 = Size::new(grown, size.height);
+            if let Some((ix, _iy, _iw, _ih)) = leaf_box.as_mut() {
+                *ix += placed_at;
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.x += placed_at;
+                }
+            }
+            for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                if !l.horizontal {
+                    *value += placed_at;
+                }
+            }
+        }
+        nodes[idx].measured_size = result.0;
+    }
+    if leaf_box.is_some() {
+        // The last element wins: it is the outermost, so its box is where the content ended up.
+        let (ix, iy, iw, ih) = leaf_box.unwrap();
+        nodes[idx].content_box_override = Some((ix, iy, iw, ih));
+    }
+
+    // ── `Modifier::minimum_interactive_size` ──
+    //
+    // Compose's `MinimumInteractiveModifierNode.measure` (`material3/InteractiveComponentSize.kt:98-140`):
+    // the box is `max(content, sizePx)` on BOTH axes, the content is placed CENTRED inside it, and two
+    // lines are published — where the VISUAL content begins — so a parent can align the small component
+    // by its real edge instead of by its 48 dp touch target. `sizePx <= 0` means enforcement is off
+    // (Compose's "unspecified or 0.dp"), and then nothing changes at all.
+    //
+    // Runs after `paddingFrom` because it wraps whatever is inside it, which is the padded content by
+    // then — the same order the chain of two Compose nodes would give.
+    if let Some(size_px) = nodes[idx].modifier.get_minimum_interactive_size() {
+        if size_px > 0.0 {
+            let content = result.0;
+            let width = content.width.max(size_px);
+            let height = content.height.max(size_px);
+            let left = ((size_px - content.width) / 2.0).max(0.0);
+            let top = ((size_px - content.height) / 2.0).max(0.0);
+            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_left(), left);
+            nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_top(), top);
+            {
+                let cx = (width - content.width) / 2.0;
+                let cy = (height - content.height) / 2.0;
+                if let Some((ix, iy, _iw, _ih)) = leaf_box.as_mut() {
+                    *ix += cx;
+                    *iy += cy;
+                    nodes[idx].content_box_override = Some((*ix, *iy, content.width, content.height));
+                } else {
+                    let kids = nodes[idx].children.clone();
+                    for c in kids {
+                        nodes[c].position.x += cx;
+                        nodes[c].position.y += cy;
+                    }
+                }
+                // The lines published above are the VISUAL content's position inside the bigger box, so
+                // they do not move with the centring — but the lines inherited from the children do, and
+                // so does a line a caller declared with `Modifier::alignment_line`, whose closure saw the
+                // pre-enlargement size. Shifting them keeps both in the new coordinates, which is what lets
+                // an outer `align_by` land on the visual edge.
+                for (l, value) in nodes[idx].alignment_lines.iter_mut() {
+                    let line = *l;
+                    if line == AlignmentLine::minimum_interactive_left()
+                        || line == AlignmentLine::minimum_interactive_top()
+                    {
+                        continue;
+                    }
+                    *value += if line.horizontal { cy } else { cx };
+                }
+                result.0 = Size::new(width, height);
+                nodes[idx].measured_size = result.0;
+            }
+        }
+    }
 
     // aspectRatio：测量后按 inner_constraints（含 size/required 链内收紧）
     // 推导节点尺寸（对标 Compose——aspect 的 incoming = 链中 aspect 位置的
@@ -3143,12 +3610,12 @@ fn measure_node_inner(
 pub(crate) fn build_plain_paragraph(
     content: &str,
     font_size: f32,
-    color: &crate::modifier::Color,
-    font_weight: crate::ui::text::FontWeight,
-    font_style: crate::ui::text::FontSlant,
+    color: &crate::graphics::Color,
+    font_weight: crate::text::FontWeight,
+    font_style: crate::text::FontSlant,
     max_lines: usize,
-    align: crate::ui::TextAlign,
-    overflow: crate::ui::TextOverflow,
+    align: crate::text::TextAlign,
+    overflow: crate::text::TextOverflow,
     soft_wrap: bool,
     letter_spacing: f32,
     line_height: Option<f32>,
@@ -3164,12 +3631,12 @@ pub(crate) fn build_plain_paragraph(
     }
 
     // ellipsis overflow：超出时显示省略号
-    if overflow == crate::ui::TextOverflow::Ellipsis {
+    if overflow == crate::text::TextOverflow::Ellipsis {
         para_style.set_ellipsis("\u{2026}");
     }
 
     // justify alignment
-    if align == crate::ui::TextAlign::Justify {
+    if align == crate::text::TextAlign::Justify {
         para_style.set_text_align(skia_safe::textlayout::TextAlign::Justify);
     }
 
@@ -3194,9 +3661,9 @@ pub(crate) fn build_plain_paragraph(
         }
     }
     // 设置字重和倾斜
-    if font_weight != crate::ui::text::FontWeight::NORMAL || font_style != crate::ui::text::FontSlant::Upright {
+    if font_weight != crate::text::FontWeight::NORMAL || font_style != crate::text::FontSlant::Upright {
         use skia_safe::FontStyle;
-        use crate::ui::text::FontSlant;
+        use crate::text::FontSlant;
         let slant = match font_style {
             FontSlant::Upright => skia_safe::font_style::Slant::Upright,
             FontSlant::Italic => skia_safe::font_style::Slant::Italic,
@@ -3204,7 +3671,7 @@ pub(crate) fn build_plain_paragraph(
         };
         text_style.set_font_style(FontStyle::new(font_weight.value().into(), 5.into(), slant));
     }
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
     let mut builder = crate::text::ParagraphBuilder::new(&para_style, &fc);
     builder.push_style(&text_style);
     builder.add_text(content);
@@ -3284,10 +3751,10 @@ fn measure_and_cache_text(node: &LayoutNode, max_width: f32) -> Size {
 /// 使用 Skia ParagraphBuilder 构建带 U+FFFC 占位符的段落，
 /// 对每个片段应用对应的样式后缓存 Paragraph 和 drawables 供渲染复用。
 fn measure_and_cache_richtext(node: &LayoutNode, max_width: f32) -> Size {
-    use skia_safe::textlayout::{ParagraphStyle, PlaceholderStyle, PlaceholderAlignment, TextBaseline};
+    use skia_safe::textlayout::{ParagraphStyle, PlaceholderAlignment, TextBaseline};
     
     
-    let fc = crate::font::get_font_collection();
+    let fc = crate::text::font::get_font_collection();
 
     for el in node.modifier.elements() {
         if let ModifierElement::RichTextContent { content, drawables, drawable_ranges, spans } = el {
@@ -3373,7 +3840,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_color(skia_safe::Color::from_argb(c.a, c.r, c.g, c.b));
     }
     if let Some(st) = s.decoration_style {
-        use crate::modifier::DecoStyle;
+        use crate::text::DecoStyle;
         let sk = match st {
             DecoStyle::Solid => skia_safe::textlayout::TextDecorationStyle::Solid,
             DecoStyle::Double => skia_safe::textlayout::TextDecorationStyle::Double,
@@ -3384,7 +3851,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_decoration_style(sk);
     }
     if let Some(m) = s.decoration_mode {
-        use crate::modifier::DecoMode;
+        use crate::text::DecoMode;
         let sk = match m {
             DecoMode::Gaps => skia_safe::textlayout::TextDecorationMode::Gaps,
             DecoMode::Through => skia_safe::textlayout::TextDecorationMode::Through,
@@ -3410,7 +3877,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
 
     // 渲染精度
     if let Some(e) = s.font_edging {
-        use crate::modifier::FontEdge;
+        use crate::text::FontEdge;
         let sk = match e {
             FontEdge::Alias => skia_safe::font::Edging::Alias,
             FontEdge::AntiAlias => skia_safe::font::Edging::AntiAlias,
@@ -3419,7 +3886,7 @@ fn to_sktextstyle(s: &RichSpanStyle) -> SkTextStyle {
         ts.set_font_edging(sk);
     }
     if let Some(h) = s.font_hinting {
-        use crate::modifier::FontHint;
+        use crate::text::FontHint;
         let sk = match h {
             FontHint::None => skia_safe::FontHinting::None,
             FontHint::Slight => skia_safe::FontHinting::Slight,
@@ -3502,18 +3969,19 @@ mod intrinsic_tests {
     use super::*;
     use crate::layout::column::ColumnLayout;
     use crate::layout::row::RowLayout;
-    use crate::modifier::{IntrinsicSize, Modifier, ModifierElement};
+    use crate::modifier::{Modifier, ModifierElement};
+    use crate::layout::{IntrinsicSize};
 
     fn text_modifier(content: &str) -> Modifier {
         Modifier::new().push(ModifierElement::TextContent {
             content: content.to_string(),
             font_size: 14.0,
-            color: crate::modifier::Color::from_argb(255, 0, 0, 0),
-            font_weight: crate::ui::text::FontWeight::NORMAL,
-            font_style: crate::ui::text::FontSlant::Upright,
+            color: crate::graphics::Color::from_argb(255, 0, 0, 0),
+            font_weight: crate::text::FontWeight::NORMAL,
+            font_style: crate::text::FontSlant::Upright,
             max_lines: usize::MAX,
-            align: crate::ui::TextAlign::Left,
-            overflow: crate::ui::TextOverflow::Clip,
+            align: crate::text::TextAlign::Left,
+            overflow: crate::text::TextOverflow::Clip,
             soft_wrap: true,
             letter_spacing: 0.0,
             line_height: None,

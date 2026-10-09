@@ -1,5 +1,7 @@
 # `exp/lookahead-probe` — what it does now, and how to pick it up
 
+> ⚠ **Historical record — the round of 2026-09-27, kept as written.** A snapshot log of one pass, not a description of the tree today: the file paths predate the `ui/` → `components/` restructure (`core/` is `runtime/`, `ui/` is `components/`) and the counts are from then.
+
 > Status: **the whole objective is in place.** The acceptance test
 > (`box_with_constraints_composes_its_content_at_measure_time`) is GREEN and un-ignored: the content
 > prints the parent's cap on the first frame, the box takes its size from what it composed, and a cap
@@ -24,9 +26,9 @@
 
 | file | what it is |
 |---|---|
-| `winia/src/ui/subcompose.rs` (428 lines) | the facility: a measure-time subcomposition, its parking registry, adoption into the outer arena, `LayoutHostGuard` |
-| `winia/src/ui/subcompose_probe.rs` (369 lines) | 5 library tests that define what the facility guarantees — composing inside `measure`, TLS isolation, a panic inside it, adoption's index re-basing, and a subtree surviving the next frame |
-| `winia/src/ui/box_with_constraints.rs` (rewritten, +272/−179) | `BoxWithConstraints` on the facility, with a `first_measure` generation guard and the `subcomposed` no-fold flag |
+| `winia/src/layout/subcompose.rs` (428 lines) | the facility: a measure-time subcomposition, its parking registry, adoption into the outer arena, `LayoutHostGuard` |
+| `winia/src/layout/subcompose_probe.rs` (369 lines) | 5 library tests that define what the facility guarantees — composing inside `measure`, TLS isolation, a panic inside it, adoption's index re-basing, and a subtree surviving the next frame |
+| `winia/src/layout/box_with_constraints.rs` (rewritten, +272/−179) | `BoxWithConstraints` on the facility, with a `first_measure` generation guard and the `subcomposed` no-fold flag |
 | `winia/src/core/composer.rs`, `winia/src/core/materialize.rs`, `winia/src/layout/node.rs` | the materialize/node contract: `subcomposed_child`, `subcomposed_measurements`, detach/reattach across both reuse arms, previous-subtree release |
 | `winia/tests/ui_fixtures/fixture_bwc.rs` + a `("bwc", …)` row | the window fixture: a box whose parent cap changes on demand |
 | `winia/tests/ui_test.rs` | the acceptance test — it ran `#[ignore]`d as the reproduction and is now un-ignored and green in the normal suite |
@@ -77,7 +79,7 @@ different place than this file first described:
 The reuse needs the composition to survive the frame, and the two obvious routes are both blocked by
 facts in the tree, checked this round:
 
-1. **Adoption drains, so a cache holds an empty composer.** `adopt_parked` (`winia/src/ui/subcompose.rs`)
+1. **Adoption drains, so a cache holds an empty composer.** `adopt_parked` (`winia/src/layout/subcompose.rs`)
    sets its cache to `None` on purpose, with the reason written down: adoption MOVES the inner tree
    into the outer arena, so what would be left to cache is an empty composer. That is also what the
    unique-id test measures (`remember values across frames: [1, 2]`).

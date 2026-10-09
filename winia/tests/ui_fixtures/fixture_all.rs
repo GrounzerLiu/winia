@@ -38,6 +38,14 @@ mod split_button;
 mod date_picker;
 #[path = "fixture_date_picker_dialog.rs"]
 mod date_picker_dialog;
+#[path = "fixture_date_picker_input.rs"]
+mod date_picker_input;
+#[path = "fixture_date_picker_docked.rs"]
+mod date_picker_docked;
+#[path = "fixture_animated_size_overflow.rs"]
+mod animated_size_overflow;
+#[path = "fixture_nav_suite_state.rs"]
+mod nav_suite_state;
 #[path = "fixture_overlay.rs"]
 mod overlay;
 #[path = "fixture_overlay_focus.rs"]
@@ -101,6 +109,10 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("split_button", split_button::main),
     ("date_picker", date_picker::main),
     ("date_picker_dialog", date_picker_dialog::main),
+    ("date_picker_input", date_picker_input::main),
+    ("date_picker_docked", date_picker_docked::main),
+    ("animated_size_overflow", animated_size_overflow::main),
+    ("nav_suite_state", nav_suite_state::main),
     ("nest", nest::main),
     ("nested_scroll", nested_scroll::main),
     ("overlay", overlay::main),

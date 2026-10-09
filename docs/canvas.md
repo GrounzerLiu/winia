@@ -1,6 +1,6 @@
 # Canvas / DrawScope
 
-> Source of truth: `winia/src/ui/draw_scope.rs`. Alignment target: Compose
+> Source of truth: `winia/src/components/draw_scope.rs`. Alignment target: Compose
 > `androidx.compose.foundation.Canvas` / `androidx.compose.ui.graphics.drawscope.DrawScope`.
 > Companion: `docs/modifier-node.md` (the `DrawNode` / `DrawWrapNode` extension points this is built on).
 
@@ -105,7 +105,7 @@ decide what is drawn; use a struct node for the latter (the rule is in `docs/mod
 
 ## Tests
 
-`ui::draw_scope::tests` renders through a real `Composer` to a raster surface and reads pixels back —
+`components::draw_scope::tests` renders through a real `Composer` to a raster surface and reads pixels back —
 the same pattern `modifier.rs` uses for its draw nodes:
 
 | test | what it pins |

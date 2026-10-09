@@ -1,6 +1,6 @@
 # Navigation drawer
 
-M3 `ModalNavigationDrawer` parity: `winia/src/ui/navigation_drawer.rs`.
+M3 `ModalNavigationDrawer` parity: `winia/src/components/navigation_drawer.rs`.
 Demo: `cargo run -p winia --example navigation_drawer_demo`.
 
 ## API
@@ -165,7 +165,7 @@ in either implementation.
 
 ## Tests
 
-`winia/src/ui/navigation_drawer.rs` — anchors and progress (including the RTL sign flip),
+`winia/src/components/navigation_drawer.rs` — anchors and progress (including the RTL sign flip),
 dragging in both directions, clamping, velocity-vs-position settle, the drawer's own 400dp/s
 threshold (fails if `DrawerState::new` stops setting it), the `confirmStateChange` veto
 (compared against the same gesture without a veto), width resolution, resize behaviour,
