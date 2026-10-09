@@ -89,7 +89,12 @@ fn panel_a(ctx: &mut ComposeCtx) {
         });
 }
 
-/// Panel B: slide + scale (slide in from the right, scale up).
+/// Panel B: slide + scale (slide in from the right, scale up). Neither builder carries a SIZE change,
+/// so the layout never animates: the space this panel takes appears at its full height on the frame the
+/// content arrives and collapses on the frame it is removed, which is why the panels below jump instead
+/// of travelling. Compose behaves the same way — its KDoc says only an expanding/shrinking transition
+/// animates the parent and siblings (`AnimatedVisibility.kt:157-158`) and that the content is removed
+/// from the tree once the exit finishes (`:172-173`). Panel C is the contrast.
 #[composable]
 fn panel_b(ctx: &mut ComposeCtx) {
     let show = ctx.remember(|| false);
@@ -102,7 +107,7 @@ fn panel_b(ctx: &mut ComposeCtx) {
                     move || show.update(|v| *v = !*v)
                 })
                 .build(ctx, |ctx| {
-                    Text::new("B: slide + scale (toggle)").font_size(12.0).build(ctx);
+                    Text::new("B: slide + scale (toggle) - no size change, so the panels below jump").font_size(12.0).build(ctx);
                 });
             AnimatedVisibility::new(show.clone())
                 .enter(

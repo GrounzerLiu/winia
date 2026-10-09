@@ -787,6 +787,88 @@ mod tests {
         assert!(seen, "the content ran and held the scope");
     }
 
+    /// A transition with no SIZE channel — `slide_in`/`slide_out` and `scale`, which is panel B of the
+    /// demo — leaves the layout alone: the container is the content's own size from the frame the content
+    /// appears, so the panels below it jump by that height instead of following an animation, and the
+    /// jump happens again (upward) when the exit finishes and the node is removed. That is Compose's
+    /// behaviour too, and its KDoc says both halves: only a size-changing enter/exit animates the parent
+    /// and siblings ("The expanding and shrinking will likely also animate the parent and siblings in the
+    /// row since they rely on the size of appearing/disappearing content", `AnimatedVisibility.kt:157-158`)
+    /// and "Once the exit transition is finished, the [content] composable will be removed from the tree,
+    /// and disposed" (`:172-173`). Compose's own defaults therefore pair the fade with a size change, and
+    /// the demo's panel C is the contrast.
+    #[test]
+    fn a_slide_only_transition_keeps_the_container_size_and_the_space_collapses_at_removal() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(false);
+        let v = visible.clone();
+        let mut build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Column::new().build(ctx, |ctx| {
+                    AnimatedVisibility::new(v.clone())
+                        .enter(VisibilityTransition::slide_in(
+                            SlideDirection::Right,
+                            crate::animation::TweenSpec::default(),
+                        ))
+                        .exit(VisibilityTransition::slide_out(
+                            SlideDirection::Right,
+                            crate::animation::TweenSpec::default(),
+                        ))
+                        .build(ctx, |ctx| {
+                            LeafBox::new(80.0, 40.0).build(ctx);
+                        });
+                    // The witness: the panel below the animated one.
+                    LeafBox::new(20.0, 20.0).build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let below_y = |composer: &Composer| -> f32 {
+            let root = composer.layout_root_idx().expect("root");
+            let nodes = composer.arena_nodes();
+            let below = *nodes[root].children.last().expect("the witness leaf");
+            nodes[below].position.y
+        };
+        build(&mut composer);
+        let hidden_y = below_y(&composer);
+        visible.set(true);
+        build(&mut composer);
+        // The content appears at its FULL height on the first frame of a slide-only enter: the witness
+        // has already moved down by 40, even though the content is still off to the right.
+        assert_eq!(
+            below_y(&composer) - hidden_y,
+            40.0,
+            "a slide-only enter moves the content below at once (no size channel to animate)"
+        );
+        for _ in 0..40 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            build(&mut composer);
+        }
+        assert_eq!(below_y(&composer) - hidden_y, 40.0, "and it stays there while the content is shown");
+        visible.set(false);
+        // While the exit plays the space is still taken.
+        build(&mut composer);
+        assert_eq!(
+            below_y(&composer) - hidden_y,
+            40.0,
+            "the container keeps its size for the whole exit"
+        );
+        for _ in 0..60 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            build(&mut composer);
+        }
+        // Removal collapses the space in one frame — the jump the demo shows.
+        let collapsed = below_y(&composer) - hidden_y;
+        assert!(
+            collapsed.abs() < 0.001,
+            "and the space collapses only when the content is removed (still {collapsed} above)"
+        );
+    }
+
     /// The content can ride the same clock the container does — Compose's `AnimatedVisibilityScope`,
     /// whose `transition: Transition<EnterExitState>` exists for exactly this ("Custom enter/exit
     /// animations can be created using the `Transition<EnterExitState>` object from the
