@@ -286,19 +286,39 @@ impl VisibilityTransition {
 }
 
 impl Default for VisibilityTransition {
+    /// Compose's default enter/exit pair. Every `AnimatedVisibility` overload defaults to a FADE PLUS A
+    /// SIZE CHANGE — `fadeIn() + expandIn()` at the top level (`AnimatedVisibility.kt:125-129`),
+    /// `fadeIn() + expandVertically()` in a `ColumnScope` (`:272-276`),
+    /// `fadeIn() + expandHorizontally()` in a `RowScope` (`:199-203`); the exits are the matching
+    /// `fadeOut() + shrink*`. winia used to fade only, so a plain `AnimatedVisibility::new(v)` left its
+    /// siblings in place where Compose moves them (measured: the container's height stayed at the full
+    /// content height for the whole transition).
+    ///
+    /// The spec is Compose's channel default, `spring(stiffness = StiffnessMediumLow)` = 400
+    /// (`EnterExitTransition.kt:304-306` for the fade, `:529-535` for the size change, which adds
+    /// `visibilityThreshold = IntSize.VisibilityThreshold`).
+    ///
+    /// Two deliberate differences: winia expands BOTH axes by default (Compose picks the axis from the
+    /// scope — a Row expands horizontally, a Column vertically — and winia has one default plus the
+    /// explicit `expand_in_h`/`with_expand_h` builders), and winia keeps ONE spec for every channel of a
+    /// transition where Compose gives each channel its own (`fadeIn(spring) + expandIn(spring2)`).
     fn default() -> Self {
         Self {
             fade: true,
             alpha_from: 0.0,
             slide: None,
-            expand: false,
+            expand: true,
             expand_from: ExpandFrom::Top,
-            expand_h: false,
+            expand_h: true,
             expand_from_h: ExpandFromH::Start,
             scale: false,
             scale_from: 0.8,
             transform_origin: (0.5, 0.5),
-            spec: AnimationSpec::Tween(Default::default()),
+            spec: AnimationSpec::Spring(crate::animation::SpringSpec {
+                stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
+                threshold: 0.01,
+                ..crate::animation::SpringSpec::default()
+            }),
         }
     }
 }

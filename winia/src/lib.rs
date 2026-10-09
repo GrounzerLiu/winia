@@ -170,7 +170,7 @@ pub mod prelude {
     pub use crate::components::bottom_sheet_scaffold::{BottomSheetScaffold, SCAFFOLD_SHEET_PEEK_HEIGHT};
     pub use crate::components::sheet_state::{SheetState, SheetValue};
     pub use crate::components::animated_visibility::{
-        AnimatedVisibility,
+        AnimatedVisibility, VisibilityScope,
     };
     pub use crate::animation::{
         ExpandFrom, ExpandFromH, SlideDirection, SlideOffset, VisibilityTransition,
