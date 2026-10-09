@@ -31,6 +31,12 @@
 //! for a hundred-pixel move) and overshoot applies to the whole rectangle uniformly rather than per
 //! edge. Same motion to the eye, different numbers underneath.
 //!
+//! The same difference shows up on a retarget: Compose's four-spring form inherits four velocities in
+//! pixels per second when the endpoints change mid-flight, while winia's single progress spring
+//! inherits one progress velocity. The visually equivalent case (both ends moving along the same
+//! axis) behaves the same; when the four edges have different displacement the per-edge recovery
+//! differs — which edge settles first during an interrupted or reversed flight.
+//!
 //! The default shaping is Compose's spring — see [`BoundsTransform::default`].
 
 // The flight machinery lives a layer down (`crate::transition`): the runtime stores flights,
@@ -41,8 +47,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use crate::animation::{
-    push_animatable, AnimatableValue, AnimationSpec, SpringSpec, TweenSpec,
+    push_animatable, AnimatableValue, AnimationSpec, SpringSpec,
 };
+// Only the tests build a tween by hand now that the default flight shaping is Compose's spring.
+#[cfg(test)]
+use crate::animation::TweenSpec;
 use crate::runtime::composer::Composer;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::composition_local::CompositionLocal;
