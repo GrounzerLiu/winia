@@ -126,18 +126,26 @@ fn with_alpha_factor(color: Color, factor: f32) -> Color {
     )
 }
 
-// ── 动画规格（同导航栏：DefaultEffects/FastSpatial 近似）──
+// ── The motion-scheme tokens this component names (all verified against androidx) ──
 
-const ALPHA_SPRING_STIFFNESS: f32 = 200.0;
-const SIZE_SPRING_STIFFNESS: f32 = 400.0;
+/// An item's icon/label fade: `NavigationRail.kt:265` uses `DefaultEffects` (damping 1.0 /
+/// stiffness 1600). winia used damping 1.0 / stiffness 200.
+fn rail_alpha_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
+}
 
-fn rail_spring(stiffness: f32) -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        damping_ratio: 1.0,
-        stiffness,
-        mass: 1.0,
-        threshold: 0.01,
-    })
+/// The indicator pill's size and shape morph: `NavigationRail.kt:271` uses `FastSpatial`
+/// (0.9 / 1400), whose damping is what makes the pill settle with a slight overshoot. winia used
+/// damping 1.0 / stiffness 400.
+fn rail_item_size_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
+}
+
+/// The container's own expand/collapse progress: `WideNavigationRail.kt:230` uses `DefaultSpatial`
+/// (0.9 / 700) — the rail is not a modal drawer, so the `FastSpatial` it reserves for the modal form
+/// does not apply. winia used damping 1.0 / stiffness 400.
+fn rail_container_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
 
 // ── NavigationRail 容器 ──
@@ -302,9 +310,9 @@ impl NavigationRailItem {
 
         // 双进度动画（同导航栏）
         let alpha_progress =
-            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_spring(ALPHA_SPRING_STIFFNESS));
+            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_alpha_spec());
         let size_progress =
-            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_spring(SIZE_SPRING_STIFFNESS));
+            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_item_size_spec());
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);
@@ -543,6 +551,34 @@ impl MeasurePolicy for NavigationRailItemLayoutPolicy {
 mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
+
+    /// The three springs this component names, pinned to their androidx tokens: item alpha
+    /// `DefaultEffects` (1.0/1600), item size `FastSpatial` (0.9/1400), container expand
+    /// `DefaultSpatial` (0.9/700). winia used one no-bouncy spring at 200/400 for all three.
+    #[test]
+    fn the_rail_springs_are_the_tokens_its_sources_name() {
+        match rail_alpha_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (1.0, 1600.0));
+            }
+            other => panic!("alpha must be a spring, got {other:?}"),
+        }
+        match rail_item_size_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 1400.0));
+            }
+            other => panic!("item size must be a spring, got {other:?}"),
+        }
+        match rail_container_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_default());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 700.0));
+            }
+            other => panic!("the container must be a spring, got {other:?}"),
+        }
+    }
 
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
         let key = ctx.next_key();
@@ -1171,7 +1207,7 @@ impl WideNavigationRail {
         let container = self.container_color.unwrap_or(theme.surface);
         let progress = ctx.animate_float_as_state(
             if self.state.is_expanded() { 1.0 } else { 0.0 },
-            rail_spring(SIZE_SPRING_STIFFNESS),
+            rail_container_spec(),
         );
         // 挂载进度到状态机——current()/is_animating() 的数据源
         self.state.attach_progress(progress.clone());
@@ -1290,12 +1326,11 @@ impl WideNavigationRailItem {
             Some(p) => p.clone(),
             None => ctx.animate_float_as_state(
                 if selected { 1.0 } else { 0.0 },
-                rail_spring(SIZE_SPRING_STIFFNESS),
+                rail_item_size_spec(),
             ),
         };
         // 胶囊展开进度（选中态）——与变形进度相互独立
-        let size_progress =
-            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_spring(SIZE_SPRING_STIFFNESS));
+        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_item_size_spec());
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);

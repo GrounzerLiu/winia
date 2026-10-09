@@ -32,6 +32,10 @@ const CHECK_MARK_PATH: &str = "M9.55 18.2 3.55 12.2 5 10.75 9.55 15.3 19 5.85 20
 /// Indeterminate 横线（M3 drawCheck 中段：0.2w..0.8w、y=0.5h，2dp 高）
 const DASH_PATH: &str = "M4.8 11h14.4v2H4.8z";
 
+/// How long the checkmark stays visible after the box starts emptying — M3's `SnapAnimationDelay`
+/// (`material3/Checkbox.kt:733`), before the draw fraction snaps to zero.
+const CHECKBOX_SNAP_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
 use crate::selection::ToggleableState;
 
 /// 勾选框颜色集（对标 material3 `CheckboxColors`）——box/border/checkmark
@@ -180,6 +184,31 @@ fn checkbox_color_spec(state: ToggleableState) -> crate::animation::SpringSpec {
     }
 }
 
+/// The draw-fraction spec M3 picks, from its `transition.animateFloat(transitionSpec = { … })` over
+/// `ToggleableState` (`material3/Checkbox.kt:405-411`, `:733`):
+///
+/// - the box EMPTYING (`targetState == Off`) is `snap(delayMillis = SnapAnimationDelay)`, i.e. the
+///   checkmark disappears at once after 100 ms — winia has no delayed `Snap`, so this is a
+///   zero-duration tween with that delay, which the engine runs as an instant jump after waiting;
+/// - filling from `Off`, and every move between `On` and `Indeterminate`, is the `DefaultSpatial`
+///   token (`Checkbox.kt:404`), damping 0.9 / stiffness 700 — not the no-bouncy 400 winia used.
+///
+/// (`Checkbox.kt` also snaps `checkCenterGravitationShiftFraction` in the same two cases; winia has no
+/// separate gravitation shift.)
+fn checkbox_draw_spec(state: ToggleableState) -> crate::animation::AnimationSpec {
+    if state == ToggleableState::Off {
+        crate::animation::AnimationSpec::Tween(
+            crate::animation::TweenSpec::new(
+                std::time::Duration::ZERO,
+                crate::animation::interpolator::Linear::new(),
+            )
+            .delay(CHECKBOX_SNAP_DELAY),
+        )
+    } else {
+        crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
+    }
+}
+
 /// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用。
 /// #[composable]：内部组合子组件（Icon×2）调用语句注入——多实例隔离
 /// （勾号/横线两个 Icon 同调用位置靠语句 id 区分）
@@ -209,13 +238,8 @@ fn checkbox_impl(
     // 也是随 checkDrawFraction 过渡的）。
     let check_color = colors.checked_checkmark;
 
-    // 动画规格：Compose/M3 默认级 Spring（StiffnessMedium=400、NoBouncy）。
-    // 注意 winia 的 SpringSpec::default() 是 StiffnessLow(200)——比 M3 基准
-    // 软一档，过渡尾巴偏长（“动画有点慢”）。仅浮点动画生效。
-    let check_spec = crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
-        ..crate::animation::SpringSpec::default()
-    });
+    // The draw fraction (check / dash), animated per M3 — see `checkbox_draw_spec`.
+    let check_spec = checkbox_draw_spec(state);
     // The container/border colour, animated per state the way M3 does — see
     // `checkbox_color_spec` for the reference and the two branches.
     let color_spec = crate::animation::AnimationSpec::Spring(checkbox_color_spec(state));
@@ -502,6 +526,30 @@ mod tests {
         assert!(ToggleableState::Indeterminate.is_checked());
         assert!(!ToggleableState::Off.is_checked());
         assert!(ToggleableState::Indeterminate.is_indeterminate());
+    }
+
+    /// The draw-fraction spec per state, pinned to M3: filling (and `On` ↔ `Indeterminate`) is the
+    /// `DefaultSpatial` spring, emptying is a 100 ms-delayed snap rather than either a spring or an
+    /// immediate jump.
+    #[test]
+    fn the_draw_spec_matches_m3s_transition() {
+        for state in [ToggleableState::On, ToggleableState::Indeterminate] {
+            match checkbox_draw_spec(state) {
+                crate::animation::AnimationSpec::Spring(spec) => {
+                    assert_eq!(spec, crate::animation::SpringSpec::spatial_default(), "{state:?}");
+                    assert_eq!(spec.damping_ratio, 0.9, "{state:?}");
+                }
+                other => panic!("{state:?} must draw on a spring, got {other:?}"),
+            }
+        }
+        match checkbox_draw_spec(ToggleableState::Off) {
+            crate::animation::AnimationSpec::Tween(spec) => {
+                assert!(spec.duration.is_zero(), "the snap itself is instant");
+                assert_eq!(spec.delay, CHECKBOX_SNAP_DELAY, "SnapAnimationDelay = 100 ms");
+                assert_eq!(CHECKBOX_SNAP_DELAY, std::time::Duration::from_millis(100));
+            }
+            other => panic!("emptying must snap after a delay, got {other:?}"),
+        }
     }
 
     /// The colour spec per state, pinned to M3's tokens: leaving (`Off`) is the faster spring, every

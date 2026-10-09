@@ -72,8 +72,10 @@ Colors resolve from `enabled × active` (Compose's `containerColor` / `contentCo
   is the default in either row scope). It appears through a graphics layer whose scale and alpha ride
   one progress value about the BOTTOM-LEFT corner — `scaleIn(initialScale = 0f, transformOrigin =
   TransformOrigin(0f, 1f))` plus `fadeIn` — and goes invisible the moment the segment is inactive, which
-  is the source's `exit = None` (no exit animation). The spring parameters are ours: Compose publishes
-  no tokens for this animation (the source carries its own TODO). `.inactive_icon(...)` switches to the
+  is the source's `exit = None` (no exit animation). The icon's own scale/fade spring parameters are
+  ours (the source carries its own TODO): the SLOT OFFSET, by contrast, does follow a published token —
+  `FastSpatial`, `spring(0.9, 1400)`, which `SegmentedButton.kt:391` hands its content measure policy
+  (`SpringSpec::spatial_fast()`). `.inactive_icon(...)` switches to the
   source's other branch: the slot holds an icon in both states and the two fade between each other
   through the framework's `Crossfade` (see the difference below), so nothing slides.
 - **Stacking.** A checked item carries `z_index(5)` and a pressed or focused one `z_index(1)`

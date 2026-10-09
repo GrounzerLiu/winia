@@ -59,8 +59,6 @@ pub const FAB_LARGE_SIZE: f32 = 96.0;
 pub const FAB_ICON_SIZE: f32 = 24.0;
 pub const FAB_MEDIUM_ICON_SIZE: f32 = 28.0;
 pub const FAB_LARGE_ICON_SIZE: f32 = 32.0;
-/// sizeProgress 规格（FastSpatial 近似）——Extended FAB 展开/收起用
-const SIZE_SPRING_STIFFNESS: f32 = 400.0;
 
 /// Container/content colors for a FAB, including disabled colors.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -439,6 +437,19 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::components::Text;
+
+    /// The extended FAB's size animation is M3's `FastSpatial` spring (0.9/1400), not the no-bouncy
+    /// 400 the comment used to call an approximation.
+    #[test]
+    fn the_size_spec_is_m3s_fast_spatial_spring() {
+        match fab_size_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 1400.0));
+            }
+            other => panic!("the size spec must be a spring, got {other:?}"),
+        }
+    }
 
     fn child<'a>(nodes: &'a [LayoutNode], parent: usize, index: usize) -> &'a LayoutNode {
         &nodes[nodes[parent].children[index]]
@@ -820,15 +831,10 @@ impl ExtendedFloatingActionButton {
         // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge（16dp 圆角）
         let shape = self.shape.unwrap_or_else(|| Shape::rounded(16.0));
 
-        // 展开/收起进度（FastSpatial 近似 stiffness400）
+        // The expand/collapse progress — see `fab_size_spec`.
         let progress = ctx.animate_float_as_state(
             if self.expanded.get() { 1.0 } else { 0.0 },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-                damping_ratio: 1.0,
-                stiffness: SIZE_SPRING_STIFFNESS,
-                mass: 1.0,
-                threshold: 0.01,
-            }),
+            fab_size_spec(),
         );
 
         // 高程动画（同 FAB）
@@ -922,6 +928,14 @@ fn wrap_fab_slot_with(
 struct ExtendedFabLayoutPolicy {
     progress: State<f32>,
     direction: LayoutDirection,
+}
+
+/// The extended FAB's expand/collapse progress runs on M3's `FastSpatial` token
+/// (`material3/FloatingActionButton.kt:467`: `val sizeAnimationSpec =
+/// MotionSchemeKeyTokens.FastSpatial.value<Float>()`), damping 0.9 / stiffness 1400. winia used
+/// damping 1.0 / stiffness 400 and called it an approximation in the comment.
+fn fab_size_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
 }
 
 impl MeasurePolicy for ExtendedFabLayoutPolicy {

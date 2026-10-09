@@ -107,6 +107,15 @@ fn radio_colour_spec() -> crate::animation::SpringSpec {
     crate::animation::SpringSpec::effects_default()
 }
 
+/// The dot's appearance spec: M3 animates the dot radius with the `FastSpatial` token
+/// (`material3/RadioButton.kt:86`: `animateDpAsState(targetValue = … RadioButtonDotSize / 2 else 0.dp,
+/// animationSpec = MotionSchemeKeyTokens.FastSpatial.value())`) — damping 0.9, stiffness 1400
+/// (`tokens/StandardMotionTokens.kt:24-25`). winia used a no-bouncy spring at stiffness 400 and a
+/// comment quoting "spring(600/30)", neither of which is this token.
+fn radio_dot_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::spatial_fast()
+}
+
 /// 共享实现（对标 M3 `RadioButtonImpl`）。
 /// #[composable]：内部圆环/内点叶子节点语句注入——多实例隔离
 #[allow(clippy::too_many_arguments)]
@@ -134,16 +143,10 @@ fn radio_button_impl(
     let color_spec = crate::animation::AnimationSpec::Spring(radio_colour_spec());
     let color_anim = ctx.animate_color_as_state(color, color_spec);
 
-    // 内点出现/消失动画：scale 0↔1（Spring StiffnessMedium(400)/NoBouncy——对齐
-    // checkbox 勾号规格；Compose `animateDpAsState(MotionScheme.FastSpatial)` 为
-    // spring(600/30)，winia 无直接等价，用 M3 基准级近似——仅浮点动画生效）
-    let dot_spec = crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
-        ..crate::animation::SpringSpec::default()
-    });
+    // The dot's appearance, which M3 animates with the `FastSpatial` token — see `radio_dot_spec`.
     let dot_scale = ctx.animate_float_as_state(
         if selected { 1.0 } else { 0.0 },
-        dot_spec,
+        crate::animation::AnimationSpec::Spring(radio_dot_spec()),
     );
 
     let mut m = Modifier::new()
@@ -303,6 +306,15 @@ impl RadioButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M3's `FastSpatial` spring (0.9/1400) for the dot, pinned — a no-bouncy 400 approximation fails.
+    #[test]
+    fn the_dot_spec_is_m3s_fast_spatial_spring() {
+        let spec = radio_dot_spec();
+        assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+        assert_eq!(spec.damping_ratio, 0.9);
+        assert_eq!(spec.stiffness, 1400.0);
+    }
 
     /// M3's `DefaultEffects` (spring 1.0/1600) and nothing else: a silent return to a tween fails here.
     #[test]

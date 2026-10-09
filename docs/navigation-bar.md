@@ -62,7 +62,7 @@ NavigationBarItem::new(selected, |ctx| { Icon... })
 | 未选中 !alwaysShowLabel | 图标居中插值 offset = iconDistance × (1−p) | |
 
 - 双进度动画：alphaProgress（stiffness 200——颜色/label 淡出）与
-  sizeProgress（stiffness 400——胶囊展开/位置插值），对齐 androidx
+  sizeProgress (M3's `FastSpatial` token, spring 0.9/1400 — the pill's size and position), matching androidx
   alphaAnimationProgress/sizeAnimationProgress 分离。
 
 ### 水平 item 几何（Expressive）

@@ -82,7 +82,8 @@ Tab::new(selected, || on_click())
      已置位 → `push_animatable(state, target, spec)`（全局 pub，可在 layout 期调用）。
   4. `peek()` 读当前动画值做 placement（零注册开销）。
 - 动画帧 → 仅重测 TabRow 节点（不重组）→ 指示条位置更新。spec =
-  `spring(damping_ratio=0.6, stiffness=700)`（对齐 M3 Expressive DefaultSpatial）。
+  `spring(damping_ratio=0.9, stiffness=700)` — M3's `DefaultSpatial` token, which `TabRow.kt:406`
+  passes to the indicator (`SpringSpec::spatial_default()`).
 
 ### Tab 颜色过渡（TabTransition 对齐）
 

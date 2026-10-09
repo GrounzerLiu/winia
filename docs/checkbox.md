@@ -74,9 +74,10 @@ TriStateCheckbox::new(state: ToggleableState)    // 对标 TriStateCheckbox(stat
   and never recomposes.
 - 边框色 = 容器色时渲染层跳过描边（合并为纯填充）——半透明色若再叠
   stroke 会双重混合，边框带明显深于内部（禁用已选中态可见）。
-- Animation specs: the check/dash scale is `Spring StiffnessMedium(400)/NoBouncy` (M3's baseline;
-  winia's `SpringSpec::default()` is `StiffnessLow(200)`, whose tail is a touch longer), and the
-  colours use M3's effect springs (above).
+- Animation specs: the check/dash draw fraction follows M3's `transition.animateFloat`
+  (`material3/Checkbox.kt:405-411`): filling (and `On` <-> `Indeterminate`) runs on the `DefaultSpatial`
+  token (spring 0.9/700), while emptying is `snap(delayMillis = 100)` — winia expresses that as a
+  zero-duration tween with a 100 ms delay. The colours use M3's effect springs (above).
 - 勾号：Material Icons “check” 填充路径（20×20），外层 `graphics_layer`
   缩放动画（checked=1 / unchecked=0，Spring 近似 M3 `checkDrawFraction`
   过渡）。勾号 tint 固定为选中色（OnPrimary），未选中静止态由 scale=0

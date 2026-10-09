@@ -748,6 +748,15 @@ impl SegmentedButton {
 /// mirror, so this is a deliberate difference — a check mark on the *leading* side of the text is
 /// what the rest of winia does (a `Row` mirrors its children), and a row whose items mirror while
 /// their contents do not reads as a mistake next to them.
+/// The selected-item slot's slide, on M3's `FastSpatial` token: `SegmentedButton.kt:391` builds its
+/// content measure policy with `MotionSchemeKeyTokens.FastSpatial.value<Int>()`, and that policy is the
+/// one animating the icon/content offset — the counterpart of winia's `slot_offset`. Damping 0.9 /
+/// stiffness 1400 (`tokens/StandardMotionTokens.kt:24-25`); winia used `SpringSpec::default()`
+/// (no-bouncy, 200), which neither matched the token nor matched winia's own comment.
+fn segmented_slot_offset_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
+}
+
 #[derive(Debug)]
 struct SegmentedButtonContentPolicy {
     slot_offset: crate::runtime::state::State<f32>,
@@ -811,7 +820,7 @@ impl MeasurePolicy for SegmentedButtonContentPolicy {
         crate::animation::push_animatable(
             self.slot_offset.clone(),
             self.target_offset,
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+            segmented_slot_offset_spec(),
         );
         let offset = self.slot_offset.peek();
 
@@ -931,6 +940,18 @@ mod tests {
     use crate::runtime::composer::Composer;
     use crate::layout::LayoutDirection;
     use crate::components::text::Text;
+
+    /// The slot offset slides on M3's `FastSpatial` spring (0.9/1400); winia's no-bouncy default fails.
+    #[test]
+    fn the_slot_offset_runs_on_m3s_fast_spatial_spring() {
+        match segmented_slot_offset_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 1400.0));
+            }
+            other => panic!("the slot offset must be a spring, got {other:?}"),
+        }
+    }
     use crate::theme::ThemeColors;
 
     fn compose_row(count: usize, selected: usize, theme: &ThemeColors, dir: LayoutDirection) -> Composer {

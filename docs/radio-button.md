@@ -60,9 +60,9 @@ Selected/Unselected Hover/Focus/Pressed IconColor 与静态色同值，Compose
   (`material3/RadioButton.kt:237`: `animateColorAsState(…, MotionSchemeKeyTokens.DefaultEffects.value())`;
   winia's `SpringSpec::effects_default()` is spring(1.0, 1600)). The renderer `peek()`s the animated
   value and never recomposes.
-- 内点动画规格：Spring `StiffnessMedium(400)`/NoBouncy（对齐 checkbox 勾号
-  规格；Compose `MotionScheme.FastSpatial` 为 spring(600/30)，winia 无直接
-  等价——近似差异同 checkbox 文档说明）。
+- The dot's spec is M3's `FastSpatial` token, spring(0.9, 1400) (`material3/RadioButton.kt:86`,
+  winia's `SpringSpec::spatial_fast()`). It used to approximate it with a no-bouncy 400, while its
+  comment quoted "spring(600/30)" — neither is the token.
 - 像素级验证：选中/未选中/禁用三态 + 取消选中过渡帧保留色（颜色瞬切会吞
   退出动画）+ 动画推完回未选中，共 5 个测试（raster surface 断言；注意
   `raster_n32_premul` 小端像素为 BGRA 布局，读取按 (R,G,B) 语义换位）。

@@ -47,9 +47,10 @@ disabled 按 token alpha（38%/38%）叠 Surface。
 - 组合结构：轨道（52×32，动态背景色 + 动态边框色 + clickable + 拖拽）
   → Handle 容器（28×28，动态 x 偏移 + unbounded ripple）
   → 中心圆（动态尺寸 + 动态背景色，容器内居中）。
-- Transitions (180 ms EaseOutCubic / springs): track, border and thumb colours (the colour fade is a
-  winia addition — M3's `Switch.kt` applies those colours directly), the handle's x (2↔22) and the
-  thumb's size (16↔28).
+- Transitions: track, border and thumb colours (an 180 ms EaseOutCubic fade — a winia addition, since
+  M3's `Switch.kt` applies those colours directly), the handle's x (2↔22) and the thumb's size (16↔28)
+  both on M3's `FastSpatial` token, spring(0.9, 1400) (`Switch.kt:162`;
+  `SpringSpec::spatial_fast()`).
 - 按下：中心圆放大到 28（动画），按住保持；松手按状态回 16（关闭）
   或 24（开启）。
 - 拖拽切换：轨道上挂 `on_drag_start/on_drag/on_drag_end/on_drag_cancel`——

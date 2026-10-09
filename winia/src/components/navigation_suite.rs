@@ -389,15 +389,13 @@ impl NavigationSuiteScaffold {
                 let expanded = suite_type == NavigationSuiteType::WideNavigationRailExpanded;
                 let rail_state = WideNavigationRailState::new(ctx);
                 if expanded { rail_state.expand(); } else { rail_state.collapse(); }
-                // item 变形进度（与容器同 spec 同目标——视觉同步，同 demo 模式）
+                // The item morph progress, on the same token the rail's own items use
+                // (`material3/NavigationRail.kt:271`: `FastSpatial` = 0.9 / 1400). It drives the item
+                // shape while the container runs `DefaultSpatial`, exactly as Compose's wide rail
+                // splits them (`WideNavigationRail.kt:230`).
                 let rail_item_progress = ctx.animate_float_as_state(
                     if expanded { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-                        damping_ratio: 1.0,
-                        stiffness: 400.0,
-                        mass: 1.0,
-                        threshold: 0.01,
-                    }),
+                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
                 );
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))

@@ -39,6 +39,15 @@ pub const SWITCH_DRAG_MAX_OFFSET: f32 =
     SWITCH_TRACK_WIDTH - SWITCH_TRACK_OUTLINE_WIDTH - SWITCH_THUMB_CONTAINER_SIZE;
 pub const SWITCH_DRAG_THRESHOLD: f32 = (SWITCH_DRAG_MIN_OFFSET + SWITCH_DRAG_MAX_OFFSET) / 2.0;
 
+/// The thumb's two spatial animations — its slide (the container offset) and its size — run on M3's
+/// `FastSpatial` token: `material3/Switch.kt:162` hands the thumb element
+/// `MotionSchemeKeyTokens.FastSpatial.value()`, which is damping 0.9 / stiffness 1400
+/// (`tokens/StandardMotionTokens.kt:24-25`). winia used `SpringSpec::default()` (no-bouncy, 200) for
+/// both — softer than M3, and without the slight overshoot the token has.
+fn switch_thumb_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::spatial_fast()
+}
+
 /// Switch 颜色集（对标 material3 `SwitchColors`）——enabled/disabled ×
 /// checked/unchecked 的 thumb/track/border/icon 四组色。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -282,7 +291,7 @@ impl Switch {
             } else {
                 SWITCH_DRAG_MIN_OFFSET
             },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+            crate::animation::AnimationSpec::Spring(switch_thumb_spec()),
         );
         // 拖拽状态：drag 期间 container_offset 被覆盖；释放后从当前位置动画回目标
         let drag_active = ctx.remember(|| false);
@@ -303,7 +312,7 @@ impl Switch {
             } else {
                 SWITCH_THUMB_UNCHECKED_SIZE
             },
-            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::default()),
+            crate::animation::AnimationSpec::Spring(switch_thumb_spec()),
         );
 
         // 轨道：toggleable + 拖拽；波纹在 Handle 容器上
@@ -481,6 +490,16 @@ impl Switch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The thumb's slide and size both run on M3's `FastSpatial` spring (0.9/1400), not on winia's
+    /// softer no-bouncy default.
+    #[test]
+    fn the_thumb_runs_on_m3s_fast_spatial_spring() {
+        let spec = switch_thumb_spec();
+        assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+        assert_eq!(spec.damping_ratio, 0.9);
+        assert_eq!(spec.stiffness, 1400.0);
+    }
 
     #[test]
     fn color_state_resolution() {

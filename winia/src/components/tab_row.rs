@@ -67,15 +67,12 @@ pub const SCROLLABLE_TAB_ROW_EDGE_START_PADDING: f32 = 52.0;
 
 // ── 动画规格 ──
 
-/// 指示条动画 spring（对齐 M3 Expressive Motion DefaultSpatial：
-/// spring(dampingRatio=0.6, stiffness=700)）
+/// The indicator's slide, which M3 runs on the `DefaultSpatial` token
+/// (`material3/TabRow.kt:406`: `MotionSchemeKeyTokens.DefaultSpatial.value<Dp>()`) — damping 0.9,
+/// stiffness 700 (`tokens/StandardMotionTokens.kt:20-21`). winia used damping 0.6, which bounced more
+/// than M3's motion does.
 fn indicator_spring() -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        damping_ratio: 0.6,
-        stiffness: 700.0,
-        mass: 1.0,
-        threshold: 0.01,
-    })
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
 
 // ── TabPosition ──
@@ -1620,6 +1617,20 @@ mod tests {
     use crate::layout::components::Row;
     use crate::components::text::Text;
 
+    /// The indicator runs on M3's `DefaultSpatial` token (`TabRow.kt:406`), whose damping 0.9 is what
+    /// gives the slide its slight overshoot; a no-bouncy approximation (or the 0.6 this used) fails here.
+    #[test]
+    fn the_indicator_runs_on_m3s_default_spatial_spring() {
+        match indicator_spring() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_default());
+                assert_eq!(spec.damping_ratio, 0.9);
+                assert_eq!(spec.stiffness, 700.0);
+            }
+            other => panic!("the indicator must be a spring, got {other:?}"),
+        }
+    }
+
     /// `TabTransition`'s direction rule, pinned: arriving uses the slower default spring, leaving the
     /// faster one. One spring for both directions (or a tween) fails here.
     #[test]
@@ -2360,6 +2371,7 @@ mod tests {
             nodes[children[4]].position.x
         };
         let mut converged = false;
+        let mut frames = 0usize;
         while Instant::now() < deadline {
             crate::animation::update_animations();
             c.layout(Constraints::new(0.0, 360.0, 0.0, 640.0));
@@ -2367,6 +2379,7 @@ mod tests {
             let nodes = c.arena_nodes();
             let children = &nodes[root].children;
             let x = nodes[children[4]].position.x;
+            frames += 1;
             // 单调逼近 + 收敛到 target ±1
             if (x - last_x).abs() < 0.5 && (x - target).abs() < 1.0 {
                 converged = true;
@@ -2376,6 +2389,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(8));
         }
         assert!(converged, "指示条应动画收敛到 {target}，实际 {last_x}");
+        // The token is `DefaultSpatial` (stiffness 700), so this 120 px move settles in 26 of the
+        // loop's 1/60 s steps (measured). The no-bouncy 200 winia used here needed about twice as long, and a stiffness
+        // this size is the visible half of the change — `the_indicator_runs_on_m3s_default_spatial_spring`
+        // pins the numbers, this pins the speed.
+        assert!(
+            frames <= 40,
+            "the indicator should settle within 40 frames on the DefaultSpatial token, took {frames}"
+        );
         let root = c.layout_root_idx().unwrap();
         let nodes = c.arena_nodes();
         let children = &nodes[root].children;

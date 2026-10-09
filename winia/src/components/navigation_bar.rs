@@ -212,21 +212,19 @@ fn with_alpha_factor(color: Color, factor: f32) -> Color {
 
 // ── 动画规格 ──
 
-/// 临界阻尼 spring（对齐 MotionScheme DefaultEffects/FastSpatial 的
-/// no-bouncy 特征；stiffness 分别近似 mediumLow/medium）。
-fn nav_spring(stiffness: f32) -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        damping_ratio: 1.0,
-        stiffness,
-        mass: 1.0,
-        threshold: 0.01,
-    })
+/// An item's icon/label fade: M3 runs it on the `DefaultEffects` token
+/// (`material3/NavigationBar.kt:265`: `animationSpec = MotionSchemeKeyTokens.DefaultEffects.value()`),
+/// i.e. damping 1.0 / stiffness 1600. winia used damping 1.0 / stiffness 200, five times softer.
+fn nav_alpha_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
 
-/// alphaProgress 规格（DefaultEffects 近似）
-const ALPHA_SPRING_STIFFNESS: f32 = 200.0;
-/// sizeProgress 规格（FastSpatial 近似）
-const SIZE_SPRING_STIFFNESS: f32 = 400.0;
+/// The indicator pill's size: M3 runs it on the `FastSpatial` token
+/// (`material3/NavigationBar.kt:270`), damping 0.9 / stiffness 1400 — the 0.9 is why the pill settles
+/// with a slight overshoot where winia's no-bouncy 400 settled flat.
+fn nav_size_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
+}
 
 // ── NavigationBar 容器 ──
 
@@ -413,10 +411,8 @@ impl NavigationBarItem {
         let horizontal = self.icon_position == NavigationItemIconPosition::Start;
 
         // 双进度动画（alphaProgress / sizeProgress 分离——见模块文档）
-        let alpha_progress =
-            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_spring(ALPHA_SPRING_STIFFNESS));
-        let size_progress =
-            ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_spring(SIZE_SPRING_STIFFNESS));
+        let alpha_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_alpha_spec());
+        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, nav_size_spec());
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);
@@ -741,6 +737,26 @@ impl MeasurePolicy for NavigationBarItemLayoutPolicy {
 mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
+
+    /// The two item progressions, pinned to M3: the alpha rides `DefaultEffects`, the indicator size
+    /// `FastSpatial` (0.9/1400). winia used one no-bouncy spring at 200/400 for both.
+    #[test]
+    fn the_item_progressions_run_on_m3s_tokens() {
+        match nav_alpha_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (1.0, 1600.0));
+            }
+            other => panic!("alpha must be a spring, got {other:?}"),
+        }
+        match nav_size_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 1400.0));
+            }
+            other => panic!("size must be a spring, got {other:?}"),
+        }
+    }
 
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
         let key = ctx.next_key();

@@ -102,7 +102,7 @@ ExtendedFloatingActionButton::new(
 
 ### 动画语义（对齐 androidx）
 
-- 进度 p = animate_float_as_state(expanded, FastSpatial≈stiffness400)
+- progress p = animate_float_as_state(expanded, M3's `FastSpatial` token = spring(0.9, 1400))
 - 宽度 = lerp(56, max(80, 16+icon+12+text+20), p)
 - 图标 x：从居中滑至 start padding 16；文本透明度 = p（FastEffects 淡入淡出）、
   位置从居中滑至图标右侧
