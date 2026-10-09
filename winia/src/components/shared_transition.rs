@@ -22,6 +22,16 @@
 //! the target, which is exactly the Compose spring look. Hence
 //! `SharedBounds` keeps `supports_spring() == false` (Tween-exact) and spring
 //! flights go through scalar progress (Phase 2 wiring).
+//!
+//! Recorded deviation: Compose animates the bounds themselves — its
+//! `BoundsTransform` returns a `FiniteAnimationSpec<Rect>` and the flight runs it through
+//! `Rect.VectorConverter` (`animation/SharedTransitionScope.kt:265-268`, `:1323`, `:1534`), so the four
+//! edges are four springs whose visibility threshold is one PIXEL each. winia springs one scalar and
+//! derives the rect, so the stop band is a fraction of the flight's own delta (0.01, about one pixel
+//! for a hundred-pixel move) and overshoot applies to the whole rectangle uniformly rather than per
+//! edge. Same motion to the eye, different numbers underneath.
+//!
+//! The default shaping is Compose's spring — see [`BoundsTransform::default`].
 
 // The flight machinery lives a layer down (`crate::transition`): the runtime stores flights,
 // the layout pass writes their visuals and the renderer reads them, so none of it may live in
@@ -31,7 +41,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use crate::animation::{
-    push_animatable, AnimatableValue, AnimationSpec, TweenSpec,
+    push_animatable, AnimatableValue, AnimationSpec, SpringSpec, TweenSpec,
 };
 use crate::runtime::composer::Composer;
 use crate::runtime::composer::ComposeCtx;
@@ -74,8 +84,26 @@ impl AnimatableValue for SharedBounds {
 
 
 impl Default for BoundsTransform {
+    /// Compose's default flight shaping: `SharedTransitionDefaults.BoundsTransform` is
+    /// `spring(stiffness = StiffnessMediumLow, visibilityThreshold = Rect.VisibilityThreshold)`
+    /// (`animation/SharedTransitionScope.kt:1534`, `:1608`; `StiffnessMediumLow` is 400,
+    /// `Rect.VisibilityThreshold` is one pixel per edge, `VisibilityThresholds.kt:39-42`).
+    ///
+    /// The threshold here is in PROGRESS units, not pixels, because winia springs the scalar flight
+    /// progress and derives the rect per frame (`transition.rs:56-59`): 0.01 of the flight's own
+    /// rectangle delta is about one pixel for a hundred-pixel move — the same stop band Compose has.
+    /// See the module note on `SharedBounds::supports_spring()` for why the value itself is not
+    /// animated as four components.
     fn default() -> Self {
-        Self { spec: TweenSpec::default().into() }
+        Self {
+            spec: SpringSpec {
+                damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+                stiffness: SpringSpec::STIFFNESS_MEDIUM,
+                mass: 1.0,
+                threshold: 0.01,
+            }
+            .into(),
+        }
     }
 }
 
@@ -86,8 +114,9 @@ impl Default for BoundsTransform {
 pub struct SharedTransitionDefaults;
 
 impl SharedTransitionDefaults {
-    /// Default flight shaping: 300ms linear tween (same as
-    /// [`BoundsTransform::default`]).
+    /// Default flight shaping: Compose's spring, the same object
+    /// [`BoundsTransform::default`] hands out — `spring(1.0, 400)` with a one-pixel-equivalent
+    /// progress threshold, not a 300 ms tween.
     pub fn bounds_transform() -> BoundsTransform {
         BoundsTransform::default()
     }
@@ -668,8 +697,10 @@ mod tests {
     fn transform_constructors_preserve_spec() {
         let t = BoundsTransform::spring(SpringSpec::default());
         assert!(matches!(t.spec, AnimationSpec::Spring(_)));
-        let t = BoundsTransform::default();
+        let t = BoundsTransform::tween(TweenSpec::default());
         assert!(matches!(t.spec, AnimationSpec::Tween(_)));
+        // The DEFAULT is Compose's spring, not a tween — see `BoundsTransform::default`.
+        assert!(matches!(BoundsTransform::default().spec, AnimationSpec::Spring(_)));
     }
 
     /// The `ContentScale`/`ImageAlignment` math, pinned against Compose's documented
@@ -726,12 +757,18 @@ mod tests {
     fn shared_transition_defaults_match_hardcoded_behavior() {
         let t = SharedTransitionDefaults::bounds_transform();
         match &t.spec {
-            AnimationSpec::Tween(spec) => assert_eq!(
-                spec.duration,
-                std::time::Duration::from_millis(300),
-                "default flight shaping is the 300ms tween"
+            AnimationSpec::Spring(spec) => {
+                assert_eq!(spec.damping_ratio, SpringSpec::DAMPING_RATIO_NO_BOUNCY);
+                assert_eq!(
+                    spec.stiffness,
+                    SpringSpec::STIFFNESS_MEDIUM,
+                    "Compose's StiffnessMediumLow is 400, which winia spells STIFFNESS_MEDIUM"
+                );
+                assert_eq!(spec.threshold, 0.01, "about one pixel of the flight's own delta");
+            }
+            other => panic!(
+                "the default bounds transform is Compose's spring, not a tween, got {other:?}"
             ),
-            other => panic!("default bounds transform must be a tween, got {other:?}"),
         }
         assert_eq!(SharedTransitionDefaults::z_index_in_overlay(), 0.0);
         assert!(SharedTransitionDefaults::render_in_overlay());

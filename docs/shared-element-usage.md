@@ -31,8 +31,9 @@
 
 | Constructor | Default | Notes |
 |---|---|---|
-| `BoundsTransform::tween(TweenSpec)` | 300ms Linear (`TweenSpec::default()`, same as `SharedTransitionDefaults::bounds_transform()`) | Exact, no overshoot |
-| `BoundsTransform::spring(SpringSpec)` | critically damped (`damping_ratio: 1.0`, stiffness 200) | `SpringSpec::bouncy()` (`damping_ratio: 0.6`) overshoots past the end rect — the Compose spring look |
+| `BoundsTransform::tween(TweenSpec)` | 300ms Linear when constructed explicitly (`TweenSpec::default()`) | Exact, no overshoot. NOT the default flight shaping any more |
+| `BoundsTransform::spring(SpringSpec)` | Compose's default: `damping_ratio: 1.0`, stiffness 400 (`SpringSpec::default()` is the softer 200) | `SpringSpec::bouncy()` (`damping_ratio: 0.6`) overshoots past the end rect — the Compose spring look |
+| `BoundsTransform::default()` | `spring(1.0, 400)` with a 0.01 progress threshold | Compose `SharedTransitionDefaults.BoundsTransform` (`SharedTransitionScope.kt:1534`, `:1608`): `spring(StiffnessMediumLow = 400, visibilityThreshold = Rect.VisibilityThreshold)`, one pixel per edge |
 | `BoundsTransform::keyframes(KeyframesSpec)` | — | Arbitrary progress curves |
 
 Specs must be **finite** (Tween/Spring/Keyframes settle and release the
