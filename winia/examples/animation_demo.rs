@@ -328,7 +328,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
     });
 
     // 8c. Spring 常量 + on_finish 回调
-    Text::new("8c. Spring 常量 + finishedListener")
+    Text::new("8c. Spring constants + a finishedListener")
         .font_size(14.0)
         .color(WiniaTheme::colors().on_surface_variant)
         .modifier(Modifier::new().padding_vertical(8.0))
@@ -339,11 +339,14 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
         ..Default::default()
     };
     let done_flag = ctx.remember(|| false);
-    // ⚠ 只用 push_animatable_with_done 管理动画（内含动画 + done 回调）——
-    // 若先 animate_float_as_state 再 push_with_done 同 target，去重检查发现
-    // 同 state 同 target 已存在 → done 动画永不注册 → 回调不触发（一直显示
-    // "未完成"）。State 初始值须 ≠ 首帧 target（否则 peek==target 直接 return，
-    // 无动画也永不回调）。
+    // Drive this state with `push_animatable_with_done` ONLY (it owns the motion and the callback).
+    // Two traps a caller has to know about, both documented on the function itself:
+    //   * a second mechanism on the same state + target (`animate_float_as_state` too) makes the dedup
+    //     skip the callback-carrying registration, so the callback never fires;
+    //   * the callback reports a motion finishing, not "the value is at the target" — this entry point
+    //     is pushed every frame, so "already there" (the state's initial value equal to the first
+    //     frame's target) is the steady state where nothing runs and nothing is reported.
+    // This demo keeps the initial value (0.2) different from the first target (1.0) for that reason.
     let alpha_state = ctx.remember(|| 0.2);
     winia::animation::push_animatable_with_done(
         alpha_state.clone(),
@@ -359,7 +362,7 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
                 Shape::rounded(4.0),
             ))
         .build(ctx, |_| {});
-    Text::new(if done_flag.get() { " 完成回调触发 ✓" } else { " 动画未完成" })
+    Text::new(if done_flag.get() { " finished callback fired" } else { " animation running" })
         .font_size(12.0)
         .color(WiniaTheme::colors().on_surface_variant)
         .build(ctx);

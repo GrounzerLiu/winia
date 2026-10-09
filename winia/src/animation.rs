@@ -121,7 +121,12 @@ pub enum RepeatMode {
     Reverse,
 }
 
-/// 无限循环规格
+/// An infinite repeat spec (`InfiniteRepeatableSpec`).
+///
+/// Repeated difference from Compose: `initialStartOffset` (Compose's `StartOffset(offsetMillis,
+/// StartOffsetType::Delay | FastForward)`) has no counterpart here — a looping animation always starts
+/// at the beginning of its first cycle. `RepeatMode` itself is covered (`Restart` here, `Reverse` in
+/// `reverse`), and a per-cycle curve is available through `restart_tween`/`restart_keyframes`.
 #[derive(Debug, Clone)]
 pub struct InfiniteRepeatableSpec {
     pub duration: Duration,
@@ -240,8 +245,27 @@ pub fn push_animatable_with_velocity<
     push_animatable_with_velocity_and_done(state, target, spec, velocity, || {});
 }
 
+/// Is an animation registered for `sid` whose target differs from `target`? A caller that finds the
+/// value already AT its target must still cancel such an animation: the value passes through the new
+/// target mid-flight, and leaving the old one registered lets it pull the value on to the OLD target
+/// (measured: told to stay at 0.557, the value sailed on to 0.969). The same helper backs
+/// `push_animatable_handle`, `push_animatable_with_done` and `push_animatable_with_velocity_and_done`.
+fn has_conflicting_animation(sid: StateId, target: &dyn std::any::Any) -> bool {
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|a| a.state_id() == sid && !a.same_target(target))
+}
+
 /// [`push_animatable_with_velocity`] reporting completion, for a caller that has to hold a flag up
 /// for as long as the motion lasts.
+///
+/// When the value is ALREADY at `target`: a conflicting animation is cancelled and a zero-displacement
+/// motion is registered (which completes at once and reports through `done`); with nothing conflicting
+/// to cancel, `done` is called directly and no animation is registered. A caller pushing the same
+/// target every frame therefore gets a callback on every frame — use `push_animatable_with_done` for
+/// that shape, which reports only when a motion it registered finishes.
 pub fn push_animatable_with_velocity_and_done<
     T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
 >(
@@ -253,9 +277,14 @@ pub fn push_animatable_with_velocity_and_done<
 ) {
     let handle = state.into_animating();
     if handle.peek() == target {
-        // Already there: no motion to run, so report completion rather than leaving the caller waiting.
-        done();
-        return;
+        if !has_conflicting_animation(handle.state_id(), &target) {
+            // Already there: no motion to run, so report completion rather than leaving the caller waiting.
+            done();
+            return;
+        }
+        // Cancel the stale one and fall through: the zero-displacement motion that follows lands on the
+        // exact target and reports completion itself.
+        cancel_animation_by_id(handle.state_id());
     }
     let sid = handle.state_id();
     let spec = normalise_multi_component_decay(spec, &handle.peek());
@@ -551,8 +580,18 @@ pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sy
     value
 }
 
-/// `push_animatable` + 完成回调（对标 Compose animate*AsState 的 finishedListener）：
-/// 动画自然完成/超时强制完成时调用一次 `done`。
+/// `push_animatable` + a completion callback (Compose's `animate*AsState(finishedListener)`), fired
+/// once when a motion this call registered finishes naturally or is forced to by the overrun guard.
+///
+/// Two differences from Compose's `finishedListener`, both forced by winia's call shape:
+/// * Compose fires it when `Animatable.animateTo` ends, INCLUDING the "already at the target, motion
+///   completes instantly" case (`AnimationEndResult.Finished`). But Compose only calls `animateTo` when
+///   the target CHANGES, so a per-frame caller has no such moment to attach to. This entry point is
+///   pushed every frame, where "already there" is the steady state, so nothing fires there — only a
+///   registered motion reports. A caller that uses it one-shot per target should reach for
+///   `push_animatable_with_velocity_and_done`, which reports the instant case too.
+/// * Compose's `label` and `visibilityThreshold` parameters have no counterpart here: winia has no
+///   tooling label, and the threshold lives on the `AnimationSpec`.
 ///
 /// 注意：动画未完成时再次 push 同 state（retarget）会移除旧动画——
 /// **旧回调被静默丢弃且不调用**（新动画持有新回调）。需要"每次动画完成都触发"
@@ -563,12 +602,27 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     spec: AnimationSpec,
     done: impl FnOnce() + Send + 'static,
 ) {
-    if state.peek() == target {
-        // 已等于目标——无动画（Compose 语义：无动画不回调？——不，Compose
-        // 立即到达也会回调；这里保持简单：无动画不回调，调用方自查）
-        return;
-    }
     let sid = state.state_id();
+    if state.peek() == target {
+        // Already at the target. Nothing to animate, so no callback fires — this entry point is for a
+        // caller that pushes every frame, where "already there" is the steady state and a callback per
+        // frame would be wrong. (Compose calls its `finishedListener` for an instantaneous
+        // `Animatable.animateTo`, but it only calls `animateTo` when the target CHANGES; a per-frame
+        // push has no such moment to attach to.)
+        //
+        // A conflicting animation still has to be cancelled: the value passes through the new target
+        // mid-flight, and a stale motion left registered keeps pulling it to the OLD target (measured
+        // before this: told to stay at 0.557, the value sailed on to 0.969). `push_animatable_handle`
+        // has always done this; this entry point was missing it.
+        if !has_conflicting_animation(sid, &target) {
+            return;
+        }
+        cancel_animation_by_id(sid);
+    }
+    // Same preparation as `push_animatable_handle`: a multi-component value cannot decay, and a motion
+    // replacing a running one inherits its velocity so a retarget stays continuous.
+    let inherited_velocity: RetargetVelocity;
+    let spec = normalise_multi_component_decay(spec, &state.peek());
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -580,11 +634,16 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        inherited_velocity = list
+            .iter()
+            .find(|a| a.state_id() == sid)
+            .map(|a| a.retarget_velocity())
+            .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
     }
     let mut anim = Animatable::new(state);
+    anim.start_with_velocity(target, spec, inherited_velocity);
     anim.on_finish(done);
-    anim.animate_to(target, spec);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     crate::runtime::state::wake_loop();
@@ -1587,7 +1646,14 @@ impl Default for TweenSpec {
     }
 }
 
-/// 关键帧序列：(进度 0~1, 值, 段间插值器)
+/// A keyframe sequence: `(progress 0..1, value 0..1, segment interpolator)`, evaluated with the value
+/// applied as a FRACTION of the from→to displacement.
+///
+/// That fraction is a deliberate difference from Compose: `keyframes { durationMillis = 400; 1.2f at
+/// 0.6f }` carries a value in the ANIMATED TYPE's units (1.2 px, say) plus an optional `Easing` per
+/// keyframe, while winia's needs to stay type-generic — the same spec drives a `Color` or a `Size`,
+/// where "the value in the target's units" does not exist. Per-segment easing IS available (the third
+/// element of a frame, see `interpolator`); `new` fills it with `Linear`.
 #[derive(Clone, Debug)]
 pub struct KeyframesSpec {
     pub duration: Duration,
@@ -2823,6 +2889,93 @@ pub(crate) mod tests {
             assert!(n <= nodes1 + 20,
                 "帧 {frame}: 节点数不应持续增长（{n} vs 初始 {nodes1}）——泄漏/dup");
         }
+    }
+
+    /// `push_animatable_with_done` has to cancel a conflicting animation exactly as
+    /// `push_animatable_handle` does (`animation.rs:294-309`). The value's CURRENT value can equal the
+    /// NEW target while an animation toward a DIFFERENT target is still running — the value passes
+    /// through it mid-flight — and returning early there leaves the stale animation pulling the value
+    /// to its old target. Measured before the fix: an animation 0.2 → 1.0 was pushed, the value was
+    /// read at ~0.62 and that same value pushed back as the target, and the state then sailed on to
+    /// 1.0 instead of staying put.
+    #[test]
+    fn push_animatable_with_done_cancels_a_conflicting_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let state = crate::runtime::state::State::new(0.2f32);
+        let slow = AnimationSpec::Spring(SpringSpec {
+            stiffness: 60.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            ..SpringSpec::default()
+        });
+        push_animatable_with_done(state.clone(), 1.0, slow.clone(), || {});
+        // Let it get well clear of 0.2 but nowhere near 1.0.
+        for _ in 0..12 {
+            update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let mid = state.peek();
+        assert!(mid > 0.3 && mid < 0.9, "the first animation is mid-flight (value {mid})");
+        // Push the value it is AT right now as the new target: that is the `peek == target` branch.
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d = done.clone();
+        push_animatable_with_done(state.clone(), mid, slow, move || {
+            d.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        for _ in 0..30 {
+            update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let end = state.peek();
+        assert!(
+            (end - mid).abs() < 0.05,
+            "the conflicting animation must be cancelled, so the value stays at {mid} (ended at {end})"
+        );
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "and the zero-displacement animation completes, so its callback runs"
+        );
+    }
+
+    /// The velocity variant had the same hole from the other side: on `peek() == target` it reported
+    /// completion and returned, without cancelling a conflicting motion — so the callback announced
+    /// "finished" while the stale animation was still pulling the value (before this fix: it reported
+    /// done at 0.55 and the value ended at 0.97).
+    #[test]
+    fn push_animatable_with_velocity_and_done_cancels_a_conflicting_animation_too() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let state = crate::runtime::state::State::new(0.2f32);
+        let slow = AnimationSpec::Spring(SpringSpec {
+            stiffness: 60.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            ..SpringSpec::default()
+        });
+        push_animatable(state.clone(), 1.0, slow.clone());
+        for _ in 0..12 {
+            update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let mid = state.peek();
+        assert!(mid > 0.3 && mid < 0.9, "the first animation is mid-flight (value {mid})");
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d = done.clone();
+        push_animatable_with_velocity_and_done(state.clone(), mid, slow, 0.0, move || {
+            d.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        for _ in 0..30 {
+            update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        let end = state.peek();
+        assert!(
+            (end - mid).abs() < 0.05,
+            "the conflicting animation must be cancelled, so the value stays at {mid} (ended at {end})"
+        );
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "and the callback fires once the zero-displacement motion lands"
+        );
     }
 
 }
