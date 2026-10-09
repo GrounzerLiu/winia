@@ -1010,12 +1010,15 @@ pub trait MeasurePolicy: std::fmt::Debug {
     // the space they are given; a policy that knows better (Row/Column, whose `weight` handling
     // needs the same arithmetic as its measure phases) overrides these.
     //
-    // A policy whose `measure` has side effects MUST override all four: Compose's contract is that
-    // an intrinsic query never changes state ("There should be no side-effects from implementers of
-    // `maxIntrinsicWidth`", `ui/layout/MeasurePolicy.kt:133`), which is why Compose's animating nodes
-    // extend `LayoutModifierNodeWithPassThroughIntrinsics`. Here the default would instead run the
-    // side-effecting measure with the queried axis unbounded. [`max_child_intrinsic`] is the
-    // pass-through fold; see it for the two measured failures that motivated the rule.
+    // The children handed to that `measure` are SUBSTITUTED, exactly as Compose substitutes them:
+    // each child measurement answers the corresponding intrinsic query instead of measuring
+    // (`approx_measure` + `synthetic_intrinsic_measure`). That is what lets a policy with side
+    // effects in its `measure` be asked an intrinsic question through a defaulted ancestor without
+    // running it, and it is why Compose's animating nodes can inherit
+    // `LayoutModifierNodeWithPassThroughIntrinsics`. A policy whose own `measure` has side effects
+    // still overrides all four — "There should be no side-effects from implementers of
+    // `maxIntrinsicWidth`" (`ui/layout/MeasurePolicy.kt:133`) — so that answering is exact and
+    // never enters the approximation at all.
 
     /// The smallest width this content can be laid out at, given it will be `height` tall.
     fn min_intrinsic_width(
@@ -1024,7 +1027,12 @@ pub trait MeasurePolicy: std::fmt::Debug {
         children: &[usize],
         height: f32,
     ) -> f32 {
-        ctx.approx_measure(children, Constraints::new(0.0, f32::MAX, 0.0, height)).width
+        ctx.approx_measure(
+            children,
+            Constraints::new(0.0, f32::MAX, 0.0, height),
+            IntrinsicQuery::MinWidth,
+        )
+        .width
     }
 
     /// The width this content takes with nothing wrapped, given it will be `height` tall.
@@ -1034,7 +1042,12 @@ pub trait MeasurePolicy: std::fmt::Debug {
         children: &[usize],
         height: f32,
     ) -> f32 {
-        ctx.approx_measure(children, Constraints::new(0.0, f32::MAX, 0.0, height)).width
+        ctx.approx_measure(
+            children,
+            Constraints::new(0.0, f32::MAX, 0.0, height),
+            IntrinsicQuery::MaxWidth,
+        )
+        .width
     }
 
     /// The smallest height this content can be laid out at, given it will be `width` wide.
@@ -1044,7 +1057,12 @@ pub trait MeasurePolicy: std::fmt::Debug {
         children: &[usize],
         width: f32,
     ) -> f32 {
-        ctx.approx_measure(children, Constraints::new(0.0, width, 0.0, f32::MAX)).height
+        ctx.approx_measure(
+            children,
+            Constraints::new(0.0, width, 0.0, f32::MAX),
+            IntrinsicQuery::MinHeight,
+        )
+        .height
     }
 
     /// The height this content takes with nothing wrapped, given it will be `width` wide.
@@ -1054,7 +1072,12 @@ pub trait MeasurePolicy: std::fmt::Debug {
         children: &[usize],
         width: f32,
     ) -> f32 {
-        ctx.approx_measure(children, Constraints::new(0.0, width, 0.0, f32::MAX)).height
+        ctx.approx_measure(
+            children,
+            Constraints::new(0.0, width, 0.0, f32::MAX),
+            IntrinsicQuery::MaxHeight,
+        )
+        .height
     }
 }
 
@@ -1098,12 +1121,13 @@ impl IntrinsicQuery {
 /// approximation Compose's defaults use) or asks a child directly
 /// ([`IntrinsicCtx::child_intrinsic`], which inverts that child's own modifier chain).
 ///
-/// An intrinsic query must NOT go through [`measure_node`]; that is the frame's folding path and
-/// it writes `measured_size` / `cached_constraints` / `dirty` into the node. Nodes reached through
-/// `approx_measure` ARE measured (that is what the approximation does) but the fold stays
-/// consistent: a node measured by a probe records the probe's constraints, so the frame's own pass
-/// re-measures it as soon as its constraints differ, and folds only when they are identical — in
-/// which case the result is the same by definition.
+/// Neither path writes the frame's measurement state. `child_intrinsic` never touches
+/// [`measure_node`], and `approx_measure` runs the policy's own `measure` with its children
+/// SUBSTITUTED (every descendant measurement answers an intrinsic query —
+/// `synthetic_intrinsic_measure`), so no descendant is really measured, no `measured_size` /
+/// `cached_constraints` / `dirty` is written, and no state a descendant's `measure` would mutate is
+/// touched. That substitution is Compose's `DefaultIntrinsicMeasurable`; without it the
+/// approximation really measures the subtree, which is a different thing from what Compose does.
 pub struct IntrinsicCtx<'a> {
     nodes: &'a mut Vec<LayoutNode>,
     policies: &'a [Box<dyn MeasurePolicy>],
@@ -1113,7 +1137,21 @@ pub struct IntrinsicCtx<'a> {
 impl<'a> IntrinsicCtx<'a> {
     /// Compose's `IntrinsicMeasureScope.measure`: run the policy's own `measure` with the probe
     /// constraints and report the size it produces.
-    pub fn approx_measure(&mut self, children: &[usize], constraints: Constraints) -> Size {
+    ///
+    /// The query is part of the signature because Compose hands the policy a list of
+    /// `DefaultIntrinsicMeasurable` wrappers instead of the real children
+    /// (`ui/layout/MeasurePolicy.kt:100-107`), and that substitution is what the probe query drives
+    /// here: while this call runs, every descendant `measure_node` answers an intrinsic query rather
+    /// than measuring (`synthetic_intrinsic_measure`). Without it a defaulted container would really
+    /// measure its subtree — which is how an intrinsic query above a plain `Stack` used to reach an
+    /// `AnimatedSize`'s animation and mutate it.
+    pub fn approx_measure(
+        &mut self,
+        children: &[usize],
+        constraints: Constraints,
+        query: IntrinsicQuery,
+    ) -> Size {
+        let _probe = IntrinsicProbeGuard::enter(query);
         let policy: &dyn MeasurePolicy = &*self.policies[self.policy_idx];
         policy.measure(self.nodes, self.policies, children, constraints).0
     }
@@ -1172,7 +1210,7 @@ pub(crate) fn intrinsic_size_of(
 ) -> f32 {
     let horizontal = query.is_width();
     // Read the whole chain in one borrow and let it go: the content query needs `nodes` mutably.
-    let (fixed, min_axis, max_axis, required, pad_axis, intrinsic_request, scrolled) = {
+    let (fixed, min_axis, max_axis, required, pad_axis, pad_other, intrinsic_request, scrolled) = {
         let m = &nodes[idx].modifier;
         let (pad_x, pad_y) = m.get_padding_values();
         let (min_w, min_h) = m.min_size_constraint();
@@ -1183,6 +1221,7 @@ pub(crate) fn intrinsic_size_of(
             if horizontal { max_w } else { max_h },
             m.required_size_constraint().and_then(|(w, h)| if horizontal { w } else { h }),
             if horizontal { pad_x } else { pad_y },
+            if horizontal { pad_y } else { pad_x },
             if horizontal { m.intrinsic_width_request() } else { m.intrinsic_height_request() },
             if horizontal {
                 m.horizontal_scroll_state().is_some()
@@ -1191,6 +1230,14 @@ pub(crate) fn intrinsic_size_of(
             },
         )
     };
+
+    // Padding on the OTHER axis reduces the space the content is asked about — Compose's padding
+    // node offsets the constraints before the child's intrinsic is queried
+    // (`foundation/layout/Padding.kt:449` + the inherited `NodeMeasuringIntrinsics` default), so a
+    // `padding_horizontal(10)` under a height query must ask its content at `width - 20`, not at
+    // `width`. Measured before this: a child whose intrinsic height equals the width it is given
+    // answered 100 for an outer width of 100 with 10 of horizontal padding (correct: 80).
+    let other = (other - pad_other).max(0.0);
 
     // The queried axis's own numeric range, in the pipeline's order: size → sizeIn(min) →
     // sizeIn(max) → requiredSize (a hard override that may leave the incoming range on purpose).
@@ -1216,9 +1263,23 @@ pub(crate) fn intrinsic_size_of(
         return lo;
     }
 
-    let content = if intrinsic_request.is_some() {
-        // `Modifier.width/height(IntrinsicSize)`: this axis IS the content's measurement.
-        content_intrinsic(nodes, policies, idx, query, other)
+    // `Modifier.width/height(IntrinsicSize)` declares an EXTREME for this axis, and Compose answers
+    // both of its intrinsic queries with that extreme: `IntrinsicWidthNode.minIntrinsicWidth` and
+    // `.maxIntrinsicWidth` both forward to `maxIntrinsicWidth` when the declared size is `Max`
+    // (`foundation/layout/Intrinsic.kt:192-204`; the height node mirrors it at `:253-265`). Measured
+    // before this: a node with `width(IntrinsicSize::Max)` answering a `MinWidth` query reported its
+    // child's minimum (20) where Compose reports the declared maximum (80).
+    let declared = match (intrinsic_request.map(|(size, _)| size), horizontal) {
+        (Some(IntrinsicSize::Min), true) => Some(IntrinsicQuery::MinWidth),
+        (Some(IntrinsicSize::Max), true) => Some(IntrinsicQuery::MaxWidth),
+        (Some(IntrinsicSize::Min), false) => Some(IntrinsicQuery::MinHeight),
+        (Some(IntrinsicSize::Max), false) => Some(IntrinsicQuery::MaxHeight),
+        (None, _) => None,
+    };
+    let content = if let Some(declared) = declared {
+        // `Modifier.width/height(IntrinsicSize)`: this axis IS the content's measurement, at the
+        // extreme the modifier declares.
+        content_intrinsic(nodes, policies, idx, declared, other)
     } else if scrolled {
         // A scroller reports its content's intrinsic size along the scrolled axis: the content is
         // asked with the cross axis unbounded (Compose's `Scroll` intrinsic block does the same).
@@ -2841,12 +2902,74 @@ impl Drop for ActiveSlotKeyGuard {
     }
 }
 
+thread_local! {
+    /// The intrinsic query an approximation is answering right now, if any — the state that turns a
+    /// descendant `measure_node` into Compose's `DefaultIntrinsicMeasurable`.
+    static INTRINSIC_PROBE: std::cell::Cell<Option<IntrinsicQuery>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn intrinsic_probe_query() -> Option<IntrinsicQuery> {
+    INTRINSIC_PROBE.with(|q| q.get())
+}
+
+/// Sets (and restores) the probe query for one approximation. A guard rather than two lines because
+/// the policy's `measure` may panic, and a nested approximation for the other axis overwrites the
+/// value — restoring the OUTER query is what keeps the enclosing fold answering its own question.
+struct IntrinsicProbeGuard(Option<IntrinsicQuery>);
+
+impl IntrinsicProbeGuard {
+    fn enter(query: IntrinsicQuery) -> Self {
+        Self(INTRINSIC_PROBE.with(|q| q.replace(Some(query))))
+    }
+}
+
+impl Drop for IntrinsicProbeGuard {
+    fn drop(&mut self) {
+        INTRINSIC_PROBE.with(|q| q.set(self.0));
+    }
+}
+
+/// Compose's `DefaultIntrinsicMeasurable.measure` (`ui/layout/Layout.kt:309-330`): the size a child
+/// reports while an approximation is running its parent's OWN `measure`. The queried axis is the
+/// child's intrinsic answer at the other axis the policy handed it, and the other axis is that
+/// policy's constraint (Compose uses `LargeDimension` where it is unbounded).
+///
+/// Nothing is written back: no `measured_size`, no placement, no cache — the wrapper is a synthetic
+/// measurable, so the frame's real measurement and, above all, any state a child's real `measure`
+/// would mutate stay untouched.
+fn synthetic_intrinsic_measure(
+    nodes: &mut Vec<LayoutNode>,
+    policies: &[Box<dyn MeasurePolicy>],
+    idx: usize,
+    query: IntrinsicQuery,
+    constraints: Constraints,
+) -> Size {
+    if query.is_width() {
+        let width = intrinsic_size_of(nodes, policies, idx, query, constraints.max_height);
+        Size::new(width, constraints.max_height)
+    } else {
+        let height = intrinsic_size_of(nodes, policies, idx, query, constraints.max_width);
+        Size::new(constraints.max_width, height)
+    }
+}
+
 pub(crate) fn measure_node(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
     idx: usize,
     constraints: Constraints,
 ) -> (Size, Vec<Placement>) {
+    // Inside an intrinsic approximation, a child measurement IS an intrinsic query — see
+    // `synthetic_intrinsic_measure`. This is what keeps a policy with side effects in its `measure`
+    // (an animating container, a first-measurement flag) out of an intrinsic probe even when the
+    // policy that reaches it keeps the trait's default intrinsic implementation.
+    if let Some(query) = intrinsic_probe_query() {
+        return (
+            synthetic_intrinsic_measure(nodes, policies, idx, query, constraints),
+            Vec::new(),
+        );
+    }
     // The fold check lives in `measure_node_inner` (it must also arm the node's slot key etc.); this
     // wrapper only adds the "which node is measuring" marker that a subcomposing policy needs, and
     // leaves folded calls with no marker at all — a policy that folds did not run, so a stale marker
@@ -4014,6 +4137,178 @@ mod intrinsic_tests {
         }
 
         fn place(&self, _nodes: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+    }
+
+    /// A policy with the trait's DEFAULT intrinsics — only `measure` and `place`, like `BoxLayout`.
+    /// Its `measure` really measures its children, so the children handed to it during an
+    /// approximation must be SUBSTITUTED (Compose's `DefaultIntrinsicMeasurable`).
+    #[derive(Debug)]
+    struct DefaultBox;
+
+    impl MeasurePolicy for DefaultBox {
+        fn measure(
+            &self,
+            nodes: &mut Vec<LayoutNode>,
+            policies: &[Box<dyn MeasurePolicy>],
+            children: &[usize],
+            constraints: Constraints,
+        ) -> (Size, Vec<Placement>) {
+            let mut size = Size::new(0.0, 0.0);
+            for &c in children {
+                let (child, _) = measure_node(nodes, policies, c, constraints.loosen());
+                size = Size::new(size.width.max(child.width), size.height.max(child.height));
+            }
+            (size, Vec::new())
+        }
+
+        fn place(&self, _nodes: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+    }
+
+    /// A child that COUNTS its real measurements and answers all four intrinsics explicitly:
+    /// 20 wide at its minimum, 80 at its maximum, height = the width it is asked about.
+    #[derive(Debug)]
+    struct CountingLeaf {
+        real_measures: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl MeasurePolicy for CountingLeaf {
+        fn measure(
+            &self,
+            _nodes: &mut Vec<LayoutNode>,
+            _policies: &[Box<dyn MeasurePolicy>],
+            _children: &[usize],
+            constraints: Constraints,
+        ) -> (Size, Vec<Placement>) {
+            self.real_measures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            (
+                Size::new(constraints.constrain_width(80.0), constraints.constrain_height(40.0)),
+                Vec::new(),
+            )
+        }
+
+        fn place(&self, _nodes: &mut Vec<LayoutNode>, _c: &[usize], _p: &[Placement]) {}
+
+        fn min_intrinsic_width(&self, _c: &mut IntrinsicCtx<'_>, _n: &[usize], _h: f32) -> f32 {
+            20.0
+        }
+        fn max_intrinsic_width(&self, _c: &mut IntrinsicCtx<'_>, _n: &[usize], _h: f32) -> f32 {
+            80.0
+        }
+        fn min_intrinsic_height(&self, _c: &mut IntrinsicCtx<'_>, _n: &[usize], w: f32) -> f32 {
+            w
+        }
+        fn max_intrinsic_height(&self, _c: &mut IntrinsicCtx<'_>, _n: &[usize], w: f32) -> f32 {
+            w
+        }
+    }
+
+    /// The composed failure: `Column.width(IntrinsicSize::Max) -> Stack -> AnimatedSize` used to
+    /// reach the animated container's real `measure` (through `BoxLayout`'s default intrinsics) and
+    /// start an animation. The substitution is what makes an intrinsic query above a plain container
+    /// safe: the child is ASKED, never measured.
+    #[test]
+    fn a_defaulted_container_asks_its_child_instead_of_measuring_it() {
+        let measures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::new(Modifier::new(), Some(1)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![
+            Box::new(DefaultBox),
+            Box::new(CountingLeaf { real_measures: measures.clone() }),
+        ];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            80.0,
+            "the defaulted container answers with its child's max intrinsic width"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            20.0,
+            "…and with the child's minimum for the other width query"
+        );
+        assert_eq!(
+            measures.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "no descendant may be really measured inside an intrinsic probe"
+        );
+        assert!(
+            nodes[1].cached_constraints.is_none(),
+            "and no probe constraint may be written into the child's cache"
+        );
+
+        // The frame's own pass still measures both, so the substitution is a probe-only path.
+        let _ = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(
+            measures.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a real layout measures the child exactly once"
+        );
+    }
+
+    /// Compose's padding node offsets the constraints before the child's intrinsic is asked, so the
+    /// space the content is told about is the INNER one — on both axes.
+    #[test]
+    fn padding_reduces_the_other_axis_before_the_content_is_asked() {
+        let measures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().padding_horizontal(10.0), Some(0)),
+            LayoutNode::new(Modifier::new(), Some(1)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![
+            Box::new(DefaultBox),
+            Box::new(CountingLeaf { real_measures: measures }),
+        ];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0),
+            80.0,
+            "a height query must ask the content at the width the padding leaves it (100 - 20)"
+        );
+    }
+
+    /// `width/height(IntrinsicSize)` declares an EXTREME, and Compose answers both of that axis's
+    /// intrinsic queries with it (`foundation/layout/Intrinsic.kt:192-204`).
+    #[test]
+    fn an_intrinsic_width_modifier_answers_both_extremes_with_its_declaration() {
+        let measures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let leaf = || {
+            let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(CountingLeaf {
+                real_measures: measures.clone(),
+            })];
+            policies
+        };
+        let mut max_nodes = vec![LayoutNode::new(
+            Modifier::new().width(IntrinsicSize::Max),
+            Some(0),
+        )];
+        let max_policies = leaf();
+        assert_eq!(
+            intrinsic_size_of(&mut max_nodes, &max_policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            80.0,
+            "width(Max) answers a MinWidth query with the content's maximum"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut max_nodes, &max_policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            80.0
+        );
+
+        let mut min_nodes = vec![LayoutNode::new(
+            Modifier::new().width(IntrinsicSize::Min),
+            Some(0),
+        )];
+        let min_policies = leaf();
+        assert_eq!(
+            intrinsic_size_of(&mut min_nodes, &min_policies, 0, IntrinsicQuery::MaxWidth, 100.0),
+            20.0,
+            "width(Min) answers a MaxWidth query with the content's minimum"
+        );
+        assert_eq!(
+            intrinsic_size_of(&mut min_nodes, &min_policies, 0, IntrinsicQuery::MinWidth, 100.0),
+            20.0
+        );
     }
 
     #[test]

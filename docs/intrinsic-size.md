@@ -100,8 +100,10 @@ Components that implement the protocol directly instead:
   `AspectRatio.kt:123-154`, `BasicMarquee.kt:299-317`, `FlowLayout.kt:736-802`, `Grid.kt:1743`, `:1803`
   (auto tracks call `minIntrinsicWidth(Constraints.Infinity)`), `TextStringSimpleNode.kt:427-445`.
 
-`foundation/layout/Padding.kt` contains no intrinsic code at all: padding is expressed by offsetting
-the constraints at measure time, so it never appears in the intrinsic layer.
+`foundation/layout/Padding.kt` contains no intrinsic code of its own: its node inherits Compose's
+`LayoutModifierNode` defaults, which offset the constraints before asking the child
+(`Padding.kt:449` + `ui/node/LayoutModifierNode.kt:285-354`), so padding participates by shrinking
+the space the content is queried about — on both axes, not just the queried one.
 
 ## 2. winia today
 
@@ -311,13 +313,17 @@ landed; §1-§4 stay the specification it was written against.
   `min_intrinsic_height`, `max_intrinsic_height` — defaulting to Compose's documented approximation:
   measure with the queried axis unbounded and report that axis. `MeasurePolicy` stays object-safe and
   every existing `impl` compiles unchanged.
-- `IntrinsicCtx<'a> { nodes, policies, policy_idx }` is the probe's own receiver: `approx_measure` runs
-  the policy's own `measure` for the defaults, and `child_intrinsic(child, query, other)` recurses.
-  `child_weight(child)` reads `Modifier::get_layout_weight()`, which is where winia stores what Compose
-  keeps as `LayoutWeightNode` parent data.
+- `IntrinsicCtx<'a> { nodes, policies, policy_idx }` is the probe's own receiver: `approx_measure`
+  runs the policy's own `measure` for the defaults with its children substituted (below), and
+  `child_intrinsic(child, query, other)` recurses. `child_weight(child)` reads
+  `Modifier::get_layout_weight()`, which is where winia stores what Compose keeps as
+  `LayoutWeightNode` parent data.
 - `intrinsic_size_of(nodes, policies, idx, query, other)` is the entry point. It never calls
-  `measure_node`, so it cannot write `dirty` / `layout_dirty` / `cached_constraints` /
-  `subcomposed` (`node.rs` write-back sites) and cannot invalidate the frame's measure results.
+  `measure_node`, and neither does the approximation it drives: a descendant measurement inside
+  `approx_measure` answers an intrinsic query instead (`synthetic_intrinsic_measure`), so a probe
+  writes no `dirty` / `layout_dirty` / `cached_constraints` / `subcomposed` (`node.rs` write-back
+  sites), cannot invalidate the frame's measure results, and cannot run state a descendant's `measure`
+  would change.
 - `IntrinsicQuery { MinWidth, MaxWidth, MinHeight, MaxHeight }` keeps the two axes explicit; Compose's
   `IntrinsicMinMax`/`IntrinsicWidthHeight` pair is folded into one enum.
 
@@ -334,12 +340,21 @@ each modifier node constrains into what the node before it produced, so the oute
   because the pipeline tightens the node's own box before the padding offset is pushed inward.
 - Otherwise the answer is `content.clamp(lo, hi) + padding`, mirroring "measure the content, then add
   padding back".
+- The content is asked with the OTHER axis reduced by that axis's padding (`other - pad_other`), as
+  Compose's padding node offsets the constraints before the child answers
+  (`Padding.kt:449`); measured before the fix: a `padding_horizontal(10)` node under a height query
+  asked its content at the outer width 100 instead of 80, so a wrapping child answered the wrong height.
 - `fill_max` is deliberately ignored when answering intrinsics, matching Compose's `FillNode`
   (`Size.kt:689`), which does not override the intrinsic methods either.
 - A scroll modifier on the queried axis forwards with `other = f32::MAX`, mirroring
   `foundation/Scroll.kt:478-500`.
 - `size`/`width`/`height(IntrinsicSize)` clamp the answer to the incoming constraint
   (`enforceIncoming = true`, `Intrinsic.kt:34-49`); the `required*` forms do not.
+- `size`/`width`/`height(IntrinsicSize)` also NORMALIZE both of that axis's queries to the extreme it
+  declares: `IntrinsicWidthNode.minIntrinsicWidth` and `.maxIntrinsicWidth` both forward to
+  `maxIntrinsicWidth` for `IntrinsicSize.Max` (the height node mirrors it, `Intrinsic.kt:192-204` and
+  `:253-265`), so a `width(IntrinsicSize::Max)` answers a `MinWidth` query with the maximum. Winia
+  used to forward the incoming query unchanged — measured: 20 where Compose reports 80.
 
 ### 8.4 Containers share the flex arithmetic
 
@@ -352,7 +367,15 @@ cross-axis query first resolves the main-axis room each child gets (`mainAxisSiz
 query there) and then asks the children's cross size at that room. One deviation is stated in a
 comment: `remaining` is floored at 0.0 where Compose can go negative on ints.
 
-Box and every other container keep the default approximation, which is also what Compose does for Box.
+Box and every other container keep the default approximation, which is also what Compose does for Box —
+but the approximation SUBSTITUTES its children the way Compose's `DefaultIntrinsicMeasurable` does
+(`ui/layout/MeasurePolicy.kt:100-107`, `ui/layout/Layout.kt:309-330`): while a policy's own `measure`
+runs to answer an intrinsic query, every descendant measurement is answered by that descendant's
+intrinsic size and nothing is written back. Winia used to really measure the descendants there, which
+meant an intrinsic query above a plain `Stack`/`Box` reached an `AnimatedSize`'s `measure` and mutated
+its animation — measured before the substitution: the box snapped to the probe's 200 instead of its
+content's 60 and started animating. A policy whose own `measure` has side effects still overrides all
+four methods, so the query never enters the approximation at all.
 
 ### 8.5 Leaves
 
