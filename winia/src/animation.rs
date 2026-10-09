@@ -3095,7 +3095,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     assert!(!has_animation_for_state(sid), "双重触发后表仍空（幂等）");
 }
 
-    /// 表驱动插值器接入引擎的接线测试（v1 29 个插值器 + Linear）
+    /// Wiring test for the table-driven interpolators (v1's 29 curves plus `Linear`).
     #[test]
     fn tween_uses_table_interpolator() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -3105,19 +3105,19 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         let t = TweenSpec::default();
         assert!(
             (t.interpolator.interpolate(0.5) - 0.7756).abs() < 0.01,
-            "默认缓动是 FastOutSlowIn，中点 = {}",
+            "the default easing is FastOutSlowIn, midpoint = {}",
             t.interpolator.interpolate(0.5)
         );
         // 1b. An explicitly linear ramp still is one — `TweenSpec::new(dur, Linear::new())`.
         let linear = TweenSpec::new(Duration::from_millis(300), Linear::new());
-        assert_eq!(linear.interpolator.interpolate(0.5), 0.5, "显式 Linear 中点 = 0.5");
-        // 2. 表驱动曲线生效（EaseInQuad 中点 < 0.5——缓入）
+        assert_eq!(linear.interpolator.interpolate(0.5), 0.5, "an explicit Linear midpoint = 0.5");
+        // 2. A table-driven curve takes effect (EaseInQuad's midpoint is below 0.5 — it eases in).
         let ease = Arc::new(EaseInQuad::new());
-        assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad 中点应 < 0.5（缓入）");
-        assert!(ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0, "端点 clamp");
-        // 3. 引擎接线：Animatable 用表插值器动画——推进 60ms（t≈0.2）后
-        //    EaseInQuad(0.2)=0.04 → 值≈4，linear(0.2)=0.2 → 值≈20（差异 5 倍，
-        //    dt 抖动 ±10ms 不影响区分度）
+        assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad's midpoint must be below 0.5");
+        assert!(ease.interpolate(0.0) == 0.0 && ease.interpolate(1.0) == 1.0, "the ends are clamped");
+        // 3. Engine wiring: an Animatable animated by a table interpolator. After 60 ms (t ≈ 0.2)
+        //    EaseInQuad(0.2) = 0.04 → about 4, while linear(0.2) = 0.2 → about 20: five times apart,
+        //    so a ±10 ms jitter in the sleep cannot blur the two.
         let st = State::new(0.0f32);
         let mut anim = Animatable::new(st.clone());
         anim.animate_to(
@@ -3130,10 +3130,10 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         let v = st.peek();
         assert!(
             v > 0.0 && v < 10.0,
-            "EaseInQuad 推进 60ms 应远小于 linear（实际 {}，linear 约 20）",
+            "EaseInQuad after 60 ms must be far below linear (got {}, linear is about 20)",
             v
         );
-        // 对照：同一个 300 ms tween，用它自己声明的插值器推进 ≈ 20
+        // Control: the same 300 ms tween through its own declared interpolator reaches about 20.
         let st2 = State::new(0.0f32);
         let mut anim2 = Animatable::new(st2.clone());
         anim2.animate_to(
