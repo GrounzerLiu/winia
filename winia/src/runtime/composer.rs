@@ -1772,7 +1772,17 @@ impl SlotTable {
         found
     }
 
-    /// 查找 key 的 slot：标其及所有祖先 dirty；若目标是 scope，整个子树标 dirty（失效传播）
+    /// Find the slot holding `key`: mark it and all its ancestors dirty. When the target is a SCOPE the
+    /// whole subtree goes dirty too — an over-approximation of Compose, which invalidates only the group
+    /// that read the state and lets clean children skip.
+    ///
+    /// The cost is real and was measured on `NavigationSuiteScaffold`: its build reads the morph
+    /// progress, so every morph frame invalidates the scaffold scope and, with this rule, every slot
+    /// below it — the caller's page recomposed once per frame (20 runs over 19 frames). Narrowing the
+    /// scaffold's own dirty marking (the review's suggestion at the time) changes nothing: with no
+    /// marking at all the page still ran once per frame, so THIS rule is the driver. Making it precise
+    /// (invalidate the reading group only) is an engine change with a wide blast radius — components
+    /// whose body reads state and whose children must follow rely on the conservative behaviour today.
     fn mark_dirty_path_scope(slot: &mut Slot, key: u64) -> bool {
         if slot.key == key {
             slot.dirty = true;
