@@ -1462,6 +1462,16 @@ impl SpringSpec {
     /// M3's `StandardMotionTokens.SpringFastEffectsStiffness` (3800) — the spring behind
     /// `MotionSchemeKeyTokens.FastEffects`.
     pub const STIFFNESS_EFFECTS_FAST: f32 = 3800.0;
+    /// Every M3 spatial spring shares this damping ratio
+    /// (`StandardMotionTokens.Spring{Default,Fast,Slow}SpatialDamping = 0.9f`): a spatial move carries a
+    /// slight overshoot, where an effect spring (damping 1.0) settles without one.
+    pub const DAMPING_RATIO_SPATIAL: f32 = 0.9;
+    /// `SpringSlowSpatialStiffness` (300) — a large move (a sheet, a full-screen expansion).
+    pub const STIFFNESS_SPATIAL_SLOW: f32 = 300.0;
+    /// `SpringDefaultSpatialStiffness` (700) — the ordinary move (an indicator sliding, a check drawing).
+    pub const STIFFNESS_SPATIAL_DEFAULT: f32 = 700.0;
+    /// `SpringFastSpatialStiffness` (1400) — a small move (a dot growing, a thumb sliding).
+    pub const STIFFNESS_SPATIAL_FAST: f32 = 1400.0;
 
     pub fn bouncy() -> Self {
         Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
@@ -1491,6 +1501,43 @@ impl SpringSpec {
         Self {
             damping_ratio: Self::DAMPING_RATIO_NO_BOUNCY,
             stiffness: Self::STIFFNESS_EFFECTS_FAST,
+            mass: 1.0,
+            threshold: 0.01,
+        }
+    }
+
+    /// M3's `DefaultSpatial` motion-scheme token: `spring(dampingRatio = 0.9, stiffness = 700)`
+    /// (`material3/MotionScheme.kt:134-139`, `tokens/StandardMotionTokens.kt:20-21`). This is what M3
+    /// moves a POSITION or a size with — a tab indicator travelling, a checkmark drawing, a segmented
+    /// button's item resizing — and the 0.9 damping is deliberate: these moves overshoot slightly,
+    /// unlike the effect springs above. winia used to approximate it with a no-bouncy spring.
+    pub fn spatial_default() -> Self {
+        Self {
+            damping_ratio: Self::DAMPING_RATIO_SPATIAL,
+            stiffness: Self::STIFFNESS_SPATIAL_DEFAULT,
+            mass: 1.0,
+            threshold: 0.01,
+        }
+    }
+
+    /// M3's `FastSpatial`: `spring(dampingRatio = 0.9, stiffness = 1400)` (`MotionScheme.kt:140-145`)
+    /// — a small spatial change: a dot growing, a switch thumb sliding, an icon scaling
+    /// (`NavigationBar.kt:270`, `RadioButton.kt:86`, `Switch.kt:162`, `SegmentedButton.kt:391`).
+    pub fn spatial_fast() -> Self {
+        Self {
+            damping_ratio: Self::DAMPING_RATIO_SPATIAL,
+            stiffness: Self::STIFFNESS_SPATIAL_FAST,
+            mass: 1.0,
+            threshold: 0.01,
+        }
+    }
+
+    /// M3's `SlowSpatial`: `spring(dampingRatio = 0.9, stiffness = 300)` (`MotionScheme.kt:146-151`)
+    /// — a large spatial change, such as a sheet or an expanded container.
+    pub fn spatial_slow() -> Self {
+        Self {
+            damping_ratio: Self::DAMPING_RATIO_SPATIAL,
+            stiffness: Self::STIFFNESS_SPATIAL_SLOW,
             mass: 1.0,
             threshold: 0.01,
         }
@@ -1933,6 +1980,31 @@ pub(crate) mod tests {
         let target = crate::unit::Size::new(80.0, 20.0);
         push_animatable(state.clone(), target, AnimationSpec::Decay(DecaySpec::default()));
         assert_eq!(state.peek(), target, "the size snaps to the target, not to a square at the origin");
+    }
+
+    /// M3's three spatial tokens, pinned: one shared damping (0.9 — the slight overshoot is the point)
+    /// and the three stiffnesses the components name.
+    #[test]
+    fn the_spatial_springs_are_m3s_tokens() {
+        for (spec, stiffness, name) in [
+            (SpringSpec::spatial_slow(), 300.0, "SpringSlowSpatialStiffness"),
+            (SpringSpec::spatial_default(), 700.0, "SpringDefaultSpatialStiffness"),
+            (SpringSpec::spatial_fast(), 1400.0, "SpringFastSpatialStiffness"),
+        ] {
+            assert_eq!(spec.damping_ratio, 0.9, "{name}: SpringDefaultSpatialDamping");
+            assert_eq!(spec.stiffness, stiffness, "{name}");
+            assert_eq!(spec.mass, 1.0);
+        }
+        assert!(SpringSpec::spatial_fast().stiffness > SpringSpec::spatial_default().stiffness);
+        assert_eq!(
+            SpringSpec::spatial_default().damping_ratio,
+            SpringSpec::DAMPING_RATIO_SPATIAL
+        );
+        assert_ne!(
+            SpringSpec::spatial_default().damping_ratio,
+            SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            "the spatial springs overshoot; the effect springs do not"
+        );
     }
 
     /// Compose interpolates a colour in Oklab — `ColorVectorConverter.convertToVector` hands the
