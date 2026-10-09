@@ -378,8 +378,8 @@ pub(crate) enum ModifierElement {
         read_only: bool,
         /// 光标色（组合期解析：error → error_cursor，否则 primary）
         cursor_color: Color,
-        /// 指示线/边框颜色（动画 State——`animate_color_as_state` 驱动，
-        /// CAM16-UCS 插值；渲染期 peek 读取）
+        /// The indicator/border colour: an animation `State` driven by `animate_color_as_state`,
+        /// interpolated in Oklab, peeked during rendering.
         indicator_color: crate::runtime::state::State<crate::graphics::Color>,
         /// 焦点过渡进度（0 = unfocused，1 = focused——宽度 1↔2px 动画）
         focus_progress: crate::runtime::state::State<f32>,

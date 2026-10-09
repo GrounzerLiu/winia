@@ -26,7 +26,9 @@ AnimationSpec（动画规格）
 
 ### 1. 值类型（AnimatableValue trait）
 - `f32` — 线性插值
-- `Color` — CAM16-UCS 色彩空间插值（`material-colors::blend::cam16_ucs`）+ alpha 单独线性插值
+- `Color` — Oklab interpolation (`Color::to_oklab` / `from_oklab`), the four components `alpha, L, a, b`
+  Compose's `ColorVectorConverter` animates: a Spring runs one spring per component, a Tween mixes all
+  four (`animation/ColorVectorConverter.kt:33-47`)
 - `Dp` / `Sp` / `Offset` / `Size` — unit 模块类型（unit.rs）
 
 ### 2. 动画规格（AnimationSpec）
@@ -143,7 +145,7 @@ AnimationSpec（动画规格）
 | 1 | 蓝色盒子宽度 | Spring Bouncy |
 | 2 | 绿色盒子透明度/宽度 | Tween |
 | 3 | 橙色盒子 offset | updateTransition |
-| 4 | 颜色盒子 | animate_color_as_state（CAM16） |
+| 4 | colour box | animate_color_as_state (Oklab) |
 | 5 | 呼吸圆点 | rememberInfiniteTransition |
 | 6 | 青色盒子 | Keyframes（400ms 超调） |
 

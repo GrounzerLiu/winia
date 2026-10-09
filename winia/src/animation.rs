@@ -258,8 +258,9 @@ pub fn push_animatable_with_velocity_and_done<
         return;
     }
     let sid = handle.state_id();
-    // 声明 `supports_spring() == false` 的类型（Color、SharedBounds 等）没有分量弹簧
-    // 可跑——Spring 降级为默认 Tween，免得落进沿范数运动的单值位移
+    // A type declaring `supports_spring() == false` (`SharedBounds`, say) has no per-component
+    // springs to run, so a Spring is downgraded to the default Tween rather than falling into the
+    // single scalar displacement that travels along the value's norm.
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -337,6 +338,12 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
 }
 
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
+///
+/// The spec is honoured as written, springs included: a `Color` is a four-component value (Oklab
+/// `alpha, L, a, b`), so `Animatable::start_with_velocity` gives it one spring per component, the way
+/// Compose's `Color.VectorConverter` does. Until this, a colour spring was silently replaced by a
+/// 300 ms linear tween — the caller asked for a spring and got a different motion (measured on
+/// `Tab`'s content colour, whose `SpringSpec` never ran).
 pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
     
     if state.peek() == target {
@@ -357,18 +364,19 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
         return;
     }
     let sid = state.state_id();
+    // The velocity to inherit on a retarget: each Oklab component its own, the way the main registry
+    // hands a `Size`'s axes their own (see `RetargetVelocity`).
+    let inherited_velocity: RetargetVelocity;
     {
         let mut list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
         if list.iter().any(|anim| anim.state.state_id() == sid && anim.anim_state.as_ref().map(|s| s.to == target).unwrap_or(false)) { return; }
+        inherited_velocity = list.iter().find(|anim| anim.state.state_id() == sid)
+            .map(|anim| anim.retarget_velocity())
+            .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state.state_id() != sid);
     }
     let mut anim = Animatable::new(state);
-    // Color 弹簧无意义（无单一 f32 值），强制 Tween
-    let spec = match spec {
-        AnimationSpec::Spring(_) => AnimationSpec::Tween(TweenSpec::default()),
-        other => other,
-    };
-    anim.animate_to(target, spec);
+    anim.start_with_velocity(target, spec, inherited_velocity);
     anim.update();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
     // 唤醒事件循环启动推进轮次（同 push_animatable）
@@ -1425,9 +1433,44 @@ impl SpringSpec {
     pub const STIFFNESS_MEDIUM: f32 = 400.0;
     /// 刚度：高（1000——快速干脆）
     pub const STIFFNESS_HIGH: f32 = 1000.0;
+    /// M3's `StandardMotionTokens.SpringDefaultEffectsStiffness` (1600) — the spring behind
+    /// `MotionSchemeKeyTokens.DefaultEffects`.
+    pub const STIFFNESS_EFFECTS_DEFAULT: f32 = 1600.0;
+    /// M3's `StandardMotionTokens.SpringFastEffectsStiffness` (3800) — the spring behind
+    /// `MotionSchemeKeyTokens.FastEffects`.
+    pub const STIFFNESS_EFFECTS_FAST: f32 = 3800.0;
 
     pub fn bouncy() -> Self {
         Self { damping_ratio: 0.6, threshold: 0.1, ..Self::default() }
+    }
+
+    /// M3's `DefaultEffects` motion-scheme token: `spring(dampingRatio = 1.0, stiffness = 1600)`
+    /// (`material3/MotionScheme.kt:152-156`, `tokens/StandardMotionTokens.kt:22-23`). Compose's
+    /// `MotionSchemeKeyTokens.DefaultEffects.value()` resolves to exactly this spring, which is what
+    /// M3 uses for a state arriving: a checkbox filling, a radio button dot appearing, a tab's
+    /// content colour fading IN.
+    ///
+    /// The threshold is the default 0.01 — for a colour that is one eight-bit step of Oklab
+    /// lightness, and for a length one hundredth of a dp.
+    pub fn effects_default() -> Self {
+        Self {
+            damping_ratio: Self::DAMPING_RATIO_NO_BOUNCY,
+            stiffness: Self::STIFFNESS_EFFECTS_DEFAULT,
+            mass: 1.0,
+            threshold: 0.01,
+        }
+    }
+
+    /// M3's `FastEffects`: `spring(dampingRatio = 1.0, stiffness = 3800)`
+    /// (`material3/MotionScheme.kt:158-162`). M3 uses it for a state LEAVING — a checkbox emptying, a
+    /// tab's colour fading out — so the exit is quicker than the arrival.
+    pub fn effects_fast() -> Self {
+        Self {
+            damping_ratio: Self::DAMPING_RATIO_NO_BOUNCY,
+            stiffness: Self::STIFFNESS_EFFECTS_FAST,
+            mass: 1.0,
+            threshold: 0.01,
+        }
     }
 }
 
@@ -1500,33 +1543,36 @@ impl RepeatableSpec {
     }
 }
 
-/// 一个值最多拆成几条独立弹簧的位移分量（`Size`/`Offset` 是 2，`Color` 若要按通道
-/// 动画会是 4）。定长数组让每帧的推进不分配。
+/// How many independent spring components one value can be split into (`Size`/`Offset` have 2,
+/// `Color`'s Oklab `alpha, L, a, b` is exactly 4). The fixed array is what keeps a frame's step free
+/// of allocations.
 pub const MAX_ANIMATION_COMPONENTS: usize = 4;
 
-/// 可动画化的值类型
+/// A value that can be animated.
 pub trait AnimatableValue: Clone + PartialEq {
+    /// Mix towards `to` by `t` — the interpolation a Tween/Keyframes spec uses.
     fn lerp(&self, to: &Self, t: f32) -> Self;
-    /// 转换为 f32（Spring 去重用；⚠️ 非单射——Offset/Size 返回范数，仅标量类型精确）
+    /// The scalar projection (spring de-duplication; exact only for scalar types).
     fn to_f32(&self) -> f32;
-    /// 从 f32 构建（⚠️ 仅标量类型精确；向量的 from_f32 是占位）
+    /// Rebuild from that projection (exact only for scalar types; a placeholder for vectors).
     fn from_f32(v: f32) -> Self;
-    /// 精确比较目标（默认 PartialEq；f32/Dp/Offset/Size 均精确）
+    /// Exact target comparison (the default `PartialEq`).
     fn same_target(&self, other: &Self) -> bool { self == other }
-    /// 是否支持 Spring。标量类型是一条弹簧；向量类型由 [`Self::write_components`]
-    /// 拆成每个分量一条弹簧，因此也能精确表达弹簧物理。
+    /// Whether a Spring can run on this type. A scalar is one spring; a value that overrides
+    /// [`Self::write_components`] with several components runs one spring per component, which is
+    /// Compose's `VectorConverter` + `VectorizedSpringSpec`.
     fn supports_spring() -> bool { false }
-    /// 写入弹簧独立推进的分量，返回分量个数。每个分量各有一条弹簧、各自按可见阈值
-    /// 收敛——这就是 Compose 的 `VectorConverter` + `VectorizedSpringSpec`
-    /// （`IntSize.VectorConverter` 让尺寸的两个轴各有一条弹簧，因此两轴都能落到目标）。
+    /// Write the components a Spring advances independently, returning how many: each gets its own
+    /// spring and its own visibility threshold, which is how `Size` lands BOTH axes on target and how
+    /// `Color` mixes in Oklab.
     ///
-    /// 默认实现不拆分（标量类型无需覆写）。向量的 `from_f32` 非单射，必须同时覆写
-    /// 本方法与 [`Self::from_components`] 才能让 `Spring` 按分量运行。
+    /// The default does not split (a scalar needs no override). A vector must override this and
+    /// [`Self::from_components`] together — its `from_f32` is not injective.
     fn write_components(&self, out: &mut [f32; MAX_ANIMATION_COMPONENTS]) -> usize {
         out[0] = self.to_f32();
         1
     }
-    /// [`Self::write_components`] 的逆运算：由各分量的当前值重组回一个值。
+    /// The inverse of [`Self::write_components`]: rebuild a value from its components.
     fn from_components(components: &[f32]) -> Self {
         Self::from_f32(components[0])
     }
@@ -1540,21 +1586,49 @@ impl AnimatableValue for f32 {
 }
 
 impl AnimatableValue for crate::graphics::Color {
-    /// CAM16-UCS 色彩空间插值（人眼感知均匀）+ alpha 单独线性插值
-    /// （cam16_ucs 忽略 alpha，需要手动插值保持透明度动画正确）
+    /// Oklab interpolation, which is what Compose's colour animations interpolate: the vector is
+    /// `(alpha, L, a, b)` converted to Oklab (`ColorVectorConverter.kt:33-47`) and the four components
+    /// are mixed independently, then clamped on the way back. A Tween's fraction lands here; a Spring
+    /// runs one spring per component instead (see `SpringLane`).
+    ///
+    /// This replaces a CAM16-UCS blend (`material_colors::blend::cam16_ucs`) whose result is close but
+    /// not the same curve, and whose alpha had to be interpolated by hand: Oklab is one space for all
+    /// four components, and it is the one Compose uses.
     fn lerp(&self, to: &Self, t: f32) -> Self {
-        use material_colors::blend::cam16_ucs;
-        use material_colors::color::Argb;
         let t = t.clamp(0.0, 1.0);
-        // RGB 用 CAM16-UCS，alpha 用线性（cam16_ucs 返回 alpha 恒 255）
-        let from_argb = Argb::new(255, self.r, self.g, self.b);
-        let to_argb = Argb::new(255, to.r, to.g, to.b);
-        let b = cam16_ucs(from_argb, to_argb, t as f64);
-        let a = (self.a as f32 + (to.a as f32 - self.a as f32) * t).round() as u8;
-        Self::from_argb(a, b.red, b.green, b.blue)
+        let from = self.to_oklab();
+        let target = to.to_oklab();
+        let mut components = [0.0f32; 4];
+        for (i, slot) in components.iter_mut().enumerate() {
+            *slot = from[i] + (target[i] - from[i]) * t;
+        }
+        Self::from_oklab(components)
     }
-    fn to_f32(&self) -> f32 { self.a as f32 }
-    fn from_f32(v: f32) -> Self { Self::from_argb(v as u8, 0, 0, 0) }
+
+    /// The lightness component. Only the scalar fallbacks use it (Decay, and a Spring on a value that
+    /// does not declare four components) — a colour animation goes through the lanes.
+    fn to_f32(&self) -> f32 { self.to_oklab()[1] }
+
+    /// A grey at that lightness: the scalar form is a placeholder, as the trait documents.
+    fn from_f32(v: f32) -> Self { Self::from_oklab([1.0, v, 0.0, 0.0]) }
+
+    /// Compose's four components: alpha, L, a, b.
+    fn write_components(&self, out: &mut [f32; MAX_ANIMATION_COMPONENTS]) -> usize {
+        out[..4].copy_from_slice(&self.to_oklab());
+        4
+    }
+
+    fn from_components(components: &[f32]) -> Self {
+        let mut vector = [0.0f32; 4];
+        for (slot, value) in vector.iter_mut().zip(components.iter()) {
+            *slot = *value;
+        }
+        Self::from_oklab(vector)
+    }
+
+    /// A colour is a four-component value like `Size`/`Offset`, so a Spring is a spring per component
+    /// rather than a replacement motion.
+    fn supports_spring() -> bool { true }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1792,23 +1866,107 @@ pub(crate) mod tests {
         assert!(saw_low, "reverse should return near from=0.4");
     }
 
+    /// M3's motion-scheme effect springs, pinned to the token values they mirror
+    /// (`tokens/StandardMotionTokens.kt:22-27`): both critically damped, 1600 for an arriving state
+    /// and 3800 for a leaving one.
     #[test]
-    fn color_lerp_uses_cam16_and_preserves_alpha() {
+    fn the_effects_springs_are_m3s_tokens() {
+        let arriving = SpringSpec::effects_default();
+        assert_eq!(arriving.damping_ratio, 1.0);
+        assert_eq!(arriving.stiffness, 1600.0, "SpringDefaultEffectsStiffness");
+        let leaving = SpringSpec::effects_fast();
+        assert_eq!(leaving.damping_ratio, 1.0);
+        assert_eq!(leaving.stiffness, 3800.0, "SpringFastEffectsStiffness");
+        assert!(leaving.stiffness > arriving.stiffness, "leaving is quicker than arriving");
+        assert_eq!(arriving.threshold, 0.01, "the default visibility threshold");
+    }
+
+    /// Compose interpolates a colour in Oklab — `ColorVectorConverter.convertToVector` hands the
+    /// animation `AnimationVector4D(alpha, L, a, b)` (`animation/ColorVectorConverter.kt:33-47`), so a
+    /// Tween's fraction is applied to those four components rather than to the sRGB bytes or to a
+    /// CAM16 blend.
+    #[test]
+    fn color_lerp_interpolates_in_oklab() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::graphics::Color;
-        // 蓝 → 红，alpha 128 → 255
         let from = Color::from_argb(128, 33, 150, 243);
         let to = Color::from_argb(255, 255, 82, 82);
         let mid = from.lerp(&to, 0.5);
-        // alpha 应线性插值（≈191）
+
+        let (a, b) = (from.to_oklab(), to.to_oklab());
+        let mut half = [0.0f32; 4];
+        for i in 0..4 {
+            half[i] = a[i] + (b[i] - a[i]) * 0.5;
+        }
+        assert_eq!(mid, Color::from_oklab(half), "the midpoint is the component-wise Oklab midpoint");
         assert!((mid.a as i32 - 191).abs() <= 1, "alpha={} should be ~191", mid.a);
-        // RGB 应在蓝和红之间（非灰暗：r 和 b 至少一个 > 100）
         assert!(mid.r > 100 || mid.b > 100, "mid={:?} should not be grayish", mid);
-        // 端点保持
-        let start = from.lerp(&to, 0.0);
-        assert_eq!(start, from);
-        let end = from.lerp(&to, 1.0);
-        assert_eq!(end, to);
+        assert_eq!(from.lerp(&to, 0.0), from);
+        assert_eq!(from.lerp(&to, 1.0), to);
+
+        // The perceptual midpoint, which the encoded-byte blend does not produce.
+        assert_eq!(
+            Color::BLACK.lerp(&Color::WHITE, 0.5),
+            Color::from_argb(255, 99, 99, 99),
+            "black -> white at 50% is Oklab L 0.5 (#636363), not #7F7F7F"
+        );
+    }
+
+    /// A colour spring is a spring: one per Oklab component, so the lightness follows the same curve a
+    /// scalar `f32` spring does under the same spec — and not the 300 ms linear tween the engine used
+    /// to substitute for it (the property this test was written to pin).
+    ///
+    /// The endpoints are mid-tones on purpose: winia stores a colour as eight-bit sRGB, so the visible
+    /// value moves in byte steps (near black one step is 0.067 of Oklab L; at these greys it is 0.004),
+    /// which is the recorded deviation from Compose's float components.
+    #[test]
+    fn a_colour_spring_runs_on_every_component() {
+        use std::time::Duration;
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        super::tests::clear_all_animations();
+
+        let from = crate::graphics::Color::from_argb(255, 0x40, 0x40, 0x40);
+        let to = crate::graphics::Color::from_argb(255, 0xC8, 0xC8, 0xC8);
+        let (from_l, to_l) = (from.to_oklab()[1], to.to_oklab()[1]);
+        let color = State::new(from);
+        let scalar: State<f32> = State::new(from_l);
+        let tweened = State::new(from);
+        let spec = AnimationSpec::Spring(SpringSpec::default());
+        push_animatable_color(color.clone(), to, spec.clone());
+        push_animatable(scalar.clone(), to_l, spec);
+        push_animatable_color(
+            tweened.clone(),
+            to,
+            AnimationSpec::Tween(TweenSpec::default()),
+        );
+
+        let mut frames = 0;
+        let mut max_spring_gap = 0.0f32;
+        let mut max_tween_gap = 0.0f32;
+        for _ in 0..2_000 {
+            if !update_animations() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(8));
+            let lightness = color.peek().to_oklab()[1];
+            max_spring_gap = max_spring_gap.max((lightness - scalar.peek()).abs());
+            max_tween_gap = max_tween_gap.max((lightness - tweened.peek().to_oklab()[1]).abs());
+            frames += 1;
+        }
+        let total = color.peek();
+        assert!(frames > 20, "the loop sampled the motion (frames={frames})");
+        assert!(
+            max_spring_gap <= 0.006,
+            "the colour's lightness follows the scalar spring under the same spec, one byte step \
+             apart at most (largest gap={max_spring_gap})"
+        );
+        assert!(
+            max_tween_gap > 0.03,
+            "…and is NOT the linear tween the engine used to substitute for a colour spring \
+             (largest gap={max_tween_gap})"
+        );
+        assert_eq!(total, to, "the spring lands exactly on target");
+        assert!(tweened.peek() == to, "the tween does too, and in its own time");
     }
 
     #[test]

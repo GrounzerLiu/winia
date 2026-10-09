@@ -102,7 +102,7 @@
 - `AnimationSpec { Spring/Tween/Keyframes/Repeatable/Snap }` + `SpringSpec/TweenSpec/KeyframesSpec/RepeatableSpec/InfiniteRepeatableSpec`
 
 **值类型**（AnimatableValue trait：lerp/to_f32/from_f32/supports_spring）：
-- `f32`、`Color`（CAM16-UCS 感知均匀插值 + alpha 线性）、`Dp`/`Sp`/`Offset`/`Size`（unit.rs:201-223）
+- `f32`; `Color` (four Oklab components `alpha, L, a, b`, one spring each); `Dp`/`Sp`/`Offset`/`Size` (unit.rs:201-223)
 
 **插值器**：31 种（`Linear` + `EaseIn/Out/InOut` × Sine/Quad/Cubic/Quart/Quint/Expo/Circ/Back/Elastic/Bounce = 30）——**超过 Compose 内置常量**（Compose 仅 ~10 个 + 自定义 bezier）
 
