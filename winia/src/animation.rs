@@ -258,6 +258,7 @@ pub fn push_animatable_with_velocity_and_done<
         return;
     }
     let sid = handle.state_id();
+    let spec = normalise_multi_component_decay(spec, &handle.peek());
     // A type declaring `supports_spring() == false` (`SharedBounds`, say) has no per-component
     // springs to run, so a Spring is downgraded to the default Tween rather than falling into the
     // single scalar displacement that travels along the value's norm.
@@ -307,6 +308,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         cancel_animation_by_id(sid);
     }
     let inherited_velocity: RetargetVelocity;
+    let spec = normalise_multi_component_decay(spec, &state.peek());
     // 同 `push_animatable_with_velocity_and_done`：只有声明不支持 Spring 的类型才降级
     let spec = if T::supports_spring() {
         spec
@@ -337,13 +339,31 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
     crate::runtime::state::wake_loop();
 }
 
+/// A `Decay` on a value with several components cannot be run by this engine: the decay branch works
+/// on one scalar (`state.from.to_f32() + v0/friction*(…)`) and rebuilds the value through
+/// `AnimatableValue::from_f32`, which for `Size`, `Offset` and `Color` is a placeholder — a square, or
+/// (measured, before this guard) an opaque GREY at the old Oklab lightness, written on the first frame
+/// because the push paths supply a zero initial velocity so the decay reports itself finished at once.
+/// None of the entry points can take a per-component velocity, so the honest outcome is the target:
+/// a multi-component `Decay` becomes `Snap`. Scalar decays (the fling/deceleration path) are untouched.
+fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, value: &T) -> AnimationSpec {
+    if matches!(spec, AnimationSpec::Decay(_)) {
+        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+        if value.write_components(&mut components) > 1 {
+            return AnimationSpec::Snap;
+        }
+    }
+    spec
+}
+
 /// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
 ///
 /// The spec is honoured as written, springs included: a `Color` is a four-component value (Oklab
 /// `alpha, L, a, b`), so `Animatable::start_with_velocity` gives it one spring per component, the way
 /// Compose's `Color.VectorConverter` does. Until this, a colour spring was silently replaced by a
 /// 300 ms linear tween — the caller asked for a spring and got a different motion (measured on
-/// `Tab`'s content colour, whose `SpringSpec` never ran).
+/// `Tab`'s content colour, whose `SpringSpec` never ran). A `Decay` is the one spec that still cannot
+/// run here: see `normalise_multi_component_decay`.
 pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
     
     if state.peek() == target {
@@ -375,6 +395,7 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
             .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state.state_id() != sid);
     }
+    let spec = normalise_multi_component_decay(spec, &state.peek());
     let mut anim = Animatable::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     anim.update();
@@ -1395,7 +1416,9 @@ impl From<DecaySpec> for AnimationSpec {
     fn from(s: DecaySpec) -> Self { AnimationSpec::Decay(s) }
 }
 
-#[derive(Clone, Debug)]
+/// The physical constants of a spring animation (`AnimationSpec::Spring`). `PartialEq` so a component
+/// can assert the spec it hands the engine is the motion-scheme token it claims to be.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SpringSpec {
     pub damping_ratio: f32,
     pub stiffness: f32,
@@ -1879,6 +1902,37 @@ pub(crate) mod tests {
         assert_eq!(leaving.stiffness, 3800.0, "SpringFastEffectsStiffness");
         assert!(leaving.stiffness > arriving.stiffness, "leaving is quicker than arriving");
         assert_eq!(arriving.threshold, 0.01, "the default visibility threshold");
+    }
+
+    /// A `Decay` on a colour used to write an opaque grey through the scalar fallback (the fallback's
+    /// `from_f32` is a grey at the old Oklab lightness) and to do it on the first frame, because the
+    /// push path supplies a zero initial velocity and the decay then reports itself finished at once.
+    /// Multi-component decays are normalised to `Snap`, so the colour lands on the target instead.
+    #[test]
+    fn a_decay_on_a_colour_lands_on_the_target_not_on_a_grey() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        super::tests::clear_all_animations();
+        let from = crate::graphics::Color::from_argb(255, 33, 150, 243);
+        let to = crate::graphics::Color::from_argb(255, 244, 67, 54);
+        let state = State::new(from);
+        push_animatable_color(state.clone(), to, AnimationSpec::Decay(DecaySpec::default()));
+        let grey = crate::graphics::Color::from_oklab([1.0, from.to_oklab()[1], 0.0, 0.0]);
+        let value = state.peek();
+        assert_ne!(value, grey, "the decay must not paint the placeholder grey");
+        assert_eq!(value, to, "and it lands exactly on the target");
+        assert!(!update_animations(), "nothing is left running");
+    }
+
+    /// The same rule for the other placeholder types: a `Size` decay used to travel along the area
+    /// norm through `from_f32` (a square at the origin).
+    #[test]
+    fn a_decay_on_a_size_lands_on_the_target_too() {
+        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        super::tests::clear_all_animations();
+        let state = State::new(crate::unit::Size::new(10.0, 10.0));
+        let target = crate::unit::Size::new(80.0, 20.0);
+        push_animatable(state.clone(), target, AnimationSpec::Decay(DecaySpec::default()));
+        assert_eq!(state.peek(), target, "the size snaps to the target, not to a square at the origin");
     }
 
     /// Compose interpolates a colour in Oklab — `ColorVectorConverter.convertToVector` hands the
