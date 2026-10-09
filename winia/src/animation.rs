@@ -1573,11 +1573,16 @@ impl TweenSpec {
 }
 
 impl Default for TweenSpec {
+    /// Compose's `tween()` with no arguments: `Duration = DefaultDurationMillis` (300 ms) and
+    /// `easing = FastOutSlowInEasing` (`animation/core/AnimationSpec.kt:816-820`,
+    /// `core/Easing.kt:50`). Linear interpolation is NOT the default there — a tween that eases in and
+    /// out is — so `TweenSpec::new(duration, interpolator::Linear::new())` is what an explicitly linear
+    /// ramp looks like.
     fn default() -> Self {
         Self {
             duration: Duration::from_millis(300),
             delay: Duration::ZERO,
-            interpolator: std::sync::Arc::new(interpolator::Linear::new()),
+            interpolator: std::sync::Arc::new(interpolator::fast_out_slow_in()),
         }
     }
 }
@@ -3095,9 +3100,17 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     fn tween_uses_table_interpolator() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
-        // 1. default 是 Linear 包装（恒等）
+        // 1. The default is Compose's `tween()` easing, `FastOutSlowIn` — not a linear ramp. Its
+        //    midpoint sits at 0.776 (see `interpolator::tests` for the solved reference values).
         let t = TweenSpec::default();
-        assert_eq!(t.interpolator.interpolate(0.5), 0.5, "默认 linear 中点 = 0.5");
+        assert!(
+            (t.interpolator.interpolate(0.5) - 0.7756).abs() < 0.01,
+            "默认缓动是 FastOutSlowIn，中点 = {}",
+            t.interpolator.interpolate(0.5)
+        );
+        // 1b. An explicitly linear ramp still is one — `TweenSpec::new(dur, Linear::new())`.
+        let linear = TweenSpec::new(Duration::from_millis(300), Linear::new());
+        assert_eq!(linear.interpolator.interpolate(0.5), 0.5, "显式 Linear 中点 = 0.5");
         // 2. 表驱动曲线生效（EaseInQuad 中点 < 0.5——缓入）
         let ease = Arc::new(EaseInQuad::new());
         assert!(ease.interpolate(0.5) < 0.5, "EaseInQuad 中点应 < 0.5（缓入）");
@@ -3120,10 +3133,16 @@ fn test_infinite_transition_manual_dispose_idempotent() {
             "EaseInQuad 推进 60ms 应远小于 linear（实际 {}，linear 约 20）",
             v
         );
-        // 对照：linear 同参数推进 ≈ 20
+        // 对照：同一个 300 ms tween，用它自己声明的插值器推进 ≈ 20
         let st2 = State::new(0.0f32);
         let mut anim2 = Animatable::new(st2.clone());
-        anim2.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
+        anim2.animate_to(
+            100.0,
+            AnimationSpec::Tween(TweenSpec::new(
+                Duration::from_millis(300),
+                crate::animation::interpolator::Linear::new(),
+            )),
+        );
         std::thread::sleep(Duration::from_millis(60));
         anim2.update();
         assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
