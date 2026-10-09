@@ -99,6 +99,14 @@ impl RadioButtonDefaults {
     }
 }
 
+/// The radio's colour spec: M3 animates it with `animateColorAsState(target,
+/// MotionSchemeKeyTokens.DefaultEffects.value())` (`material3/RadioButton.kt:237`) — a critically damped
+/// spring (1.0 / 1600), not a 300 ms linear tween, which is what this component used while the engine
+/// could not put a colour on a spring at all. Named so the token is assertable.
+fn radio_colour_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::effects_default()
+}
+
 /// 共享实现（对标 M3 `RadioButtonImpl`）。
 /// #[composable]：内部圆环/内点叶子节点语句注入——多实例隔离
 #[allow(clippy::too_many_arguments)]
@@ -122,13 +130,8 @@ fn radio_button_impl(
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let color = colors.radio_color(enabled, selected);
 
-    // The radio's colour, per M3: `animateColorAsState(target, MotionSchemeKeyTokens.DefaultEffects.value())`
-    // (`material3/RadioButton.kt:237`) — a critically damped spring (stiffness 1600), not a 300 ms
-    // linear tween, which is what this used to be while the engine could not animate a colour on a
-    // spring at all.
-    let color_spec = crate::animation::AnimationSpec::Spring(
-        crate::animation::SpringSpec::effects_default(),
-    );
+    // The radio's colour, per M3 — see `radio_colour_spec`.
+    let color_spec = crate::animation::AnimationSpec::Spring(radio_colour_spec());
     let color_anim = ctx.animate_color_as_state(color, color_spec);
 
     // 内点出现/消失动画：scale 0↔1（Spring StiffnessMedium(400)/NoBouncy——对齐
@@ -300,6 +303,15 @@ impl RadioButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M3's `DefaultEffects` (spring 1.0/1600) and nothing else: a silent return to a tween fails here.
+    #[test]
+    fn the_colour_spec_is_m3s_default_effects_spring() {
+        let spec = radio_colour_spec();
+        assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+        assert_eq!(spec.damping_ratio, 1.0);
+        assert_eq!(spec.stiffness, 1600.0);
+    }
 
     #[test]
     fn color_state_resolution() {

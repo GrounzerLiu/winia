@@ -393,6 +393,18 @@ pub(crate) struct TextFieldLayout {
 ///
 /// `constrain_height` honours a tight parent as well, so a fixed-height field (a 40dp pill) still centres
 /// its slots in 40.
+/// The colour spec for the field's focus transition: M3's `FastEffects` spring (1.0 / 3800), which is
+/// what `TextFieldDefaults` passes to `animateColorAsState` (`material3/TextFieldDefaults.kt:246-248`
+/// for the filled style, `:1068-1070` for the outlined one) instead of a 100 ms tween.
+///
+/// Recorded deviation: Compose animates `colors.containerColor(enabled, isError, focused)` there —
+/// the CONTAINER. winia has no container-colour transition in this component and animates the
+/// indicator/border colour instead, so the spring matches while the animated object does not
+/// (`indicator_color` is not animated by M3). Named so the token is assertable.
+fn text_field_colour_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::effects_fast()
+}
+
 fn text_field_content_height(constraints: &crate::layout::Constraints, supporting_h: f32, input_height: f32) -> f32 {
     constraints.constrain_height(input_height + supporting_h)
 }
@@ -1486,12 +1498,11 @@ impl TextField {
                     else if self.is_error { colors.error_supporting }
                     else { colors.supporting },
             });
-            // The indicator colour is M3's `FastEffects` spring
-            // (`material3/TextFieldDefaults.kt:246-248`, `:1068-1070`: `animateColorAsState(…,
-            // animationSpec = MotionSchemeKeyTokens.FastEffects.value())`), not a 100 ms tween.
+            // The indicator colour follows M3's `FastEffects` spring — see `text_field_colour_spec`,
+            // which also records where winia animates a different object than Compose does.
             let indicator_anim = ctx.animate_color_as_state(
                 colors.indicator_color(self.enabled, self.is_error, focused),
-                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_fast()),
+                crate::animation::AnimationSpec::Spring(text_field_colour_spec()),
             );
             let focus_progress = ctx.animate_float_as_state(
                 if focused { 1.0 } else { 0.0 },
@@ -1915,6 +1926,15 @@ mod tests {
     use crate::text::field::text_field_show_cursor;
     use crate::runtime::composer::Composer;
     use crate::modifier::ModifierElement;
+
+    /// M3's `FastEffects` spring and nothing else; a silent return to the old 100 ms tween fails here.
+    #[test]
+    fn the_focus_colour_spec_is_m3s_fast_effects_spring() {
+        let spec = text_field_colour_spec();
+        assert_eq!(spec, crate::animation::SpringSpec::effects_fast());
+        assert_eq!(spec.damping_ratio, 1.0);
+        assert_eq!(spec.stiffness, 3800.0);
+    }
 
     fn find_text_content(modifier: &Modifier) -> Option<String> {
         modifier.elements().iter().find_map(|el| {

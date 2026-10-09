@@ -167,6 +167,19 @@ impl CheckboxDefaults {
     }
 }
 
+/// The colour spec M3 picks for a checkbox state — its `colorAnimationSpecForState`
+/// (`material3/Checkbox.kt:685-694`): the box EMPTYING uses `FastEffects` (spring 1.0/3800) and every
+/// other state, including indeterminate, uses `DefaultEffects` (spring 1.0/1600), so the fill arrives
+/// more slowly than it leaves. Kept as a named function so a change from these springs to a tween
+/// fails a test instead of only changing how the component feels.
+fn checkbox_color_spec(state: ToggleableState) -> crate::animation::SpringSpec {
+    if state == ToggleableState::Off {
+        crate::animation::SpringSpec::effects_fast()
+    } else {
+        crate::animation::SpringSpec::effects_default()
+    }
+}
+
 /// 共享实现（对标 M3 `CheckboxImpl`）——`Checkbox` 与 `TriStateCheckbox` 共用。
 /// #[composable]：内部组合子组件（Icon×2）调用语句注入——多实例隔离
 /// （勾号/横线两个 Icon 同调用位置靠语句 id 区分）
@@ -203,15 +216,9 @@ fn checkbox_impl(
         stiffness: crate::animation::SpringSpec::STIFFNESS_MEDIUM,
         ..crate::animation::SpringSpec::default()
     });
-    // The container/border colour, animated per state the way M3 does:
-    // `animateColorAsState(target, colorAnimationSpecForState(state))` (`material3/Checkbox.kt:685-694`)
-    // picks `FastEffects` while the box empties (`Off`) and `DefaultEffects` otherwise — both
-    // critically damped springs (see `SpringSpec::effects_*`), so the arrival is slower than the exit.
-    let color_spec = crate::animation::AnimationSpec::Spring(if state == ToggleableState::Off {
-        crate::animation::SpringSpec::effects_fast()
-    } else {
-        crate::animation::SpringSpec::effects_default()
-    });
+    // The container/border colour, animated per state the way M3 does — see
+    // `checkbox_color_spec` for the reference and the two branches.
+    let color_spec = crate::animation::AnimationSpec::Spring(checkbox_color_spec(state));
     let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
     let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
 
@@ -495,6 +502,20 @@ mod tests {
         assert!(ToggleableState::Indeterminate.is_checked());
         assert!(!ToggleableState::Off.is_checked());
         assert!(ToggleableState::Indeterminate.is_indeterminate());
+    }
+
+    /// The colour spec per state, pinned to M3's tokens: leaving (`Off`) is the faster spring, every
+    /// other state the slower one. A silent return to a 300 ms tween fails here.
+    #[test]
+    fn the_colour_spec_is_m3s_effect_spring_per_state() {
+        let leaving = checkbox_color_spec(ToggleableState::Off);
+        assert_eq!(leaving, crate::animation::SpringSpec::effects_fast());
+        assert_eq!(leaving.stiffness, 3800.0);
+        for state in [ToggleableState::On, ToggleableState::Indeterminate] {
+            let arriving = checkbox_color_spec(state);
+            assert_eq!(arriving, crate::animation::SpringSpec::effects_default(), "{state:?}");
+            assert_eq!(arriving.stiffness, 1600.0, "{state:?}");
+        }
     }
 
     #[test]

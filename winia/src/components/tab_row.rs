@@ -617,6 +617,22 @@ impl MeasurePolicy for TabRowLayoutPolicy {
     }
 }
 
+/// The spec a `Tab` animates its content colour with, following Compose's `TabTransition`
+/// (`material3/Tab.kt:270-291`): a `updateTransition(selected)` whose `animateColor` picks
+/// `DefaultEffects` when `false isTransitioningTo true` — i.e. while the tab is ARRIVING at the
+/// selected colour — and `FastEffects` otherwise, so leaving the selected state is the quicker move.
+/// (`Tab.kt` has no `animateColorAsState`; it is this transition that carries the direction.)
+///
+/// Kept as a function so both directions are assertable: a change back to one spring for both, or to a
+/// tween, fails a test rather than only changing how a tab feels.
+fn tab_colour_spec(arriving: bool) -> crate::animation::SpringSpec {
+    if arriving {
+        crate::animation::SpringSpec::effects_default()
+    } else {
+        crate::animation::SpringSpec::effects_fast()
+    }
+}
+
 /// TabRow children are `[tabs.., divider, indicator]`; the divider and the indicator are placed
 /// inside the row's height, so neither prices it.
 fn tab_count_of(children: &[usize]) -> usize {
@@ -784,19 +800,13 @@ impl Tab {
             TabRowDefaults::unselected_content_color(&theme)
         });
 
-        // The content colour, animated per Compose's `TabTransition` (`material3/Tab.kt:270-291`):
-        // `updateTransition(selected)` + `animateColor(transitionSpec = { if (false isTransitioningTo
-        // true) DefaultEffects else FastEffects })` — so ARRIVING at the selected colour uses the
-        // slower default spring and leaving it the faster one. The remembered `was_selected` is what
-        // says which side of that transition this frame is on.
+        // The content colour, animated per Compose's `TabTransition` — see `tab_colour_spec` for the
+        // reference and why the direction decides the spec. The remembered `was_selected` is what says
+        // which side of that transition this frame is on.
         let was_selected = ctx.remember(|| selected);
         let arriving = selected && !was_selected.peek();
         was_selected.set(selected);
-        let color_spec = crate::animation::AnimationSpec::Spring(if arriving {
-            crate::animation::SpringSpec::effects_default()
-        } else {
-            crate::animation::SpringSpec::effects_fast()
-        });
+        let color_spec = crate::animation::AnimationSpec::Spring(tab_colour_spec(arriving));
         let color_anim = ctx.animate_color_as_state(if selected { sel_color } else { unsel_color }, color_spec);
 
         let has_text = self.text.is_some();
@@ -1609,6 +1619,18 @@ mod tests {
     use crate::layout::constraints::Constraints;
     use crate::layout::components::Row;
     use crate::components::text::Text;
+
+    /// `TabTransition`'s direction rule, pinned: arriving uses the slower default spring, leaving the
+    /// faster one. One spring for both directions (or a tween) fails here.
+    #[test]
+    fn the_content_colour_spec_follows_the_tab_transition_direction() {
+        let arriving = tab_colour_spec(true);
+        assert_eq!(arriving, crate::animation::SpringSpec::effects_default());
+        assert_eq!(arriving.stiffness, 1600.0);
+        let leaving = tab_colour_spec(false);
+        assert_eq!(leaving, crate::animation::SpringSpec::effects_fast());
+        assert_eq!(leaving.stiffness, 3800.0);
+    }
 
     fn tab_row_layout(
         selected: usize,

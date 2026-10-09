@@ -209,11 +209,10 @@ impl TopAppBar {
         let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0);
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
         let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
-            // M3 animates this one with `MotionSchemeKeyTokens.DefaultEffects.value()`
-            // (`material3/AppBar.kt:2529-2532`) — a critically damped spring, not an 180 ms tween.
+            // M3 animates this one with DefaultEffects — see `top_app_bar_container_spec`.
             ctx.animate_color_as_state(
                 target_container,
-                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default()),
+                crate::animation::AnimationSpec::Spring(top_app_bar_container_spec()),
             )
         } else {
             crate::runtime::state::State::new(target_container)
@@ -252,6 +251,14 @@ fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut Comp
 fn alpha(fraction: f32) -> Modifier { Modifier::new().graphics_layer(move || GraphicsLayerParams { alpha: 1.0 - fraction, clip: true, ..Default::default() }) }
 fn expanded_height(v: TopAppBarVariant) -> f32 { match v { TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => TOP_APP_BAR_HEIGHT, TopAppBarVariant::Medium => TOP_APP_BAR_MEDIUM_HEIGHT, TopAppBarVariant::Large => TOP_APP_BAR_LARGE_HEIGHT } }
 fn expanded_title_style(v: TopAppBarVariant) -> TextStyle { let t = WiniaTheme::typography(); match v { TopAppBarVariant::Medium => t.headline_small, TopAppBarVariant::Large => t.headline_medium, _ => t.title_large } }
+
+/// The container-colour spec for the two bar variants that animate it: M3 uses `DefaultEffects`
+/// (`material3/AppBar.kt:2529-2532`: `animateColorAsState(…, MotionSchemeKeyTokens.DefaultEffects.value())`),
+/// a critically damped spring at 1.0/1600, where winia used an 180 ms tween. The medium and large
+/// variants do not animate the container in either implementation.
+fn top_app_bar_container_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::effects_default()
+}
 fn title_style(mut s: TextStyle, color: Color) -> TextStyle { s.color = Some(color); s.max_lines = Some(1); s.overflow = Some(TextOverflow::Ellipsis); s }
 
 #[derive(Debug, Clone)]
@@ -291,6 +298,13 @@ mod tests {
     fn layout(bar: TopAppBar, w: f32) -> Composer { let mut c = Composer::new(); c.compose(|ctx| bar.build(ctx)); c.layout(Constraints::new(0.0, w, 0.0, 200.0)); c }
     fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new().size(w, h)); ctx.end_node(); }
     #[test] fn variants_have_expected_heights() { for (bar,h) in [(TopAppBar::new(|_| {}),64.),(TopAppBar::center_aligned(|_| {}),64.),(TopAppBar::medium(|_| {}),112.),(TopAppBar::large(|_| {}),152.)] { let c=layout(bar,400.); assert_eq!(c.arena_nodes()[c.layout_root_idx().unwrap()].measured_size.height,h); } }
+
+    /// M3's `DefaultEffects` spring, not the 180 ms tween this used to be.
+    #[test] fn the_container_colour_spec_is_m3s_default_effects_spring() {
+        let spec = top_app_bar_container_spec();
+        assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+        assert_eq!(spec.stiffness, 1600.0);
+    }
     #[test] fn scroll_behavior_clamps_fraction() { let s=ScrollState::new(); assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| TopAppBarScrollBehavior::new(s.clone(),63.))).is_err()); let b=TopAppBarScrollBehavior::new(s.clone(),152.); s.offset.set(44.); assert!((b.collapse_fraction() - 0.5).abs()< 0.001); assert_eq!(b.current_height(),108.); }
     #[test] fn single_title_moves_to_collapsed_row_without_subtitle_offset() { let s=ScrollState::new(); s.offset.set(1000.); let with_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s.clone(),152.)),400.); let without_sub=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).navigation_icon(|ctx| leaf(ctx,24.,24.)).actions(|ctx| leaf(ctx,72.,24.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let a=with_sub.layout_root_idx().unwrap(); let b=without_sub.layout_root_idx().unwrap(); let an=with_sub.arena_nodes(); let bn=without_sub.arena_nodes(); assert_eq!(an[a].measured_size.height,64.); assert_eq!(an[an[a].children[1]].position.y,22.); assert_eq!(an[an[a].children[1]].position.y,bn[bn[b].children[1]].position.y); assert_eq!(an[an[a].children[0]].position.y,8.); }
     #[test] fn title_y_moves_continuously_at_mid_fraction() { let s=ScrollState::new(); s.offset.set(44.); let c=layout(TopAppBar::large(|ctx| leaf(ctx,100.,20.)).subtitle(|ctx| leaf(ctx,80.,16.)).scroll_behavior(TopAppBarScrollBehavior::new(s,152.)),400.); let root=c.layout_root_idx().unwrap(); let n=c.arena_nodes(); let y=n[n[root].children[1]].position.y; assert!(y>22. && y<80.); assert_eq!(n[root].measured_size.height,108.); }
