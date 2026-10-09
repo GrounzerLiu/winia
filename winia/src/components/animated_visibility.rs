@@ -34,7 +34,10 @@
 //! - **One default, both axes.** Compose picks the default axis from the scope — `RowScope` expands
 //!   horizontally, `ColumnScope` vertically, the top level expands both (`AnimatedVisibility.kt:125-129`,
 //!   `:199-203`, `:272-276`) — while winia has one default (both axes) plus the explicit
-//!   `expand_in_h`/`with_expand_h` builders for the horizontal case.
+//!   `expand_in_h`/`with_expand_h` builders for the horizontal case. The default ANCHORS differ too:
+//!   Compose's top-level `expandIn`/`shrinkOut` use `Alignment.BottomEnd` (`EnterExitTransition.kt:529-535`,
+//!   `:569-575`), where winia's default is `ExpandFrom::Top`/`ExpandFromH::Start` — Compose's
+//!   `ColumnScope`/`RowScope` shape, which is what a plain `AnimatedVisibility` in a column reads as.
 //! - **No `MutableTransitionState`.** Winia takes a `State<bool>`, and the scope's progress covers what
 //!   `isIdle`/`currentState` are read for. Compose also allows an initial state different from the first
 //!   target through that type (`Transition.kt:796`); winia's first composition is always the initial
