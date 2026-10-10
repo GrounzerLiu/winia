@@ -413,13 +413,18 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
     crate::runtime::state::wake_loop();
 }
 
-/// A `Decay` on a value with several components cannot be run by this engine: the decay branch works
-/// on one scalar (`state.from.to_f32() + v0/friction*(…)`) and rebuilds the value through
+/// A `Decay` reaching the TARGET-based entry points (`push_animatable*`, which carry a target and no
+/// velocity) on a value with several components becomes `Snap`: this engine's target-based decay branch
+/// works on one scalar (`state.from.to_f32() + v0/friction*(…)`) and rebuilds the value through
 /// `AnimatableValue::from_f32`, which for `Size`, `Offset` and `Color` is a placeholder — a square, or
 /// (measured, before this guard) an opaque GREY at the old Oklab lightness, written on the first frame
 /// because the push paths supply a zero initial velocity so the decay reports itself finished at once.
-/// None of the entry points can take a per-component velocity, so the honest outcome is the target:
-/// a multi-component `Decay` becomes `Snap`. Scalar decays (the fling/deceleration path) are untouched.
+///
+/// A real vector fling takes a velocity OF THE VALUE'S OWN TYPE, and that path exists:
+/// `push_decay_vector(state, Offset::new(100.0, -60.0), spec)` (or
+/// `Animatable::animate_decay_with_velocity`) gives every component its own decay, the way Compose's
+/// `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec: DecayAnimationSpec<T>)` does.
+/// Scalar decays (the fling/deceleration path) are untouched.
 fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, value: &T) -> AnimationSpec {
     if matches!(spec, AnimationSpec::Decay(_)) {
         let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
@@ -529,6 +534,29 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     // 唤醒事件循环启动推进轮次（同 push_animatable）
+    crate::runtime::state::wake_loop();
+}
+
+/// A fling whose initial velocity has the value's own type — Compose's
+/// `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec: DecayAnimationSpec<T>)` for a
+/// multi-component value (`Offset`, `Size`, `Color`): every component decays with the velocity it was
+/// given and parks on its own limit, so `Offset(100, -60)` travels up and left independently instead of
+/// collapsing to one scalar direction. The counterpart of `push_decay`, which is scalar; a boundary
+/// clamp is scalar too, so this entry point has none.
+pub fn push_decay_vector<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    velocity: T,
+    spec: DecaySpec,
+) {
+    let sid = state.state_id();
+    {
+        let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
+        list.retain(|anim| anim.state_id() != sid);
+    }
+    let mut anim = Animatable::new(state);
+    anim.animate_decay_with_velocity(velocity, spec);
+    anim.update();
+    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     crate::runtime::state::wake_loop();
 }
 
@@ -831,6 +859,18 @@ struct AnimationState<T> {
     /// `VectorizedSpringSpec` 语义。`None` 表示单分量：走下面的标量位移
     /// （`current_displacement`），标量类型与 Tween/Keyframes 等一律走它。
     lanes: Option<Vec<SpringLane>>,
+    /// A fling on a multi-component value: one exponential decay per component — Compose's
+    /// `DecayAnimationSpec<T>` vectorized through the type's `VectorConverter` (each axis its own
+    /// velocity and its own rest threshold; the motion ends when EVERY component is at rest).
+    /// `None` means the scalar path (`initial_velocity` + `from.to_f32()`).
+    decay_lanes: Option<Vec<DecayLane>>,
+}
+
+/// One component's exponential decay: where it started and the velocity it started with. The motion is
+/// analytic (no accumulators), so a lane needs nothing else.
+struct DecayLane {
+    from: f32,
+    velocity: f32,
 }
 
 /// 一条分量弹簧：目标值 + 该分量的位移与速度（标量路径的字段按分量复制一份）。
@@ -938,16 +978,19 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             current_displacement: displacement,
             initial_velocity: 0.0,
             lanes,
+            decay_lanes: None,
         });
     }
 
-    /// 以初始速度启动指数衰减（fling/惯性滚动）——无目标值，自然停止。
+    /// Start an exponential decay from an initial speed (fling / inertial scrolling) — no target value,
+    /// it simply comes to rest. Analytic form `value(t) = from + v0/friction·(1 - e^(-friction·t))`, and
+    /// it finishes once `|v0·e^(-friction·t)| < threshold`, parking on the exact limit.
     ///
-    /// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
-    /// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
-    ///
-    /// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
-    /// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+    /// SCALAR ONLY: this goes through `AnimatableValue::to_f32/from_f32`, so a value with several
+    /// components would collapse into one motion along its norm — usable for f32 (scroll offsets and
+    /// the like). For a value of several components use `animate_decay_with_velocity`, whose initial
+    /// velocity has the value's own type, exactly as Compose's
+    /// `Animatable<T>.animateDecay(initialVelocity: T, …)` takes one.
     pub fn animate_decay(&mut self, initial_velocity: f32, spec: DecaySpec) {
         let from = self.state.peek();
         self.anim_state = Some(AnimationState {
@@ -960,6 +1003,46 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
             current_displacement: 0.0,
             initial_velocity,
             lanes: None,
+            decay_lanes: None,
+        });
+    }
+
+    /// A fling on a value whose initial velocity is the value type itself — Compose's
+    /// `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec: DecayAnimationSpec<T>)`,
+    /// vectorized through the type's converter: every component decays with its own velocity and rests
+    /// on its own threshold, and the motion ends when all of them are at rest. A value with a single
+    /// component falls back to the scalar path (identical result, less bookkeeping).
+    pub fn animate_decay_with_velocity(&mut self, velocity: T, spec: DecaySpec) {
+        let from = self.state.peek();
+        let mut velocities = [0.0f32; MAX_ANIMATION_COMPONENTS];
+        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+        let v_len = velocity.write_components(&mut velocities);
+        let from_len = from.write_components(&mut components);
+        let decay_lanes = if v_len == from_len && v_len > 1 {
+            Some(
+                (0..v_len)
+                    .map(|i| DecayLane { from: components[i], velocity: velocities[i] })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        let scalar_velocity = if decay_lanes.is_some() {
+            0.0
+        } else {
+            AnimatableValue::to_f32(&velocity)
+        };
+        self.anim_state = Some(AnimationState {
+            from: from.clone(),
+            to: from.clone(),
+            start: Instant::now(),
+            spec: AnimationSpec::Decay(spec),
+            last_velocity: scalar_velocity,
+            last_update: Instant::now(),
+            current_displacement: 0.0,
+            initial_velocity: scalar_velocity,
+            lanes: None,
+            decay_lanes,
         });
     }
 
@@ -978,11 +1061,29 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 AnimationSpec::Decay(spec) => {
                     let t = now.duration_since(state.start).as_secs_f32();
                     let friction = spec.friction.max(0.001);
-                    let v0 = state.initial_velocity;
-                    let decay = (-friction * t).exp();
-                    Some(AnimatableValue::from_f32(
-                        state.from.to_f32() + v0 / friction * (1.0 - decay),
-                    ))
+                    match state.decay_lanes.as_ref() {
+                        Some(lanes) => {
+                            // Same analytic value per component; a lane never overshoots its limit.
+                            let decay = (-friction * t).exp();
+                            let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                            let len = lanes.len();
+                            for (i, lane) in lanes.iter().enumerate() {
+                                components[i] = if lane.velocity.abs() < spec.threshold {
+                                    lane.from + lane.velocity / friction
+                                } else {
+                                    lane.from + lane.velocity / friction * (1.0 - decay)
+                                };
+                            }
+                            Some(T::from_components(&components[..len]))
+                        }
+                        None => {
+                            let v0 = state.initial_velocity;
+                            let decay = (-friction * t).exp();
+                            Some(AnimatableValue::from_f32(
+                                state.from.to_f32() + v0 / friction * (1.0 - decay),
+                            ))
+                        }
+                    }
                 }
                 _ => None,
             };
@@ -1151,10 +1252,36 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let elapsed = now - state.start;
                 let t = elapsed.as_secs_f32();
                 let friction = spec.friction.max(0.001); // 除零保护（friction<=0 退化为极慢）
+                if let Some(lanes) = state.decay_lanes.as_mut() {
+                    // A fling on a multi-component value: one decay per component, exactly as Compose's
+                    // `DecayAnimationSpec<T>` runs the float spec through the type's `VectorConverter`.
+                    // Each component rests on its own threshold and parks on its exact limit; the motion
+                    // is over once the last of them has. A boundary clamp is a scalar concept (it takes
+                    // one `f32`), so it does not apply here — `push_fling` stays scalar-only.
+                    let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                    let len = lanes.len();
+                    let mut all_done = true;
+                    let mut last_velocity = 0.0f32;
+                    for (i, lane) in lanes.iter_mut().enumerate() {
+                        let decay = (-friction * t).exp();
+                        let vel_now = lane.velocity * decay;
+                        components[i] = if vel_now.abs() < spec.threshold {
+                            lane.from + lane.velocity / friction
+                        } else {
+                            all_done = false;
+                            lane.from + lane.velocity / friction * (1.0 - decay)
+                        };
+                        if vel_now.abs() > last_velocity.abs() {
+                            last_velocity = vel_now;
+                        }
+                    }
+                    state.last_velocity = last_velocity; // for an interruption (velocity continuity, P2-9)
+                    (T::from_components(&components[..len]), all_done)
+                } else {
                 let v0 = state.initial_velocity;
                 let decay = (-friction * t).exp();
                 let vel_now = v0 * decay;
-                state.last_velocity = vel_now; // 供打断（P2-9 速度延续）使用
+                state.last_velocity = vel_now; // for an interruption (velocity continuity, P2-9)
                 // 解析式极限（速度低于阈值时精确停靠）
                 let raw = if vel_now.abs() < spec.threshold {
                     state.from.to_f32() + v0 / friction
@@ -1174,6 +1301,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                         }
                     }
                     None => (AnimatableValue::from_f32(raw), done),
+                }
                 }
             }
         };
@@ -1285,34 +1413,76 @@ use crate::runtime::composer::ComposeCtx;
 
 pub struct Transition<T: Clone + PartialEq + 'static> {
     target: T,
+    /// The state this transition is animating FROM — Compose's `Transition.initialState`. It is what
+    /// `transitionSpec = { initial, target -> ... }` chooses a spec from, so it has to be kept.
+    previous: T,
     spec: AnimationSpec,
     #[allow(dead_code)]
     label: &'static str,
 }
 
 impl ComposeCtx<'_> {
+    /// updateTransition — a state machine whose changes animate (cf. Compose `updateTransition`).
+    ///
+    /// The returned value carries BOTH ends of the pair — the state being animated from and the one
+    /// being animated to — because Compose's `transitionSpec = { initial, target -> ... }` picks a spec
+    /// per pair (`Transition.kt`'s `TransitionSpec`). Two Backchannels hold the pair between frames:
+    /// nothing subscribes to them and they notify nobody, they are just remembered memory.
     pub fn update_transition<T: Clone + PartialEq + 'static>(
         &mut self,
         target: T,
         spec: AnimationSpec,
         label: &'static str,
     ) -> Transition<T> {
-        Transition { target, spec, label }
+        let last = self.remember_backchannel(|| target.clone());
+        let previous = self.remember_backchannel(|| target.clone());
+        if last.peek() != target {
+            previous.set(last.peek());
+            last.set(target.clone());
+        }
+        Transition { target, previous: previous.peek(), spec, label }
     }
 }
 
 impl<T: Clone + PartialEq + 'static> Transition<T> {
+    /// The state being animated TO — Compose's `Transition.targetState`.
+    pub fn target(&self) -> &T {
+        &self.target
+    }
+
+    /// The state being animated FROM — Compose's `Transition.initialState`.
+    pub fn previous(&self) -> &T {
+        &self.previous
+    }
+
     /// 泛型值动画（对标 Compose `TransitionScope.animateValue`）——任意
     /// AnimatableValue 类型，target 变化 → 自动平滑过渡到新目标值。
     pub fn animate<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
         &mut self,
         ctx: &mut ComposeCtx,
         target_fn: impl Fn(&T) -> U,
+        label: &'static str,
+    ) -> State<U> {
+        let spec = self.spec.clone();
+        self.animate_with_spec(ctx, target_fn, label, move |_, _| spec.clone())
+    }
+
+    /// `animateValue(transitionSpec = { initial, target -> ... })` — the per-pair spec Compose's
+    /// animations all accept. The function is handed the state being animated FROM and the one being
+    /// animated TO, evaluated at the moment the motion is pushed, so a forward leg and a return leg can
+    /// run different curves (a slow ease out, a quick bouncy return). The transition's own `spec` stays
+    /// the default for every call that does not pass one.
+    pub fn animate_with_spec<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> U,
         _label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
     ) -> State<U> {
         let value = target_fn(&self.target);
         let state: State<U> = ctx.remember(|| value.clone());
-        crate::animation::push_animatable(state.clone(), value, self.spec.clone());
+        let spec = spec_fn(&self.previous, &self.target);
+        crate::animation::push_animatable(state.clone(), value, spec);
         state
     }
 
@@ -1378,6 +1548,61 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         self.animate(ctx, target_fn, label)
     }
 
+    /// animateFloat with Compose's `transitionSpec = { initial, target -> ... }`.
+    pub fn animate_float_with_spec(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> f32,
+        label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
+    ) -> State<f32> {
+        self.animate_with_spec(ctx, target_fn, label, spec_fn)
+    }
+
+    /// animateColor with Compose's `transitionSpec`.
+    pub fn animate_color_with_spec(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::graphics::Color,
+        label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
+    ) -> State<crate::graphics::Color> {
+        self.animate_with_spec(ctx, target_fn, label, spec_fn)
+    }
+
+    /// animateDp with Compose's `transitionSpec`.
+    pub fn animate_dp_with_spec(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Dp,
+        label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
+    ) -> State<crate::unit::Dp> {
+        self.animate_with_spec(ctx, target_fn, label, spec_fn)
+    }
+
+    /// animateSize with Compose's `transitionSpec`.
+    pub fn animate_size_with_spec(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Size,
+        label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
+    ) -> State<crate::unit::Size> {
+        self.animate_with_spec(ctx, target_fn, label, spec_fn)
+    }
+
+    /// animateOffset with Compose's `transitionSpec`.
+    pub fn animate_offset_with_spec(
+        &mut self,
+        ctx: &mut ComposeCtx,
+        target_fn: impl Fn(&T) -> crate::unit::Offset,
+        label: &'static str,
+        spec_fn: impl Fn(&T, &T) -> AnimationSpec,
+    ) -> State<crate::unit::Offset> {
+        self.animate_with_spec(ctx, target_fn, label, spec_fn)
+    }
+
     /// createChildTransition — derived transition following this one
     /// (cf. Compose `Transition.createChildTransition(transformToChildState)`).
     ///
@@ -1389,7 +1614,12 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         &self,
         map: impl Fn(&T) -> U,
     ) -> Transition<U> {
-        Transition { target: map(&self.target), spec: self.spec.clone(), label: self.label }
+        Transition {
+            target: map(&self.target),
+            previous: map(&self.previous),
+            spec: self.spec.clone(),
+            label: self.label,
+        }
     }
 }
 
@@ -1712,6 +1942,82 @@ impl KeyframesSpec {
             std::sync::Arc::new(interpolator::Linear::new());
         let frames = frames.into_iter().map(|(p, v)| (p, v, linear.clone())).collect();
         Self { duration, frames }
+    }
+}
+
+/// Compose-shaped keyframes: absolute millisecond times and values in the ANIMATED TYPE's units, with an
+/// optional easing per keyframe —
+///
+/// ```ignore
+/// // keyframes { durationMillis = 400; 0f at 0; 340f at 200; 300f at 400 } on a 100 → 300 flight
+/// let spec = KeyframesOf::between(100.0, 300.0).at(0, 100.0).at(200, 340.0).at(400, 300.0).build();
+/// ```
+///
+/// `build` normalises the band's endpoints into the fraction form the engine evaluates (see
+/// `KeyframesSpec`), so the shape reads the way Compose's does while one spec still drives a `Color` or a
+/// `Size`. A keyframe with no easing interpolates linearly. When the caller leaves the 0 ms keyframe out,
+/// one is supplied at the `from` value — Compose's "the animation starts at the initial value".
+pub struct KeyframesOf {
+    from: f32,
+    to: f32,
+    frames: Vec<(u64, f32, Option<std::sync::Arc<dyn interpolator::Interpolator>>)>,
+}
+
+impl KeyframesOf {
+    /// The band the values are measured in — the value the animation starts at and the one it targets.
+    pub fn between(from: f32, to: f32) -> Self {
+        Self { from, to, frames: Vec::new() }
+    }
+
+    /// `value at millis`, interpolated linearly from the previous keyframe.
+    pub fn at(mut self, millis: u64, value: f32) -> Self {
+        self.frames.push((millis, value, None));
+        self
+    }
+
+    /// `value at millis with easing` — Compose's `value at millis with Easing`.
+    pub fn at_with(
+        mut self,
+        millis: u64,
+        value: f32,
+        easing: std::sync::Arc<dyn interpolator::Interpolator>,
+    ) -> Self {
+        self.frames.push((millis, value, Some(easing)));
+        self
+    }
+
+    pub fn build(mut self) -> KeyframesSpec {
+        // Last keyframe wins for a repeated millisecond value; the order is otherwise the caller's.
+        self.frames.sort_by_key(|(millis, _, _)| *millis);
+        self.frames.dedup_by_key(|(millis, _, _)| *millis);
+        let linear: std::sync::Arc<dyn interpolator::Interpolator> =
+            std::sync::Arc::new(interpolator::Linear::new());
+        let duration_ms = self.frames.last().map(|(millis, _, _)| *millis).unwrap_or(0);
+        if self.frames.first().map(|(millis, _, _)| *millis).unwrap_or(0) != 0 {
+            // Compose starts from the initial value when there is no keyframe at 0.
+            self.frames.insert(0, (0, self.from, None));
+        }
+        let span = self.to - self.from;
+        let frames = self
+            .frames
+            .into_iter()
+            .map(|(millis, value, easing)| {
+                let progress = if duration_ms == 0 {
+                    0.0
+                } else {
+                    millis as f32 / duration_ms as f32
+                };
+                // A band with no width (from == to) has nothing to interpolate: every keyframe value
+                // collapses to it, which is what the engine's `from.lerp(&to, …)` produces anyway.
+                let fraction = if span.abs() <= f32::EPSILON {
+                    0.0
+                } else {
+                    (value - self.from) / span
+                };
+                (progress, fraction, easing.unwrap_or_else(|| linear.clone()))
+            })
+            .collect();
+        KeyframesSpec { duration: Duration::from_millis(duration_ms), frames }
     }
 }
 
@@ -3123,6 +3429,172 @@ pub(crate) mod tests {
             counter.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "the shrink reports once when it lands"
+        );
+        clear_all_animations();
+    }
+
+    /// Compose's `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec)` runs one float
+    /// decay per component (`DecayAnimationSpec<T>`, vectorized by the type's converter). Before this,
+    /// a Decay reaching a multi-component value was replaced by Snap
+    /// (`normalise_multi_component_decay`), so a fling on an `Offset` never moved at all.
+    #[test]
+    fn a_vector_fling_decays_each_component_on_its_own() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let start = crate::unit::Offset::new(10.0, 20.0);
+        let velocity = crate::unit::Offset::new(100.0, -60.0);
+        let friction = 4.2f32;
+        let spec = DecaySpec::new(friction, 0.1);
+        let state = crate::runtime::state::State::new(start);
+        push_decay_vector(state.clone(), velocity, spec);
+        update_animations();
+        let mid = state.peek();
+        let (limit_x, limit_y) = (10.0 + 100.0 / friction, 20.0 - 60.0 / friction);
+        assert!(
+            mid.x > start.x && mid.x < limit_x,
+            "x travels toward its own limit (at {})",
+            mid.x
+        );
+        assert!(
+            mid.y < start.y && mid.y > limit_y,
+            "y travels the other way, on its own limit (at {})",
+            mid.y
+        );
+        let mut frames = 0;
+        while update_animations() && frames < 400 {
+            std::thread::sleep(Duration::from_millis(8));
+            frames += 1;
+        }
+        let end = state.peek();
+        assert!(
+            (end.x - limit_x).abs() < 0.01 && (end.y - limit_y).abs() < 0.01,
+            "each component parks on its exact limit (ended at {end:?}, expected {limit_x}x{limit_y})"
+        );
+        assert!(frames < 400, "the fling ends on its own ({frames} frames)");
+        clear_all_animations();
+    }
+
+    /// Compose's keyframe shape — absolute milliseconds and values in the type's units — is normalised
+    /// into the engine's fraction band by `KeyframesOf`, and the resulting motion is the one Compose
+    /// describes: a 100 → 300 flight through `340f at 200ms` overshoots to 340 and lands exactly on 300.
+    #[test]
+    fn composes_keyframe_shape_drives_the_same_motion() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let spec = KeyframesOf::between(100.0, 300.0)
+            .at(0, 100.0)
+            .at(200, 340.0)
+            .at(400, 300.0)
+            .build();
+        assert_eq!(spec.duration, Duration::from_millis(400));
+        assert_eq!(spec.frames.len(), 3);
+        // 200 ms of a 400 ms flight is progress 0.5, and 340 is 1.2 bands up from 100.
+        assert!((spec.frames[1].0 - 0.5).abs() < 1e-6, "the middle keyframe sits at half the duration");
+        assert!((spec.frames[1].1 - 1.2).abs() < 1e-6, "and 340 is 1.2 bands above the 100 start");
+        assert_eq!(interpolate_keyframes(&spec.frames, 0.0), 0.0);
+        assert!((interpolate_keyframes(&spec.frames, 0.5) - 1.2).abs() < 1e-6);
+        assert_eq!(interpolate_keyframes(&spec.frames, 1.0), 1.0);
+        // End to end through the engine: 100 → 300 overshoots at half time and lands on the target.
+        let state = crate::runtime::state::State::new(100.0f32);
+        push_animatable(state.clone(), 300.0, AnimationSpec::Keyframes(spec.clone()));
+        update_animations();
+        let mut mid = state.peek();
+        let mut frames = 0;
+        while update_animations() && frames < 200 {
+            std::thread::sleep(Duration::from_millis(4));
+            frames += 1;
+            let v = state.peek();
+            if v > mid {
+                mid = v;
+            }
+        }
+        assert!(
+            mid > 330.0,
+            "the flight overshoots toward 340 the way the keyframes say (peak {mid})"
+        );
+        assert_eq!(state.peek(), 300.0, "and it lands exactly on the target");
+        // A keyframe list without a 0 ms entry starts at the `from` value (Compose's rule).
+        let no_first = KeyframesOf::between(0.0, 1.0).at(100, 0.5).at(200, 1.0).build();
+        assert_eq!(no_first.frames.first().map(|f| f.0), Some(0.0));
+        assert_eq!(no_first.frames.first().map(|f| f.1), Some(0.0));
+        clear_all_animations();
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    enum Leg {
+        Idle,
+        Busy,
+    }
+
+    /// Compose's `transitionSpec = { initial, target -> ... }` chooses a spec from the PAIR of states
+    /// (`Transition.kt`'s `TransitionSpec`), so the leg leaving `Idle` and the leg returning to it can
+    /// run different curves. Before this, a `Transition` carried one spec and used it for every
+    /// animation: this test fails on a single spec whichever one is chosen (a quick one finishes the
+    /// slow leg too early, a slow one leaves the quick leg mid-flight).
+    #[test]
+    fn a_transition_chooses_a_spec_for_each_pair() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
+        let slow = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(700), linear()));
+        let quick = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(60), linear()));
+        let leg = crate::runtime::state::State::new(Leg::Idle);
+        let held: std::rc::Rc<std::cell::RefCell<Option<crate::runtime::state::State<f32>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut composer = Composer::new();
+        let mut frame = |composer: &mut Composer| {
+            let current = leg.get();
+            let slow = slow.clone();
+            let quick = quick.clone();
+            let held = held.clone();
+            composer.compose(|ctx| {
+                let mut t = ctx.update_transition(current, quick.clone(), "leg");
+                let value = t.animate_float_with_spec(
+                    ctx,
+                    |l| match l {
+                        Leg::Idle => 0.0,
+                        Leg::Busy => 100.0,
+                    },
+                    "position",
+                    move |from, to| {
+                        if *from == Leg::Idle && *to == Leg::Busy {
+                            slow.clone()
+                        } else {
+                            quick.clone()
+                        }
+                    },
+                );
+                let _ = value.get();
+                if held.borrow().is_none() {
+                    *held.borrow_mut() = Some(value);
+                }
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut run = |composer: &mut Composer, ms: u64, frame: &mut dyn FnMut(&mut Composer)| {
+            let frames = (ms / 16).max(1);
+            for _ in 0..frames {
+                frame(composer);
+                update_animations();
+                std::thread::sleep(Duration::from_millis(16));
+            }
+        };
+        run(&mut composer, 40, &mut frame);
+        let value = held.borrow().clone().expect("the animation ran and held its state");
+        assert_eq!(value.peek(), 0.0, "the idle state starts where it is");
+        leg.set(Leg::Busy);
+        run(&mut composer, 260, &mut frame);
+        let outbound = value.peek();
+        assert!(
+            outbound > 15.0 && outbound < 85.0,
+            "the Idle -> Busy leg runs the SLOW spec (value {outbound} after ~260 ms of 700)"
+        );
+        leg.set(Leg::Idle);
+        run(&mut composer, 260, &mut frame);
+        let back = value.peek();
+        assert!(
+            back < 0.001,
+            "the Busy -> Idle leg runs the QUICK spec and is already home (value {back})"
         );
         clear_all_animations();
     }

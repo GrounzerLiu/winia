@@ -216,7 +216,7 @@ pub mod prelude {
     pub use crate::effect::{LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope, observe_watch, with_frame_nanos};
     pub use crate::animation::{
         animate_int_as_state, animate_value_as_state, cancel_animation, DecaySpec,
-        exponential_decay, push_decay,
+        exponential_decay, push_decay, push_decay_vector,
     };
     pub use std::time::Duration;
 }
