@@ -286,10 +286,24 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
     /// 拖拽增量（on_drag 回调——当前位置增量 delta 的轴向分量）。
     /// 更新 offset（clamp 到 min/max 锚点），跨过半程更新 current_value。
     pub fn drag_delta(&self, delta: f32) {
+        self.dragging.set(true);
+        self.apply_delta(delta);
+    }
+
+    /// Apply a delta that is NOT this node's own gesture — a nested-scroll delta a child could not use
+    /// (`SheetNested::consume`). The offset moves the same way, but `is_dragging` stays as it was: a list
+    /// being scrolled inside a sheet must not look like a drag of the sheet, or the flag can be left set by a
+    /// release that starts no fling (measured: after one wheel tick inside a docked sheet, a window resize no
+    /// longer moved the sheet, because the re-target gate read `is_dragging == true` forever). Compose keeps
+    /// the two apart as well: a nested connection calls `dispatchRawDelta`, which never takes the drag mutex.
+    pub fn scroll_delta(&self, delta: f32) {
+        self.apply_delta(delta);
+    }
+
+    fn apply_delta(&self, delta: f32) {
         if self.anchors.get().is_empty() {
             return;
         }
-        self.dragging.set(true);
         let off = self.offset.get();
         let base = if off.is_nan() { 0.0 } else { off };
         let min = self.anchors.get().min_position();

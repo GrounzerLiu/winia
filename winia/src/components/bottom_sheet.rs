@@ -43,6 +43,9 @@ use crate::unit::Dp;
 
 /// 默认 sheet 顶部圆角（M3 `BottomSheetDefaults.ExpandedShape` 28dp）
 pub const SHEET_TOP_CORNER_RADIUS: f32 = 28.0;
+/// Compose's `DragHandleVerticalPadding` (`SheetDefaults.kt:543`) — the handle box is the 32x4 bar plus
+/// this on both sides. The modal sheet had 12, which made its handle 8 px shorter than the scaffold's.
+pub const BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING: f32 = 22.0;
 
 /// The modal sheet's panel geometry in LOGICAL px: `(width, horizontal padding)` for a
 /// `max_width` token inside a `window_width` window.
@@ -373,9 +376,13 @@ impl ModalBottomSheet {
                                 st: crate::components::sheet_state::SheetState,
                             }
                             impl SheetNested {
-                                /// sheet 实际消费的 deltay（offset 前后差——drag_delta
-                                /// clamp 到锚点[min,max]，已在 Expanded 时 offset 不动
-                                /// → consumed=0，剩余自动放行给列表）
+                                /// How much of `delta_y` the sheet actually took, measured as the offset's
+                                /// change: `scroll_delta` clamps to the anchors' [min, max], so a sheet
+                                /// already at `Expanded` moves nothing and the list gets the rest.
+                                /// `scroll_delta`, not `drag_delta`: a list scrolling inside the sheet is
+                                /// not a gesture on the sheet, and marking it as one left `is_dragging` set
+                                /// after any scroll that started no fling — after which a resize never moved
+                                /// the sheet again.
                                 fn consume(
                                     st: &crate::components::sheet_state::SheetState,
                                     delta_y: f32,
@@ -384,7 +391,7 @@ impl ModalBottomSheet {
                                         return crate::nested_scroll::ScrollDelta::ZERO;
                                     }
                                     let before = st.offset();
-                                    st.drag_delta(delta_y);
+                                    st.anchored_draggable().scroll_delta(delta_y);
                                     let consumed = st.offset() - before;
                                     crate::nested_scroll::ScrollDelta::new(0.0, consumed)
                                 }
@@ -393,11 +400,16 @@ impl ModalBottomSheet {
                                 fn on_pre_scroll(
                                     &self,
                                     available: crate::nested_scroll::ScrollDelta,
-                                    _source: crate::nested_scroll::NestedScrollSource,
+                                    source: crate::nested_scroll::NestedScrollSource,
                                 ) -> crate::nested_scroll::ScrollDelta {
                                     // 对齐 Compose M3：向上拖(available.y<0)先展开 sheet
                                     // （expands-first），列表只在 sheet 已到 Expanded 后滚动。
-                                    if available.y >= 0.0 {
+                                    // Compose's connection only reacts to USER INPUT
+                                    // (`SheetDefaults.kt:454-470`) — a wheel must scroll the list, not drag
+                                    // the sheet.
+                                    if source != crate::nested_scroll::NestedScrollSource::Drag
+                                        || available.y >= 0.0
+                                    {
                                         return crate::nested_scroll::ScrollDelta::ZERO;
                                     }
                                     Self::consume(&self.st, available.y)
@@ -406,10 +418,13 @@ impl ModalBottomSheet {
                                     &self,
                                     _consumed: crate::nested_scroll::ScrollDelta,
                                     available: crate::nested_scroll::ScrollDelta,
-                                    _source: crate::nested_scroll::NestedScrollSource,
+                                    source: crate::nested_scroll::NestedScrollSource,
                                 ) -> crate::nested_scroll::ScrollDelta {
                                     // 向下拖/列表到顶后的剩余增量（折叠/关闭方向）。
                                     // 用 consumed 度量——avoid over-consumption
+                                    if source != crate::nested_scroll::NestedScrollSource::Drag {
+                                        return crate::nested_scroll::ScrollDelta::ZERO;
+                                    }
                                     Self::consume(&self.st, available.y)
                                 }
                                 fn on_post_fling(
@@ -467,7 +482,7 @@ impl ModalBottomSheet {
                                         .modifier(
                                             Modifier::new()
                                                 .fill_max_width()
-                                                .padding_vertical(12.0)
+                                                .padding_vertical(BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING)
                                                 .on_drag(move |_pos, (_dx, dy)| d.drag_delta(dy))
                                                 .on_drag_end(move || {
                                                     e.settle_with_velocity(e.last_velocity());
@@ -477,7 +492,10 @@ impl ModalBottomSheet {
                                         .build(ctx, |ctx| {
                                             crate::layout::components::Stack::new()
                                                 .modifier(Modifier::new().size(32.0, 4.0).background(
-                                                    theme.outline_variant,
+                                                    // `SheetBottomTokens.DockedDragHandleColor =
+                                                    // OnSurfaceVariant` (winia painted it with the dimmer
+                                                    // `outline_variant`, and only the scaffold had been fixed).
+                                                    theme.on_surface_variant,
                                                     Shape::RoundedRect { corner_radius: 2.0 },
                                                 ))
                                                 .build(ctx, |_| {});

@@ -401,8 +401,12 @@ impl BottomSheetScaffold {
                         st: SheetState,
                     }
                     impl SheetNested {
-                        /// sheet 实际消费的 deltay（offset 前后差——drag_delta clamp
-                        /// 到锚点[min,max]，已在 Expanded 时 consumed=0 放行给列表）
+                        /// How much of `delta_y` the sheet actually took, measured as the offset's change:
+                        /// `scroll_delta` clamps to the anchors' [min, max], so a sheet already at
+                        /// `Expanded` consumes 0 and the list gets the rest.
+                        /// `scroll_delta`, not `drag_delta`: a list scrolling inside the sheet is not a
+                        /// gesture on the sheet, and marking it as one left `is_dragging` set after any
+                        /// scroll that started no fling — after which a resize never moved the sheet again.
                         fn consume(
                             st: &SheetState,
                             delta_y: f32,
@@ -411,7 +415,7 @@ impl BottomSheetScaffold {
                                 return crate::nested_scroll::ScrollDelta::ZERO;
                             }
                             let before = st.offset();
-                            st.drag_delta(delta_y);
+                            st.anchored_draggable().scroll_delta(delta_y);
                             let consumed = st.offset() - before;
                             crate::nested_scroll::ScrollDelta::new(0.0, consumed)
                         }
@@ -420,9 +424,15 @@ impl BottomSheetScaffold {
                         fn on_pre_scroll(
                             &self,
                             available: crate::nested_scroll::ScrollDelta,
-                            _source: crate::nested_scroll::NestedScrollSource,
+                            source: crate::nested_scroll::NestedScrollSource,
                         ) -> crate::nested_scroll::ScrollDelta {
-                            if available.y >= 0.0 {
+                            // Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection`
+                            // (`SheetDefaults.kt:454-470`): the sheet only reacts to USER INPUT, and only to
+                            // an upward delta in the pre-scroll phase. A wheel must scroll the list instead
+                            // of dragging the sheet, and a fling is handled by the fling callbacks.
+                            if source != crate::nested_scroll::NestedScrollSource::Drag
+                                || available.y >= 0.0
+                            {
                                 return crate::nested_scroll::ScrollDelta::ZERO;
                             }
                             Self::consume(&self.st, available.y)
@@ -431,8 +441,11 @@ impl BottomSheetScaffold {
                             &self,
                             _consumed: crate::nested_scroll::ScrollDelta,
                             available: crate::nested_scroll::ScrollDelta,
-                            _source: crate::nested_scroll::NestedScrollSource,
+                            source: crate::nested_scroll::NestedScrollSource,
                         ) -> crate::nested_scroll::ScrollDelta {
+                            if source != crate::nested_scroll::NestedScrollSource::Drag {
+                                return crate::nested_scroll::ScrollDelta::ZERO;
+                            }
                             Self::consume(&self.st, available.y)
                         }
                         fn on_post_fling(
@@ -757,6 +770,10 @@ mod tests {
     /// twice, as a real app does.
     #[test]
     fn the_snackbar_sits_above_the_sheet_until_it_is_expanded() {
+        // It drives a settle animation, so it holds the animation lock like every other such test.
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         /// One frame of the scaffold: compose, then lay out.
         fn frame(c: &mut Composer, state: &SheetState) {
             let st = state.clone();
@@ -973,6 +990,92 @@ mod tests {
             row.measured_size.height,
             4.0 + 2.0 * SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING,
             "the handle's box is the bar plus DragHandleVerticalPadding on both sides"
+        );
+    }
+
+    /// A wheel inside a docked sheet scrolls the LIST, never drags the sheet, and never leaves the sheet
+    /// marked as dragging. Compose's connection answers user input only (`SheetDefaults.kt:454-470`), and
+    /// winia's used to answer every source: measured, one wheel tick moved the sheet 20 px and left
+    /// `is_dragging == true`, after which a window resize no longer moved the sheet at all (the re-target
+    /// gate read the stale flag forever, because the flag is only cleared by a settle or a fling and a wheel
+    /// starts neither).
+    #[test]
+    fn a_wheel_scrolls_the_list_instead_of_dragging_the_sheet() {
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let st = state.clone();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            let scroll = ctx.remember(|| crate::layout::LazyListState::new()).get();
+            BottomSheetScaffold::new()
+                .sheet_state(st.clone())
+                .build(
+                    ctx,
+                    move |ctx| {
+                        // A scrollable inside the sheet: this is what the nested-scroll chain hands the
+                        // leftover delta to (`SheetNested`).
+                        let rows = ctx.remember(|| std::sync::Arc::new((0..60).map(|i| (i as u64, format!("row {i}"))).collect::<Vec<_>>())).get();
+                        crate::layout::LazyColumn::new()
+                            .state(scroll.clone())
+                            .modifier(Modifier::new().test_tag("sheet-scroll").fill_max_width())
+                            .items_from(rows.clone(), |(id, _)| *id, |ctx, _i, (_, label)| {
+                                crate::components::Text::new(label.clone())
+                                    .modifier(Modifier::new().fill_max_width().height(40.0))
+                                    .build(ctx);
+                            })
+                            .build(ctx);
+                    },
+                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                );
+        });
+        c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        let before = state.offset();
+        assert!(!state.anchored_draggable().is_dragging(), "nothing drags yet");
+
+        let root = c.layout_root_idx().expect("laid out");
+        let target = node_with_tag(c.arena_nodes(), "sheet-scroll");
+        let density = crate::unit::Density::from_density(1.0);
+
+        // A wheel tick: the sheet must not move, and the flag must stay clear.
+        let consumed = crate::app::scroll::dispatch_nested_scroll_delta(
+            c.arena_nodes_mut(),
+            root,
+            target,
+            crate::nested_scroll::ScrollDelta::new(0.0, -20.0),
+            crate::nested_scroll::NestedScrollSource::Wheel,
+            density,
+        );
+        let _ = consumed;
+        assert_eq!(
+            state.offset(),
+            before,
+            "a wheel must not move the sheet (it has to scroll the list)"
+        );
+        assert!(
+            !state.anchored_draggable().is_dragging(),
+            "and it must not mark the sheet as dragging"
+        );
+
+        // User input still drives the sheet, and also leaves the flag clear (this is the nested path, not
+        // the panel's own gesture).
+        crate::app::scroll::dispatch_nested_scroll_delta(
+            c.arena_nodes_mut(),
+            root,
+            target,
+            crate::nested_scroll::ScrollDelta::new(0.0, -20.0),
+            crate::nested_scroll::NestedScrollSource::Drag,
+            density,
+        );
+        assert!(
+            (state.offset() - (before - 20.0)).abs() < 0.5,
+            "a finger drag inside the sheet still moves it ({} against {})",
+            state.offset(),
+            before - 20.0
+        );
+        assert!(
+            !state.anchored_draggable().is_dragging(),
+            "a list scroll is not the panel's own gesture, so the re-target gate stays open"
         );
     }
 

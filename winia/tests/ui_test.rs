@@ -1479,8 +1479,10 @@ fn the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not() {
     fn panel_top(app: &mut UiTest) -> f32 {
         app.refresh();
         let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
-        // The drag-handle row sits above it: padding_vertical(12) + a 4 px handle + 12.
-        y - 28.0
+        // The drag-handle row sits above it: the handle's vertical padding twice plus the 4 px bar. The
+        // padding is Compose's `DragHandleVerticalPadding = 22.dp` (`SheetDefaults.kt:543`), read from the
+        // component so this cannot drift out of step with it again.
+        y - (winia::components::bottom_sheet::BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING * 2.0 + 4.0)
     }
     /// Wait until the panel's top-left corner is (or is not) painted like the surface just below it: a
     /// rounded corner shows what is BEHIND the panel there, a square one shows the panel itself. Waiting
@@ -1541,7 +1543,7 @@ fn escape_slides_the_sheet_out_instead_of_fading_it() {
     app.refresh();
     let panel_top_before = {
         let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
-        y - 28.0
+        y - (winia::components::bottom_sheet::BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING * 2.0 + 4.0)
     };
 
     let escaped_at = Instant::now();
@@ -1551,7 +1553,10 @@ fn escape_slides_the_sheet_out_instead_of_fading_it() {
     app.refresh();
     let panel_top_during = app
         .find_tag_in_overlay("bs-content")
-        .map(|(_, y, _, _)| y - 28.0)
+        .map(|(_, y, _, _)| {
+            y - (winia::components::bottom_sheet::BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING * 2.0
+                + 4.0)
+        })
         .unwrap_or(panel_top_before);
     assert!(
         panel_top_during > panel_top_before + 4.0,
@@ -1587,12 +1592,13 @@ fn escape_slides_the_sheet_out_instead_of_fading_it() {
 /// the bottom edge instead of sitting on it).
 #[test]
 fn resizing_the_window_moves_the_sheets_anchors() {
-    /// The panel's top: the content's tag plus the drag-handle row above it (padding 12 + a 4 px handle +
-    /// 12). Read from the tree, which settles once the slide is over — the same helper the corner test uses.
+    /// The panel's top: the content's tag plus the drag-handle row above it (the handle's vertical padding
+    /// twice plus the 4 px bar, read from the component's token constant). Read from the tree, which settles
+    /// once the slide is over — the same helper the corner test uses.
     fn panel_top(app: &mut UiTest) -> f32 {
         app.refresh();
         let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
-        y - 28.0
+        y - (winia::components::bottom_sheet::BOTTOM_SHEET_DRAG_HANDLE_VERTICAL_PADDING * 2.0 + 4.0)
     }
     fn settled_panel_top(app: &mut UiTest, what: &str) -> f32 {
         let deadline = Instant::now() + Duration::from_secs(4);

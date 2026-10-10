@@ -43,6 +43,11 @@ impl Ord for SheetValue {
     }
 }
 
+/// Compose's `BottomSheetDefaults.PositionalThreshold` (`SheetDefaults.kt:404`) — how far a sheet must
+/// travel towards the next anchor before a slow release commits to it. Both sheets use it; winia used
+/// `AnchoredDraggable`'s generic "half the gap between anchors".
+pub const SHEET_POSITIONAL_THRESHOLD_DP: f32 = 56.0;
+
 /// Which state a sheet falls back to when the state it is in loses its anchor. Compose's two components
 /// differ here, and both orders are in the sources:
 /// - the MODAL sheet falls from `Expanded` straight to `Hidden` (`ModalBottomSheet.kt:320-324`:
@@ -271,13 +276,14 @@ impl SheetState {
         };
         let has_expanded_pos = !expanded_pos.is_nan();
         if has_expanded_pos {
-            let dominated = pairs.iter().any(|(_, p)| (*p - expanded_pos).abs() < 0.5);
-            if !dominated {
-                pairs.push((SheetValue::Expanded, expanded_pos));
-            } else {
-                // sheetH == peek 时 Partial 与 Expanded 重合，仍保留 Expanded 语义（expand() 不应静默失败）
-                pairs.push((SheetValue::Expanded, expanded_pos));
-            }
+            // Pushed even when it coincides with the partial anchor (which happens as soon as the content is
+            // no taller than the peek, and `min_height(peek)` makes that the normal case for short content):
+            // the anchors are then the same position, and keeping the `Expanded` VALUE is what stops
+            // `expand()` from silently doing nothing — Compose reaches the same place through
+            // `closest_anchor`, which keeps the first anchor at a position. Measured: with
+            // `update_anchors_scaffold(720, 56, 56)` both anchors sit at 664 and the value stays
+            // `PartiallyExpanded`, exactly as it does in Compose.
+            pairs.push((SheetValue::Expanded, expanded_pos));
         }
         // Hidden is kept only when it is not skipped (Compose's scaffold skips it by default — see
         // `skip_hidden_state`).
@@ -401,12 +407,19 @@ impl SheetState {
 
     /// 拖拽结束吸附（按位置最近锚点）
     pub fn settle(&self) -> SheetValue {
-        self.anchored.settle()
+        // A release with (almost) no velocity still commits by the same positional threshold.
+        self.settle_with_velocity(0.0)
     }
 
     /// 拖拽结束带速度吸附
+    /// The positional commit threshold is `BottomSheetDefaults.PositionalThreshold = 56.dp`
+    /// (`SheetDefaults.kt:404`, applied at `:331` and `:349`), NOT the generic "half the distance between the
+    /// anchors" that `AnchoredDraggable` defaults to (foundation `AnchoredDraggable.kt:1523-1524`): a sheet
+    /// commits after 56 px of travel towards the next anchor, where winia used to need half of a 200 px gap
+    /// (measured: a 60 px slow drag from Expanded stayed Expanded, and only 300 px committed).
     pub fn settle_with_velocity(&self, velocity: f32) -> SheetValue {
-        self.anchored.settle_with_velocity(velocity, None)
+        self.anchored
+            .settle_with_velocity(velocity, Some(SHEET_POSITIONAL_THRESHOLD_DP))
     }
 
     /// 是否动画中
@@ -531,6 +544,12 @@ mod tests {
     /// stayed where it was, floating at a position no anchor described any more.
     #[test]
     fn a_vanished_anchor_falls_back_to_the_next_state() {
+        // This test drives a real tween, so it holds the animation lock and clears the registry like every
+        // other test that pushes an animation (a test that skipped this was cleared by a parallel test's
+        // `clear_all_animations()` and failed whenever the crate's tests ran in parallel).
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         let s = SheetState::new(SheetValue::PartiallyExpanded);
         s.update_anchors_scaffold(800.0, 96.0, 600.0);
         s.anchored.offset_state().set(704.0);
@@ -556,6 +575,7 @@ mod tests {
             "and travels to that anchor (800 - 600), got {}",
             s.offset()
         );
+        crate::animation::clear_all_animations();
     }
 
     /// The scaffold's own state skips `Hidden` (`rememberStandardBottomSheetState(skipHiddenState = true)`):
@@ -579,7 +599,38 @@ mod tests {
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
     }
 
-    /// A live gesture owns the offset: an anchor update that runs mid-drag — the scaffold recomputes its
+    /// Compose's two sheets commit a slow release after `BottomSheetDefaults.PositionalThreshold = 56.dp`
+    /// of travel towards the next anchor (`SheetDefaults.kt:404`, applied at `:331`/`:349`) — not after half
+    /// the gap between anchors, which is what `AnchoredDraggable` defaults to. Measured with an
+    /// Expanded/Partial pair 200 px apart: a 60 px drag towards Partial used to snap back to Expanded (the
+    /// old threshold was 100), and it now commits.
+    #[test]
+    fn a_slow_release_commits_after_the_positional_threshold() {
+        // It pushes a settle animation, so it takes the same lock every other animation-driving test does.
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let s = SheetState::new(SheetValue::Expanded);
+        // Anchors 200 px apart: Expanded at 200, PartiallyExpanded at 400, Hidden at 800.
+        s.anchored.update_anchors(DraggableAnchors::new(vec![
+            (SheetValue::Expanded, 200.0),
+            (SheetValue::PartiallyExpanded, 400.0),
+            (SheetValue::Hidden, 800.0),
+        ]));
+        s.anchored.offset_state().set(200.0);
+        s.anchored.drag_delta(60.0);
+        assert_eq!(s.offset(), 260.0, "the finger moved the sheet 60 px towards the peek");
+        // A release must be MOVING for the positional rule to apply at all — both Compose and winia
+        // short-circuit a dead-stop release to the nearest anchor (`computeTarget`'s `if (!isMoving)`), so
+        // this is a slow-but-moving release, well under the 125 dp/s fling gate.
+        let target = s.settle_with_velocity(10.0);
+        assert_eq!(
+            target,
+            SheetValue::PartiallyExpanded,
+            "60 px is past the 56 px threshold, so the sheet commits to the peek (the generic half-gap \
+             threshold of 100 px would have sent it back to Expanded)"
+        );
+        crate::animation::clear_all_animations();
+    }
     /// anchors whenever the window, the peek or the sheet's size changes — must not animate the sheet back.
     /// Measured on the demo: a downward drag moved the offset 40 px and `update_anchors` then animated it
     /// straight to the Expanded anchor, so the sheet never followed the finger while a release still settled
