@@ -2018,6 +2018,26 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
         set_animation_bounds(self.state.state_id(), self.bounds.peek());
     }
 
+    /// Run `steps` one after another on this value — the capability Compose gets from a coroutine
+    /// (`a.animateTo(first); a.animateTo(second)` inside a `LaunchedEffect`), which winia has no suspend for,
+    /// so the steps are queued instead: each one starts when the motion before it ENDS, whatever the reason
+    /// (arriving, a value range, or the overrun guard — a stalled queue would be worse than a moved-on one).
+    ///
+    /// The queue is driven by completion, so a direct `animate_to`/`snap_to` from the caller replaces the
+    /// motion in flight and thereby drops the rest of the sequence: nothing else could start step two.
+    pub fn animate_sequence(&self, steps: impl IntoIterator<Item = (T, AnimationSpec)>) {
+        let queue: std::collections::VecDeque<(T, AnimationSpec)> = steps.into_iter().collect();
+        self.run_step(std::sync::Arc::new(Mutex::new(queue)));
+    }
+
+    fn run_step(&self, queue: std::sync::Arc<Mutex<std::collections::VecDeque<(T, AnimationSpec)>>>) {
+        let Some((target, spec)) = queue.lock().unwrap().pop_front() else {
+            return;
+        };
+        let next = self.clone();
+        self.animate_to_with_result(target, spec, move |_end| next.run_step(queue.clone()));
+    }
+
     /// Keep this value inside `[min, max]` — Compose's `Animatable.updateBounds`. Applies to the motion in
     /// flight and to every motion started later through this handle: a value that would leave the range is
     /// written exactly at the bound and the motion ends there. Scalar values only — the range is compared
@@ -4758,6 +4778,57 @@ pub(crate) mod tests {
             gap < 5.0,
             "the exact target only replaces a value the integrator had already brought to within a few pixels (gap {gap:.3})"
         );
+        clear_all_animations();
+    }
+
+    /// Compose sequences two motions with a coroutine — `a.animateTo(one); a.animateTo(two)` inside a
+    /// `LaunchedEffect` — so the second starts when the first has finished suspending. The queued version
+    /// has to do the same: step two starts only after step one ends. Measured against the alternative it
+    /// replaces (pushing both targets in turn, where the second simply replaces the first): after the first
+    /// leg's 150 ms the value must still be on its way BACK, not already at the second target.
+    #[test]
+    fn a_sequence_runs_its_steps_one_after_another() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let mut composer = Composer::new();
+        let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h = held.clone();
+        composer.compose(|ctx| {
+            let handle = ctx.remember_animatable(0.0f32);
+            if h.borrow().is_none() {
+                *h.borrow_mut() = Some(handle.clone());
+            }
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let a = held.borrow().clone().expect("the slot remembered the animatable");
+        let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
+
+        a.animate_sequence([
+            (100.0, AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(150), linear()))),
+            (0.0, AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(150), linear()))),
+        ]);
+
+        // Midway through the first leg: up, and nowhere near the second target.
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(80) {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        let rising = a.value();
+        assert!(
+            rising > 20.0 && rising < 95.0,
+            "the first leg is still running ({rising}), so the second has not started"
+        );
+
+        // Once both legs are done the value is at the second target and the queue is empty.
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(400) {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert_eq!(a.value(), 0.0, "the sequence ended on its last step");
+        assert!(!a.is_running());
         clear_all_animations();
     }
 
