@@ -29,10 +29,16 @@
 //!   decides for itself, exactly like the two `remember…SheetState` helpers.
 //! - `sheetPeekHeight` is applied as a `min_height`, where Compose uses `requiredHeightIn(min = …)`
 //!   (`:262-264`) — Compose's form wins even when the incoming maximum is smaller.
-//! - No `topBar`, no `snackbarHost` (Compose places the snackbar above the sheet while it is partially
-//!   expanded and on the bottom edge otherwise, `:437-444`), no `sheetContentColor`/`sheetTonalElevation`, no
-//!   `sheetShadowElevation` (the shadow is fixed at 1 px, 40/255 black), no `sheetShape` (a radius instead of
-//!   a `Shape`), and `sheetDragHandle` is a bool rather than a composable slot.
+//! - `topBar` and the snackbar host are slots here too (`top_bar`, `snackbar`). Structurally the page is a
+//!   Column whose body is weighted: the bar takes its natural height and the body gets the rest, which is
+//!   Compose's `bodyConstraints = looseConstraints.copy(maxHeight = layoutHeight - topBarHeight)` (`:427-431`)
+//!   expressed with the tools winia's layout has instead of a dedicated `Layout` pass. The snackbar follows
+//!   Compose's placement rule — centred, just above the sheet while it is partially expanded and on the
+//!   bottom edge otherwise (`:437-444`) — but its own height comes from the PREVIOUS frame, so the first
+//!   frame of a snackbar's life places it by its bottom edge (Compose measures every child before placing
+//!   any).
+//! - No `sheetShape` (a radius instead of a `Shape`), and `sheetDragHandle` is a bool rather than a
+//!   composable slot.
 //! - `content` receives no `PaddingValues`: Compose hands the caller `PaddingValues(bottom = sheetPeekHeight)`
 //!   (`:143`) and lets it apply the padding, while winia applies the same inset itself.
 //! - The drag handle's `semantics` actions (expand/collapse/dismiss, `:350-385`) are not ported; the click
@@ -66,6 +72,8 @@ pub struct BottomSheetScaffold {
     sheet_swipe_enabled: bool,
     sheet_drag_handle: bool,
     sheet_max_width: Option<Dp>,
+    top_bar: Option<Box<dyn Fn(&mut ComposeCtx)>>,
+    snackbar: Option<Box<dyn Fn(&mut ComposeCtx)>>,
 }
 
 impl BottomSheetScaffold {
@@ -83,6 +91,8 @@ impl BottomSheetScaffold {
             sheet_swipe_enabled: true,
             sheet_drag_handle: true,
             sheet_max_width: Some(Dp(640.0)),
+            top_bar: None,
+            snackbar: None,
         }
     }
 
@@ -143,6 +153,21 @@ impl BottomSheetScaffold {
 
     pub fn sheet_drag_handle(mut self, v: bool) -> Self {
         self.sheet_drag_handle = v;
+        self
+    }
+
+    /// Compose's `topBar` slot: it is measured FIRST and the body gets what is left below it
+    /// (`BottomSheetScaffold.kt:427-431`, `bodyConstraints = looseConstraints.copy(maxHeight = layoutHeight
+    /// - topBarHeight)`), then the bar is placed at the top and the body under it.
+    pub fn top_bar(mut self, f: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.top_bar = Some(Box::new(f));
+        self
+    }
+
+    /// Compose's `snackbarHost` slot. The snackbar sits centred, just above the sheet while it is partially
+    /// expanded, and on the bottom edge otherwise (`:437-444`).
+    pub fn snackbar(mut self, f: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.snackbar = Some(Box::new(f));
         self
     }
 
@@ -217,6 +242,8 @@ impl BottomSheetScaffold {
             .or_else(|| theme_for_sheet.content_color_for(sheet_bg))
             .unwrap_or_else(crate::theme::WiniaTheme::content_color);
 
+        let top_bar = self.top_bar;
+        let snackbar = self.snackbar;
         // 外层 Stack：主内容底层，片上层
         let mut root_mod = Modifier::new().fill_max_size();
         if let Some(cc) = container_color {
@@ -233,15 +260,30 @@ impl BottomSheetScaffold {
             // window, where 130 is centred).
             .content_alignment(ContentAlignment::TOP_CENTER)
             .build(ctx, |ctx| {
-                // 主内容（占满，片在上层覆盖）——底部留出 sheet peek 高度，
-                // 对齐 Compose BottomSheetScaffold 的 contentWindowPadding（sheet 折叠时内容不被遮挡）
+                // The page: Compose measures the top bar first and gives the body what is left below it
+                // (`BottomSheetScaffold.kt:427-431`). A Column with a weighted body does exactly that —
+                // the bar takes its natural height, the body takes the rest — and the body keeps the peek
+                // inset of `PaddingValues(bottom = sheetPeekHeight)` (`:143`).
                 // Same unit rule: `padding_bottom` takes a layout length, so the dp value is
                 // the logical value (the sheet's own height is reported in logical px too).
                 let peek_px_pre = peek.to_logical();
-                crate::layout::components::Stack::new()
-                    .modifier(Modifier::new().fill_max_size().padding_bottom(peek_px_pre))
+                crate::layout::components::Column::new()
+                    .modifier(Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
-                        content(ctx);
+                        if let Some(bar) = &top_bar {
+                            bar(ctx);
+                        }
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().fill_max_size().layout_weight(1.0))
+                            .build(ctx, |ctx| {
+                                crate::layout::components::Stack::new()
+                                    .modifier(
+                                        Modifier::new().fill_max_size().padding_bottom(peek_px_pre),
+                                    )
+                                    .build(ctx, |ctx| {
+                                        content(ctx);
+                                    });
+                            });
                     });
 
                 // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
@@ -249,6 +291,8 @@ impl BottomSheetScaffold {
                 let layout_h = crate::layout::window_size().1;
                 let peek_px = peek.to_logical();
                 let peek_h_for_anchors = peek_px;
+                // The snackbar rule reads the sheet state after the handle closure has taken a clone.
+                let st_for_snackbar_snapshot = sheet_state.clone();
 
                 let st_for_offset = sheet_state.clone();
                 let st_for_anchors = sheet_state.clone();
@@ -448,6 +492,33 @@ impl BottomSheetScaffold {
                         sheet_content(ctx);
                         });
                     });
+
+                // The snackbar: centred, just above the sheet while it is partially expanded, on the bottom
+                // edge otherwise — Compose's rule (`BottomSheetScaffold.kt:437-444`). Compose knows the
+                // snackbar's height because its layout measures every child before placing any; here the
+                // height is remembered from the previous frame, so the first frame of a snackbar's life
+                // places it by its bottom edge. The rule reads the state that drives the sheet, so it
+                // re-runs as the sheet moves.
+                if let Some(host) = &snackbar {
+                    let snack_h: State<f32> = ctx.remember(|| 0.0);
+                    let snack_h_measured = snack_h.get();
+                    let st_for_snackbar = st_for_snackbar_snapshot.clone();
+                    let y = match st_for_snackbar.current_value() {
+                        SheetValue::PartiallyExpanded => st_for_snackbar.offset() - snack_h_measured,
+                        _ => layout_h - snack_h_measured,
+                    };
+                    let snack_mod = Modifier::new()
+                        .absolute_offset(0.0, y)
+                        .on_size_changed({
+                            let h = snack_h.clone();
+                            move |_w, height| h.set(height)
+                        });
+                    crate::layout::components::Stack::new()
+                        .modifier(snack_mod)
+                        .build(ctx, |ctx| {
+                            host(ctx);
+                        });
+                }
             });
     }
 }
@@ -515,10 +586,14 @@ mod tests {
             "the sheet's size callback (during measure) uses the peek as a logical length"
         );
 
+        // Structure: root -> page Column -> the weighted body Column -> the peek-inset Stack -> content.
         let root = c.layout_root_idx().expect("laid out");
-        let content = c.arena_nodes()[root].children[0];
+        let nodes = c.arena_nodes();
+        let page = nodes[root].children[0];
+        let body = nodes[page].children[0];
+        let inset = nodes[body].children[0];
         assert_eq!(
-            c.arena_nodes()[content].modifier.get_padding_vertical().1,
+            nodes[inset].modifier.get_padding_vertical().1,
             SCAFFOLD_SHEET_PEEK_HEIGHT.value(),
             "the content reserves exactly one peek at the bottom, in logical px"
         );
@@ -561,6 +636,156 @@ mod tests {
             c.arena_nodes()[sheet].position.y, 720.0 - 96.0,
             "so the collapsed sheet covers the window's bottom edge, with no page showing under it"
         );
+    }
+
+    /// Compose measures the top bar FIRST and hands the body `maxHeight = layoutHeight - topBarHeight`
+    /// (`BottomSheetScaffold.kt:427-431`) before placing the body under the bar. Structurally the same here:
+    /// a Column whose body is weighted takes what the bar leaves, and the body is placed below it.
+    #[test]
+    fn a_top_bar_takes_its_height_before_the_body() {
+        fn body_geometry(with_bar: bool) -> (f32, f32) {
+            let mut c = Composer::new();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                let mut scaffold = BottomSheetScaffold::new();
+                if with_bar {
+                    scaffold = scaffold.top_bar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().fill_max_width().height(40.0))
+                            .build(ctx, |_| {});
+                    });
+                }
+                scaffold.build(
+                    ctx,
+                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                    |ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().fill_max_size().test_tag("body"))
+                            .build(ctx, |_| {});
+                    },
+                );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            let nodes = c.arena_nodes();
+            let root = c.layout_root_idx().expect("laid out");
+            let body = node_with_tag(nodes, "body");
+            let (_, y) = absolute_position(nodes, root, body).expect("the body is under the root");
+            (y, nodes[body].measured_size.height)
+        }
+
+        // The tagged node lives inside the peek-inset Stack, so its height is the scaffold's minus the
+        // 56 px the collapsed sheet reserves — what matters here is the 40 px the bar takes off the top.
+        let (y_without, h_without) = body_geometry(false);
+        assert_eq!(
+            (y_without, h_without),
+            (0.0, 720.0 - 56.0),
+            "with no bar the body starts at the top and is only inset by the peek"
+        );
+        let (y_with, h_with) = body_geometry(true);
+        assert_eq!(y_with, 40.0, "the body starts under the top bar");
+        assert_eq!(h_with, 720.0 - 40.0 - 56.0, "and gets exactly what the bar left");
+    }
+
+    /// A node's absolute position: the arena stores each position relative to its parent, so a test that
+    /// wants to know where a nested node ended up has to walk down from the root adding them up.
+    fn absolute_position(
+        nodes: &[crate::layout::node::LayoutNode],
+        root: usize,
+        target: usize,
+    ) -> Option<(f32, f32)> {
+        if root == target {
+            return Some((0.0, 0.0));
+        }
+        for &child in &nodes[root].children {
+            if let Some((x, y)) = absolute_position(nodes, child, target) {
+                return Some((nodes[child].position.x + x, nodes[child].position.y + y));
+            }
+        }
+        None
+    }
+
+    /// The index of the node carrying `tag`.
+    fn node_with_tag(nodes: &[crate::layout::node::LayoutNode], tag: &str) -> usize {
+        nodes
+            .iter()
+            .position(|n| {
+                n.modifier.elements().iter().any(|el| {
+                    matches!(el, crate::modifier::ModifierElement::TestTag { tag: t } if t == tag)
+                })
+            })
+            .unwrap_or_else(|| panic!("no node tagged {tag}"))
+    }
+
+    /// The snackbar sits centred, just above the sheet while it is partially expanded, and on the bottom
+    /// edge otherwise — Compose's rule (`BottomSheetScaffold.kt:437-444`). Compose can do it in one pass
+    /// because its layout measures every child before placing any; here the snackbar's own height comes from
+    /// the previous frame (the documented one-frame caveat), so the helper below composes and lays out
+    /// twice, as a real app does.
+    #[test]
+    fn the_snackbar_sits_above_the_sheet_until_it_is_expanded() {
+        /// One frame of the scaffold: compose, then lay out.
+        fn frame(c: &mut Composer, state: &SheetState) {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st)
+                    .snackbar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                            .build(ctx, |_| {});
+                    })
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+
+        fn snackbar_y(state: &SheetState, settle_expanded: bool) -> f32 {
+            let mut c = Composer::new();
+            frame(&mut c, state);
+            if settle_expanded {
+                state.expand();
+                let start = std::time::Instant::now();
+                while start.elapsed() < std::time::Duration::from_millis(600) {
+                    crate::animation::update_animations();
+                    std::thread::sleep(std::time::Duration::from_millis(8));
+                    if (state.offset()
+                        - state.anchored_draggable().position_of(&SheetValue::Expanded))
+                    .abs()
+                        < 0.5
+                    {
+                        break;
+                    }
+                }
+            }
+            // A second frame: the snackbar's height has been measured by now, so the rule can place it.
+            frame(&mut c, state);
+            let nodes = c.arena_nodes();
+            let root = c.layout_root_idx().expect("laid out");
+            let snack = node_with_tag(nodes, "snack");
+            absolute_position(nodes, root, snack)
+                .expect("the snackbar is under the root")
+                .1
+        }
+
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let peek_y = snackbar_y(&state, false);
+        assert_eq!(
+            peek_y,
+            720.0 - 56.0 - 48.0,
+            "partially expanded: the snackbar's bottom edge sits on the sheet's top (the default 56 px \
+             peek, minus its own 48)"
+        );
+
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let expanded_y = snackbar_y(&state, true);
+        assert_eq!(expanded_y, 720.0 - 48.0, "expanded: it drops to the bottom edge");
     }
 
     /// The sheet's shadow follows `sheetShadowElevation` (Compose's default is `ElevationTokens.Level1`,
