@@ -201,8 +201,8 @@ pub mod prelude {
     pub use crate::overlay::anchored_draggable::{AnchoredDraggableState, DraggableAnchors};
     pub use crate::app::window::Window;
     pub use crate::theme::{
-        is_system_dark_theme, set_system_dark_mode, ThemeColors, ThemeSpec, Typography,
-        WiniaTheme,
+        is_system_dark_theme, set_system_dark_mode, MotionScheme, ThemeColors, ThemeSpec,
+        Typography, WiniaTheme,
     };
     pub use crate::text::{
         IdentityTransformation, OffsetMapping, PasswordTransformation, VisualTransformation,

@@ -2,7 +2,7 @@
 //!
 //! Run: cargo run -p winia --example animated_visibility_demo
 //!
-//! Nine panels, each showing one way to drive the component:
+//! Ten panels, each showing one way to drive the component:
 //! - A: fade_in + expand_in — which is also what `AnimatedVisibility::new(v)` alone does, since every
 //!   Compose overload defaults to `fadeIn() + expand*()`
 //! - B: slide_in(Right) + scale_in (slide from the right + scale)
@@ -18,6 +18,9 @@
 //!   (the left box opts into the first-appearance enter, the right box shows the rule)
 //! - I: `VisibilityTransition::empty()` on both sides (Compose's `EnterTransition.None` +
 //!   `ExitTransition.None` — an instant switch, nothing animates)
+//! - J: a CHILD with its own enter/exit — `VisibilityScope::animate_enter_exit`, Compose's
+//!   `Modifier.animateEnterExit(enter, exit)`: one visibility target, two clocks (the container fades in
+//!   120 ms, the child in 1200)
 
 use letclone::clone;
 use std::time::Duration;
@@ -55,6 +58,7 @@ fn main() {
                                 panel_g(ctx);
                                 panel_h(ctx);
                                 panel_i(ctx);
+                                panel_j(ctx);
                             });
                     });
                 });
@@ -373,6 +377,66 @@ fn panel_h(ctx: &mut ComposeCtx) {
                         .font_size(12.0)
                         .modifier(Modifier::new().background(Color::from_argb(255, 158, 158, 158), Shape::rounded(8.0)))
                         .build(ctx);
+                });
+        });
+}
+
+/// Panel J: a CHILD with its own enter/exit — Compose's `Modifier.animateEnterExit(enter, exit)`, through
+/// `VisibilityScope::animate_enter_exit`. The container fades over 120 ms and the inner box over 1200 ms, so
+/// a quarter of a second in the frame is already opaque while the child has barely started: one visibility
+/// target, two clocks.
+#[composable]
+fn panel_j(ctx: &mut ComposeCtx) {
+    let show = ctx.remember(|| false);
+    Column::new()
+        .modifier(Modifier::new().padding(16.0))
+        .build(ctx, |ctx| {
+            Button::new()
+                .on_click({
+                    clone!(show);
+                    move || show.update(|v| *v = !*v)
+                })
+                .build(ctx, |ctx| {
+                    Text::new("J: a child runs its own enter (toggle)").font_size(12.0).build(ctx);
+                });
+            AnimatedVisibility::new(show.clone())
+                .enter(VisibilityTransition::fade_in(TweenSpec::new(
+                    Duration::from_millis(120),
+                    Linear::new(),
+                )))
+                .exit(VisibilityTransition::fade_out(TweenSpec::new(
+                    Duration::from_millis(120),
+                    Linear::new(),
+                )))
+                .build_with_scope(ctx, |scope, ctx| {
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                .padding(8.0)
+                                .background(Color::from_argb(255, 76, 175, 80), Shape::rounded(8.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("container: 120 ms fade").font_size(13.0).build(ctx);
+                            // The child's own channels: it fades on its own clock, inside a box that is
+                            // already there. `extent` is what a fraction slide would travel over.
+                            let layer = scope.animate_enter_exit(
+                                ctx,
+                                VisibilityTransition::fade_in(TweenSpec::new(
+                                    Duration::from_millis(1200),
+                                    Linear::new(),
+                                )),
+                                VisibilityTransition::fade_out(TweenSpec::new(
+                                    Duration::from_millis(1200),
+                                    Linear::new(),
+                                )),
+                                (160.0, 24.0),
+                            );
+                            Row::new()
+                                .modifier(layer.padding(6.0))
+                                .build(ctx, |ctx| {
+                                    Text::new("child: 1200 ms fade of its own").font_size(12.0).build(ctx);
+                                });
+                        });
                 });
         });
 }

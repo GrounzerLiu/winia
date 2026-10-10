@@ -1,6 +1,6 @@
 //! Animation demo — the whole animation system on one page.
 //!
-//! Six groups, each answering a different question about how motion gets its value:
+//! Seven groups, each answering a different question about how motion gets its value:
 //!
 //! - **A. Every-frame targets** — `animate_float_as_state` / `animate_dp_as_state` /
 //!   `animate_int_as_state` / `animate_value_as_state`: hand the engine the value it should be at and
@@ -8,15 +8,20 @@
 //! - **B. State machines** — `update_transition`: one `Transition` over an enum drives several values,
 //!   each animation can pick its spec from the PAIR of states (`transitionSpec`), and a child
 //!   transition derives its own target from the parent.
-//! - **C. Loops** — `remember_infinite_transition`: reverse/restart pulses, the cyclic curve, and
-//!   `with_start_offset` (a loop that begins part-way in).
+//! - **C. Loops** — `remember_infinite_transition`: reverse/restart pulses, the cyclic curve,
+//!   `with_start_offset` (a loop that begins part-way in) and a reverse loop carrying a curve
+//!   (`with_base`), whose return leg is that curve running backwards.
 //! - **D. Explicit timelines** — `KeyframesOf`: absolute milliseconds, values in the animated type's
 //!   units, easing per keyframe.
 //! - **E. Impulse and control** — `push_decay` / `push_decay_vector` (fling, scalar and diagonal),
-//!   `SnapSpec` (hold, then jump), `RepeatableSpec` (n cycles, optionally fast-forwarded), and the
-//!   `Animatable` handle (`animate_to` / `snap_to` / `stop` / `is_running` / `target`).
+//!   `SnapSpec` (hold, then jump), `RepeatableSpec` (n cycles, optionally fast-forwarded), the
+//!   `Animatable` handle (`animate_to` / `snap_to` / `stop` / `is_running` / `target`), a value range
+//!   (`set_bounds`) and a queued `animate_sequence` — both reporting WHY they ended (`MotionEnd`).
 //! - **F. Containers** — `AnimatedSize` (content size changes animate the box), `Crossfade`,
 //!   `AnimatedContent`. `AnimatedVisibility` has its own demo (`animated_visibility_demo`).
+//! - **G. Scheme and clock** — the theme's `MotionScheme` (the same move on standard and expressive
+//!   motion, whose springs the components ask the theme for) and `TimedAnimation`, which answers what a
+//!   spec is worth at any time — the plot at the bottom is drawn by sampling it, nothing running.
 //!
 //! Each group is its own `#[composable]` function, which is also why an animation inside one group only
 //! re-runs that group: winia's invalidation is scoped to the function that read the state, the way a
@@ -28,10 +33,10 @@
 use letclone::clone;
 use std::sync::Arc;
 use std::time::Duration;
-use winia::animation::interpolator::{CubicBezier, EaseOutCubic, Linear};
+use winia::animation::interpolator::{CubicBezier, EaseInOutCubic, EaseOutCubic, Linear};
 use winia::animation::{
     self, AnimationSpec, InfiniteRepeatableSpec, KeyframesOf, RepeatableSpec, SnapSpec, SpringSpec,
-    StartOffsetType, TweenSpec, interpolator,
+    StartOffsetType, TimedAnimation, TweenSpec, interpolator,
 };
 use winia::graphics::GraphicsLayerParams;
 use winia::layout::Alignment;
@@ -85,6 +90,7 @@ fn animation_demo(ctx: &mut ComposeCtx) {
                     group_d(ctx, &clicked);
                     group_e(ctx);
                     group_f(ctx, &clicked);
+                    group_g(ctx, &clicked);
                 });
         });
 }
@@ -384,7 +390,7 @@ fn group_c(ctx: &mut ComposeCtx) {
     heading(
         ctx,
         "C. Loops (remember_infinite_transition)",
-        "Four loops off one scope: reverse, restart with a curve, keyframes, and one that starts part-way in (FastForward).",
+        "Five loops off one scope: reverse, restart with a curve, keyframes, one that starts part-way in (FastForward), and a reverse loop whose return leg runs that same curve backwards.",
     );
     let mut infinite = ctx.remember_infinite_transition();
     let pulse = infinite.animate_float(
@@ -421,6 +427,19 @@ fn group_c(ctx: &mut ComposeCtx) {
         1.0,
         InfiniteRepeatableSpec::restart(Duration::from_millis(1200))
             .with_start_offset(Duration::from_millis(900), StartOffsetType::FastForward),
+    );
+    // The reverse shape carrying a CURVE: `Reverse` mirrors the iteration time, so the return leg is
+    // `fast_out_slow_in` running backwards rather than a linear trip back (`with_base`).
+    let curved = infinite.animate_float(
+        ctx,
+        0.0,
+        1.0,
+        InfiniteRepeatableSpec::reverse(Duration::from_millis(1000)).with_base(
+            AnimationSpec::Tween(TweenSpec::new(
+                Duration::from_millis(1000),
+                Arc::new(interpolator::fast_out_slow_in()) as Arc<dyn interpolator::Interpolator>,
+            )),
+        ),
     );
 
     Row::new()
@@ -503,6 +522,20 @@ fn group_c(ctx: &mut ComposeCtx) {
                         )
                         .build(ctx, |_| {});
                 });
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .size(70.0, 12.0)
+                        .graphics_layer({
+                            clone!(curved);
+                            move || GraphicsLayerParams {
+                                scale_x: 0.12 + curved.peek() * 0.88,
+                                ..Default::default()
+                            }
+                        })
+                        .background(Color::from_argb(255, 156, 39, 176), Shape::rounded(3.0)),
+                )
+                .build(ctx, |_| {});
         });
 }
 
@@ -764,6 +797,79 @@ fn group_e(ctx: &mut ComposeCtx) {
             stopped.get(),
         ),
     );
+
+    // A value range and a queued sequence, both of which report WHY their motion ended — the thing a plain
+    // "finished" callback cannot tell apart: arriving, stopping at a bound, or the engine's overrun guard.
+    let bounded = ctx.remember_animatable(0.0f32);
+    let queued = ctx.remember_animatable(0.0f32);
+    let bounded_end = ctx.remember(|| "not run yet".to_string());
+    Row::new().build(ctx, |ctx| {
+        Button::new()
+            .on_click({
+                clone!(bounded, bounded_end);
+                move || {
+                    bounded.snap_to(0.0);
+                    bounded.set_bounds(0.0, 1.0);
+                    let report = bounded_end.clone();
+                    bounded.animate_to_with_result(
+                        5.0,
+                        AnimationSpec::Spring(SpringSpec::spatial_default()),
+                        move |end| report.set(format!("{:?}", end.reason)),
+                    );
+                }
+            })
+            .build(ctx, |ctx| {
+                Text::new("to 5.0, bounds (0, 1)").font_size(11.0).build(ctx);
+            });
+        Button::new()
+            .on_click({
+                clone!(queued);
+                move || {
+                    queued.snap_to(0.0);
+                    // Three legs in one call: each starts when the one before it ends.
+                    queued.animate_sequence([
+                        (
+                            1.0,
+                            AnimationSpec::Tween(TweenSpec::new(
+                                Duration::from_millis(260),
+                                EaseOutCubic::new(),
+                            )),
+                        ),
+                        (0.35, AnimationSpec::Spring(SpringSpec::spatial_fast())),
+                        (
+                            0.8,
+                            AnimationSpec::Tween(TweenSpec::new(
+                                Duration::from_millis(320),
+                                EaseInOutCubic::new(),
+                            )),
+                        ),
+                    ]);
+                }
+            })
+            .build(ctx, |ctx| {
+                Text::new("sequence: 1 → 0.35 → 0.8").font_size(11.0).build(ctx);
+            });
+    });
+    let bounded_value = bounded.as_state().get();
+    let bounded_state = bounded.as_state();
+    let queued_value = queued.as_state().get();
+    let queued_state = queued.as_state();
+    bar(
+        ctx,
+        &bounded_state,
+        200.0,
+        16.0,
+        Color::from_argb(255, 255, 111, 0),
+        &format!("bounded: {bounded_value:.3}  (ended: {})", bounded_end.get()),
+    );
+    bar(
+        ctx,
+        &queued_state,
+        200.0,
+        16.0,
+        Color::from_argb(255, 63, 81, 181),
+        &format!("sequence: {queued_value:.3}"),
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -862,6 +968,99 @@ fn group_f(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
                 Text::new("Next page").font_size(11.0).build(ctx);
             });
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// G. Scheme and clock
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[composable]
+fn group_g(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) {
+    heading(
+        ctx,
+        "G. Motion scheme and the clock",
+        "The theme decides a component's spring, so the same move reads differently under standard and expressive motion. Below that, TimedAnimation answers what a spec is worth at any time — the plot is sampled from it, with nothing running.",
+    );
+    let target = if clicked.get() { 1.0 } else { 0.0 };
+    // Both bars make the SAME call with the SAME target; only the scheme in force differs. The caption
+    // prints the springs so the numbers behind the motion are legible, since `spatial_default()` resolves
+    // through the theme rather than naming a spring.
+    let standard = ctx.animate_float_as_state(
+        target,
+        AnimationSpec::Spring(SpringSpec::spatial_default()),
+    );
+    let reference = SpringSpec::spatial_default();
+    bar(
+        ctx,
+        &standard,
+        200.0,
+        18.0,
+        Color::from_argb(255, 63, 81, 181),
+        &format!(
+            "standard scheme: spring({:.1}, {:.0})",
+            reference.damping_ratio, reference.stiffness
+        ),
+    );
+    WiniaTheme::with_motion_scheme(MotionScheme::expressive(), ctx, |ctx| {
+        let expressive = ctx.animate_float_as_state(
+            target,
+            AnimationSpec::Spring(SpringSpec::spatial_default()),
+        );
+        let token = SpringSpec::spatial_default();
+        bar(
+            ctx,
+            &expressive,
+            200.0,
+            18.0,
+            Color::from_argb(255, 156, 39, 176),
+            &format!(
+                "expressive scheme: spring({:.1}, {:.0})",
+                token.damping_ratio, token.stiffness
+            ),
+        );
+    });
+
+    // `TimedAnimation` is the engine's own evaluation as a function of time: this plot samples one spring
+    // at 32 instants without registering or running anything. Its `duration()` is the estimate a running
+    // spring is cut off at, so the plot shows the whole flight.
+    let timed = TimedAnimation::target(
+        0.0f32,
+        1.0f32,
+        AnimationSpec::Spring(SpringSpec::spatial_default()),
+    );
+    let duration = timed.duration();
+    Text::new(format!(
+        "TimedAnimation: {} ms of spring({:.1}, {:.0}), sampled at 32 times",
+        duration.as_millis(),
+        SpringSpec::spatial_default().damping_ratio,
+        SpringSpec::spatial_default().stiffness
+    ))
+    .font_size(11.0)
+    .color(WiniaTheme::colors().on_surface_variant)
+    .build(ctx);
+    Row::new()
+        .modifier(Modifier::new().height(52.0).fill_max_width())
+        .alignment(Alignment::End)
+        .build(ctx, |ctx| {
+            for i in 0..32 {
+                let at = duration.mul_f32(i as f32 / 31.0);
+                let value = timed.value_at(at).clamp(0.0, 1.15);
+                Column::new()
+                    .modifier(
+                        Modifier::new()
+                            .size(5.0, (value * 44.0).max(1.0))
+                            .background(
+                                Color::from_argb(255, 0, 150, 136),
+                                Shape::rounded(2.0),
+                            ),
+                    )
+                    .build(ctx, |_| {});
+            }
+        });
+    Text::new("the ramp rises, overshoots slightly and settles: that is the 0.9 damping of the token above")
+        .font_size(11.0)
+        .color(WiniaTheme::colors().on_surface_variant)
+        .build(ctx);
 }
 
 /// A labelled bar whose width is the animated value: `unit` is how many pixels one unit of the value is
