@@ -148,6 +148,7 @@ impl Tooltip {
                 focus_scope: false,
                 dismiss_on_outside: dismiss_outside,
                 dismiss_on_back_press: true,
+                dismiss_defers_to_content: false,
                 // ⚠ Tooltip 浮层必须放行主树点击——浮层盖住锚点（锚点上方
                 // tooltip 与锚点重叠）时点击锚点仍生效（否则 tooltip 挡住
                 // 锚点按钮 → 外部 visible 控制关不了）

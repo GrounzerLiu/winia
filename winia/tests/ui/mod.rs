@@ -377,6 +377,38 @@ impl UiTest {
         }
     }
 
+    /// The running animations right now (`al`): one `ANIM:` line per motion, whose `state=`, `spec=` and
+    /// `value=a->b` fields say which value is moving and between what. Read synchronously like
+    /// [`Self::frame_passes`], and with no motions running the answer is just the `ANIMATIONS:0` header.
+    pub fn animations(&mut self) -> Vec<String> {
+        self.send("al");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut expected: Option<usize> = None;
+        let mut out = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return out;
+            }
+            match self.stdout_rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    if let Some(rest) = line.strip_prefix("ANIMATIONS:") {
+                        expected = rest.trim().parse::<usize>().ok();
+                        if expected == Some(0) {
+                            return out;
+                        }
+                    } else if let Some(rest) = line.strip_prefix("ANIM:") {
+                        out.push(rest.trim().to_string());
+                        if expected.is_some_and(|n| out.len() >= n) {
+                            return out;
+                        }
+                    }
+                }
+                Err(_) => return out,
+            }
+        }
+    }
+
     /// `fpc` — forget the recorded frames, so the next reading starts at the input under test (the first
     /// frame renders too, and it converges as well).
     pub fn clear_frame_passes(&mut self) {

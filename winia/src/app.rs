@@ -432,6 +432,17 @@ impl PerWindow {
                 return true;
             }
             let id = self.overlay.layers[i].id;
+            // A content that owns its exit gets the request and nothing else: the bottom sheet slides down
+            // first and only then flips the caller's `visible`, which stops composing the overlay and
+            // removes it. Starting the host's own exit fade here made the panel fade out where it stood
+            // (the overlap the bottom sheet's module doc recorded) — Compose has no flag for this because
+            // `onDismissRequest` is always the caller's to complete.
+            if self.overlay.layers[i].dismiss_defers_to_content {
+                if let Some(cb) = self.overlay.layers[i].on_dismiss.clone() {
+                    cb();
+                }
+                return true;
+            }
             begin_overlay_close(self, id);
             return true;
         }

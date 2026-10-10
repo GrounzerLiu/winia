@@ -1525,6 +1525,56 @@ fn the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not() {
     settle_shape(&mut app, false, "collapsing brings the rounded corners back");
 }
 
+/// Escape is a dismissal REQUEST, not the host's own removal: the sheet slides down and only then is the
+/// overlay taken away.
+///
+/// The host used to call the handler AND start its own 200 ms exit fade, so a sheet faded out while it was
+/// still sliding — the overlap the module doc recorded. With the request left to the sheet, the overlay
+/// lives for the slide plus the fade; the measurable difference is the overlay's LIFETIME, since a dark page
+/// under a dark scrim changes too little in pixels to read (that is what an earlier version of this test
+/// tried, and it passed either way).
+#[test]
+fn escape_slides_the_sheet_out_instead_of_fading_it() {
+    let mut app = UiTest::launch("bottom_sheet");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+    app.refresh();
+    let panel_top_before = {
+        let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
+        y - 28.0
+    };
+
+    let escaped_at = Instant::now();
+    app.key("Escape");
+    // The panel starts sliding immediately (the handler is the sheet's own).
+    std::thread::sleep(Duration::from_millis(90));
+    app.refresh();
+    let panel_top_during = app
+        .find_tag_in_overlay("bs-content")
+        .map(|(_, y, _, _)| y - 28.0)
+        .unwrap_or(panel_top_before);
+    assert!(
+        panel_top_during > panel_top_before + 4.0,
+        "the sheet slides itself out (top {panel_top_before} -> {panel_top_during})"
+    );
+
+    // `overlay_count` reads the CACHED tree, so the poll has to refresh it first — an earlier version of
+    // this test polled without refreshing and therefore never saw the overlay go, which wrongly looked like
+    // a stuck overlay (the fix was reverted over it, then re-measured through the debug server: the current
+    // code does remove the overlay about 450 ms after Escape).
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        app.refresh();
+        if app.overlay_count() == 0 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the sheet's overlay must eventually be gone");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let lifetime = escaped_at.elapsed();
+    assert!(lifetime < Duration::from_secs(4), "the dismissal completed in {lifetime:?}");
+}
+
 /// The sheet's anchors come from the WINDOW height, so a resize has to move them.
 ///
 /// Compose rebuilds them inside the layout pass (`ModalBottomSheet.kt:295-300`: `val fullHeight =

@@ -119,6 +119,10 @@ pub(crate) struct OverlayWindow {
     /// Whether Escape closes this overlay (Compose's `DialogProperties.dismissOnBackPress`). Copied
     /// from [`crate::overlay::OverlayDesc::dismiss_on_back_press`] and read by [`PerWindow::escape_key`].
     pub(crate) dismiss_on_back_press: bool,
+    /// Whether the CONTENT completes its own removal: a dismissal request calls `on_dismiss` and leaves the
+    /// overlay open (the component animates out and stops composing it). Copied from
+    /// [`crate::overlay::OverlayDesc::dismiss_defers_to_content`].
+    pub(crate) dismiss_defers_to_content: bool,
     /// Has this overlay already suspended the page's focus? Claiming is a ONE-TIME transition, and
     /// this is what keeps it one: re-running it every frame walked the whole main tree and called
     /// into the IME on every frame of a modal's life.
@@ -1060,10 +1064,17 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
         let passthrough = pw.overlay.layers[i].click_passthrough;
         let id = pw.overlay.layers[i].id;
         if dismiss {
-            // 启动退出动画（不复位——动画完成后移除；passthrough Tooltip 的
-            // on_dismiss 同步置 visible=false → 组合期记录 active=false 走
-            // begin_overlay_close；这里先直接触发——两者幂等（closing 防重入））
-            begin_overlay_close(pw, id);
+            // A content that owns its exit (a bottom sheet) gets the request only: it animates itself out
+            // and flips the caller's `visible`, and that removes the overlay. Everything else starts the
+            // host's exit now (idempotent with a component that flips its own state during composition:
+            // the `closing` flag stops the second path).
+            if pw.overlay.layers[i].dismiss_defers_to_content {
+                if let Some(cb) = pw.overlay.layers[i].on_dismiss.clone() {
+                    cb();
+                }
+            } else {
+                begin_overlay_close(pw, id);
+            }
         }
         // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
         // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
@@ -1120,6 +1131,7 @@ impl OverlayWindow {
             position: desc.position,
             offset: desc.offset,
             dismiss_on_back_press: desc.dismiss_on_back_press,
+            dismiss_defers_to_content: desc.dismiss_defers_to_content,
             anchor_slide: desc.anchor_slide,
             modal: desc.modal,
             dismiss_on_outside: desc.dismiss_on_outside,
@@ -1363,6 +1375,7 @@ mod overlay_close_tests {
             focus_scope: true,
             dismiss_on_outside: true,
             dismiss_on_back_press: true,
+            dismiss_defers_to_content: false,
             click_passthrough: false,
             fit_around_anchor: false,
             match_anchor_width: false,
@@ -1419,6 +1432,7 @@ mod overlay_close_tests {
             focus_scope: true,
             dismiss_on_outside: true,
             dismiss_on_back_press,
+            dismiss_defers_to_content: false,
             click_passthrough: false,
             fit_around_anchor: false,
             match_anchor_width: false,
@@ -1455,5 +1469,57 @@ mod overlay_close_tests {
             !stubborn.overlay.layers[0].closing,
             "but the dialog that opted out stays open"
         );
+    }
+
+    /// A content that owns its exit gets the dismissal request and nothing else: `on_dismiss` runs, and the
+    /// host does NOT start its own exit. That is the difference a bottom sheet needs — the panel slides down
+    /// first and flips the caller's `visible`, which is what removes the overlay. Without the flag the host
+    /// both calls the handler and fades, so the sheet fades out mid-slide.
+    #[test]
+    fn a_dismissal_request_that_the_content_owns_does_not_start_the_hosts_fade() {
+        let desc = |defers: bool, called: Arc<std::sync::atomic::AtomicUsize>| OverlayDesc {
+            id: 11,
+            anchor_slot: None,
+            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: true,
+            focus_scope: true,
+            dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            dismiss_defers_to_content: defers,
+            click_passthrough: false,
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            on_dismiss: Some(Arc::new(move || {
+                called.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+            enter_anim: None,
+            exit_anim: Some(OverlayAnimSpec::fade_only(Duration::from_millis(50))),
+            content: Box::new(|_| {}),
+            local_snapshot: Vec::new(),
+        };
+
+        for (defers, want_closing) in [(true, false), (false, true)] {
+            let called = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let light = ThemeColors::default_light();
+            let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, light);
+            pw.overlay
+                .layers
+                .push(OverlayWindow::new_with_composer(
+                    desc(defers, called.clone()),
+                    Composer::new(),
+                ));
+            assert!(pw.escape_key(), "escape is consumed");
+            assert_eq!(
+                called.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "the handler runs either way (defers = {defers})"
+            );
+            assert_eq!(
+                pw.overlay.layers[0].closing, want_closing,
+                "a content that owns its exit is left open (defers = {defers})"
+            );
+        }
     }
 }

@@ -301,6 +301,12 @@ pub struct OverlayDesc {
     pub(crate) focus_scope: bool,
     pub(crate) dismiss_on_outside: bool,
     pub(crate) dismiss_on_back_press: bool,
+    /// Whether the CONTENT owns its own exit — Compose's `onDismissRequest` contract, which is always the
+    /// caller's to complete. A dismissal request then calls `on_dismiss` and leaves the overlay open: the
+    /// component animates itself out and stops composing the overlay, which is what removes it. winia's
+    /// host otherwise starts its own exit fade next to the handler, which faded a bottom sheet out while it
+    /// was still sliding down. `false` for everything else (the door-out animation stays the host's).
+    pub(crate) dismiss_defers_to_content: bool,
     pub(crate) click_passthrough: bool,
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     pub(crate) fit_around_anchor: bool,
@@ -443,6 +449,7 @@ impl Popup {
             focus_scope: false,
             dismiss_on_outside: self.dismiss_on_outside,
             dismiss_on_back_press: true,
+            dismiss_defers_to_content: false,
             click_passthrough: false,
             // A popup keeps winia's historic placement (below the anchor, no fitting).
             fit_around_anchor: false,
@@ -577,6 +584,7 @@ impl Dialog {
             focus_scope: true,
             dismiss_on_outside: self.dismiss_on_outside,
             dismiss_on_back_press: true,
+            dismiss_defers_to_content: false,
             click_passthrough: false,
             // A dialog is centred (`PopupPosition::Center`), so there is nothing to fit around.
             fit_around_anchor: false,

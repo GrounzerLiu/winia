@@ -271,6 +271,7 @@ impl BasicAlertDialog {
             focus_scope: self.focusable,
             dismiss_on_outside: self.dismiss_on_outside,
             dismiss_on_back_press: self.dismiss_on_back_press,
+            dismiss_defers_to_content: false,
             click_passthrough: false,
             // An alert dialog is centred, so there is nothing to fit around the anchor.
             fit_around_anchor: false,

@@ -388,6 +388,7 @@ impl DropdownMenu {
                 focus_scope: self.focus_scope,
                 dismiss_on_outside: true,
                 dismiss_on_back_press: true,
+                dismiss_defers_to_content: false,
                 click_passthrough: false,
                 // material3's `DropdownMenuPositionProvider`: a menu fits itself around the anchor, so a
                 // menu taller than the space below it ends up above or against the window edge instead of
