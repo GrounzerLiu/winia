@@ -74,10 +74,9 @@ fn badge_demo(ctx: &mut ComposeCtx) {
                     Badge::new().content(|ctx| { Text::new("100+").build(ctx); }).build(ctx);
                 });
 
-            section_title(ctx, "自定义颜色");
+            section_title(ctx, "Colors: the container colour decides the content colour");
             let theme = WiniaTheme::colors();
             let prim = theme.primary;
-            let on_prim = theme.on_primary;
             Row::new()
                 .modifier(Modifier::new().padding_vertical(3.0))
                 .spacing(24.0)
@@ -89,13 +88,50 @@ fn badge_demo(ctx: &mut ComposeCtx) {
                             .content(|ctx| { Text::new("3").build(ctx); })
                             .build(ctx);
                     }).build(ctx, |ctx| { Text::new("📈").font_size(24.0).build(ctx); });
+                    // No `content_color`: Compose derives it from the container — a scheme colour maps to
+                    // its paired content colour (`contentColorFor`: primary → onPrimary).
                     BadgedBox::new(move |ctx| {
                         Badge::new()
                             .container_color(prim)
-                            .content_color(on_prim)
+                            .content(|ctx| { Text::new("3").build(ctx); })
                             .build(ctx);
                     }).build(ctx, |ctx| { Text::new("⭐").font_size(24.0).build(ctx); });
+                    // A colour that is NOT in the scheme: the ambient content colour is the fallback.
+                    BadgedBox::new(|ctx| {
+                        Badge::new()
+                            .container_color(Color::from_argb(255, 69, 90, 100))
+                            .content(|ctx| { Text::new("3").build(ctx); })
+                            .build(ctx);
+                    }).build(ctx, |ctx| { Text::new("🧭").font_size(24.0).build(ctx); });
                 });
+            Text::new("explicit white · primary → onPrimary · a custom colour → the ambient content colour")
+                .font_size(11.0)
+                .color(theme.on_surface_variant)
+                .build(ctx);
+
+            section_title(ctx, "Baseline: BadgedBox reports only the anchor's");
+            // Compose passes the ANCHOR's baselines as the box's own, so a badge (whose own text sits
+            // higher) cannot drag the line a row aligns by. Both boxes below align on that baseline.
+            Row::new()
+                .modifier(Modifier::new().padding_vertical(3.0))
+                .spacing(24.0)
+                .build(ctx, |ctx| {
+                    Text::new("baseline →")
+                        .font_size(16.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                    BadgedBox::new(|ctx| {
+                        Badge::new()
+                            .content(|ctx| { Text::new("9").font_size(20.0).build(ctx); })
+                            .build(ctx);
+                    })
+                    .modifier(Modifier::new().align_by_baseline())
+                    .build(ctx, |ctx| { Text::new("📥").font_size(28.0).build(ctx); });
+                });
+            Text::new("the badge hangs above the icon and does not move the shared baseline")
+                .font_size(11.0)
+                .color(theme.on_surface_variant)
+                .build(ctx);
 
             section_title(ctx, "自定义 modifier");
             Row::new()
