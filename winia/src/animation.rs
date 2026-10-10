@@ -1907,6 +1907,26 @@ impl From<DecaySpec> for AnimationSpec {
     fn from(s: DecaySpec) -> Self { AnimationSpec::Decay(s) }
 }
 
+impl AnimationSpec {
+    /// Compose's `visibilityThreshold` argument — how close a spring has to get before it counts as
+    /// arrived, in the value's own unit. In Compose the threshold is a construction parameter of the
+    /// `Animatable` (and the default spec is built with it: `spring(visibilityThreshold = …)`); winia's
+    /// springs carry theirs on the spec, so this is the per-call override.
+    ///
+    /// A no-op for specs with no threshold: a `Tween`/`Keyframes` ends on its clock, and a `Decay`'s
+    /// stop threshold is its own (`DecaySpec::threshold`).
+    pub fn with_visibility_threshold(self, threshold: f32) -> Self {
+        match self {
+            AnimationSpec::Spring(spec) => AnimationSpec::Spring(SpringSpec { threshold, ..spec }),
+            AnimationSpec::Repeatable(spec) => AnimationSpec::Repeatable(RepeatableSpec {
+                base: Box::new(spec.base.with_visibility_threshold(threshold)),
+                ..spec
+            }),
+            other => other,
+        }
+    }
+}
+
 /// The physical constants of a spring animation (`AnimationSpec::Spring`). `PartialEq` so a component
 /// can assert the spec it hands the engine is the motion-scheme token it claims to be.
 #[derive(Clone, Debug, PartialEq)]
@@ -3853,6 +3873,52 @@ pub(crate) mod tests {
         assert_eq!(a.value(), 0.0, "the cancelled motion does not pull the value back");
         assert_eq!(a.as_state().peek(), 0.0, "as_state() is the same value the frame paints");
         clear_all_animations();
+    }
+
+    /// Compose's `visibilityThreshold` argument (`animateFloatAsState(..., visibilityThreshold = …)`):
+    /// winia's springs carry the threshold on the spec, so this is the per-call override — a loose
+    /// threshold arrives sooner, a tight one keeps travelling.
+    #[test]
+    fn a_looser_visibility_threshold_arrives_sooner() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let soft = SpringSpec {
+            stiffness: 60.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            ..SpringSpec::default()
+        };
+        let frames_until_done = |threshold: f32| -> u32 {
+            let state = crate::runtime::state::State::new(0.0f32);
+            push_animatable(
+                state.clone(),
+                100.0,
+                AnimationSpec::Spring(soft.clone()).with_visibility_threshold(threshold),
+            );
+            let mut frames = 0;
+            while update_animations() && frames < 600 {
+                std::thread::sleep(Duration::from_millis(8));
+                frames += 1;
+            }
+            assert_eq!(state.peek(), 100.0, "a spring still lands on its exact target");
+            frames
+        };
+        let tight = frames_until_done(0.1);
+        clear_all_animations();
+        let loose = frames_until_done(40.0);
+        clear_all_animations();
+        assert!(
+            loose < tight,
+            "a 40-unit threshold settles before a 0.1-unit one (loose {loose} frames, tight {tight})"
+        );
+        // And the threshold really is inside the spec, where Compose puts it: nothing else changes.
+        let spec = AnimationSpec::Spring(soft.clone()).with_visibility_threshold(7.5);
+        match spec {
+            AnimationSpec::Spring(s) => {
+                assert_eq!(s.threshold, 7.5);
+                assert_eq!(s.stiffness, soft.stiffness, "the rest of the spring is untouched");
+            }
+            other => panic!("expected a spring, got {other:?}"),
+        }
     }
 
     #[derive(Clone, PartialEq, Debug)]
