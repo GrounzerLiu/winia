@@ -49,6 +49,11 @@ pub struct SheetState {
     anchored: AnchoredDraggableState<SheetValue>,
     /// 跳过半展开（sheet 只 Hidden/Expanded 两态）— State 以便 Clone 后共享
     skip_partially_expanded: State<bool>,
+    /// Compose's `SheetState(skipHiddenState)` (`SheetDefaults.kt:…`): the DOCKED sheet skips it by default
+    /// (`rememberStandardBottomSheetState(skipHiddenState = true)`, `BottomSheetScaffold.kt:207-215`) — a
+    /// standard sheet cannot be swiped off the screen, which is why its drag handle collapses it instead of
+    /// hiding it. The modal sheet keeps `false` (`rememberModalBottomSheetState`).
+    skip_hidden_state: State<bool>,
     /// 是否启用半展开锚点（sheet 高度 > 视口一半）
     has_partially_expanded: State<bool>,
     /// 是否有 Expanded 锚点
@@ -61,6 +66,7 @@ impl SheetState {
         Self {
             anchored: AnchoredDraggableState::new(initial_value),
             skip_partially_expanded: State::new(false),
+            skip_hidden_state: State::new(false),
             has_partially_expanded: State::new(false),
             has_expanded: State::new(true),
         }
@@ -71,6 +77,16 @@ impl SheetState {
         self.skip_partially_expanded.set(v);
     }
 
+    /// Skip the `Hidden` anchor (Compose's `skipHiddenState`). The scaffold's default state sets it; a
+    /// caller-provided state decides for itself, exactly as the two `remember…SheetState` helpers do.
+    pub fn set_skip_hidden_state(&self, v: bool) {
+        self.skip_hidden_state.set(v);
+    }
+
+    pub fn skip_hidden_state(&self) -> bool {
+        self.skip_hidden_state.get()
+    }
+
     /// 设置值变更确认回调（veto 时回滚）
     pub fn set_confirm_value_change(&mut self, f: impl Fn(SheetValue) -> bool + Send + Sync + 'static) {
         self.anchored.set_confirm_value_change(move |v: &SheetValue| f(*v));
@@ -79,6 +95,50 @@ impl SheetState {
     /// 布局期更新锚点（`full_height` = 视口高，`sheet_height` = 面板内容高）。
     /// 对标 Compose BottomSheet 的 `draggableAnchors` 计算。`&self`——
     /// on_size_changed 回调（Fn 闭包）中调用。
+    /// Compose's `newTarget` resolution inside a `draggableAnchors` block: the sheet keeps the state it is
+    /// in while that state still has an anchor, and otherwise falls back in the order the component's own
+    /// state machine allows — `PartiallyExpanded -> Expanded -> Hidden` for a partially expanded sheet whose
+    /// state was switched off, `Expanded -> PartiallyExpanded -> Hidden` for one that no longer has an
+    /// expanded anchor (`ModalBottomSheet.kt:307-325`, `BottomSheetScaffold.kt:280-300`). `Hidden` keeps its
+    /// value only while `Hidden` itself has an anchor. `None` means "no anchor to move to": leave it.
+    fn resolved_target(&self, anchors: &DraggableAnchors<SheetValue>) -> Option<SheetValue> {
+        let has = |v: SheetValue| !anchors.position_of(&v).is_nan();
+        match self.anchored.target_value() {
+            SheetValue::Hidden => has(SheetValue::Hidden).then_some(SheetValue::Hidden),
+            SheetValue::PartiallyExpanded => [
+                SheetValue::PartiallyExpanded,
+                SheetValue::Expanded,
+                SheetValue::Hidden,
+            ]
+            .into_iter()
+            .find(|v| has(*v)),
+            SheetValue::Expanded => [
+                SheetValue::Expanded,
+                SheetValue::PartiallyExpanded,
+                SheetValue::Hidden,
+            ]
+            .into_iter()
+            .find(|v| has(*v)),
+        }
+    }
+
+    /// Move a settled sheet onto `value`'s new position, if it is not already there. Called after the
+    /// anchors changed.
+    fn settle_onto(&self, value: Option<SheetValue>) {
+        let Some(value) = value else { return };
+        if self.anchored.is_animation_running() {
+            // A motion already in flight is heading for the same value; only its end position moved.
+            return;
+        }
+        let wanted = self.anchored.position_of(&value);
+        if !wanted.is_nan()
+            && (self.anchored.target_value() != value
+                || (self.anchored.offset() - wanted).abs() > 0.5)
+        {
+            self.anchored.animate_to(value);
+        }
+    }
+
     pub fn update_anchors(&self, full_height: f32, sheet_height: f32) {
         let mut pairs = vec![(SheetValue::Hidden, full_height)];
         // 半展开锚点：sheet 高 > 视口一半 才启用（或强制）
@@ -94,6 +154,7 @@ impl SheetState {
         self.has_partially_expanded.set(partially_available);
         self.has_expanded.set(sheet_height != 0.0);
         let new_anchors = DraggableAnchors::new(pairs.clone());
+        let resolved = self.resolved_target(&new_anchors);
         let was_uninit = self.anchored.offset().is_nan();
         if was_uninit {
             // 未初始化且已 show()（current != Hidden）：先 snap 到 Hidden(fullH)，再动画到 correct(Partial/Expanded)，
@@ -130,18 +191,11 @@ impl SheetState {
         // Compose's `draggableAnchors` block returns the new anchors AND the new target together
         // (`ModalBottomSheet.kt:299-325`): the sheet keeps the state it is in across a geometry change and
         // travels to that state's NEW position — `PartiallyExpanded -> PartiallyExpanded` while that anchor
-        // exists, `Expanded -> Expanded`, `Hidden -> Hidden`. Clamping alone does not do that: after the
-        // window grows, a partially expanded sheet's old offset is still inside the offset range, so it
-        // stayed at the old half instead of the new one (measured through the demo: 280 -> 280 where half of
-        // the taller window is 380). A motion already in flight is left alone — it is heading for the same
-        // value, only its end position moved.
-        if !self.anchored.is_animation_running() {
-            let value = self.anchored.target_value();
-            let wanted = self.anchored.position_of(&value);
-            if !wanted.is_nan() && (self.anchored.offset() - wanted).abs() > 0.5 {
-                self.anchored.animate_to(value);
-            }
-        }
+        // exists, `Expanded -> Expanded`, `Hidden -> Hidden`, with the fallback `resolved_target` applies
+        // when the anchor is gone. Clamping alone does not do that: after the window grows, a partially
+        // expanded sheet's old offset is still inside the offset range, so it stayed at the old half instead
+        // of the new one (measured through the demo: 280 -> 280 where half of the taller window is 380).
+        self.settle_onto(resolved);
     }
 
     /// Scaffold 专用锚点（对标 Compose `BottomSheetScaffold` 的 `calculateAnchors`）。
@@ -173,12 +227,16 @@ impl SheetState {
                 pairs.push((SheetValue::Expanded, expanded_pos));
             }
         }
-        // Hidden 始终保留（供 hide() 用，scaffold 拖到隐藏）
-        pairs.push((SheetValue::Hidden, layout_height));
+        // Hidden is kept only when it is not skipped (Compose's scaffold skips it by default — see
+        // `skip_hidden_state`).
+        if !self.skip_hidden_state.get() {
+            pairs.push((SheetValue::Hidden, layout_height));
+        }
         self.has_partially_expanded.set(pairs.iter().any(|(v, _)| *v == SheetValue::PartiallyExpanded));
         // Expanded 在重合时仍视为可用（expand() 应可达），用 has_expanded_pos 而非 pairs 去重结果
         self.has_expanded.set(has_expanded_pos);
         let new_anchors = DraggableAnchors::new(pairs);
+        let resolved = self.resolved_target(&new_anchors);
         // Scaffold 首帧直接 snap 到初始值（通常 Partial），不做 Hidden→Partial 的首次滑入
         // 保留 Modal 的首次滑入逻辑，仅 Scaffold 走静默初始化
         let was_uninit = self.anchored.offset().is_nan();
@@ -190,13 +248,7 @@ impl SheetState {
         // the state it is in (Compose's `calculateAnchors` returns the anchors and the target together,
         // `BottomSheetScaffold.kt:272-306`), where keeping the old offset would leave a docked sheet at the
         // old peek line after the window resizes.
-        if !self.anchored.is_animation_running() {
-            let value = self.anchored.target_value();
-            let wanted = self.anchored.position_of(&value);
-            if !wanted.is_nan() && (self.anchored.offset() - wanted).abs() > 0.5 {
-                self.anchored.animate_to(value);
-            }
-        }
+        self.settle_onto(resolved);
     }
 
     // ── 状态读取 ──
@@ -316,6 +368,7 @@ impl Clone for SheetState {
         Self {
             anchored: self.anchored.clone(),
             skip_partially_expanded: self.skip_partially_expanded.clone(),
+            skip_hidden_state: self.skip_hidden_state.clone(),
             has_partially_expanded: self.has_partially_expanded.clone(),
             has_expanded: self.has_expanded.clone(),
         }
@@ -384,6 +437,60 @@ mod tests {
         assert_eq!(s.target_value(), SheetValue::PartiallyExpanded, "the state is kept");
         settle(&s);
         assert_eq!(s.offset(), 500.0, "the sheet travels to the new position of that state");
+    }
+
+    /// When the anchor the sheet sits on DISAPPEARS, it falls back to the next state its own state machine
+    /// allows — Compose's `newTarget` (`BottomSheetScaffold.kt:280-300`). Switching the partially expanded
+    /// state off while the sheet is on the peek line removes that anchor: without the fallback the sheet
+    /// stayed where it was, floating at a position no anchor described any more.
+    #[test]
+    fn a_vanished_anchor_falls_back_to_the_next_state() {
+        let s = SheetState::new(SheetValue::PartiallyExpanded);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        s.anchored.offset_state().set(704.0);
+        assert_eq!(s.offset(), 704.0, "on the peek line");
+        s.set_skip_partially_expanded(true);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        assert!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded).is_nan(),
+            "the anchor is gone"
+        );
+        assert_eq!(s.target_value(), SheetValue::Expanded, "the sheet falls back to Expanded");
+        // The move itself is a timed animation, so drive frames until it arrives.
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(600) {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            if (s.offset() - 200.0).abs() < 0.5 {
+                break;
+            }
+        }
+        assert!(
+            (s.offset() - 200.0).abs() < 0.5,
+            "and travels to that anchor (800 - 600), got {}",
+            s.offset()
+        );
+    }
+
+    /// The scaffold's own state skips `Hidden` (`rememberStandardBottomSheetState(skipHiddenState = true)`):
+    /// a standard sheet cannot be swiped off the screen, so its anchors stop at the peek. A caller-provided
+    /// state keeps whatever it was told.
+    #[test]
+    fn a_docked_sheet_can_skip_the_hidden_anchor() {
+        let s = SheetState::new(SheetValue::PartiallyExpanded);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        assert!(
+            !s.anchored.position_of(&SheetValue::Hidden).is_nan(),
+            "by default the docked sheet can still be hidden"
+        );
+        s.set_skip_hidden_state(true);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        assert!(
+            s.anchored.position_of(&SheetValue::Hidden).is_nan(),
+            "with the flag set there is no anchor to hide at"
+        );
+        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
+        assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
     }
 
     /// The same for the docked sheet: its anchors come from the layout height and the peek, so a resize has

@@ -17,6 +17,26 @@
 //!   (`window_size().1`), `peekPx` from `sheetPeekHeight` used as a LOGICAL length (one dp
 //!   is one logical px — see `Dp::to_logical`), and `sheetH` as measured.
 //! - Dragging: `on_drag`/`drag_end` feed `SheetState` directly.
+//!
+//! Differences from Compose (audited against `material3/BottomSheetScaffold.kt`, 494 lines):
+//! - The settle is a 250 ms `EaseOutCubic` tween. Compose settles with the motion scheme's `DefaultSpatial`
+//!   spring and expands/shows with the same token (`:238-240`). A tween cannot overshoot, which is why
+//!   Compose's `verticalScaleUp`/`verticalScaleDown` (`:461-492`, a drawing-layer scale that hides the gap a
+//!   bouncy settle leaves between the sheet's bottom edge and the screen edge) has no counterpart here — it
+//!   becomes necessary the moment the settle turns into a spring.
+//! - The anchors skip `Hidden` for the state the scaffold creates itself, as
+//!   `rememberStandardBottomSheetState(skipHiddenState = true)` does (`:207-215`); a caller-provided state
+//!   decides for itself, exactly like the two `remember…SheetState` helpers.
+//! - `sheetPeekHeight` is applied as a `min_height`, where Compose uses `requiredHeightIn(min = …)`
+//!   (`:262-264`) — Compose's form wins even when the incoming maximum is smaller.
+//! - No `topBar`, no `snackbarHost` (Compose places the snackbar above the sheet while it is partially
+//!   expanded and on the bottom edge otherwise, `:437-444`), no `sheetContentColor`/`sheetTonalElevation`, no
+//!   `sheetShadowElevation` (the shadow is fixed at 1 px, 40/255 black), no `sheetShape` (a radius instead of
+//!   a `Shape`), and `sheetDragHandle` is a bool rather than a composable slot.
+//! - `content` receives no `PaddingValues`: Compose hands the caller `PaddingValues(bottom = sheetPeekHeight)`
+//!   (`:143`) and lets it apply the padding, while winia applies the same inset itself.
+//! - The drag handle's `semantics` actions (expand/collapse/dismiss, `:350-385`) are not ported; the click
+//!   behaviour is.
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
@@ -114,7 +134,15 @@ impl BottomSheetScaffold {
         let sheet_state = match self.sheet_state {
             Some(s) => s,
             None => ctx
-                .remember(|| SheetState::new(SheetValue::PartiallyExpanded))
+                .remember(|| {
+                    // Compose's `rememberStandardBottomSheetState(skipHiddenState = true)`
+                    // (`BottomSheetScaffold.kt:207-215`): a standard sheet cannot be swiped off the
+                    // screen — swiping down stops at the peek, and the drag handle collapses rather
+                    // than hides. A caller-provided state decides for itself, as it does in Compose.
+                    let s = SheetState::new(SheetValue::PartiallyExpanded);
+                    s.set_skip_hidden_state(true);
+                    s
+                })
                 .get(),
         };
         let peek = self.sheet_peek_height;
@@ -215,6 +243,12 @@ impl BottomSheetScaffold {
                 // -pad_x in RTL, with as much clipped off the left as left dead on the right.
                 let sheet_mod = Modifier::new()
                     .width(sheet_w)
+                    // At least as tall as the peek: Compose's `requiredHeightIn(min = peekHeight)` on the
+                    // sheet's Surface (`BottomSheetScaffold.kt:262-264`). Without it a content shorter than
+                    // the peek left the sheet only as tall as that content while its anchor still put the
+                    // TOP at `layoutHeight - peek`, so the page showed through the strip under the
+                    // collapsed sheet (measured: an 11 px text and a 96 px peek left an 85 px gap).
+                    .min_height(peek_px)
                     // x = 0: the box's centre alignment owns the horizontal placement now.
                     .absolute_offset(0.0, st_for_offset.offset_state())
                     .shadow(
@@ -325,8 +359,30 @@ impl BottomSheetScaffold {
                     .modifier(sheet_mod_with_panel_drag)
                     .build(ctx, |ctx| {
                         if drag_handle {
+                            // The handle is CLICKABLE in Compose (`StandardBottomSheet`, the
+                            // `DragHandleWithTooltip { Box(Modifier.clickable { … }) }`): a click expands
+                            // a peeking sheet, collapses an expanded one (or hides it when the hidden
+                            // state is allowed), and shows a hidden one. `semantics` actions
+                            // (expand/collapse/dismiss) are not ported — winia's semantics API has no
+                            // custom-action channel yet, which the module doc records.
+                            let handle_state = sheet_state.clone();
                             crate::layout::components::Row::new()
-                                .modifier(Modifier::new().fill_max_width().padding_vertical(12.0))
+                                .modifier(
+                                    Modifier::new()
+                                        .fill_max_width()
+                                        .padding_vertical(12.0)
+                                        .clickable(move || match handle_state.current_value() {
+                                            SheetValue::Expanded => {
+                                                if handle_state.skip_hidden_state() {
+                                                    handle_state.partial_expand();
+                                                } else {
+                                                    handle_state.hide();
+                                                }
+                                            }
+                                            SheetValue::PartiallyExpanded => handle_state.expand(),
+                                            _ => handle_state.show(),
+                                        }),
+                                )
                                 .arrangement(crate::layout::Arrangement::Center)
                                 .build(ctx, |ctx| {
                                     crate::layout::components::Stack::new()
@@ -412,6 +468,45 @@ mod tests {
             c.arena_nodes()[content].modifier.get_padding_vertical().1,
             SCAFFOLD_SHEET_PEEK_HEIGHT.value(),
             "the content reserves exactly one peek at the bottom, in logical px"
+        );
+    }
+
+    /// Compose forces the sheet to be at least as tall as its peek — `Modifier.requiredHeightIn(min =
+    /// peekHeight)` on the Surface (`BottomSheetScaffold.kt:262-264`). Without it a content shorter than
+    /// the peek leaves the sheet just as tall as that content while the anchor still puts its TOP at
+    /// `layoutHeight - peek`, so the strip between the sheet's bottom edge and the window's bottom edge
+    /// shows the page underneath - the collapsed sheet looks like it is floating.
+    #[test]
+    fn a_short_sheet_still_reaches_its_peek_height() {
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        let st = state.clone();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            BottomSheetScaffold::new()
+                .sheet_state(st.clone())
+                .sheet_peek_height(Dp(96.0))
+                .sheet_drag_handle(false)
+                .build(
+                    ctx,
+                    |ctx| {
+                        crate::components::Text::new("s").font_size(8.0).build(ctx);
+                    },
+                    |ctx| {
+                        crate::components::Text::new("page").build(ctx);
+                    },
+                );
+        });
+        c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        let root = c.layout_root_idx().expect("laid out");
+        let sheet = c.arena_nodes()[root].children[1];
+        assert_eq!(
+            c.arena_nodes()[sheet].measured_size.height, 96.0,
+            "the sheet is at least as tall as its peek (its content is 11)"
+        );
+        assert_eq!(
+            c.arena_nodes()[sheet].position.y, 720.0 - 96.0,
+            "so the collapsed sheet covers the window's bottom edge, with no page showing under it"
         );
     }
 
