@@ -90,12 +90,17 @@ pub trait AnimationInstance: Send {
     fn retarget_velocity(&self) -> RetargetVelocity {
         RetargetVelocity::scalar(self.last_velocity())
     }
+    /// The value this motion is heading for, for callers that ask (Compose's
+    /// `Animatable.targetValue`); `None` for a motion with no target (a fling).
+    fn target_value(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 /// Color 动画列表（与 f32 动画分开，避免类型擦除）
-static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Animatable<crate::graphics::Color>>>> =
+static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Motion<crate::graphics::Color>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Drop all animations owned by a Composer. State IDs remain globally unique,
@@ -265,7 +270,7 @@ pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
 }
 
 /// 注册一个动画到全局活跃列表
-/// 注册一个 Animatable<T> 到全局活跃列表（由 animate_*_as_state 调用）
+/// Register a `Motion<T>` in the global active list (called by `animate_*_as_state`)
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     push_animatable_handle(state.into_animating(), target, spec);
 }
@@ -353,7 +358,7 @@ pub fn push_animatable_with_velocity_and_done<
         }
         list.retain(|anim| anim.state_id() != sid);
     }
-    let mut anim = Animatable::from_animating(handle);
+    let mut anim = Motion::from_animating(handle);
     anim.start_with_velocity(target, spec, RetargetVelocity::scalar(velocity));
     anim.on_finish(done);
     anim.update();
@@ -404,7 +409,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
             .map(|a| a.retarget_velocity()).unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
     } // 锁释放，下面 anim.update() 不持锁执行用户代码
-    let mut anim = Animatable::from_animating(state);
+    let mut anim = Motion::from_animating(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     // 立即执行首次更新，避免等下一帧 flash
     anim.update();
@@ -422,7 +427,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
 ///
 /// A real vector fling takes a velocity OF THE VALUE'S OWN TYPE, and that path exists:
 /// `push_decay_vector(state, Offset::new(100.0, -60.0), spec)` (or
-/// `Animatable::animate_decay_with_velocity`) gives every component its own decay, the way Compose's
+/// `Motion::animate_decay_with_velocity`) gives every component its own decay, the way Compose's
 /// `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec: DecayAnimationSpec<T>)` does.
 /// Scalar decays (the fling/deceleration path) are untouched.
 fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, value: &T) -> AnimationSpec {
@@ -435,10 +440,10 @@ fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, valu
     spec
 }
 
-/// 注册一个 Animatable<Color> 到全局活跃列表（由 animate_color_as_state 调用）
+/// Register a `Motion<Color>` in the global active list (called by `animate_color_as_state`)
 ///
 /// The spec is honoured as written, springs included: a `Color` is a four-component value (Oklab
-/// `alpha, L, a, b`), so `Animatable::start_with_velocity` gives it one spring per component, the way
+/// `alpha, L, a, b`), so `Motion::start_with_velocity` gives it one spring per component, the way
 /// Compose's `Color.VectorConverter` does. Until this, a colour spring was silently replaced by a
 /// 300 ms linear tween — the caller asked for a spring and got a different motion (measured on
 /// `Tab`'s content colour, whose `SpringSpec` never ran). A `Decay` is the one spec that still cannot
@@ -475,7 +480,7 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
         list.retain(|anim| anim.state.state_id() != sid);
     }
     let spec = normalise_multi_component_decay(spec, &state.peek());
-    let mut anim = Animatable::new(state);
+    let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     anim.update();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
@@ -529,7 +534,7 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         list.retain(|anim| anim.state_id() != sid);
     }
-    let mut anim = Animatable::new(state);
+    let mut anim = Motion::new(state);
     anim.animate_decay(initial_velocity, spec);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -553,7 +558,7 @@ pub fn push_decay_vector<T: Clone + PartialEq + AnimatableValue + Send + Sync + 
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         list.retain(|anim| anim.state_id() != sid);
     }
-    let mut anim = Animatable::new(state);
+    let mut anim = Motion::new(state);
     anim.animate_decay_with_velocity(velocity, spec);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
@@ -601,7 +606,7 @@ fn push_fling_internal(
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
         list.retain(|anim| anim.state_id() != sid);
     }
-    let mut anim = Animatable::new(state);
+    let mut anim = Motion::new(state);
     anim.set_clamp(clamp);
     if let Some(on_boundary) = on_boundary {
         anim.on_boundary(on_boundary);
@@ -666,9 +671,10 @@ pub fn animate_value_as_state<T: Clone + PartialEq + AnimatableValue + Send + Sy
 /// * Compose's `label` and `visibilityThreshold` parameters have no counterpart here: winia has no
 ///   tooling label, and the threshold lives on the `AnimationSpec`.
 ///
-/// 注意：动画未完成时再次 push 同 state（retarget）会移除旧动画——
-/// **旧回调被静默丢弃且不调用**（新动画持有新回调）。需要"每次动画完成都触发"
-/// 的语义请用 `Animatable::on_finish` 实例级管理，或自行在回调里重新注册。
+/// Careful: pushing a new target for the same state while a motion is running REPLACES it — the old
+/// motion's callback is dropped silently, never called, because the new motion carries the new one. A
+/// caller that needs every completion wants per-instance `Motion::on_finish` management, or to
+/// re-register from inside the callback.
 pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
     state: State<T>,
     target: T,
@@ -714,7 +720,7 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
             .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
     }
-    let mut anim = Animatable::new(state);
+    let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     anim.on_finish(done);
     anim.update();
@@ -722,10 +728,10 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     crate::runtime::state::wake_loop();
 }
 
-/// 实现 AnimationInstance for Animatable<f32>
-impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Animatable<T> {
+/// AnimationInstance for Motion<f32> (and every other value type it is instantiated with)
+impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationInstance for Motion<T> {
     fn update(&mut self) -> bool {
-        Animatable::update(self)
+        Motion::update(self)
     }
     fn state_id(&self) -> StateId {
         self.state.state_id()
@@ -739,7 +745,12 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
         self.anim_state.as_ref().map(|s| s.last_velocity).unwrap_or(0.0)
     }
     fn retarget_velocity(&self) -> RetargetVelocity {
-        Animatable::retarget_velocity(self)
+        Motion::retarget_velocity(self)
+    }
+    fn target_value(&self) -> Option<&dyn std::any::Any> {
+        self.anim_state
+            .as_ref()
+            .map(|s| &s.to as &dyn std::any::Any)
     }
 }
 
@@ -821,6 +832,50 @@ pub fn is_animating_state(id: crate::runtime::state::StateId) -> bool {
         || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == id)
 }
 
+/// The value a state's running animation is heading for — Compose's `Animatable.targetValue`, `None`
+/// when nothing is running for that state. Checked in both registries, so a colour animation answers
+/// too.
+pub fn animation_target<T: Clone + 'static>(id: crate::runtime::state::StateId) -> Option<T> {
+    if let Some(found) = ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a.state_id() == id)
+        .and_then(|a| a.target_value())
+        .and_then(|t| t.downcast_ref::<T>())
+    {
+        return Some(found.clone());
+    }
+    ACTIVE_COLOR_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a.state.state_id() == id)
+        .and_then(|a| a.target_value())
+        .and_then(|t| t.downcast_ref::<T>())
+        .cloned()
+}
+
+/// How fast the state's animation is moving right now (0.0 when nothing runs for it) — what Compose's
+/// `Animatable.stop` hands back so a fling can pick the motion up where it left off.
+pub fn animation_velocity(id: crate::runtime::state::StateId) -> f32 {
+    ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a.state_id() == id)
+        .map(|a| a.last_velocity())
+        .or_else(|| {
+            ACTIVE_COLOR_ANIMATIONS
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|a| a.state.state_id() == id)
+                .map(|a| a.last_velocity())
+        })
+        .unwrap_or(0.0)
+}
+
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
@@ -828,11 +883,12 @@ pub fn is_animating() -> bool {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Animatable — 底层动画值（对标 Compose Animatable）
+// Motion — the engine's own animated value (the public handle is `Animatable`)
 // ═══════════════════════════════════════════════════════════
 
-/// 可动画化的单一值
-pub(crate) struct Animatable<T: Clone + 'static> {
+/// One value the engine can move: the state it writes, the motion in progress, and the callbacks.
+/// Renamed from `Animatable` when the public Compose-shaped handle took that name.
+pub(crate) struct Motion<T: Clone + 'static> {
     state: crate::runtime::state::Animating<T>,
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
@@ -880,7 +936,7 @@ struct SpringLane {
     velocity: f32,
 }
 
-impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
+impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
     pub fn new(state: State<T>) -> Self {
         Self::from_animating(state.into_animating())
     }
@@ -1363,7 +1419,7 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
 }
 
 /// Whether a spring has come to rest — the ONE place this is decided, because the integrator and
-/// `Animatable::update` both need it and must never disagree.
+/// `Motion::update` both need it and must never disagree.
 ///
 /// **The two sides are not in the same unit, and that is deliberate.** The displacement is in the
 /// threshold's unit; the velocity is in that unit per SECOND, so `velocity.abs() < threshold` reads as
@@ -1419,6 +1475,91 @@ fn compute_spring_displacement(
         return 0.0;
     }
     displacement
+}
+
+// ═══════════════════════════════════════════════════════════
+// Animatable — the handle a component drives by hand
+// ═══════════════════════════════════════════════════════════
+
+/// Compose's `Animatable<T>`: a value you drive by hand instead of pushing a target every frame.
+///
+/// ```ignore
+/// let pulse = ctx.remember_animatable(0.0f32);
+/// pulse.animate_to(1.0, SpringSpec::default());   // start a motion      (Compose's animateTo)
+/// pulse.snap_to(0.0);                             // jump, cancelling    (Compose's snapTo)
+/// let v = pulse.value();                          // read it (peek — no recomposition)
+/// if pulse.is_running() { … }                     // Compose's isRunning
+/// let v0 = pulse.stop();                          // cancel, handing back the velocity
+/// let s = pulse.as_state();                       // feed the usual modifiers
+/// ```
+///
+/// Every call takes `&self`: the handle is a cheap clone of the `State` the slot owns, so it can be
+/// captured by a click handler and read by the paint closure.
+#[derive(Clone)]
+pub struct Animatable<T: Clone + PartialEq + 'static> {
+    state: State<T>,
+}
+
+impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<T> {
+    /// The value right now (a peek: reading it subscribes to nothing, so it cannot recompose).
+    pub fn value(&self) -> T {
+        self.state.peek()
+    }
+
+    /// The value the running motion is heading for — Compose's `targetValue`. `None` when idle,
+    /// which is also what Compose reports before the first `animateTo`.
+    pub fn target(&self) -> Option<T> {
+        animation_target::<T>(self.state.state_id())
+    }
+
+    /// Whether a motion is registered for this value — Compose's `isRunning`.
+    pub fn is_running(&self) -> bool {
+        is_animating_state(self.state.state_id())
+    }
+
+    /// How fast the value is moving right now (per second, in the value's own unit).
+    pub fn velocity(&self) -> f32 {
+        animation_velocity(self.state.state_id())
+    }
+
+    /// Write the value and cancel whatever was running — Compose's `snapTo`. Cancelling is part of it:
+    /// leaving a motion registered would keep pulling the value away from what the caller just wrote.
+    pub fn snap_to(&self, value: T) {
+        remove_animation_by_state(self.state.state_id());
+        self.state.set(value);
+        crate::runtime::state::wake_loop();
+    }
+
+    /// Start a motion toward `target` — Compose's `animateTo`. A motion already running is replaced,
+    /// inheriting its velocity (see `push_animatable`).
+    pub fn animate_to(&self, target: T, spec: impl Into<AnimationSpec>) {
+        push_animatable(self.state.clone(), target, spec.into());
+    }
+
+    /// Cancel the running motion and return the velocity it had, so a fling can carry on — Compose's
+    /// `stop`. Zero when nothing was running.
+    pub fn stop(&self) -> f32 {
+        let velocity = animation_velocity(self.state.state_id());
+        remove_animation_by_state(self.state.state_id());
+        velocity
+    }
+
+    /// The underlying `State`, for a modifier or a container that takes one.
+    pub fn as_state(&self) -> State<T> {
+        self.state.clone()
+    }
+}
+
+impl ComposeCtx<'_> {
+    /// rememberAnimatable — Compose's `remember { Animatable(initialValue) }`: one value the component
+    /// drives imperatively, with its motion state carried by the slot it was remembered in.
+    pub fn remember_animatable<T: Clone + PartialEq + 'static>(
+        &mut self,
+        initial: T,
+    ) -> Animatable<T> {
+        let state: State<T> = self.remember(|| initial);
+        Animatable { state }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2319,7 +2460,7 @@ pub(crate) mod tests {
     #[test]
     fn tween_completes_within_duration() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
         // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
         let mut frames = 0;
@@ -2336,7 +2477,7 @@ pub(crate) mod tests {
     #[test]
     fn tween_holds_from_until_its_delay_elapses() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(
             100.0,
             AnimationSpec::Tween(
@@ -2661,7 +2802,7 @@ pub(crate) mod tests {
     #[test]
     fn repeatable_runs_iterations() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
                 AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
@@ -2679,7 +2820,7 @@ pub(crate) mod tests {
     fn repeatable_reverse_even_ends_at_from() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
-        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
                 AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
@@ -2705,7 +2846,7 @@ pub(crate) mod tests {
     #[test]
     fn snap_jumps_immediately() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let mut anim = Animatable::<f32>::new(State::new(0.0));
+        let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(42.0, AnimationSpec::Snap(SnapSpec::default()));
         assert!(!anim.update(), "snap completes in one update");
         assert_eq!(anim.state.get(), 42.0);
@@ -2824,7 +2965,7 @@ pub(crate) mod tests {
         //   progress<0.001 会因残余位移卡住/误判）
         use crate::runtime::state::State;
         let st = State::new(1.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
         // 步进直到完成：update() 用真实时钟（Instant::now()）——连续调用 dt≈0
         // 永不推进，需真实帧间隔（16ms ≈ 60fps）；上限 100 帧防死循环
@@ -2843,7 +2984,7 @@ pub(crate) mod tests {
     fn decay_moves_and_stops_at_limit() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_decay(1000.0, DecaySpec::new(4.2, 0.1));
         let mut prev = 0.0f32;
         let mut frames = 0;
@@ -2870,7 +3011,7 @@ pub(crate) mod tests {
     fn repeatable_keyframes_base() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(
             100.0,
             AnimationSpec::Repeatable(RepeatableSpec::new(
@@ -2896,7 +3037,7 @@ pub(crate) mod tests {
     fn repeatable_snap_base() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(
             100.0,
             AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap(SnapSpec::default()))),
@@ -2910,7 +3051,7 @@ pub(crate) mod tests {
     fn decay_zero_velocity_done_immediately() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(42.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_decay(0.0, DecaySpec::default());
         assert!(!anim.update(), "v0=0 应立即完成");
         assert_eq!(st.peek(), 42.0, "v0=0 值不变");
@@ -3002,7 +3143,7 @@ pub(crate) mod tests {
     fn retarget_inherits_velocity() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_decay(1000.0, DecaySpec::default());
         // 步进 5 帧（20ms）——速度衰减但仍 > 0
         for _ in 0..5 {
@@ -3051,7 +3192,7 @@ pub(crate) mod tests {
     fn retarget_after_tween_restarts_from_rest() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         // 1) Spring 跑起来（速度显著）
         anim.animate_to(100.0, AnimationSpec::Spring(SpringSpec::default()));
         for _ in 0..5 {
@@ -3080,7 +3221,7 @@ pub(crate) mod tests {
     fn fling_clamps_at_boundary_and_stops() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.set_clamp(|o| o.min(100.0));
         anim.animate_decay(10000.0, DecaySpec::new(4.2, 0.1));
         let mut frames = 0;
@@ -3121,7 +3262,7 @@ pub(crate) mod tests {
     fn fling_clamps_below_zero() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(50.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.set_clamp(|o| o.max(0.0));
         anim.animate_decay(-500.0, DecaySpec::new(4.2, 0.1));
         let mut frames = 0;
@@ -3147,13 +3288,13 @@ pub(crate) mod tests {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // Tween duration=0
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(42.0, AnimationSpec::Tween(TweenSpec::new(Duration::ZERO, interpolator::Linear::new())));
         assert!(!anim.update(), "duration=0 Tween 应首次 update 即完成");
         assert_eq!(st.peek(), 42.0, "duration=0 Tween 完成值 = to");
         // Keyframes duration=0
         let st2 = State::new(0.0f32);
-        let mut anim2 = Animatable::new(st2.clone());
+        let mut anim2 = Motion::new(st2.clone());
         anim2.animate_to(
             42.0,
             AnimationSpec::Keyframes(KeyframesSpec::new(Duration::ZERO, vec![(0.0, 0.0), (1.0, 1.0)])),
@@ -3205,7 +3346,7 @@ pub(crate) mod tests {
         use std::sync::Arc;
         use crate::runtime::state::State;
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         let fired = Arc::new(AtomicBool::new(false));
         let f2 = fired.clone();
         anim.on_finish(move || {
@@ -3643,6 +3784,77 @@ pub(crate) mod tests {
         clear_all_animations();
     }
 
+    /// Compose's `Animatable` handle — `rememberAnimatable` with `animateTo` / `snapTo` / `stop` /
+    /// `isRunning` / `targetValue`. Three of those had no equivalent at all: nothing could tell a caller
+    /// what a running motion was heading for, whether one was running, or cancel it and keep the
+    /// velocity. `snapTo` cancelling is the part that is easy to get wrong: leaving the motion
+    /// registered lets it pull the value straight back off what the caller just wrote.
+    #[test]
+    fn the_animatable_handle_reports_and_controls_its_motion() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let mut composer = Composer::new();
+        let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h = held.clone();
+        composer.compose(|ctx| {
+            let handle = ctx.remember_animatable(0.0f32);
+            if h.borrow().is_none() {
+                *h.borrow_mut() = Some(handle.clone());
+            }
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let a = held.borrow().clone().expect("the slot remembered the animatable");
+        assert_eq!(a.value(), 0.0);
+        assert!(!a.is_running(), "nothing runs before the first animateTo");
+        assert_eq!(a.target(), None);
+
+        let slow = AnimationSpec::Spring(SpringSpec {
+            stiffness: 60.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            ..SpringSpec::default()
+        });
+        a.animate_to(100.0, slow.clone());
+        assert!(a.is_running());
+        assert_eq!(a.target(), Some(100.0), "the handle reports what it is heading for");
+        let mut frames = 0;
+        while frames < 10 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(16));
+            frames += 1;
+        }
+        let mid = a.value();
+        assert!(mid > 0.0 && mid < 100.0, "the motion is on its way (at {mid})");
+
+        let velocity = a.stop();
+        assert!(!a.is_running(), "stop() cancels the motion");
+        assert_eq!(a.target(), None, "and there is no target left");
+        assert!(velocity.abs() > 1.0, "stop() hands back the velocity it had ({velocity})");
+        let stopped = a.value();
+        for _ in 0..5 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        assert_eq!(a.value(), stopped, "and nothing moves it afterwards");
+
+        a.animate_to(500.0, slow.clone());
+        for _ in 0..4 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        assert!(a.value() > stopped, "the second motion is running");
+        a.snap_to(0.0);
+        assert_eq!(a.value(), 0.0);
+        assert!(!a.is_running(), "snapTo cancels too");
+        for _ in 0..6 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        assert_eq!(a.value(), 0.0, "the cancelled motion does not pull the value back");
+        assert_eq!(a.as_state().peek(), 0.0, "as_state() is the same value the frame paints");
+        clear_all_animations();
+    }
+
     #[derive(Clone, PartialEq, Debug)]
     enum Leg {
         Idle,
@@ -4016,7 +4228,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         //    EaseInQuad(0.2) = 0.04 → about 4, while linear(0.2) = 0.2 → about 20: five times apart,
         //    so a ±10 ms jitter in the sleep cannot blur the two.
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(
             100.0,
             AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(300), delay: Duration::ZERO, interpolator: Arc::new(EaseInQuad::new()),
@@ -4032,7 +4244,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         );
         // Control: the same 300 ms tween through its own declared interpolator reaches about 20.
         let st2 = State::new(0.0f32);
-        let mut anim2 = Animatable::new(st2.clone());
+        let mut anim2 = Motion::new(st2.clone());
         anim2.animate_to(
             100.0,
             AnimationSpec::Tween(TweenSpec::new(
@@ -4056,7 +4268,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic 末端应过冲（>1.0）");
         // 动画推进完整时长——必须精确停靠 100（修复前停在过冲值）
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         anim.animate_to(
             100.0,
             AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), EaseOutElastic::new())),
@@ -4076,7 +4288,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     fn keyframes_settles_at_target() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let st = State::new(0.0f32);
-        let mut anim = Animatable::new(st.clone());
+        let mut anim = Motion::new(st.clone());
         // 末帧 progress=0.8（<1.0）——done 时若用插值结果将 ≠ to
         anim.animate_to(
             100.0,
