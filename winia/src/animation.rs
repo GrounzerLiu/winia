@@ -1857,6 +1857,290 @@ fn newton_step(x: f64, f: impl Fn(f64) -> f64, f_prime: impl Fn(f64) -> f64) -> 
     x - f(x) / f_prime(x)
 }
 
+/// A motion that can be asked for its value at ANY time — Compose's `TargetBasedAnimation` /
+/// `DecayAnimation` and their `getValueFromNanos`.
+///
+/// Nothing is registered and nothing ticks: this is the same evaluation the engine performs each frame,
+/// exposed as a function of time. What needs it is a gesture hand-off — freeze a motion in flight, let the
+/// pointer take over, then start the remainder from where it was — and any caller that wants to ask what a
+/// spec does at 137 ms without driving frames.
+///
+/// A spring is integrated from its start for the time asked, with the engine's own stepper, so a value here
+/// matches what a running animation would have shown; each query therefore costs O(steps) rather than a
+/// table lookup.
+pub struct TimedAnimation<T: AnimatableValue> {
+    from: T,
+    /// `None` for a fling: there is no target, only the decay's own limit.
+    to: Option<T>,
+    spec: AnimationSpec,
+    /// The starting velocity in the value's own units per second (a fling's `initial_velocity` included).
+    initial_velocity: f32,
+    /// The same per component, for a value that has several.
+    initial_velocity_components: [f32; MAX_ANIMATION_COMPONENTS],
+    components: usize,
+}
+
+impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
+    /// A motion from `from` to `to` under any spec — Compose's `TargetBasedAnimation(animationSpec,
+    /// converter, initialValue, targetValue, initialVelocity)`.
+    pub fn target(from: T, to: T, spec: impl Into<AnimationSpec>) -> Self {
+        Self::with_velocity(from, to, spec.into(), 0.0)
+    }
+
+    /// The same with an initial speed (units per second), which a hand-off needs: the remainder of a motion
+    /// that was already moving.
+    pub fn with_velocity(from: T, to: T, spec: AnimationSpec, initial_velocity: f32) -> Self {
+        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+        let components = from.write_components(&mut components);
+        Self {
+            from,
+            to: Some(to),
+            spec,
+            initial_velocity,
+            initial_velocity_components: [0.0; MAX_ANIMATION_COMPONENTS],
+            components,
+        }
+    }
+
+    /// A fling with no target — Compose's `DecayAnimation(decayAnimationSpec, converter, initialValue,
+    /// initialVelocity)`. The velocity has the value's own type, so a vector flings on every component.
+    pub fn fling(from: T, velocity: T, spec: DecaySpec) -> Self {
+        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+        let len = velocity.write_components(&mut components);
+        Self {
+            from,
+            to: None,
+            spec: AnimationSpec::Decay(spec),
+            initial_velocity: AnimatableValue::to_f32(&velocity),
+            initial_velocity_components: components,
+            components: len,
+        }
+    }
+
+    /// How long the motion lasts — Compose's `Animation.durationNanos`. A spring's answer is the estimate
+    /// the engine itself now runs on, a fling's is the time its velocity takes to fall under the threshold,
+    /// and a `Repeatable`'s is its iterations times its base.
+    pub fn duration(&self) -> Duration {
+        match &self.spec {
+            AnimationSpec::Spring(spec) => Duration::from_secs_f32(
+                estimate_spring_duration_seconds(
+                    spec.stiffness,
+                    spec.damping_ratio,
+                    self.initial_velocity,
+                    self.displacement(),
+                    spec.threshold,
+                )
+                .max(0.0),
+            ),
+            AnimationSpec::Tween(spec) => spec.delay + spec.duration,
+            AnimationSpec::Snap(spec) => spec.delay,
+            AnimationSpec::Keyframes(spec) => spec.duration,
+            AnimationSpec::Repeatable(spec) => {
+                base_duration_of(&spec.base).saturating_mul(spec.iterations)
+            }
+            AnimationSpec::Decay(spec) => {
+                let friction = spec.friction.max(0.001);
+                let v0 = self.initial_velocity.abs().max(1e-6);
+                // |v0·e^(-friction·t)| = threshold
+                Duration::from_secs_f32((v0 / spec.threshold).ln() / friction)
+            }
+        }
+    }
+
+    /// The value at `elapsed` — Compose's `getValueFromNanos`.
+    pub fn value_at(&self, elapsed: Duration) -> T {
+        match &self.spec {
+            AnimationSpec::Spring(spec) => {
+                let target = self.target_of();
+                if elapsed >= self.duration() {
+                    // The clock the engine runs on: at the estimated end it writes the exact target.
+                    return target;
+                }
+                if self.components > 1 {
+                    let mut from_components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                    let mut to_components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                    let len = self.from.write_components(&mut from_components);
+                    target.write_components(&mut to_components);
+                    for (i, slot) in to_components.iter_mut().take(len).enumerate() {
+                        let mut velocity = self.initial_velocity_components[i];
+                        let displacement = compute_spring_displacement_with_step(
+                            spec.stiffness,
+                            spec.damping_ratio,
+                            spec.mass,
+                            from_components[i] - *slot,
+                            &mut velocity,
+                            elapsed,
+                            spec.threshold,
+                            1.0 / 480.0,
+                        );
+                        *slot += displacement;
+                    }
+                    return T::from_components(&to_components[..len]);
+                }
+                let mut velocity = self.initial_velocity;
+                let displacement = compute_spring_displacement_with_step(
+                    spec.stiffness,
+                    spec.damping_ratio,
+                    spec.mass,
+                    self.displacement(),
+                    &mut velocity,
+                    elapsed,
+                    spec.threshold,
+                    1.0 / 480.0,
+                );
+                AnimatableValue::from_f32(AnimatableValue::to_f32(&target) + displacement)
+            }
+            AnimationSpec::Tween(spec) => {
+                let target = self.target_of();
+                if elapsed < spec.delay {
+                    return self.from.clone();
+                }
+                let t = fraction_of(elapsed - spec.delay, spec.duration);
+                if t >= 1.0 {
+                    return target;
+                }
+                self.from.lerp(&target, spec.interpolator.interpolate(t))
+            }
+            AnimationSpec::Snap(spec) => {
+                let target = self.target_of();
+                if elapsed < spec.delay {
+                    self.from.clone()
+                } else {
+                    target
+                }
+            }
+            AnimationSpec::Keyframes(spec) => {
+                let target = self.target_of();
+                let t = fraction_of(elapsed, spec.duration);
+                if t >= 1.0 {
+                    return target;
+                }
+                self.from.lerp(&target, interpolate_keyframes(&spec.frames, t))
+            }
+            AnimationSpec::Repeatable(spec) => {
+                let target = self.target_of();
+                let base = base_duration_of(&spec.base);
+                let total = base.saturating_mul(spec.iterations);
+                if base.is_zero() || elapsed >= total {
+                    return target;
+                }
+                let played = match spec.start_offset_type {
+                    StartOffsetType::Delay => elapsed.saturating_sub(spec.start_offset),
+                    StartOffsetType::FastForward => elapsed + spec.start_offset,
+                };
+                let cycle = (played.as_secs_f32() / base.as_secs_f32()) as u32;
+                let mut phase = (played.as_secs_f32() % base.as_secs_f32()) / base.as_secs_f32();
+                if matches!(spec.mode, RepeatMode::Reverse) && cycle % 2 == 1 {
+                    phase = 1.0 - phase;
+                }
+                match spec.base.as_ref() {
+                    AnimationSpec::Keyframes(k) => {
+                        self.from.lerp(&target, interpolate_keyframes(&k.frames, phase))
+                    }
+                    _ => self.from.lerp(&target, phase),
+                }
+            }
+            AnimationSpec::Decay(spec) => {
+                let friction = spec.friction.max(0.001);
+                let t = elapsed.as_secs_f32();
+                let decay = (-friction * t).exp();
+                if self.components > 1 {
+                    let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                    let len = self.from.write_components(&mut components);
+                    for (i, slot) in components.iter_mut().take(len).enumerate() {
+                        let v0 = self.initial_velocity_components[i];
+                        *slot += if (v0 * decay).abs() < spec.threshold {
+                            v0 / friction
+                        } else {
+                            v0 / friction * (1.0 - decay)
+                        };
+                    }
+                    return T::from_components(&components[..len]);
+                }
+                let v0 = self.initial_velocity;
+                let raw = if (v0 * decay).abs() < spec.threshold {
+                    AnimatableValue::to_f32(&self.from) + v0 / friction
+                } else {
+                    AnimatableValue::to_f32(&self.from) + v0 / friction * (1.0 - decay)
+                };
+                AnimatableValue::from_f32(raw)
+            }
+        }
+    }
+
+    /// How fast the value moves at `elapsed`, in the value's own units per second. A spring and a fling
+    /// answer from the physics; everything else answers by stepping 1 ms and measuring, which is what a
+    /// caller holding an easing curve but no derivative can do. Compose returns a vector from
+    /// `getVelocityVectorFromNanos`; this is its scalar projection.
+    pub fn velocity_at(&self, elapsed: Duration) -> f32 {
+        match &self.spec {
+            AnimationSpec::Spring(spec) => {
+                let mut velocity = self.initial_velocity;
+                compute_spring_displacement_with_step(
+                    spec.stiffness,
+                    spec.damping_ratio,
+                    spec.mass,
+                    self.displacement(),
+                    &mut velocity,
+                    elapsed,
+                    spec.threshold,
+                    1.0 / 480.0,
+                );
+                velocity
+            }
+            AnimationSpec::Decay(spec) => {
+                self.initial_velocity * (-spec.friction.max(0.001) * elapsed.as_secs_f32()).exp()
+            }
+            _ => {
+                let step = Duration::from_millis(1);
+                let a = self.value_at(elapsed);
+                let b = self.value_at(elapsed + step);
+                (AnimatableValue::to_f32(&b) - AnimatableValue::to_f32(&a)) / step.as_secs_f32()
+            }
+        }
+    }
+
+    /// The displacement the motion starts with (value minus target), which every spring calculation is
+    /// expressed in.
+    fn displacement(&self) -> f32 {
+        match &self.to {
+            Some(to) => AnimatableValue::to_f32(&self.from) - AnimatableValue::to_f32(to),
+            None => 0.0,
+        }
+    }
+
+    fn target_of(&self) -> T {
+        self.to.clone().expect("this spec has a target")
+    }
+}
+
+/// A `Repeatable`'s cycle length: a `Tween` or `Keyframes` base has one, a `Snap` jumps after its delay.
+/// A nested Spring/Decay/Repeatable has no cycle length, and the engine rejects those at push time too.
+fn base_duration_of(base: &AnimationSpec) -> Duration {
+    match base {
+        AnimationSpec::Tween(t) => t.duration,
+        AnimationSpec::Keyframes(k) => k.duration,
+        AnimationSpec::Snap(s) => s.delay,
+        other => {
+            debug_assert!(
+                false,
+                "Repeatable only has a cycle length for a Tween/Keyframes/Snap base (got {other:?})"
+            );
+            Duration::from_millis(300)
+        }
+    }
+}
+
+/// The fraction of a duration that `elapsed` represents, clamped: 1.0 for a zero-length spec (a value that
+/// arrives at once) and for anything past the end.
+fn fraction_of(elapsed: Duration, duration: Duration) -> f32 {
+    if duration.is_zero() {
+        1.0
+    } else {
+        (elapsed.as_secs_f64() / duration.as_secs_f64()).clamp(0.0, 1.0) as f32
+    }
+}
+
 /// Whether a spring has come to rest — the ONE place this is decided, because the integrator and
 /// `Motion::update` both need it and must never disagree.
 ///
@@ -1895,11 +2179,34 @@ fn spring_at_rest(displacement: f32, velocity: f32, threshold: f32) -> bool {
     displacement.abs() < threshold && velocity.abs() < threshold
 }
 
-/// 固定时间步长弹簧积分（accumulator 模式，最多 10 步）
+/// The spring integrator: fixed steps inside one frame's time (accumulator style).
 fn compute_spring_displacement(
     stiffness: f32, damping_ratio: f32, mass: f32,
     initial_displacement: f32, velocity: &mut f32,
     elapsed: Duration, threshold: f32,
+) -> f32 {
+    compute_spring_displacement_with_step(
+        stiffness,
+        damping_ratio,
+        mass,
+        initial_displacement,
+        velocity,
+        elapsed,
+        threshold,
+        1.0 / 60.0,
+    )
+}
+
+/// The integrator with its ordinary-frame step spelled out. [`TimedAnimation`] asks with a shorter one: a
+/// query has no frame to keep up with, and a coarser step than a running animation uses shows up as a gap
+/// between the two. Measured on a 100-unit stiffness-200 spring, worst gap against a running motion: 7.7 px
+/// at the 1/60 s frame step, 1.7 px at 1/240 s, under 1.5 px at 1/480 s — the query's own integration error,
+/// not a difference in what is being computed.
+fn compute_spring_displacement_with_step(
+    stiffness: f32, damping_ratio: f32, mass: f32,
+    initial_displacement: f32, velocity: &mut f32,
+    elapsed: Duration, threshold: f32,
+    frame_cap: f32,
 ) -> f32 {
     /// The longest step an ordinary frame uses (1/60 s).
     const FRAME_CAP: f32 = 1.0 / 60.0;
@@ -1914,9 +2221,9 @@ fn compute_spring_displacement(
     const MAX_STEPS: u32 = 2000;
     let omega0 = (stiffness / mass.max(f32::EPSILON)).sqrt();
     let step_cap = if omega0 > 0.0 {
-        (1.0 / (4.0 * omega0)).min(FRAME_CAP)
+        (1.0 / (4.0 * omega0)).min(frame_cap)
     } else {
-        FRAME_CAP
+        frame_cap
     };
     let mut total_dt = elapsed.as_secs_f32().min(step_cap * MAX_STEPS as f32);
     let mut displacement = initial_displacement;
@@ -4830,6 +5137,80 @@ pub(crate) mod tests {
         assert_eq!(a.value(), 0.0, "the sequence ended on its last step");
         assert!(!a.is_running());
         clear_all_animations();
+    }
+
+    /// `TimedAnimation` is the engine's own evaluation exposed as a function of time, so what it reports has
+    /// to match what a running motion shows at the same moment — otherwise a hand-off would jump. Measured
+    /// against a real registered animation, sampled every frame, for a spring, a tween and a fling.
+    #[test]
+    fn a_timed_animation_matches_the_running_one() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
+        let specs: Vec<(&str, AnimationSpec)> = vec![
+            (
+                "spring",
+                AnimationSpec::Spring(SpringSpec {
+                    stiffness: 200.0,
+                    ..SpringSpec::default()
+                }),
+            ),
+            (
+                "tween",
+                AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(300), linear())),
+            ),
+            ("decay", AnimationSpec::Decay(exponential_decay(4.2))),
+        ];
+        for (name, spec) in specs {
+            clear_all_animations();
+            let state = crate::runtime::state::State::new(0.0f32);
+            let timed = match spec.clone() {
+                AnimationSpec::Decay(decay) => TimedAnimation::fling(0.0f32, 900.0, decay),
+                other => TimedAnimation::target(0.0f32, 100.0, other),
+            };
+            match spec.clone() {
+                AnimationSpec::Decay(decay) => push_decay(state.clone(), 900.0, decay),
+                other => push_animatable(state.clone(), 100.0, other),
+            }
+            let start = std::time::Instant::now();
+            let mut worst = 0.0f32;
+            while start.elapsed() < Duration::from_millis(280) {
+                update_animations();
+                let gap = (state.peek() - timed.value_at(start.elapsed())).abs();
+                worst = worst.max(gap);
+            }
+            assert!(
+                worst < 1.5,
+                "the timed {name} tracks the running one (worst gap {worst} over 100 units)"
+            );
+        }
+        clear_all_animations();
+    }
+
+    /// What the type exists for: freeze a spring mid-flight and continue it from where it was. A linear
+    /// spring resumed with the position AND velocity it had keeps the trajectory it would have followed, so
+    /// a gesture hand-off does not jump — measured against the uninterrupted motion.
+    #[test]
+    fn a_mid_flight_hand_off_keeps_the_trajectory() {
+        let spec = SpringSpec {
+            stiffness: 200.0,
+            ..SpringSpec::default()
+        };
+        let whole = TimedAnimation::target(0.0f32, 100.0, AnimationSpec::Spring(spec.clone()));
+        let at = Duration::from_millis(150);
+        let frozen_value = whole.value_at(at);
+        let frozen_velocity = whole.velocity_at(at);
+        let resumed = TimedAnimation::with_velocity(
+            frozen_value,
+            100.0,
+            AnimationSpec::Spring(spec),
+            frozen_velocity,
+        );
+        let after = resumed.value_at(Duration::from_millis(100));
+        let reference = whole.value_at(at + Duration::from_millis(100));
+        assert!(
+            (after - reference).abs() < 0.5,
+            "the resumed motion continues the same trajectory (resumed {after:.3}, uninterrupted {reference:.3}, frozen at {frozen_value:.3} moving {frozen_velocity:.1}/s)"
+        );
     }
 
     #[derive(Clone, PartialEq, Debug)]
