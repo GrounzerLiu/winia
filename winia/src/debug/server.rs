@@ -736,6 +736,17 @@ pub fn start_stdin_channel() {
                 "fp" => println!("FRAME_PASSES:{}", frame_passes_line()),
                 // fpc: forget the recorded frames, so the next reading starts at the input under test.
                 "fpc" => clear_frame_passes(),
+                // al: the animations running right now — a count line, then one `ANIM:` line each (state
+                // id, spec with its numbers, from/target, elapsed, velocity). Without this a value that
+                // moves for the wrong reason cannot be traced back to the animation that owns it; with it,
+                // a stuck or duplicated motion is a single query. The count is zero when nothing runs.
+                "al" => {
+                    let lines = crate::animation::active_animations_report();
+                    println!("ANIMATIONS:{}", lines.len());
+                    for line in lines {
+                        println!("ANIM:{line}");
+                    }
+                }
                 "swipe" if parts.len() >= 5 => {
                     // swipe x1 y1 x2 y2 [steps] [delay_ms] — stdin 同步版（无延迟，全部入队）
                     let x1: f32 = parts[1].parse().unwrap_or(0.0);

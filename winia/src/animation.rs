@@ -95,6 +95,12 @@ pub trait AnimationInstance: Send {
     fn target_value(&self) -> Option<&dyn std::any::Any> {
         None
     }
+    /// One line describing this motion, for [`active_animations_report`]. Compose has no equivalent —
+    /// it is here because a value that is moving looks the same whoever moves it, and nothing else can
+    /// answer "who is animating this".
+    fn describe(&self) -> String {
+        format!("state={:?} spec=?", self.state_id())
+    }
 }
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
@@ -249,6 +255,24 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
     fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> StateId { self.state.state_id() }
     fn last_velocity(&self) -> f32 { 0.0 } // 无限循环无速度延续语义
+    fn describe(&self) -> String {
+        format!(
+            "state={:?} spec=infinite({}ms, {}, offset {}ms {}) value={:.3}->{:.3}",
+            self.state.state_id(),
+            self.spec.duration.as_millis(),
+            match self.spec.mode {
+                RepeatMode::Restart => "restart",
+                RepeatMode::Reverse => "reverse",
+            },
+            self.spec.start_offset.as_millis(),
+            match self.spec.start_offset_type {
+                StartOffsetType::Delay => "delay",
+                StartOffsetType::FastForward => "fast-forward",
+            },
+            self.from.to_f32(),
+            self.to.to_f32(),
+        )
+    }
 }
 
 /// 注册一个无限循环动画（f32/Color 等 AnimatableValue 共用——泛型表，无独立第三表）
@@ -752,6 +776,51 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
             .as_ref()
             .map(|s| &s.to as &dyn std::any::Any)
     }
+    fn describe(&self) -> String {
+        match &self.anim_state {
+            Some(s) => format!(
+                "state={:?} spec={} from={:.3} target={:.3} elapsed={}ms v={:.1}{}",
+                self.state.state_id(),
+                spec_kind(&s.spec),
+                s.from.to_f32(),
+                s.to.to_f32(),
+                s.start.elapsed().as_millis(),
+                s.last_velocity,
+                match (&s.lanes, &s.decay_lanes) {
+                    (Some(lanes), _) => format!(" components={}", lanes.len()),
+                    (_, Some(lanes)) => format!(" decay_components={}", lanes.len()),
+                    _ => String::new(),
+                },
+            ),
+            None => format!("state={:?} idle", self.state.state_id()),
+        }
+    }
+}
+
+/// The spec's name, for [`active_animations_report`]: what kind of motion this is, with the one number
+/// that says how long it lasts.
+fn spec_kind(spec: &AnimationSpec) -> String {
+    match spec {
+        AnimationSpec::Spring(s) => format!(
+            "spring(stiffness={:.0}, damping={:.2}, threshold={:.2})",
+            s.stiffness, s.damping_ratio, s.threshold
+        ),
+        AnimationSpec::Tween(t) => format!("tween({}ms)", t.duration.as_millis()),
+        AnimationSpec::Keyframes(k) => {
+            format!("keyframes({}ms, {} frames)", k.duration.as_millis(), k.frames.len())
+        }
+        AnimationSpec::Repeatable(r) => format!(
+            "repeatable({}x {}, base={})",
+            r.iterations,
+            match r.mode {
+                RepeatMode::Restart => "restart",
+                RepeatMode::Reverse => "reverse",
+            },
+            spec_kind(&r.base)
+        ),
+        AnimationSpec::Snap(s) => format!("snap(delay={}ms)", s.delay.as_millis()),
+        AnimationSpec::Decay(d) => format!("decay(friction={:.2})", d.friction),
+    }
 }
 
 /// 更新所有活跃动画，返回是否有动画还在运行
@@ -874,6 +943,48 @@ pub fn animation_velocity(id: crate::runtime::state::StateId) -> f32 {
                 .map(|a| a.last_velocity())
         })
         .unwrap_or(0.0)
+}
+
+/// A cached runtime check for a tracing environment variable — `WINIA_ANIM_SIZE_TRACE=1`, say.
+///
+/// The per-component traces used to be `#[cfg(test)]`-gated, which meant an example could never print
+/// what its own animation did: the demo binary is not built with the test cfg, so the block was not even
+/// compiled in (measured — `WINIA_ANIM_SIZE_TRACE=1 cargo run --example animated_size_demo` printed
+/// nothing). Reading the variable once and caching it makes the switch a runtime one while keeping the
+/// check cheap enough for a per-frame layout path.
+pub fn trace_flag(name: &'static str) -> bool {
+    static FLAGS: LazyLock<Mutex<std::collections::HashMap<&'static str, bool>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+    let mut flags = FLAGS.lock().unwrap();
+    *flags.entry(name).or_insert_with(|| {
+        std::env::var(name)
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Everything animating right now, one line per motion — what the debug server's `al` command prints.
+///
+/// There is no other way to ask which animation owns a value: a value that is moving looks the same
+/// whoever moves it, and the registry is the only place that knows. Each line carries the state id, the
+/// spec (with its numbers), where the motion came from and what it targets, how long it has been running
+/// and its current velocity, so a stuck or unexpected animation can be identified from outside the
+/// process. Compose has no equivalent.
+pub fn active_animations_report() -> Vec<String> {
+    let mut lines: Vec<String> = ACTIVE_ANIMATIONS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|a| a.describe())
+        .collect();
+    lines.extend(
+        ACTIVE_COLOR_ANIMATIONS
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| a.describe()),
+    );
+    lines
 }
 
 /// 是否有动画在运行（用于控制事件循环 Poll/Wait）
@@ -3919,6 +4030,52 @@ pub(crate) mod tests {
             }
             other => panic!("expected a spring, got {other:?}"),
         }
+    }
+
+    /// `active_animations_report` is what the debug server's `al` command prints: it has to name the
+    /// animation that owns a moving value, with the numbers needed to tell a stuck motion from a healthy
+    /// one. Before it there was no way to ask — the registry was write-only from outside.
+    #[test]
+    fn the_active_animation_report_names_what_is_running() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        assert!(active_animations_report().is_empty(), "nothing runs before anything is pushed");
+
+        let state = crate::runtime::state::State::new(40.0f32);
+        push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(300), Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>)));
+        update_animations();
+        let lines = active_animations_report();
+        assert_eq!(lines.len(), 1, "one motion, one line ({lines:?})");
+        let line = &lines[0];
+        assert!(line.contains(&format!("state={:?}", state.state_id())), "names the state ({line})");
+        assert!(line.contains("spec=tween(300ms)"), "names the spec and its duration ({line})");
+        assert!(line.contains("from=40.000") && line.contains("target=200.000"), "names the ends ({line})");
+
+        // A fling has no target: the line says decay and carries the friction instead.
+        let fling = crate::runtime::state::State::new(0.0f32);
+        push_decay(fling.clone(), 900.0, exponential_decay(4.2));
+        update_animations();
+        let lines = active_animations_report();
+        assert_eq!(lines.len(), 2, "the tween and the fling ({lines:?})");
+        assert!(
+            lines.iter().any(|l| l.contains("spec=decay(friction=4.20)")),
+            "the fling is named as a decay ({lines:?})"
+        );
+
+        // A vector motion says how many components it is driving.
+        let vector = crate::runtime::state::State::new(crate::unit::Offset::new(0.0, 0.0));
+        push_decay_vector(vector.clone(), crate::unit::Offset::new(100.0, -60.0), exponential_decay(4.2));
+        update_animations();
+        assert!(
+            active_animations_report()
+                .iter()
+                .any(|l| l.contains("decay_components=2")),
+            "the diagonal fling reports its two components"
+        );
+
+        // Nothing is running once every animation has been dropped.
+        clear_all_animations();
+        assert!(active_animations_report().is_empty());
     }
 
     #[derive(Clone, PartialEq, Debug)]

@@ -275,9 +275,14 @@ impl MeasurePolicy for SizePolicy {
         }
         // layout_dep：动画推进每帧重测本节点（get 注册——值变化才 notify）
         let cur = self.size.get();
-        #[cfg(test)]
-        if std::env::var("WINIA_ANIM_SIZE_TRACE").is_ok() {
-            eprintln!("[anim-size] goal={:?} prev={:?} cur={:?} tid={:?}", goal, prev, cur, std::thread::current().id());
+        // Runtime trace (`WINIA_ANIM_SIZE_TRACE=1`), not a test-only one: the same switch works from an
+        // example, which is the only way to watch a real component's retargets. It used to be
+        // `#[cfg(test)]`-gated, so a demo binary printed nothing at all.
+        if crate::animation::trace_flag("WINIA_ANIM_SIZE_TRACE") {
+            eprintln!(
+                "[anim-size] goal={goal:?} prev={prev:?} cur={cur:?} tid={:?}",
+                std::thread::current().id()
+            );
         }
         // Fired once per target, when the animated value HAS ARRIVED and the animation has left the
         // registry — Compose's coroutine awaits `animateTo` and calls the listener only when it ends
