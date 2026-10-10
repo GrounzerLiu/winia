@@ -61,6 +61,18 @@ impl Constraints {
     }
 
     /// 宽松化：将 min 设为 0，保留 max
+    /// Loosen only the height — Compose's `constraints.copy(minHeight = 0)`, which is what a container
+    /// measuring a small overlay does when it wants the overlay's own height but still respects the width
+    /// its parent demanded (`material3/Badge.kt:86-88`).
+    pub fn loosen_height(&self) -> Constraints {
+        Constraints {
+            min_width: self.min_width,
+            max_width: self.max_width,
+            min_height: 0.0,
+            max_height: self.max_height,
+        }
+    }
+
     pub fn loosen(&self) -> Constraints {
         Constraints {
             min_width: 0.0,

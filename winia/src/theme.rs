@@ -92,6 +92,47 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
+    /// The content colour Compose derives from a container colour — `ColorScheme.contentColorFor`
+    /// (`material3/ColorScheme.kt:1064-1099`): each scheme colour that has a paired "on" colour maps to it,
+    /// and anything else maps to `None`, which is why `Badge`'s default falls back to the ambient content
+    /// colour next (`ColorScheme.kt:1112-1115`: `.takeOrElse { LocalContentColor.current }`).
+    ///
+    /// Compose builds the map with a `when` over the fourteen pairs; this is the same list, and the
+    /// `surfaceContainer*`/`surfaceBright`/`surfaceDim` family all answer `onSurface` as they do there.
+    pub fn content_color_for(&self, background: Color) -> Option<Color> {
+        let pairs = [
+            (self.primary, self.on_primary),
+            (self.secondary, self.on_secondary),
+            (self.tertiary, self.on_tertiary),
+            (self.background, self.on_background),
+            (self.error, self.on_error),
+            (self.primary_container, self.on_primary_container),
+            (self.secondary_container, self.on_secondary_container),
+            (self.tertiary_container, self.on_tertiary_container),
+            (self.error_container, self.on_error_container),
+            (self.inverse_surface, self.inverse_on_surface),
+            (self.surface, self.on_surface),
+            (self.surface_variant, self.on_surface_variant),
+            (self.surface_bright, self.on_surface),
+            (self.surface_container, self.on_surface),
+            (self.surface_container_high, self.on_surface),
+            (self.surface_container_highest, self.on_surface),
+            (self.surface_container_low, self.on_surface),
+            (self.surface_container_lowest, self.on_surface),
+            (self.surface_dim, self.on_surface),
+            (self.primary_fixed, self.on_primary_fixed),
+            (self.primary_fixed_dim, self.on_primary_fixed),
+            (self.secondary_fixed, self.on_secondary_fixed),
+            (self.secondary_fixed_dim, self.on_secondary_fixed),
+            (self.tertiary_fixed, self.on_tertiary_fixed),
+            (self.tertiary_fixed_dim, self.on_tertiary_fixed),
+        ];
+        pairs
+            .into_iter()
+            .find(|(container, _)| *container == background)
+            .map(|(_, content)| content)
+    }
+
     fn from_scheme(s: &material_colors::scheme::Scheme) -> Self {
         Self {
             primary:              argb(s.primary),

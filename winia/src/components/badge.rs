@@ -88,7 +88,13 @@ impl Badge {
         let has_content = self.content.is_some();
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.error);
-        let content_color = self.content_color.unwrap_or(theme.on_error);
+        // Compose's default is `contentColorFor(containerColor)`, which maps a scheme colour to its paired
+        // content colour and falls back to `LocalContentColor.current` for anything else
+        // (`Badge.kt:135`, `ColorScheme.kt:1064-1115`) — winia used `on_error` unconditionally.
+        let content_color = self
+            .content_color
+            .or_else(|| theme.content_color_for(container))
+            .unwrap_or_else(WiniaTheme::content_color);
         let size = if has_content { BADGE_LARGE_SIZE } else { BADGE_SIZE };
         let shape = Shape::rounded(if has_content { BADGE_LARGE_CORNER } else { BADGE_CORNER });
 
@@ -144,7 +150,11 @@ impl Default for Badge {
 /// 对标 Compose `BadgedBox` 的 Layout 实现（无 BadgeEndRuler/BadgeTopRuler
 /// 导航栏边界钳制——winia 无对应概念，文档注明差距）。
 #[derive(Debug, Clone)]
-struct BadgedBoxPolicy;
+struct BadgedBoxPolicy {
+    /// The direction the badge mirrors under — Compose places both children with `placeRelative`, so the
+    /// badge sits at the anchor's TRAILING edge: the right one in LTR, the left one under RTL.
+    direction: crate::layout::LayoutDirection,
+}
 
 impl MeasurePolicy for BadgedBoxPolicy {
     fn measure(
@@ -160,7 +170,7 @@ impl MeasurePolicy for BadgedBoxPolicy {
         }
         // badge 先测（宽松高度——文本不占多余空间，Compose copy(minHeight = 0)）；
         // anchor 全约束
-        let (badge_size, _) = measure_node(nodes, policies, children[1], constraints.loosen());
+        let (badge_size, _) = measure_node(nodes, policies, children[1], constraints.loosen_height());
         let (anchor_size, _) = measure_node(nodes, policies, children[0], constraints);
 
         // 用徽章宽度推断有无内容（Compose：width > BadgeTokens.Size）
@@ -181,12 +191,36 @@ impl MeasurePolicy for BadgedBoxPolicy {
             },
             Placement {
                 size: badge_size,
-                // 徽章左下角距锚点右上角 (off_x, off_y)：
-                // x = 锚点右缘 - off_x；y = -徽章高 + off_y（徽章可越出锚点顶部）
-                position: Offset::new(width - off_x, -badge_size.height + off_y),
+                // The badge's leading edge sits `off_x` from the anchor's trailing edge and its bottom
+                // `off_y` below the anchor's top (`-h + off_y`, so it may hang above it). Under RTL the
+                // horizontal half mirrors — `placeRelative`'s rule (`containerWidth - x - width`), which is
+                // why the badge ends up at the anchor's left edge there.
+                position: Offset::new(
+                    if self.direction == crate::layout::LayoutDirection::Rtl {
+                        width - (width - off_x) - badge_size.width
+                    } else {
+                        width - off_x
+                    },
+                    -badge_size.height + off_y,
+                ),
             },
         ];
         (Size::new(width, height), placements)
+    }
+
+    /// The box reports the ANCHOR's lines and nothing else — Compose passes them as the layout's own
+    /// `alignmentLines` so "default baseline calculations" cannot include the badge
+    /// (`material3/Badge.kt:92-100`). The anchor is placed at the origin, so its lines are already
+    /// expressed in this box's coordinates.
+    fn alignment_lines(
+        &self,
+        nodes: &[LayoutNode],
+        children: &[usize],
+    ) -> Option<Vec<(crate::layout::AlignmentLine, f32)>> {
+        Some(match children.first() {
+            Some(&anchor) => nodes[anchor].alignment_lines.clone(),
+            None => Vec::new(),
+        })
     }
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
@@ -224,8 +258,15 @@ impl BadgedBox {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
         let key = ctx.next_key();
+        // The direction comes from the modifier when a caller set one and from the ambient scope otherwise,
+        // the way `Stack` resolves it — the policy needs it at build time because it is not re-created for a
+        // measure (and a modifier's direction is a per-node override).
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or_else(crate::layout::direction::current);
         // 容器节点：自定义布局策略（anchor + badge 双子）
-        ctx.start_container(key, self.modifier, BadgedBoxPolicy);
+        ctx.start_container(key, self.modifier, BadgedBoxPolicy { direction });
         // 子 1：anchor（居中——anchor 内容即用户 content）
         let ak = ctx.next_key();
         match ctx.start_restartable_group(
@@ -262,6 +303,180 @@ mod tests {
 
     fn light_theme() -> crate::theme::ThemeColors {
         crate::theme::ThemeColors::light_from_seed(0x6750A4)
+    }
+
+    // ── Audit probes: the four things Compose does that winia did not ──
+
+    /// Compose derives a Badge's content colour from its CONTAINER colour — `contentColorFor` maps the
+    /// scheme's pairs (`error → onError`, `primary → onPrimary`, …) and falls back to `LocalContentColor`
+    /// for anything else (`ColorScheme.kt:1064-1115`, used at `Badge.kt:135`). winia always used `on_error`,
+    /// so a badge on a primary container painted onError text and never consulted the ambient content colour.
+    #[test]
+    fn the_content_colour_follows_the_container_colour() {
+        let theme = light_theme();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<Color>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let record = |colours: std::sync::Arc<std::sync::Mutex<Vec<Color>>>| {
+            move |ctx: &mut ComposeCtx| {
+                colours.lock().unwrap().push(WiniaTheme::content_color());
+            }
+        };
+        let mut composer = crate::runtime::composer::Composer::new();
+        let s = seen.clone();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                WiniaTheme::with_content_color(theme.tertiary, ctx, |ctx| {
+                    // A scheme colour: the mapping decides, not the ambient colour. surfaceContainerHigh
+                    // → onSurface, which is dark in a light scheme — unlike onError, so the two answers
+                    // are distinguishable.
+                    Badge::new()
+                        .container_color(theme.surface_container_high)
+                        .content(record(s.clone()))
+                        .build(ctx);
+                    // Not a scheme colour: Compose falls back to the ambient content colour.
+                    Badge::new()
+                        .container_color(Color::from_argb(255, 1, 2, 3))
+                        .content(record(s.clone()))
+                        .build(ctx);
+                    // An explicit content colour wins over both.
+                    Badge::new()
+                        .container_color(theme.primary)
+                        .content_color(Color::from_argb(255, 9, 9, 9))
+                        .content(record(s.clone()))
+                        .build(ctx);
+                });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let got = seen.lock().unwrap();
+        assert_eq!(got.len(), 3, "three badges composed");
+        assert_eq!(
+            got[0], theme.on_surface,
+            "a scheme container maps to its own content colour (surfaceContainerHigh → onSurface)"
+        );
+        assert_eq!(got[1], theme.tertiary, "a custom container falls back to the ambient content colour");
+        assert_eq!(got[2], Color::from_argb(255, 9, 9, 9), "an explicit content colour wins");
+    }
+
+    /// Compose places the anchor and the badge with `placeRelative`, so the badge sits at the anchor's
+    /// TRAILING edge — the right one in LTR, the left one under RTL (`Badge.kt:130-131`). winia always used
+    /// `width - offset`, which is the right edge in both directions.
+    #[test]
+    fn a_badge_mirrors_under_rtl() {
+        let theme = light_theme();
+        let scene = |direction: crate::layout::LayoutDirection| {
+            let theme = theme.clone();
+            move |ctx: &mut ComposeCtx| {
+                WiniaTheme::with_theme_and_direction(theme.clone(), direction, ctx, |ctx| {
+                    BadgedBox::new(|ctx| {
+                        Badge::new().build(ctx);
+                    })
+                    .build(ctx, |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(
+                            k,
+                            Modifier::new().size(24.0, 24.0).background(Color::WHITE, Shape::Rectangle),
+                        );
+                        ctx.end_node();
+                    });
+                });
+            }
+        };
+        let badge_x = |direction| {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(scene(direction));
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let nodes = composer.arena_nodes();
+            for n in nodes.iter() {
+                if n.measured_size.width == 24.0 && n.measured_size.height == 24.0 && n.children.len() == 2 {
+                    return nodes[n.children[1]].position.x;
+                }
+            }
+            panic!("no BadgedBox found");
+        };
+        assert_eq!(badge_x(crate::layout::LayoutDirection::Ltr), 18.0, "LTR: flush with the right edge");
+        assert_eq!(
+            badge_x(crate::layout::LayoutDirection::Rtl),
+            0.0,
+            "RTL: mirrored to the left edge (a 6-wide badge at 18 mirrored is 24 - 18 - 6)"
+        );
+    }
+
+    /// Compose measures the badge with `constraints.copy(minHeight = 0)` — the comment says why (a badge's
+    /// text must not claim more height than it needs), and only the HEIGHT is loosened, so a min width
+    /// reaching the box reaches the badge too. winia loosened both axes.
+    #[test]
+    fn the_badge_keeps_the_min_width_of_the_box() {
+        let theme = light_theme();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                BadgedBox::new(|ctx| {
+                    Badge::new().build(ctx);
+                })
+                .build(ctx, |ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, Modifier::new().size(24.0, 24.0));
+                    ctx.end_node();
+                });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(40.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        for n in nodes.iter() {
+            if n.children.len() == 2 && n.measured_size.width >= 40.0 {
+                let badge = &nodes[n.children[1]];
+                assert_eq!(
+                    badge.measured_size.width, 40.0,
+                    "the badge takes the box's min width (only the height is loosened), as Compose does"
+                );
+                return;
+            }
+        }
+        panic!("no BadgedBox found");
+    }
+
+    /// Compose's BadgedBox reports the ANCHOR's baselines as its own
+    /// (`alignmentLines = mapOf(FirstBaseline to firstBaseline, LastBaseline to lastBaseline)`,
+    /// `Badge.kt:97-100`), with the comment saying why: "to avoid default baseline calculations from
+    /// including by any badge content". winia's container merged every child's lines, so a badge's own text
+    /// baseline moved the line a Row aligns a whole row of icons by.
+    #[test]
+    fn a_badges_baseline_does_not_move_the_anchors() {
+        let theme = light_theme();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                BadgedBox::new(|ctx| {
+                    Badge::new()
+                        .content(|ctx| {
+                            crate::components::Text::new("9").font_size(30.0).build(ctx);
+                        })
+                        .build(ctx);
+                })
+                .build(ctx, |ctx| {
+                    crate::components::Text::new("anchor").font_size(40.0).build(ctx);
+                });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        let nodes = composer.arena_nodes();
+        for n in nodes.iter() {
+            if n.children.len() == 2 && n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE).is_some() {
+                let own = n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE).unwrap();
+                let anchor_child = &nodes[n.children[0]];
+                let badge_child = &nodes[n.children[1]];
+                let anchor_line = anchor_child
+                    .alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE)
+                    .expect("the anchor reports a baseline");
+                assert_eq!(
+                    own, anchor_line,
+                    "the box reports the anchor's baseline, not a merge with the badge's"
+                );
+                return;
+            }
+        }
+        panic!("no BadgedBox with a baseline found");
     }
 
     #[test]

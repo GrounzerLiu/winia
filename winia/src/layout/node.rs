@@ -1079,6 +1079,25 @@ pub trait MeasurePolicy: std::fmt::Debug {
         )
         .height
     }
+
+    /// The lines this container reports, when it decides them itself — Compose's
+    /// `layout(alignmentLines = …)` parameter.
+    ///
+    /// `None`, the default, means "inherit the children's": `measure_node_inner` merges every child's lines
+    /// through each line's own merger. `Some(lines)` REPLACES that set, which is what a container whose
+    /// overlay child must not move its own line needs — `BadgedBox` reports the ANCHOR's baselines so a
+    /// badge's text cannot shift the line a Row aligns a whole row of icons by
+    /// (`material3/Badge.kt:97-100`, "to avoid default baseline calculations from including by any badge
+    /// content").
+    ///
+    /// Called after the children are placed, so a policy may read their positions as well as their lines.
+    fn alignment_lines(
+        &self,
+        _nodes: &[LayoutNode],
+        _children: &[usize],
+    ) -> Option<Vec<(AlignmentLine, f32)>> {
+        None
+    }
 }
 
 // ── Intrinsic measurement (Compose's intrinsic protocol) ──
@@ -3310,7 +3329,15 @@ fn measure_node_inner(
         // children's lines (set during their own measure) and their positions (just placed), and a
         // policy does not even know its own node index.
         //
+        // A policy may decide the set itself — Compose's `layout(alignmentLines = …)`: `Some` replaces the
+        // inherited lines entirely (that is how an overlay child is kept out of its host's baseline), and
+        // `None` leaves the merge below in charge.
         // A leaf's own line is untouched: it has no children, so the loop below is empty for it.
+        if let Some(lines) = policies[pidx].alignment_lines(nodes, &children) {
+            for (line, value) in lines {
+                nodes[idx].set_alignment_line(line, value);
+            }
+        } else {
         for child in &children {
             // Only the lines the child actually reports; a child that reports none contributes none.
             // `alignment_lines` is a small Vec (usually empty), so this is a cheap nested loop.
@@ -3333,6 +3360,7 @@ fn measure_node_inner(
                 };
                 nodes[idx].set_alignment_line(line, merged);
             }
+        }
         }
         // Record whether any child asks for a paint order of its own (`Modifier::z_index`). The
         // renderer and the hit test consult this before doing any ordering work, so the common case
