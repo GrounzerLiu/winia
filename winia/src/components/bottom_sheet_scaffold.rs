@@ -56,6 +56,12 @@ pub struct BottomSheetScaffold {
     sheet_peek_height: Dp,
     sheet_shape_radius: f32,
     sheet_container_color: Option<Color>,
+    /// Compose's `sheetContentColor = contentColorFor(sheetContainerColor)` (`:126`).
+    sheet_content_color: Option<Color>,
+    /// Compose's `sheetShadowElevation = BottomSheetDefaults.Elevation` = `ElevationTokens.Level1` = 1 dp.
+    sheet_shadow_elevation: Dp,
+    /// Compose's `sheetTonalElevation = 0.dp` (`:127`).
+    sheet_tonal_elevation: Dp,
     container_color: Option<Color>,
     sheet_swipe_enabled: bool,
     sheet_drag_handle: bool,
@@ -70,6 +76,9 @@ impl BottomSheetScaffold {
             sheet_peek_height: SCAFFOLD_SHEET_PEEK_HEIGHT,
             sheet_shape_radius: SCAFFOLD_SHEET_SHAPE_RADIUS,
             sheet_container_color: None,
+            sheet_content_color: None,
+            sheet_shadow_elevation: Dp(1.0),
+            sheet_tonal_elevation: Dp(0.0),
             container_color: None,
             sheet_swipe_enabled: true,
             sheet_drag_handle: true,
@@ -94,6 +103,30 @@ impl BottomSheetScaffold {
 
     pub fn sheet_container_color(mut self, c: Color) -> Self {
         self.sheet_container_color = Some(c);
+        self
+    }
+
+    /// The sheet's content colour. Unset, it is derived from the container colour the way Compose's
+    /// `contentColorFor(sheetContainerColor)` does — a scheme container maps to its paired content colour
+    /// (`surfaceContainerLow -> onSurface`, `primary -> onPrimary`, …) and anything else falls back to the
+    /// ambient content colour.
+    pub fn sheet_content_color(mut self, c: Color) -> Self {
+        self.sheet_content_color = Some(c);
+        self
+    }
+
+    /// The sheet's shadow elevation (Compose's `sheetShadowElevation`, 1 dp by default = `ElevationTokens`
+    /// `Level1`). Zero removes the shadow.
+    pub fn sheet_shadow_elevation(mut self, e: Dp) -> Self {
+        self.sheet_shadow_elevation = e;
+        self
+    }
+
+    /// The sheet's tonal elevation (Compose's `sheetTonalElevation`, 0 by default). Only applies when the
+    /// container colour IS the scheme's `surface`, which is Compose's `surfaceColorAtElevation` rule, and
+    /// only while the theme's tonal-elevation switch is on.
+    pub fn sheet_tonal_elevation(mut self, e: Dp) -> Self {
+        self.sheet_tonal_elevation = e;
         self
     }
 
@@ -151,6 +184,9 @@ impl BottomSheetScaffold {
         // by the `container_color` below, which made `sheet_container_color()` a silent no-op
         // and painted the sheet with the scaffold's color.
         let sheet_container_color = self.sheet_container_color;
+        let sheet_content_color = self.sheet_content_color;
+        let sheet_shadow_elevation = self.sheet_shadow_elevation.0;
+        let sheet_tonal_elevation = self.sheet_tonal_elevation.0;
         let swipe = self.sheet_swipe_enabled;
         let drag_handle = self.sheet_drag_handle;
         // sheet_max_width：对齐 Compose 640.dp 居中（与 Modal 同语义——手机 480 铺满、
@@ -161,6 +197,25 @@ impl BottomSheetScaffold {
         let (sheet_w, _sheet_pad_x) =
             crate::components::bottom_sheet::sheet_panel_geometry(self.sheet_max_width, crate::layout::window_size().0);
         let container_color = self.container_color;
+        // The sheet's own colours, resolved once: the container (Compose's
+        // `SheetBottomTokens.DockedContainerColor` = `surfaceContainerLow`), its tonal overlay, and the
+        // content colour derived from it.
+        let theme_for_sheet = crate::theme::WiniaTheme::colors();
+        let sheet_bg = sheet_container_color.unwrap_or(theme_for_sheet.surface_container_low);
+        let sheet_bg = if sheet_tonal_elevation > 0.0
+            && sheet_bg == theme_for_sheet.surface
+            && crate::theme::WiniaTheme::tonal_elevation_enabled()
+        {
+            // Compose's published alpha over the `ElevationTokens` levels (`ElevationTokens.kt:24-29`),
+            // the same rule `Surface` applies.
+            let alpha = ((4.5 * (sheet_tonal_elevation + 1.0).ln()) + 2.0) / 100.0;
+            sheet_bg.overlay(theme_for_sheet.surface_tint, alpha)
+        } else {
+            sheet_bg
+        };
+        let sheet_content_colour = sheet_content_color
+            .or_else(|| theme_for_sheet.content_color_for(sheet_bg))
+            .unwrap_or_else(crate::theme::WiniaTheme::content_color);
 
         // 外层 Stack：主内容底层，片上层
         let mut root_mod = Modifier::new().fill_max_size();
@@ -252,17 +307,12 @@ impl BottomSheetScaffold {
                     // x = 0: the box's centre alignment owns the horizontal placement now.
                     .absolute_offset(0.0, st_for_offset.offset_state())
                     .shadow(
-                        1.0,
+                        sheet_shadow_elevation,
                         cur_shape,
                         false,
                         Color::from_argb(40, 0, 0, 0),
                     )
-                    .background(
-                        sheet_container_color.unwrap_or_else(|| {
-                            crate::theme::WiniaTheme::colors().surface_container_low
-                        }),
-                        cur_shape,
-                    )
+                    .background(sheet_bg, cur_shape)
                     .on_size_changed({
                         let sheet_h_for_cb = sheet_h.clone();
                         // 在回调内重算 peek/layout，避免闭包固化 + Skip 时 stale
@@ -357,7 +407,9 @@ impl BottomSheetScaffold {
                     });
                 crate::layout::components::Column::new()
                     .modifier(sheet_mod_with_panel_drag)
-                    .build(ctx, |ctx| {
+                    .build(ctx, move |ctx| {
+                        // The sheet's content colour, as a scope the whole panel inherits from.
+                        crate::theme::WiniaTheme::with_content_color(sheet_content_colour, ctx, |ctx| {
                         if drag_handle {
                             // The handle is CLICKABLE in Compose (`StandardBottomSheet`, the
                             // `DragHandleWithTooltip { Box(Modifier.clickable { … }) }`): a click expands
@@ -394,6 +446,7 @@ impl BottomSheetScaffold {
                                 });
                         }
                         sheet_content(ctx);
+                        });
                     });
             });
     }
@@ -508,6 +561,156 @@ mod tests {
             c.arena_nodes()[sheet].position.y, 720.0 - 96.0,
             "so the collapsed sheet covers the window's bottom edge, with no page showing under it"
         );
+    }
+
+    /// The sheet's shadow follows `sheetShadowElevation` (Compose's default is `ElevationTokens.Level1`,
+    /// 1 dp) — zero asks for no shadow at all, which `Modifier::shadow` drops.
+    #[test]
+    fn the_sheet_shadow_follows_its_elevation() {
+        fn sheet_shadow_count(elevation: f32) -> usize {
+            let mut c = Composer::new();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_shadow_elevation(Dp(elevation))
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            c.arena_nodes()
+                .iter()
+                .filter(|node| {
+                    node.modifier.elements().iter().any(|el| {
+                        matches!(el, crate::modifier::ModifierElement::AbsoluteOffset { .. })
+                    })
+                })
+                .map(|node| {
+                    node.modifier
+                        .elements()
+                        .iter()
+                        .filter(|el| matches!(el, crate::modifier::ModifierElement::Shadow { .. }))
+                        .count()
+                })
+                .max()
+                .unwrap_or(0)
+        }
+        // `Modifier::shadow` pushes an ambient and a spot layer per call.
+        assert_eq!(sheet_shadow_count(1.0), 2, "the default elevation draws a shadow");
+        assert_eq!(sheet_shadow_count(0.0), 0, "zero elevation draws none");
+    }
+
+    /// The sheet's content colour follows its container, as Compose's
+    /// `sheetContentColor = contentColorFor(sheetContainerColor)` does: a scheme container maps to its
+    /// paired content colour, a custom one falls back to the ambient colour, and an explicit
+    /// `sheet_content_color` wins. Before this, the panel simply inherited whatever the page provided.
+    #[test]
+    fn the_sheets_content_colour_follows_its_container() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Color>::new()));
+        let observe = |sink: std::rc::Rc<std::cell::RefCell<Vec<Color>>>| {
+            move |ctx: &mut ComposeCtx| {
+                sink.borrow_mut().push(crate::theme::WiniaTheme::content_color());
+            }
+        };
+        let mut c = Composer::new();
+        let s1 = seen.clone();
+        let s2 = seen.clone();
+        let s3 = seen.clone();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            crate::theme::WiniaTheme::with_content_color(
+                theme.tertiary,
+                ctx,
+                move |ctx| {
+                    // A scheme container: its pair decides, not the ambient colour.
+                    BottomSheetScaffold::new()
+                        .sheet_container_color(theme.surface_container_low)
+                        .build(
+                            ctx,
+                            move |ctx| observe(s1.clone())(ctx),
+                            |ctx| { crate::components::Text::new("page").build(ctx); },
+                        );
+                    // A colour that is not in the scheme: the ambient one is the fallback.
+                    BottomSheetScaffold::new()
+                        .sheet_container_color(Color::from_argb(255, 1, 2, 3))
+                        .build(
+                            ctx,
+                            move |ctx| observe(s2.clone())(ctx),
+                            |ctx| { crate::components::Text::new("page").build(ctx); },
+                        );
+                    // Explicit wins over both.
+                    BottomSheetScaffold::new()
+                        .sheet_container_color(theme.surface_container_low)
+                        .sheet_content_color(Color::from_argb(255, 9, 9, 9))
+                        .build(
+                            ctx,
+                            move |ctx| observe(s3.clone())(ctx),
+                            |ctx| { crate::components::Text::new("page").build(ctx); },
+                        );
+                },
+            );
+        });
+        c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        let got = seen.borrow();
+        assert_eq!(got.len(), 3, "three sheets composed");
+        assert_eq!(got[0], theme.on_surface, "surfaceContainerLow -> onSurface");
+        assert_eq!(got[1], theme.tertiary, "a custom container falls back to the ambient colour");
+        assert_eq!(got[2], Color::from_argb(255, 9, 9, 9), "an explicit content colour wins");
+    }
+
+    /// The sheet's own background: the token colour by default, tinted by `surface_tint` when a tonal
+    /// elevation is asked for AND the container is the scheme's `surface` (Compose's
+    /// `surfaceColorAtElevation`), untinted otherwise.
+    #[test]
+    fn the_sheets_tonal_elevation_only_tints_a_surface_coloured_sheet() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let painted = |container: Color, tonal: f32| -> Color {
+            let mut c = Composer::new();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_container_color(container)
+                    .sheet_tonal_elevation(Dp(tonal))
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            // The sheet's background is the first painted background belonging to a node that also
+            // carries the sheet's own absolute offset.
+            c.arena_nodes()
+                .iter()
+                .find_map(|node| {
+                    let is_sheet = node.modifier.elements().iter().any(|el| {
+                        matches!(el, crate::modifier::ModifierElement::AbsoluteOffset { .. })
+                    });
+                    if !is_sheet {
+                        return None;
+                    }
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                        _ => None,
+                    })
+                })
+                .expect("the sheet paints a background")
+        };
+        let alpha = ((4.5 * (3.0f32 + 1.0).ln()) + 2.0) / 100.0;
+        assert_eq!(
+            painted(theme.surface, 3.0),
+            theme.surface.overlay(theme.surface_tint, alpha),
+            "a surface-coloured sheet is tinted, with the published alpha"
+        );
+        assert_eq!(
+            painted(theme.surface_container_low, 3.0),
+            theme.surface_container_low,
+            "any other container is left alone"
+        );
+        assert_eq!(painted(theme.surface, 0.0), theme.surface, "and zero elevation tints nothing");
     }
 
     #[test]
