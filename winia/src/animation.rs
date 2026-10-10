@@ -95,6 +95,10 @@ pub trait AnimationInstance: Send {
     fn target_value(&self) -> Option<&dyn std::any::Any> {
         None
     }
+    /// Keep this motion's value inside `[min, max]`, or clear the range with `None` — Compose's
+    /// `Animatable.updateBounds`. Applied at the write point for every spec: a value that would leave the
+    /// range is written exactly at the bound and the motion ends there.
+    fn set_value_bounds(&mut self, bounds: Option<(f32, f32)>) {}
     /// One line describing this motion, for [`active_animations_report`]. Compose has no equivalent —
     /// it is here because a value that is moving looks the same whoever moves it, and nothing else can
     /// answer "who is animating this".
@@ -771,6 +775,11 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
     fn retarget_velocity(&self) -> RetargetVelocity {
         Motion::retarget_velocity(self)
     }
+    fn set_value_bounds(&mut self, bounds: Option<(f32, f32)>) {
+        self.set_clamp_opt(bounds.map(|(lo, hi)| -> Box<dyn Fn(f32) -> f32 + Send + Sync> {
+            Box::new(move |v| v.clamp(lo.min(hi), hi.max(lo)))
+        }));
+    }
     fn target_value(&self) -> Option<&dyn std::any::Any> {
         self.anim_state
             .as_ref()
@@ -980,6 +989,23 @@ pub fn trace_flag(name: &'static str) -> bool {
     }
 }
 
+/// Keep a state's running motion inside `[min, max]` — Compose's `Animatable.updateBounds` for a motion
+/// that is already in flight. `None` clears the range. Harmless when nothing runs for the state, but a
+/// motion pushed afterwards starts without bounds: `Animatable::set_bounds` is the version that carries
+/// them forward.
+pub fn set_animation_bounds(id: crate::runtime::state::StateId, bounds: Option<(f32, f32)>) {
+    for a in ACTIVE_ANIMATIONS.lock().unwrap().iter_mut() {
+        if a.state_id() == id {
+            a.set_value_bounds(bounds);
+        }
+    }
+    for a in ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter_mut() {
+        if a.state.state_id() == id {
+            a.set_value_bounds(bounds);
+        }
+    }
+}
+
 /// Everything animating right now, one line per motion — what the debug server's `al` command prints.
 ///
 /// There is no other way to ask which animation owns a value: a value that is moving looks the same
@@ -1076,6 +1102,12 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
     /// fling 边界 clamp（仅 Decay 生效）：值被 clamp 改变 → 写边界值并立即完成
     pub fn set_clamp(&mut self, f: impl Fn(f32) -> f32 + Send + Sync + 'static) {
         self.clamp = Some(Box::new(f));
+    }
+
+    /// Set or clear the clamp directly (the value-bounds path builds one closure, so it does not need the
+    /// `impl Fn` form).
+    fn set_clamp_opt(&mut self, clamp: Option<Box<dyn Fn(f32) -> f32 + Send + Sync>>) {
+        self.clamp = clamp;
     }
 
     /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
@@ -1489,21 +1521,33 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     state.from.to_f32() + v0 / friction * (1.0 - decay)
                 };
                 let done = vel_now.abs() < spec.threshold;
-                match &self.clamp {
-                    // fling：每帧 clamp 到滚动边界——撞边界写边界值并立即完成
-                    Some(clamp) => {
-                        let c = clamp(raw);
-                        if c != raw {
-                            boundary_velocity = Some(vel_now);
-                            (AnimatableValue::from_f32(c), true)
-                        } else {
-                            (AnimatableValue::from_f32(c), done)
-                        }
-                    }
-                    None => (AnimatableValue::from_f32(raw), done),
-                }
+                // The boundary clamp is applied once, at the write point below, for every spec.
+                (AnimatableValue::from_f32(raw), done)
                 }
             }
+        };
+        // Compose's `Animatable.updateBounds`: the value never leaves its range, and a motion that reaches
+        // a bound ENDS there instead of running on against a value that cannot move (its `BoundReached`).
+        // A clamp that changes the value therefore completes the motion, and a fling reports the velocity it
+        // had left through `on_boundary`. Scalar values only: the range is compared on the scalar
+        // projection, and for a multi-component value that projection is a placeholder.
+        let (value, done) = match &self.clamp {
+            Some(clamp) => {
+                let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                let raw = AnimatableValue::to_f32(&value);
+                if value.write_components(&mut components) == 1 {
+                    let clamped = clamp(raw);
+                    if clamped != raw {
+                        boundary_velocity.get_or_insert(state.last_velocity);
+                        (AnimatableValue::from_f32(clamped), true)
+                    } else {
+                        (value, done)
+                    }
+                } else {
+                    (value, done)
+                }
+            }
+            None => (value, done),
         };
         self.state.set(value);
         if let Some(velocity) = boundary_velocity {
@@ -1640,6 +1684,8 @@ fn compute_spring_displacement(
 #[derive(Clone)]
 pub struct Animatable<T: Clone + PartialEq + 'static> {
     state: State<T>,
+    /// The range this value may live in, kept on the slot so every motion started later inherits it.
+    bounds: crate::runtime::state::Backchannel<Option<(f32, f32)>>,
 }
 
 impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<T> {
@@ -1676,6 +1722,37 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
     /// inheriting its velocity (see `push_animatable`).
     pub fn animate_to(&self, target: T, spec: impl Into<AnimationSpec>) {
         push_animatable(self.state.clone(), target, spec.into());
+        set_animation_bounds(self.state.state_id(), self.bounds.peek());
+    }
+
+    /// A fling whose initial velocity has the value's own type — Compose's
+    /// `Animatable.animateDecay(initialVelocity, decayAnimationSpec)`. The value has no target: it decays
+    /// until it rests (or until it reaches a bound, if one is set).
+    pub fn animate_decay(&self, velocity: T, spec: DecaySpec) {
+        push_decay_vector(self.state.clone(), velocity, spec);
+        set_animation_bounds(self.state.state_id(), self.bounds.peek());
+    }
+
+    /// Keep this value inside `[min, max]` — Compose's `Animatable.updateBounds`. Applies to the motion in
+    /// flight and to every motion started later through this handle: a value that would leave the range is
+    /// written exactly at the bound and the motion ends there. Scalar values only — the range is compared
+    /// on the value's scalar projection, which a multi-component value (Offset/Size/Color) does not have,
+    /// so bounds on those are ignored.
+    pub fn set_bounds(&self, min: f32, max: f32) {
+        let bounds = Some((min, max));
+        self.bounds.set(bounds);
+        set_animation_bounds(self.state.state_id(), bounds);
+    }
+
+    /// Drop the range, so the value may travel anywhere again.
+    pub fn clear_bounds(&self) {
+        self.bounds.set(None);
+        set_animation_bounds(self.state.state_id(), None);
+    }
+
+    /// The range in force, if any.
+    pub fn bounds(&self) -> Option<(f32, f32)> {
+        self.bounds.peek()
     }
 
     /// Cancel the running motion and return the velocity it had, so a fling can carry on — Compose's
@@ -1700,7 +1777,8 @@ impl ComposeCtx<'_> {
         initial: T,
     ) -> Animatable<T> {
         let state: State<T> = self.remember(|| initial);
-        Animatable { state }
+        let bounds = self.remember_backchannel(|| None);
+        Animatable { state, bounds }
     }
 }
 
@@ -4145,6 +4223,101 @@ pub(crate) mod tests {
             s > 96.0,
             "the spring integrates the whole 400 ms it was given (at {s} of 100; 71.8 means the frame was cut at 10 x 1/60 s)"
         );
+        clear_all_animations();
+    }
+
+    /// Compose's `Animatable.updateBounds`: the value never leaves its range and a motion that reaches a
+    /// bound ends exactly there. Without the range the spring would settle at 5.0 and the fling would
+    /// travel on to 900/4.2 = 214.3.
+    #[test]
+    fn the_handle_keeps_its_value_inside_its_bounds() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let mut composer = Composer::new();
+        let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h = held.clone();
+        composer.compose(|ctx| {
+            let handle = ctx.remember_animatable(0.0f32);
+            if h.borrow().is_none() {
+                *h.borrow_mut() = Some(handle.clone());
+            }
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let a = held.borrow().clone().expect("the slot remembered the animatable");
+
+        a.set_bounds(0.0, 1.0);
+        assert_eq!(a.bounds(), Some((0.0, 1.0)));
+        a.animate_to(
+            5.0,
+            AnimationSpec::Spring(SpringSpec {
+                stiffness: 300.0,
+                ..SpringSpec::default()
+            }),
+        );
+        for _ in 0..60 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert_eq!(a.value(), 1.0, "the value stops exactly at the upper bound");
+        assert!(!a.is_running(), "and the motion ends there rather than pushing on");
+
+        // The same for a fling: 900 units/s of decay would travel 214.3, but the range ends it at 100.
+        a.set_bounds(0.0, 100.0);
+        a.snap_to(0.0);
+        a.animate_decay(900.0, exponential_decay(4.2));
+        for _ in 0..60 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert_eq!(a.value(), 100.0, "the fling parks on the bound");
+        assert!(!a.is_running());
+
+        // Dropping the range lets it travel anywhere again.
+        a.clear_bounds();
+        assert_eq!(a.bounds(), None);
+        a.animate_to(
+            200.0,
+            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(60), Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>)),
+        );
+        for _ in 0..40 {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        assert_eq!(a.value(), 200.0, "with no bounds the target is reached");
+        clear_all_animations();
+    }
+
+    /// `animate_decay` on the handle is the vector form: an `Offset` fling decays each axis on its own
+    /// limit. (Bounds are a scalar concept — see the module note on `set_bounds`.)
+    #[test]
+    fn the_handle_can_fling_a_vector_value() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let mut composer = Composer::new();
+        let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<crate::unit::Offset>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h = held.clone();
+        composer.compose(|ctx| {
+            let handle = ctx.remember_animatable(crate::unit::Offset::new(0.0, 0.0));
+            if h.borrow().is_none() {
+                *h.borrow_mut() = Some(handle.clone());
+            }
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let o = held.borrow().clone().expect("the slot remembered the animatable");
+        o.animate_decay(crate::unit::Offset::new(100.0, -60.0), exponential_decay(4.2));
+        let mut frames = 0;
+        while update_animations() && frames < 400 {
+            std::thread::sleep(Duration::from_millis(8));
+            frames += 1;
+        }
+        let v = o.value();
+        assert!(
+            (v.x - 100.0 / 4.2).abs() < 0.01 && (v.y + 60.0 / 4.2).abs() < 0.01,
+            "each axis parks on 100/4.2 and -60/4.2 (at {v:?})"
+        );
+        assert!(!o.is_running());
         clear_all_animations();
     }
 
