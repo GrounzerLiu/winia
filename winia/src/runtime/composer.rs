@@ -781,6 +781,46 @@ impl<'a> ComposeCtx<'a> {
         self.animate_value_as_state(target, spec).into_state()
     }
 
+    /// `animateFloatAsState(targetValue, animationSpec, label, finishedListener)` — the completion
+    /// callback Compose's overload carries, fired once when a motion this call registered finishes.
+    ///
+    /// Prefer this over remembering a state and driving it with the free `push_animatable_with_done`:
+    /// the state here is created and owned by the slot, so no second mechanism can land on it and make
+    /// the dedup swallow the callback. An interrupted motion does not report (the retarget replaces its
+    /// callback, as Compose's `animateTo` replaces its block).
+    pub fn animate_float_as_state_with_done(
+        &mut self,
+        target: f32,
+        spec: crate::animation::AnimationSpec,
+        done: impl FnOnce() + Send + 'static,
+    ) -> State<f32> {
+        self.animate_value_as_state_with_done(target, spec, done).into_state()
+    }
+
+    /// `animateValueAsState` + the completion callback (Compose's `finishedListener`); any
+    /// `AnimatableValue` works. See `animate_float_as_state_with_done` for the semantics.
+    pub fn animate_value_as_state_with_done<
+        T: Clone + PartialEq + crate::animation::AnimatableValue + Send + Sync + 'static,
+    >(
+        &mut self,
+        target: T,
+        spec: crate::animation::AnimationSpec,
+        done: impl FnOnce() + Send + 'static,
+    ) -> crate::runtime::state::Animating<T> {
+        let slot_key = self.next_remember_key();
+        let handle = self.composer.slot_table.remember_handle(slot_key, || {
+            crate::runtime::state::Animating::new(target.clone())
+        });
+        self.composer.animation_state_ids.insert(handle.state_id());
+        crate::animation::push_animatable_with_done(
+            State::from_raw(handle.as_raw().clone()),
+            target,
+            spec,
+            done,
+        );
+        handle
+    }
+
     /// animateColorAsState — 动画颜色值到目标值（RGBA 插值，Tween 驱动）
     pub fn animate_color_as_state(&mut self, target: crate::graphics::Color, spec: crate::animation::AnimationSpec) -> State<crate::graphics::Color> {
         let slot_key = self.next_remember_key();

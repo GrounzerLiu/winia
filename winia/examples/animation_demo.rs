@@ -339,17 +339,13 @@ fn section8(ctx: &mut ComposeCtx, clicked: &winia::runtime::state::State<bool>) 
         ..Default::default()
     };
     let done_flag = ctx.remember(|| false);
-    // Drive this state with `push_animatable_with_done` ONLY (it owns the motion and the callback).
-    // Two traps a caller has to know about, both documented on the function itself:
-    //   * a second mechanism on the same state + target (`animate_float_as_state` too) makes the dedup
-    //     skip the callback-carrying registration, so the callback never fires;
-    //   * the callback reports a motion finishing, not "the value is at the target" — this entry point
-    //     is pushed every frame, so "already there" (the state's initial value equal to the first
-    //     frame's target) is the steady state where nothing runs and nothing is reported.
-    // This demo keeps the initial value (0.2) different from the first target (1.0) for that reason.
-    let alpha_state = ctx.remember(|| 0.2);
-    winia::animation::push_animatable_with_done(
-        alpha_state.clone(),
+    // `animate_float_as_state_with_done` is Compose's `animateFloatAsState(target, animationSpec,
+    // label, finishedListener)`: the slot owns the state, so no second mechanism can land on it, and
+    // the callback reports each motion that finishes. (Reaching for the free
+    // `push_animatable_with_done` instead means remembering the state yourself and owning its two
+    // caveats — a second driver on the same state swallows the callback, and "already at the target"
+    // is silent because this is a per-frame push. Both are documented on that function.)
+    let alpha_state = ctx.animate_float_as_state_with_done(
         if clicked.get() { 0.2 } else { 1.0 },
         AnimationSpec::Spring(spring.clone()),
         { clone!(done_flag); move || { done_flag.set(true); } },

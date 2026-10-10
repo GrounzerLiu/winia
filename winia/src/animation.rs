@@ -121,12 +121,22 @@ pub enum RepeatMode {
     Reverse,
 }
 
+/// How a loop's `initial_start_offset` is applied — Compose's `StartOffsetType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartOffsetType {
+    /// Hold the loop's first value for the offset, then run it as usual (`StartOffsetType.Delay`).
+    #[default]
+    Delay,
+    /// Skip the offset's worth of the first cycle, so the loop starts part-way in
+    /// (`StartOffsetType.FastForward`).
+    FastForward,
+}
+
 /// An infinite repeat spec (`InfiniteRepeatableSpec`).
 ///
-/// Repeated difference from Compose: `initialStartOffset` (Compose's `StartOffset(offsetMillis,
-/// StartOffsetType::Delay | FastForward)`) has no counterpart here — a looping animation always starts
-/// at the beginning of its first cycle. `RepeatMode` itself is covered (`Restart` here, `Reverse` in
-/// `reverse`), and a per-cycle curve is available through `restart_tween`/`restart_keyframes`.
+/// `RepeatMode` is covered (`restart` and `reverse`), a per-cycle curve is available through
+/// `restart_tween`/`restart_keyframes`, and `with_start_offset` is Compose's
+/// `initialStartOffset = StartOffset(offsetMillis, StartOffsetType.Delay | FastForward)`.
 #[derive(Debug, Clone)]
 pub struct InfiniteRepeatableSpec {
     pub duration: Duration,
@@ -134,18 +144,26 @@ pub struct InfiniteRepeatableSpec {
     /// 循环周期内的取值曲线（None = 线性 from→to）；
     /// 对标 Compose `infiniteRepeatable(tween{...}/keyframes{...})`
     pub(crate) base: Option<AnimationSpec>,
+    pub(crate) start_offset: Duration,
+    pub(crate) start_offset_type: StartOffsetType,
 }
 
 impl InfiniteRepeatableSpec {
     pub fn restart(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Restart, base: None }
+        Self { duration, mode: RepeatMode::Restart, base: None, start_offset: Duration::ZERO, start_offset_type: StartOffsetType::Delay }
     }
     pub fn reverse(duration: Duration) -> Self {
-        Self { duration, mode: RepeatMode::Reverse, base: None }
+        Self { duration, mode: RepeatMode::Reverse, base: None, start_offset: Duration::ZERO, start_offset_type: StartOffsetType::Delay }
     }
     /// 周期内按 tween 曲线取值（对标 Compose `infiniteRepeatable(tween(...))`）
     pub fn restart_tween(duration: Duration, tween: TweenSpec) -> Self {
-        Self { duration, mode: RepeatMode::Restart, base: Some(AnimationSpec::Tween(tween)) }
+        Self {
+            duration,
+            mode: RepeatMode::Restart,
+            base: Some(AnimationSpec::Tween(tween)),
+            start_offset: Duration::ZERO,
+            start_offset_type: StartOffsetType::Delay,
+        }
     }
     /// 周期内按 keyframes 曲线取值（对标 Compose `infiniteRepeatable(keyframes{...})`）——
     /// frames = (周期内进度 0..1, 值 0..1，段间插值器)
@@ -157,7 +175,19 @@ impl InfiniteRepeatableSpec {
             duration,
             mode: RepeatMode::Restart,
             base: Some(AnimationSpec::Keyframes(KeyframesSpec { duration, frames })),
+            start_offset: Duration::ZERO,
+            start_offset_type: StartOffsetType::Delay,
         }
+    }
+
+    /// Compose's `initialStartOffset`: with `StartOffsetType::Delay` the loop holds its first value for
+    /// `offset` before running its first cycle; with `FastForward` it starts `offset` into that cycle.
+    /// The offset applies to the FIRST cycle only — later cycles follow normally, and the phase is
+    /// computed from one fixed origin, so the loop never drifts.
+    pub fn with_start_offset(mut self, offset: Duration, kind: StartOffsetType) -> Self {
+        self.start_offset = offset;
+        self.start_offset_type = kind;
+        self
     }
 }
 
@@ -172,10 +202,27 @@ struct Infinite<T: AnimatableValue> {
 
 impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<T> {
     fn update(&mut self) -> bool {
+        // Compose's `initialStartOffset`: `Delay` holds the loop's first value for the offset, then the
+        // first cycle runs; `FastForward` begins that many into the first cycle. Both are applied to the
+        // FIRST cycle only. The phase is taken from one fixed origin (no per-cycle restart), so the loop
+        // cannot drift and an offset is never re-applied.
         let elapsed = self.start.elapsed();
+        let period = self.spec.duration.as_secs_f32().max(0.001);
+        let elapsed = match self.spec.start_offset_type {
+            StartOffsetType::Delay => match elapsed.checked_sub(self.spec.start_offset) {
+                Some(rest) => rest,
+                None => {
+                    // Still waiting: hold the loop's first value.
+                    self.state.set(self.from.clone());
+                    return true;
+                }
+            },
+            StartOffsetType::FastForward => elapsed + self.spec.start_offset,
+        };
         match self.spec.mode {
             RepeatMode::Restart => {
-                let t = (elapsed.as_secs_f32() / self.spec.duration.as_secs_f32().max(0.001)).min(1.0);
+                let phase = (elapsed.as_secs_f32() % period) / period;
+                let t = phase;
                 // 曲线取值：Tween/Keyframes base 时用曲线进度（对标 Compose
                 // infiniteRepeatable(keyframes{...})——周期内按关键帧插值）；None = 线性
                 let eased = match &self.spec.base {
@@ -184,12 +231,10 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
                     _ => t,
                 };
                 self.state.set(self.from.lerp(&self.to, eased));
-                if elapsed >= self.spec.duration { self.start = Instant::now(); }
             }
             RepeatMode::Reverse => {
                 // 周期 = 2×duration：前半 from→to，后半 to→from
-                let cycle_secs = self.spec.duration.as_secs_f32().max(0.001) * 2.0;
-                let phase = (elapsed.as_secs_f32() % cycle_secs) / self.spec.duration.as_secs_f32().max(0.001);
+                let phase = (elapsed.as_secs_f32() % (period * 2.0)) / period;
                 let t = if phase < 1.0 { phase } else { 2.0 - phase };
                 self.state.set(self.from.lerp(&self.to, t));
             }
@@ -2976,6 +3021,110 @@ pub(crate) mod tests {
             done.load(std::sync::atomic::Ordering::SeqCst),
             "and the callback fires once the zero-displacement motion lands"
         );
+    }
+
+    /// A loop honours its `initial_start_offset` (Compose's `initialStartOffset`): `Delay` holds the
+    /// loop's first value for the offset, `FastForward` begins that far into the first cycle.
+    #[test]
+    fn an_infinite_loop_honours_its_start_offset() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        // FastForward: a 400 ms cycle entered 300 ms in → the first step is already three quarters along.
+        let fast = crate::runtime::state::State::new(0.0f32);
+        push_infinite(
+            fast.clone(),
+            0.0,
+            1.0,
+            InfiniteRepeatableSpec::restart(Duration::from_millis(400))
+                .with_start_offset(Duration::from_millis(300), StartOffsetType::FastForward),
+        );
+        update_animations();
+        let v = fast.peek();
+        assert!(
+            (v - 0.75).abs() < 0.1,
+            "FastForward starts three quarters into the cycle (value {v})"
+        );
+        clear_all_animations();
+        // Delay: the same cycle, but held for 300 ms before it begins.
+        let slow = crate::runtime::state::State::new(0.0f32);
+        push_infinite(
+            slow.clone(),
+            0.0,
+            1.0,
+            InfiniteRepeatableSpec::restart(Duration::from_millis(400))
+                .with_start_offset(Duration::from_millis(300), StartOffsetType::Delay),
+        );
+        update_animations();
+        let held = slow.peek();
+        assert!(held < 0.02, "Delay holds the first value for the offset (value {held})");
+        std::thread::sleep(Duration::from_millis(430)); // 300 ms of waiting + ~130 ms into the cycle
+        update_animations();
+        let moving = slow.peek();
+        assert!(
+            moving > 0.1 && moving < 0.6,
+            "then the first cycle runs from its beginning (value {moving})"
+        );
+        clear_all_animations();
+    }
+
+    /// `ComposeCtx::animate_float_as_state_with_done` is Compose's
+    /// `animateFloatAsState(targetValue, animationSpec, label, finishedListener)`: the slot owns the
+    /// state, so nothing else can drive it, and the callback fires once per motion that finishes.
+    #[test]
+    fn the_ctx_animate_state_with_done_reports_each_finished_motion() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let visible = crate::runtime::state::State::new(false);
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut composer = Composer::new();
+        let spec = AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(120),
+            std::sync::Arc::new(interpolator::Linear::new())
+                as std::sync::Arc<dyn interpolator::Interpolator>,
+        ));
+        let mut frame = |composer: &mut Composer| {
+            let on = visible.get();
+            let c = counter.clone();
+            let spec = spec.clone();
+            composer.compose(|ctx| {
+                let value = ctx.animate_float_as_state_with_done(if on { 100.0 } else { 0.0 }, spec, move || {
+                    c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                });
+                let _ = value.get();
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let mut run = |composer: &mut Composer, frames: usize, frame: &mut dyn FnMut(&mut Composer)| {
+            for _ in 0..frames {
+                frame(composer);
+                update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+        };
+        frame(&mut composer); // the state is created AT the target: nothing runs, nothing reports
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
+        visible.set(true);
+        run(&mut composer, 20, &mut frame);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the grow reports exactly once"
+        );
+        // Interrupt it: the abandoned motion does not report, the replacement does.
+        visible.set(false);
+        run(&mut composer, 5, &mut frame);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a motion that was replaced must not report"
+        );
+        run(&mut composer, 20, &mut frame);
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the shrink reports once when it lands"
+        );
+        clear_all_animations();
     }
 
 }
