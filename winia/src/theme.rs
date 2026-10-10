@@ -381,6 +381,85 @@ static LOCAL_TONAL_ELEVATION_ENABLED: LazyLock<CompositionLocal<bool>> =
 static LOCAL_ABSOLUTE_TONAL_ELEVATION: LazyLock<CompositionLocal<f32>> =
     LazyLock::new(|| CompositionLocal::new(|| 0.0));
 
+/// The motion scheme in force (Compose's `LocalMotionScheme`, `material3/MotionScheme.kt`) — the six springs
+/// a component asks its theme for instead of naming its own. A component never reads this directly: it asks
+/// `SpringSpec::spatial_fast()` and friends, which resolve through here.
+static LOCAL_MOTION_SCHEME: LazyLock<CompositionLocal<MotionScheme>> =
+    LazyLock::new(|| CompositionLocal::new(MotionScheme::standard));
+
+/// Compose's `MotionScheme` (`material3/MotionScheme.kt:96-162`, tokens in
+/// `material3/tokens/StandardMotionTokens.kt:20-31` and `ExpressiveMotionTokens.kt:22-33`).
+///
+/// The point of the object is that a component asks for a ROLE — default/fast/slow, spatial/effects — rather
+/// than for a spring, so an application switches `standard()` to `expressive()` in one place and every
+/// animated component follows. winia had the same numbers as constants `SpringSpec::spatial_*`/
+/// `effects_*` read directly; those now resolve through the scheme in force.
+///
+/// The two schemes differ only in their spatial tokens: expressive motion is softer and bouncier (damping
+/// 0.8/0.6 against 0.9, stiffness 380/800/200 against 700/1400/300). The EFFECT springs are identical in
+/// both — which is why a colour animation does not change when the scheme does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MotionScheme {
+    /// `MotionSchemeKeyTokens.DefaultSpatial` — position and size changes.
+    pub default_spatial: crate::animation::SpringSpec,
+    /// `FastSpatial` — a small, immediate move (a thumb, a slot).
+    pub fast_spatial: crate::animation::SpringSpec,
+    /// `SlowSpatial` — a large surface appearing or leaving.
+    pub slow_spatial: crate::animation::SpringSpec,
+    /// `DefaultEffects` — a colour, an alpha.
+    pub default_effects: crate::animation::SpringSpec,
+    /// `FastEffects`.
+    pub fast_effects: crate::animation::SpringSpec,
+    /// `SlowEffects`.
+    pub slow_effects: crate::animation::SpringSpec,
+}
+
+impl MotionScheme {
+    /// `StandardMotionTokens` (`tokens/StandardMotionTokens.kt:20-31`) — M3's default motion.
+    pub fn standard() -> Self {
+        use crate::animation::SpringSpec;
+        let spatial = |damping_ratio: f32, stiffness: f32| SpringSpec {
+            damping_ratio,
+            stiffness,
+            mass: 1.0,
+            threshold: 0.01,
+        };
+        Self {
+            default_spatial: spatial(0.9, 700.0),
+            fast_spatial: spatial(0.9, 1400.0),
+            slow_spatial: spatial(0.9, 300.0),
+            default_effects: spatial(1.0, 1600.0),
+            fast_effects: spatial(1.0, 3800.0),
+            slow_effects: spatial(1.0, 800.0),
+        }
+    }
+
+    /// `ExpressiveMotionTokens` (`tokens/ExpressiveMotionTokens.kt:22-33`).
+    pub fn expressive() -> Self {
+        use crate::animation::SpringSpec;
+        let spatial = |damping_ratio: f32, stiffness: f32| SpringSpec {
+            damping_ratio,
+            stiffness,
+            mass: 1.0,
+            threshold: 0.01,
+        };
+        Self {
+            default_spatial: spatial(0.8, 380.0),
+            fast_spatial: spatial(0.6, 800.0),
+            slow_spatial: spatial(0.8, 200.0),
+            default_effects: spatial(1.0, 1600.0),
+            fast_effects: spatial(1.0, 3800.0),
+            slow_effects: spatial(1.0, 800.0),
+        }
+    }
+}
+
+impl Default for MotionScheme {
+    fn default() -> Self {
+        Self::standard()
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // 主题入口
 // ═══════════════════════════════════════════════════════════
@@ -677,11 +756,33 @@ impl WiniaTheme {
             LOCAL_COLORS.provides(colors, || {
                 LOCAL_TYPOGRAPHY.provides(typography, || {
                     LOCAL_CONTENT_COLOR.provides(on_surface, || {
-                        content(ctx);
+                        // The motion scheme travels with the theme, as Compose's `LocalMotionScheme` does.
+                        // The theme provides the standard one; a subtree switches to expressive motion with
+                        // `WiniaTheme::with_motion_scheme`.
+                        LOCAL_MOTION_SCHEME.provides(MotionScheme::standard(), || {
+                            content(ctx);
+                        });
                     });
                 });
             });
         });
+    }
+
+    /// The motion scheme in force — Compose's `LocalMotionScheme.current`.
+    pub fn motion_scheme() -> MotionScheme {
+        LOCAL_MOTION_SCHEME.current()
+    }
+
+    /// Override the motion scheme for a subtree — Compose's
+    /// `CompositionLocalProvider(LocalMotionScheme provides MotionScheme.expressive())`, which is how an
+    /// application switches every animated component at once. The six springs a component asks for
+    /// (`SpringSpec::spatial_*`/`effects_*`) resolve through here, so no component names its own numbers.
+    pub fn with_motion_scheme(
+        scheme: MotionScheme,
+        ctx: &mut ComposeCtx,
+        content: impl FnOnce(&mut ComposeCtx),
+    ) {
+        LOCAL_MOTION_SCHEME.provides(scheme, || content(ctx));
     }
 
     /// 在子树中覆盖 Material Typography token，不改变颜色或布局方向。
@@ -1109,6 +1210,94 @@ mod tests {
                 assert_eq!(WiniaTheme::typography(), custom);
             });
             assert_eq!(WiniaTheme::typography(), default);
+        });
+    }
+
+    /// The two schemes are Compose's own token files, number for number: `StandardMotionTokens.kt:20-31`
+    /// and `ExpressiveMotionTokens.kt:22-33`. The effect springs are the same in both — only the spatial
+    /// tokens differ, which is why switching the scheme cannot change a colour animation.
+    #[test]
+    fn the_motion_schemes_are_comp_oses_two_token_sets() {
+        let standard = MotionScheme::standard();
+        for (token, damping, stiffness) in [
+            (&standard.default_spatial, 0.9, 700.0),
+            (&standard.fast_spatial, 0.9, 1400.0),
+            (&standard.slow_spatial, 0.9, 300.0),
+            (&standard.default_effects, 1.0, 1600.0),
+            (&standard.fast_effects, 1.0, 3800.0),
+            (&standard.slow_effects, 1.0, 800.0),
+        ] {
+            assert_eq!(
+                (token.damping_ratio, token.stiffness),
+                (damping, stiffness),
+                "StandardMotionTokens"
+            );
+            assert_eq!(token.mass, 1.0);
+        }
+
+        let expressive = MotionScheme::expressive();
+        for (token, damping, stiffness) in [
+            (&expressive.default_spatial, 0.8, 380.0),
+            (&expressive.fast_spatial, 0.6, 800.0),
+            (&expressive.slow_spatial, 0.8, 200.0),
+            (&expressive.default_effects, 1.0, 1600.0),
+            (&expressive.fast_effects, 1.0, 3800.0),
+            (&expressive.slow_effects, 1.0, 800.0),
+        ] {
+            assert_eq!(
+                (token.damping_ratio, token.stiffness),
+                (damping, stiffness),
+                "ExpressiveMotionTokens"
+            );
+        }
+
+        for (a, b) in [
+            (&expressive.default_effects, &standard.default_effects),
+            (&expressive.fast_effects, &standard.fast_effects),
+            (&expressive.slow_effects, &standard.slow_effects),
+        ] {
+            assert_eq!(
+                (a.damping_ratio, a.stiffness),
+                (b.damping_ratio, b.stiffness),
+                "the effect springs do not move between the two schemes"
+            );
+        }
+        assert_eq!(MotionScheme::default(), MotionScheme::standard());
+    }
+
+    /// A component asks for a ROLE, and the theme decides which spring that is: under expressive motion
+    /// `SpringSpec::spatial_fast()` (the spec a radio dot, a switch thumb and a segmented slot use) is the
+    /// expressive token, and outside the override it is the standard one. Before the scheme existed both
+    /// were the same constant, so this test could not have two different answers.
+    #[test]
+    fn a_component_takes_its_spring_from_the_motion_scheme() {
+        use crate::animation::SpringSpec;
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            let standard = SpringSpec::spatial_fast();
+            assert_eq!(
+                (standard.damping_ratio, standard.stiffness),
+                (0.9, 1400.0),
+                "the theme carries standard motion"
+            );
+            WiniaTheme::with_motion_scheme(MotionScheme::expressive(), ctx, |_ctx| {
+                let expressive = SpringSpec::spatial_fast();
+                assert_eq!(
+                    (expressive.damping_ratio, expressive.stiffness),
+                    (0.6, 800.0),
+                    "expressive motion reaches the component through the same call"
+                );
+                assert_eq!(
+                    SpringSpec::effects_default(),
+                    MotionScheme::expressive().default_effects,
+                    "the effect springs resolve through the scheme too (and are the same numbers)"
+                );
+            });
+            assert_eq!(
+                SpringSpec::spatial_fast(),
+                standard,
+                "the override ends with its subtree"
+            );
         });
     }
 
