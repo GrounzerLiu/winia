@@ -1568,16 +1568,30 @@ fn compute_spring_displacement(
     initial_displacement: f32, velocity: &mut f32,
     elapsed: Duration, threshold: f32,
 ) -> f32 {
-    const FIXED_DT: f32 = 1.0 / 60.0;
-    const MAX_STEPS: u32 = 10;
-    let mut total_dt = elapsed.as_secs_f32().min(FIXED_DT * MAX_STEPS as f32);
+    /// The longest step an ordinary frame uses (1/60 s).
+    const FRAME_CAP: f32 = 1.0 / 60.0;
+    /// Semi-implicit Euler is only stable while the step stays well under the spring's own period, so the
+    /// step is bounded by the spring (`1/(4·omega0)` = a sixteenth of a period) instead of a fixed 1/60 s:
+    /// a soft spring keeps the frame cap, a very stiff one gets a proportionally shorter step.
+    /// A frame can be arbitrarily long (a stalled loop, a resize, a suspended app). Integrating all of it
+    /// keeps a spring on the same clock as a Tween, which is what Compose's time-based springs do — the cap
+    /// only stops a pathological gap from costing unbounded work in one frame. `MAX_STEPS` at the bound
+    /// covers ~33 s of a soft spring and ~5 s of a very stiff one; beyond that the remainders are dropped,
+    /// which is the one case where a spring can still fall behind.
+    const MAX_STEPS: u32 = 2000;
+    let omega0 = (stiffness / mass.max(f32::EPSILON)).sqrt();
+    let step_cap = if omega0 > 0.0 {
+        (1.0 / (4.0 * omega0)).min(FRAME_CAP)
+    } else {
+        FRAME_CAP
+    };
+    let mut total_dt = elapsed.as_secs_f32().min(step_cap * MAX_STEPS as f32);
     let mut displacement = initial_displacement;
+    let damping_coeff = damping_ratio * 2.0 * omega0 * mass;
     while total_dt > 0.0 {
-        let step = total_dt.min(FIXED_DT);
-        let omega0 = (stiffness / mass).sqrt();
-        let damping_coeff = damping_ratio * 2.0 * omega0 * mass;
+        let step = total_dt.min(step_cap);
         let force = -stiffness * displacement - damping_coeff * *velocity;
-        *velocity += force / mass * step;
+        *velocity += force / mass.max(f32::EPSILON) * step;
         displacement += *velocity * step;
         total_dt -= step;
     }
@@ -4076,6 +4090,45 @@ pub(crate) mod tests {
         // Nothing is running once every animation has been dropped.
         clear_all_animations();
         assert!(active_animations_report().is_empty());
+    }
+
+    /// A frame longer than `FIXED_DT * MAX_STEPS` advances a spring by only that much, while a Tween reads
+    /// the wall clock and arrives — so one stall makes the two disagree and the spring quietly takes
+    /// longer than the real time it was given. Compose's springs are functions of elapsed time, so they
+    /// are unaffected. Measured here so the deviation is a number, not a suspicion.
+    #[test]
+    fn a_long_frame_does_not_leave_a_spring_behind_the_clock() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let spring = crate::runtime::state::State::new(0.0f32);
+        let tween = crate::runtime::state::State::new(0.0f32);
+        let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
+        let soft = SpringSpec {
+            stiffness: 200.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            ..SpringSpec::default()
+        };
+        push_animatable(spring.clone(), 100.0, AnimationSpec::Spring(soft));
+        push_animatable(
+            tween.clone(),
+            100.0,
+            AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), linear())),
+        );
+        update_animations();
+        // One 400 ms frame: no update runs in between, exactly what a stalled loop looks like.
+        std::thread::sleep(Duration::from_millis(400));
+        update_animations();
+        let (s, t) = (spring.peek(), tween.peek());
+        assert_eq!(t, 100.0, "the tween reads the clock, so it arrives ({t})");
+        // A stiffness-200 spring needs ~4/omega0 = 280 ms to settle; 400 ms of real time is past that, so
+        // anything under ~96 means the frame was truncated rather than integrated. (The analytic value at
+        // 400 ms is 97.68; six 1/60 s semi-implicit steps land at 96.88, the integrator's own error, which
+        // is why the bar is a range and not the analytic number.)
+        assert!(
+            s > 96.0,
+            "the spring integrates the whole 400 ms it was given (at {s} of 100; 71.8 means the frame was cut at 10 x 1/60 s)"
+        );
+        clear_all_animations();
     }
 
     #[derive(Clone, PartialEq, Debug)]
