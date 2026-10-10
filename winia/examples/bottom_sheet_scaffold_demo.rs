@@ -25,7 +25,15 @@ struct ScaffoldItem {
 #[composable]
 fn scaffold_demo(ctx: &mut ComposeCtx) {
     // 外部 SheetState 可用于程序化控制（按钮展开/收起）
-    let scaffold_state = ctx.remember(|| SheetState::new(SheetValue::PartiallyExpanded)).get();
+    // Compose's `rememberStandardBottomSheetState`: a standard (docked) sheet skips the hidden state, so a
+    // downward drag stops at the peek instead of taking the panel off the screen.
+    let scaffold_state = ctx
+        .remember(|| {
+            let s = SheetState::new(SheetValue::PartiallyExpanded);
+            s.set_skip_hidden_state(true);
+            s
+        })
+        .get();
     let lazy_state = ctx.remember(|| LazyListState::new()).get();
     let items = ctx
         .remember(|| {
