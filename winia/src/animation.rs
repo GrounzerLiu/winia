@@ -709,6 +709,19 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     spec: AnimationSpec,
     done: impl FnOnce() + Send + 'static,
 ) {
+    push_animatable_with_result(state, target, spec, move |_end| done());
+}
+
+/// [`push_animatable`] reporting its outcome: why the motion ended and the velocity it had at that moment
+/// — Compose's `AnimationResult` handed to the block of `Animatable.animateTo`. The reason separates a
+/// motion that arrived (`Finished`) from one a value range stopped (`BoundReached`) and from one the
+/// engine's overrun guard cut short (`Forced`), which the plain callback cannot tell apart.
+pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    done: impl FnOnce(MotionEnd) + Send + 'static,
+) {
     let sid = state.state_id();
     if state.peek() == target {
         // Already at the target. Nothing to animate, so no callback fires — this entry point is for a
@@ -750,7 +763,7 @@ pub fn push_animatable_with_done<T: Clone + PartialEq + AnimatableValue + Send +
     }
     let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
-    anim.on_finish(done);
+    anim.on_finish_with(done);
     anim.update();
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     crate::runtime::state::wake_loop();
@@ -954,6 +967,28 @@ pub fn animation_velocity(id: crate::runtime::state::StateId) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Why a motion ended — Compose's `AnimationEndReason`, plus the one case Compose does not have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionEndReason {
+    /// The motion arrived: a spring settled on its target, a decay came to rest, a tween or keyframes ran
+    /// out its clock. Compose's `AnimationEndReason.Finished`.
+    Finished,
+    /// A value range ended it — the value was written exactly at a bound (`set_bounds`). Compose's
+    /// `AnimationEndReason.BoundReached`.
+    BoundReached,
+    /// The engine's overrun guard cut it short: a spring or decay that had still not settled after five
+    /// seconds. winia only — Compose sizes its springs by an estimated duration, so it has nothing to cut.
+    Forced,
+}
+
+/// What a completion callback is handed: the reason and the velocity the motion had at that moment —
+/// Compose's `AnimationResult` (`endReason` plus the end state's velocity).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotionEnd {
+    pub reason: MotionEndReason,
+    pub velocity: f32,
+}
+
 /// A cached runtime check for a tracing environment variable — `WINIA_ANIM_SIZE_TRACE=1`, say.
 ///
 /// The per-component traces used to be `#[cfg(test)]`-gated, which meant an example could never print
@@ -1046,7 +1081,7 @@ pub(crate) struct Motion<T: Clone + 'static> {
     state: crate::runtime::state::Animating<T>,
     anim_state: Option<AnimationState<T>>,
     /// 动画完成回调（done 帧触发一次，take 后释放）
-    on_finish: Option<Box<dyn FnOnce() + Send>>,
+    on_finish: Option<Box<dyn FnOnce(MotionEnd) + Send>>,
     /// fling 撞到 clamp 边界时回调一次，参数为该帧尚未消费的瞬时速度。
     on_boundary: Option<Box<dyn FnOnce(f32) + Send>>,
     /// fling 边界 clamp（Decay 专用）：每帧求值（读最新滚动极限）；
@@ -1113,6 +1148,11 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
     /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
     /// 动画自然完成/超时强制完成时调用一次）
     pub fn on_finish(&mut self, f: impl FnOnce() + Send + 'static) {
+        self.on_finish = Some(Box::new(move |_end| f()));
+    }
+
+    /// The same, with the outcome: why it ended and the velocity it had — Compose's `AnimationResult`.
+    pub fn on_finish_with(&mut self, f: impl FnOnce(MotionEnd) + Send + 'static) {
         self.on_finish = Some(Box::new(f));
     }
 
@@ -1305,9 +1345,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             };
             if let Some(final_val) = overrun {
                 self.state.set(final_val);
+                let velocity = state.last_velocity;
                 self.anim_state = None;
                 if let Some(f) = self.on_finish.take() {
-                    f();
+                    f(MotionEnd { reason: MotionEndReason::Forced, velocity });
                 }
                 return false;
             }
@@ -1315,6 +1356,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         let dt = now.duration_since(state.last_update);
         state.last_update = now;
         let mut boundary_velocity = None;
+        let mut bound_hit = false;
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
                 if state.lanes.is_some() {
@@ -1539,6 +1581,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     let clamped = clamp(raw);
                     if clamped != raw {
                         boundary_velocity.get_or_insert(state.last_velocity);
+                        bound_hit = true;
                         (AnimatableValue::from_f32(clamped), true)
                     } else {
                         (value, done)
@@ -1556,9 +1599,17 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             }
         }
         if done {
+            let velocity = state.last_velocity;
             self.anim_state = None;
             if let Some(f) = self.on_finish.take() {
-                f();
+                f(MotionEnd {
+                    reason: if bound_hit {
+                        MotionEndReason::BoundReached
+                    } else {
+                        MotionEndReason::Finished
+                    },
+                    velocity,
+                });
             }
         }
         !done
@@ -1730,6 +1781,19 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
     /// until it rests (or until it reaches a bound, if one is set).
     pub fn animate_decay(&self, velocity: T, spec: DecaySpec) {
         push_decay_vector(self.state.clone(), velocity, spec);
+        set_animation_bounds(self.state.state_id(), self.bounds.peek());
+    }
+
+    /// [`Self::animate_to`] reporting its outcome — Compose's `animateTo` block, which receives an
+    /// `AnimationResult`: the callback is handed a [`MotionEnd`] saying whether the motion arrived,
+    /// stopped at a bound, or was cut short by the engine's overrun guard, plus its velocity at the end.
+    pub fn animate_to_with_result(
+        &self,
+        target: T,
+        spec: impl Into<AnimationSpec>,
+        done: impl FnOnce(MotionEnd) + Send + 'static,
+    ) {
+        push_animatable_with_result(self.state.clone(), target, spec.into(), done);
         set_animation_bounds(self.state.state_id(), self.bounds.peek());
     }
 
@@ -4318,6 +4382,81 @@ pub(crate) mod tests {
             "each axis parks on 100/4.2 and -60/4.2 (at {v:?})"
         );
         assert!(!o.is_running());
+        clear_all_animations();
+    }
+
+    /// Compose's `AnimationResult`: the three ways a motion can end were indistinguishable through a
+    /// zero-argument callback — a motion cut short by the overrun guard reported "finished" like any other,
+    /// and one stopped by a value range looked the same. Measured here for all three.
+    #[test]
+    fn a_completion_callback_is_told_why_the_motion_ended() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let mut composer = Composer::new();
+        let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let h = held.clone();
+        composer.compose(|ctx| {
+            let handle = ctx.remember_animatable(0.0f32);
+            if h.borrow().is_none() {
+                *h.borrow_mut() = Some(handle.clone());
+            }
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let a = held.borrow().clone().expect("the slot remembered the animatable");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<MotionEnd>::new()));
+
+        let record = {
+            let seen = seen.clone();
+            move |end: MotionEnd| seen.lock().unwrap().push(end)
+        };
+        let quick = || AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(60), Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>));
+        let step = |frames: u32| {
+            for _ in 0..frames {
+                update_animations();
+                std::thread::sleep(Duration::from_millis(6));
+            }
+        };
+
+        // 1. It arrived.
+        a.animate_to_with_result(100.0, quick(), record.clone());
+        step(30);
+        assert_eq!(seen.lock().unwrap().len(), 1, "one motion, one report");
+        assert_eq!(seen.lock().unwrap()[0].reason, MotionEndReason::Finished);
+
+        // 2. A value range stopped it: 5.0 is outside (0, 1), so the value is written at the bound.
+        a.set_bounds(0.0, 1.0);
+        a.animate_to_with_result(5.0, quick(), record.clone());
+        step(30);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert_eq!(seen.lock().unwrap()[1].reason, MotionEndReason::BoundReached, "the bound is named");
+        assert_eq!(a.value(), 1.0);
+        a.clear_bounds();
+        a.snap_to(0.0);
+
+        // 3. The overrun guard cut it short: a spring too soft to settle inside five seconds. This is the
+        // one reason with no Compose counterpart, and the only way to reach it is to wait it out.
+        a.animate_to_with_result(
+            100.0,
+            AnimationSpec::Spring(SpringSpec {
+                stiffness: 0.5,
+                damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+                threshold: 0.001,
+                mass: 1.0,
+            }),
+            record.clone(),
+        );
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(5600) {
+            update_animations();
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        assert_eq!(seen.lock().unwrap().len(), 3, "the guard reports instead of vanishing");
+        assert_eq!(
+            seen.lock().unwrap()[2].reason,
+            MotionEndReason::Forced,
+            "and it says it was cut short rather than finished"
+        );
         clear_all_animations();
     }
 
