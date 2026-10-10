@@ -195,6 +195,14 @@ impl InfiniteRepeatableSpec {
         }
     }
 
+    /// The curve a cycle follows — Compose's `infiniteRepeatable(tween(...)/keyframes(...))`. It works in
+    /// BOTH repeat modes: a `Reverse` loop mirrors its iteration time, so the return leg is this curve running
+    /// backwards (Compose's `VectorizedInfiniteRepeatableSpec`), where winia used to travel back linearly.
+    pub fn with_base(mut self, base: AnimationSpec) -> Self {
+        self.base = Some(base);
+        self
+    }
+
     /// Compose's `initialStartOffset`: with `StartOffsetType::Delay` the loop holds its first value for
     /// `offset` before running its first cycle; with `FastForward` it starts `offset` into that cycle.
     /// The offset applies to the FIRST cycle only — later cycles follow normally, and the phase is
@@ -237,21 +245,15 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
         match self.spec.mode {
             RepeatMode::Restart => {
                 let phase = (elapsed.as_secs_f32() % period) / period;
-                let t = phase;
-                // 曲线取值：Tween/Keyframes base 时用曲线进度（对标 Compose
-                // infiniteRepeatable(keyframes{...})——周期内按关键帧插值）；None = 线性
-                let eased = match &self.spec.base {
-                    Some(AnimationSpec::Tween(tw)) => tw.interpolator.interpolate(t),
-                    Some(AnimationSpec::Keyframes(kf)) => interpolate_keyframes(&kf.frames, t),
-                    _ => t,
-                };
+                let eased = loop_factor(self.spec.base.as_ref(), RepeatMode::Restart, 0, phase);
                 self.state.set(self.from.lerp(&self.to, eased));
             }
             RepeatMode::Reverse => {
-                // 周期 = 2×duration：前半 from→to，后半 to→from
-                let phase = (elapsed.as_secs_f32() % (period * 2.0)) / period;
-                let t = if phase < 1.0 { phase } else { 2.0 - phase };
-                self.state.set(self.from.lerp(&self.to, t));
+                // The cycle is 2x the duration: the first half travels from → to, the second to → from.
+                let cycle = (elapsed.as_secs_f32() / period) as u32;
+                let phase = (elapsed.as_secs_f32() % period) / period;
+                let eased = loop_factor(self.spec.base.as_ref(), RepeatMode::Reverse, cycle, phase);
+                self.state.set(self.from.lerp(&self.to, eased));
             }
         }
         true // 永远运行
@@ -1857,6 +1859,29 @@ fn newton_step(x: f64, f: impl Fn(f64) -> f64, f_prime: impl Fn(f64) -> f64) -> 
     x - f(x) / f_prime(x)
 }
 
+/// The interpolation factor a loop is at — Compose's `VectorizedInfiniteRepeatableSpec.getValueFromNanos`:
+/// `Restart` plays the base curve forward in every iteration, and `Reverse` mirrors the iteration TIME on the
+/// odd ones (`if (iteration % 2 != 0) durationNanos - iterationTime`) and evaluates the base there. Mirroring
+/// the time rather than the value is what makes the return leg the same curve running backwards; interpolating
+/// the return leg linearly — what winia did — is a different motion for any eased base.
+fn loop_factor(base: Option<&AnimationSpec>, mode: RepeatMode, cycle: u32, phase: f32) -> f32 {
+    let forward = match mode {
+        RepeatMode::Restart => phase,
+        RepeatMode::Reverse => {
+            if cycle % 2 == 0 {
+                phase
+            } else {
+                1.0 - phase
+            }
+        }
+    };
+    match base {
+        Some(AnimationSpec::Tween(tween)) => tween.interpolator.interpolate(forward),
+        Some(AnimationSpec::Keyframes(keyframes)) => interpolate_keyframes(&keyframes.frames, forward),
+        _ => forward,
+    }
+}
+
 /// A motion that can be asked for its value at ANY time — Compose's `TargetBasedAnimation` /
 /// `DecayAnimation` and their `getValueFromNanos`.
 ///
@@ -2029,16 +2054,9 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
                     StartOffsetType::FastForward => elapsed + spec.start_offset,
                 };
                 let cycle = (played.as_secs_f32() / base.as_secs_f32()) as u32;
-                let mut phase = (played.as_secs_f32() % base.as_secs_f32()) / base.as_secs_f32();
-                if matches!(spec.mode, RepeatMode::Reverse) && cycle % 2 == 1 {
-                    phase = 1.0 - phase;
-                }
-                match spec.base.as_ref() {
-                    AnimationSpec::Keyframes(k) => {
-                        self.from.lerp(&target, interpolate_keyframes(&k.frames, phase))
-                    }
-                    _ => self.from.lerp(&target, phase),
-                }
+                let phase = (played.as_secs_f32() % base.as_secs_f32()) / base.as_secs_f32();
+                let eased = loop_factor(Some(&spec.base), spec.mode, cycle, phase);
+                self.from.lerp(&target, eased)
             }
             AnimationSpec::Decay(spec) => {
                 let friction = spec.friction.max(0.001);
@@ -5211,6 +5229,63 @@ pub(crate) mod tests {
             (after - reference).abs() < 0.5,
             "the resumed motion continues the same trajectory (resumed {after:.3}, uninterrupted {reference:.3}, frozen at {frozen_value:.3} moving {frozen_velocity:.1}/s)"
         );
+    }
+
+    /// Compose's `RepeatMode.Reverse` mirrors the iteration TIME and evaluates the base curve there, so the
+    /// return leg is the same curve running backwards. Interpolating the return leg linearly — what this
+    /// engine used to do — is a different motion for any eased base, and a loop builder could not even name one
+    /// (`restart_tween`/`restart_keyframes` were the only curve constructors, and both imply Restart).
+    #[test]
+    fn a_reverse_loop_runs_its_curve_backwards() {
+        use crate::animation::interpolator::Interpolator;
+        let curve = |t: f32| interpolator::fast_out_slow_in().interpolate(t);
+        let tween = AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(400),
+            Arc::new(interpolator::fast_out_slow_in()) as Arc<dyn Interpolator>,
+        ));
+        let forward = loop_factor(Some(&tween), RepeatMode::Reverse, 0, 0.25);
+        let backward = loop_factor(Some(&tween), RepeatMode::Reverse, 1, 0.25);
+        assert!(
+            (forward - curve(0.25)).abs() < 1e-6,
+            "the first leg is the curve itself ({forward} against {})",
+            curve(0.25)
+        );
+        assert!(
+            (backward - curve(0.75)).abs() < 1e-6,
+            "the return leg evaluates the curve at the mirrored time ({backward} against {})",
+            curve(0.75)
+        );
+        assert!(
+            (backward - 0.75).abs() > 0.1,
+            "which is not the linear mirror (linear reads 0.75, the curve reads {backward})"
+        );
+
+        // Then through the engine: a reverse loop carrying that curve, sampled on its return leg.
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let state = crate::runtime::state::State::new(0.0f32);
+        push_infinite(
+            state.clone(),
+            0.0f32,
+            1.0f32,
+            InfiniteRepeatableSpec::reverse(Duration::from_millis(400)).with_base(tween),
+        );
+        let start = std::time::Instant::now();
+        let mut on_the_return_leg = None;
+        while start.elapsed() < Duration::from_millis(560) {
+            update_animations();
+            let t = start.elapsed().as_secs_f32();
+            if (0.48..0.52).contains(&t) {
+                on_the_return_leg = Some(state.peek());
+            }
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        let value = on_the_return_leg.expect("the loop was sampled on its return leg");
+        assert!(
+            value > 0.85,
+            "half a second in, the backward leg is already near the loop's start value ({value}; a linear return would read about 0.75)"
+        );
+        clear_all_animations();
     }
 
     #[derive(Clone, PartialEq, Debug)]
