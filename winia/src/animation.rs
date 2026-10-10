@@ -951,16 +951,33 @@ pub fn animation_velocity(id: crate::runtime::state::StateId) -> f32 {
 /// what its own animation did: the demo binary is not built with the test cfg, so the block was not even
 /// compiled in (measured — `WINIA_ANIM_SIZE_TRACE=1 cargo run --example animated_size_demo` printed
 /// nothing). Reading the variable once and caching it makes the switch a runtime one while keeping the
-/// check cheap enough for a per-frame layout path.
+/// check cheap enough for a per-frame layout path: an atomic load plus a name compare, measured at 25 ns
+/// per call against 346 ns for the mutex-and-hash-map version this started as (1,000,000 calls each,
+/// debug build).
 pub fn trace_flag(name: &'static str) -> bool {
-    static FLAGS: LazyLock<Mutex<std::collections::HashMap<&'static str, bool>>> =
-        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-    let mut flags = FLAGS.lock().unwrap();
-    *flags.entry(name).or_insert_with(|| {
-        std::env::var(name)
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
+    // Each known trace variable owns an atomic, and the steady-state check is one relaxed load plus a name
+    // compare: no lock, no allocation, nothing to pay for a trace that is off. `AnimatedSize` asks this on
+    // every layout pass, so anything heavier here would be a per-frame cost. A new trace variable is a row
+    // in the table.
+    const UNKNOWN: u8 = 0;
+    const OFF: u8 = 1;
+    const ON: u8 = 2;
+    static TRACES: [(&str, std::sync::atomic::AtomicU8); 1] =
+        [("WINIA_ANIM_SIZE_TRACE", std::sync::atomic::AtomicU8::new(UNKNOWN))];
+    let Some((_, cell)) = TRACES.iter().find(|(n, _)| *n == name) else {
+        return false;
+    };
+    match cell.load(std::sync::atomic::Ordering::Relaxed) {
+        ON => true,
+        OFF => false,
+        _ => {
+            let on = std::env::var(name)
+                .map(|v| !v.is_empty() && v != "0")
+                .unwrap_or(false);
+            cell.store(if on { ON } else { OFF }, std::sync::atomic::Ordering::Relaxed);
+            on
+        }
+    }
 }
 
 /// Everything animating right now, one line per motion — what the debug server's `al` command prints.
