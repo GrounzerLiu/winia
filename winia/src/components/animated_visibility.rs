@@ -761,19 +761,27 @@ mod tests {
         build(&mut composer);
         visible.set(true);
         let mut seen = false;
+        let mut checked_the_start = false;
         for _ in 0..12 {
             build(&mut composer);
             if let Some(scope) = held.borrow().as_ref() {
                 seen = true;
                 let animating =
                     |s: &State<f32>| crate::animation::has_animation_for_state(s.state_id());
-                assert!(
-                    animating(&scope.progress) && animating(&scope.alpha),
-                    "the enabled size and fade channels are driven"
-                );
+                // The enabled channels are checked as the enter STARTS: a stiffness-1400 spring settles in
+                // about 0.14 s (Compose's own duration estimate), so it has legitimately left the registry
+                // long before this loop's 240 ms are up. Which channels are driven is the question — not
+                // how long a spring lasts.
+                if !checked_the_start {
+                    checked_the_start = true;
+                    assert!(
+                        animating(&scope.progress) && animating(&scope.alpha),
+                        "the enabled size and fade channels are driven"
+                    );
+                }
                 assert!(
                     !animating(&scope.slide) && !animating(&scope.scale),
-                    "a channel no builder enabled must not be driven"
+                    "a channel no builder enabled must not be driven, at any point"
                 );
                 assert_eq!(
                     (scope.slide.peek(), scope.scale.peek()),

@@ -1109,6 +1109,11 @@ struct AnimationState<T> {
     /// velocity and its own rest threshold; the motion ends when EVERY component is at rest).
     /// `None` means the scalar path (`initial_velocity` + `from.to_f32()`).
     decay_lanes: Option<Vec<DecayLane>>,
+    /// How long a Spring is meant to take, from Compose's `estimateAnimationDurationMillis` — the clock
+    /// the spec runs on. For a multi-component spring it is the longest axis, exactly as
+    /// `VectorizedFloatAnimationSpec.getDurationNanos` takes the maximum. `None` for every other spec,
+    /// which carries its own duration.
+    spring_duration: Option<Duration>,
 }
 
 /// One component's exponential decay: where it started and the velocity it started with. The motion is
@@ -1202,7 +1207,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
         // Spring 在多分量值（Size/Offset）上按分量推进：每轴一条弹簧、各自收敛——这样
         // 尺寸弹簧的两个轴都能落到目标，而不是共用一条沿范数运动的单值位移。
-        let lanes = match &spec {
+        let lanes: Option<Vec<SpringLane>> = match &spec {
             AnimationSpec::Spring(_) => {
                 let mut from_components = [0.0; MAX_ANIMATION_COMPONENTS];
                 let mut to_components = [0.0; MAX_ANIMATION_COMPONENTS];
@@ -1224,6 +1229,36 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             }
             _ => None,
         };
+        // Compose's clock for a spring: how long it needs to stay within one threshold of the target, with
+        // the longest axis deciding for a multi-component value (`VectorizedFloatAnimationSpec
+        // .getDurationNanos` takes the maximum over axes).
+        let spring_duration = match &spec {
+            AnimationSpec::Spring(spring) => {
+                let seconds = match &lanes {
+                    Some(lanes) => lanes
+                        .iter()
+                        .map(|lane| {
+                            estimate_spring_duration_seconds(
+                                spring.stiffness,
+                                spring.damping_ratio,
+                                lane.velocity,
+                                lane.displacement,
+                                spring.threshold,
+                            )
+                        })
+                        .fold(0.0f32, f32::max),
+                    None => estimate_spring_duration_seconds(
+                        spring.stiffness,
+                        spring.damping_ratio,
+                        start_velocity.max_abs(),
+                        displacement,
+                        spring.threshold,
+                    ),
+                };
+                Some(Duration::from_secs_f32(seconds.max(0.0)))
+            }
+            _ => None,
+        };
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to,
@@ -1235,6 +1270,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             initial_velocity: 0.0,
             lanes,
             decay_lanes: None,
+            spring_duration,
         });
     }
 
@@ -1260,6 +1296,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             initial_velocity,
             lanes: None,
             decay_lanes: None,
+            spring_duration: None,
         });
     }
 
@@ -1299,6 +1336,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             initial_velocity: scalar_velocity,
             lanes: None,
             decay_lanes,
+            spring_duration: None,
         });
     }
 
@@ -1357,6 +1395,16 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         state.last_update = now;
         let mut boundary_velocity = None;
         let mut bound_hit = false;
+        // Compose ends a spring on a CLOCK: `estimateAnimationDurationMillis` says how long it needs to
+        // stay within `delta` of the target, and the spec runs exactly that long (`FloatSpringSpec
+        // .getDurationNanos`, `animation-core/FloatAnimationSpec.kt:172-190`). Position alone, no velocity
+        // term — the rule this engine used to stop on. Both are kept: whichever comes first ends the
+        // motion, with the exact target written, so a spring that the integrator has already brought to
+        // rest does not keep ticking, and one the estimate says is done does not linger.
+        let spring_elapsed = now.duration_since(state.start);
+        let spring_on_clock = state
+            .spring_duration
+            .is_some_and(|duration| spring_elapsed >= duration);
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
                 if state.lanes.is_some() {
@@ -1388,7 +1436,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     };
                     // 打断时的速度延续取最快的那条分量（`push_animatable` 的 retarget 用）
                     state.last_velocity = last_velocity;
-                    if all_done {
+                    if all_done || spring_on_clock {
                         (state.to.clone(), true)
                     } else {
                         (T::from_components(&components[..len]), false)
@@ -1402,7 +1450,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     state.current_displacement = displacement;
                     // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
                     // One test, shared with the integrator: see `spring_at_rest`.
-                    let done = spring_at_rest(displacement, state.last_velocity, spec.threshold);
+                    let done = spring_on_clock
+                        || spring_at_rest(displacement, state.last_velocity, spec.threshold);
                     if done {
                         // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
                         // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
@@ -1641,6 +1690,173 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
     last.1
 }
 
+/// Compose's `estimateAnimationDurationMillis` (`animation-core/SpringEstimation.kt:36-89`): how long a
+/// spring needs before it stays within `delta` of its target, in SECONDS. Ported number for number.
+///
+/// Compose calls it with the displacement and velocity expressed in thresholds (`delta = 1`), which is why
+/// winia's `SpringSpec::threshold` divides both. It is a POSITION-only estimate: it never asks how fast the
+/// spring is still moving, which is the rule this engine used to stop on.
+fn estimate_spring_duration_seconds(
+    stiffness: f32,
+    damping_ratio: f32,
+    initial_velocity: f32,
+    initial_displacement: f32,
+    delta: f32,
+) -> f32 {
+    if damping_ratio == 0.0 {
+        // No damping: it never settles. (Compose returns MAX_LONG_MILLIS.)
+        return f32::INFINITY;
+    }
+    let stiffness = stiffness as f64;
+    let zeta = damping_ratio as f64;
+    let damping_coefficient = 2.0 * zeta * stiffness.sqrt();
+    // Roots of x^2 + damping_coefficient*x + stiffness = 0, which may be complex.
+    let partial_root = damping_coefficient * damping_coefficient - 4.0 * stiffness;
+    let (partial_real, partial_imaginary) = if partial_root < 0.0 {
+        (0.0, (-partial_root).sqrt())
+    } else {
+        (partial_root.sqrt(), 0.0)
+    };
+    let first_root_real = (-damping_coefficient + partial_real) * 0.5;
+    let first_root_imaginary = partial_imaginary * 0.5;
+    let second_root_real = (-damping_coefficient - partial_real) * 0.5;
+    estimate_duration_seconds(
+        zeta,
+        first_root_real,
+        first_root_imaginary,
+        second_root_real,
+        initial_velocity as f64,
+        initial_displacement as f64,
+        delta as f64,
+    ) as f32
+}
+
+fn estimate_duration_seconds(
+    damping_ratio: f64,
+    first_root_real: f64,
+    first_root_imaginary: f64,
+    second_root_real: f64,
+    initial_velocity: f64,
+    initial_position: f64,
+    delta: f64,
+) -> f64 {
+    if initial_position == 0.0 && initial_velocity == 0.0 {
+        return 0.0;
+    }
+    let v0 = if initial_position < 0.0 { -initial_velocity } else { initial_velocity };
+    let p0 = initial_position.abs();
+    if damping_ratio > 1.0 {
+        estimate_over_damped(first_root_real, second_root_real, p0, v0, delta)
+    } else if damping_ratio < 1.0 {
+        estimate_under_damped(first_root_real, first_root_imaginary, p0, v0, delta)
+    } else {
+        estimate_critically_damped(first_root_real, p0, v0, delta)
+    }
+}
+
+/// Under-damped: the general solution is `c·e^(r·t)·cos(…)`, so `c·e^(r·t)` is its envelope and the time
+/// the envelope reaches `delta` is the estimate.
+fn estimate_under_damped(r: f64, r_imaginary: f64, p0: f64, v0: f64, delta: f64) -> f64 {
+    let c1 = p0;
+    let c2 = (v0 - r * c1) / r_imaginary;
+    let c = (c1 * c1 + c2 * c2).sqrt();
+    (delta / c).ln() / r
+}
+
+/// Critically damped: `x(t) = (c1 + c2·t)·e^(r·t)`, solved by Newton–Raphson. The inflection argument is
+/// Compose's: it decides whether the first or the last crossing of the threshold is the one that matters.
+fn estimate_critically_damped(r: f64, p0: f64, v0: f64, delta: f64) -> f64 {
+    let c1 = p0;
+    let c2 = v0 - r * c1;
+    let t1 = (delta / c1).abs().ln() / r;
+    let t2 = {
+        // Lambert's W function, applied to `t·e^t`.
+        let guess = (delta / c2).abs().ln();
+        let mut t = guess;
+        for _ in 0..5 {
+            t = guess - (t / r).abs().ln();
+        }
+        t / r
+    };
+    let mut t_curr = match (t1.is_finite(), t2.is_finite()) {
+        (false, _) => t2,
+        (_, false) => t1,
+        _ => t1.max(t2),
+    };
+    let t_inflection = -(r * c1 + c2) / (r * c2);
+    let x_inflection = c1 * (r * t_inflection).exp() + c2 * t_inflection * (r * t_inflection).exp();
+    let signed_delta = if t_inflection.is_nan() || t_inflection <= 0.0 {
+        -delta
+    } else if -x_inflection < delta {
+        if c2 < 0.0 && c1 > 0.0 {
+            t_curr = 0.0;
+        }
+        -delta
+    } else {
+        t_curr = -(2.0 / r) - (c1 / c2);
+        delta
+    };
+    let mut t_delta = f64::MAX;
+    let mut iterations = 0;
+    while t_delta > 0.001 && iterations < 100 {
+        iterations += 1;
+        let t_last = t_curr;
+        t_curr = newton_step(
+            t_curr,
+            |t| (c1 + c2 * t) * (r * t).exp() + signed_delta,
+            |t| (c2 * (r * t + 1.0) + c1 * r) * (r * t).exp(),
+        );
+        t_delta = (t_last - t_curr).abs();
+    }
+    t_curr
+}
+
+/// Over-damped: `x(t) = c1·e^(r1·t) + c2·e^(r2·t)`, same Newton–Raphson treatment.
+fn estimate_over_damped(r1: f64, r2: f64, p0: f64, v0: f64, delta: f64) -> f64 {
+    let c2 = (r1 * p0 - v0) / (r1 - r2);
+    let c1 = p0 - c2;
+    let t1 = (delta / c1).abs().ln() / r1;
+    let t2 = (delta / c2).abs().ln() / r2;
+    let mut t_curr = match (t1.is_finite(), t2.is_finite()) {
+        (false, _) => t2,
+        (_, false) => t1,
+        _ => t1.max(t2),
+    };
+    let t_inflection = ((c1 * r1) / (-c2 * r2)).ln() / (r2 - r1);
+    let x_inflection = c1 * (r1 * t_inflection).exp() + c2 * (r2 * t_inflection).exp();
+    let signed_delta = if t_inflection.is_nan() || t_inflection <= 0.0 {
+        -delta
+    } else if -x_inflection < delta {
+        if c2 > 0.0 && c1 < 0.0 {
+            t_curr = 0.0;
+        }
+        -delta
+    } else {
+        t_curr = (-(c2 * r2 * r2) / (c1 * r1 * r1)).ln() / (r1 - r2);
+        delta
+    };
+    if (c1 * r1 * (r1 * t_curr).exp() + c2 * r2 * (r2 * t_curr).exp()).abs() < 0.0001 {
+        return t_curr;
+    }
+    let mut t_delta = f64::MAX;
+    let mut iterations = 0;
+    while t_delta > 0.001 && iterations < 100 {
+        iterations += 1;
+        let t_last = t_curr;
+        t_curr = newton_step(
+            t_curr,
+            |t| c1 * (r1 * t).exp() + c2 * (r2 * t).exp() + signed_delta,
+            |t| c1 * r1 * (r1 * t).exp() + c2 * r2 * (r2 * t).exp(),
+        );
+        t_delta = (t_last - t_curr).abs();
+    }
+    t_curr
+}
+
+fn newton_step(x: f64, f: impl Fn(f64) -> f64, f_prime: impl Fn(f64) -> f64) -> f64 {
+    x - f(x) / f_prime(x)
+}
+
 /// Whether a spring has come to rest — the ONE place this is decided, because the integrator and
 /// `Motion::update` both need it and must never disagree.
 ///
@@ -1658,17 +1874,22 @@ fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::I
 /// the spring was still ~11 % short of its target. Scaling it the other way (`velocity * FRAME <
 /// threshold * FRAME`) is exactly the code below.
 ///
-/// Compose settles by a different route, with a measurable difference in WHEN: a spring there computes
-/// its own duration with `estimateAnimationDurationMillis` — the time the analytic solution needs to come
-/// within one `visibilityThreshold` of the target and stay there (`animation-core/SpringEstimation.kt:36-89`
-/// and the Newton solve at `:121-190`) — runs exactly that long (`FloatSpringSpec.getDurationNanos`,
-/// `animation-core/FloatAnimationSpec.kt:172-190`) and then reports the exact target. That is a
-/// POSITION-only test, so the velocity-gated rule below can keep integrating past the point Compose stops:
-/// measured on the demo, a 140x44 → 320x120 grow with the default spec (stiffness 400, ratio 1, 1 px
-/// threshold) is within 1 px of the target at ~0.43 s, where Compose's estimator stops, while the listener
-/// reported the finished animation at ~0.5 s, once the velocity had also fallen under 1 px/s. Nothing
-/// visible differs — both end inside a pixel of the target — but a finish time reported here can be up to
-/// ~0.15 s later than Compose's.
+/// Compose's own clock is now the primary rule and this test is the backstop. Compose sizes a spring with
+/// `estimateAnimationDurationMillis` — how long the analytic solution needs to come within one
+/// `visibilityThreshold` of the target and stay there (`animation-core/SpringEstimation.kt:36-89`) — and runs
+/// the spec for exactly that long (`FloatSpringSpec.getDurationNanos`,
+/// `animation-core/FloatAnimationSpec.kt:172-190`). `Motion` computes the same estimate when a spring starts
+/// and ends the motion on it, so a spring here stops when Compose's does. This test still ends a spring the
+/// integrator has already brought to rest, which keeps a pathological parameter (an estimate that never
+/// converges) from ticking forever.
+///
+/// One measured difference remains, and it is in the VALUE rather than the time: this engine integrates the
+/// spring in 1/60 s steps instead of evaluating the analytic solution, so at the estimated end the integrator
+/// is a fraction of a pixel short, and writing the exact target there is a step of that size. Measured on a
+/// 0 → 100 move with stiffness 400 and a 1 px threshold: the clock ends it at 0.335 s against an estimate of
+/// 0.3319 s with the value at 98.42, i.e. a 1.6 px step, where the analytic value at that moment would sit
+/// inside the 1 px band. With ONLY this velocity test — the rule before the clock arrived — the same spring
+/// ran 0.556 s, i.e. 224 ms past Compose's finish.
 #[inline]
 fn spring_at_rest(displacement: f32, velocity: f32, threshold: f32) -> bool {
     displacement.abs() < threshold && velocity.abs() < threshold
@@ -4456,6 +4677,86 @@ pub(crate) mod tests {
             seen.lock().unwrap()[2].reason,
             MotionEndReason::Forced,
             "and it says it was cut short rather than finished"
+        );
+        clear_all_animations();
+    }
+
+    /// The estimator is Compose's own code, so it is checked against a method that is not: for the
+    /// critically damped case the solution of a step from rest is `x(t) = D·(1 + ω t)·e^(-ω t)`, and the
+    /// crossing of `|x| = delta` is single and monotone, so a bisection finds it independently.
+    #[test]
+    fn the_spring_duration_estimate_matches_a_bisection() {
+        for (stiffness, displacement) in [(400.0f32, 100.0f32), (200.0, 100.0), (1000.0, 20.0)] {
+            let omega = (stiffness as f64).sqrt();
+            let x = |t: f64| displacement as f64 * (1.0 + omega * t) * (-omega * t).exp();
+            let (mut lo, mut hi) = (0.0f64, 5.0f64);
+            assert!(x(hi).abs() < 1.0, "the bracket has to contain the crossing");
+            for _ in 0..90 {
+                let mid = 0.5 * (lo + hi);
+                if x(mid).abs() > 1.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let reference = 0.5 * (lo + hi);
+            let estimate =
+                estimate_spring_duration_seconds(stiffness, 1.0, 0.0, displacement, 1.0) as f64;
+            assert!(
+                (estimate - reference).abs() <= 0.01 + reference * 0.02,
+                "the port agrees with the analytic crossing ({stiffness} over {displacement}: estimate {estimate:.4}s against {reference:.4}s)"
+            );
+        }
+        let base = estimate_spring_duration_seconds(400.0, 1.0, 0.0, 100.0, 1.0);
+        assert!(
+            estimate_spring_duration_seconds(400.0, 1.0, 0.0, 100.0, 0.5) > base,
+            "a tighter threshold takes longer"
+        );
+        assert!(
+            estimate_spring_duration_seconds(1600.0, 1.0, 0.0, 100.0, 1.0) < base,
+            "a stiffer spring takes less"
+        );
+        assert!(
+            estimate_spring_duration_seconds(400.0, 0.0, 0.0, 100.0, 1.0).is_infinite(),
+            "an undamped spring never settles"
+        );
+    }
+
+    /// A spring now ENDS on Compose's clock rather than waiting for its velocity to fall under the
+    /// threshold. Measured here: the finish time tracks the estimate, and the gap between the frame before
+    /// the end and the exact target it writes is small (the integrator's own tracking error, not a jump).
+    /// With only the velocity gate — the rule this replaced — the same spring ran about 0.15 s longer.
+    #[test]
+    fn a_spring_ends_on_the_estimated_clock() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let spec = SpringSpec {
+            stiffness: 400.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            mass: 1.0,
+            threshold: 1.0,
+        };
+        let estimate = estimate_spring_duration_seconds(400.0, 1.0, 0.0, -100.0, 1.0);
+        let state = crate::runtime::state::State::new(0.0f32);
+        push_animatable(state.clone(), 100.0, AnimationSpec::Spring(spec));
+        let start = std::time::Instant::now();
+        let mut frames = 0u32;
+        let mut before_end = 0.0f32;
+        while update_animations() && frames < 600 {
+            before_end = state.peek();
+            std::thread::sleep(Duration::from_millis(8));
+            frames += 1;
+        }
+        let took = start.elapsed().as_secs_f32();
+        assert_eq!(state.peek(), 100.0, "the motion ends exactly on the target");
+        assert!(
+            took - estimate < 0.08,
+            "it ends on the estimate rather than waiting out the velocity gate (took {took:.3}s against an estimate of {estimate:.3}s)"
+        );
+        let gap = 100.0 - before_end;
+        assert!(
+            gap < 5.0,
+            "the exact target only replaces a value the integrator had already brought to within a few pixels (gap {gap:.3})"
         );
         clear_all_animations();
     }
