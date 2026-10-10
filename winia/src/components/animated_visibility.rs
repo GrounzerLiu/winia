@@ -110,6 +110,9 @@ pub struct VisibilityScope {
     pub slide: State<f32>,
     /// The scale channel (Compose's `Scale.scale` progress).
     pub scale: State<f32>,
+    /// The visibility this transition is playing towards — Compose's `Transition<Boolean>.targetState`,
+    /// which a child's own enter/exit follows.
+    pub visible: State<bool>,
 }
 
 impl VisibilityScope {
@@ -131,6 +134,63 @@ impl VisibilityScope {
             slide: self.slide.peek(),
             scale: self.scale.peek(),
         }
+    }
+
+    /// Compose's `Modifier.animateEnterExit(enter, exit)`: a CHILD inside this `AnimatedVisibility` runs
+    /// its own enter and exit on the same visibility target, so it can fade, slide or scale on a curve of
+    /// its own instead of travelling with the container. Each child gets its own animatables — the
+    /// container's clock is not shared — with the specs its own builders set, so a child can fade late or
+    /// slide further than the box it sits in.
+    ///
+    /// `extent` is what a fraction slide offset travels over. Compose reads the child's measured size;
+    /// a paint-only modifier cannot see it, so the caller passes it (the container's content extent is the
+    /// usual answer).
+    ///
+    /// Deviation recorded: a size channel on a CHILD (`expand_in`/`shrink_out`) would need a layout pass,
+    /// which this modifier does not run — those flags are ignored on a child, and the container's own size
+    /// channel stays the only one that moves layout.
+    pub fn animate_enter_exit(
+        &self,
+        ctx: &mut ComposeCtx,
+        enter: VisibilityTransition,
+        exit: VisibilityTransition,
+        extent: (f32, f32),
+    ) -> Modifier {
+        let vis = self.visible.get();
+        // The child is born on the frame the container first composes its content — which is the frame the
+        // visibility turned on — so its channels start at the enter's beginning. (Remembered per call site:
+        // a child that stays composed keeps its own value; a child added later plays its enter too.)
+        let initial = || 0.0;
+        let alpha: State<f32> = ctx.remember(initial);
+        let slide_ch: State<f32> = ctx.remember(initial);
+        let scale_ch: State<f32> = ctx.remember(initial);
+        // Subscribe to every channel this call drives: an animation notifies, but only a read re-runs the
+        // child's build — without this the channels would stop being pushed after the first frame.
+        let _moving = (alpha.get(), slide_ch.get(), scale_ch.get());
+        let target = if vis { 1.0 } else { 0.0 };
+        let cfg = if vis { &enter } else { &exit };
+        if cfg.fade {
+            crate::animation::push_animatable(alpha.clone(), target, cfg.fade_spec().clone());
+        }
+        if cfg.slide.is_some() {
+            crate::animation::push_animatable(slide_ch.clone(), target, cfg.slide_spec().clone());
+        }
+        if cfg.scale {
+            crate::animation::push_animatable(scale_ch.clone(), target, cfg.scale_spec().clone());
+        }
+        let (a, sl, sc) = (alpha.clone(), slide_ch.clone(), scale_ch.clone());
+        let (e, x, v) = (enter, exit, self.visible.clone());
+        Modifier::new().graphics_layer(move || {
+            let cfg = if v.peek() { &e } else { &x };
+            cfg.layer_params(
+                crate::animation::visibility::ChannelValues {
+                    fade: a.peek(),
+                    slide: sl.peek(),
+                    scale: sc.peek(),
+                },
+                extent,
+            )
+        })
     }
 }
 
@@ -348,6 +408,7 @@ impl AnimatedVisibility {
             alpha: alpha.clone(),
             slide: slide_ch.clone(),
             scale: scale_ch.clone(),
+            visible: visible.clone(),
         };
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
@@ -1418,5 +1479,87 @@ mod tests {
         }
         walk(nodes, root, &mut count);
         count
+    }
+
+    /// Every node's paint-time alpha, in tree order — the only way to tell a container's fade from a
+    /// child's, since both are just graphics layers.
+    fn layer_alphas(composer: &Composer) -> Vec<f32> {
+        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+        let nodes = composer.arena_nodes();
+        let mut out = Vec::new();
+        fn walk(nodes: &[LayoutNode], idx: usize, out: &mut Vec<f32>) {
+            if let Some(p) = nodes[idx].modifier.graphics_layer_params() {
+                out.push(p.alpha);
+            }
+            for &c in &nodes[idx].children {
+                walk(nodes, c, out);
+            }
+        }
+        walk(nodes, root, &mut out);
+        out
+    }
+
+    /// Compose's `Modifier.animateEnterExit`: a child runs its OWN enter on the container's visibility
+    /// target. The container fades over 100 ms and the child over 800 ms, so a quarter of a second after
+    /// the flip the container is essentially opaque while the child has barely started — which a child
+    /// sharing the container's clock cannot produce.
+    #[test]
+    fn a_child_can_run_its_own_enter() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let visible = State::new(false);
+        let v = visible.clone();
+        let mut build = move |composer: &mut Composer| {
+            let v = v.clone();
+            composer.compose(|ctx| {
+                AnimatedVisibility::new(v)
+                    .enter(VisibilityTransition::fade_in(crate::animation::TweenSpec::new(
+                        std::time::Duration::from_millis(100),
+                        crate::animation::interpolator::Linear::new(),
+                    )))
+                    .build_with_scope(ctx, |scope, ctx| {
+                        let layer = scope.animate_enter_exit(
+                            ctx,
+                            VisibilityTransition::fade_in(crate::animation::TweenSpec::new(
+                                std::time::Duration::from_millis(800),
+                                crate::animation::interpolator::Linear::new(),
+                            )),
+                            VisibilityTransition::fade_out(crate::animation::TweenSpec::new(
+                                std::time::Duration::from_millis(800),
+                                crate::animation::interpolator::Linear::new(),
+                            )),
+                            (40.0, 20.0),
+                        );
+                        Column::new()
+                            .modifier(layer.size(40.0, 20.0))
+                            .build(ctx, |_| {});
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        visible.set(true);
+        for _ in 0..13 {
+            build(&mut composer);
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let alphas = layer_alphas(&composer);
+        assert!(
+            alphas.len() >= 2,
+            "the container and the child both paint through a layer ({alphas:?})"
+        );
+        let container = alphas[0];
+        let child = alphas[1];
+        assert!(
+            container > 0.9,
+            "the container's 100 ms fade is done after ~260 ms (at {container})"
+        );
+        assert!(
+            child > 0.0 && child < 0.5,
+            "the child is on its own 800 ms clock (at {child}, container {container})"
+        );
+        crate::animation::clear_all_animations();
     }
 }
