@@ -37,8 +37,9 @@
 //!   bottom edge otherwise (`:437-444`) — but its own height comes from the PREVIOUS frame, so the first
 //!   frame of a snackbar's life places it by its bottom edge (Compose measures every child before placing
 //!   any).
-//! - No `sheetShape` (a radius instead of a `Shape`), and `sheetDragHandle` is a bool rather than a
-//!   composable slot.
+//! - `sheetShape` and the composable `sheetDragHandle` are supported (`sheet_shape`,
+//!   `sheet_drag_handle_content`). An explicit shape is used as given — the flattening winia does when the
+//!   sheet fills the screen applies only to the built-in one, Compose's scaffold using its shape as given.
 //! - `content` receives no `PaddingValues`: Compose hands the caller `PaddingValues(bottom = sheetPeekHeight)`
 //!   (`:143`) and lets it apply the padding, while winia applies the same inset itself.
 //! - The drag handle's `semantics` actions (expand/collapse/dismiss, `:350-385`) are not ported; the click
@@ -61,6 +62,10 @@ pub struct BottomSheetScaffold {
     sheet_state: Option<SheetState>,
     sheet_peek_height: Dp,
     sheet_shape_radius: f32,
+    /// Compose's `sheetShape`: when set, it is used as-is (no flattening when the sheet fills the screen).
+    sheet_shape: Option<Shape>,
+    /// Compose's `sheetDragHandle` is a composable slot; this replaces the built-in handle.
+    sheet_drag_handle_content: Option<Box<dyn Fn(&mut ComposeCtx)>>,
     sheet_container_color: Option<Color>,
     /// Compose's `sheetContentColor = contentColorFor(sheetContainerColor)` (`:126`).
     sheet_content_color: Option<Color>,
@@ -83,6 +88,8 @@ impl BottomSheetScaffold {
             sheet_state: None,
             sheet_peek_height: SCAFFOLD_SHEET_PEEK_HEIGHT,
             sheet_shape_radius: SCAFFOLD_SHEET_SHAPE_RADIUS,
+            sheet_shape: None,
+            sheet_drag_handle_content: None,
             sheet_container_color: None,
             sheet_content_color: None,
             sheet_shadow_elevation: Dp(1.0),
@@ -108,6 +115,20 @@ impl BottomSheetScaffold {
 
     pub fn sheet_shape_radius(mut self, r: f32) -> Self {
         self.sheet_shape_radius = r;
+        self
+    }
+
+    /// Compose's `sheetShape`: an explicit shape replaces the built-in top-rounded rectangle, and with it the
+    /// flattening winia does when the sheet fills the screen (Compose's scaffold uses the shape as given).
+    pub fn sheet_shape(mut self, s: Shape) -> Self {
+        self.sheet_shape = Some(s);
+        self
+    }
+
+    /// Compose's `sheetDragHandle` slot: this replaces the built-in 32x4 handle. `sheet_drag_handle(false)`
+    /// removes the handle entirely, and a slot takes precedence over it.
+    pub fn sheet_drag_handle_content(mut self, f: impl Fn(&mut ComposeCtx) + 'static) -> Self {
+        self.sheet_drag_handle_content = Some(Box::new(f));
         self
     }
 
@@ -205,6 +226,8 @@ impl BottomSheetScaffold {
         };
         let peek = self.sheet_peek_height;
         let radius = self.sheet_shape_radius;
+        let explicit_shape = self.sheet_shape;
+        let sheet_drag_handle_content_slot = self.sheet_drag_handle_content;
         // The sheet's own color, distinct from the scaffold's: this local used to be shadowed
         // by the `container_color` below, which made `sheet_container_color()` a silent no-op
         // and painted the sheet with the scaffold's color.
@@ -331,7 +354,7 @@ impl BottomSheetScaffold {
                 } else {
                     radius
                 };
-                let cur_shape = Shape::TopRoundedRect { radius: cur_radius };
+                let cur_shape = explicit_shape.unwrap_or(Shape::TopRoundedRect { radius: cur_radius });
 
                 // The x/y pair must go through ONE element: `get_offset` and
                 // `get_absolute_offset` both return only the FIRST element of their kind, so
@@ -454,7 +477,11 @@ impl BottomSheetScaffold {
                     .build(ctx, move |ctx| {
                         // The sheet's content colour, as a scope the whole panel inherits from.
                         crate::theme::WiniaTheme::with_content_color(sheet_content_colour, ctx, |ctx| {
-                        if drag_handle {
+                        // A caller-supplied handle replaces the built-in one, exactly as Compose's
+                        // composable `sheetDragHandle` slot does.
+                        if let Some(slot) = &sheet_drag_handle_content_slot {
+                            slot(ctx);
+                        } else if drag_handle {
                             // The handle is CLICKABLE in Compose (`StandardBottomSheet`, the
                             // `DragHandleWithTooltip { Box(Modifier.clickable { … }) }`): a click expands
                             // a peeking sheet, collapses an expanded one (or hides it when the hidden
@@ -786,6 +813,99 @@ mod tests {
         state.set_skip_hidden_state(true);
         let expanded_y = snackbar_y(&state, true);
         assert_eq!(expanded_y, 720.0 - 48.0, "expanded: it drops to the bottom edge");
+    }
+
+    /// `sheet_shape` is used as given, and a supplied drag handle replaces the built-in 32x4 bar — Compose's
+    /// `sheetShape` and composable `sheetDragHandle`.
+    #[test]
+    fn an_explicit_shape_and_a_supplied_handle_replace_the_built_ins() {
+        let custom_shape = Shape::RoundedRect { corner_radius: 3.0 };
+
+        fn sheet_background_shape(c: &Composer) -> Option<Shape> {
+            c.arena_nodes()
+                .iter()
+                .find(|node| {
+                    node.modifier.elements().iter().any(|el| {
+                        matches!(el, crate::modifier::ModifierElement::AbsoluteOffset { .. })
+                    })
+                })
+                .and_then(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { shape, .. } => {
+                            Some(shape.clone())
+                        }
+                        _ => None,
+                    })
+                })
+        }
+
+        fn frame(with_custom_shape: bool, with_custom_handle: bool, shape: Option<Shape>) -> Composer {
+            let mut c = Composer::new();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                let mut scaffold = BottomSheetScaffold::new();
+                if with_custom_shape {
+                    scaffold = scaffold.sheet_shape(shape.clone().expect("a shape was passed"));
+                }
+                if with_custom_handle {
+                    scaffold = scaffold.sheet_drag_handle_content(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().size(80.0, 6.0).test_tag("custom-handle"))
+                            .build(ctx, |_| {});
+                    });
+                }
+                scaffold.build(
+                    ctx,
+                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            c
+        }
+
+        let default_shape = frame(false, false, None);
+        assert!(
+            matches!(
+                sheet_background_shape(&default_shape),
+                Some(Shape::TopRoundedRect { .. })
+            ),
+            "the built-in shape stays a top-rounded rectangle"
+        );
+        let explicit = frame(true, false, Some(custom_shape.clone()));
+        assert_eq!(
+            sheet_background_shape(&explicit),
+            Some(custom_shape.clone()),
+            "an explicit shape replaces it"
+        );
+
+        // The built-in handle is a 32x4 node with the outline-variant fill; the supplied one carries a tag
+        // and that size is gone.
+        let builtin = frame(false, false, None);
+        let has_32x4 = |c: &Composer| {
+            c.arena_nodes().iter().any(|n| {
+                n.modifier.elements().iter().any(|el| match el {
+                    crate::modifier::ModifierElement::Size { width, height } => {
+                        let fixed = |v: &crate::layout::sizing::SizeValue| match v {
+                            crate::layout::sizing::SizeValue::Static(
+                                crate::layout::sizing::Dimension::Fixed(px),
+                            ) => *px,
+                            _ => f32::NAN,
+                        };
+                        fixed(width) == 32.0 && fixed(height) == 4.0
+                    }
+                    _ => false,
+                })
+            })
+        };
+        assert!(has_32x4(&builtin), "the built-in handle is drawn by default");
+
+        let custom = frame(false, true, None);
+        node_with_tag(custom.arena_nodes(), "custom-handle");
+        assert!(
+            !has_32x4(&custom),
+            "a supplied handle replaces the built-in one"
+        );
     }
 
     /// The sheet's shadow follows `sheetShadowElevation` (Compose's default is `ElevationTokens.Level1`,
