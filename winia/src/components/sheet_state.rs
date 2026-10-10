@@ -43,6 +43,20 @@ impl Ord for SheetValue {
     }
 }
 
+/// Which state a sheet falls back to when the state it is in loses its anchor. Compose's two components
+/// differ here, and both orders are in the sources:
+/// - the MODAL sheet falls from `Expanded` straight to `Hidden` (`ModalBottomSheet.kt:320-324`:
+///   `Expanded -> if (newAnchors.hasAnchorFor(Expanded)) Expanded else Hidden`), with no partial step;
+/// - the SCAFFOLD falls `Expanded -> PartiallyExpanded -> Hidden` (`BottomSheetScaffold.kt:292-300`), which
+///   is right for a docked sheet because it always has a peek to land on.
+/// They agree that `PartiallyExpanded` tries `Expanded` next, and that `Hidden` keeps its value (the modal's
+/// `Hidden at fullHeight` anchor always exists, so the question does not arise there).
+#[derive(Clone, Copy)]
+enum Fallback {
+    Modal,
+    Scaffold,
+}
+
 /// BottomSheet 状态机（对标 Compose `SheetState`）。
 pub struct SheetState {
     /// 底层锚点拖拽状态
@@ -96,12 +110,14 @@ impl SheetState {
     /// 对标 Compose BottomSheet 的 `draggableAnchors` 计算。`&self`——
     /// on_size_changed 回调（Fn 闭包）中调用。
     /// Compose's `newTarget` resolution inside a `draggableAnchors` block: the sheet keeps the state it is
-    /// in while that state still has an anchor, and otherwise falls back in the order the component's own
-    /// state machine allows — `PartiallyExpanded -> Expanded -> Hidden` for a partially expanded sheet whose
-    /// state was switched off, `Expanded -> PartiallyExpanded -> Hidden` for one that no longer has an
-    /// expanded anchor (`ModalBottomSheet.kt:307-325`, `BottomSheetScaffold.kt:280-300`). `Hidden` keeps its
-    /// value only while `Hidden` itself has an anchor. `None` means "no anchor to move to": leave it.
-    fn resolved_target(&self, anchors: &DraggableAnchors<SheetValue>) -> Option<SheetValue> {
+    /// in while that state still has an anchor, and otherwise falls back in the order that component's own
+    /// state machine allows (see `Fallback`). `Hidden` keeps its value only while `Hidden` itself has an
+    /// anchor. `None` means "no anchor to move to": leave the sheet where it is.
+    fn resolved_target(
+        &self,
+        anchors: &DraggableAnchors<SheetValue>,
+        fallback: Fallback,
+    ) -> Option<SheetValue> {
         let has = |v: SheetValue| !anchors.position_of(&v).is_nan();
         match self.anchored.target_value() {
             SheetValue::Hidden => has(SheetValue::Hidden).then_some(SheetValue::Hidden),
@@ -112,13 +128,17 @@ impl SheetState {
             ]
             .into_iter()
             .find(|v| has(*v)),
-            SheetValue::Expanded => [
-                SheetValue::Expanded,
-                SheetValue::PartiallyExpanded,
-                SheetValue::Hidden,
-            ]
-            .into_iter()
-            .find(|v| has(*v)),
+            SheetValue::Expanded => {
+                let order: &[SheetValue] = match fallback {
+                    Fallback::Modal => &[SheetValue::Expanded, SheetValue::Hidden],
+                    Fallback::Scaffold => &[
+                        SheetValue::Expanded,
+                        SheetValue::PartiallyExpanded,
+                        SheetValue::Hidden,
+                    ],
+                };
+                order.iter().copied().find(|v| has(*v))
+            }
         }
     }
 
@@ -182,7 +202,7 @@ impl SheetState {
         self.has_expanded.set(sheet_height != 0.0);
         let old_anchors = [self.positions()];
         let new_anchors = DraggableAnchors::new(pairs.clone());
-        let resolved = self.resolved_target(&new_anchors);
+        let resolved = self.resolved_target(&new_anchors, Fallback::Modal);
         let moved = Self::anchors_moved(&old_anchors[0], &new_anchors);
         let was_uninit = self.anchored.offset().is_nan();
         if was_uninit {
@@ -269,7 +289,7 @@ impl SheetState {
         self.has_expanded.set(has_expanded_pos);
         let old_anchors = [self.positions()];
         let new_anchors = DraggableAnchors::new(pairs);
-        let resolved = self.resolved_target(&new_anchors);
+        let resolved = self.resolved_target(&new_anchors, Fallback::Scaffold);
         let moved = Self::anchors_moved(&old_anchors[0], &new_anchors);
         // Scaffold 首帧直接 snap 到初始值（通常 Partial），不做 Hidden→Partial 的首次滑入
         // 保留 Modal 的首次滑入逻辑，仅 Scaffold 走静默初始化
@@ -420,6 +440,35 @@ mod tests {
         let mut s = SheetState::new(SheetValue::Hidden);
         s.update_anchors(800.0, 400.0); // 视口 800，内容 400
         s
+    }
+
+    /// The two components fall back DIFFERENTLY when the expanded anchor disappears: the modal jumps to
+    /// `Hidden` (`ModalBottomSheet.kt:320-324`) while the docked sheet lands on its peek
+    /// (`BottomSheetScaffold.kt:292-300`). A shared helper takes which order to use, so this pins both.
+    #[test]
+    fn the_expanded_fallback_differs_between_the_two_components() {
+        let anchors = DraggableAnchors::new(vec![
+            (SheetValue::Hidden, 800.0),
+            (SheetValue::PartiallyExpanded, 400.0),
+        ]);
+        let s = SheetState::new(SheetValue::Expanded);
+        assert_eq!(
+            s.resolved_target(&anchors, Fallback::Modal),
+            Some(SheetValue::Hidden),
+            "the modal drops straight to Hidden"
+        );
+        assert_eq!(
+            s.resolved_target(&anchors, Fallback::Scaffold),
+            Some(SheetValue::PartiallyExpanded),
+            "the docked sheet lands on its peek instead"
+        );
+
+        // Both agree when there is no partial anchor to land on.
+        let hidden_only = DraggableAnchors::new(vec![(SheetValue::Hidden, 800.0)]);
+        assert_eq!(
+            s.resolved_target(&hidden_only, Fallback::Scaffold),
+            Some(SheetValue::Hidden)
+        );
     }
 
     #[test]
