@@ -737,7 +737,7 @@ mod tests {
                         std::time::Duration::from_millis(600),
                         crate::animation::interpolator::Linear::new(),
                     )))
-                    .size_animation(crate::animation::AnimationSpec::Snap)
+                    .size_animation(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()))
                     .build(ctx, |ctx, page| {
                         let w = if page == 0 { 50.0 } else { 200.0 };
                         SizedLeaf { w }.build(ctx);
@@ -935,7 +935,7 @@ mod tests {
                         std::time::Duration::from_millis(600),
                         crate::animation::interpolator::Linear::new(),
                     )))
-                    .size_animation(AnimationSpec::Snap)
+                    .size_animation(AnimationSpec::Snap(crate::animation::SnapSpec::default()))
                     .build(ctx, |ctx, page| {
                         SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
                     });
@@ -1001,7 +1001,7 @@ mod tests {
                         std::time::Duration::from_millis(600),
                         crate::animation::interpolator::Linear::new(),
                     )))
-                    .size_animation(AnimationSpec::Snap)
+                    .size_animation(AnimationSpec::Snap(crate::animation::SnapSpec::default()))
                     .build(ctx, |ctx, _page| {
                         let slot = ctx
                             .remember(|| SLOT_MARKERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst))

@@ -429,7 +429,7 @@ fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, valu
     if matches!(spec, AnimationSpec::Decay(_)) {
         let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
         if value.write_components(&mut components) > 1 {
-            return AnimationSpec::Snap;
+            return AnimationSpec::Snap(SnapSpec::default());
         }
     }
     spec
@@ -1205,7 +1205,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 let base_duration = match base {
                     AnimationSpec::Tween(t) => t.duration,
                     AnimationSpec::Keyframes(k) => k.duration,
-                    AnimationSpec::Snap => Duration::ZERO,
+                    AnimationSpec::Snap(s) => s.delay,
                     other => {
                         debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
                         Duration::from_millis(300)
@@ -1213,8 +1213,17 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                 };
                 let elapsed = now - state.start;
                 let total = base_duration.saturating_mul(spec.iterations);
+                // Compose's `initialStartOffset` (`repeatable(..., initialStartOffset = …)`): `Delay`
+                // holds the first value until the offset has passed, `FastForward` begins that far into
+                // the first cycle. `played` is the time inside the repeated motion, so the cycle maths
+                // below stays as it was; a fast-forward past the whole run finishes at once, as it does
+                // in Compose.
+                let played = match spec.start_offset_type {
+                    StartOffsetType::Delay => elapsed.saturating_sub(spec.start_offset),
+                    StartOffsetType::FastForward => elapsed + spec.start_offset,
+                };
                 // total=0（Snap/0 时长）→ elapsed>=0 恒真 → 首次 update 即完成（Snap 语义）
-                if elapsed >= total {
+                if played >= total {
                     // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
                     let end_val = match spec.mode {
                         RepeatMode::Restart => state.to.clone(),
@@ -1225,9 +1234,9 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     (end_val, true)
                 } else {
                     let d = base_duration.as_secs_f64().max(0.001);
-                    let cycle = elapsed.as_secs_f64() % d;
+                    let cycle = played.as_secs_f64() % d;
                     let t = (cycle / d) as f32;
-                    let cycle_idx = (elapsed.as_secs_f64() / d).floor() as u32;
+                    let cycle_idx = (played.as_secs_f64() / d).floor() as u32;
                     let factor = match spec.mode {
                         RepeatMode::Restart => t,
                         RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
@@ -1236,7 +1245,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     let value = match base {
                         AnimationSpec::Tween(tw) => state.from.lerp(&state.to, tw.interpolator.interpolate(factor)),
                         AnimationSpec::Keyframes(kf) => state.from.lerp(&state.to, interpolate_keyframes(&kf.frames, factor)),
-                        AnimationSpec::Snap => state.to.clone(),
+                        AnimationSpec::Snap(_) => state.to.clone(),
                         other => {
                             debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
                             state.from.lerp(&state.to, factor)
@@ -1245,8 +1254,15 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Animatable<T> {
                     (value, false)
                 }
             }
-            AnimationSpec::Snap => {
-                (state.to.clone(), true)
+            AnimationSpec::Snap(spec) => {
+                // Compose's `snap(delayMillis)`: hold the value where it is for the delay, then jump.
+                // The animation is still running during the hold (the frame loop keeps ticking) and
+                // nothing is written to the state until the jump.
+                if now.duration_since(state.start) < spec.delay {
+                    (state.from.clone(), false)
+                } else {
+                    (state.to.clone(), true)
+                }
             }
             AnimationSpec::Decay(spec) => {
                 let elapsed = now - state.start;
@@ -1732,8 +1748,8 @@ pub enum AnimationSpec {
     Keyframes(KeyframesSpec),
     /// 重复执行子动画（对标 Compose repeatable）
     Repeatable(RepeatableSpec),
-    /// 瞬时跳转到目标（对标 Compose snap）
-    Snap,
+    /// Instant jump to the target (cf. Compose `snap`), optionally after a delay
+    Snap(SnapSpec),
     /// 指数衰减（对标 Compose exponentialDecay——fling/惯性滚动，无目标值）
     Decay(DecaySpec),
 }
@@ -2027,11 +2043,49 @@ pub struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
     pub base: Box<AnimationSpec>,
+    /// Compose's `initialStartOffset`: `Delay` holds the first value for this long before the first
+    /// cycle, `FastForward` starts that far into it. The offset applies to the FIRST cycle only.
+    pub(crate) start_offset: Duration,
+    pub(crate) start_offset_type: StartOffsetType,
+}
+
+/// `snap(delayMillis = …)` — Compose's `SnapSpec`: hold the value where it is for the delay, then jump
+/// straight to the target. A zero delay (the default) is the plain instant jump the engine always had.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SnapSpec {
+    pub delay: Duration,
+}
+
+impl SnapSpec {
+    pub fn new(delay: Duration) -> Self {
+        Self { delay }
+    }
+}
+
+impl Default for SnapSpec {
+    fn default() -> Self {
+        Self { delay: Duration::ZERO }
+    }
 }
 
 impl RepeatableSpec {
     pub fn new(iterations: u32, mode: RepeatMode, base: AnimationSpec) -> Self {
-        Self { iterations, mode, base: Box::new(base) }
+        Self {
+            iterations,
+            mode,
+            base: Box::new(base),
+            start_offset: Duration::ZERO,
+            start_offset_type: StartOffsetType::Delay,
+        }
+    }
+
+    /// Compose's `repeatable(..., initialStartOffset = StartOffset(…))`: `StartOffsetType::Delay` holds
+    /// the first value for `offset` before the first cycle, `FastForward` starts that far into it. The
+    /// offset applies to the first cycle only; later cycles follow normally.
+    pub fn with_start_offset(mut self, offset: Duration, kind: StartOffsetType) -> Self {
+        self.start_offset = offset;
+        self.start_offset_type = kind;
+        self
     }
 }
 
@@ -2652,7 +2706,7 @@ pub(crate) mod tests {
     fn snap_jumps_immediately() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut anim = Animatable::<f32>::new(State::new(0.0));
-        anim.animate_to(42.0, AnimationSpec::Snap);
+        anim.animate_to(42.0, AnimationSpec::Snap(SnapSpec::default()));
         assert!(!anim.update(), "snap completes in one update");
         assert_eq!(anim.state.get(), 42.0);
     }
@@ -2845,7 +2899,7 @@ pub(crate) mod tests {
         let mut anim = Animatable::new(st.clone());
         anim.animate_to(
             100.0,
-            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap)),
+            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap(SnapSpec::default()))),
         );
         assert!(!anim.update(), "Snap base 应首次 update 即完成");
         assert_eq!(st.peek(), 100.0, "Snap base 完成值 = to");
@@ -3157,7 +3211,7 @@ pub(crate) mod tests {
         anim.on_finish(move || {
             f2.store(true, Ordering::SeqCst);
         });
-        anim.animate_to(1.0, AnimationSpec::Snap);
+        anim.animate_to(1.0, AnimationSpec::Snap(SnapSpec::default()));
         anim.update(); // Snap 一帧完成 → 回调触发
         assert!(fired.load(Ordering::SeqCst), "动画完成应触发 on_finish");
         assert_eq!(st.peek(), 1.0, "动画值应到达目标");
@@ -3517,6 +3571,75 @@ pub(crate) mod tests {
         let no_first = KeyframesOf::between(0.0, 1.0).at(100, 0.5).at(200, 1.0).build();
         assert_eq!(no_first.frames.first().map(|f| f.0), Some(0.0));
         assert_eq!(no_first.frames.first().map(|f| f.1), Some(0.0));
+        clear_all_animations();
+    }
+
+    /// Compose's `snap(delayMillis)` holds the value for the delay and only then jumps, and Compose's
+    /// `repeatable(..., initialStartOffset = StartOffset(…))` shifts the first cycle of a finite repeat
+    /// the same way the infinite spec does. Both were missing: winia's `Snap` had no delay at all, and a
+    /// repeat always began at its first frame.
+    #[test]
+    fn a_delayed_snap_and_a_delayed_repeat_both_hold_first() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        clear_all_animations();
+        let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
+        // snap(delayMillis = 250): nothing moves for 250 ms, then the target appears in one frame.
+        let state = crate::runtime::state::State::new(0.0f32);
+        push_animatable(state.clone(), 1.0, AnimationSpec::Snap(SnapSpec::new(Duration::from_millis(250))));
+        update_animations();
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(update_animations(), "the animation is still running during the hold");
+        assert_eq!(state.peek(), 0.0, "and the value has not moved yet");
+        std::thread::sleep(Duration::from_millis(180));
+        assert!(!update_animations(), "after the delay the snap completes");
+        assert_eq!(state.peek(), 1.0, "writing the target exactly");
+        clear_all_animations();
+        // repeatable(2, tween(200, linear), FastForward 150): the first frame is already 3/4 in.
+        let fast = crate::runtime::state::State::new(0.0f32);
+        push_animatable(
+            fast.clone(),
+            1.0,
+            AnimationSpec::Repeatable(
+                RepeatableSpec::new(
+                    2,
+                    RepeatMode::Restart,
+                    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), linear())),
+                )
+                .with_start_offset(Duration::from_millis(150), StartOffsetType::FastForward),
+            ),
+        );
+        update_animations();
+        let started = fast.peek();
+        assert!(
+            (started - 0.75).abs() < 0.1,
+            "a fast-forwarded repeat starts three quarters into its first cycle (at {started})"
+        );
+        clear_all_animations();
+        // The same repeat with Delay 300 ms still sits at the first value 120 ms in.
+        let slow = crate::runtime::state::State::new(0.0f32);
+        push_animatable(
+            slow.clone(),
+            1.0,
+            AnimationSpec::Repeatable(
+                RepeatableSpec::new(
+                    2,
+                    RepeatMode::Restart,
+                    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), linear())),
+                )
+                .with_start_offset(Duration::from_millis(300), StartOffsetType::Delay),
+            ),
+        );
+        update_animations();
+        std::thread::sleep(Duration::from_millis(120));
+        update_animations();
+        assert_eq!(slow.peek(), 0.0, "a delayed repeat holds its first value");
+        std::thread::sleep(Duration::from_millis(300));
+        update_animations();
+        let moving = slow.peek();
+        assert!(
+            moving > 0.05 && moving < 0.95,
+            "and only then does its first cycle run (at {moving})"
+        );
         clear_all_animations();
     }
 
