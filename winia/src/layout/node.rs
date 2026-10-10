@@ -3332,35 +3332,35 @@ fn measure_node_inner(
         // A policy may decide the set itself — Compose's `layout(alignmentLines = …)`: `Some` replaces the
         // inherited lines entirely (that is how an overlay child is kept out of its host's baseline), and
         // `None` leaves the merge below in charge.
-        // A leaf's own line is untouched: it has no children, so the loop below is empty for it.
+        // A leaf's own line is untouched: it has no children, so the merge reports nothing for it.
         if let Some(lines) = policies[pidx].alignment_lines(nodes, &children) {
             for (line, value) in lines {
                 nodes[idx].set_alignment_line(line, value);
             }
         } else {
-        for child in &children {
-            // Only the lines the child actually reports; a child that reports none contributes none.
-            // `alignment_lines` is a small Vec (usually empty), so this is a cheap nested loop.
-            let child_position = nodes[*child].position;
-            let child_lines = nodes[*child].alignment_lines.clone();
-            for (line, value) in child_lines {
-                // A horizontal line runs ACROSS the horizontal axis, so its position is a vertical
-                // offset from this node's top; a vertical line's position is horizontal.
-                let absolute = if line.horizontal {
-                    child_position.y + value
-                } else {
-                    child_position.x + value
-                };
-                // MERGE, not overwrite: two children reporting the same line combine through the
-                // line's own merger (`::min` for the first baseline of a block, `::max` for the
-                // last), which is what Compose's `merge` does.
-                let merged = match nodes[idx].alignment_line(line) {
-                    Some(previous) => line.merge(previous, absolute),
-                    None => absolute,
-                };
-                nodes[idx].set_alignment_line(line, merged);
+            for child in &children {
+                // Only the lines the child actually reports; a child that reports none contributes none.
+                // `alignment_lines` is a small Vec (usually empty), so this is a cheap nested loop.
+                let child_position = nodes[*child].position;
+                let child_lines = nodes[*child].alignment_lines.clone();
+                for (line, value) in child_lines {
+                    // A horizontal line runs ACROSS the horizontal axis, so its position is a vertical
+                    // offset from this node's top; a vertical line's position is horizontal.
+                    let absolute = if line.horizontal {
+                        child_position.y + value
+                    } else {
+                        child_position.x + value
+                    };
+                    // MERGE, not overwrite: two children reporting the same line combine through the
+                    // line's own merger (`::min` for the first baseline of a block, `::max` for the
+                    // last), which is what Compose's `merge` does.
+                    let merged = match nodes[idx].alignment_line(line) {
+                        Some(previous) => line.merge(previous, absolute),
+                        None => absolute,
+                    };
+                    nodes[idx].set_alignment_line(line, merged);
+                }
             }
-        }
         }
         // Record whether any child asks for a paint order of its own (`Modifier::z_index`). The
         // renderer and the hit test consult this before doing any ordering work, so the common case
