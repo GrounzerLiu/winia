@@ -18,9 +18,16 @@
 //!
 //! 与 Compose 的差异（winia 降级）：
 //! - 无 suspend——`show/hide/expand/partial_expand` 用 `push_animatable`
-//!   动画驱动（非挂起）
-//! - `onDismissRequest`：点击遮罩触发 sheet 下滑动画 + 回调（overlay 移除时
-//!   exit fade 与下滑重叠——非严格"动画完成后再回调"）
+//!   动画驱动（非挂起）。**能力不缺**：滑动完成的时刻由 `on_dismiss_request` 给出，
+//!   它在面板滑完之后才触发（`clicking_the_scrim_dismisses_the_sheet_completely`
+//!   钉住这条），所以"隐藏之后再移除"这种调用方写法是可行的；差别只在 API 形状
+//!   （Compose 的 `suspend fun hide()` 可以被 await，winia 只能回调）。
+//! - 遮罩点击（面板内的 scrim 层）走组件自身路径：只 `hide()`，滑完再回调，
+//!   不存在重叠。**Escape / 外部点击仍走 overlay host**：它先调 `on_dismiss`
+//!   再启动自己的 exit fade，于是下滑与淡出重叠。尝试过让内容自己完成退出
+//!   （overlay 描述符加"内容自己收尾"的开关，host 只回调不关闭），实测下滑正常
+//!   但那次交互里 overlay 再也未被移除（测试等到 4s 仍在，面板已滑出屏幕，
+//!   只剩遮罩层）——比起重叠这是更糟的缺陷，因此保留现状并把结论记在这里。
 //! - `sheetMaxWidth` 已对齐（默认 `640.dp`，`Dp::from(f32::INFINITY)` 表铺满，居中）
 //! - 拖拽 velocity 用内部估算（winia 拖拽事件无原生 velocity）
 
