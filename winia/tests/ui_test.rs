@@ -1525,6 +1525,54 @@ fn the_bottom_sheet_panel_is_square_when_expanded_and_rounded_again_when_not() {
     settle_shape(&mut app, false, "collapsing brings the rounded corners back");
 }
 
+/// The sheet's anchors come from the WINDOW height, so a resize has to move them.
+///
+/// Compose rebuilds them inside the layout pass (`ModalBottomSheet.kt:295-300`: `val fullHeight =
+/// constraints.maxHeight.toFloat()` then `Hidden at fullHeight` / `PartiallyExpanded at fullHeight / 2f` /
+/// `Expanded at max(0f, fullHeight - sheetSize.height)`), which makes a window resize free. winia recomputed
+/// them from the PANEL's `on_size_changed` callback only — and a pure window resize does not change a panel
+/// whose content wraps the same way, so the anchors kept the old height. Measured before the fix: after
+/// growing the fixture's window from 480x560 to 480x760 the partially expanded panel stayed at the 560-based
+/// anchor, a hundred logical pixels above where it belongs (and an expanded panel would have floated above
+/// the bottom edge instead of sitting on it).
+#[test]
+fn resizing_the_window_moves_the_sheets_anchors() {
+    /// The panel's top: the content's tag plus the drag-handle row above it (padding 12 + a 4 px handle +
+    /// 12). Read from the tree, which settles once the slide is over — the same helper the corner test uses.
+    fn panel_top(app: &mut UiTest) -> f32 {
+        app.refresh();
+        let (_, y, _, _) = app.find_tag_in_overlay("bs-content").expect("the sheet content");
+        y - 28.0
+    }
+    fn settled_panel_top(app: &mut UiTest, what: &str) -> f32 {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut last = panel_top(app);
+        loop {
+            std::thread::sleep(Duration::from_millis(60));
+            let now = panel_top(app);
+            if (now - last).abs() < 0.5 {
+                return now;
+            }
+            assert!(Instant::now() < deadline, "{what}: the panel never settled ({last} -> {now})");
+            last = now;
+        }
+    }
+
+    let mut app = UiTest::launch("bottom_sheet");
+    app.click_tag("bs-open");
+    app.expect_overlay_text("sheet header");
+
+    // Partially expanded (the fixture's panel is taller than half the window): its top is `fullHeight / 2`.
+    let before = settled_panel_top(&mut app, "the opening sheet");
+    app.resize(480.0, 760.0);
+    let after = settled_panel_top(&mut app, "the resized sheet");
+
+    assert!(
+        (after - (before + 100.0)).abs() < 12.0,
+        "the partially expanded panel follows the window: its top is half the height, so +200 of window is +100 of anchor (before {before}, after {after})"
+    );
+}
+
 /// Clicking the scrim dismisses the sheet — the overlay really goes away, with nothing left drawing.
 ///
 /// A user hit the failure this guards: the panel slid out of view but the overlay stayed open, so only its

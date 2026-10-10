@@ -127,6 +127,21 @@ impl SheetState {
                 }
             }
         }
+        // Compose's `draggableAnchors` block returns the new anchors AND the new target together
+        // (`ModalBottomSheet.kt:299-325`): the sheet keeps the state it is in across a geometry change and
+        // travels to that state's NEW position — `PartiallyExpanded -> PartiallyExpanded` while that anchor
+        // exists, `Expanded -> Expanded`, `Hidden -> Hidden`. Clamping alone does not do that: after the
+        // window grows, a partially expanded sheet's old offset is still inside the offset range, so it
+        // stayed at the old half instead of the new one (measured through the demo: 280 -> 280 where half of
+        // the taller window is 380). A motion already in flight is left alone — it is heading for the same
+        // value, only its end position moved.
+        if !self.anchored.is_animation_running() {
+            let value = self.anchored.target_value();
+            let wanted = self.anchored.position_of(&value);
+            if !wanted.is_nan() && (self.anchored.offset() - wanted).abs() > 0.5 {
+                self.anchored.animate_to(value);
+            }
+        }
     }
 
     /// Scaffold 专用锚点（对标 Compose `BottomSheetScaffold` 的 `calculateAnchors`）。
@@ -167,11 +182,21 @@ impl SheetState {
         // Scaffold 首帧直接 snap 到初始值（通常 Partial），不做 Hidden→Partial 的首次滑入
         // 保留 Modal 的首次滑入逻辑，仅 Scaffold 走静默初始化
         let was_uninit = self.anchored.offset().is_nan();
+        self.anchored.update_anchors(new_anchors);
         if was_uninit {
-            self.anchored.update_anchors(new_anchors);
             return;
         }
-        self.anchored.update_anchors(new_anchors);
+        // The same re-target the modal path does: a geometry change moves the sheet to the NEW position of
+        // the state it is in (Compose's `calculateAnchors` returns the anchors and the target together,
+        // `BottomSheetScaffold.kt:272-306`), where keeping the old offset would leave a docked sheet at the
+        // old peek line after the window resizes.
+        if !self.anchored.is_animation_running() {
+            let value = self.anchored.target_value();
+            let wanted = self.anchored.position_of(&value);
+            if !wanted.is_nan() && (self.anchored.offset() - wanted).abs() > 0.5 {
+                self.anchored.animate_to(value);
+            }
+        }
     }
 
     // ── 状态读取 ──
@@ -324,6 +349,61 @@ mod tests {
         assert!(s.has_partially_expanded_state());
         assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 400.0);
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
+    }
+
+    /// A geometry change moves the sheet to the NEW position of the state it is in, the way Compose's
+    /// `draggableAnchors` block returns the anchors and the target together (`ModalBottomSheet.kt:299-325`).
+    /// Clamping alone left the old offset in place: measured here, a partially expanded sheet whose window
+    /// grew from 800 to 1000 stayed at 400 where half the taller window is 500.
+    /// Drive the engine until the sheet stops moving, the way a frame loop would.
+    fn settle(state: &SheetState) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while crate::animation::update_animations() {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            assert!(std::time::Instant::now() < deadline, "the sheet never settled");
+        }
+    }
+
+    #[test]
+    fn a_taller_window_moves_the_modal_sheet_to_the_new_anchor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut s = SheetState::new(SheetValue::Hidden);
+        s.update_anchors(800.0, 600.0);
+        s.show();
+        settle(&s);
+        // Land it on the partially expanded anchor, as a real settle would.
+        s.anchored.offset_state().set(400.0);
+        assert_eq!(s.offset(), 400.0);
+        s.update_anchors(1000.0, 600.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            500.0,
+            "the anchor follows the window"
+        );
+        assert_eq!(s.target_value(), SheetValue::PartiallyExpanded, "the state is kept");
+        settle(&s);
+        assert_eq!(s.offset(), 500.0, "the sheet travels to the new position of that state");
+    }
+
+    /// The same for the docked sheet: its anchors come from the layout height and the peek, so a resize has
+    /// to move the collapsed sheet to the new peek line (`BottomSheetScaffold.kt:272-306`).
+    #[test]
+    fn a_taller_window_moves_the_docked_sheet_to_the_new_peek_line() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let s = SheetState::new(SheetValue::PartiallyExpanded);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
+        s.anchored.offset_state().set(704.0);
+        s.update_anchors_scaffold(1000.0, 96.0, 600.0);
+        assert_eq!(
+            s.anchored.position_of(&SheetValue::PartiallyExpanded),
+            904.0,
+            "the peek line follows the layout height"
+        );
+        settle(&s);
+        assert_eq!(s.offset(), 904.0, "the docked sheet travels with it");
     }
 
     #[test]

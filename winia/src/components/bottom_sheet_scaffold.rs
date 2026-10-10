@@ -165,6 +165,7 @@ impl BottomSheetScaffold {
                 // 用窗口高近似 layoutH（占满时正确），响应式订阅 window_size 以跟随 resize
                 let layout_h = crate::layout::window_size().1;
                 let peek_px = peek.to_logical();
+                let peek_h_for_anchors = peek_px;
 
                 let st_for_offset = sheet_state.clone();
                 let st_for_anchors = sheet_state.clone();
@@ -174,7 +175,21 @@ impl BottomSheetScaffold {
                 // NaN→0 导致片贴顶（y=0）。sheet_h=0 时 Expanded 锚点为 NaN，后续
                 // on_size_changed 补全（offset 已初始化则保持）。
                 if st_for_offset.offset().is_nan() {
-                    st_for_offset.update_anchors_scaffold(layout_h, peek_px, sheet_h.get());
+                    st_for_offset.update_anchors_scaffold(layout_h, peek_h_for_anchors, sheet_h.get());
+                }
+                // The scaffold's anchors depend on the layout height and the peek as much as on the panel's
+                // own height, and `on_size_changed` below fires only when the PANEL changes size — a window
+                // resize does not change a wrap-content panel. Compose rebuilds them inside the layout
+                // lambda (`BottomSheetScaffold.kt:272-277`, `val layoutHeight = constraints.maxHeight`), so
+                // a resize moves them for free; `window_size()` is a tracked read, so this closure re-runs.
+                let anchors_input: crate::runtime::state::Backchannel<Option<(f32, f32, f32)>> =
+                    ctx.remember_backchannel(|| None);
+                let sheet_h_now = sheet_h.get();
+                if sheet_h_now > 0.0
+                    && anchors_input.peek() != Some((layout_h, peek_px, sheet_h_now))
+                {
+                    anchors_input.set(Some((layout_h, peek_px, sheet_h_now)));
+                    st_for_offset.update_anchors_scaffold(layout_h, peek_px, sheet_h_now);
                 }
                 let is_full = sheet_h.get() >= layout_h - 1.0;
                 let from = if st_for_offset.has_partially_expanded_state() {

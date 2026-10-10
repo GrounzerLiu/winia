@@ -224,6 +224,23 @@ impl ModalBottomSheet {
                 // 仅全屏（sheetH≈fullH）时 28→0 过渡，非全屏保持 28（M3 满屏变直角）
                 // progress 基准用 Partial→Expanded 才能半展开保持 28（Hidden→Expanded 会在 Partial 已掉角）
                 let full_h = crate::layout::window_size().1;
+                // The anchors depend on the WINDOW height as much as on the panel's, and `on_size_changed`
+                // only fires when the panel's own measured size changes — a pure window resize does not
+                // change a wrap-content panel. Compose rebuilds the anchors every layout pass from
+                // `constraints.maxHeight` (`ModalBottomSheet.kt:295-300`), so a resize moves them for free;
+                // measured before this, the partially expanded panel kept its top at 280 when the window
+                // grew from 560 to 760, where half the height is 380. `window_size()` is a tracked read, so
+                // this closure re-runs on a resize; both inputs go through one update.
+                let anchors_input: crate::runtime::state::Backchannel<Option<(f32, f32)>> =
+                    ctx.remember_backchannel(|| None);
+                let sheet_h_now = sheet_h.get();
+                // `0.0` means the panel has not been measured yet: the `on_size_changed` callback below
+                // owns that first update (it has to slide the uninitialised sheet in from the bottom), and
+                // running with a zero height here would install a Hidden-only anchor set first.
+                if sheet_h_now > 0.0 && anchors_input.peek() != Some((full_h, sheet_h_now)) {
+                    anchors_input.set(Some((full_h, sheet_h_now)));
+                    anchors_st.update_anchors(full_h, sheet_h_now);
+                }
                 // winia's own rule (kept from the original implementation): an expanded sheet whose panel
                 // reaches the window height drops its top corners. It is NOT from Material 3 — current M3
                 // passes `shape` through untouched and never switches on the sheet's state (checked against
