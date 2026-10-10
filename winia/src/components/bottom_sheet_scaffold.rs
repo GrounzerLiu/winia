@@ -56,6 +56,8 @@ use crate::layout::node::ContentAlignment;
 
 pub const SCAFFOLD_SHEET_PEEK_HEIGHT: Dp = Dp(56.0);
 pub const SCAFFOLD_SHEET_SHAPE_RADIUS: f32 = 28.0;
+/// Compose's `DragHandleVerticalPadding` (`SheetDefaults.kt:543`).
+pub const SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING: f32 = 22.0;
 
 /// 常驻式底部面板宿主（对标 `BottomSheetScaffold`）
 pub struct BottomSheetScaffold {
@@ -493,7 +495,10 @@ impl BottomSheetScaffold {
                                 .modifier(
                                     Modifier::new()
                                         .fill_max_width()
-                                        .padding_vertical(12.0)
+                                        // Compose's `DragHandleVerticalPadding = 22.dp`
+                                        // (`SheetDefaults.kt:543`) — winia used 12, which made the collapsed
+                                        // sheet 20 px shorter than Compose's.
+                                        .padding_vertical(SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING)
                                         .clickable(move || match handle_state.current_value() {
                                             SheetValue::Expanded => {
                                                 if handle_state.skip_hidden_state() {
@@ -510,7 +515,9 @@ impl BottomSheetScaffold {
                                 .build(ctx, |ctx| {
                                     crate::layout::components::Stack::new()
                                         .modifier(Modifier::new().size(32.0, 4.0).background(
-                                            crate::theme::WiniaTheme::colors().outline_variant,
+                                            // `SheetBottomTokens.DockedDragHandleColor` = `OnSurfaceVariant`
+                                            // (winia painted it with `outline_variant`, a dimmer token).
+                                            crate::theme::WiniaTheme::colors().on_surface_variant,
                                             Shape::RoundedRect { corner_radius: 2.0 },
                                         ))
                                         .build(ctx, |_| {});
@@ -905,6 +912,67 @@ mod tests {
         assert!(
             !has_32x4(&custom),
             "a supplied handle replaces the built-in one"
+        );
+    }
+
+    /// The handle's numbers are the tokens Compose names: `DockedDragHandleWidth/Height` 32x4,
+    /// `DragHandleVerticalPadding` 22 (`SheetDefaults.kt:410-431`, `:543`) and its colour
+    /// `DockedDragHandleColor` = `OnSurfaceVariant` (`tokens/SheetBottomTokens.kt`). winia used a 12 px
+    /// vertical padding and `outline_variant`, which made the collapsed sheet 20 px shorter than Compose's
+    /// and painted the bar a dimmer grey.
+    #[test]
+    fn the_drag_handle_numbers_are_the_tokens() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                BottomSheetScaffold::new().build(
+                    ctx,
+                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                );
+            });
+        });
+        c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        let nodes = c.arena_nodes();
+        let bar = nodes
+            .iter()
+            .position(|n| {
+                n.modifier.elements().iter().any(|el| match el {
+                    crate::modifier::ModifierElement::Size { width, height } => {
+                        let fixed = |v: &crate::layout::sizing::SizeValue| match v {
+                            crate::layout::sizing::SizeValue::Static(
+                                crate::layout::sizing::Dimension::Fixed(px),
+                            ) => *px,
+                            _ => f32::NAN,
+                        };
+                        fixed(width) == 32.0 && fixed(height) == 4.0
+                    }
+                    _ => false,
+                })
+            })
+            .expect("the built-in 32x4 bar");
+        let colour = nodes[bar]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                _ => None,
+            })
+            .expect("the bar paints a background");
+        assert_eq!(colour, theme.on_surface_variant, "DockedDragHandleColor is onSurfaceVariant");
+
+        // 4 px of bar plus 22 above and below.
+        let row = nodes
+            .iter()
+            .find(|n| n.children.contains(&bar))
+            .expect("the bar's row");
+        assert_eq!(
+            row.measured_size.height,
+            4.0 + 2.0 * SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING,
+            "the handle's box is the bar plus DragHandleVerticalPadding on both sides"
         );
     }
 

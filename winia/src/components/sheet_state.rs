@@ -122,10 +122,37 @@ impl SheetState {
         }
     }
 
+    /// The three anchor positions in one snapshot, for comparing two anchor sets.
+    fn positions(&self) -> [(SheetValue, f32); 3] {
+        [
+            (SheetValue::Hidden, self.anchored.position_of(&SheetValue::Hidden)),
+            (
+                SheetValue::PartiallyExpanded,
+                self.anchored.position_of(&SheetValue::PartiallyExpanded),
+            ),
+            (SheetValue::Expanded, self.anchored.position_of(&SheetValue::Expanded)),
+        ]
+    }
+
+    /// Whether a geometry change actually moved an anchor. NaN (an absent anchor) counts as equal to NaN.
+    fn anchors_moved(before: &[(SheetValue, f32); 3], after: &DraggableAnchors<SheetValue>) -> bool {
+        let same = |a: f32, b: f32| (a.is_nan() && b.is_nan()) || (a - b).abs() < 0.01;
+        before
+            .iter()
+            .any(|(value, position)| !same(*position, after.position_of(value)))
+    }
+
     /// Move a settled sheet onto `value`'s new position, if it is not already there. Called after the
     /// anchors changed.
-    fn settle_onto(&self, value: Option<SheetValue>) {
-        let Some(value) = value else { return };
+    fn settle_onto(&self, value: Option<SheetValue>) {        let Some(value) = value else { return };
+        // A live gesture owns the offset. Compose's `draggableAnchors` block re-targets only when the
+        // LAYOUT changed, never while a finger is down; without this gate the sheet followed a drag and was
+        // animated straight back to the anchor it started from (measured on the demo: a downward drag moved
+        // the offset 40 px, `update_anchors` then animated it to the Expanded anchor at 64, so the sheet
+        // never followed the finger while a release still settled and collapsed it).
+        if self.anchored.is_dragging() {
+            return;
+        }
         if self.anchored.is_animation_running() {
             // A motion already in flight is heading for the same value; only its end position moved.
             return;
@@ -153,8 +180,10 @@ impl SheetState {
         }
         self.has_partially_expanded.set(partially_available);
         self.has_expanded.set(sheet_height != 0.0);
+        let old_anchors = [self.positions()];
         let new_anchors = DraggableAnchors::new(pairs.clone());
         let resolved = self.resolved_target(&new_anchors);
+        let moved = Self::anchors_moved(&old_anchors[0], &new_anchors);
         let was_uninit = self.anchored.offset().is_nan();
         if was_uninit {
             // 未初始化且已 show()（current != Hidden）：先 snap 到 Hidden(fullH)，再动画到 correct(Partial/Expanded)，
@@ -189,13 +218,16 @@ impl SheetState {
             }
         }
         // Compose's `draggableAnchors` block returns the new anchors AND the new target together
-        // (`ModalBottomSheet.kt:299-325`): the sheet keeps the state it is in across a geometry change and
+        // (`ModalBottomSheet.kt:299-325`): the sheet keeps the state it is in across a GEOMETRY change and
         // travels to that state's NEW position — `PartiallyExpanded -> PartiallyExpanded` while that anchor
         // exists, `Expanded -> Expanded`, `Hidden -> Hidden`, with the fallback `resolved_target` applies
         // when the anchor is gone. Clamping alone does not do that: after the window grows, a partially
         // expanded sheet's old offset is still inside the offset range, so it stayed at the old half instead
         // of the new one (measured through the demo: 280 -> 280 where half of the taller window is 380).
-        self.settle_onto(resolved);
+        // Only a REAL anchor change moves anything (see `settle_onto`).
+        if moved {
+            self.settle_onto(resolved);
+        }
     }
 
     /// Scaffold 专用锚点（对标 Compose `BottomSheetScaffold` 的 `calculateAnchors`）。
@@ -235,8 +267,10 @@ impl SheetState {
         self.has_partially_expanded.set(pairs.iter().any(|(v, _)| *v == SheetValue::PartiallyExpanded));
         // Expanded 在重合时仍视为可用（expand() 应可达），用 has_expanded_pos 而非 pairs 去重结果
         self.has_expanded.set(has_expanded_pos);
+        let old_anchors = [self.positions()];
         let new_anchors = DraggableAnchors::new(pairs);
         let resolved = self.resolved_target(&new_anchors);
+        let moved = Self::anchors_moved(&old_anchors[0], &new_anchors);
         // Scaffold 首帧直接 snap 到初始值（通常 Partial），不做 Hidden→Partial 的首次滑入
         // 保留 Modal 的首次滑入逻辑，仅 Scaffold 走静默初始化
         let was_uninit = self.anchored.offset().is_nan();
@@ -247,8 +281,11 @@ impl SheetState {
         // The same re-target the modal path does: a geometry change moves the sheet to the NEW position of
         // the state it is in (Compose's `calculateAnchors` returns the anchors and the target together,
         // `BottomSheetScaffold.kt:272-306`), where keeping the old offset would leave a docked sheet at the
-        // old peek line after the window resizes.
-        self.settle_onto(resolved);
+        // old peek line after the window resizes. Only a REAL anchor change moves anything — a live drag
+        // owns the offset (`settle_onto`).
+        if moved {
+            self.settle_onto(resolved);
+        }
     }
 
     // ── 状态读取 ──
@@ -491,6 +528,32 @@ mod tests {
         );
         assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
+    }
+
+    /// A live gesture owns the offset: an anchor update that runs mid-drag — the scaffold recomputes its
+    /// anchors whenever the window, the peek or the sheet's size changes — must not animate the sheet back.
+    /// Measured on the demo: a downward drag moved the offset 40 px and `update_anchors` then animated it
+    /// straight to the Expanded anchor, so the sheet never followed the finger while a release still settled
+    /// and collapsed it.
+    #[test]
+    fn an_anchor_update_does_not_fight_a_drag() {
+        let s = SheetState::new(SheetValue::PartiallyExpanded);
+        s.set_skip_hidden_state(true);
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        s.anchored.offset_state().set(704.0);
+        s.drag_delta(-40.0);
+        let dragged = s.offset();
+        assert_eq!(dragged, 664.0, "the finger moved the sheet");
+        assert!(s.anchored_draggable().is_dragging(), "the drag is live");
+
+        s.update_anchors_scaffold(800.0, 96.0, 600.0);
+        assert_eq!(s.offset(), dragged, "unchanged anchors leave the drag alone");
+        assert!(!s.is_animation_running(), "and start no motion");
+
+        // Even a REAL geometry change waits for the finger to lift.
+        s.update_anchors_scaffold(1000.0, 96.0, 600.0);
+        assert_eq!(s.offset(), dragged, "a resize mid-drag does not snap the sheet either");
+        assert!(!s.is_animation_running(), "still no motion behind the drag");
     }
 
     /// The same for the docked sheet: its anchors come from the layout height and the peek, so a resize has
