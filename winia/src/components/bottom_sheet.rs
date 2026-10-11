@@ -404,12 +404,12 @@ impl ModalBottomSheet {
                                 ) -> crate::nested_scroll::ScrollDelta {
                                     // 对齐 Compose M3：向上拖(available.y<0)先展开 sheet
                                     // （expands-first），列表只在 sheet 已到 Expanded 后滚动。
-                                    // Compose's connection only reacts to USER INPUT
-                                    // (`SheetDefaults.kt:454-470`) — a wheel must scroll the list, not drag
-                                    // the sheet.
-                                    if source != crate::nested_scroll::NestedScrollSource::Drag
-                                        || available.y >= 0.0
-                                    {
+                                    // Compose's connection answers USER INPUT (`SheetDefaults.kt:454-470`),
+                                    // and a wheel IS user input there — `dispatchMouseWheelScroll` uses
+                                    // `NestedScrollSource.UserInput` (`MouseWheelScrollingLogic.kt:303-307`) —
+                                    // so an upward wheel expands the sheet like a finger does. Only a fling or
+                                    // an animation is excluded.
+                                    if !source.is_user_input() || available.y >= 0.0 {
                                         return crate::nested_scroll::ScrollDelta::ZERO;
                                     }
                                     Self::consume(&self.st, available.y)
@@ -422,7 +422,7 @@ impl ModalBottomSheet {
                                 ) -> crate::nested_scroll::ScrollDelta {
                                     // 向下拖/列表到顶后的剩余增量（折叠/关闭方向）。
                                     // 用 consumed 度量——avoid over-consumption
-                                    if source != crate::nested_scroll::NestedScrollSource::Drag {
+                                    if !source.is_user_input() {
                                         return crate::nested_scroll::ScrollDelta::ZERO;
                                     }
                                     Self::consume(&self.st, available.y)

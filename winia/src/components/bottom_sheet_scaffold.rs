@@ -433,12 +433,12 @@ impl BottomSheetScaffold {
                             source: crate::nested_scroll::NestedScrollSource,
                         ) -> crate::nested_scroll::ScrollDelta {
                             // Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScrollConnection`
-                            // (`SheetDefaults.kt:454-470`): the sheet only reacts to USER INPUT, and only to
-                            // an upward delta in the pre-scroll phase. A wheel must scroll the list instead
-                            // of dragging the sheet, and a fling is handled by the fling callbacks.
-                            if source != crate::nested_scroll::NestedScrollSource::Drag
-                                || available.y >= 0.0
-                            {
+                            // (`SheetDefaults.kt:454-470`): the sheet answers USER INPUT only, and only an
+                            // upward delta in the pre-scroll phase. A wheel counts as user input there — it
+                            // is dispatched with `NestedScrollSource.UserInput`
+                            // (`MouseWheelScrollingLogic.kt:303-307`) — so an upward wheel expands the sheet
+                            // first, exactly like a finger; a fling or an animation must not move it.
+                            if !source.is_user_input() || available.y >= 0.0 {
                                 return crate::nested_scroll::ScrollDelta::ZERO;
                             }
                             Self::consume(&self.st, available.y)
@@ -449,7 +449,7 @@ impl BottomSheetScaffold {
                             available: crate::nested_scroll::ScrollDelta,
                             source: crate::nested_scroll::NestedScrollSource,
                         ) -> crate::nested_scroll::ScrollDelta {
-                            if source != crate::nested_scroll::NestedScrollSource::Drag {
+                            if !source.is_user_input() {
                                 return crate::nested_scroll::ScrollDelta::ZERO;
                             }
                             Self::consume(&self.st, available.y)
@@ -999,14 +999,14 @@ mod tests {
         );
     }
 
-    /// A wheel inside a docked sheet scrolls the LIST, never drags the sheet, and never leaves the sheet
-    /// marked as dragging. Compose's connection answers user input only (`SheetDefaults.kt:454-470`), and
-    /// winia's used to answer every source: measured, one wheel tick moved the sheet 20 px and left
-    /// `is_dragging == true`, after which a window resize no longer moved the sheet at all (the re-target
-    /// gate read the stale flag forever, because the flag is only cleared by a settle or a fling and a wheel
-    /// starts neither).
+    /// The WHEEL is user input, exactly like a finger: Compose dispatches it with
+    /// `NestedScrollSource.UserInput` (`MouseWheelScrollingLogic.kt:303-307`), and the sheet's connection
+    /// accepts user input (`SheetDefaults.kt:454-470`). So an upward wheel expands the sheet (expands-first),
+    /// a downward one reaches the sheet only with what the list could not use — and neither marks the sheet as
+    /// dragging, because a nested delta is not the panel's own gesture. A FLING, by contrast, is a side effect
+    /// and must not move the sheet at all.
     #[test]
-    fn a_wheel_scrolls_the_list_instead_of_dragging_the_sheet() {
+    fn a_wheel_drives_the_sheet_like_a_finger_and_a_fling_does_not() {
         let state = SheetState::new(SheetValue::PartiallyExpanded);
         state.set_skip_hidden_state(true);
         let st = state.clone();
@@ -1036,53 +1036,40 @@ mod tests {
                 );
         });
         c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
-        let before = state.offset();
         assert!(!state.anchored_draggable().is_dragging(), "nothing drags yet");
 
         let root = c.layout_root_idx().expect("laid out");
         let target = node_with_tag(c.arena_nodes(), "sheet-scroll");
         let density = crate::unit::Density::from_density(1.0);
+        let dispatch = |c: &mut Composer, delta: f32, source| {
+            crate::app::scroll::dispatch_nested_scroll_delta(
+                c.arena_nodes_mut(),
+                root,
+                target,
+                crate::nested_scroll::ScrollDelta::new(0.0, delta),
+                source,
+                density,
+            )
+        };
 
-        // A wheel tick: the sheet must not move, and the flag must stay clear.
-        let consumed = crate::app::scroll::dispatch_nested_scroll_delta(
-            c.arena_nodes_mut(),
-            root,
-            target,
-            crate::nested_scroll::ScrollDelta::new(0.0, -20.0),
-            crate::nested_scroll::NestedScrollSource::Wheel,
-            density,
-        );
-        let _ = consumed;
-        assert_eq!(
-            state.offset(),
-            before,
-            "a wheel must not move the sheet (it has to scroll the list)"
-        );
-        assert!(
-            !state.anchored_draggable().is_dragging(),
-            "and it must not mark the sheet as dragging"
-        );
-
-        // User input still drives the sheet, and also leaves the flag clear (this is the nested path, not
-        // the panel's own gesture).
-        crate::app::scroll::dispatch_nested_scroll_delta(
-            c.arena_nodes_mut(),
-            root,
-            target,
-            crate::nested_scroll::ScrollDelta::new(0.0, -20.0),
-            crate::nested_scroll::NestedScrollSource::Drag,
-            density,
-        );
+        // An upward wheel expands the sheet, like a finger (expands-first: the list gets nothing yet).
+        let before = state.offset();
+        dispatch(&mut c, -20.0, crate::nested_scroll::NestedScrollSource::Wheel);
         assert!(
             (state.offset() - (before - 20.0)).abs() < 0.5,
-            "a finger drag inside the sheet still moves it ({} against {})",
+            "an upward wheel moves the sheet ({} against {})",
             state.offset(),
             before - 20.0
         );
         assert!(
             !state.anchored_draggable().is_dragging(),
-            "a list scroll is not the panel's own gesture, so the re-target gate stays open"
+            "a nested delta is not the panel's own gesture, so the re-target gate stays open"
         );
+
+        // A FLING is a side effect: it must not move the sheet.
+        let settled = state.offset();
+        dispatch(&mut c, -20.0, crate::nested_scroll::NestedScrollSource::Fling);
+        assert_eq!(state.offset(), settled, "a fling does not move the sheet");
     }
 
     /// The sheet's shadow follows `sheetShadowElevation` (Compose's default is `ElevationTokens.Level1`,

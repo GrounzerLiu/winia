@@ -40,6 +40,22 @@ fn clamp_consumption(value: f32, available: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NestedScrollSource { Wheel, Drag, Fling, SideEffect }
 
+impl NestedScrollSource {
+    /// Whether this delta came from the user, as opposed to an animation or a fling.
+    ///
+    /// Compose has ONE value for this: `NestedScrollSource.UserInput`, documented as "any source of scroll
+    /// events originated from a user interaction: mouse, touch, key events"
+    /// (`ui/input/nestedscroll/NestedScrollModifier.kt:244-248`, where `Drag` is only a deprecated alias of
+    /// it). A MOUSE WHEEL is user input there, not a side effect — `MouseWheelScrollingLogic.dispatchMouseWheelScroll`
+    /// dispatches with `NestedScrollSource.UserInput` (`foundation/gestures/MouseWheelScrollingLogic.kt:303-307`).
+    /// winia splits the case in two, so "user input" is `Drag | Wheel`; `Fling` and `SideEffect` are the
+    /// Compose `SideEffect` case and must NOT drive a bottom sheet's connection
+    /// (`material3/SheetDefaults.kt:454-470` gates on user input only).
+    pub fn is_user_input(self) -> bool {
+        matches!(self, Self::Drag | Self::Wheel)
+    }
+}
+
 pub trait NestedScrollConnection: Send + Sync {
     fn on_pre_scroll(&self, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta { let _ = (available, source); ScrollDelta::ZERO }
     fn on_post_scroll(&self, consumed_by_child: ScrollDelta, available: ScrollDelta, source: NestedScrollSource) -> ScrollDelta { let _ = (consumed_by_child, available, source); ScrollDelta::ZERO }

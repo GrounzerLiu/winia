@@ -76,15 +76,20 @@ the window.
   the gap a bouncy settle leaves under the panel's bottom edge) has no counterpart here; it becomes necessary
   the moment the settle turns into a spring. The positional and velocity gates do match:
   `BottomSheetDefaults.PositionalThreshold = 56.dp` (`SheetDefaults.kt:404`) and `VelocityThreshold = 125.dp`.
-- **Scroll sources.** M3's connection consumes `NestedScrollSource.UserInput` only; winia's equivalents
-  (`on_pre_scroll` / `on_post_scroll` in both sheets) answer `NestedScrollSource::Drag`, which is the pointer
-  path, and ignore `Wheel`. A wheel over the list therefore scrolls the list, and a wheel over the panel's own
-  area (its header, its padding) does NOTHING — as in M3, where a wheel is not user input either. The fling
-  callbacks are unaffected: they carry a velocity, not a source.
+- **Scroll sources.** M3's connection answers `NestedScrollSource.UserInput`, which in Compose covers the
+  mouse as well as touch — `MouseWheelScrollingLogic.dispatchMouseWheelScroll` dispatches the wheel with
+  `NestedScrollSource.UserInput` (`foundation/gestures/MouseWheelScrollingLogic.kt:303-307`). winia splits that
+  case in two, so its callbacks accept `NestedScrollSource::Drag | Wheel` through
+  `NestedScrollSource::is_user_input()` and reject `Fling`/`SideEffect` (Compose's `SideEffect`), which
+  `SheetDefaults.kt:454-470` also rejects. In practice a wheel behaves exactly like a finger here: an upward
+  one expands the sheet first, a downward one scrolls the list first and hands the sheet what the list could
+  not use. The fling callbacks are unaffected — they carry a velocity, not a source.
 
 Two things described above were deviations in an earlier version and are now fixed, each covered by a test: the
 positional threshold fell back to half the travel distance (a drag of 100 px toward a nearer anchor sprang back
-where M3 commits), and a wheel — or a fling the list could not absorb — moved the sheet instead of the list.
+where M3 commits), and the callbacks ignored the source entirely, so a fling or an animation could move the
+sheet. A third fix in that round went too far and was corrected the same day: filtering to `Drag` alone also
+rejected the wheel, but a wheel IS user input in M3, so it drives the sheet exactly like a finger.
 
 ## Dismissal paths
 
