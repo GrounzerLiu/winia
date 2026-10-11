@@ -24,6 +24,12 @@
 //!   Compose's `verticalScaleUp`/`verticalScaleDown` (`:461-492`, a drawing-layer scale that hides the gap a
 //!   bouncy settle leaves between the sheet's bottom edge and the screen edge) has no counterpart here — it
 //!   becomes necessary the moment the settle turns into a spring.
+//! - The `Expanded` anchor's condition is `sheetH != 0`, where Compose uses `sheetH != peekPx`
+//!   (`BottomSheetScaffold.kt:281-283`); the two agree for any content taller than the peek, and keeping the
+//!   anchor when it COINCIDES with the partial one (short content, `peekPx == sheetH`) is deliberate: the two
+//!   positions are then the same, so the value is what keeps `expand()` from silently doing nothing — which
+//!   is also where Compose's `closestAnchor` lands. Measured: `update_anchors_scaffold(720, 56, 56)` puts
+//!   both anchors at 664 and leaves the value at `PartiallyExpanded`.
 //! - The anchors skip `Hidden` for the state the scaffold creates itself, as
 //!   `rememberStandardBottomSheetState(skipHiddenState = true)` does (`:207-215`); a caller-provided state
 //!   decides for itself, exactly like the two `remember…SheetState` helpers.
