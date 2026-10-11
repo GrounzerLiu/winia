@@ -22,6 +22,8 @@ mod bwc;
 mod tab_indicator;
 #[path = "fixture_bottom_sheet.rs"]
 mod bottom_sheet;
+#[path = "fixture_bottom_sheet_scaffold.rs"]
+mod bottom_sheet_scaffold;
 #[path = "fixture_dialog_dismiss.rs"]
 mod dialog_dismiss;
 #[path = "fixture_nest.rs"]
@@ -104,6 +106,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("bwc", bwc::main),
     ("tab_indicator", tab_indicator::main),
     ("bottom_sheet", bottom_sheet::main),
+    ("bottom_sheet_scaffold", bottom_sheet_scaffold::main),
     ("dialog_dismiss", dialog_dismiss::main),
     ("dropdown_menu", dropdown_menu::main),
     ("split_button", split_button::main),

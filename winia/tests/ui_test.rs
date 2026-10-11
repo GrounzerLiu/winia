@@ -4686,3 +4686,53 @@ fn assert_nav_state_layout(
         }
     }
 }
+
+/// The WHEEL drives a docked sheet exactly like a finger: Compose dispatches a wheel with
+/// `NestedScrollSource.UserInput` (`foundation/gestures/MouseWheelScrollingLogic.kt:303-307`) and M3's connection
+/// accepts user input (`SheetDefaults.kt:454-470`), so an upward wheel expands the sheet first and only what the
+/// sheet cannot use reaches the list inside it. This test exists because the sheet's UI coverage was drag-only,
+/// which is how a fix that rejected the wheel slipped past it once (`07ff5a3`, corrected the same day).
+#[test]
+fn a_wheel_expands_the_docked_sheet_and_then_scrolls_its_list() {
+    let mut app = UiTest::launch("bottom_sheet_scaffold");
+    app.refresh();
+    let viewport_before = app.find_tag("bss-viewport").expect("the sheet's list viewport");
+    assert!(
+        app.find_tag("bss-row-0").is_some(),
+        "the list starts at its first row"
+    );
+
+    // Wheel up: the sheet expands, taking the delta before the list does. The sheet's motion is a 250 ms tween,
+    // so read the viewport's position until it settles rather than once.
+    let mut viewport_after = viewport_before;
+    for _ in 0..8 {
+        app.send("s -200");
+        std::thread::sleep(Duration::from_millis(120));
+        app.refresh();
+        viewport_after = app.find_tag("bss-viewport").unwrap_or(viewport_after);
+    }
+    assert!(
+        viewport_after.1 < viewport_before.1 - 100.0,
+        "the wheel expanded the sheet: viewport y {} -> {}",
+        viewport_before.1,
+        viewport_after.1
+    );
+
+    // Now the sheet is at its anchor: more of the same direction must reach the LIST, leaving the sheet alone.
+    for _ in 0..4 {
+        app.send("s -400");
+        std::thread::sleep(Duration::from_millis(120));
+    }
+    app.refresh();
+    let viewport_at_expanded = app.find_tag("bss-viewport").expect("the viewport");
+    assert!(
+        (viewport_at_expanded.1 - viewport_after.1).abs() < 2.0,
+        "the sheet stays at its anchor while the list takes over ({} against {})",
+        viewport_at_expanded.1,
+        viewport_after.1
+    );
+    assert!(
+        app.find_tag("bss-row-0").is_none() || app.find_tag("bss-row-0").unwrap().1 < viewport_at_expanded.1,
+        "the list scrolled: its first row has left the top of the viewport"
+    );
+}
