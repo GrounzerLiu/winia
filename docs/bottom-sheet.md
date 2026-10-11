@@ -22,6 +22,7 @@ COMPLETES, not when it starts (an earlier version fired on the anchor change, so
 | Container colour | `surface_container_low` | `SheetBottomTokens.DockedModalContainerColor` |
 | Container elevation | 1 dp | `DockedModalContainerElevation` |
 | Max width | 640 dp, centred | `sheetMaxWidth` |
+| Drag handle | 32x4 dp, padding 22 dp, `on_surface_variant` | `DockedDragHandleWidth/Height`, `DragHandleVerticalPadding` (`SheetDefaults.kt:543`), `DockedDragHandleColor` |
 | `skip_partially_expanded` | off | drops the half-expanded anchor, so a swipe down goes straight out |
 
 ## Dragging: who owns the gesture
