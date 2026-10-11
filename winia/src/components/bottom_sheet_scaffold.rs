@@ -793,15 +793,22 @@ mod tests {
             crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         /// One frame of the scaffold: compose, then lay out.
-        fn frame(c: &mut Composer, state: &SheetState) {
+        /// `pad` gives the slot its own vertical padding, the way a real snackbar host does — Compose measures
+        /// the host INCLUDING that padding, so the padded box's bottom lands on the sheet's top edge.
+        fn frame(c: &mut Composer, state: &SheetState, pad: f32) {
             let st = state.clone();
             c.compose(move |ctx| {
                 crate::layout::adaptive::set_window_size(480.0, 720.0);
                 BottomSheetScaffold::new()
                     .sheet_state(st)
-                    .snackbar(|ctx| {
+                    .snackbar(move |ctx| {
                         crate::layout::components::Column::new()
-                            .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                            .modifier(
+                                Modifier::new()
+                                    .padding_vertical(pad)
+                                    .size(200.0, 48.0)
+                                    .test_tag("snack"),
+                            )
                             .build(ctx, |_| {});
                     })
                     .build(
@@ -815,7 +822,7 @@ mod tests {
 
         fn snackbar_y(state: &SheetState, settle_expanded: bool) -> f32 {
             let mut c = Composer::new();
-            frame(&mut c, state);
+            frame(&mut c, state, 0.0);
             if settle_expanded {
                 state.expand();
                 let start = std::time::Instant::now();
@@ -832,7 +839,7 @@ mod tests {
                 }
             }
             // A second frame: the snackbar's height has been measured by now, so the rule can place it.
-            frame(&mut c, state);
+            frame(&mut c, state, 0.0);
             let nodes = c.arena_nodes();
             let root = c.layout_root_idx().expect("laid out");
             let snack = node_with_tag(nodes, "snack");
@@ -855,6 +862,61 @@ mod tests {
         state.set_skip_hidden_state(true);
         let expanded_y = snackbar_y(&state, true);
         assert_eq!(expanded_y, 720.0 - 48.0, "expanded: it drops to the bottom edge");
+    }
+
+    /// A slot that pads ITSELF must be placed by its padded extent: Compose measures whatever host it is given,
+    /// and M3's `SnackbarHost` carries its margins inside that host.
+    ///
+    /// NOT true here yet, which is why this is ignored: measured 2026-10-11 with the demo's card (padding 16,
+    /// card 48) the card landed at 616 where 600 is due — the height `on_size_changed` remembers came back as
+    /// 24 where the padded box measures 80. `winia/examples/bottom_sheet_scaffold_demo.rs` (its tip button)
+    /// shows the same displacement, up to 60 px, and the card spills past the window's bottom edge once the
+    /// sheet is expanded. The test pins the Compose behaviour so it can be un-ignored when the measurement is
+    /// fixed.
+    #[test]
+    #[ignore = "the padded extent of a snackbar slot is not measured: 24 comes back where the box measures 80"]
+    fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let mut c = Composer::new();
+        fn frame(c: &mut Composer, state: &SheetState) {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st)
+                    .snackbar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .padding_vertical(16.0)
+                                    .size(200.0, 48.0)
+                                    .test_tag("snack"),
+                            )
+                            .build(ctx, |_| {});
+                    })
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+        frame(&mut c, &state);
+        frame(&mut c, &state);
+        let nodes = c.arena_nodes();
+        let root = c.layout_root_idx().expect("laid out");
+        let card = node_with_tag(nodes, "snack");
+        let y = absolute_position(nodes, root, card).expect("under the root").1;
+        assert_eq!(
+            y,
+            720.0 - 56.0 - 16.0 - 48.0,
+            "the padded box's bottom sits on the sheet's top, so the card itself ends 16 px above it"
+        );
     }
 
     /// While the sheet animates between two anchors, the snackbar stays on the panel's top edge until the

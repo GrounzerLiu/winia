@@ -37,6 +37,10 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
         })
         .get();
     let lazy_state = ctx.remember(|| LazyListState::new()).get();
+    // The `snackbar` slot, which Compose places from the sheet's own offset: on the panel's top edge while it
+    // is partially expanded (and until it has travelled past the midpoint while animating), on the window's
+    // bottom edge otherwise. Shown by a button so both placements can be watched.
+    let snack_visible = ctx.remember(|| false);
     let items = ctx
         .remember(|| {
             let v: Vec<ScaffoldItem> = (0..120)
@@ -50,6 +54,44 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
         .sheet_state(scaffold_state.clone())
         .sheet_peek_height(96.dp())
         .sheet_drag_handle(true)
+        // The `snackbar` slot. Its placement is the sheet's, not the caller's: on the panel's top edge while the
+        // sheet is partially expanded, on the window's bottom edge otherwise — and, while the sheet animates,
+        // where the panel actually IS, so it rides that edge instead of jumping ahead of it.
+        .snackbar({
+            clone!(snack_visible);
+            move |ctx| {
+                if !snack_visible.get() {
+                    return;
+                }
+                let colors = WiniaTheme::colors();
+                let hide = snack_visible.clone();
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_width().padding(16.0))
+                    .build(ctx, move |ctx| {
+                        Row::new()
+                            .modifier(
+                                Modifier::new()
+                                    .fill_max_width()
+                                    .background(colors.surface_container_highest, Shape::rounded(8.0))
+                                    .padding(12.0),
+                            )
+                            .alignment(Alignment::Center)
+                            .spacing(12.0)
+                            .build(ctx, |ctx| {
+                                Text::new("已保存到草稿")
+                                    .font_size(13.0)
+                                    .color(colors.on_surface)
+                                    .build(ctx);
+                                Button::text()
+                                    .on_click({
+                                        clone!(hide);
+                                        move || hide.set(false)
+                                    })
+                                    .build(ctx, |ctx| Text::new("撤销").build(ctx));
+                            });
+                    });
+            }
+        })
         .build(
             ctx,
             {
@@ -107,7 +149,9 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                         });
                 }
             },
-            |ctx| {
+            {
+                clone!(snack_visible);
+                move |ctx| {
                 // 主内容
                 Column::new()
                     .modifier(Modifier::new().fill_max_size().padding(16.0))
@@ -120,7 +164,13 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                         Text::new("主内容区域（可放地图/列表）")
                             .font_size(14.0)
                             .build(ctx);
+                        // The `snackbar` slot is the scaffold's, so this only flips visibility: where the card
+                        // ends up is the sheet's business (see the slot above).
+                        Button::text()
+                            .on_click(move || snack_visible.set(true))
+                            .build(ctx, |ctx| Text::new("显示提示").build(ctx));
                     });
+                }
             },
         );
 }
