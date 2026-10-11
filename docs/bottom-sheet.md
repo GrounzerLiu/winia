@@ -68,14 +68,20 @@ the window.
 
 ## Differences from M3 (beyond the shape rule above)
 
-- **Settle threshold.** M3 settles with a positional threshold of 56 dp
-  (`SheetDefaults.PositionalThreshold`); winia passes no explicit threshold and
-  `AnchoredDraggableState::settle_with_velocity` falls back to HALF the travel distance. A drag of 100 px
-  toward a nearer anchor therefore springs back here and settles in M3 — the sheet feels heavier. The
-  velocity gate matches (125 dp/s).
-- **Fling deltas.** M3's connection only consumes `NestedScrollSource.UserInput` deltas; winia's
-  `on_pre_scroll` / `on_post_scroll` ignore the source, so a FLING that the list could not absorb also moves
-  the sheet.
+- **Settle curve.** M3 settles, shows and hides with motion-scheme tokens — `DefaultSpatial` for the settle
+  and the show, `FastEffects` for the hide (`ModalBottomSheet.kt:141-143`; the scaffold uses the same three,
+  `BottomSheetScaffold.kt:239-241`) — while winia uses a 250 ms `EaseOutCubic` tween for all three. A tween
+  cannot overshoot, which is why M3's `verticalScaleUp`/`verticalScaleDown` (the drawing-layer scale that hides
+  the gap a bouncy settle leaves under the panel's bottom edge) has no counterpart here; it becomes necessary
+  the moment the settle turns into a spring. The positional and velocity gates do match:
+  `BottomSheetDefaults.PositionalThreshold = 56.dp` (`SheetDefaults.kt:404`) and `VelocityThreshold = 125.dp`.
+- **Scroll sources.** M3's connection consumes `NestedScrollSource.UserInput` only; winia's equivalents
+  (`on_pre_scroll` / `on_post_scroll` in both sheets) answer `NestedScrollSource::Drag`, which is the pointer
+  path, and ignore `Wheel` — a wheel scrolls the list, it does not drag the sheet.
+
+Two things described above were deviations in an earlier version and are now fixed, each covered by a test: the
+positional threshold fell back to half the travel distance (a drag of 100 px toward a nearer anchor sprang back
+where M3 commits), and a wheel — or a fling the list could not absorb — moved the sheet instead of the list.
 
 ## Dismissal paths
 
