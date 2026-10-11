@@ -9,7 +9,7 @@ use crate::modifier::Modifier;
 /// 容器 build 样板合并（P2-4）：Column/Row/Stack 共用——
 /// start_restartable_group 的 Skip/Enter 分支 + end 配对收拢一处。
 /// 参数暂存（changed）由各组件在自己 build 里做（参数集不同）。
-fn build_container(
+pub(crate) fn build_container(
     ctx: &mut ComposeCtx,
     modifier: Modifier,
     policy: impl MeasurePolicy + 'static,
