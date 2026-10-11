@@ -765,6 +765,58 @@ mod tests {
         );
     }
 
+    /// A sheet whose CONTENT changes height must re-anchor: recomputing the anchors used to live in the sheet's
+    /// own `on_size_changed` (which runs inside the measure, so it always saw the new height), and that job moved
+    /// to `ScaffoldStackPolicy`. This pins that the height still reaches the anchors when nothing but the content
+    /// changed — the Expanded anchor is `layoutHeight - sheetHeight`, so growth must lower it by the same amount.
+    #[test]
+    fn a_content_height_change_moves_the_expanded_anchor() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let tall = State::new(false);
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let mut c = Composer::new();
+        fn frame(c: &mut Composer, state: &SheetState, tall: &State<bool>) {
+            let st = state.clone();
+            let tall = tall.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st.clone())
+                    .build(
+                        ctx,
+                        {
+                            let tall = tall.clone();
+                            move |ctx| {
+                                let h = if tall.get() { 300.0 } else { 120.0 };
+                                crate::layout::components::Column::new()
+                                    .modifier(Modifier::new().fill_max_width().height(h))
+                                    .build(ctx, |_| {});
+                            }
+                        },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+        for _ in 0..3 {
+            frame(&mut c, &state, &tall);
+        }
+        let short = state.anchored_draggable().position_of(&SheetValue::Expanded);
+        tall.set(true);
+        for _ in 0..3 {
+            frame(&mut c, &state, &tall);
+        }
+        let grown = state.anchored_draggable().position_of(&SheetValue::Expanded);
+        assert!(
+            (short - grown - 180.0).abs() < 1.0,
+            "growing the content by 180 must lower the Expanded anchor by 180 ({short} -> {grown})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// Compose forces the sheet to be at least as tall as its peek — `Modifier.requiredHeightIn(min =
     /// peekHeight)` on the Surface (`BottomSheetScaffold.kt:262-264`). Without it a content shorter than
     /// the peek leaves the sheet just as tall as that content while the anchor still puts its TOP at
