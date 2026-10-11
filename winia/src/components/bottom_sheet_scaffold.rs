@@ -232,6 +232,9 @@ impl BottomSheetScaffold {
                 })
                 .get(),
         };
+        // The scaffold's own measured height, which the anchors and the snackbar rule use as Compose's
+        // `layoutHeight`: the constraints this scaffold was handed, not the window (see the note at its use).
+        let self_h: State<f32> = ctx.remember(|| 0.0);
         let peek = self.sheet_peek_height;
         let radius = self.sheet_shape_radius;
         let explicit_shape = self.sheet_shape;
@@ -276,7 +279,10 @@ impl BottomSheetScaffold {
         let top_bar = self.top_bar;
         let snackbar = self.snackbar;
         // 外层 Stack：主内容底层，片上层
-        let mut root_mod = Modifier::new().fill_max_size();
+        let mut root_mod = Modifier::new().fill_max_size().on_size_changed({
+            let h = self_h.clone();
+            move |_w, height| h.set(height)
+        });
         if let Some(cc) = container_color {
             // 整体背景（对齐 Compose BottomSheetScaffold containerColor）
             root_mod = root_mod.background(cc, Shape::Rectangle);
@@ -318,8 +324,20 @@ impl BottomSheetScaffold {
                     });
 
                 // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
-                // 用窗口高近似 layoutH（占满时正确），响应式订阅 window_size 以跟随 resize
-                let layout_h = crate::layout::window_size().1;
+                // The scaffold's OWN height, not the window's: Compose's layout takes `layoutHeight` from the
+                // constraints it is handed (`BottomSheetScaffold.kt:272-277`), so a scaffold nested inside
+                // another one — the demo sits in the settings shell's `Scaffold`, which spends 64 px on a top
+                // bar — anchors from what it actually got. Reading `window_size()` put that panel 64 px too low
+                // and fed the snackbar's rule the same wrong number; measured in
+                // `a_nested_scaffold_anchors_from_its_own_height`, where the partial anchor landed on 664
+                // instead of the nested scaffold's own 600. The measurement arrives one frame in, so the window
+                // stays the first-frame fallback, as it must for `on_size_changed`-driven anchors.
+                let self_h_measured = self_h.get();
+                let layout_h = if self_h_measured > 0.0 {
+                    self_h_measured
+                } else {
+                    crate::layout::window_size().1
+                };
                 let peek_px = peek.to_logical();
                 let peek_h_for_anchors = peek_px;
                 // The snackbar rule reads the sheet state after the handle closure has taken a clone.
@@ -581,9 +599,18 @@ impl BottomSheetScaffold {
                     // renderer draws sat ~90 px lower than that offset, which is a placement/paint bug of its
                     // own (see the module doc's note and the demo). The value is computed here rather than read
                     // in the build because reading it in the build froze it at the first frame's 0.
-                    let y = move || match st_for_offset.value_for_offset() {
-                        SheetValue::PartiallyExpanded => st_for_offset.offset() - snack_h_for_offset.get(),
-                        _ => layout_h - snack_h_for_offset.get(),
+                    let h_for_offset = self_h.clone();
+                    let y = move || {
+                        // The scaffold's own height, read HERE so this pass's measurement is used; a capture
+                        // from the build would be a frame older and, in a static tree, forever.
+                        let h_self = h_for_offset.get();
+                        let h_self = if h_self > 0.0 { h_self } else { layout_h };
+                        match st_for_offset.value_for_offset() {
+                            SheetValue::PartiallyExpanded => {
+                                st_for_offset.offset() - snack_h_for_offset.get()
+                            }
+                            _ => h_self - snack_h_for_offset.get(),
+                        }
                     };
                     let snack_mod = Modifier::new()
                         .absolute_offset(0.0, y)
@@ -888,6 +915,58 @@ mod tests {
     /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
     /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
     /// model (`docs/modifier-node.md`) and needs its own fix.
+    /// A scaffold nested inside another one — the demo's shape, where the settings shell wraps the page in its
+    /// own `Scaffold` with a top bar — must anchor from ITS OWN height, not from the window's. Compose's
+    /// scaffold layout takes `layoutHeight` from the constraints it is given
+    /// (`BottomSheetScaffold.kt`'s layout). winia reads `crate::layout::window_size().1` instead, so the panel
+    /// anchors as if the top bar were not there and the snackbar's rule is fed the same wrong number, which is
+    /// where the demo's ~36-90 px displacement comes from.
+    #[test]
+    #[ignore = "the scaffold still falls back to the window height: a stable node's measured size is not reported (the constant-fold path skips it), so the anchor block never sees its own height"]
+    fn a_nested_scaffold_anchors_from_its_own_height() {
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let mut c = Composer::new();
+        /// One frame: compose (the anchors are computed there) and lay out. The scaffold's own height reaches
+        /// the build through a State written during layout, so the frames matter here.
+        fn frame(c: &mut Composer, state: &SheetState) {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                crate::components::Scaffold::new(move |ctx, _pad| {
+                    crate::layout::components::Stack::new()
+                        .modifier(Modifier::new().fill_max_size())
+                        .build(ctx, |ctx| {
+                            BottomSheetScaffold::new()
+                                .sheet_state(st.clone())
+                                .build(
+                                    ctx,
+                                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                                );
+                        });
+                })
+                .top_bar(|ctx| {
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().fill_max_width().height(64.0))
+                        .build(ctx, |_| {});
+                })
+                .build(ctx);
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+        for _ in 0..3 {
+            frame(&mut c, &state);
+        }
+        // Its own height is 720 - 64 = 656, so the partial anchor is 656 - 56 = 600; the window's would be 664.
+        assert_eq!(
+            state.offset(),
+            600.0,
+            "the nested scaffold's partial anchor uses its own height ({} was used)",
+            state.offset()
+        );
+    }
+
     /// The demo's own slot shape, to bisect where its displacement comes from: a padded Stack holding a
     /// Column holding a Row that carries the card's background, padding, a Text and a Button. The card must sit
     /// exactly where the measured slot puts it — the same relation the plain-Column test above pins.
