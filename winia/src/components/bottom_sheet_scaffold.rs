@@ -888,6 +888,74 @@ mod tests {
     /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
     /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
     /// model (`docs/modifier-node.md`) and needs its own fix.
+    /// The demo's own slot shape, to bisect where its displacement comes from: a padded Stack holding a
+    /// Column holding a Row that carries the card's background, padding, a Text and a Button. The card must sit
+    /// exactly where the measured slot puts it — the same relation the plain-Column test above pins.
+    #[test]
+    fn the_demo_shaped_snackbar_slot_is_placed_by_its_measured_height() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let st = state.clone();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            BottomSheetScaffold::new()
+                .sheet_state(st)
+                .snackbar(|ctx| {
+                    let colors = crate::theme::WiniaTheme::colors();
+                    crate::layout::components::Stack::new()
+                        .modifier(Modifier::new().fill_max_width().padding(16.0).test_tag("snack-slot"))
+                        .build(ctx, |ctx| {
+                            crate::layout::components::Row::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .fill_max_width()
+                                        .background(colors.surface_container_highest, crate::graphics::Shape::rounded(8.0))
+                                        .padding(12.0)
+                                        .test_tag("snack-card"),
+                                )
+                                .spacing(12.0)
+                                .build(ctx, |ctx| {
+                                    crate::components::Text::new("saved").font_size(13.0).build(ctx);
+                                    crate::components::Button::text()
+                                        .on_click(|| {})
+                                        .build(ctx, |ctx| crate::components::Text::new("undo").build(ctx));
+                                });
+                        });
+                })
+                .build(
+                    ctx,
+                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                );
+        });
+        let constraints = Constraints::new(0.0, 480.0, 0.0, 720.0);
+        for _ in 0..3 {
+            c.layout(constraints);
+        }
+        let nodes = c.arena_nodes();
+        let root = c.layout_root_idx().expect("laid out");
+        let slot = node_with_tag(nodes, "snack-slot");
+        let card = node_with_tag(nodes, "snack-card");
+        let slot_h = nodes[slot].measured_size.height;
+        let slot_y = absolute_position(nodes, root, slot).expect("under the root").1;
+        let card_y = absolute_position(nodes, root, card).expect("under the root").1;
+        assert_eq!(
+            slot_y,
+            720.0 - 56.0 - slot_h,
+            "the slot's padded box rests on the panel's top edge"
+        );
+        assert_eq!(
+            card_y,
+            slot_y + 16.0,
+            "and the card starts inside it, below the slot's own 16 px of padding"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// The layout half of the snackbar's placement: an `absolute_offset` whose value is computed AT LAYOUT
     /// TIME (a closure, the same `SizeValue::Dynamic` path the snackbar uses) must move the NODE, not merely
     /// the number the build computed. Written while chasing the demo, where the rule's `y=528` and the drawn
