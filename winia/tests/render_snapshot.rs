@@ -10,6 +10,8 @@ use winia::graphics::{Color, Shape};
 use winia::components::{Text, Button, FloatingActionButton, FloatingActionButtonSize, Icon};
 use winia::layout::{Column, Row};
 use winia::render;
+use winia::prelude::*;
+use winia::layout::components::Stack;
 
 // ── 辅助 ──
 
@@ -564,4 +566,119 @@ fn a_degenerate_brush_paints_nothing_instead_of_panicking() {
 fn a_solid_brush_is_the_same_as_a_solid_background() {
     let mut surface = brush_scene(Brush::solid(red()), 100.0, 100.0);
     assert_eq!(rgb(&mut surface, 50, 50), RED, "a solid brush fills with its color");
+}
+
+/// A node moved by a layout-time `absolute_offset` must be PAINTED where that layout placed it, on the frame
+/// that placed it — a real frame measures the child and places it without recomposing in between. This is the
+/// paint half of a defect found through `bottom_sheet_scaffold`'s snackbar: the rule computes its value
+/// (traced `y=528`) and the layout honours it (the component's own tests pin that), yet the card the demo
+/// DRAWS stays where the first frame drew it, from before the slot had been measured.
+#[test]
+fn a_node_moved_by_a_layout_time_offset_is_painted_at_its_new_position() {
+    use std::sync::Arc;
+
+    // A `State`, not a bare atomic: the offset has to be read through the framework's dependency tracking,
+    // which is how a slot's measured height reaches the rule.
+    let y = winia::runtime::state::State::new(0.0f32);
+    let y_for_ui = y.clone();
+    let mut composer = Composer::new();
+    composer.compose(move |ctx| {
+        ctx.key("probe-root", |ctx| {
+        Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, move |ctx| {
+            let y_read = y_for_ui.clone();
+            ctx.key("moved", |ctx| {
+            Column::new()
+                .modifier(
+                    Modifier::new()
+                        .absolute_offset(0.0, y_read)
+                        .size(40.0, 20.0)
+                        .background(Color::from_argb(255, 255, 0, 0), Shape::Rectangle),
+                )
+                .build(ctx, |_| {});
+            });
+        });
+        });
+    });
+    let constraints = Constraints::new(0.0, 100.0, 0.0, 100.0);
+    composer.layout(constraints);
+    let mut surface = raster_surface(100, 100);
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    {
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        render::render(nodes, root, surface.canvas());
+    }
+    assert_eq!(rgb(&mut surface, 20, 10), RED, "it starts at the top with a zero offset");
+
+    // The offset changes WITHOUT a recompose, exactly as it does when a slot reports a height during layout.
+    y.set(60.0);
+    composer.layout(constraints);
+    let mut surface = raster_surface(100, 100);
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    {
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        render::render(nodes, root, surface.canvas());
+    }
+    assert_eq!(
+        rgb(&mut surface, 20, 70),
+        RED,
+        "and is painted at the new offset without a recompose"
+    );
+    assert_eq!(
+        rgb(&mut surface, 20, 10),
+        (255, 255, 255),
+        "while nothing is left behind at the old place"
+    );
+}
+
+/// The case the demo actually exercises: a height reported DURING layout (`on_size_changed`) drives the offset
+/// of the same pass / the next one, with no recompose involved. If a `State` written inside the layout pass
+/// does not invalidate the node that reads it, the placement stays on the first frame's value — which is what
+/// the scaffold's snackbar did (`y=528` computed, the card drawn where `y=624` had put it).
+#[test]
+fn a_height_reported_during_layout_moves_a_dependent_offset() {
+    use winia::runtime::state::State;
+
+    let h = State::new(0.0f32);
+    let h_for_ui = h.clone();
+    let h_for_offset = h.clone();
+    let mut composer = Composer::new();
+    composer.compose(move |ctx| {
+        ctx.key("probe-layout-height", |ctx| {
+            Stack::new().modifier(Modifier::new().fill_max_size()).build(ctx, move |ctx| {
+                let h_reported = h_for_ui.clone();
+                let h_read = h_for_offset.clone();
+                ctx.key("moved", |ctx| {
+                    Column::new()
+                        .modifier(
+                            Modifier::new()
+                                // The node moves to the height its own child reports: 0 first, then 20.
+                                .absolute_offset(0.0, move || 100.0 - h_read.get())
+                                .size(40.0, 20.0)
+                                .on_size_changed(move |_w, height| h_reported.set(height))
+                                .background(Color::from_argb(255, 255, 0, 0), Shape::Rectangle),
+                        )
+                        .build(ctx, |_| {});
+                });
+            });
+        });
+    });
+    let constraints = Constraints::new(0.0, 100.0, 0.0, 100.0);
+    for _ in 0..3 {
+        composer.layout(constraints);
+    }
+    let mut surface = raster_surface(100, 100);
+    surface.canvas().clear(skia_safe::Color::WHITE);
+    {
+        let nodes = composer.arena_nodes();
+        let root = composer.layout_root_idx().expect("laid out");
+        render::render(nodes, root, surface.canvas());
+    }
+    assert_eq!(h.get(), 20.0, "the node reported its own height during layout");
+    assert_eq!(
+        rgb(&mut surface, 20, 90),
+        RED,
+        "and the offset that reads it moved the node there without a recompose"
+    );
 }
