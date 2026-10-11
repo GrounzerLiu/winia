@@ -11,11 +11,14 @@
 //!   (peeking), the modal starts `Hidden`.
 //!
 //! Layout (mirrors `BottomSheetScaffoldLayout`):
-//! - An outer `Stack.fill_max_size`; the page at the bottom of it, the sheet above it,
-//!   pinned to the bottom edge by its `offset_y`.
-//! - The anchors are computed in `on_size_changed`: `layoutH` from the window height
-//!   (`window_size().1`), `peekPx` from `sheetPeekHeight` used as a LOGICAL length (one dp
-//!   is one logical px — see `Dp::to_logical`), and `sheetH` as measured.
+//! - A fill-max-size root built by `build_container` with `ScaffoldStackPolicy` (a `BoxLayout` plus the anchor
+//!   step); the page at the bottom of it, the sheet above it, pinned to the bottom edge by its `offset_y`.
+//! - The anchors are computed inside that stack's OWN layout, by `ScaffoldStackPolicy`, from the height the
+//!   layout was handed (`constraints.max_height` — Compose's `val layoutHeight = constraints.maxHeight`,
+//!   `:272-277`), plus `peekPx` from `sheetPeekHeight` used as a LOGICAL length (one dp is one logical px —
+//!   see `Dp::to_logical`) and `sheetH` as measured. A scaffold nested in a box that is not the window
+//!   therefore anchors from its own box; the window height is only the pre-layout fallback the snackbar rule
+//!   starts from.
 //! - Dragging: `on_drag`/`drag_end` feed `SheetState` directly.
 //!
 //! Differences from Compose (audited against `material3/BottomSheetScaffold.kt`, 494 lines):
@@ -25,11 +28,14 @@
 //!   bouncy settle leaves between the sheet's bottom edge and the screen edge) has no counterpart here — it
 //!   becomes necessary the moment the settle turns into a spring.
 //! - The `Expanded` anchor's condition is `sheetH != 0`, where Compose uses `sheetH != peekPx`
-//!   (`BottomSheetScaffold.kt:281-283`); the two agree for any content taller than the peek, and keeping the
-//!   anchor when it COINCIDES with the partial one (short content, `peekPx == sheetH`) is deliberate: the two
-//!   positions are then the same, so the value is what keeps `expand()` from silently doing nothing — which
-//!   is also where Compose's `closestAnchor` lands. Measured: `update_anchors_scaffold(720, 56, 56)` puts
-//!   both anchors at 664 and leaves the value at `PartiallyExpanded`.
+//!   (`BottomSheetScaffold.kt:282`); the two agree for any content taller than the peek, and keeping the anchor
+//!   when it COINCIDES with the partial one (short content, `peekPx == sheetH`) is deliberate: the two positions
+//!   are then the same, so the value is what keeps `expand()` from silently doing nothing. Compose does not have
+//!   to decide that tie at all — with `sheetH == peekPx` it never adds the `Expanded` anchor — and where it does
+//!   have candidates at one offset its `closestAnchor` KDoc says "this will be the last anchor of the candidates
+//!   at this offset" (`foundation/AnchoredDraggable.kt:571-575`, implemented with `distance <= minDistance` at
+//!   `:1620-1631`), so a tie there resolves towards the later anchor. Measured: `update_anchors_scaffold(720,
+//!   56, 56)` puts both anchors at 664 and leaves the value at `PartiallyExpanded`.
 //! - The anchors skip `Hidden` for the state the scaffold creates itself, as
 //!   `rememberStandardBottomSheetState(skipHiddenState = true)` does (`:207-215`); a caller-provided state
 //!   decides for itself, exactly like the two `remember…SheetState` helpers.
@@ -297,6 +303,7 @@ impl BottomSheetScaffold {
         // The panel's own height: reported by the sheet every time it is measured, and read by the policy's
         // anchor step and by the is-full rule below.
         let sheet_h: State<f32> = ctx.remember(|| 0.0);
+        let layout_h_state: State<f32> = ctx.remember(|| 0.0);
         let anchors_input: crate::runtime::state::Backchannel<Option<(f32, f32, f32)>> =
             ctx.remember_backchannel(|| None);
         let root_policy = ScaffoldStackPolicy {
@@ -307,6 +314,7 @@ impl BottomSheetScaffold {
             peek_px: peek.to_logical(),
             sheet_h: sheet_h.clone(),
             measured_layout_h: measured_layout_h.clone(),
+            layout_h_state: layout_h_state.clone(),
             anchors_input: anchors_input.clone(),
         };
         crate::layout::components::build_container(ctx, root_mod, root_policy, |ctx| {
@@ -338,20 +346,27 @@ impl BottomSheetScaffold {
 
                 // 片：offset_y 驱动，高度由内容决定，锚点在 on_size_changed 中更新
                 // The anchors themselves are computed in `ScaffoldStackPolicy`, from the height this
-                // scaffold's own layout was handed (Compose's `layoutHeight`, `BottomSheetScaffold.kt:272-277`)
-                // — that is what makes a nested scaffold anchor from its own box rather than the window's
-                // (measured in `a_nested_scaffold_anchors_from_its_own_height`: 664 with the window, 600 with
-                // its own 656). This is only the value the build needs for the snackbar rule below, and it is
-                // the window's until the first layout has run.
-                let layout_h = measured_layout_h.peek().unwrap_or_else(|| crate::layout::window_size().1);
+                // scaffold's own layout was handed (Compose's `layoutHeight`, `BottomSheetScaffold.kt:275-276`)
+                // — that is what makes a scaffold in a box that is not the window anchor from its own box
+                // (measured in `a_nested_scaffold_anchors_from_its_own_height`: the first layout's partial
+                // anchor is 344 for a 400-tall box where the window's height would put it at 664).
+                //
+                // Read the TRACKED copy first: the rules below run in the BUILD, so they need a dependency on
+                // the layout's height — the backchannel is the same number without one, and the window is the
+                // frame before any layout has run.
+                let tracked_h = layout_h_state.get();
+                let layout_h = if tracked_h > 0.0 {
+                    tracked_h
+                } else {
+                    measured_layout_h
+                        .peek()
+                        .unwrap_or_else(|| crate::layout::window_size().1)
+                };
                 let peek_px = peek.to_logical();
-                let peek_h_for_anchors = peek_px;
                 // The snackbar rule reads the sheet state after the handle closure has taken a clone.
                 let st_for_snackbar_snapshot = sheet_state.clone();
 
                 let st_for_offset = sheet_state.clone();
-                let st_for_anchors = sheet_state.clone();
-                let _ = peek_h_for_anchors;
                 let is_full = sheet_h.get() >= layout_h - 1.0;
                 let from = if st_for_offset.has_partially_expanded_state() {
                     SheetValue::PartiallyExpanded
@@ -630,6 +645,8 @@ struct ScaffoldStackPolicy {
     peek_px: f32,
     sheet_h: State<f32>,
     measured_layout_h: crate::runtime::state::Backchannel<Option<f32>>,
+    /// The same height as a tracked `State`, for the build-time rules (see the set site).
+    layout_h_state: State<f32>,
     /// The last `(layout height, peek, panel height)` the anchors were computed for, so a pass that changes
     /// none of them does not re-target the sheet.
     anchors_input: crate::runtime::state::Backchannel<Option<(f32, f32, f32)>>,
@@ -655,6 +672,13 @@ impl crate::layout::node::MeasurePolicy for ScaffoldStackPolicy {
             crate::layout::window_size().1
         };
         self.measured_layout_h.set(Some(layout_h));
+        // A TRACKED copy, so the build re-runs when the layout's height changes (a resize — the anchors follow
+        // either way because this pass recomputes them, but rules that only run in the build, like the
+        // square-corner `is_full` test, need the dependency). Set only on change, so nothing is marked dirty by a
+        // pass that found the same number.
+        if (self.layout_h_state.get() - layout_h).abs() > f32::EPSILON {
+            self.layout_h_state.set(layout_h);
+        }
 
         let peek = self.peek_px;
         // The first frame: the panel's offset has not been set yet, so snap the anchors to the state it is in
@@ -1017,37 +1041,28 @@ mod tests {
         assert_eq!(expanded_y, 720.0 - 48.0, "expanded: it drops to the bottom edge");
     }
 
-    /// A slot that pads ITSELF must be placed by its padded extent: Compose measures whatever host it is given,
-    /// and M3's `SnackbarHost` carries its margins inside that host.
+    /// A scaffold in a box that is NOT the window must anchor from that box. Compose's scaffold layout takes
+    /// `layoutHeight` from the constraints it is given (`BottomSheetScaffold.kt:275-276`); before `4c16daf`
+    /// winia read `crate::layout::window_size().1` in the build and only converged once the sheet's own
+    /// `on_size_changed` had reported a height, so the panel started on the window's anchor and took about 25
+    /// frames to reach its own.
     ///
-    /// The root cause is NOT in this component, which is why the test is ignored rather than the rule changed:
-    /// a chain of `padding_vertical(16).size(200, 48)` reports `200x48` here, where Compose reports
-    /// `200x80` — `Modifier::size` sets the node's own size without the earlier `padding` being added around
-    /// it (measured 2026-10-11 with two `on_size_changed` probes on that chain: both printed `200x48`). The
-    /// component's rule is exact for an unpadded slot (the test above pins both endpoints). Nesting instead of
-    /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
-    /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
-    /// model (`docs/modifier-node.md`) and needs its own fix.
-    /// A scaffold nested inside another one — the demo's shape, where the settings shell wraps the page in its
-    /// own `Scaffold` with a top bar — must anchor from ITS OWN height, not from the window's. Compose's
-    /// scaffold layout takes `layoutHeight` from the constraints it is given
-    /// (`BottomSheetScaffold.kt`'s layout). winia reads `crate::layout::window_size().1` instead, so the panel
-    /// anchors as if the top bar were not there and the snackbar's rule is fed the same wrong number, which is
-    /// where the demo's ~36-90 px displacement comes from.
+    /// The assertion is therefore made on the FIRST layout, not on a settled offset: a polling version of this
+    /// test passed on the pre-`4c16daf` sources as well (measured there: `early_partial_anchor=664`,
+    /// `frames_to_344=25`), which made it pin nothing.
     #[test]
     fn a_nested_scaffold_anchors_from_its_own_height() {
         let state = SheetState::new(SheetValue::PartiallyExpanded);
         state.set_skip_hidden_state(true);
         let mut c = Composer::new();
-        /// One frame: compose (the anchors are computed there) and lay out. The scaffold's own height reaches
-        /// the build through a State written during layout, so the frames matter here.
+        /// One frame: compose and lay out. The frame matters because the anchors are computed in the layout.
         fn frame(c: &mut Composer, state: &SheetState) {
             let st = state.clone();
             c.compose(move |ctx| {
                 crate::layout::adaptive::set_window_size(480.0, 720.0);
                 // A box that is SHORTER than the window: the case where the scaffold's own height and the
                 // window's differ. (The settings shell cannot show it — its body takes the whole window, so
-                // there the two are equal and the bug is invisible.)
+                // there the two are equal and the difference is invisible.)
                 crate::layout::components::Column::new()
                     .modifier(Modifier::new().fill_max_width().height(400.0))
                     .build(ctx, move |ctx| {
@@ -1062,11 +1077,14 @@ mod tests {
             });
             c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
         }
-        for _ in 0..3 {
-            frame(&mut c, &state);
-        }
-        // The anchor is set inside the layout; the sheet then animates onto it, so wait for the motion instead
-        // of reading the first frame.
+        frame(&mut c, &state);
+        // Its own height is 400, so the partial anchor is 400 - 56 = 344; the window's would be 664.
+        let first = state.anchored_draggable().position_of(&SheetValue::PartiallyExpanded);
+        assert!(
+            (first - 344.0).abs() < 0.5,
+            "the FIRST layout's anchors use the scaffold's own height, not the window's ({first} was used)"
+        );
+        // And the sheet settles onto that anchor.
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_millis(600) {
             frame(&mut c, &state);
@@ -1076,13 +1094,69 @@ mod tests {
                 break;
             }
         }
-        // Its own height is 400, so the partial anchor is 400 - 56 = 344; the window's would be 664.
         assert!(
             (state.offset() - 344.0).abs() < 0.5,
-            "a scaffold in a 400-tall box anchors from its own height, not the window's ({} was used)",
+            "the panel settles on its own anchor ({} was reached)",
             state.offset()
         );
         crate::animation::clear_all_animations();
+    }
+
+    /// A slot that pads ITSELF must be placed by its padded extent: Compose measures whatever host it is given,
+    /// and M3's `SnackbarHost` carries its margins inside that host.
+    ///
+    /// The root cause is NOT in this component, which is why the test is ignored rather than the rule changed:
+    /// a chain of `padding_vertical(16).size(200, 48)` reports `200x48` here, where Compose reports
+    /// `200x80` — `Modifier::size` sets the node's own size without the earlier `padding` being added around
+    /// it (measured 2026-10-11 with two `on_size_changed` probes on that chain: both printed `200x48`). The
+    /// component's rule is exact for an unpadded slot (the test above pins both endpoints). Nesting instead of
+    /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
+    /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
+    /// model (`docs/modifier-node.md`, item 5 of its known-limitations section) and needs its own fix.
+    #[test]
+    #[ignore = "Modifier::padding before size() is not added to the measured size: 200x48 comes back where Compose measures 200x80"]
+    fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let mut c = Composer::new();
+        fn frame(c: &mut Composer, state: &SheetState) {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st)
+                    .snackbar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .padding_vertical(16.0)
+                                    .size(200.0, 48.0)
+                                    .test_tag("snack"),
+                            )
+                            .build(ctx, |_| {});
+                    })
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+        frame(&mut c, &state);
+        frame(&mut c, &state);
+        let nodes = c.arena_nodes();
+        let root = c.layout_root_idx().expect("laid out");
+        let card = node_with_tag(nodes, "snack");
+        let y = absolute_position(nodes, root, card).expect("under the root").1;
+        assert_eq!(
+            y,
+            720.0 - 56.0 - 16.0 - 48.0,
+            "the padded box's bottom sits on the sheet's top, so the card itself ends 16 px above it"
+        );
     }
 
     /// The demo's own slot shape, to bisect where its displacement comes from: a padded Stack holding a
@@ -1157,6 +1231,10 @@ mod tests {
     /// TIME (a closure, the same `SizeValue::Dynamic` path the snackbar uses) must move the NODE, not merely
     /// the number the build computed. Written while chasing the demo, where the rule's `y=528` and the drawn
     /// card disagreed by ~90 px: this says whether the offset reaches the arena at all.
+    ///
+    /// A CHARACTERISATION test, not a discriminator: `Modifier::get_absolute_offset` already resolved
+    /// `SizeValue::Dynamic(f) => f()` before any of the sheet commits (`winia/src/modifier.rs`), so no revert of
+    /// theirs can fail it. It pins the behaviour the snackbar's rule depends on, nothing more.
     #[test]
     fn a_layout_time_absolute_offset_moves_the_node() {
         fn placed_with(offset: crate::layout::sizing::SizeValue) -> f32 {
@@ -1208,22 +1286,33 @@ mod tests {
         let mut c = Composer::new();
         c.compose(move |ctx| {
             crate::layout::adaptive::set_window_size(480.0, 720.0);
-            BottomSheetScaffold::new()
-                .sheet_state(st)
-                .snackbar(|ctx| {
-                    crate::layout::components::Column::new()
-                        .modifier(Modifier::new().padding_vertical(16.0))
-                        .build(ctx, |ctx| {
+            // A box that is shorter than the window, so "the scaffold's own height" and "the window's" are
+            // different numbers; the second phase below is what reads the difference.
+            crate::layout::components::Column::new()
+                .modifier(Modifier::new().fill_max_width().height(400.0))
+                .build(ctx, move |ctx| {
+                BottomSheetScaffold::new()
+                    .sheet_state(st)
+                    .snackbar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().padding_vertical(16.0))
+                            .build(ctx, |ctx| {
+                                crate::layout::components::Column::new()
+                                    .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                                    .build(ctx, |_| {});
+                            });
+                    })
+                    .build(
+                        ctx,
+                        |ctx| {
+                            // 200 tall, so `Expanded` is an anchor of its own rather than the partial one.
                             crate::layout::components::Column::new()
-                                .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                                .modifier(Modifier::new().fill_max_width().height(200.0))
                                 .build(ctx, |_| {});
-                        });
-                })
-                .build(
-                    ctx,
-                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
-                    |ctx| { crate::components::Text::new("page").build(ctx); },
-                );
+                        },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+                });
         });
         let constraints = Constraints::new(0.0, 480.0, 0.0, 720.0);
         c.layout(constraints);
@@ -1233,59 +1322,44 @@ mod tests {
         let card = node_with_tag(nodes, "snack");
         let y = absolute_position(nodes, root, card).expect("under the root").1;
         // The slot measures 80 (a 48 px card with 16 px of padding on both sides), the sheet's partial anchor
-        // is at 720 - 56 = 664, so the slot's top is 584 and the card inside it starts 16 lower.
+        // is at 400 - 56 = 344 (the scaffold's OWN height), so the slot's top is 264 and the card inside it
+        // starts 16 lower.
         assert_eq!(
             y,
-            720.0 - 56.0 - 80.0 + 16.0,
+            400.0 - 56.0 - 80.0 + 16.0,
             "the card sits inside a slot placed by the height the same pass measured"
         );
-        crate::animation::clear_all_animations();
-    }
 
-    #[test]
-    #[ignore = "Modifier::padding before size() is not added to the measured size: 200x48 comes back where Compose measures 200x80"]
-    fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
-        let _serial =
-            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        let state = SheetState::new(SheetValue::PartiallyExpanded);
-        state.set_skip_hidden_state(true);
-        let mut c = Composer::new();
-        fn frame(c: &mut Composer, state: &SheetState) {
-            let st = state.clone();
-            c.compose(move |ctx| {
-                crate::layout::adaptive::set_window_size(480.0, 720.0);
-                BottomSheetScaffold::new()
-                    .sheet_state(st)
-                    .snackbar(|ctx| {
-                        crate::layout::components::Column::new()
-                            .modifier(
-                                Modifier::new()
-                                    .padding_vertical(16.0)
-                                    .size(200.0, 48.0)
-                                    .test_tag("snack"),
-                            )
-                            .build(ctx, |_| {});
-                    })
-                    .build(
-                        ctx,
-                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
-                        |ctx| { crate::components::Text::new("page").build(ctx); },
-                    );
-            });
-            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        // The branch that actually READS the scaffold's own height is the expanded one (`h_self - snack_h`), so
+        // a box shorter than the window is where the two diverge: 400 - 80, not 720 - 80. The content is 200
+        // tall, so `Expanded` is a distinct anchor (400 - 200 = 200) and the rule really switches branches —
+        // with content no taller than the peek the two anchors coincide and this could not be asserted. Freezing
+        // the height at its build-time value, or taking it from the window, both fail this.
+        state.expand();
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_millis(600) {
+            c.layout(constraints);
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            if (state.offset() - (400.0 - 200.0)).abs() < 0.5 {
+                break;
+            }
         }
-        frame(&mut c, &state);
-        frame(&mut c, &state);
         let nodes = c.arena_nodes();
         let root = c.layout_root_idx().expect("laid out");
         let card = node_with_tag(nodes, "snack");
-        let y = absolute_position(nodes, root, card).expect("under the root").1;
+        let expanded_y = absolute_position(nodes, root, card).expect("under the root").1;
         assert_eq!(
-            y,
-            720.0 - 56.0 - 16.0 - 48.0,
-            "the padded box's bottom sits on the sheet's top, so the card itself ends 16 px above it"
+            state.value_for_offset(),
+            SheetValue::Expanded,
+            "the panel reached the expanded anchor"
         );
+        assert_eq!(
+            expanded_y,
+            400.0 - 80.0 + 16.0,
+            "expanded, the card rests on the box's bottom edge (its own 400), not the window's 720"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// While the sheet animates between two anchors, the snackbar stays on the panel's top edge until the

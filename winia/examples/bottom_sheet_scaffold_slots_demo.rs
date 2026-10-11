@@ -67,7 +67,8 @@ fn slots_demo(ctx: &mut ComposeCtx) {
                 let hide = snack_visible.clone();
                 // The margins sit on the outer node and the card on an inner one: a single chain of
                 // `padding(16).size(…)` reports the size WITHOUT the padding here (`Modifier::size` wins), and
-                // the scaffold places this slot by its measured height — see `docs/modifier-node.md` §4.5.
+                // the scaffold places this slot by its measured height — see `docs/modifier-node.md`, item 5 of
+                // its known-limitations section.
                 Stack::new()
                     .modifier(Modifier::new().fill_max_width().padding(16.0))
                     .build(ctx, move |ctx| {

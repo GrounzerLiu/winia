@@ -280,10 +280,14 @@ impl SheetState {
             // Pushed even when it coincides with the partial anchor (which happens as soon as the content is
             // no taller than the peek, and `min_height(peek)` makes that the normal case for short content):
             // the anchors are then the same position, and keeping the `Expanded` VALUE is what stops
-            // `expand()` from silently doing nothing — Compose reaches the same place through
-            // `closest_anchor`, which keeps the first anchor at a position. Measured: with
+            // `expand()` from silently doing nothing. Compose does not face that choice — with
+            // `sheetHeight == peekHeightPx` it never adds the `Expanded` anchor at all
+            // (`BottomSheetScaffold.kt:282`, `if (sheetHeight != peekHeightPx)`), and where two of its anchors
+            // do share an offset its `closestAnchor` resolves the tie towards the LAST one
+            // (`foundation/AnchoredDraggable.kt:571-575`, `distance <= minDistance` at `:1620-1631`) — so this
+            // anchor is a deliberate winia addition, not something Compose's lookup produces. Measured: with
             // `update_anchors_scaffold(720, 56, 56)` both anchors sit at 664 and the value stays
-            // `PartiallyExpanded`, exactly as it does in Compose.
+            // `PartiallyExpanded`.
             pairs.push((SheetValue::Expanded, expanded_pos));
         }
         // Hidden is kept only when it is not skipped (Compose's scaffold skips it by default — see
@@ -333,9 +337,14 @@ impl SheetState {
         if offset.is_nan() {
             return self.current_value();
         }
-        // `PartiallyExpanded` first so that a tie goes to it, matching `DraggableAnchors::closest_anchor`
-        // (which walks a map ordered by the value, `Hidden < PartiallyExpanded < Expanded`, and keeps the
-        // first minimum) — with a short sheet the partial and expanded anchors coincide.
+        // The order below is winia's own and decides the tie: `PartiallyExpanded` first, so a short sheet (whose
+        // partial and expanded anchors coincide) reports the partial state. That is a RECORDED DEVIATION rather
+        // than a copy of Compose, and the earlier comment here claimed the opposite: Compose's own rule for two
+        // candidates at one offset prefers the LATER one — "this will be the last anchor of the candidates at
+        // this offset" (`foundation/AnchoredDraggable.kt:571-575`, implemented with `distance <= minDistance` at
+        // `:1620-1631`) — and for the coinciding case Compose never gets that far, because its scaffold does not
+        // add the `Expanded` anchor when `sheetHeight == peekHeightPx` (`BottomSheetScaffold.kt:282`). winia adds
+        // it on purpose (see `update_anchors_scaffold`) so `expand()` has a target.
         [SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden]
             .into_iter()
             .filter(|v| !self.anchored.position_of(v).is_nan())
