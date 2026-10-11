@@ -321,6 +321,32 @@ impl SheetState {
         self.anchored.current_value()
     }
 
+    /// The state the sheet's POSITION is closest to, which is what Compose's `currentValue` holds while an
+    /// animation runs: `AnchoredDraggableState.updateIfNeeded` sets it from `anchors.closestAnchor(offset)`
+    /// every frame (foundation `AnchoredDraggable.kt:1105-1130`), so it flips when the sheet crosses the
+    /// midpoint between two anchors — not when the animation is requested. winia's `current_value` flips at
+    /// the request (`animate_to` writes it before pushing the tween), which is what made the scaffold's
+    /// snackbar jump to the window's bottom edge while the panel was still where it started, and what made the
+    /// drag handle reverse a running animation instead of ignoring the click.
+    pub fn value_for_offset(&self) -> SheetValue {
+        let offset = self.anchored.offset();
+        if offset.is_nan() {
+            return self.current_value();
+        }
+        // `PartiallyExpanded` first so that a tie goes to it, matching `DraggableAnchors::closest_anchor`
+        // (which walks a map ordered by the value, `Hidden < PartiallyExpanded < Expanded`, and keeps the
+        // first minimum) — with a short sheet the partial and expanded anchors coincide.
+        [SheetValue::PartiallyExpanded, SheetValue::Expanded, SheetValue::Hidden]
+            .into_iter()
+            .filter(|v| !self.anchored.position_of(v).is_nan())
+            .min_by(|a, b| {
+                let da = (self.anchored.position_of(a) - offset).abs();
+                let db = (self.anchored.position_of(b) - offset).abs();
+                da.total_cmp(&db)
+            })
+            .unwrap_or_else(|| self.current_value())
+    }
+
     pub fn settled_value(&self) -> SheetValue {
         self.anchored.settled_value()
     }
@@ -598,6 +624,39 @@ mod tests {
         );
         assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 704.0);
         assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 200.0);
+    }
+
+    /// `value_for_offset` is the state the sheet's POSITION is closest to, so it lags a requested animation
+    /// until the sheet crosses the midpoint between two anchors — which is what Compose's `currentValue` does
+    /// (`AnchoredDraggableState.updateIfNeeded`) and what the scaffold's snackbar rule and drag handle read.
+    #[test]
+    fn the_value_for_the_offset_lags_the_requested_target() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let s = SheetState::new(SheetValue::PartiallyExpanded);
+        s.set_skip_hidden_state(true);
+        s.update_anchors_scaffold(720.0, 96.0, 600.0);
+        assert_eq!(s.anchored.position_of(&SheetValue::PartiallyExpanded), 624.0);
+        assert_eq!(s.anchored.position_of(&SheetValue::Expanded), 120.0);
+        s.anchored.offset_state().set(624.0);
+        assert_eq!(s.value_for_offset(), SheetValue::PartiallyExpanded);
+
+        s.expand();
+        assert_eq!(
+            s.current_value(),
+            SheetValue::Expanded,
+            "the request flips this one immediately"
+        );
+        assert_eq!(
+            s.value_for_offset(),
+            SheetValue::PartiallyExpanded,
+            "but the sheet itself has not moved yet"
+        );
+
+        // Past the midpoint of 624 and 120 the position agrees with the request.
+        s.anchored.offset_state().set(300.0);
+        assert_eq!(s.value_for_offset(), SheetValue::Expanded);
+        crate::animation::clear_all_animations();
     }
 
     /// Compose's two sheets commit a slow release after `BottomSheetDefaults.PositionalThreshold = 56.dp`

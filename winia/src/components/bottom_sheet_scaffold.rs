@@ -518,7 +518,13 @@ impl BottomSheetScaffold {
                                         // (`SheetDefaults.kt:543`) — winia used 12, which made the collapsed
                                         // sheet 20 px shorter than Compose's.
                                         .padding_vertical(SCAFFOLD_DRAG_HANDLE_VERTICAL_PADDING)
-                                        .clickable(move || match handle_state.current_value() {
+                                        // Compose's drag handle reads `currentValue`, which is the state the
+                                        // sheet's POSITION is closest to during an animation
+                                        // (`AnchoredDraggableState.updateIfNeeded`), so a click mid-flight
+                                        // asks for the state it is already heading to and does nothing. With
+                                        // `current_value()` (which flips when the animation is requested)
+                                        // the click reversed the animation instead.
+                                        .clickable(move || match handle_state.value_for_offset() {
                                             SheetValue::Expanded => {
                                                 if handle_state.skip_hidden_state() {
                                                     handle_state.partial_expand();
@@ -556,7 +562,13 @@ impl BottomSheetScaffold {
                     let snack_h: State<f32> = ctx.remember(|| 0.0);
                     let snack_h_measured = snack_h.get();
                     let st_for_snackbar = st_for_snackbar_snapshot.clone();
-                    let y = match st_for_snackbar.current_value() {
+                    // Compose's rule reads `currentValue` (`BottomSheetScaffold.kt:441-446`), which during an
+                    // animation is the state the sheet's POSITION is closest to — so the snackbar stays on the
+                    // panel's top edge until the panel has actually travelled past the midpoint between two
+                    // anchors. `current_value()` flips at the request instead, which put the snackbar on the
+                    // window's bottom edge while the panel was still where it started (measured: panel at
+                    // 663.7 of 664 while the snackbar had already moved).
+                    let y = match st_for_snackbar.value_for_offset() {
                         SheetValue::PartiallyExpanded => st_for_snackbar.offset() - snack_h_measured,
                         _ => layout_h - snack_h_measured,
                     };
@@ -845,7 +857,66 @@ mod tests {
         assert_eq!(expanded_y, 720.0 - 48.0, "expanded: it drops to the bottom edge");
     }
 
-    /// `sheet_shape` is used as given, and a supplied drag handle replaces the built-in 32x4 bar — Compose's
+    /// While the sheet animates between two anchors, the snackbar stays on the panel's top edge until the
+    /// panel has travelled past the MIDPOINT — Compose's rule reads `currentValue`, which is
+    /// `anchors.closestAnchor(offset)` there (`AnchoredDraggableState.updateIfNeeded`). winia's
+    /// `current_value` flips the moment `expand()` is called, so the snackbar used to jump to the window's
+    /// bottom edge while the panel was still where it started (measured in a frame-loop probe: panel at 663.7
+    /// of 664, snackbar already at the bottom).
+    #[test]
+    fn the_snackbar_waits_until_the_sheet_passes_the_midpoint() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let mut c = Composer::new();
+        fn frame(c: &mut Composer, state: &SheetState) {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(480.0, 720.0);
+                BottomSheetScaffold::new()
+                    .sheet_state(st)
+                    .snackbar(|ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                            .build(ctx, |_| {});
+                    })
+                    .build(
+                        ctx,
+                        |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                        |ctx| { crate::components::Text::new("page").build(ctx); },
+                    );
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+        }
+        frame(&mut c, &state);
+        frame(&mut c, &state);
+        let collapsed_y = {
+            let nodes = c.arena_nodes();
+            let root = c.layout_root_idx().expect("laid out");
+            let snack = node_with_tag(nodes, "snack");
+            absolute_position(nodes, root, snack).expect("under the root").1
+        };
+
+        state.expand();
+        // One frame: the tween has barely moved, so the sheet's position is still at the partial anchor.
+        crate::animation::update_animations();
+        frame(&mut c, &state);
+        let y_after_one_frame = {
+            let nodes = c.arena_nodes();
+            let root = c.layout_root_idx().expect("laid out");
+            let snack = node_with_tag(nodes, "snack");
+            absolute_position(nodes, root, snack).expect("under the root").1
+        };
+        assert!(
+            (y_after_one_frame - collapsed_y).abs() < 1.0,
+            "the snackbar stays where it was while the panel is still at its starting anchor \
+             ({y_after_one_frame} against {collapsed_y})"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     /// `sheetShape` and composable `sheetDragHandle`.
     #[test]
     fn an_explicit_shape_and_a_supplied_handle_replace_the_built_ins() {
