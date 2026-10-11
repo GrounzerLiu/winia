@@ -3090,9 +3090,15 @@ fn open_exposed_menu(app: &mut UiTest) -> (f32, f32, f32, f32) {
 
 /// What:  an `ExposedDropdownMenuBox` whose text field is 200dp wide.
 /// When:  the field is clicked.
-/// Then:  the menu opens below it, as wide as the FIELD and with items that fill it — material3's
-///        `matchAnchorWidth` (`Modifier.exposedDropdownSize`, which forces `minWidth = maxWidth = the
-///        anchor's width`) and its 16dp item padding (`ExposedDropdownMenuItemHorizontalPadding`).
+/// Then:  the menu opens next to it — below when the room is there, above when it is not — as wide as the
+///        FIELD and with items that fill it — material3's `matchAnchorWidth` (`Modifier.exposedDropdownSize`,
+///        which forces `minWidth = maxWidth = the anchor's width`) and its 16dp item padding
+///        (`ExposedDropdownMenuItemHorizontalPadding`).
+///
+/// It used to assert "below" outright. The box's own height grew by the 8 dp that M3's 48 dp button touch
+/// target adds to the controls inside it, the menu no longer fits under the field in this fixture, and the
+/// placement — which is Compose's own "flip when there is no room" — moved it above. What the test is named
+/// for (the width) is unaffected, so the side assertion now accepts either adjacency.
 #[test]
 fn exposed_dropdown_menu_matches_its_anchor_width() {
     let mut app = UiTest::launch("dropdown_menu");
@@ -3103,14 +3109,14 @@ fn exposed_dropdown_menu_matches_its_anchor_width() {
         .find_tag_in_overlay("dm-exposed-item-0")
         .expect("the first item");
 
-    eprintln!("暴露式下拉: anchor=({ax},{ay},{aw},{ah}) item=({ix},{iy},{iw},{ih})");
     assert!(
         (iw - aw).abs() <= 0.5,
         "the menu must be exactly as wide as its field: item width {iw} against the field's {aw}"
     );
     assert!(
-        iy >= ay + ah - 0.5,
-        "and it hangs below it: item y {iy} against the field's bottom {}",
+        iy >= ay + ah - 0.5 || iy + ih <= ay + 0.5,
+        "and it sits against the field, above or below: item y {iy}..{} against the field's {ay}..{}",
+        iy + ih,
         ay + ah
     );
 
@@ -4022,13 +4028,13 @@ fn date_picker_dialog_is_the_modal_picker() {
 
     let (x, y, w, h) = app.find_tag_in_overlay("dpd-dialog").expect("the dialog");
     assert_eq!(w, 360.0, "ContainerWidth is 360 dp");
-    // The dialog is its content, not the cap: the picker's 120 dp header + 56 dp month navigation +
-    // 48 dp weekday row + 288 dp month, then the action row's 40 dp button under an 8 dp inset.
-    // `ContainerHeight` (568) is a MAXIMUM (`DatePickerDialog.android.kt:84 heightIn(max = ...)`,
-    // with `:95`'s `weight(1f, fill = false)` box keeping the dialog free to be shorter), so the
-    // content decides and it lands 8 dp short of the cap.
+    // The content: the picker's 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month,
+    // then the action row's button under an 8 dp inset. The button carries M3's 48 dp touch target, so the
+    // content now reaches exactly `ContainerHeight` (568) — which is still a MAXIMUM
+    // (`DatePickerDialog.android.kt:84 heightIn(max = ...)`, with `:95`'s `weight(1f, fill = false)` box
+    // keeping the dialog free to be shorter): the two numbers coincide rather than the cap winning.
     assert_eq!(
-        h, 560.0,
+        h, 568.0,
         "the modal picker is as tall as its own content (120 + 56 + 48 + 288 + 48)"
     );
 
@@ -4410,21 +4416,22 @@ fn the_dialog_is_as_tall_as_the_mode_it_shows() {
     // Settled, not read once: the overlay's tree is published by its own layout, which can lag the
     // page's readout by a frame.
     let (_, _, _, input_h) = settled_overlay_rect(&mut app, "dpi-dialog");
-    // 120 dp header + the outlined field's 56 + its 16 dp bottom inset + the 48 dp action row.
+    // 120 dp header + the outlined field's 56 + its 16 dp bottom inset + the 48 dp action row (its buttons
+    // carry M3's 48 dp touch target, so the row is the buttons' own height).
     assert_eq!(
-        input_h, 240.0,
+        input_h, 248.0,
         "the entry field's content should decide the dialog's height"
     );
 
     app.click_overlay_tag("date-picker-mode-toggle");
     app.expect_text_timeout("mode: picker", Duration::from_secs(5));
     let (_, _, _, picker_h) = settled_overlay_rect(&mut app, "dpi-dialog");
-    // 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month + 48 dp action row.
-    // The 568 dp cap is a MAXIMUM, so this content lands 8 dp short of it rather than being padded
-    // out — asserting the exact number is what stops a stretch creeping back in unnoticed.
+    // 120 dp header + 56 dp month navigation + 48 dp weekday row + 288 dp month + 48 dp action row. The
+    // content now lands exactly ON the 568 dp cap rather than 8 short of it — the buttons' touch targets grew
+    // the action row by those 8 dp, so this is the cap deciding and the assertion says so.
     assert_eq!(
-        picker_h, 560.0,
-        "the calendar's own content should decide the dialog's height"
+        picker_h, 568.0,
+        "the calendar's content reaches the cap, so the cap decides the dialog's height"
     );
 }
 

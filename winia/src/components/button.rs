@@ -663,6 +663,24 @@ impl Button {
             }
         }
 
+        // The touch target, as its OWN node around the visual box: Compose gets it from the clickable
+        // `Surface`'s `Box`, which applies `Modifier.minimumInteractiveComponentSize()`
+        // (`material3/Surface.kt:219`; the node is at `material3/InteractiveComponentSize.kt:98-140`), so every
+        // M3 button reserves at least 48 dp on both axes with its 40 dp visual box centred inside — which is
+        // also why a row of buttons sits 48 apart. In ONE chain winia decides the size across the whole chain,
+        // so `min_height(40)` clamps the 48 away (measured: 40 with the modifier on either side of it), hence
+        // the wrapper. It wraps the button's own scope so the visual chain keeps its box.
+        //
+        // Deviation, recorded: the wrapper sits OUTSIDE the caller's modifier, so a
+        // `Button::modifier(Modifier::new().size(40.0, 40.0))` still measures 48. In Compose the caller's
+        // modifier is the outer one (`Surface(modifier = modifier…)`), so its explicit size wins and the touch
+        // target cannot grow past it. winia's modifier chain cannot express "the caller's size clamps the
+        // smaller node inside", which is why the two Node trees would be needed to match exactly.
+        crate::layout::components::build_container(
+            ctx,
+            Modifier::new().minimum_interactive_component_size(),
+            BoxLayout::new().alignment(crate::layout::Alignment::Center),
+            |ctx| {
         // content 闭包自动成为组合 scope（与 Column 一致）
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
             crate::runtime::composer::GroupStatus::Skip => {}
@@ -689,6 +707,8 @@ impl Button {
         // 焦点环颜色：主题 primary（组合期捕获——渲染期 CompositionLocal 已退出）
         ctx.set_current_node_focus_color(theme.primary);
         ctx.end_restartable_group();
+            },
+        );
     }
 
     // ── Getters（测试用）──
@@ -944,6 +964,42 @@ mod tests {
 
         // 组合树应该正确构建
         assert!(composer.layout_root().is_some());
+    }
+
+    /// Compose's buttons carry a 48 dp touch target even when the visual box is smaller: the clickable
+    /// `Surface` they are built on applies `Modifier.minimumInteractiveComponentSize()`
+    /// (`material3/Surface.kt:219`, the node at `material3/InteractiveComponentSize.kt:98-140`), so the box is
+    /// `max(content, 48)` with the 40 dp visual centred inside. Both heights are asserted, because the point of
+    /// the wrapper is that the VARIABLE box (the background, the ripple) stays 40.
+    #[test]
+    fn a_button_reserves_a_48_dp_touch_target() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            // Under a Column: the composition root is special-cased and does not show the enlargement.
+            crate::layout::components::Column::new()
+                .modifier(Modifier::new().fill_max_width())
+                .build(ctx, |ctx| {
+                    Button::filled()
+                        .on_click(|| {})
+                        .build(ctx, |ctx| crate::components::Text::new("Ok").build(ctx));
+                });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = composer.arena_nodes();
+        let heights: Vec<f32> = nodes.iter().map(|n| n.measured_size.height).collect();
+        let widest = nodes.iter().map(|n| n.measured_size.width).fold(0.0f32, f32::max);
+        assert!(
+            heights.contains(&48.0),
+            "the button reserves the 48 dp touch target ({heights:?})"
+        );
+        assert!(
+            heights.iter().any(|h| (h - 40.0).abs() < 0.5),
+            "and its visual box is still the 40 dp content box ({heights:?})"
+        );
+        assert!(
+            widest >= 58.0,
+            "the box is at least `MinWidth` wide ({widest})"
+        );
     }
 
     #[test]
