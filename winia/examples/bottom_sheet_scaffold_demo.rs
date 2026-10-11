@@ -65,29 +65,40 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                 }
                 let colors = WiniaTheme::colors();
                 let hide = snack_visible.clone();
+                // The margins are on an OUTER Column and the card is an inner one, rather than both on one
+                // modifier chain: `padding(16).size(…)` in a single chain reports the size WITHOUT the padding
+                // (`Modifier::size` wins), and the scaffold places the slot by its measured height, so the card
+                // would end up up to 60 px too low and could spill past the window's bottom edge. Nested, the
+                // outer Column measures the card plus its own padding and the card sits exactly on the edge the
+                // rule computes. (The chain behaviour is a deviation from Compose's `padding().size()`; see the
+                // ignored test in `bottom_sheet_scaffold.rs`.)
                 Stack::new()
                     .modifier(Modifier::new().fill_max_width().padding(16.0))
                     .build(ctx, move |ctx| {
-                        Row::new()
-                            .modifier(
-                                Modifier::new()
-                                    .fill_max_width()
-                                    .background(colors.surface_container_highest, Shape::rounded(8.0))
-                                    .padding(12.0),
-                            )
-                            .alignment(Alignment::Center)
-                            .spacing(12.0)
-                            .build(ctx, |ctx| {
-                                Text::new("已保存到草稿")
-                                    .font_size(13.0)
-                                    .color(colors.on_surface)
-                                    .build(ctx);
-                                Button::text()
-                                    .on_click({
-                                        clone!(hide);
-                                        move || hide.set(false)
-                                    })
-                                    .build(ctx, |ctx| Text::new("撤销").build(ctx));
+                        Stack::new()
+                            .modifier(Modifier::new().fill_max_width())
+                            .build(ctx, move |ctx| {
+                                Row::new()
+                                    .modifier(
+                                        Modifier::new()
+                                            .fill_max_width()
+                                            .background(colors.surface_container_highest, Shape::rounded(8.0))
+                                            .padding(12.0),
+                                    )
+                                    .alignment(Alignment::Center)
+                                    .spacing(12.0)
+                                    .build(ctx, |ctx| {
+                                        Text::new("已保存到草稿")
+                                            .font_size(13.0)
+                                            .color(colors.on_surface)
+                                            .build(ctx);
+                                        Button::text()
+                                            .on_click({
+                                                clone!(hide);
+                                                move || hide.set(false)
+                                            })
+                                            .build(ctx, |ctx| Text::new("撤销").build(ctx));
+                                    });
                             });
                     });
             }

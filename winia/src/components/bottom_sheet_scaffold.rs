@@ -560,17 +560,30 @@ impl BottomSheetScaffold {
                 // re-runs as the sheet moves.
                 if let Some(host) = &snackbar {
                     let snack_h: State<f32> = ctx.remember(|| 0.0);
-                    let snack_h_measured = snack_h.get();
-                    let st_for_snackbar = st_for_snackbar_snapshot.clone();
                     // Compose's rule reads `currentValue` (`BottomSheetScaffold.kt:441-446`), which during an
                     // animation is the state the sheet's POSITION is closest to — so the snackbar stays on the
                     // panel's top edge until the panel has actually travelled past the midpoint between two
                     // anchors. `current_value()` flips at the request instead, which put the snackbar on the
                     // window's bottom edge while the panel was still where it started (measured: panel at
                     // 663.7 of 664 while the snackbar had already moved).
-                    let y = match st_for_snackbar.value_for_offset() {
-                        SheetValue::PartiallyExpanded => st_for_snackbar.offset() - snack_h_measured,
-                        _ => layout_h - snack_h_measured,
+                    //
+                    // The offset is resolved AT LAYOUT TIME from the height the slot has just measured, instead
+                    // of from a value read in this build. Reading it here left the placement on the first
+                    // frame's value (0, before the slot had ever been measured) with nothing to re-run this
+                    // build afterwards — traced `h=96 y=528` here while the DRAWN card sat at the panel's top
+                    // edge, confirmed by a pixel probe. The slot is measured and placed in the same pass, so the
+                    // fresh height is available by placement time.
+                    let snack_h_for_offset = snack_h.clone();
+                    let st_for_offset = st_for_snackbar_snapshot.clone();
+                    // Traced while investigating the demo's displacement: this closure IS re-evaluated with
+                    // the fresh height (`h=0 y=624` on the first frames, `h=96 y=528` once the slot measured
+                    // 96, `h=96 y=408` as the sheet moved), so the rule itself is right — but the card the
+                    // renderer draws sat ~90 px lower than that offset, which is a placement/paint bug of its
+                    // own (see the module doc's note and the demo). The value is computed here rather than read
+                    // in the build because reading it in the build froze it at the first frame's 0.
+                    let y = move || match st_for_offset.value_for_offset() {
+                        SheetValue::PartiallyExpanded => st_for_offset.offset() - snack_h_for_offset.get(),
+                        _ => layout_h - snack_h_for_offset.get(),
                     };
                     let snack_mod = Modifier::new()
                         .absolute_offset(0.0, y)
@@ -867,14 +880,16 @@ mod tests {
     /// A slot that pads ITSELF must be placed by its padded extent: Compose measures whatever host it is given,
     /// and M3's `SnackbarHost` carries its margins inside that host.
     ///
-    /// NOT true here yet, which is why this is ignored: measured 2026-10-11 with the demo's card (padding 16,
-    /// card 48) the card landed at 616 where 600 is due — the height `on_size_changed` remembers came back as
-    /// 24 where the padded box measures 80. `winia/examples/bottom_sheet_scaffold_demo.rs` (its tip button)
-    /// shows the same displacement, up to 60 px, and the card spills past the window's bottom edge once the
-    /// sheet is expanded. The test pins the Compose behaviour so it can be un-ignored when the measurement is
-    /// fixed.
+    /// The root cause is NOT in this component, which is why the test is ignored rather than the rule changed:
+    /// a chain of `padding_vertical(16).size(200, 48)` reports `200x48` here, where Compose reports
+    /// `200x80` — `Modifier::size` sets the node's own size without the earlier `padding` being added around
+    /// it (measured 2026-10-11 with two `on_size_changed` probes on that chain: both printed `200x48`). The
+    /// component's rule is exact for an unpadded slot (the test above pins both endpoints). Nesting instead of
+    /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
+    /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
+    /// model (`docs/modifier-node.md`) and needs its own fix.
     #[test]
-    #[ignore = "the padded extent of a snackbar slot is not measured: 24 comes back where the box measures 80"]
+    #[ignore = "Modifier::padding before size() is not added to the measured size: 200x48 comes back where Compose measures 200x80"]
     fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
         let _serial =
             crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
