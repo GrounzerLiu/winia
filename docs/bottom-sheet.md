@@ -80,16 +80,21 @@ the window.
   mouse as well as touch — `MouseWheelScrollingLogic.dispatchMouseWheelScroll` dispatches the wheel with
   `NestedScrollSource.UserInput` (`foundation/gestures/MouseWheelScrollingLogic.kt:303-307`). winia splits that
   case in two, so its callbacks accept `NestedScrollSource::Drag | Wheel` through
-  `NestedScrollSource::is_user_input()` and reject `Fling`/`SideEffect` (Compose's `SideEffect`), which
-  `SheetDefaults.kt:454-470` also rejects. In practice a wheel behaves exactly like a finger here: an upward
-  one expands the sheet first, a downward one scrolls the list first and hands the sheet what the list could
-  not use. The fling callbacks are unaffected — they carry a velocity, not a source.
+  `NestedScrollSource::is_user_input()` and reject `Fling`/`SideEffect` (Compose's `SideEffect`). In practice a
+  wheel behaves exactly like a finger here. Mind the SIGN when reading or testing this: a negative `y` means the
+  content moves up — a finger dragging up, or the wheel rotated DOWN — and that is the delta which expands the
+  sheet first (the repository's own convention, `ui_test.rs`'s "Negative dy scrolls FORWARD"). A downward
+  (positive) delta scrolls the list first and hands the sheet what the list could not use. The fling callbacks
+  are unaffected — they carry a velocity, not a source.
 
 Two things described above were deviations in an earlier version and are now fixed, each covered by a test: the
 positional threshold fell back to half the travel distance (a drag of 100 px toward a nearer anchor sprang back
-where M3 commits), and the callbacks ignored the source entirely, so a fling or an animation could move the
-sheet. A third fix in that round went too far and was corrected the same day: filtering to `Drag` alone also
-rejected the wheel, but a wheel IS user input in M3, so it drives the sheet exactly like a finger.
+where M3 commits), and the callbacks ignored the source, so any nested delta could move the sheet. The source
+guard itself is cheap insurance rather than a fix for something reachable today: no production call site passes
+`Fling` or `SideEffect` to these callbacks (the four wheel sites pass `Wheel`, the two pointer sites `Drag`),
+and flings travel through `on_pre_fling`/`on_post_fling`, which carry a velocity and no source. A third fix in
+that round went too far and was corrected the same day: filtering to `Drag` alone also rejected the wheel, but a
+wheel IS user input in M3, so it drives the sheet exactly like a finger.
 
 ## Dismissal paths
 

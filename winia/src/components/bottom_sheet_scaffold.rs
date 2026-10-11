@@ -40,7 +40,7 @@
 //!   Compose's `bodyConstraints = looseConstraints.copy(maxHeight = layoutHeight - topBarHeight)` (`:427-431`)
 //!   expressed with the tools winia's layout has instead of a dedicated `Layout` pass. The snackbar follows
 //!   Compose's placement rule — centred, just above the sheet while it is partially expanded and on the
-//!   bottom edge otherwise (`:437-444`) — but its own height comes from the PREVIOUS frame, so the first
+//!   bottom edge otherwise (`:441-446`) — but its own height comes from the PREVIOUS frame, so the first
 //!   frame of a snackbar's life places it by its bottom edge (Compose measures every child before placing
 //!   any).
 //! - `sheetShape` and the composable `sheetDragHandle` are supported (`sheet_shape`,
@@ -194,7 +194,7 @@ impl BottomSheetScaffold {
     }
 
     /// Compose's `snackbarHost` slot. The snackbar sits centred, just above the sheet while it is partially
-    /// expanded, and on the bottom edge otherwise (`:437-444`).
+    /// expanded, and on the bottom edge otherwise (`:441-446`).
     pub fn snackbar(mut self, f: impl Fn(&mut ComposeCtx) + 'static) -> Self {
         self.snackbar = Some(Box::new(f));
         self
@@ -547,7 +547,7 @@ impl BottomSheetScaffold {
                     });
 
                 // The snackbar: centred, just above the sheet while it is partially expanded, on the bottom
-                // edge otherwise — Compose's rule (`BottomSheetScaffold.kt:437-444`). Compose knows the
+                // edge otherwise — Compose's rule (`BottomSheetScaffold.kt:441-446`). Compose knows the
                 // snackbar's height because its layout measures every child before placing any; here the
                 // height is remembered from the previous frame, so the first frame of a snackbar's life
                 // places it by its bottom edge. The rule reads the state that drives the sheet, so it
@@ -770,7 +770,7 @@ mod tests {
     }
 
     /// The snackbar sits centred, just above the sheet while it is partially expanded, and on the bottom
-    /// edge otherwise — Compose's rule (`BottomSheetScaffold.kt:437-444`). Compose can do it in one pass
+    /// edge otherwise — Compose's rule (`BottomSheetScaffold.kt:441-446`). Compose can do it in one pass
     /// because its layout measures every child before placing any; here the snackbar's own height comes from
     /// the previous frame (the documented one-frame caveat), so the helper below composes and lays out
     /// twice, as a real app does.
@@ -1001,10 +1001,11 @@ mod tests {
 
     /// The WHEEL is user input, exactly like a finger: Compose dispatches it with
     /// `NestedScrollSource.UserInput` (`MouseWheelScrollingLogic.kt:303-307`), and the sheet's connection
-    /// accepts user input (`SheetDefaults.kt:454-470`). So an upward wheel expands the sheet (expands-first),
-    /// a downward one reaches the sheet only with what the list could not use — and neither marks the sheet as
-    /// dragging, because a nested delta is not the panel's own gesture. A FLING, by contrast, is a side effect
-    /// and must not move the sheet at all.
+    /// accepts user input (`SheetDefaults.kt:454-470`). Watch the sign: a NEGATIVE `y` means the content moves
+    /// up — a finger dragging up, or the wheel rotated DOWN — and that is the delta which expands the sheet
+    /// first; a positive one reaches the sheet only with what the list could not use. Neither marks the sheet
+    /// as dragging, because a nested delta is not the panel's own gesture. `Fling` and `SideEffect` must not
+    /// move the sheet at all (no production call site passes them today; the guard is insurance and matches M3).
     #[test]
     fn a_wheel_drives_the_sheet_like_a_finger_and_a_fling_does_not() {
         let state = SheetState::new(SheetValue::PartiallyExpanded);

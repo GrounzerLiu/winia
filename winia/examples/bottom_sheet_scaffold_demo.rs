@@ -1,12 +1,14 @@
-//! BottomSheetScaffold 演示——可拖动显示更多内容（对标 Compose BottomSheetScaffold）
+//! BottomSheetScaffold demo — a draggable docked sheet (against Compose's BottomSheetScaffold).
 //!
-//! 验证：
-//! - 常驻底部片，peek 56dp 露头
-//! - 上拖展开显示更多，下拖回 peek
-//! - 顶部圆角 16dp，底部直角
-//! - 拖动手柄
+//! What it shows:
+//! - A permanently docked sheet peeking 96 dp (the component's default `SCAFFOLD_SHEET_PEEK_HEIGHT` is 56 dp;
+//!   this demo raises it so there is something to read).
+//! - Dragging up expands it, dragging down returns it to the peek. The WHEEL drives it too, because M3's
+//!   nested-scroll connection accepts `NestedScrollSource.UserInput` and a wheel is dispatched as UserInput.
+//! - Top corners of 28 dp (`SCAFFOLD_SHEET_SHAPE_RADIUS`, M3's `CornerExtraLargeTop`) with square bottom ones.
+//! - The drag handle: 32x4 with 22 dp of vertical padding, painted `on_surface_variant`.
 //!
-//! 运行：cargo run -p winia --example bottom_sheet_scaffold_demo --features debug-server
+//! Run: cargo run -p winia --example bottom_sheet_scaffold_demo --features debug-server
 
 use letclone::clone;
 use winia::prelude::*;
