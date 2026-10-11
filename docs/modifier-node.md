@@ -170,6 +170,19 @@ Modifier::new().size(48.0, 48.0).draw_node(MyBadge { color })
 4. **trait object 开销**：每节点多一次 vtable + Arc。热路径（measure）A 型 node
    仅多一次 transform 调用（MinWidth 级别，开销可忽略）；绘制/输入路径可接受；
    大规模列表待实测（未测，不要断言）。
+5. **`padding(…).size(…)` 的顺序不生效（与 Compose 不同）** — 2026-10-11 实测：
+   链 `padding_vertical(16).size(200,48)` 上报 **200x48**，Compose 报 **200x80**
+   （Compose 里 `size` 作用在 padding 内层，外层 padding 把盒子撑大）。这里的
+   `size` 直接决定节点自身尺寸，前面的 padding 只把内容内缩，所以 "先 padding 再
+   size" 和 "先 size 再 padding" 得到同一个盒子。
+   - 触发场景（真实现场）：`BottomSheetScaffold` 的 `snackbar` 槽按**实测高度**摆放，
+     调用方按 Compose 习惯写链式 padding 就会拿到偏小的高度，卡片比应到的位置低
+     （实测 16~60px，展开态会越过窗口底边）。
+   - 绕法（示例里已用）：padding 放**外层节点**、size 放内层子节点
+     （`Column(padding(16)) { Column(size(200,48)) }`），外层量到 80，摆放正确。
+   - 钉住行为的测试：`bottom_sheet_scaffold::tests::a_snackbar_slot_that_pads_itself_is_measured_with_the_padding`，
+     带 `#[ignore]` 与实测数字；修好顺序语义后解除忽略。
+   - 修它是 modifier 模型的改动（顺序敏感的包裹语义），影响面大，未做。
 
 ## 五、下一步：LayoutNode 预研结论
 
