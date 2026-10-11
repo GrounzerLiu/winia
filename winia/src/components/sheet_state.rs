@@ -169,7 +169,8 @@ impl SheetState {
 
     /// Move a settled sheet onto `value`'s new position, if it is not already there. Called after the
     /// anchors changed.
-    fn settle_onto(&self, value: Option<SheetValue>) {        let Some(value) = value else { return };
+    fn settle_onto(&self, value: Option<SheetValue>) {
+        let Some(value) = value else { return };
         // A live gesture owns the offset. Compose's `draggableAnchors` block re-targets only when the
         // LAYOUT changed, never while a finger is down; without this gate the sheet followed a drag and was
         // animated straight back to the anchor it started from (measured on the demo: a downward drag moved
@@ -631,6 +632,8 @@ mod tests {
         );
         crate::animation::clear_all_animations();
     }
+
+    /// A live gesture owns the offset: an anchor update that runs mid-drag — the scaffold recomputes its
     /// anchors whenever the window, the peek or the sheet's size changes — must not animate the sheet back.
     /// Measured on the demo: a downward drag moved the offset 40 px and `update_anchors` then animated it
     /// straight to the Expanded anchor, so the sheet never followed the finger while a release still settled

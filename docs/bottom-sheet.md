@@ -78,7 +78,9 @@ the window.
   `BottomSheetDefaults.PositionalThreshold = 56.dp` (`SheetDefaults.kt:404`) and `VelocityThreshold = 125.dp`.
 - **Scroll sources.** M3's connection consumes `NestedScrollSource.UserInput` only; winia's equivalents
   (`on_pre_scroll` / `on_post_scroll` in both sheets) answer `NestedScrollSource::Drag`, which is the pointer
-  path, and ignore `Wheel` — a wheel scrolls the list, it does not drag the sheet.
+  path, and ignore `Wheel`. A wheel over the list therefore scrolls the list, and a wheel over the panel's own
+  area (its header, its padding) does NOTHING — as in M3, where a wheel is not user input either. The fling
+  callbacks are unaffected: they carry a velocity, not a source.
 
 Two things described above were deviations in an earlier version and are now fixed, each covered by a test: the
 positional threshold fell back to half the travel distance (a drag of 100 px toward a nearer anchor sprang back

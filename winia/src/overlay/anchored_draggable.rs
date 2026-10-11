@@ -286,6 +286,13 @@ impl<T: Clone + PartialEq + Eq + Ord + 'static> AnchoredDraggableState<T> {
     /// 拖拽增量（on_drag 回调——当前位置增量 delta 的轴向分量）。
     /// 更新 offset（clamp 到 min/max 锚点），跨过半程更新 current_value。
     pub fn drag_delta(&self, delta: f32) {
+        // The flag is set only when the delta can actually be applied. It used to be set first, so dragging
+        // against an EMPTY anchor set (a sheet whose anchors have not been computed yet) left
+        // `is_dragging()` true with nothing that would ever clear it — and every reader of the flag, which
+        // includes `SheetState::settle_onto`'s re-target gate, then short-circuited forever.
+        if self.anchors.get().is_empty() {
+            return;
+        }
         self.dragging.set(true);
         self.apply_delta(delta);
     }
@@ -574,6 +581,23 @@ mod tests {
 
     fn anchors() -> DraggableAnchors<V> {
         DraggableAnchors::new(vec![(V::A, 0.0), (V::B, 100.0), (V::C, 200.0)])
+    }
+
+    #[test]
+    fn a_drag_against_no_anchors_does_not_mark_the_state_as_dragging() {
+        // `drag_delta` used to set the flag BEFORE checking the anchor set, so a drag that could not be
+        // applied (anchors not computed yet) left `is_dragging()` true forever — and `SheetState`'s re-target
+        // gate reads exactly that flag.
+        let s: AnchoredDraggableState<V> = AnchoredDraggableState::new(V::A);
+        assert!(s.position_of(&V::A).is_nan(), "no anchors yet");
+        s.drag_delta(40.0);
+        assert!(!s.is_dragging(), "nothing was dragged, so nothing is being dragged");
+        // With anchors the flag does go up, and a settle clears it again.
+        s.update_anchors(anchors());
+        s.drag_delta(40.0);
+        assert!(s.is_dragging());
+        s.settle_with_velocity(0.0, None);
+        assert!(!s.is_dragging());
     }
 
     #[test]
