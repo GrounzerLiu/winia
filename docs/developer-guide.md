@@ -500,6 +500,15 @@ fn test_divider_builder() {
 }
 ```
 
+**The animation lock is mandatory, and the library suite runs serially.** A test that pushes an animation
+(reaches `push_animatable`, `update_animations` or `clear_all_animations`) must hold
+`crate::animation::tests::TEST_SERIAL` and clear the registry — see `docs/shared-element-usage.md:357` and
+`docs/navigation-drawer.md:182` for the pattern. The lock only works if EVERY such test takes it: measured
+2026-10-11, 76 animation-driving tests in the crate do not, so a parallel `cargo test -p winia --lib` lets one
+of them clear an animation another test is driving — the failure moves from test to test between runs (the
+locked ones are the victims, not the cause). Run the library suite with `--test-threads=1`, as every
+verification run in this repo does.
+
 ---
 
 ## 九、调试技巧
