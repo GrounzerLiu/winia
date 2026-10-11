@@ -888,6 +888,95 @@ mod tests {
     /// chaining — `Column(padding(16)) { Column(size(200,48)) }` — measures 80 and places exactly, which is what
     /// `winia/examples/bottom_sheet_scaffold_demo.rs` now does; the deviation itself belongs in the modifier
     /// model (`docs/modifier-node.md`) and needs its own fix.
+    /// The layout half of the snackbar's placement: an `absolute_offset` whose value is computed AT LAYOUT
+    /// TIME (a closure, the same `SizeValue::Dynamic` path the snackbar uses) must move the NODE, not merely
+    /// the number the build computed. Written while chasing the demo, where the rule's `y=528` and the drawn
+    /// card disagreed by ~90 px: this says whether the offset reaches the arena at all.
+    #[test]
+    fn a_layout_time_absolute_offset_moves_the_node() {
+        fn placed_with(offset: crate::layout::sizing::SizeValue) -> f32 {
+            let mut c = Composer::new();
+            let mut slot = Some(offset);
+            c.compose(move |ctx| {
+                let value = slot.take().expect("one frame");
+                crate::layout::components::Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, move |ctx| {
+                        crate::layout::components::Column::new()
+                            .modifier(
+                                Modifier::new()
+                                    .absolute_offset(0.0, value)
+                                    .size(100.0, 50.0)
+                                    .test_tag("moved"),
+                            )
+                            .build(ctx, |_| {});
+                    });
+            });
+            c.layout(Constraints::new(0.0, 480.0, 0.0, 720.0));
+            let nodes = c.arena_nodes();
+            let root = c.layout_root_idx().expect("laid out");
+            absolute_position(nodes, root, node_with_tag(nodes, "moved"))
+                .expect("under the root")
+                .1
+        }
+
+        assert_eq!(placed_with(300.0f32.into()), 300.0, "a literal offset moves the node");
+        assert_eq!(
+            placed_with(crate::layout::sizing::SizeValue::Dynamic(std::sync::Arc::new(|| 200.0))),
+            200.0,
+            "and so does one computed at layout time"
+        );
+    }
+
+    /// The snackbar's offset must follow the slot's height WITHOUT a recompose in between: the slot is measured
+    /// during the layout pass, so the frame that measures it is the frame that has to place it. Two layouts in a
+    /// row with no `compose` between them is exactly that, and the demo is where it went wrong (rule `y=528`,
+    /// drawn card ~90 px lower). This pins the layout half; the demo's remaining displacement is the renderer's.
+    #[test]
+    fn the_snackbar_offset_follows_a_height_measured_in_the_same_pass() {
+        let _serial =
+            crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let state = SheetState::new(SheetValue::PartiallyExpanded);
+        state.set_skip_hidden_state(true);
+        let st = state.clone();
+        let mut c = Composer::new();
+        c.compose(move |ctx| {
+            crate::layout::adaptive::set_window_size(480.0, 720.0);
+            BottomSheetScaffold::new()
+                .sheet_state(st)
+                .snackbar(|ctx| {
+                    crate::layout::components::Column::new()
+                        .modifier(Modifier::new().padding_vertical(16.0))
+                        .build(ctx, |ctx| {
+                            crate::layout::components::Column::new()
+                                .modifier(Modifier::new().size(200.0, 48.0).test_tag("snack"))
+                                .build(ctx, |_| {});
+                        });
+                })
+                .build(
+                    ctx,
+                    |ctx| { crate::components::Text::new("sheet").build(ctx); },
+                    |ctx| { crate::components::Text::new("page").build(ctx); },
+                );
+        });
+        let constraints = Constraints::new(0.0, 480.0, 0.0, 720.0);
+        c.layout(constraints);
+        c.layout(constraints);
+        let nodes = c.arena_nodes();
+        let root = c.layout_root_idx().expect("laid out");
+        let card = node_with_tag(nodes, "snack");
+        let y = absolute_position(nodes, root, card).expect("under the root").1;
+        // The slot measures 80 (a 48 px card with 16 px of padding on both sides), the sheet's partial anchor
+        // is at 720 - 56 = 664, so the slot's top is 584 and the card inside it starts 16 lower.
+        assert_eq!(
+            y,
+            720.0 - 56.0 - 80.0 + 16.0,
+            "the card sits inside a slot placed by the height the same pass measured"
+        );
+        crate::animation::clear_all_animations();
+    }
+
     #[test]
     #[ignore = "Modifier::padding before size() is not added to the measured size: 200x48 comes back where Compose measures 200x80"]
     fn a_snackbar_slot_that_pads_itself_is_measured_with_the_padding() {
