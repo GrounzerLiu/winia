@@ -72,15 +72,20 @@ fn scaffold_demo(ctx: &mut ComposeCtx) {
                                         .state(lazy_state.clone())
                                         .modifier(Modifier::new().fill_max_width().fill_max_height())
                                         .items_from(items.clone(), |it: &ScaffoldItem| it.id, move |ctx, _i, it| {
+                                            // The row fill and its text come from the theme, like the modal
+                                            // sheet's demo: a hardcoded light grey looked right in light mode
+                                            // and glaring in dark mode (the sheet's own container is
+                                            // `surface_container_low`, so its rows use the next step up).
+                                            let colors = WiniaTheme::colors();
                                             Text::new(it.title.clone())
                                                 .font_size(13.0)
-                                                .color(WiniaTheme::colors().on_surface_variant)
+                                                .color(colors.on_surface)
                                                 .modifier(
                                                     Modifier::new()
                                                         .fill_max_width()
                                                         .padding(10.0)
                                                         .background(
-                                                            Color::from_argb(255, 245, 245, 247),
+                                                            colors.surface_container_high,
                                                             Shape::RoundedRect { corner_radius: 10.0 },
                                                         ),
                                                 )
