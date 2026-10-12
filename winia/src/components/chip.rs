@@ -648,6 +648,7 @@ impl Chip {
                     }
                 });
             },
+            theme.secondary,
         );
     }
 }
@@ -674,6 +675,7 @@ fn build_chip(
     interaction: Option<crate::interaction::MutableInteractionSource>,
     elevation_anim: Option<crate::runtime::state::State<f32>>,
     content: impl FnOnce(&mut ComposeCtx),
+    focus_color: crate::graphics::Color,
 ) {
     let key = ctx.next_key();
     // A winia addition: `animate_color_as_state` remembers the animated colour and registers the
@@ -763,6 +765,10 @@ fn build_chip(
                     });
                 }
             }
+            // Focus ring colour: every chip's token is `FocusIndicatorColor = Secondary` (all four token
+            // files). Without this the framework's default ring is drawn — the grey halo that made a focused
+            // chip look wrong.
+            ctx.set_current_node_focus_color(focus_color);
             ctx.end_restartable_group();
         }
     }
@@ -1073,5 +1079,23 @@ mod tests {
         assert_eq!(style.1, FontWeight::BOLD);
         assert_eq!(style.2, 1.3);
         assert_eq!(style.3, Some(27.0));
+    }
+
+    /// Every chip's focus indicator is `FocusIndicatorColor = Secondary` (all four token files). winia never
+    /// declared one, so a focused chip got the framework's default ring — the grey halo in the report about a
+    /// selected chip looking wrong.
+    #[test]
+    fn a_chip_declares_its_secondary_focus_ring() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let (_c, _root, inner) = chip_nodes(Chip::filter(
+            true,
+            |ctx| crate::components::Text::new("Lunch").build(ctx),
+            || {},
+        ));
+        assert_eq!(
+            _c.arena_nodes()[inner].focus_color.get(),
+            theme.secondary,
+            "the chip's ring is `FocusIndicatorColor`"
+        );
     }
 }
