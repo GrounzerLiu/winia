@@ -149,6 +149,18 @@ impl CardElevation {
     /// pressed 分支取 `max(pressed, hovered)`（与 Button 同一语义）：按下不低于
     /// hover 高度——触屏无 hover，按下升高才有阴影反馈（Elevated 默认 pressed=1
     /// 低于 hovered=2，按下若回落则触屏按下无反馈）。
+    /// Whether every state's elevation is 0 — the card then has nothing to animate and no shadow layer to pay
+    /// for. Note that a style's REST elevation being 0 does NOT make it shadow-free: Filled is 0 at rest and
+    /// still 1 on hover and 3 while dragged.
+    pub fn is_shadow_free(&self) -> bool {
+        self.default <= 0.0
+            && self.pressed <= 0.0
+            && self.focused <= 0.0
+            && self.hovered <= 0.0
+            && self.dragged <= 0.0
+            && self.disabled <= 0.0
+    }
+
     /// The elevation for a state snapshot.
     ///
     /// Compose resolves it from the LAST interaction the card received (`material3/Card.kt:705-719`:
@@ -388,20 +400,28 @@ impl Card {
         // target this build pushed, kept in a backchannel so reading it registers no dependency.
         let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
             ctx.remember_backchannel(|| None);
-        let elevation_anim = self.elevation.and_then(|e| {
-            if e.default <= 0.0 && e.pressed <= 0.0 && e.focused <= 0.0
-                && e.hovered <= 0.0 && e.dragged <= 0.0 && e.disabled <= 0.0
-            {
-                None // 全 0：无阴影，不加图层
-            } else {
-                let target = e.for_state(&state);
-                let from = last_elevation.peek().unwrap_or(target);
-                let spec =
-                    crate::animation::elevation_spec_for(from, target, state.hovered && target < from);
-                last_elevation.set(Some(target));
-                Some(ctx.animate_float_as_state(target, spec))
-            }
+        // The elevation is the caller's when there is one, otherwise the style's own token set. Compose
+        // ALWAYS has an elevation — `CardDefaults.cardElevation()` for a Filled card is
+        // `0 / 0 / 0 / 1 / 3 / 0`, not "nothing" — so a style whose REST elevation happens to be 0 still needs
+        // the animated layer: hovering raises it to 1 and dragging to 3 (`FilledCardTokens`,
+        // `CardTokens.DraggedContainerElevation`). winia stored `None` for Filled and Outlined and then skipped
+        // the layer entirely, so those cards could never show a shadow at all — a dragged Filled card moved
+        // and nothing else happened.
+        let elevation = self.elevation.unwrap_or_else(|| match self.style {
+            CardStyle::Filled => CardDefaults::card_elevation(),
+            CardStyle::Elevated => CardDefaults::elevated_card_elevation(),
+            CardStyle::Outlined => CardDefaults::outlined_card_elevation(),
         });
+        let elevation_anim = if elevation.is_shadow_free() {
+            None // every state is 0: no shadow to animate, and no layer to pay for
+        } else {
+            let target = elevation.for_state(&state);
+            let from = last_elevation.peek().unwrap_or(target);
+            let spec =
+                crate::animation::elevation_spec_for(from, target, state.hovered && target < from);
+            last_elevation.set(Some(target));
+            Some(ctx.animate_float_as_state(target, spec))
+        };
 
         let shape = self.shape;
         // 容器：三种 style 都有不透明容器色（Filled=SurfaceContainerHighest、
@@ -636,6 +656,75 @@ mod tests {
         // 内容色只区分 enabled/disabled
         assert_eq!(colors.content_color_for(&ComponentState::idle()), colors.content);
         assert_eq!(colors.content_color_for(&ComponentState::disabled()), colors.disabled_content);
+    }
+
+    /// A Filled card has no shadow at REST — and Compose still gives it an elevation, so hovering raises it to 1
+    /// and dragging to 3 (`FilledCardTokens.HoverContainerElevation` / `DraggedContainerElevation`). winia stored
+    /// `None` for Filled and Outlined and then skipped the layer, so those two styles could never show a shadow
+    /// at all: on the demo a dragged Filled card moved and nothing else happened, which is what the user hit.
+    ///
+    /// This drives the card's own interaction source (`DragInteraction.Start`) and reads the elevation the
+    /// graphics layer would paint. The control is the same card at rest.
+    #[test]
+    fn a_dragged_filled_card_raises_the_shadow_it_paints() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let source = MutableInteractionSource::new();
+        let mut compose_card = |composer: &mut crate::runtime::composer::Composer| {
+            let src = source.clone();
+            composer.compose(|ctx| {
+                crate::layout::components::Column::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        Card::filled()
+                            .interaction_source(src.clone())
+                            .build(ctx, |ctx| {
+                                crate::components::Text::new("card")
+                                    .modifier(Modifier::new().padding(8.0))
+                                    .build(ctx);
+                            });
+                    });
+            });
+        };
+        let painted_shadow = |composer: &crate::runtime::composer::Composer| -> Option<f32> {
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+        };
+        let constraints = crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0);
+        let mut composer = crate::runtime::composer::Composer::new();
+
+        compose_card(&mut composer);
+        composer.layout(constraints);
+        let at_rest = painted_shadow(&composer)
+            .expect("a Filled card carries an elevation layer even though its rest elevation is 0");
+        assert_eq!(at_rest, 0.0, "and it paints no shadow at rest");
+
+        source.emit_drag_start();
+        compose_card(&mut composer);
+        composer.layout(constraints);
+        // Real frames, not a tight loop: the animation integrates over the time since the last update, so a
+        // tight loop would step it by ~0.
+        let mut frames = 0;
+        for _ in 0..120 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            frames += 1;
+        }
+        assert!(frames > 5, "the elevation animation must actually run ({frames} frames)");
+        let dragged = painted_shadow(&composer).expect("still there");
+        assert!(
+            (dragged - 3.0).abs() < 0.01,
+            "dragging raises the shadow to `DraggedContainerElevation` (3), got {dragged}"
+        );
     }
 
     #[test]

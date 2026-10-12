@@ -195,9 +195,27 @@ impl ButtonElevation {
         Self { default, pressed, focused, hovered, disabled }
     }
 
-    /// M3 FilledButton 默认：全 0（阴影由用户显式配置）
+    /// M3 `FilledButtonTokens` / `FilledTonalButtonTokens`: rest 0 / pressed 0 / focused 0 / **hovered 1** /
+    /// disabled 0. The hover value is the one that is easy to miss — winia carried all zeros here and then
+    /// skipped the elevation layer for a Filled button, so hovering one could never raise the 1 dp shadow M3
+    /// gives it (the same shape of bug the Card had for its dragged elevation).
     pub fn default_elevation() -> Self {
+        Self::new(0.0, 0.0, 0.0, 1.0, 0.0)
+    }
+
+    /// A button style that carries no elevation in any state: `OutlinedButtonTokens` and `TextButtonTokens`
+    /// declare no elevation entries at all, so their shadow is always the ambient one.
+    pub fn none() -> Self {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
+    }
+
+    /// Whether every state's elevation is 0 — nothing to animate, no layer to pay for.
+    pub fn is_shadow_free(&self) -> bool {
+        self.default <= 0.0
+            && self.pressed <= 0.0
+            && self.focused <= 0.0
+            && self.hovered <= 0.0
+            && self.disabled <= 0.0
     }
 
     /// ElevatedButton 默认阴影（对齐 M3 `ElevatedButtonTokens`）：
@@ -599,19 +617,24 @@ impl Button {
         // registers no dependency.
         let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
             ctx.remember_backchannel(|| None);
-        let elevation_anim = self.elevation.and_then(|e| {
-            if e.default <= 0.0 && e.pressed <= 0.0 && e.focused <= 0.0
-                && e.hovered <= 0.0 && e.disabled <= 0.0
-            {
-                None // 全 0：无阴影，不加图层
-            } else {
-                let target = e.for_state(&state);
-                let from = last_elevation.peek().unwrap_or(target);
-                let spec = ButtonElevation::spec_for(from, target, state.hovered && target < from);
-                last_elevation.set(Some(target));
-                Some(ctx.animate_float_as_state(target, spec))
-            }
+        // The elevation is the caller's when there is one, otherwise the style's own token set — Compose always
+        // has one (`ButtonDefaults.buttonElevation()` is 0/0/0/1/0 for a Filled button: flat at rest, 1 dp while
+        // hovered), and `OutlinedButtonTokens`/`TextButtonTokens` declare none at all. winia stored `None` and
+        // skipped the layer, so a Filled button's hover shadow never existed.
+        let elevation = self.elevation.unwrap_or_else(|| match self.style {
+            ButtonStyle::Filled | ButtonStyle::Tonal => ButtonDefaults::button_elevation(),
+            ButtonStyle::Elevated => ButtonDefaults::elevated_button_elevation(),
+            ButtonStyle::Outlined | ButtonStyle::Text => ButtonElevation::none(),
         });
+        let elevation_anim = if elevation.is_shadow_free() {
+            None // every state is 0: no shadow to animate, and no layer to pay for
+        } else {
+            let target = elevation.for_state(&state);
+            let from = last_elevation.peek().unwrap_or(target);
+            let spec = ButtonElevation::spec_for(from, target, state.hovered && target < from);
+            last_elevation.set(Some(target));
+            Some(ctx.animate_float_as_state(target, spec))
+        };
 
         // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
         // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
@@ -1072,6 +1095,88 @@ mod tests {
             "falling from press or focus is the outgoing 150 ms"
         );
         assert_eq!(millis(2.0, 1.0, true), 120, "falling out of hover is shorter");
+    }
+
+    /// A Filled button is flat at rest and carries 1 dp while hovered — `FilledButtonTokens.HoveredContainerElevation`
+    /// (`FilledTonalButtonTokens` the same) — which winia could never show: `Button::filled()` stored no
+    /// elevation, the build skipped the layer, and hovering painted nothing. The Outlined style declares no
+    /// elevation entries at all and stays shadow-free as the control.
+    ///
+    /// This drives the button's own interaction source and reads the elevation its graphics layer would paint.
+    #[test]
+    fn a_hovered_filled_button_raises_the_shadow_it_paints() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let painted = |button: Button, source: &MutableInteractionSource| -> Option<f32> {
+            let src = source.clone();
+            let mut composer = Composer::new();
+            let button = button.interaction_source(src);
+            composer.compose(|ctx| {
+                button.on_click(|| {}).build(ctx, |ctx| {
+                    crate::components::Text::new("Ok").build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+        };
+
+        let filled_source = MutableInteractionSource::new();
+        assert_eq!(
+            painted(Button::filled(), &filled_source),
+            Some(0.0),
+            "a Filled button is flat at rest, but it still carries the layer that will lift it"
+        );
+        filled_source.emit_hover_enter();
+        let mut composer = Composer::new();
+        let src = filled_source.clone();
+        composer.compose(|ctx| {
+            Button::filled()
+                .interaction_source(src)
+                .on_click(|| {})
+                .build(ctx, |ctx| crate::components::Text::new("Ok").build(ctx));
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let mut frames = 0;
+        for _ in 0..120 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            frames += 1;
+        }
+        let hovered = composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+            .expect("still there");
+        assert!(frames > 5, "the elevation animation must actually run ({frames} frames)");
+        assert!(
+            (hovered - 1.0).abs() < 0.01,
+            "hovering raises the shadow to `HoveredContainerElevation` (1), got {hovered}"
+        );
+
+        let outlined = MutableInteractionSource::new();
+        outlined.emit_hover_enter();
+        assert_eq!(
+            painted(Button::outlined(), &outlined),
+            None,
+            "an Outlined button declares no elevation in any state, so it carries no layer"
+        );
     }
 
     /// No size named is M3's default button, whose horizontal padding is the BASELINE 24

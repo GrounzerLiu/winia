@@ -308,8 +308,16 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         press_gesture_target(nodes, &path)
     };
     let Some((node_id, slot, has_drag)) = hit else {
+        #[cfg(debug_assertions)]
+        if drag_trace_enabled() {
+            eprintln!("[gesture-down] no gesture target at {scene_pos:?}");
+        }
         return;
     };
+    #[cfg(debug_assertions)]
+    if drag_trace_enabled() {
+        eprintln!("[gesture-down] target id={node_id} slot={slot} has_drag={has_drag} at {scene_pos:?}");
+    }
 
     process_pending_taps_on_down(pw, node_id);
 
@@ -384,10 +392,18 @@ pub(crate) fn gesture_move(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     let allow_drag = !axis_undecided
         && (pw.input.scroll_slot.is_none()
             || pw.input.axis == Some(crate::input::gesture::ScrollAxis::Horizontal));
+    #[cfg(debug_assertions)]
+    if drag_trace_enabled() {
+        eprintln!("[gesture-move] local={local:?} axis_undecided={axis_undecided} scroll_slot={:?} allow_drag={allow_drag}", pw.input.scroll_slot);
+    }
     let action = {
         let Some(t) = pw.input.tracker.as_mut() else { return false; };
         t.on_move(local, allow_drag)
     };
+    #[cfg(debug_assertions)]
+    if drag_trace_enabled() {
+        eprintln!("[gesture-move] action={action:?}");
+    }
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
