@@ -343,6 +343,15 @@ impl ButtonDefaults {
         ButtonElevation::elevated()
     }
 
+    /// `ButtonDefaults.filledTonalButtonElevation()` (`material3/Button.kt:862-875`), whose defaults are
+    /// `FilledTonalButtonTokens`: `ContainerElevation`, `PressedContainerElevation` and
+    /// `FocusContainerElevation` are `ElevationTokens.Level0`, `HoverContainerElevation` is `Level1` (1 dp) and
+    /// the disabled elevation is 0. A FilledTonal button therefore has NO shadow at rest — only a hover lifts
+    /// it 1 dp — the same numbers as `button_elevation()`, but from its own token set.
+    pub fn filled_tonal_button_elevation() -> ButtonElevation {
+        ButtonElevation::new(0.0, 0.0, 0.0, 1.0, 0.0)
+    }
+
     /// 默认最小宽度（对标 `ButtonDefaults.MinWidth` 58.dp）
     pub fn min_width() -> f32 {
         58.0
@@ -633,7 +642,8 @@ impl Button {
         // hovered), and `OutlinedButtonTokens`/`TextButtonTokens` declare none at all. winia stored `None` and
         // skipped the layer, so a Filled button's hover shadow never existed.
         let elevation = self.elevation.unwrap_or_else(|| match self.style {
-            ButtonStyle::Filled | ButtonStyle::Tonal => ButtonDefaults::button_elevation(),
+            ButtonStyle::Filled => ButtonDefaults::button_elevation(),
+            ButtonStyle::Tonal => ButtonDefaults::filled_tonal_button_elevation(),
             ButtonStyle::Elevated => ButtonDefaults::elevated_button_elevation(),
             ButtonStyle::Outlined | ButtonStyle::Text => ButtonElevation::none(),
         });
@@ -1195,6 +1205,82 @@ mod tests {
             painted(Button::outlined(), &outlined),
             None,
             "an Outlined button declares no elevation in any state, so it carries no layer"
+        );
+    }
+
+    /// A FilledTonal button has NO shadow at rest and 1 dp while hovered — `FilledTonalButtonTokens`:
+    /// `ContainerElevation`/`PressedContainerElevation`/`FocusContainerElevation` are `ElevationTokens.Level0`
+    /// and `HoverContainerElevation` is `Level1` (`Button.kt:862-875` wires exactly those into
+    /// `ButtonDefaults.filledTonalButtonElevation()`).
+    #[test]
+    fn a_filled_tonal_button_is_flat_at_rest_and_lifts_on_hover() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let painted = |source: &MutableInteractionSource| -> Option<f32> {
+            let src = source.clone();
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                Button::filled_tonal()
+                    .interaction_source(src)
+                    .on_click(|| {})
+                    .build(ctx, |ctx| {
+                        crate::components::Text::new("Ok").build(ctx);
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+        };
+
+        let at_rest = MutableInteractionSource::new();
+        assert_eq!(painted(&at_rest), Some(0.0), "a tonal button paints no shadow at rest");
+
+        // The token sets agree in value; they are still two sets in material3, so keep both named.
+        assert_eq!(
+            ButtonDefaults::filled_tonal_button_elevation(),
+            ButtonDefaults::button_elevation(),
+            "FilledTonalButtonTokens and FilledButtonTokens have the same elevation numbers"
+        );
+
+        let hovered = MutableInteractionSource::new();
+        hovered.emit_hover_enter();
+        let src = hovered.clone();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Button::filled_tonal()
+                .interaction_source(src)
+                .on_click(|| {})
+                .build(ctx, |ctx| crate::components::Text::new("Ok").build(ctx));
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        for _ in 0..120 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let lifted = composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+            .expect("the layer stays");
+        assert!(
+            (lifted - 1.0).abs() < 0.01,
+            "hover leans the tonal button up to `HoverContainerElevation` (1 dp), got {lifted}"
         );
     }
 
