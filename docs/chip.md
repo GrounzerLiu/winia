@@ -36,25 +36,31 @@ Chip::suggestion(label, on_click)                   // 建议（可选 icon）
 | 容器高 | 32dp |
 | 形状 | 8dp 圆角（`ChipDefaults::shape()`） |
 | icon 尺寸 | 18dp（`IconSource` 闭包子节点，尺寸由调用方控制） |
-| avatar | 24dp、12dp 圆角（InputChip） |
-| 左右 padding | 无 icon 16dp / 有 icon 8dp |
+| avatar | 24dp、12dp 圆角（InputChip——specs 明确是圆角方块，不是圆） |
+| 左右 padding | 无 icon 16dp / 有 icon 8dp；InputChip 带头像时左侧 **4dp** |
 | 元素间距 | 8dp |
 | 边框 | 1dp outline（无填充时）；**有填充（selected）0 边框——不挂 border modifier** |
 
 ### 配色（`ChipDefaults`）
 
-**非选择型（Assist/Suggestion）**——边框样式：
-| 状态 | 容器 | 文字 | icon |
-|---|---|---|---|
-| enabled | transparent | onSurfaceVariant | primary |
-| disabled | transparent | onSurface@38% | onSurface@38% |
+颜色角色以 M3 specs 页面（<https://m3.material.io/components/chips/specs>）各变体的 "color roles" 列表为准。
 
-**选择型（Filter/Input）**：
-| 状态 | 容器 | 文字 | icon | 边框 |
+**AssistChip**（`assist_chip_colors()`）——边框样式：
+| 状态 | 容器 | 文字 | 前导 icon | 后置 icon |
 |---|---|---|---|---|
-| unselected | transparent | onSurfaceVariant | primary | 1dp outline |
-| selected | secondaryContainer | onSecondaryContainer | onSecondaryContainer | 无 |
-| disabled | transparent | onSurface@38% | onSurface@38% | 无交互 |
+| enabled | transparent | **onSurface** | primary | onSurfaceVariant |
+| disabled | transparent | onSurface@38% | onSurface@38% | onSurface@38% |
+
+**SuggestionChip**（`suggestion_chip_colors()`）：同 assist，但文字是 **onSurfaceVariant**（specs 给 suggestion 的角色）。
+
+**FilterChip**（`selectable_chip_colors()`）：
+| 状态 | 容器 | 文字 | 前导 icon | 后置 icon | 边框 |
+|---|---|---|---|---|---|
+| unselected | transparent | onSurfaceVariant | primary | onSurfaceVariant | 1dp **outlineVariant** |
+| selected | secondaryContainer | onSecondaryContainer | onSecondaryContainer | onSecondaryContainer | 无 |
+| disabled | transparent | onSurface@38% | onSurface@38% | onSurface@38% | 无交互 |
+
+**InputChip**（`input_chip_colors()`）：与 FilterChip 相同，**唯一差别**是选中时前导 icon 保持 **primary**（specs 把 input chip 的前导 icon 定为 Primary 角色；`InputChipTokens.SelectedLeadingIconColor` 同）。
 
 ## 3. 实现细节
 

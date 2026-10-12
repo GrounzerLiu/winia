@@ -100,17 +100,21 @@ impl ChipDefaults {
     pub const CORNER_RADIUS: f32 = 8.0; // 形状 8dp 圆角
     pub const PADDING_NO_ICON: f32 = 16.0; // 无 icon 左右 padding 16dp
     pub const PADDING_WITH_ICON: f32 = 8.0; // 有 icon 左右 padding 8dp
+    /// The specs page's input chip diagram: "left padding for avatar 4dp, right padding for avatar 8dp"
+    /// (the avatar sits closer to the leading edge than an icon does).
+    pub const INPUT_AVATAR_LEFT_PADDING: f32 = 4.0;
     pub const ELEMENT_GAP: f32 = 8.0; // 元素间距 8dp
     pub const BORDER_WIDTH: f32 = 1.0; // 边框 1dp
     pub const AVATAR_SIZE: f32 = 24.0; // InputChip avatar 24dp
+    /// The specs page: "avatar shape 12dp corner radius" — a rounded square, NOT a circle.
+    pub const AVATAR_CORNER_RADIUS: f32 = 12.0;
 
-    /// 非选择型（Assist/Suggestion）默认配色——**transparent 容器 + 1dp
-    /// outline 边框**（M3：assist/suggestion 是边框样式，无填充）+ onSurfaceVariant
-    /// 文字 + primary icon
-    pub fn chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
+    /// `AssistChipDefaults.assistChipColors()` — the specs page's assist chip color roles: transparent
+    /// container, label **On surface**, leading icon Primary, trailing icon On surface variant.
+    pub fn assist_chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
         ChipColors {
             container: crate::graphics::Color::TRANSPARENT,
-            label: theme.on_surface_variant,
+            label: theme.on_surface,
             leading_icon: theme.primary,
             trailing_icon: theme.on_surface_variant,
             disabled_container: crate::graphics::Color::TRANSPARENT,
@@ -118,7 +122,16 @@ impl ChipDefaults {
         }
     }
 
-    /// 选择型（Filter/Input）默认配色：unselected **transparent + outline 边框**
+    /// `SuggestionChipDefaults.suggestionChipColors()` — the same as the assist chip except that the label is
+    /// **On surface variant** (the specs page lists that role for the suggestion chip).
+    pub fn suggestion_chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
+        ChipColors {
+            label: theme.on_surface_variant,
+            ..Self::assist_chip_colors(theme)
+        }
+    }
+
+    /// 选择型（Filter/Input）默认配色：unselected **transparent + outline variant 边框**
     /// + onSurfaceVariant；selected secondaryContainer（填充）+ onSecondaryContainer
     /// + 0 边框（有填充即无边框）
     pub fn selectable_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
@@ -134,6 +147,17 @@ impl ChipDefaults {
             disabled_container: crate::graphics::Color::TRANSPARENT,
             disabled_label: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
             disabled_selected_container: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+        }
+    }
+
+    /// `InputChipDefaults.inputChipColors()` — the filter chip's colours with one difference: the specs page
+    /// gives an input chip's leading icon the **Primary** role, and `InputChipTokens.SelectedLeadingIconColor`
+    /// says the same, so it stays Primary when the chip is selected (a filter chip's turns On secondary
+    /// container).
+    pub fn input_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
+        SelectableChipColors {
+            selected_leading_icon: theme.primary,
+            ..Self::selectable_chip_colors(theme)
         }
     }
 
@@ -239,10 +263,16 @@ impl Chip {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = crate::theme::WiniaTheme::colors();
         let sel = self.selected;
-        // 配色解析（按变体取对应默认）
+        // 配色解析（按变体取对应默认）——颜色角色来自 M3 specs 页面
+        // (m3.material.io/components/chips/specs) 各变体的 "color roles" 列表：
+        // Assist 标签是 On surface、Suggestion 是 On surface variant；Assist/Suggestion 的
+        // outline 角色是 `Outline`，Filter/Input 是 `Outline variant`。
         let (container, label_color, icon_color, border_w, border_color) = match self.variant {
             ChipVariant::Assist | ChipVariant::Suggestion => {
-                let c = self.flat_colors.unwrap_or_else(|| ChipDefaults::chip_colors(&theme));
+                let c = self.flat_colors.unwrap_or_else(|| match self.variant {
+                    ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
+                    _ => ChipDefaults::assist_chip_colors(&theme),
+                });
                 let (container, label, icon) = if self.enabled {
                     (c.container, c.label, c.leading_icon)
                 } else {
@@ -251,7 +281,10 @@ impl Chip {
                 (container, label, icon, ChipDefaults::BORDER_WIDTH, theme.outline)
             }
             ChipVariant::Filter | ChipVariant::Input => {
-                let c = self.selectable_colors.unwrap_or_else(|| ChipDefaults::selectable_chip_colors(&theme));
+                let c = self.selectable_colors.unwrap_or_else(|| match self.variant {
+                    ChipVariant::Input => ChipDefaults::input_chip_colors(&theme),
+                    _ => ChipDefaults::selectable_chip_colors(&theme),
+                });
                 let (container, label, icon) = if !self.enabled {
                     (c.disabled_container, c.disabled_label, c.disabled_label)
                 } else if sel {
@@ -259,14 +292,34 @@ impl Chip {
                 } else {
                     (c.container, c.label, c.leading_icon)
                 };
-                // 选中：0 边框；未选中：1dp outline
+                // 选中：0 边框；未选中：1dp outline variant
                 let w = if sel { 0.0 } else { ChipDefaults::BORDER_WIDTH };
-                (container, label, icon, w, theme.outline)
+                (container, label, icon, w, theme.outline_variant)
             }
         };
-        // 左右 padding：有 icon/avatar 8，无 16
-        let has_icon = self.leading_icon.is_some() || self.trailing_icon.is_some() || self.avatar.is_some();
-        let pad = if has_icon { ChipDefaults::PADDING_WITH_ICON } else { ChipDefaults::PADDING_NO_ICON };
+        // 左右 padding 按 specs：无 icon 16dp、有 icon 8dp；InputChip 带头像时左 4dp / 右 8dp。
+        let pad = match self.variant {
+            ChipVariant::Input => {
+                let left = if self.avatar.is_some() {
+                    ChipDefaults::INPUT_AVATAR_LEFT_PADDING
+                } else if self.leading_icon.is_some() {
+                    ChipDefaults::PADDING_WITH_ICON
+                } else {
+                    ChipDefaults::PADDING_NO_ICON
+                };
+                let right = if self.trailing_icon.is_some() {
+                    ChipDefaults::PADDING_WITH_ICON
+                } else {
+                    ChipDefaults::PADDING_NO_ICON
+                };
+                (left, right)
+            }
+            _ => {
+                let has_icon = self.leading_icon.is_some() || self.trailing_icon.is_some();
+                let p = if has_icon { ChipDefaults::PADDING_WITH_ICON } else { ChipDefaults::PADDING_NO_ICON };
+                (p, p)
+            }
+        };
         let on_click = if self.enabled { Some(self.on_click.clone()) } else { None };
         let leading = self.leading_icon;
         let trailing = self.trailing_icon;
@@ -275,7 +328,7 @@ impl Chip {
 
         build_chip(
             ctx,
-            self.modifier.padding_horizontal(pad),
+            self.modifier.padding_start(pad.0).padding_end(pad.1),
             self.enabled,
             container,
             border_color,
@@ -291,11 +344,11 @@ impl Chip {
                     .alignment(crate::layout::Alignment::Center)
                     .build(ctx, |ctx| {
                     if let Some(av) = avatar {
-                        // avatar 24dp、12dp 圆角（M3 InputChip avatar shape）
+                        // avatar 24dp、12dp 圆角（specs："avatar shape 12dp corner radius"——圆角方块，不是圆）
                         crate::layout::components::Stack::new()
                             .modifier(Modifier::new()
                                 .size(ChipDefaults::AVATAR_SIZE, ChipDefaults::AVATAR_SIZE)
-                                .clip(Shape::RoundedRect { corner_radius: 12.0 }))
+                                .clip(Shape::RoundedRect { corner_radius: ChipDefaults::AVATAR_CORNER_RADIUS }))
                             .build(ctx, |c| av(c));
                     }
                     if let Some(ic) = leading {
@@ -388,6 +441,144 @@ mod tests {
     use crate::theme::Typography;
     use crate::text::{FontWeight, TextStyle};
     use crate::unit::{Sp, TextUnit};
+    use crate::layout::sizing::{Dimension, SizeValue};
+    use crate::components::{Icon, Text};
+    use crate::layout::components::Stack;
+
+    /// Compose one chip and hand back the composer plus its container node (the chip's own box).
+    fn chip_container(chip: Chip) -> (Composer, usize) {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| chip.build(ctx));
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        // A single chip is the root itself unless a wrapper was inserted; find the node carrying the outline
+        // or the background.
+        let inner = if nodes[root]
+            .modifier
+            .elements()
+            .iter()
+            .any(|el| matches!(el, crate::modifier::ModifierElement::Background { .. }))
+        {
+            root
+        } else {
+            nodes[root].children.first().copied().expect("the chip's box")
+        };
+        (composer, inner)
+    }
+
+    fn outline_of(composer: &Composer, idx: usize) -> Option<(f32, crate::graphics::Color)> {
+        composer.arena_nodes()[idx]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::Border { width, color, .. } => Some((*width, *color)),
+                _ => None,
+            })
+    }
+
+    fn fixed(v: &SizeValue) -> Option<f32> {
+        match v {
+            SizeValue::Static(Dimension::Fixed(dp)) => Some(*dp),
+            _ => None,
+        }
+    }
+
+    /// The horizontal padding the chip asks for, (start, end).
+    fn padding_of(composer: &Composer, idx: usize) -> (Option<f32>, Option<f32>) {
+        let mut start = None;
+        let mut end = None;
+        for el in composer.arena_nodes()[idx].modifier.elements() {
+            if let crate::modifier::ModifierElement::PaddingSides { start: s, end: e, .. } = el {
+                if let Some(v) = fixed(s) {
+                    start = Some(v);
+                }
+                if let Some(v) = fixed(e) {
+                    end = Some(v);
+                }
+            }
+        }
+        (start, end)
+    }
+
+    fn label(text: &'static str) -> impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static {
+        move |ctx: &mut ComposeCtx| Text::new(text).build(ctx)
+    }
+
+    /// The specs page lists the assist chip's label role as **On surface** and the suggestion chip's as
+    /// **On surface variant**; winia used the suggestion value for both.
+    #[test]
+    fn assist_and_suggestion_labels_are_different_roles() {
+        let theme = crate::theme::WiniaTheme::colors();
+        assert_eq!(ChipDefaults::assist_chip_colors(&theme).label, theme.on_surface);
+        assert_eq!(
+            ChipDefaults::suggestion_chip_colors(&theme).label,
+            theme.on_surface_variant
+        );
+    }
+
+    /// The specs page: assist and suggestion chips outline with `Outline`, filter and input chips with
+    /// `Outline variant`; a selected chip has no outline at all.
+    #[test]
+    fn the_outline_role_follows_the_variant() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let (assist, a_idx) = chip_container(Chip::assist(label("A"), || {}));
+        assert_eq!(outline_of(&assist, a_idx), Some((1.0, theme.outline)));
+        let (suggestion, s_idx) = chip_container(Chip::suggestion(label("S"), || {}));
+        assert_eq!(outline_of(&suggestion, s_idx), Some((1.0, theme.outline)));
+        let (filter, f_idx) = chip_container(Chip::filter(false, label("F"), || {}));
+        assert_eq!(outline_of(&filter, f_idx), Some((1.0, theme.outline_variant)));
+        let (selected, s2_idx) = chip_container(Chip::filter(true, label("F"), || {}));
+        assert_eq!(outline_of(&selected, s2_idx), None, "a selected chip draws no outline");
+        let (input, i_idx) = chip_container(Chip::input(false, label("I"), || {}));
+        assert_eq!(outline_of(&input, i_idx), Some((1.0, theme.outline_variant)));
+    }
+
+    /// The specs page gives an input chip's leading icon the Primary role, so it stays Primary when the chip
+    /// is selected; a filter chip's turns On secondary container.
+    #[test]
+    fn an_input_chips_selected_leading_icon_stays_primary() {
+        let theme = crate::theme::WiniaTheme::colors();
+        assert_eq!(
+            ChipDefaults::selectable_chip_colors(&theme).selected_leading_icon,
+            theme.on_secondary_container
+        );
+        assert_eq!(
+            ChipDefaults::input_chip_colors(&theme).selected_leading_icon,
+            theme.primary
+        );
+    }
+
+    /// The specs page's padding rules: 16 dp with nothing at the edge, 8 dp beside an icon, and for an input
+    /// chip "left padding for avatar 4 dp, right padding for avatar 8 dp".
+    #[test]
+    fn the_padding_is_the_specs_rule() {
+        let (plain, p_idx) = chip_container(Chip::assist(label("A"), || {}));
+        assert_eq!(padding_of(&plain, p_idx), (Some(16.0), Some(16.0)));
+        let (icon, i_idx) = chip_container(Chip::assist(label("A"), || {}).leading_icon(|ctx| {
+            Icon::new(crate::graphics::IconSource::svg_path("M12 3v10h8v2H10V3h2z")).build(ctx);
+        }));
+        assert_eq!(padding_of(&icon, i_idx), (Some(8.0), Some(8.0)));
+
+        let (bare_input, b_idx) = chip_container(Chip::input(false, label("I"), || {}));
+        assert_eq!(padding_of(&bare_input, b_idx), (Some(16.0), Some(16.0)));
+        let (with_avatar, av_idx) = chip_container(
+            Chip::input(false, label("I"), || {}).avatar(|ctx| {
+                Stack::new().build(ctx, |_| {});
+            }),
+        );
+        assert_eq!(
+            padding_of(&with_avatar, av_idx),
+            (Some(4.0), Some(16.0)),
+            "an avatar sits 4 dp from the leading edge (the specs page's left padding for avatar); the trailing \
+             edge has nothing in it, so it keeps the default 16 dp"
+        );
+        let (with_close, c_idx) = chip_container(Chip::input(false, label("I"), || {}).trailing_icon(|ctx| {
+            Icon::new(crate::graphics::IconSource::svg_path("M19 6.41 12 13.4 5 6.41 3.59 8 12 16.4 20.41 8z")).build(ctx);
+        }));
+        assert_eq!(padding_of(&with_close, c_idx), (Some(16.0), Some(8.0)));
+    }
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {
         for el in nodes[idx].modifier.elements() {
