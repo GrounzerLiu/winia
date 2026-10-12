@@ -39,6 +39,7 @@ use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::components::sheet_state::{SheetState, SheetValue};
+use crate::layout::node::ContentAlignment;
 use crate::unit::Dp;
 
 /// 默认 sheet 顶部圆角（M3 `BottomSheetDefaults.ExpandedShape` 28dp）
@@ -310,6 +311,14 @@ impl ModalBottomSheet {
                 // 会与 offset 双重偏移，面板被推到屏幕外）
                 crate::layout::components::Stack::new()
                     .modifier(crate::modifier::Modifier::new().fill_max_size())
+                    // The panel is centred by the BOX, not by an x inset in the panel's own modifier: this
+                    // Stack used to align it to `Start`, which mirrors under RTL — in a 1200-wide window that
+                    // put the panel's left edge at 560 (the right edge minus the sheet) and the 280 inset then
+                    // pushed it to 840, i.e. 280 px of it outside the window. Measured on the demo through the
+                    // debug server with RTL on: OLD x=840, now x=280 — the same 280 as LTR. A window narrower
+                    // than `sheetMaxWidth` has an inset of 0, which is why only a wide one showed it.
+                    // `TOP_CENTER` is symmetric, so the inset is not needed at all.
+                    .content_alignment(ContentAlignment::TOP_CENTER)
                     .build(ctx, |ctx| {
                         // Scrim 层：占满全屏、透明、点击关闭（面板之上由 overlay
                         // 自动画遮罩；此层只捕获点击——Compose Scrim 语义）
@@ -331,13 +340,14 @@ impl ModalBottomSheet {
                         // ⚠ graphics_layer 位移不参与 hit_test → 面板布局在顶部、
                         // 渲染在底部，点击命中错位（面板外点不到 Scrim）。
                         // sheetMaxWidth 640.dp 平板居中（Compose 语义），手机 480 铺满
-                        let (sheet_w, sheet_pad_x) =
+                        let (sheet_w, _centring_inset) =
                             sheet_panel_geometry(sheet_max_width, crate::layout::window_size().0);
                         let mut panel_mod = Modifier::new()
                             .width(sheet_w)
-                            // `absolute_offset`, not `offset` — see the scaffold: the x is a
-                            // centring inset, and a plain offset mirrors x under RTL.
-                            .absolute_offset(sheet_pad_x, st.offset_state())
+                            // Only the DRAG offset now: the centring comes from the container's
+                            // `ContentAlignment::TOP_CENTER` above, which is direction-independent, whereas the
+                            // inset this used to add was applied on top of a mirrored `Start`.
+                            .absolute_offset(0.0, st.offset_state())
                             .shadow(
                                 1.0,
                                 cur_shape,
