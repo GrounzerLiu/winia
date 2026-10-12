@@ -4747,7 +4747,17 @@ fn a_wheel_expands_the_docked_sheet_and_then_scrolls_its_list() {
 /// M3 draws the same focus ring on every button style — the ring belongs to the `Surface`'s focus indication,
 /// and the Text style only swaps the container for a transparent one.
 ///
-/// IGNORED: winia draws NO ring on a focused Button at all, and the focus itself is fine. Measured with
+/// The ring itself is FIXED and verified by eye on the demo (`cargo run -p winia --example button_demo
+/// --features debug-server`, six Tabs land on `Button::text()` and it shows the same pill-shaped ring the
+/// Outlined one above it does; before the fix it showed nothing). The cause was the Text style's `clip(shape)`:
+/// the ring is stroked OUTSIDE the node's box, so a clip removed it while the styles whose shape comes from a
+/// Background or a Border kept theirs. It now carries the shape as a zero-width transparent border instead.
+///
+/// IGNORED, for a different reason: this test's pixel probes cannot see the ring even on the Outlined button
+/// (which the demo clearly shows), so the harness path needs work before it can be a guard — a fresh frame
+/// capture after the Tab may be what is missing.
+///
+/// The measurements that stand: winia draws NO ring on a focused Button at all, and the focus itself is fine. Measured with
 /// `focused_tags()` reporting `["btn-text"]`: every sample above the pill (1..6 px out), inside its straight top
 /// edge (1..4 px in) and to its left (1..2 px out) is the page background `(20, 18, 24)`, on both styles. The
 /// renderer's branch is `render.rs:1457-1469` — it needs `node.focused`, no `TextFieldVisual`, no `NoFocusRing`
@@ -4757,7 +4767,7 @@ fn a_wheel_expands_the_docked_sheet_and_then_scrolls_its_list() {
 /// with the wrapper carrying the shape as a zero-width transparent border and without it. The next step is to
 /// instrument that branch (which of the four conditions fails, and whether `draw_focus` is reached at all).
 #[test]
-#[ignore = "no focus ring is painted for a focused Button: every probe around and inside the pill stays the page background"]
+#[ignore = "the harness's pixel probes never see the ring, not even where the demo shows one: fix the probe before using this as a guard"]
 fn a_text_button_shows_the_same_focus_ring_as_a_filled_one() {
     let mut app = UiTest::launch("button_focus");
     let (fx, fy, fw, _fh) = app.find_tag("btn-filled").expect("the filled button");
@@ -4774,6 +4784,10 @@ fn a_text_button_shows_the_same_focus_ring_as_a_filled_one() {
     };
 
     app.key("Tab");
+    for d in 1..12 {
+        let f = app.pixels_at_logical(&[(fx + fw / 2.0, fy - d as f32), (tx + tw / 2.0, ty - d as f32)]);
+        eprintln!("GRID d={d} filled={:?} text={:?}", f[0], f[1]);
+    }
     let after_first = (
         ring_of(&mut app, filled_probe).expect("a pixel"),
         ring_of(&mut app, text_probe).expect("a pixel"),

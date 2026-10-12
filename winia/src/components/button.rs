@@ -645,14 +645,25 @@ impl Button {
             .min_height(min_h)
             .padding_sides(pad_s, pad_t, pad_e, pad_b);
         // 背景按 style（Filled/Tonal 有容器色，Outlined 无）；
-        // Text 补透明 clip(shape)：无 Background/Border 时焦点环/波纹
-        // 形状推断会回退矩形，clip 让焦点环正确跟随胶囊（对标 Surface shape）
+        // The Text style's shape, carried without a clip:
+        //
+        // The Text style has neither a background nor a border to carry its shape, and the ripple plus the
+        // focus ring both infer that shape from the chain (`render.rs:1460-1467`). It used a `clip` for that —
+        // but a clip also CUTS everything drawn around the box, and the ring is stroked OUTSIDE the node's rect
+        // (`render.rs:2209-2213`). So a Text button lost its ring while the styles whose shape comes from a
+        // Background or a Border kept theirs — visible side by side on the demo, where `Button::outlined()`
+        // shows a ring and `Button::text()` showed none. A zero-width transparent border states the same shape
+        // and clips nothing.
         modifier = match self.style {
             ButtonStyle::Filled | ButtonStyle::Elevated | ButtonStyle::Tonal => {
                 modifier.background(container, shape)
             }
             ButtonStyle::Outlined => modifier,
-            ButtonStyle::Text => modifier.clip(shape),
+            ButtonStyle::Text => modifier.border(
+                0.0,
+                crate::graphics::Color::from_argb(0, 0, 0, 0),
+                shape,
+            ),
         };
         // 边框：显式 border 优先，否则 Outlined 默认 1px outline 色
         // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, OutlineVariant))）
