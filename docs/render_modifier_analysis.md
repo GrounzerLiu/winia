@@ -108,7 +108,7 @@ fn render_pass1(nodes, root_idx, idx, canvas, parent_x, parent_y) {
 |---|---|---|
 | drop_shadow/ShadowParams | `draw_shadow_layer` render.rs:186-286 | 离屏 surface=**内容尺寸**；白色形状（spread 外圈 stroke，Fill+Stroke 两遍）→ `SrcIn` 染色（色×alpha）→ 主画布 `draw_image` + `ImageFilter::blur` **绘制时应用**（避开离屏 clamp）+ CropRect 限模糊输入范围（内容 ±pad）。`sigma = radius×0.57735`（/√3）；`pad = radius*2+spread*2` |
 | shadow(elevation) | modifier.rs:849-875 | 展开 **ambient+spot 两层**：ambient 无偏移、blur=e、alpha 0.18×strength；spot 偏移(0,e×0.5)、blur=e×0.25、alpha 0.30。`strength=(elevation/12).min(1.0)`；`elevation<=0 && !clip` 早退（Compose early-return） |
-| graphicsLayer.shadowElevation | `draw_elevation_shadow` render.rs:131-157 | `SkShadowUtils::draw_shadow` 真 ambient+spot；`light_pos=(270,0,600)`、`light_radius=800`；elevation 即 Compose Z 语义，不再手工换算 blur |
+| graphicsLayer.shadowElevation | `draw_elevation_shadow` render.rs:181-195 | `SkShadowUtils::draw_shadow` 真 ambient+spot；`light_pos=(0,-600,600)`（光源在正上方；旧的 `(270,0,600)` 把阴影整个甩到左侧、下方没有裙边——实测见 `winia/tests/shadow_direction.rs`）、`light_radius=800`；elevation 即 Compose Z 语义，不再手工换算 blur |
 
 ### 8. GraphicsLayer（render.rs:621-653）
 

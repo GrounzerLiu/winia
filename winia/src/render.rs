@@ -180,7 +180,14 @@ fn draw_elevation_shadow(
 
     let path = shadow_path(rect, shape);
     let z_plane = (0.0, 0.0, elevation);
-    let light_pos = (270.0, 0.0, 600.0);
+    // The light sits directly above the component's centre, so the shadow falls straight down with no
+    // horizontal bias — Compose's own appearance (Android's spot shadow is a vertical skirt). It used to be
+    // `(270, 0, 600)`: off to one side AND level with the object, which threw the shadow up and sideways.
+    // Measured on a 60x40 box with an 8 dp shadow (`tests/shadow_direction.rs`): the sample 12 px ABOVE the box
+    // was 216 grey while the one 12 px below stayed pure white. Skia's spot shadow moves AWAY from the light, so
+    // in canvas coordinates (y down) a light above the object is a NEGATIVE y: `(0, -600, 600)` puts the skirt
+    // below, and `+600` moves the shadow further up instead (measured: 206 above, white below).
+    let light_pos = (0.0, -600.0, 600.0);
     let light_radius = 800.0;
     skia_safe::utils::shadow_utils::draw_shadow(
         canvas,
