@@ -24,6 +24,8 @@ mod tab_indicator;
 mod bottom_sheet;
 #[path = "fixture_bottom_sheet_scaffold.rs"]
 mod bottom_sheet_scaffold;
+#[path = "fixture_button_focus.rs"]
+mod button_focus;
 #[path = "fixture_dialog_dismiss.rs"]
 mod dialog_dismiss;
 #[path = "fixture_nest.rs"]
@@ -107,6 +109,7 @@ const SCENARIOS: &[(&str, fn())] = &[
     ("tab_indicator", tab_indicator::main),
     ("bottom_sheet", bottom_sheet::main),
     ("bottom_sheet_scaffold", bottom_sheet_scaffold::main),
+    ("button_focus", button_focus::main),
     ("dialog_dismiss", dialog_dismiss::main),
     ("dropdown_menu", dropdown_menu::main),
     ("split_button", split_button::main),

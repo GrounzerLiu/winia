@@ -4743,3 +4743,58 @@ fn a_wheel_expands_the_docked_sheet_and_then_scrolls_its_list() {
         "the list scrolled: its first row has left the top of the viewport"
     );
 }
+
+/// M3 draws the same focus ring on every button style — the ring belongs to the `Surface`'s focus indication,
+/// and the Text style only swaps the container for a transparent one.
+///
+/// IGNORED: winia draws NO ring on a focused Button at all, and the focus itself is fine. Measured with
+/// `focused_tags()` reporting `["btn-text"]`: every sample above the pill (1..6 px out), inside its straight top
+/// edge (1..4 px in) and to its left (1..2 px out) is the page background `(20, 18, 24)`, on both styles. The
+/// renderer's branch is `render.rs:1457-1469` — it needs `node.focused`, no `TextFieldVisual`, no `NoFocusRing`
+/// (nothing in `button.rs` adds one) and infers the ring's shape from the nearest
+/// Background/Border/Clip, with `draw_focus` stroking OUTSIDE the box (`:2209-2213`). Three configurations all
+/// produced nothing: the colour set on the button's own node, on the wrapper the touch target added, and both;
+/// with the wrapper carrying the shape as a zero-width transparent border and without it. The next step is to
+/// instrument that branch (which of the four conditions fails, and whether `draw_focus` is reached at all).
+#[test]
+#[ignore = "no focus ring is painted for a focused Button: every probe around and inside the pill stays the page background"]
+fn a_text_button_shows_the_same_focus_ring_as_a_filled_one() {
+    let mut app = UiTest::launch("button_focus");
+    let (fx, fy, fw, _fh) = app.find_tag("btn-filled").expect("the filled button");
+    let (tx, ty, tw, _th) = app.find_tag("btn-text").expect("the text button");
+    // The ring is drawn 2 px around the focus target, which is the touch-target box — 4 px taller than the
+    // visual pill on each side — so the probe sits 6 px above the pill's top edge.
+    let filled_probe = (fx + fw / 2.0, fy - 6.0);
+    let text_probe = (tx + tw / 2.0, ty - 6.0);
+
+    let background = app.pixels_at_logical(&[filled_probe]);
+    let base = background[0].expect("a pixel");
+    let ring_of = |app: &mut UiTest, probe: (f32, f32)| -> Option<(u8, u8, u8, u8)> {
+        app.pixels_at_logical(&[probe])[0]
+    };
+
+    app.key("Tab");
+    let after_first = (
+        ring_of(&mut app, filled_probe).expect("a pixel"),
+        ring_of(&mut app, text_probe).expect("a pixel"),
+    );
+    app.key("Tab");
+    let after_second = (
+        ring_of(&mut app, filled_probe).expect("a pixel"),
+        ring_of(&mut app, text_probe).expect("a pixel"),
+    );
+
+    let differs = |a: (u8, u8, u8, u8), b: (u8, u8, u8, u8)| a != b;
+    assert!(
+        differs(after_first.0, base) || differs(after_second.0, base),
+        "the filled button draws a focus ring: base {base:?}, first Tab {:?}, second Tab {:?}",
+        after_first.0,
+        after_second.0
+    );
+    assert!(
+        differs(after_first.1, base) || differs(after_second.1, base),
+        "and so does the text button: base {base:?}, first Tab {:?}, second Tab {:?}",
+        after_first.1,
+        after_second.1
+    );
+}
