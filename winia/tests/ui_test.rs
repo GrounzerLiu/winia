@@ -4743,3 +4743,4 @@ fn a_wheel_expands_the_docked_sheet_and_then_scrolls_its_list() {
         "the list scrolled: its first row has left the top of the viewport"
     );
 }
+
