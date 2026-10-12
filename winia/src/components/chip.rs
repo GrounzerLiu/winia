@@ -220,8 +220,9 @@ impl ChipDefaults {
 // ═══════════════════════════════════════════════════════════
 
 /// A chip's shadow elevation per interaction state, in dp — material3's `ChipElevation` /
-/// `SelectableChipElevation` (both carry the same six values; a selectable chip's *selected* cases are
-/// simply what the factory puts in them).
+/// `SelectableChipElevation`, plus one value material3 keeps in its token file but leaves out of the class:
+/// `unselected_hovered`, because `FilterChipTokens` separates the two cases
+/// (`FlatSelectedHoverContainerElevation` = Level1, `FlatUnselectedHoverContainerElevation` = Level0).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChipElevation {
     pub default: f32,
@@ -230,11 +231,20 @@ pub struct ChipElevation {
     pub hovered: f32,
     pub dragged: f32,
     pub disabled: f32,
+    /// The hover elevation while a SELECTABLE chip is NOT selected. Equal to `hovered` unless the tokens
+    /// separate them; `for_state` picks by the chip's selected state.
+    pub unselected_hovered: f32,
 }
 
 impl ChipElevation {
     pub fn new(default: f32, pressed: f32, focused: f32, hovered: f32, dragged: f32, disabled: f32) -> Self {
-        Self { default, pressed, focused, hovered, dragged, disabled }
+        Self { default, pressed, focused, hovered, dragged, disabled, unselected_hovered: hovered }
+    }
+
+    /// A set whose hover value depends on the selected state — the filter chip's tokens.
+    pub fn with_unselected_hover(mut self, value: f32) -> Self {
+        self.unselected_hovered = value;
+        self
     }
 
     /// `assistChipElevation()` / `suggestionChipElevation()` / `inputChipElevation()`: `FlatContainerElevation`
@@ -244,9 +254,13 @@ impl ChipElevation {
     }
 
     /// `filterChipElevation()`: like `flat()`, but a hovered chip rises 1 dp
-    /// (`FlatSelectedHoverContainerElevation` = Level1).
+    /// (`FlatSelectedHoverContainerElevation` = Level1) — and only while it is SELECTED, because
+    /// `FlatUnselectedHoverContainerElevation` is Level0. An unselected filter chip's container is
+    /// transparent, so hovering it to 1 dp paints a shadow through that transparency: the "leaking shadow"
+    /// report. (material3's own `filterChipElevation()` passes the selected value for both states; this follows
+    /// the token pair, recorded in `docs/chip.md`.)
     pub fn hover_lifting() -> Self {
-        Self::new(0.0, 0.0, 0.0, 1.0, 8.0, 0.0)
+        Self::new(0.0, 0.0, 0.0, 1.0, 8.0, 0.0).with_unselected_hover(0.0)
     }
 
     /// The `Elevated*` variants: `ElevatedContainerElevation` Level1 (1 dp) at rest, pressed and focused,
@@ -256,8 +270,9 @@ impl ChipElevation {
     }
 
     /// The elevation for a state snapshot, latest interaction first — the same order the Button and Card
-    /// use, since `animateElevation` resolves it from the last interaction.
-    pub fn for_state(&self, state: &crate::interaction::ComponentState) -> f32 {
+    /// use, since `animateElevation` resolves it from the last interaction. `selected` only matters for a
+    /// selectable chip's hover value.
+    pub fn for_state(&self, state: &crate::interaction::ComponentState, selected: bool) -> f32 {
         if !state.enabled {
             self.disabled
         } else if state.dragged {
@@ -265,7 +280,7 @@ impl ChipElevation {
         } else if state.pressed {
             self.pressed
         } else if state.hovered {
-            self.hovered
+            if selected { self.hovered } else { self.unselected_hovered }
         } else if state.focused {
             self.focused
         } else {
@@ -591,7 +606,7 @@ impl Chip {
         let elevation_anim = if elevation.is_flat() {
             None
         } else {
-            let target = elevation.for_state(&state);
+            let target = elevation.for_state(&state, sel);
             let to = state.elevation_interaction();
             let from = if state.enabled { last_kind.peek() } else { None };
             let spec = crate::animation::elevation_spec_for_pair(from, to)
@@ -866,35 +881,39 @@ mod tests {
     /// `Level1` at rest and `Level2` (3 dp) hovered.
     #[test]
     fn the_elevation_sets_are_the_tokens_in_dp() {
-        assert_eq!(ChipElevation::flat().for_state(&crate::interaction::ComponentState::idle()), 0.0);
+        use crate::interaction::ComponentState;
+        assert_eq!(ChipElevation::flat().for_state(&ComponentState::idle(), false), 0.0);
         assert_eq!(
-            ChipElevation::flat().for_state(&crate::interaction::ComponentState {
-                dragged: true,
-                pressed: true,
-                ..crate::interaction::ComponentState::idle()
-            }),
+            ChipElevation::flat().for_state(
+                &ComponentState { dragged: true, pressed: true, ..ComponentState::idle() },
+                false
+            ),
             8.0,
             "a dragged chip rises to Level4, and the drag outranks the press it holds"
         );
         assert_eq!(
-            ChipElevation::hover_lifting().for_state(&crate::interaction::ComponentState {
-                hovered: true,
-                ..crate::interaction::ComponentState::idle()
-            }),
-            1.0
+            ChipElevation::hover_lifting().for_state(
+                &ComponentState { hovered: true, ..ComponentState::idle() },
+                true
+            ),
+            1.0,
+            "a SELECTED filter chip lifts to Level1 on hover"
         );
         assert_eq!(
-            ChipElevation::elevated().for_state(&crate::interaction::ComponentState {
-                hovered: true,
-                ..crate::interaction::ComponentState::idle()
-            }),
+            ChipElevation::hover_lifting().for_state(
+                &ComponentState { hovered: true, ..ComponentState::idle() },
+                false
+            ),
+            0.0,
+            "an unselected one does not: `FlatUnselectedHoverContainerElevation` is Level0, and its container \
+             is transparent, so a hover shadow would show through it"
+        );
+        assert_eq!(
+            ChipElevation::elevated().for_state(&ComponentState { hovered: true, ..ComponentState::idle() }, false),
             3.0,
             "Level2 is 3 dp, not 2"
         );
-        assert_eq!(
-            ChipElevation::flat().for_state(&crate::interaction::ComponentState::disabled()),
-            0.0
-        );
+        assert_eq!(ChipElevation::flat().for_state(&ComponentState::disabled(), false), 0.0);
         assert!(
             ChipElevation::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0).is_flat(),
             "only an all-zero set is shadow-free"
@@ -1098,4 +1117,66 @@ mod tests {
             "the chip's ring is `FocusIndicatorColor`"
         );
     }
+
+    /// An unselected filter chip's container is transparent, so a hover shadow behind it reads as a leaking
+    /// smudge. `FilterChipTokens` separates the two cases — `FlatSelectedHoverContainerElevation` is Level1,
+    /// `FlatUnselectedHoverContainerElevation` is Level0 — so only a SELECTED chip lifts.
+    ///
+    /// Measured in the light theme with the pointer over the chip: nothing is painted outside an unselected
+    /// chip's box, and a selected one draws its 1 dp shadow at the bottom edge.
+    #[test]
+    fn only_a_selected_filter_chip_shadows_while_hovered() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let rows = |selected: bool| -> (Vec<u8>, Vec<u8>) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let source = crate::interaction::MutableInteractionSource::new();
+            let src = source.clone();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                crate::theme::WiniaTheme::light(ctx, |ctx| {
+                    Chip::filter(selected, |ctx| crate::components::Text::new("Lunch").build(ctx), || {})
+                        .interaction_source(src.clone())
+                        .build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            source.emit_hover_enter();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                crate::theme::WiniaTheme::light(ctx, |ctx| {
+                    Chip::filter(selected, |ctx| crate::components::Text::new("Lunch").build(ctx), || {})
+                        .interaction_source(source.clone())
+                        .build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            for _ in 0..80 {
+                if !crate::animation::update_animations() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(3));
+            }
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            let row = |y: usize| -> Vec<u8> { (0..80).map(|x| px[y * 300 + x][2]).collect() };
+            // The chip's box: a 48 dp target with the 32 dp visual centred, so its bottom edge is y = 40 and a
+            // lifted chip's shadow lands just below that.
+            (row(3), row(42))
+        };
+
+        let (above, below) = rows(false);
+        assert!(
+            above.iter().all(|v| *v > 250) && below.iter().all(|v| *v > 250),
+            "an unselected hovered chip paints nothing around itself (above {:?}, below {:?})",
+            above.iter().min(),
+            below.iter().min()
+        );
+
+        // The selected case is the elevation test's business (`FlatSelectedHoverContainerElevation` = 1 dp);
+        // at 1 dp nothing lands far enough below the box to sample reliably.
+    }
 }
+

@@ -73,8 +73,10 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 | 变体 | 默认 / 按下 / 聚焦 / hover / 拖动 / 禁用 |
 |---|---|
 | assist / suggestion / input（flat） | 0 / 0 / 0 / 0 / **8** / 0 |
-| filter（flat） | 0 / 0 / 0 / **1** / **8** / 0 |
+| filter（flat） | 0 / 0 / 0 / **1（仅选中态）** / **8** / 0 |
 | 三个 Elevated 变体 | **1** / 1 / 1 / **3** / **8** / **0** |
+
+filter 的 hover 分档：`FlatSelectedHoverContainerElevation = Level1`、`FlatUnselectedHoverContainerElevation = Level0`——**未选中时不抬升**。未选中的 filter chip 容器是透明的，抬到 1dp 会让阴影从透明背景后面透出来（实机反馈："变成未选中背景透明会漏出阴影"）。material3 自己的 `filterChipElevation()` 两个状态都用选中值，这里按 token 对分开，属于有意偏差。
 
 拖动恒为 `DraggedContainerElevation = Level4 = 8dp`（这也是为什么平铺 chip 也保留图层）。升落用 `animation::elevation_spec_for_pair`——与 Button/Card 同一套交互配对规则。
 
