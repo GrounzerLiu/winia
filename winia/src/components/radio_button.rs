@@ -22,8 +22,19 @@ use std::sync::Arc;
 
 /// 视觉图标尺寸（`RadioButtonTokens.IconSize = 20dp`）
 pub const RADIO_BUTTON_SIZE: f32 = 20.0;
-/// 状态层/触摸目标尺寸（`RadioButtonTokens.StateLayerSize = 40dp`）
-pub const RADIO_TOUCH_TARGET: f32 = 40.0;
+/// `RadioButtonTokens.StateLayerSize = 40dp` — the DIAMETER of the hover/focus halo and of the press
+/// ripple. Compose hands its half to `ripple(bounded, radius)` (`material3/RadioButton.kt:97`) instead of
+/// deriving the halo from the node.
+pub const RADIO_STATE_LAYER_SIZE: f32 = 40.0;
+/// The radius Compose passes to `ripple`: `StateLayerSize / 2`.
+pub const RADIO_STATE_LAYER_RADIUS: f32 = RADIO_STATE_LAYER_SIZE / 2.0;
+/// The node a CLICKABLE radio occupies: `Modifier.minimumInteractiveComponentSize()` = 48 dp, with the 20 dp
+/// icon centred inside (`material3/RadioButton.kt:100-115`; applied whenever `onClick != null`, disabled or
+/// not).
+pub const RADIO_TOUCH_TARGET: f32 = 48.0;
+/// The node a radio WITHOUT a click handler occupies: the 20 dp icon plus Compose's 2 dp padding on each side
+/// (`RadioButtonPadding`, `material3/RadioButton.kt:264`), and no minimum interactive size.
+pub const RADIO_IDLE_SIZE: f32 = RADIO_BUTTON_SIZE + 4.0;
 /// 圆环描边宽度（Compose `RadioStrokeWidth = 2dp`——对齐 M3 stroke 规格）
 pub const RADIO_STROKE_WIDTH: f32 = 2.0;
 /// 选中内点直径（Compose `RadioButtonDotSize = 12dp`；绘制半径 =
@@ -150,16 +161,29 @@ fn radio_button_impl(
     );
 
     let mut m = Modifier::new()
-        .size(RADIO_TOUCH_TARGET, RADIO_TOUCH_TARGET)
+        // Size: Compose applies `Modifier.minimumInteractiveComponentSize()` in front of the selectable
+        // modifier ONLY when the radio takes clicks (`material3/RadioButton.kt:100-115`), so an interactive
+        // radio is a 48 dp node with its 20 dp icon centred, and one without a click handler is just the icon
+        // plus Compose's 2 dp padding. winia used `StateLayerSize` (40 dp) for both — the same 8 dp-short
+        // target the checkbox had.
+        .size(
+            if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
+            if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
+        )
         // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
         .clip(RadioButtonDefaults::shape());
     if enabled {
         if let Some(on_click) = on_click {
             m = m
                 .clickable_with_source(&interaction, move || on_click())
-                // M3：ripple(bounded = false, radius = StateLayerSize / 2)；
-                // 本框架 ripple 无 radius 参数，半径由节点尺寸隐式决定
-                .ripple(&interaction, theme.on_surface, false);
+                // `RadioButton.kt:97`: `ripple(bounded = false, radius = RadioButtonTokens.StateLayerSize / 2)`
+                // — the halo is 40 dp because the radius is named, not because the node is 40 dp.
+                .ripple_with_radius(
+                    &interaction,
+                    theme.on_surface,
+                    false,
+                    RADIO_STATE_LAYER_RADIUS,
+                );
         }
     }
     // Accessibility: a radio is SELECTED, not checked (Compose's `selectable` → `Selected`).
@@ -347,14 +371,13 @@ mod tests {
     }
 
     // ── 渲染级像素测试（对齐 checkbox 模式：raster surface + 像素断言）──
-    // 约定：单层布局，node.position 即全局像素坐标；40×40 触摸目标内
-    // 视觉层 20×20 居中（偏移 +10,+10），圆环描边中径半径 9（真圆环点
-    // 距圆心 9：顶部 (20,11)/左侧 (11,20)），内点 10×10 居中（全局中心
-    // (20,20)）。
+    // `origin` is the touch target's OWN top-left corner: its 20 dp visual is centred inside, so the samples
+    // below (the visual's centre at +20,+20, the ring's mid-stroke at radius 9 from that centre) hold for any
+    // node size — 40 dp before, 48 dp now.
     struct RenderScene {
         px: Vec<[u8; 4]>,
         w: usize,
-        origin: (f32, f32), // 40×40 触摸目标左上角
+        origin: (f32, f32), // the touch target's top-left corner
     }
 
     fn render_radio(selected: bool, enabled: bool, colors: RadioButtonColors) -> RenderScene {
@@ -378,20 +401,40 @@ mod tests {
         crate::render::render(nodes, root, canvas);
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
-        // 找 40×40 触摸目标
-        let mut origin = (0.0f32, 0.0f32);
-        let mut found = false;
-        for node in nodes {
-            if node.measured_size.width == RADIO_TOUCH_TARGET
-                && node.measured_size.height == RADIO_TOUCH_TARGET
-            {
-                origin = (node.position.x, node.position.y);
-                found = true;
-                break;
-            }
-        }
-        assert!(found, "应有 40×40 触摸目标");
+        let origin = radio_frame_origin(&composer).expect("the 48x48 touch target is in the tree");
         RenderScene { px: px.to_vec(), w: 300, origin }
+    }
+
+    /// The frame every sample offset in these tests is written against: the node's CENTRE mapped onto the old
+    /// 40 dp frame, so `+20,+20` is the visual's centre and `±9` its ring's mid-stroke, whatever the node size
+    /// is now. Positions in the arena are parent-relative, so they are accumulated from the root — the tests
+    /// that used to add a bare `+20` sampled the wrong pixel once the node became 48 dp.
+    fn radio_frame_origin(composer: &crate::runtime::composer::Composer) -> Option<(f32, f32)> {
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            ox: f32,
+            oy: f32,
+        ) -> Option<(f32, f32)> {
+            let node = &nodes[idx];
+            let x = ox + node.position.x;
+            let y = oy + node.position.y;
+            if node.measured_size.width == RADIO_TOUCH_TARGET {
+                let half = RADIO_STATE_LAYER_SIZE / 2.0;
+                return Some((
+                    x + node.measured_size.width / 2.0 - half,
+                    y + node.measured_size.height / 2.0 - half,
+                ));
+            }
+            for &child in &node.children {
+                if let Some(hit) = walk(nodes, child, x, y) {
+                    return Some(hit);
+                }
+            }
+            None
+        }
+        let root = composer.layout_root_idx()?;
+        walk(composer.arena_nodes(), root, 0.0, 0.0)
     }
 
     impl RenderScene {
@@ -408,6 +451,66 @@ mod tests {
 
     fn is_close(a: (i32, i32, i32), b: (i32, i32, i32)) -> bool {
         (a.0 - b.0).abs() <= 6 && (a.1 - b.1).abs() <= 6 && (a.2 - b.2).abs() <= 6
+    }
+
+    /// The node an interactive radio occupies, and the halo radius it hands to the ripple.
+    ///
+    /// `material3/RadioButton.kt:100-115` puts `Modifier.minimumInteractiveComponentSize()` (48 dp) in front of
+    /// the selectable modifier ONLY when the radio takes clicks, draws its 20 dp icon inside that, and names the
+    /// state-layer radius explicitly: `ripple(bounded = false, radius = RadioButtonTokens.StateLayerSize / 2)`
+    /// (`:97`). winia used `StateLayerSize` (40 dp) as the node itself — an 8 dp-short touch target — and let
+    /// the halo fall out of the node's diagonal.
+    #[test]
+    fn an_interactive_radio_is_a_48_dp_target_with_a_40_dp_halo() {
+        let geometry = |interactive: bool| -> (f32, Option<f32>, usize) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                crate::layout::components::Column::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        let rb = RadioButton::new(false);
+                        let rb = if interactive { rb.on_click(|| {}) } else { rb };
+                        rb.build(ctx);
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let nodes = composer.arena_nodes();
+            let clickables = nodes
+                .iter()
+                .filter(|n| {
+                    n.modifier
+                        .elements()
+                        .iter()
+                        .any(|el| matches!(el, crate::modifier::ModifierElement::Clickable { .. }))
+                })
+                .count();
+            let node = nodes
+                .iter()
+                .find(|n| {
+                    n.measured_size.width == RADIO_TOUCH_TARGET
+                        || n.measured_size.width == RADIO_IDLE_SIZE
+                })
+                .expect("the radio node");
+            let radius = node.modifier.elements().iter().find_map(|el| match el {
+                crate::modifier::ModifierElement::Ripple { radius, .. } => *radius,
+                _ => None,
+            });
+            (node.measured_size.width, radius, clickables)
+        };
+
+        let (size, radius, clickables) = geometry(true);
+        assert_eq!(size, 48.0, "an interactive radio reserves 48 dp");
+        assert_eq!(clickables, 1, "and carries one clickable node");
+        assert_eq!(
+            radius,
+            Some(RADIO_STATE_LAYER_RADIUS),
+            "the halo radius is named (`StateLayerSize / 2` = 20), not derived from the node"
+        );
+
+        let (size, radius, clickables) = geometry(false);
+        assert_eq!(size, RADIO_IDLE_SIZE, "with no click handler the minimum is not applied");
+        assert_eq!(clickables, 0, "and nothing is clickable");
+        assert_eq!(radius, None, "and there is no ripple");
     }
 
     #[test]
@@ -513,14 +616,9 @@ mod tests {
         crate::render::render(nodes, root, canvas);
         let pm = surface.peek_pixels().expect("pixmap");
         let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
-        // 找触摸目标中心
-        let mut center = (0.0f32, 0.0f32);
-        for node in nodes {
-            if node.measured_size.width == RADIO_TOUCH_TARGET {
-                center = (node.position.x + 20.0, node.position.y + 20.0);
-                break;
-            }
-        }
+        // The touch target centre, in the same 40 dp reference frame (`radio_frame_origin`).
+        let frame = radio_frame_origin(&composer).expect("the touch target is in the tree");
+        let center = (frame.0 + 20.0, frame.1 + 20.0);
         let at = |x: f32, y: f32| {
             let p = px[(y as usize) * 300 + (x as usize)];
             (p[2] as i32, p[1] as i32, p[0] as i32) // BGRA → RGB

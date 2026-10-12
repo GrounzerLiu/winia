@@ -20,8 +20,19 @@ use std::sync::Arc;
 
 /// 视觉勾选框尺寸（M3 实现 `CheckboxSize = 20dp`）
 pub const CHECKBOX_SIZE: f32 = 20.0;
-/// 状态层/触摸目标尺寸（`CheckboxTokens.StateLayerSize = 40dp`）
-pub const CHECKBOX_TOUCH_TARGET: f32 = 40.0;
+/// `CheckboxTokens.StateLayerSize = 40dp` — the DIAMETER of the hover/focus halo and the press ripple.
+/// Compose passes its half to `ripple(bounded, radius)` (`material3/Checkbox.kt:285`) instead of deriving the
+/// halo from the node, so the halo stays 40 dp however big the touch target is.
+pub const CHECKBOX_STATE_LAYER_SIZE: f32 = 40.0;
+/// The radius Compose hands to `ripple`: `StateLayerSize / 2`.
+pub const CHECKBOX_STATE_LAYER_RADIUS: f32 = CHECKBOX_STATE_LAYER_SIZE / 2.0;
+/// The node a CLICKABLE checkbox occupies: `Modifier.minimumInteractiveComponentSize()` = 48 dp, with the 20 dp
+/// visual centred inside (`material3/Checkbox.kt:293-302`; the minimum is applied whenever `onClick != null`,
+/// disabled or not).
+pub const CHECKBOX_TOUCH_TARGET: f32 = 48.0;
+/// The node a checkbox WITHOUT a click handler occupies: the 20 dp visual plus Compose's 2 dp padding on each
+/// side (`CheckboxDefaultPadding`, `material3/Checkbox.kt:736`), and no minimum interactive size.
+pub const CHECKBOX_IDLE_SIZE: f32 = CHECKBOX_SIZE + 4.0;
 /// 描边宽度（`CheckboxDefaults.StrokeWidth = 2dp`）
 pub const CHECKBOX_STROKE_WIDTH: f32 = 2.0;
 /// 容器圆角（`CheckboxTokens.ContainerShape = RoundedCornerShape(2dp)`）
@@ -241,8 +252,15 @@ fn checkbox_impl(
     // The draw fraction (check / dash), animated per M3 — see `checkbox_draw_spec`.
     let check_spec = checkbox_draw_spec(state);
     // The container/border colour, animated per state the way M3 does — see
-    // `checkbox_color_spec` for the reference and the two branches.
-    let color_spec = crate::animation::AnimationSpec::Spring(checkbox_color_spec(state));
+    // `checkbox_color_spec` for the reference and the two branches. A DISABLED checkbox snaps instead:
+    // Compose returns the disabled colour through `rememberUpdatedState` and says so in a comment — "If not
+    // enabled 'snap' to the disabled state, as there should be no animations between enabled / disabled"
+    // (`material3/Checkbox.kt:634-643`, `:667-676`).
+    let color_spec = if enabled {
+        crate::animation::AnimationSpec::Spring(checkbox_color_spec(state))
+    } else {
+        crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
+    };
     let box_color_anim = ctx.animate_color_as_state(box_color, color_spec.clone());
     let border_color_anim = ctx.animate_color_as_state(border_color, color_spec);
 
@@ -259,17 +277,28 @@ fn checkbox_impl(
 
 
     let shape = CheckboxDefaults::shape();
+    // Size: Compose applies `Modifier.minimumInteractiveComponentSize()` in front of the toggleable modifier
+    // ONLY when the checkbox takes clicks (`material3/Checkbox.kt:293-302`), so an interactive checkbox is a
+    // 48 dp node with its 20 dp box centred, and one without a click handler is just the box plus Compose's
+    // 2 dp padding. winia used `StateLayerSize` (40 dp) as the node for both, which is neither: an interactive
+    // checkbox was 8 dp short on each axis.
+    let node_size = if on_click.is_some() { CHECKBOX_TOUCH_TARGET } else { CHECKBOX_IDLE_SIZE };
     let mut m = Modifier::new()
-        .size(CHECKBOX_TOUCH_TARGET, CHECKBOX_TOUCH_TARGET)
+        .size(node_size, node_size)
         // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
         .clip(Shape::Circle);
     if enabled {
         if let Some(on_click) = on_click {
             m = m
                 .clickable_with_source(&interaction, move || on_click())
-                // M3：ripple(bounded = false, radius = StateLayerSize / 2)；
-                // 本框架 ripple 无 radius 参数，半径由节点尺寸隐式决定
-                .ripple(&interaction, theme.on_surface, false);
+                // `Checkbox.kt:285`: `ripple(bounded = false, radius = CheckboxTokens.StateLayerSize / 2)` —
+                // the halo is 40 dp because the radius is named, not because the node is 40 dp.
+                .ripple_with_radius(
+                    &interaction,
+                    theme.on_surface,
+                    false,
+                    CHECKBOX_STATE_LAYER_RADIUS,
+                );
         }
     }
     // Accessibility: role plus the tri-state value — Off and Indeterminate are different answers,
@@ -517,6 +546,70 @@ impl Checkbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The node an interactive checkbox occupies, and the halo radius it hands to the ripple.
+    ///
+    /// `material3/Checkbox.kt:293-302` puts `Modifier.minimumInteractiveComponentSize()` (48 dp) in front of
+    /// the toggleable modifier ONLY when the checkbox takes clicks, draws its 20 dp box inside that, and names
+    /// the state-layer radius explicitly: `ripple(bounded = false, radius = CheckboxTokens.StateLayerSize / 2)`
+    /// (`:285`). winia used `StateLayerSize` (40 dp) as the node itself — an 8 dp-short touch target — and let
+    /// the halo fall out of the node's DIAGONAL, which for a 40 dp square is 56.6 dp rather than 40.
+    #[test]
+    fn an_interactive_checkbox_is_a_48_dp_target_with_a_40_dp_halo() {
+        let geometry = |interactive: bool| -> (f32, Option<f32>, usize) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                crate::layout::components::Column::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        let cb = Checkbox::new(false);
+                        let cb = if interactive {
+                            cb.on_checked_change(|_| {})
+                        } else {
+                            cb
+                        };
+                        cb.build(ctx);
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let nodes = composer.arena_nodes();
+            let clickables = nodes
+                .iter()
+                .filter(|n| {
+                    n.modifier
+                        .elements()
+                        .iter()
+                        .any(|el| matches!(el, crate::modifier::ModifierElement::Clickable { .. }))
+                })
+                .count();
+            let checkout = nodes
+                .iter()
+                .find(|n| {
+                    n.measured_size.width == CHECKBOX_TOUCH_TARGET
+                        || n.measured_size.width == CHECKBOX_IDLE_SIZE
+                })
+                .expect("the checkbox node");
+            let radius = checkout.modifier.elements().iter().find_map(|el| match el {
+                crate::modifier::ModifierElement::Ripple { radius, .. } => *radius,
+                _ => None,
+            });
+            (checkout.measured_size.width, radius, clickables)
+        };
+
+        let (size, radius, clickables) = geometry(true);
+        assert_eq!(size, 48.0, "an interactive checkbox reserves 48 dp");
+        assert_eq!(clickables, 1, "and carries one clickable node");
+        assert_eq!(
+            radius,
+            Some(CHECKBOX_STATE_LAYER_RADIUS),
+            "the halo radius is named (`StateLayerSize / 2` = 20), not derived from the node"
+        );
+
+        let (size, radius, clickables) = geometry(false);
+        assert_eq!(size, CHECKBOX_IDLE_SIZE, "with no click handler the minimum is not applied");
+        assert_eq!(clickables, 0, "and nothing is clickable");
+        assert_eq!(radius, None, "and there is no ripple");
+    }
 
     #[test]
     fn toggleable_state_conversion() {
@@ -1036,17 +1129,30 @@ mod tests {
         let mut render = |composer: &mut crate::runtime::composer::Composer| -> Vec<u8> {
             composer.compose(build_scene);
             composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
-            // 全选 = 第一个 40x40 节点（Column 直接子级里找）
+            // The parent checkbox is the first node at the touch-target size; what the test samples is the
+            // 20 dp VISUAL box centred inside it (`CHECKBOX_TOUCH_TARGET` vs `CHECKBOX_SIZE`).
             let root = composer.layout_root_idx().unwrap();
             let nodes = composer.arena_nodes();
-            fn first_box(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32,f32,f32,f32)> {
+            fn first_box(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+            ) -> Option<(f32, f32, f32, f32)> {
                 let n = &nodes[idx];
-                let abs = (n.position.x, n.position.y);
-                if n.measured_size.width == 40.0 && n.measured_size.height == 40.0 {
-                    return Some((abs.0, abs.1, 40.0, 40.0));
+                let inset = (CHECKBOX_TOUCH_TARGET - CHECKBOX_SIZE) / 2.0;
+                if n.measured_size.width == CHECKBOX_TOUCH_TARGET
+                    && n.measured_size.height == CHECKBOX_TOUCH_TARGET
+                {
+                    return Some((
+                        n.position.x + inset,
+                        n.position.y + inset,
+                        CHECKBOX_SIZE,
+                        CHECKBOX_SIZE,
+                    ));
                 }
                 for &c in &n.children {
-                    if let Some(r) = first_box(nodes, c) { return Some(r); }
+                    if let Some(r) = first_box(nodes, c) {
+                        return Some(r);
+                    }
                 }
                 None
             }

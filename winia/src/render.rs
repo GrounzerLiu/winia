@@ -1570,9 +1570,12 @@ fn render_pass1(
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape, radius } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
+        // Compose's `ripple(bounded, radius)` names the state-layer radius; without one winia derives it from
+        // the node's diagonal (its original behaviour, which is what a plain `clickable` wants).
+        let layer_radius = radius.unwrap_or(diagonal / 2.0);
         let rect = Rect::new(x, y, x + w, y + h);
 
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
@@ -1640,8 +1643,8 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 }
             }
         } else {
-            // unbounded：前景裁剪到背景圆（直径=对角线，节点中心）
-            let r = diagonal / 2.0;
+            // unbounded: the press layer is clipped to the state-layer circle rather than the node's rect.
+            let r = layer_radius;
             canvas.save();
             canvas.clip_rrect(
                 skia_safe::RRect::new_oval(Rect::from_xywh(
@@ -1655,7 +1658,8 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             );
         }
 
-        // ── 状态层：节点中心实心圆（半径=对角线/2，旧版 draw_circle）──
+        // State layer: a filled circle at the node's centre. Its radius is the explicit one when the ripple
+        // named it (`ripple(bounded, radius)`), otherwise the node's diagonal (the original behaviour).
         let state_alpha = source.hover_opacity_value() + source.focus_opacity_value();
         if state_alpha > 0.0 {
             let mut paint = skia_safe::Paint::default();
@@ -1668,7 +1672,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             ));
             canvas.draw_circle(
                 skia_safe::Point::new(x + w / 2.0, y + h / 2.0),
-                diagonal / 2.0,
+                layer_radius,
                 &paint,
             );
         }
@@ -1682,7 +1686,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            let r = diagonal * progress;
+            // The press layer expands to the state-layer radius when the ripple named one, and to the node's
+            // diagonal otherwise (the original behaviour, which keeps a press near a corner covered).
+            let r = if radius.is_some() { layer_radius } else { diagonal } * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;
             }
