@@ -108,6 +108,13 @@ impl ChipDefaults {
     pub const AVATAR_SIZE: f32 = 24.0; // InputChip avatar 24dp
     /// The specs page: "avatar shape 12dp corner radius" — a rounded square, NOT a circle.
     pub const AVATAR_CORNER_RADIUS: f32 = 12.0;
+    /// How long a chip fades between its container colours. A winia addition: M3's `Chip.kt` applies the colour
+    /// directly. The shadow's gate reads this same animation (see `Chip::build`), so a chip whose container is
+    /// transparent — or still on its way to being filled — shows no shadow.
+    pub const CONTAINER_FADE_MILLIS: u64 = 180;
+    /// The container alpha at which a shadow may be drawn at all. Below it the chip's background reads as
+    /// transparent, and a shadow behind a transparent fill looks like a smudge rather than a lift.
+    const SHADOW_OPAQUE_ALPHA: u8 = 250;
 
     /// `AssistChipDefaults.assistChipColors()` — the specs page's assist chip color roles: transparent
     /// container, label **On surface**, leading icon Primary, trailing icon On surface variant.
@@ -164,6 +171,125 @@ impl ChipDefaults {
     pub fn shape() -> Shape {
         Shape::RoundedRect { corner_radius: Self::CORNER_RADIUS }
     }
+
+    /// The elevated variants' container (`SurfaceContainerLow`, the specs page's "surface container low
+    /// (optional)" role) and the disabled colours they come with.
+    pub fn elevated_assist_chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
+        ChipColors {
+            container: theme.surface_container_low,
+            disabled_container: crate::graphics::Color::from_argb(31, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            ..Self::assist_chip_colors(theme)
+        }
+    }
+
+    pub fn elevated_suggestion_chip_colors(theme: &crate::theme::ThemeColors) -> ChipColors {
+        ChipColors {
+            label: theme.on_surface_variant,
+            ..Self::elevated_assist_chip_colors(theme)
+        }
+    }
+
+    pub fn elevated_selectable_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
+        SelectableChipColors {
+            container: theme.surface_container_low,
+            disabled_container: crate::graphics::Color::from_argb(31, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            ..Self::selectable_chip_colors(theme)
+        }
+    }
+
+    pub fn elevated_input_chip_colors(theme: &crate::theme::ThemeColors) -> SelectableChipColors {
+        SelectableChipColors {
+            selected_leading_icon: theme.primary,
+            ..Self::elevated_selectable_chip_colors(theme)
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ChipElevation — 阴影高度（六个交互状态）
+// ═══════════════════════════════════════════════════════════
+
+/// A chip's shadow elevation per interaction state, in dp — material3's `ChipElevation` /
+/// `SelectableChipElevation`, taken from the token LEVELS (`ElevationTokens`: Level0 0, Level1 1, Level2 3,
+/// Level3 6, Level4 8).
+///
+/// winia draws a shadow ONLY while the container is opaque (see `Chip::build`): a chip whose background is
+/// transparent shows nothing, whatever its token value says, because a shadow behind a transparent fill reads as
+/// a smudge rather than a lift.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChipElevation {
+    pub default: f32,
+    pub pressed: f32,
+    pub focused: f32,
+    pub hovered: f32,
+    pub dragged: f32,
+    pub disabled: f32,
+}
+
+impl ChipElevation {
+    pub fn new(default: f32, pressed: f32, focused: f32, hovered: f32, dragged: f32, disabled: f32) -> Self {
+        Self { default, pressed, focused, hovered, dragged, disabled }
+    }
+
+    /// `assistChipElevation()` / `suggestionChipElevation()` / `inputChipElevation()`: flat (Level0) in every
+    /// state, lifted to Level4 (8 dp) only while DRAGGED.
+    pub fn flat() -> Self {
+        Self::new(0.0, 0.0, 0.0, 0.0, 8.0, 0.0)
+    }
+
+    /// `filterChipElevation()`: like `flat()`, plus `FlatSelectedHoverContainerElevation` = Level1 (1 dp) on
+    /// hover. It only shows while the chip is filled — an unselected filter chip's container is transparent.
+    pub fn hover_lifting() -> Self {
+        Self::new(0.0, 0.0, 0.0, 1.0, 8.0, 0.0)
+    }
+
+    /// The `Elevated*` variants: `ElevatedContainerElevation` Level1 (1 dp) at rest, pressed and focused,
+    /// Level2 (3 dp) hovered, Level0 disabled, Level4 (8 dp) dragged.
+    pub fn elevated() -> Self {
+        Self::new(1.0, 1.0, 1.0, 3.0, 8.0, 0.0)
+    }
+
+    /// The elevation for a state snapshot, latest interaction first — the order the Button and Card use, since
+    /// `animateElevation` resolves it from the last interaction.
+    pub fn for_state(&self, state: &crate::interaction::ComponentState) -> f32 {
+        if !state.enabled {
+            self.disabled
+        } else if state.dragged {
+            self.dragged
+        } else if state.pressed {
+            self.pressed
+        } else if state.hovered {
+            self.hovered
+        } else if state.focused {
+            self.focused
+        } else {
+            self.default
+        }
+    }
+
+    /// Every state is zero.
+    pub fn is_flat(&self) -> bool {
+        self.default <= 0.0
+            && self.pressed <= 0.0
+            && self.focused <= 0.0
+            && self.hovered <= 0.0
+            && self.dragged <= 0.0
+            && self.disabled <= 0.0
+    }
+
+    /// What a chip actually paints: its state's elevation, or NOTHING while the container reads as transparent.
+    ///
+    /// A shadow behind a transparent fill looks like a smudge rather than a lift, so the alpha decides:
+    /// `container_alpha` is the container colour the renderer is showing right now, which during the selection
+    /// fade is the interpolated one — the transparent-to-filled direction therefore shows no shadow until the
+    /// fill has arrived, and the filled-to-transparent direction drops it as soon as the fill starts leaving.
+    pub fn shadow_for(state: &crate::interaction::ComponentState, container_alpha: u8, elevation: &ChipElevation) -> f32 {
+        if container_alpha < ChipDefaults::SHADOW_OPAQUE_ALPHA {
+            0.0
+        } else {
+            elevation.for_state(state)
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -174,12 +300,33 @@ impl ChipDefaults {
 pub enum ChipVariant {
     /// 辅助操作（AssistChip）
     Assist,
+    /// 填充 + 抬升的辅助 chip（ElevatedAssistChip）
+    ElevatedAssist,
     /// 筛选（FilterChip）
     Filter,
+    /// 填充 + 抬升的筛选 chip（ElevatedFilterChip）
+    ElevatedFilter,
     /// 输入信息（InputChip）
     Input,
     /// 建议（SuggestionChip）
     Suggestion,
+    /// 填充 + 抬升的建议 chip（ElevatedSuggestionChip）
+    ElevatedSuggestion,
+}
+
+impl ChipVariant {
+    /// Filter and input chips carry a `selected` state.
+    pub fn is_selectable(self) -> bool {
+        matches!(self, ChipVariant::Filter | ChipVariant::ElevatedFilter | ChipVariant::Input)
+    }
+
+    /// The `Elevated*` variants: `SurfaceContainerLow` container and no outline by default.
+    pub fn is_elevated(self) -> bool {
+        matches!(
+            self,
+            ChipVariant::ElevatedAssist | ChipVariant::ElevatedFilter | ChipVariant::ElevatedSuggestion
+        )
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -206,6 +353,8 @@ pub struct Chip {
     flat_colors: Option<ChipColors>,
     /// 选择型配色（filter/input 用）
     selectable_colors: Option<SelectableChipColors>,
+    /// Shadow elevation (`None` = the variant's token default; `ChipElevation?` upstream).
+    elevation: Option<ChipElevation>,
 }
 
 impl Chip {
@@ -214,9 +363,19 @@ impl Chip {
         Self::new(ChipVariant::Assist, false, label, on_click)
     }
 
+    /// 填充 + 抬升的辅助 chip（对标 ElevatedAssistChip）
+    pub fn elevated_assist(label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+        Self::new(ChipVariant::ElevatedAssist, false, label, on_click)
+    }
+
     /// 筛选 chip（对标 FilterChip）——selected 切换
     pub fn filter(selected: bool, label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
         Self::new(ChipVariant::Filter, selected, label, on_click)
+    }
+
+    /// 填充 + 抬升的筛选 chip（对标 ElevatedFilterChip）
+    pub fn elevated_filter(selected: bool, label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+        Self::new(ChipVariant::ElevatedFilter, selected, label, on_click)
     }
 
     /// 输入 chip（对标 InputChip）——selected 切换 + avatar/trailing 关闭按钮
@@ -227,6 +386,11 @@ impl Chip {
     /// 建议 chip（对标 SuggestionChip）
     pub fn suggestion(label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
         Self::new(ChipVariant::Suggestion, false, label, on_click)
+    }
+
+    /// 填充 + 抬升的建议 chip（对标 ElevatedSuggestionChip）
+    pub fn elevated_suggestion(label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
+        Self::new(ChipVariant::ElevatedSuggestion, false, label, on_click)
     }
 
     fn new(variant: ChipVariant, selected: bool, label: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static, on_click: impl Fn() + Send + Sync + 'static) -> Self {
@@ -243,6 +407,7 @@ impl Chip {
             shape: ChipDefaults::shape(),
             flat_colors: None,
             selectable_colors: None,
+            elevation: None,
         }
     }
 
@@ -253,9 +418,11 @@ impl Chip {
     pub fn colors(mut self, c: ChipColors) -> Self { self.flat_colors = Some(c); self }
     /// 选择型配色（Filter/Input）
     pub fn selectable_colors(mut self, c: SelectableChipColors) -> Self { self.selectable_colors = Some(c); self }
+    /// Shadow elevation (`ChipElevation?`; `ChipElevation::flat()` removes it in the states that can show one).
+    pub fn elevation(mut self, e: ChipElevation) -> Self { self.elevation = Some(e); self }
     pub fn leading_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.leading_icon = Some(Box::new(f)); self }
     pub fn trailing_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.trailing_icon = Some(Box::new(f)); self }
-    /// 头像（InputChip——24dp 圆角）
+    /// 头像（InputChip——24dp、12dp 圆角）
     pub fn avatar(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.avatar = Some(Box::new(f)); self }
     /// 建议图标（SuggestionChip 的 icon——等效 leading）
     pub fn icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.leading_icon = Some(Box::new(f)); self }
@@ -268,8 +435,13 @@ impl Chip {
         // Assist 标签是 On surface、Suggestion 是 On surface variant；Assist/Suggestion 的
         // outline 角色是 `Outline`，Filter/Input 是 `Outline variant`。
         let (container, label_color, icon_color, border_w, border_color) = match self.variant {
-            ChipVariant::Assist | ChipVariant::Suggestion => {
+            ChipVariant::Assist
+            | ChipVariant::ElevatedAssist
+            | ChipVariant::Suggestion
+            | ChipVariant::ElevatedSuggestion => {
                 let c = self.flat_colors.unwrap_or_else(|| match self.variant {
+                    ChipVariant::ElevatedAssist => ChipDefaults::elevated_assist_chip_colors(&theme),
+                    ChipVariant::ElevatedSuggestion => ChipDefaults::elevated_suggestion_chip_colors(&theme),
                     ChipVariant::Suggestion => ChipDefaults::suggestion_chip_colors(&theme),
                     _ => ChipDefaults::assist_chip_colors(&theme),
                 });
@@ -278,10 +450,13 @@ impl Chip {
                 } else {
                     (c.disabled_container, c.disabled_label, c.disabled_label)
                 };
-                (container, label, icon, ChipDefaults::BORDER_WIDTH, theme.outline)
+                // 无填充的 assist/suggestion 用 `Outline`；elevated 变体默认不带边框。
+                let w = if self.variant.is_elevated() { 0.0 } else { ChipDefaults::BORDER_WIDTH };
+                (container, label, icon, w, theme.outline)
             }
-            ChipVariant::Filter | ChipVariant::Input => {
+            ChipVariant::Filter | ChipVariant::ElevatedFilter | ChipVariant::Input => {
                 let c = self.selectable_colors.unwrap_or_else(|| match self.variant {
+                    ChipVariant::ElevatedFilter => ChipDefaults::elevated_selectable_chip_colors(&theme),
                     ChipVariant::Input => ChipDefaults::input_chip_colors(&theme),
                     _ => ChipDefaults::selectable_chip_colors(&theme),
                 });
@@ -292,8 +467,12 @@ impl Chip {
                 } else {
                     (c.container, c.label, c.leading_icon)
                 };
-                // 选中：0 边框；未选中：1dp outline variant
-                let w = if sel { 0.0 } else { ChipDefaults::BORDER_WIDTH };
+                // 选中：0 边框；未选中：1dp outline variant；elevated 变体默认不带边框。
+                let w = if sel || self.variant.is_elevated() {
+                    0.0
+                } else {
+                    ChipDefaults::BORDER_WIDTH
+                };
                 (container, label, icon, w, theme.outline_variant)
             }
         };
@@ -326,11 +505,57 @@ impl Chip {
         let avatar = self.avatar;
         let label = self.label;
 
+        // 阴影：`ChipElevation` 按交互状态取值（token 层级换算成 dp），用与 Button/Card 相同的
+        // `elevation_spec_for_pair` 配对规则升降；**但只在容器不透明时才画**——透明背景后面的阴影看起来
+        // 是一块脏印，而不是抬升（用户明确要求）。容器色是渐变的，所以"是否透明"问的是动画色本身，
+        // 这同时给出了过渡期的行为：变透明时阴影立即消失，变不透明时等颜色到位才出现。
+        let elevation = self.elevation.unwrap_or_else(|| match self.variant {
+            ChipVariant::ElevatedAssist | ChipVariant::ElevatedFilter
+            | ChipVariant::ElevatedSuggestion => ChipElevation::elevated(),
+            ChipVariant::Filter | ChipVariant::ElevatedFilter => ChipElevation::hover_lifting(),
+            _ => ChipElevation::flat(),
+        });
+        let container_anim = ctx.animate_color_as_state(
+            container,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(ChipDefaults::CONTAINER_FADE_MILLIS),
+                crate::animation::interpolator::EaseOutCubic::new(),
+            )),
+        );
+        let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
+        let state = interaction.state(self.enabled);
+        let last_kind: crate::runtime::state::Backchannel<
+            Option<crate::animation::ElevationInteraction>,
+        > = ctx.remember_backchannel(|| None);
+        let last_shadow: crate::runtime::state::Backchannel<f32> = ctx.remember_backchannel(|| 0.0);
+        let elevation_anim = if elevation.is_flat() {
+            None
+        } else {
+            // Reading the animated colour is what makes this build run on every colour frame, so the gate
+            // releases on the frame the fill lands. `ChipElevation::shadow_for` holds the rule.
+            let shown_colour = container_anim.get();
+            let wanted = ChipElevation::shadow_for(&state, shown_colour.a, &elevation);
+            let shown = last_shadow.peek();
+            // Leaving is immediate: nothing may linger behind a container on its way to transparent.
+            let spec = if wanted <= shown {
+                crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
+            } else {
+                let to = state.elevation_interaction();
+                let from = if state.enabled { last_kind.peek() } else { None };
+                last_kind.set(to);
+                crate::animation::elevation_spec_for_pair(from, to)
+                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()))
+            };
+            last_shadow.set(wanted);
+            Some(ctx.animate_float_as_state(wanted, spec))
+        };
         build_chip(
             ctx,
             self.modifier.padding_start(pad.0).padding_end(pad.1),
             self.enabled,
-            container,
+            container_anim,
+            interaction,
+            elevation_anim,
             border_color,
             border_w,
             self.shape,
@@ -375,7 +600,9 @@ fn build_chip(
     ctx: &mut ComposeCtx,
     modifier: Modifier,
     enabled: bool,
-    container: crate::graphics::Color,
+    container_anim: crate::runtime::state::State<crate::graphics::Color>,
+    interaction: crate::interaction::MutableInteractionSource,
+    elevation_anim: Option<crate::runtime::state::State<f32>>,
     border_color: crate::graphics::Color,
     border_width: f32,
     shape: Shape,
@@ -384,25 +611,10 @@ fn build_chip(
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let key = ctx.next_key();
-    // A winia addition: `animate_color_as_state` remembers the animated colour and registers the
-    // animation, so a chip fades between its container colours (selected / unselected / disabled).
-    // M3's chips apply their container colour directly (`material3/Chip.kt` has no
-    // `animateColorAsState`), so this 180 ms EaseOutCubic fade is ours, not a port — kept because it
-    // reads better than a hard cut, and recorded rather than presented as alignment. A spring would be
-    // `SpringSpec::effects_default()` here now that the engine animates colours per Oklab component.
-    let bg_anim = ctx.animate_color_as_state(
-        container,
-        crate::animation::AnimationSpec::Tween(
-            crate::animation::TweenSpec::new(
-                std::time::Duration::from_millis(180),
-                crate::animation::interpolator::EaseOutCubic::new(),
-            )
-        ),
-    );
     // ⚠ background 接受动态闭包（`impl Fn() -> Color`）——渲染期每帧求值
     // color_fn()：动画 tick 推进 State + request_redraw → 渲染读最新插值。
     // 若传 bg_anim.get() 的**值**则冻结在 build 时（动画不显示）。
-    let bg = bg_anim.clone();
+    let bg = container_anim.clone();
     let mut m = Modifier::new()
         .min_height(ChipDefaults::HEIGHT)
         .background(move || bg.get(), shape);
@@ -411,9 +623,16 @@ fn build_chip(
     if border_width > 0.0 {
         m = m.border(border_width, border_color, shape);
     }
+    // 阴影走 graphics_layer 动态闭包：渲染期每帧读动画值，形状跟随 chip shape。
+    if let Some(anim) = elevation_anim {
+        m = m.graphics_layer(move || crate::graphics::GraphicsLayerParams {
+            shadow_elevation: anim.get(),
+            shadow_shape: Some(shape),
+            ..Default::default()
+        });
+    }
     if enabled {
         if let Some(cb) = on_click {
-            let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
             let cb2 = cb.clone();
             m = m
                 .clickable_with_source(&interaction, move || cb2())
@@ -483,6 +702,19 @@ mod tests {
             SizeValue::Static(Dimension::Fixed(dp)) => Some(*dp),
             _ => None,
         }
+    }
+
+    /// The container colour the chip paints (its `background` element holds a closure).
+    fn painted_background(composer: &Composer, idx: usize) -> crate::graphics::Color {
+        composer.arena_nodes()[idx]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                _ => None,
+            })
+            .expect("the chip paints a container")
     }
 
     /// The horizontal padding the chip asks for, (start, end).
@@ -578,6 +810,107 @@ mod tests {
             Icon::new(crate::graphics::IconSource::svg_path("M19 6.41 12 13.4 5 6.41 3.59 8 12 16.4 20.41 8z")).build(ctx);
         }));
         assert_eq!(padding_of(&with_close, c_idx), (Some(16.0), Some(8.0)));
+    }
+
+    /// The elevation sets, in dp: a flat chip is Level0 everywhere except while dragged (`Level4` = 8); a filter
+    /// chip lifts 1 dp on hover (`FlatSelectedHoverContainerElevation` = `Level1`); the elevated variants are
+    /// `Level1` at rest and `Level2` (3 dp) hovered.
+    #[test]
+    fn the_elevation_sets_are_the_tokens_in_dp() {
+        use crate::interaction::ComponentState;
+        assert_eq!(ChipElevation::flat().for_state(&ComponentState::idle()), 0.0);
+        assert_eq!(
+            ChipElevation::flat().for_state(&ComponentState { dragged: true, pressed: true, ..ComponentState::idle() }),
+            8.0,
+            "a dragged chip rises to Level4, and the drag outranks the press it holds"
+        );
+        assert_eq!(
+            ChipElevation::hover_lifting().for_state(&ComponentState { hovered: true, ..ComponentState::idle() }),
+            1.0
+        );
+        assert_eq!(
+            ChipElevation::elevated().for_state(&ComponentState { hovered: true, ..ComponentState::idle() }),
+            3.0,
+            "Level2 is 3 dp, not 2"
+        );
+        assert_eq!(ChipElevation::elevated().for_state(&ComponentState::disabled()), 0.0);
+        assert!(!ChipElevation::flat().is_flat(), "a flat chip still lifts while dragged");
+        assert!(ChipElevation::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0).is_flat());
+    }
+
+    /// The transparency rule: a chip whose container is transparent shows NO shadow, whatever its state's token
+    /// value says — a shadow behind a transparent fill reads as a smudge. During the selection fade the alpha
+    /// decides, so the filled-to-transparent direction drops the shadow as soon as the fill starts leaving and
+    /// the transparent-to-filled direction shows none until it has arrived.
+    #[test]
+    fn a_transparent_container_never_shadows() {
+        use crate::interaction::ComponentState;
+        let hovered = ComponentState { hovered: true, ..ComponentState::idle() };
+        let transparent = 0u8;
+        let fading_in = 128u8;
+        let opaque = 255u8;
+
+        // A flat filter chip hovered: the token says Level1, but nothing may be painted.
+        assert_eq!(
+            ChipElevation::shadow_for(&hovered, transparent, &ChipElevation::hover_lifting()),
+            0.0
+        );
+        assert_eq!(
+            ChipElevation::shadow_for(&hovered, fading_in, &ChipElevation::hover_lifting()),
+            0.0,
+            "and not while the fill is still on its way in"
+        );
+        assert_eq!(
+            ChipElevation::shadow_for(&hovered, opaque, &ChipElevation::hover_lifting()),
+            1.0,
+            "once the fill is there, the token's hover lift shows"
+        );
+
+        // An assist or suggestion chip has a transparent container in every state.
+        let flat = ChipElevation::flat();
+        let dragged = ComponentState { dragged: true, ..ComponentState::idle() };
+        assert_eq!(ChipElevation::shadow_for(&dragged, transparent, &flat), 0.0);
+        assert_eq!(
+            ChipElevation::shadow_for(&dragged, opaque, &flat),
+            8.0,
+            "were its container ever opaque, the drag lift would be Level4"
+        );
+
+        // The elevated variants are filled at rest, so they lift by their tokens.
+        let elevated = ChipElevation::elevated();
+        assert_eq!(ChipElevation::shadow_for(&ComponentState::idle(), opaque, &elevated), 1.0);
+        assert_eq!(ChipElevation::shadow_for(&hovered, opaque, &elevated), 3.0);
+        assert_eq!(
+            ChipElevation::shadow_for(&ComponentState::idle(), transparent, &elevated),
+            0.0
+        );
+    }
+
+    /// The elevated variants fill with `SurfaceContainerLow` (the specs page's "surface container low
+    /// (optional)" role) and carry no outline; the flat ones stay transparent with their outline.
+    #[test]
+    fn elevated_chips_fill_and_drop_the_outline() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let (flat, f_idx) = chip_container(Chip::assist(label("A"), || {}));
+        assert_eq!(
+            painted_background(&flat, f_idx),
+            crate::graphics::Color::TRANSPARENT,
+            "a flat assist chip has no fill, so it can never show a shadow"
+        );
+        assert!(outline_of(&flat, f_idx).is_some(), "and it is outlined");
+
+        let (elev, e_idx) = chip_container(Chip::elevated_assist(label("E"), || {}));
+        assert_eq!(painted_background(&elev, e_idx), theme.surface_container_low);
+        assert_eq!(outline_of(&elev, e_idx), None, "an elevated chip has no outline");
+
+        let (elev_filter, ef_idx) = chip_container(Chip::elevated_filter(false, label("F"), || {}));
+        assert_eq!(painted_background(&elev_filter, ef_idx), theme.surface_container_low);
+        let (elev_filter_on, efo_idx) = chip_container(Chip::elevated_filter(true, label("F"), || {}));
+        assert_eq!(
+            painted_background(&elev_filter_on, efo_idx),
+            theme.secondary_container,
+            "a selected elevated filter chip keeps the selected container"
+        );
     }
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {

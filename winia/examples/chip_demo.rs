@@ -8,7 +8,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::components::Chip;
+use winia::components::{Chip, ChipElevation};
 
 fn section_title(ctx: &mut ComposeCtx, title: &str) {
     Text::new(title)
@@ -117,6 +117,29 @@ fn chip_ui(ctx: &mut ComposeCtx) {
                             .tint(WiniaTheme::colors().primary)
                             .build(ctx);
                     })
+                    .build(ctx);
+            });
+
+            // ── Elevated 变体 ──
+            // 容器 `SurfaceContainerLow`（specs 页面里的 "surface container low (optional)" 角色）、默认无边框，
+            // 阴影按 token 升降：静止 Level1 (1dp)、hover Level2 (3dp)。
+            // 注意：平铺变体（assist/suggestion/未选中的 filter）容器是透明的，**不会**出现阴影——透明的
+            // 背景后面透出阴影看起来像一块脏印。
+            section_title(ctx, "5. Elevated（填充 + 抬升）");
+            let elev_sel = ctx.remember(|| false);
+            Row::new().spacing(8.0).build(ctx, |ctx| {
+                Chip::elevated_assist(|ctx| { Text::new("Elevated assist").build(ctx); }, || {})
+                    .build(ctx);
+                Chip::elevated_suggestion(|ctx| { Text::new("Elevated tip").build(ctx); }, || {})
+                    .build(ctx);
+                let elev_sel_v = elev_sel.get();
+                Chip::elevated_filter(elev_sel_v, |ctx| { Text::new("Elevated filter").build(ctx); }, {
+                    clone!(elev_sel);
+                    move || elev_sel.update(|v| *v = !*v)
+                })
+                .build(ctx);
+                Chip::elevated_assist(|ctx| { Text::new("Flat").build(ctx); }, || {})
+                    .elevation(ChipElevation::flat())
                     .build(ctx);
             });
         });

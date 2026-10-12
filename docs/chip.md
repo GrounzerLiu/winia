@@ -6,16 +6,20 @@
 ## 1. API
 
 ```rust
-// 统一入口 Chip + 变体构造（对标 material3 AssistChip/FilterChip/InputChip/SuggestionChip）
-Chip::assist(label, on_click)                       // 辅助操作（可选 leading/trailing icon）
-Chip::filter(selected, label, on_click)             // 筛选（selected 切换）
-Chip::input(selected, label, on_click)              // 输入信息（leading/avatar/trailing 关闭）
-Chip::suggestion(label, on_click)                   // 建议（可选 icon）
+// 统一入口 Chip + 变体构造（对标 material3 七个可组合项）
+Chip::assist(label, on_click)                       // AssistChip（可选 leading/trailing icon）
+Chip::elevated_assist(label, on_click)              // ElevatedAssistChip
+Chip::filter(selected, label, on_click)             // FilterChip（selected 切换）
+Chip::elevated_filter(selected, label, on_click)    // ElevatedFilterChip
+Chip::input(selected, label, on_click)              // InputChip（leading/avatar/trailing 关闭）
+Chip::suggestion(label, on_click)                   // SuggestionChip（可选 icon）
+Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 
 // 通用 setter
     .modifier(Modifier)
     .enabled(bool)
     .shape(Shape)                                    // 默认 8dp 圆角
+    .elevation(ChipElevation)                        // 覆盖变体默认的阴影高度
     .colors(ChipColors)                              // 非选择型配色（assist/suggestion）
     .selectable_colors(SelectableChipColors)         // 选择型配色（filter/input）
     .leading_icon(|ctx| { ... })                     // 前置图标（18dp）
@@ -74,24 +78,39 @@ Chip::suggestion(label, on_click)                   // 建议（可选 icon）
   （`impl Fn() -> Color`），必须传 `move || bg.get()` 而非 `bg.get()` 的值——
   否则冻结在 build 时（动画不显示）；渲染期每帧求值。
 - **边框消失**：`border_width > 0` 才挂 border modifier——`border(0.0)` 仍会
-  绘制 0 宽线（可见伪影），selected 时直接不挂。
+  绘制 0 宽线（可见伪影），selected 时直接不挂；elevated 变体默认也不挂。
+- **阴影**：`graphics_layer` 动态闭包读动画值（渲染期求值，不触发重组），形状跟随 chip shape。
+  升高用 `elevation_spec_for_pair`（与 Button/Card 同一套交互配对规则），回落用 `Snap`。
+  **只有容器不透明时才画**（`ChipElevation::shadow_for(state, container_alpha, elevation)`）——
+  透明背景后面的阴影看起来像一块脏印。判定读的是容器**动画色**的 alpha，因此过渡期行为自然正确：
+  变透明时阴影立即消失，变不透明时等颜色到位才出现。
 - **变体差异**（`ChipVariant` 分派）：Assist/Suggestion 走 ChipColors（非选择）；
-  Filter/Input 走 SelectableChipColors（selected 双态）+ selected 0 边框。
-- **内部结构**：容器（背景/边框/clickable/ripple）→ Row（icon → label → trailing，
+  Filter/Input 走 SelectableChipColors（selected 双态）+ selected 0 边框；
+  Elevated* 三个变体容器 `SurfaceContainerLow` 且默认无边框。
+- **内部结构**：容器（背景/边框/阴影/clickable/ripple）→ Row（icon → label → trailing，
   间距 8）→ 内容经 `WiniaTheme::with_content_color` 下传各元素颜色（Icon tint Auto
   跟随）。label 默认通过 `ProvideTextStyle(WiniaTheme::typography().label_large)`
   下传 Material 3 LabelLarge（14sp/20sp/Medium/0.1sp），状态色只覆盖其 color。
 - **宏化判据**：未宏化（与 Column/Row/Button 一致——content 闭包 + 内部 scope
   会拦截依赖注册）。
 
+### 阴影（`ChipElevation`，dp）
+
+| 变体 | 默认 / 按下 / 聚焦 / hover / 拖动 / 禁用 |
+|---|---|
+| assist / suggestion / input（flat） | 0 / 0 / 0 / 0 / **8** / 0 |
+| filter（flat） | 0 / 0 / 0 / **1** / **8** / 0 |
+| 三个 Elevated 变体 | **1** / 1 / 1 / **3** / **8** / **0** |
+
+数值取自 token 层级（`ElevatedContainerElevation = Level1`、`ElevatedHoverContainerElevation = Level2`、
+`DraggedContainerElevation = Level4 = 8dp`）；`Level2 = 3dp`。以上都是"容器不透明时"的值——平铺
+assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴影，这是有意行为（见上）。
+
 ## 4. 已知限制 / 待改进
 
-- **elevation**（ElevatedAssistChip/ElevatedFilterChip）：未实现（无阴影层）。
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
-  winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉）。
-- **disabled 边框**：Compose 用 onSurface@12% 边框 + 0.12 opacity；当前禁用态
-  未画边框。
+  winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
+- **disabled 边框不透明度**：token 里是 `OnSurface @0.12`，当前禁用态仍画 1dp `Outline`/`OutlineVariant` 原色。
 - **交互源**：未暴露 `interaction_source`（Button 有）。
-- **contentPadding 定制**：写死 16/8。
-- 视觉验证：chip_demo 展示 4 变体 + selected 切换 + 过渡动画（WS 实测点击切换
-  生效、动画渐变正常）。
+- **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
+- 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。
