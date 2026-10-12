@@ -8,7 +8,7 @@ use winia::prelude::*;
 #[path = "common/settings.rs"]
 mod settings;
 
-use winia::components::{Chip, ChipBorder, ChipElevation};
+use winia::components::Chip;
 
 fn section_title(ctx: &mut ComposeCtx, title: &str) {
     Text::new(title)
@@ -117,30 +117,6 @@ fn chip_ui(ctx: &mut ComposeCtx) {
                             .tint(WiniaTheme::colors().primary)
                             .build(ctx);
                     })
-                    .build(ctx);
-            });
-
-            // ── Elevated 变体 ──
-            // `SurfaceContainerLow` instead of a transparent container, no outline, and a shadow that is
-            // `ElevatedContainerElevation` (Level1 = 1 dp) at rest and `ElevatedHoverContainerElevation`
-            // (Level2 = 3 dp) while hovered.
-            section_title(ctx, "5. Elevated（填充 + 抬升）");
-            let sel3 = ctx.remember(|| false);
-            Row::new().spacing(8.0).build(ctx, |ctx| {
-                Chip::elevated_assist(|ctx| { Text::new("Elevated assist").build(ctx); }, || {})
-                    .build(ctx);
-                Chip::elevated_suggestion(|ctx| { Text::new("Elevated tip").build(ctx); }, || {})
-                    .build(ctx);
-                let sel3v = sel3.get();
-                Chip::elevated_filter(sel3v, |ctx| { Text::new("Elevated filter").build(ctx); }, {
-                    clone!(sel3);
-                    move || sel3.update(|v| *v = !*v)
-                })
-                .build(ctx);
-                // A caller can drop either the shadow or the outline the variant would otherwise carry.
-                Chip::elevated_assist(|ctx| { Text::new("Flat + outlined").build(ctx); }, || {})
-                    .elevation(ChipElevation::flat())
-                    .border(ChipBorder::flat(&WiniaTheme::colors()))
                     .build(ctx);
             });
         });
