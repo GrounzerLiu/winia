@@ -206,28 +206,15 @@ impl ButtonElevation {
         Self::new(1.0, 1.0, 1.0, 2.0, 0.0)
     }
 
-    /// The spec for a change of elevation, which Compose picks by DIRECTION and by what is being left
-    /// (`material3/internal/Elevation.kt:101-118`): moving to an interaction uses
-    /// `TweenSpec(120, FastOutSlowInEasing)`, leaving one uses `TweenSpec(150, CubicBezierEasing(0.40, 0.00,
-    /// 0.60, 1.00))`, and leaving HOVER is shorter — `TweenSpec(120, <the same easing>)`. winia used one spec
-    /// for every direction (a 180 ms `EaseOutCubic`), so a hover grew 60 ms slower than Compose's and left
-    /// slower still.
+    /// The spec for a change of elevation — Compose's rule, shared with every other component that
+    /// animates one ([`crate::animation::elevation_spec_for`], from
+    /// `material3/internal/Elevation.kt:101-118`): 120 ms `FastOutSlowIn` towards an interaction, 150 ms
+    /// of `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, 120 ms of the same curve out of
+    /// HOVER. winia used one 180 ms `EaseOutCubic` for every direction.
     ///
     /// `was_hovered` is the state being left, which the caller reads before the animation starts.
     pub fn spec_for(current: f32, target: f32, was_hovered: bool) -> crate::animation::AnimationSpec {
-        use crate::animation::interpolator::{fast_out_slow_in, CubicBezier};
-        use crate::animation::{AnimationSpec, TweenSpec};
-        let (millis, easing): (u64, CubicBezier) = if target > current {
-            (120, fast_out_slow_in())
-        } else if was_hovered {
-            (120, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
-        } else {
-            (150, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
-        };
-        AnimationSpec::Tween(TweenSpec::new(
-            std::time::Duration::from_millis(millis),
-            easing,
-        ))
+        crate::animation::elevation_spec_for(current, target, was_hovered)
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default）。

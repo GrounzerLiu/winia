@@ -912,6 +912,26 @@ pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
 
+/// The spec material3 animates an elevation change with — one rule for every component that has a
+/// per-state elevation (`Button`, `Card`, and anything else that follows `animateElevation`).
+///
+/// Compose picks it by DIRECTION and by what is being left (`material3/internal/Elevation.kt:101-118`):
+/// towards an interaction `TweenSpec(120, FastOutSlowInEasing)`, away from one
+/// `TweenSpec(150, CubicBezierEasing(0.40, 0.00, 0.60, 1.00))`, and away from HOVER the shorter
+/// `TweenSpec(120, <the same easing>)`. `was_hovered` is the state being left, which the caller knows
+/// from the interaction it read before pushing the animation.
+pub fn elevation_spec_for(current: f32, target: f32, was_hovered: bool) -> AnimationSpec {
+    use interpolator::{fast_out_slow_in, CubicBezier};
+    let (millis, easing): (u64, CubicBezier) = if target > current {
+        (120, fast_out_slow_in())
+    } else if was_hovered {
+        (120, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
+    } else {
+        (150, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
+    };
+    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(millis), easing))
+}
+
 /// Whether an animation is still running for ONE state.
 ///
 /// [`is_animating`] answers for the process; a caller that needs to know when its own animation

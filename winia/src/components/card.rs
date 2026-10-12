@@ -370,19 +370,24 @@ impl Card {
         let content_color = colors.content_color_for(&state);
         // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
         // 平滑过渡——悬停/按下时阴影逐渐升高、移出后逐渐回落，不跳变。
+        // The spec is Compose's — the same directional rule the Button uses
+        // (`animation::elevation_spec_for`, from `material3/internal/Elevation.kt:101-118`); this used one
+        // 180 ms `EaseOutCubic` for every direction. It needs the elevation being LEFT, which is the last
+        // target this build pushed, kept in a backchannel so reading it registers no dependency.
+        let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
+            ctx.remember_backchannel(|| None);
         let elevation_anim = self.elevation.and_then(|e| {
             if e.default <= 0.0 && e.pressed <= 0.0 && e.focused <= 0.0
                 && e.hovered <= 0.0 && e.dragged <= 0.0 && e.disabled <= 0.0
             {
                 None // 全 0：无阴影，不加图层
             } else {
-                Some(ctx.animate_float_as_state(
-                    e.for_state(&state),
-                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                        std::time::Duration::from_millis(180),
-                        crate::animation::interpolator::EaseOutCubic::new(),
-                    )),
-                ))
+                let target = e.for_state(&state);
+                let from = last_elevation.peek().unwrap_or(target);
+                let spec =
+                    crate::animation::elevation_spec_for(from, target, state.hovered && target < from);
+                last_elevation.set(Some(target));
+                Some(ctx.animate_float_as_state(target, spec))
             }
         });
 
@@ -431,26 +436,54 @@ impl Card {
 
         // content 闭包自动成为组合 scope（与 Column 一致）；
         // 布局策略 = ColumnLayout（对标 M3：内容包在 Column 中，顶部对齐）
+        //
+        // A CLICKABLE card gets Compose's 48 dp touch target: its `onClick` overload goes through
+        // `Surface(onClick = …)` (`material3/Card.kt:146-156`), whose Box applies
+        // `Modifier.minimumInteractiveComponentSize()` (`material3/Surface.kt:219`). A card that takes no
+        // clicks has no such minimum in Compose, and does not get one here either. The wrapper is a node of
+        // its own for the reason the Button's is: winia decides a chain's size across the whole chain, so a
+        // minimum inside the card's chain would fight its own background and padding. It also carries the
+        // ring's shape and colour, since it is the node that takes focus.
         let dir = modifier.get_layout_direction()
             .unwrap_or(crate::layout::direction::current());
-        match ctx.start_restartable_group(
-            key,
-            modifier,
-            crate::layout::ColumnLayout::new().direction(dir),
-        ) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {
-                // 内容色下传（LocalContentColor 等价物）——Icon tint Auto
-                // 取卡片内容色（Filled/Elevated/Outlined 内容色 = OnSurface）
-                crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                    content(ctx);
-                });
+        let build_card = |ctx: &mut ComposeCtx| {
+            match ctx.start_restartable_group(
+                key,
+                modifier,
+                crate::layout::ColumnLayout::new().direction(dir),
+            ) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    // The content colour is passed down (the `LocalContentColor` equivalent) so an `Icon`
+                    // with tint Auto picks up the card's own content colour: `onSurface` for all three
+                    // styles.
+                    crate::theme::WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                        content(ctx);
+                    });
+                }
             }
+            // The focus ring's colour is the theme's `secondary` — M3's `CardTokens.FocusIndicatorColor`,
+            // deliberately different from Button's `primary`. Captured at compose time into the node's desc,
+            // because the theme's CompositionLocal is gone by render time.
+            ctx.set_current_node_focus_color(theme.secondary);
+            ctx.end_restartable_group();
+        };
+        if self.on_click.is_some() {
+            crate::layout::components::build_container(
+                ctx,
+                Modifier::new()
+                    .minimum_interactive_component_size()
+                    .border(0.0, crate::graphics::Color::from_argb(0, 0, 0, 0), shape),
+                crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+                |ctx| {
+                    build_card(ctx);
+                    // The wrapper is the focus node, so the ring's colour has to reach it too.
+                    ctx.set_current_node_focus_color(theme.secondary);
+                },
+            );
+        } else {
+            build_card(ctx);
         }
-        // 焦点环颜色：主题 secondary（M3 CardTokens.FocusIndicatorColor = Secondary——
-        // 与 Button 的 primary 有意不同，对齐 M3 token；组合期捕获进 desc）
-        ctx.set_current_node_focus_color(theme.secondary);
-        ctx.end_restartable_group();
     }
 
     // ── Getters（测试用）──
@@ -474,6 +507,59 @@ impl Default for Card {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compose's CLICKABLE card carries a 48 dp touch target, because the `onClick` overload is built on
+    /// `Surface(onClick = …)` (`material3/Card.kt:146-156`) whose Box applies
+    /// `Modifier.minimumInteractiveComponentSize()` (`material3/Surface.kt:219`, the node at
+    /// `material3/InteractiveComponentSize.kt:98-140`): the box becomes `max(content, 48)` with the content
+    /// centred. A card with no `on_click` has no such minimum in Compose — it is asserted here as the control.
+    #[test]
+    fn a_clickable_card_reserves_a_48_dp_touch_target() {
+        let heights = |clickable: bool| -> Vec<f32> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                crate::layout::components::Column::new()
+                    .modifier(Modifier::new().fill_max_width())
+                    .build(ctx, |ctx| {
+                        let card = Card::filled();
+                        let card = if clickable { card.on_click(|| {}) } else { card };
+                        card.build(ctx, |ctx| {
+                            crate::components::Text::new("Card")
+                                .modifier(Modifier::new().padding(8.0))
+                                .build(ctx);
+                        });
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let nodes = composer.arena_nodes();
+            nodes.iter().map(|n| n.measured_size.height).collect()
+        };
+        let clickable = heights(true);
+        assert!(
+            clickable.contains(&48.0),
+            "the clickable card reserves the 48 dp touch target ({clickable:?})"
+        );
+        let plain = heights(false);
+        assert!(
+            !plain.contains(&48.0),
+            "and a card that takes no clicks does not, as in Compose ({plain:?})"
+        );
+    }
+
+    /// The elevation animation is directional, as Compose's is (`material3/internal/Elevation.kt:101-118`) —
+    /// the same rule the Button uses. One 180 ms `EaseOutCubic` for every direction was winia's.
+    #[test]
+    fn the_card_elevation_spec_follows_compose_direction_and_source() {
+        let millis = |current: f32, target: f32, hovered: bool| {
+            match crate::animation::elevation_spec_for(current, target, hovered) {
+                crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis(),
+                other => panic!("an elevation animation is a tween, got {other:?}"),
+            }
+        };
+        assert_eq!(millis(0.0, 1.0, false), 120, "growing is the incoming 120 ms");
+        assert_eq!(millis(1.0, 0.0, false), 150, "falling is the outgoing 150 ms");
+        assert_eq!(millis(1.0, 0.0, true), 120, "falling out of hover is shorter");
+    }
 
     #[test]
     fn test_card_variant_constructors() {
