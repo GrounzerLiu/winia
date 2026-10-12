@@ -76,12 +76,11 @@ impl ButtonSize {
         }
     }
 
-    /// 水平 padding（LeadingSpace/TrailingSpace：16/24/24/48/64；
-    /// Small 用 M3 ButtonDefaults 的 24 惯例）
+    /// Horizontal padding, `LeadingSpace`/`TrailingSpace` per size: 16/16/24/48/64.
     pub fn horizontal_padding(self) -> f32 {
         match self {
-            ButtonSize::XSmall => 16.0,
-            ButtonSize::Small | ButtonSize::Medium => 24.0,
+            ButtonSize::XSmall | ButtonSize::Small => 16.0,
+            ButtonSize::Medium => 24.0,
             ButtonSize::Large => 48.0,
             ButtonSize::XLarge => 64.0,
         }
@@ -205,6 +204,30 @@ impl ButtonElevation {
     /// rest 1 / pressed 1 / focused 1 / hovered 2 / disabled 0。
     pub fn elevated() -> Self {
         Self::new(1.0, 1.0, 1.0, 2.0, 0.0)
+    }
+
+    /// The spec for a change of elevation, which Compose picks by DIRECTION and by what is being left
+    /// (`material3/internal/Elevation.kt:101-118`): moving to an interaction uses
+    /// `TweenSpec(120, FastOutSlowInEasing)`, leaving one uses `TweenSpec(150, CubicBezierEasing(0.40, 0.00,
+    /// 0.60, 1.00))`, and leaving HOVER is shorter — `TweenSpec(120, <the same easing>)`. winia used one spec
+    /// for every direction (a 180 ms `EaseOutCubic`), so a hover grew 60 ms slower than Compose's and left
+    /// slower still.
+    ///
+    /// `was_hovered` is the state being left, which the caller reads before the animation starts.
+    pub fn spec_for(current: f32, target: f32, was_hovered: bool) -> crate::animation::AnimationSpec {
+        use crate::animation::interpolator::{fast_out_slow_in, CubicBezier};
+        use crate::animation::{AnimationSpec, TweenSpec};
+        let (millis, easing): (u64, CubicBezier) = if target > current {
+            (120, fast_out_slow_in())
+        } else if was_hovered {
+            (120, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
+        } else {
+            (150, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
+        };
+        AnimationSpec::Tween(TweenSpec::new(
+            std::time::Duration::from_millis(millis),
+            easing,
+        ))
     }
 
     /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default）。
@@ -404,6 +427,8 @@ pub struct Button {
     border: Option<ButtonBorder>,
     /// 尺寸变体（默认 Small）
     size_variant: ButtonSize,
+    /// `true` when the caller named a size — only then do that size's tokens decide the horizontal padding.
+    size_named: bool,
     /// 修饰符链（尺寸、颜色、形状等）
     modifier: Modifier,
 }
@@ -424,6 +449,7 @@ impl Button {
             min_height: None,
             border: None,
             size_variant: ButtonSize::Small,
+            size_named: false,
             modifier: Modifier::new(),
         }
     }
@@ -535,8 +561,14 @@ impl Button {
     }
 
     /// 尺寸变体（XSmall/Small/Medium/Large/XLarge，默认 Small）
+    ///
+    /// Naming a size switches the horizontal padding to that size's token: `ButtonSmallTokens.LeadingSpace`
+    /// is 16 dp, while the DEFAULT button (no `.size()` call) keeps `ButtonDefaults.ContentPadding`'s 24 dp,
+    /// which comes from `BaselineButtonTokens.LeadingSpace` and is what M3's own default button uses. The two
+    /// are different numbers for the same height, so the builder has to remember which one was asked for.
     pub fn size(mut self, size: ButtonSize) -> Self {
         self.size_variant = size;
+        self.size_named = true;
         self
     }
 
@@ -566,28 +598,39 @@ impl Button {
         let text_color = colors.content_color_for(&state);
         // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
         // 平滑过渡——悬停时阴影逐渐升高、移出后逐渐回落，不跳变。
+        //
+        // The spec is Compose's, direction and source included (`ButtonElevation::spec_for`), and it needs the
+        // elevation being LEFT: the last target this build pushed, kept in a backchannel so reading it
+        // registers no dependency.
+        let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
+            ctx.remember_backchannel(|| None);
         let elevation_anim = self.elevation.and_then(|e| {
             if e.default <= 0.0 && e.pressed <= 0.0 && e.focused <= 0.0
                 && e.hovered <= 0.0 && e.disabled <= 0.0
             {
                 None // 全 0：无阴影，不加图层
             } else {
-                Some(ctx.animate_float_as_state(
-                    e.for_state(&state),
-                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                        std::time::Duration::from_millis(180),
-                        crate::animation::interpolator::EaseOutCubic::new(),
-                    )),
-                ))
+                let target = e.for_state(&state);
+                let from = last_elevation.peek().unwrap_or(target);
+                let spec = ButtonElevation::spec_for(from, target, state.hovered && target < from);
+                last_elevation.set(Some(target));
+                Some(ctx.animate_float_as_state(target, spec))
             }
         });
 
         // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
         // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
         let shape = self.shape;
-        let (pad_s, pad_t, pad_e, pad_b) = self
-            .content_padding
-            .unwrap_or_else(|| ButtonDefaults::content_padding_for(self.size_variant, self.style));
+        let (pad_s, pad_t, pad_e, pad_b) = self.content_padding.unwrap_or_else(|| {
+            if self.size_named {
+                // A named size takes that size's own tokens (`ButtonSmallTokens.LeadingSpace` = 16 for Small).
+                ButtonDefaults::content_padding_for(self.size_variant, self.style)
+            } else {
+                // No size named: M3's default button, whose padding is the BASELINE 24 dp
+                // (`BaselineButtonTokens.LeadingSpace`) and not the small size's 16.
+                ButtonDefaults::content_padding(self.style)
+            }
+        });
         let min_w = self
             .min_width
             .clone()
@@ -905,7 +948,9 @@ mod tests {
         assert_eq!(ButtonSize::Large.icon_label_space(), 12.0);
         assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
         assert_eq!(ButtonSize::XSmall.horizontal_padding(), 16.0);
-        assert_eq!(ButtonSize::Small.horizontal_padding(), 24.0);
+        // `ButtonSmallTokens.LeadingSpace` is 16, not the baseline's 24: the two are different numbers for the
+        // same 40 dp height, and only an explicit `.size(Small)` takes this one (see `Button::size`).
+        assert_eq!(ButtonSize::Small.horizontal_padding(), 16.0);
         assert_eq!(ButtonSize::XLarge.horizontal_padding(), 64.0);
         assert_eq!(ButtonSize::Large.outline_width(), 2.0);
         assert_eq!(ButtonSize::XLarge.outline_width(), 3.0);
@@ -999,6 +1044,56 @@ mod tests {
         assert!(
             widest >= 58.0,
             "the box is at least `MinWidth` wide ({widest})"
+        );
+    }
+
+    /// The elevation animation is directional, as Compose's is (`material3/internal/Elevation.kt:101-118`):
+    /// 120 ms `FastOutSlowInEasing` towards an interaction, 150 ms of
+    /// `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, and 120 ms of that same curve when what is
+    /// being left is hover. winia animated every direction with one 180 ms `EaseOutCubic`.
+    #[test]
+    fn the_elevation_spec_follows_compose_direction_and_source() {
+        let millis = |current: f32, target: f32, hovered: bool| {
+            match ButtonElevation::spec_for(current, target, hovered) {
+                crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis(),
+                other => panic!("an elevation animation is a tween, got {other:?}"),
+            }
+        };
+        assert_eq!(millis(1.0, 2.0, false), 120, "growing is the incoming 120 ms");
+        assert_eq!(
+            millis(2.0, 1.0, false),
+            150,
+            "falling from press or focus is the outgoing 150 ms"
+        );
+        assert_eq!(millis(2.0, 1.0, true), 120, "falling out of hover is shorter");
+    }
+
+    /// No size named is M3's default button, whose horizontal padding is the BASELINE 24
+    /// (`BaselineButtonTokens.LeadingSpace`); `.size(Small)` is the expressive size, whose own token is 16
+    /// (`ButtonSmallTokens.LeadingSpace`). Same 40 dp height, different padding, which is why the builder has
+    /// to remember whether a size was named.
+    #[test]
+    fn a_named_size_takes_its_own_padding_and_the_default_takes_the_baseline() {
+        let padding_of = |button: Button| -> f32 {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                button.on_click(|| {}).build(ctx, |ctx| {
+                    crate::components::Text::new("Ok").build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("laid out");
+            let hit = std::iter::once(root).chain(nodes[root].children.iter().copied()).find(|i| {
+                nodes[*i].modifier.get_padding_horizontal().0 > 0.0
+            });
+            nodes[hit.expect("the button's own chain")].modifier.get_padding_horizontal().0
+        };
+        assert_eq!(padding_of(Button::filled()), 24.0, "the default keeps the baseline");
+        assert_eq!(
+            padding_of(Button::filled().size(ButtonSize::Small)),
+            16.0,
+            "a named Small takes ButtonSmallTokens.LeadingSpace"
         );
     }
 
