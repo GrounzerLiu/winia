@@ -93,9 +93,17 @@ filter 的 hover 分档：`FlatSelectedHoverContainerElevation = Level1`、`Flat
   selected/unselected/disabled 之间渐变容器色。这是 winia 的补充——M3 的 `Chip.kt` 直接取色，
   没有 `animateColorAsState`。`background` 接受动态闭包（`impl Fn() -> Color`），必须传
   `move || bg.get()` 而非取值，否则冻结在 build 时。
+- **阴影与容器色同步**（`Chip::build` 的 gate）：容器色渐变期间**不显示新升起的阴影**——
+  背景还是半透明时阴影会从后面透出来（"两个状态过渡过程中可以砍刀"）。规则：
+  - 变透明（选中 → 未选中）：阴影**立即**归零（`Snap`），不等颜色渐变结束；
+  - 变不透明（未选中 → 选中）：等**容器色真正到位**（逐通道比较动画色与目标色，容差 1）后才升阴影。
+
+  判定用的是动画色本身而非动画注册表：gate 只依赖"当前画的是什么"，并在颜色落位的那一帧自动放开（
+  build 里读了动画色，因此每个颜色帧都会重跑一次 build）。
 - **边框**：`ChipBorder::resolve(enabled, selected)` 返回 `Option<(宽度, 颜色)>`——宽度为 0 时
   **不挂** border modifier（挂 0 宽线仍会绘制，可见）。
 - **阴影**：`graphics_layer` 动态闭包读动画值（渲染期求值，不触发重组），形状跟随 chip shape。
+  升起用 `elevation_spec_for_pair`（与 Button/Card 同一套交互配对规则），落下用 `Snap`。
 - **label 排版**：`ProvideTextStyle(WiniaTheme::typography().label_large)`（M3 LabelLarge
   14sp/20sp/Medium/0.1sp），状态色只覆盖其 color。
 - **宏化判据**：未宏化（与 Column/Row/Button 一致——content 闭包 + 内部 scope 会拦截依赖注册）。

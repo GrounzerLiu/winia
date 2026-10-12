@@ -118,6 +118,10 @@ impl ChipDefaults {
     pub const INPUT_PADDING_COMPACT: f32 = 4.0;
     pub const ELEMENT_GAP: f32 = 8.0; // between leading icon / label / trailing icon
     pub const BORDER_WIDTH: f32 = 1.0; // FlatOutlineWidth / FlatUnselectedOutlineWidth
+    /// How long a chip fades between its container colours — the winia addition M3 does not have (M3 applies
+    /// the container colour directly). The shadow's gate follows this same clock: a chip becoming transparent
+    /// drops its shadow at once, one becoming filled holds its shadow off until this fade has arrived.
+    pub const CONTAINER_FADE_MILLIS: u64 = 180;
     pub const AVATAR_SIZE: f32 = 24.0; // InputChipTokens.AvatarSize
     /// `DisabledLabelTextOpacity` (all four variants) and `DisabledAvatarOpacity` (input chip).
     pub const DISABLED_OPACITY: f32 = 0.38;
@@ -591,27 +595,60 @@ impl Chip {
             .interaction_source
             .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
-        // Elevation (`ChipElevation?`): the variant's token default, animated with the shared
-        // interaction-pair rule the Button and Card use (`animateElevation`). The interaction kind the last
-        // target came from lives in a backchannel so reading it registers no dependency.
-        let last_kind: crate::runtime::state::Backchannel<
-            Option<crate::animation::ElevationInteraction>,
-        > = ctx.remember_backchannel(|| None);
         let elevation = self.elevation.unwrap_or_else(|| match variant {
             ChipVariant::ElevatedAssist | ChipVariant::ElevatedFilter
             | ChipVariant::ElevatedSuggestion => ChipElevation::elevated(),
             ChipVariant::Filter | ChipVariant::ElevatedFilter => ChipElevation::hover_lifting(),
             _ => ChipElevation::flat(),
         });
+        // The container colour fades over 180 ms, and the shadow must not be seen through a half-faded
+        // container: a chip that is BECOMING transparent drops its shadow at once, and one that is BECOMING
+        // filled holds its shadow off until the colour has arrived. So the container's own animation is created
+        // HERE and read here — reading it is also what makes the build run on each colour frame, which is what
+        // releases the gate when the fade ends.
+        let container_anim = ctx.animate_color_as_state(
+            container,
+            crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
+                std::time::Duration::from_millis(ChipDefaults::CONTAINER_FADE_MILLIS),
+                crate::animation::interpolator::EaseOutCubic::new(),
+            )),
+        );
+        let _ = container_anim.get();
+        // "Has the fill arrived?" is asked of the animated colour itself rather than of the animation registry:
+        // the gate then depends only on what is painted, and it releases on the frame the colour lands.
+        let colour_now = container_anim.get();
+        let colour_arrived = colour_now.r.abs_diff(container.r) <= 1
+            && colour_now.g.abs_diff(container.g) <= 1
+            && colour_now.b.abs_diff(container.b) <= 1
+            && colour_now.a.abs_diff(container.a) <= 1;
+        // Elevation (`ChipElevation?`): the variant's token default, animated with the shared
+        // interaction-pair rule the Button and Card use (`animateElevation`). The interaction kind the last
+        // target came from lives in a backchannel so reading it registers no dependency.
+        let last_kind: crate::runtime::state::Backchannel<
+            Option<crate::animation::ElevationInteraction>,
+        > = ctx.remember_backchannel(|| None);
+        let last_shadow: crate::runtime::state::Backchannel<f32> = ctx.remember_backchannel(|| 0.0);
         let elevation_anim = if elevation.is_flat() {
             None
         } else {
-            let target = elevation.for_state(&state, sel);
+            let wanted = elevation.for_state(&state, sel);
+            let shown = last_shadow.peek();
+            // Rising while the container is mid-fade would paint a shadow behind a translucent fill; hold the
+            // shadow where it is until the colour has arrived. Falling is immediate: nothing should linger behind
+            // a background that is on its way out.
+            let target = if !colour_arrived && wanted > shown { shown } else { wanted };
             let to = state.elevation_interaction();
             let from = if state.enabled { last_kind.peek() } else { None };
-            let spec = crate::animation::elevation_spec_for_pair(from, to)
-                .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+            let spec = if target <= shown {
+                // Falling (or holding): the shadow leaves AT ONCE. A fade-out would keep it visible behind a
+                // container that is already on its way to transparent.
+                crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
+            } else {
+                crate::animation::elevation_spec_for_pair(from, to)
+                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()))
+            };
             last_kind.set(to);
+            last_shadow.set(target);
             Some(ctx.animate_float_as_state(target, spec))
         };
         let leading = self.leading_icon;
@@ -626,7 +663,7 @@ impl Chip {
             self.enabled,
             variant,
             sel,
-            container,
+            container_anim,
             border,
             shape,
             label_color,
@@ -675,14 +712,13 @@ impl Chip {
 /// 通用 chip 容器：32dp 高 + shape 背景 + 边框 + clickable/ripple +
 /// 水平内容排列（垂直居中）。
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn build_chip(
     ctx: &mut ComposeCtx,
     modifier: Modifier,
     enabled: bool,
     variant: ChipVariant,
     selected: bool,
-    container: crate::graphics::Color,
+    container_anim: crate::runtime::state::State<crate::graphics::Color>,
     border: Option<(f32, crate::graphics::Color)>,
     shape: Shape,
     content_color: crate::graphics::Color,
@@ -693,25 +729,10 @@ fn build_chip(
     focus_color: crate::graphics::Color,
 ) {
     let key = ctx.next_key();
-    // A winia addition: `animate_color_as_state` remembers the animated colour and registers the
-    // animation, so a chip fades between its container colours (selected / unselected / disabled).
-    // M3's chips apply their container colour directly (`material3/Chip.kt` has no
-    // `animateColorAsState`), so this 180 ms EaseOutCubic fade is ours, not a port — kept because it
-    // reads better than a hard cut, and recorded rather than presented as alignment. A spring would be
-    // `SpringSpec::effects_default()` here now that the engine animates colours per Oklab component.
-    let bg_anim = ctx.animate_color_as_state(
-        container,
-        crate::animation::AnimationSpec::Tween(
-            crate::animation::TweenSpec::new(
-                std::time::Duration::from_millis(180),
-                crate::animation::interpolator::EaseOutCubic::new(),
-            )
-        ),
-    );
     // ⚠ background 接受动态闭包（`impl Fn() -> Color`）——渲染期每帧求值
     // color_fn()：动画 tick 推进 State + request_redraw → 渲染读最新插值。
     // 若传 bg_anim.get() 的**值**则冻结在 build 时（动画不显示）。
-    let bg = bg_anim.clone();
+    let bg = container_anim.clone();
     let mut m = Modifier::new()
         .min_height(ChipDefaults::HEIGHT)
         .background(move || bg.get(), shape);
@@ -1074,6 +1095,101 @@ mod tests {
             if let Some(style) = find_text_style(nodes, child) { return Some(style); }
         }
         None
+    }
+
+    /// A chip's shadow waits for its container to arrive, and leaves at once.
+    ///
+    /// The container colour fades over `CONTAINER_FADE_MILLIS`; a shadow rising underneath a half-faded fill
+    /// was the visible seam in the transition, and one lingering after the fill left showed through the
+    /// transparency. This drives the state change and reads what the layer would paint, so the gate is measured
+    /// rather than assumed.
+    #[test]
+    fn the_shadow_waits_for_the_container_and_leaves_at_once() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = crate::theme::WiniaTheme::colors();
+        let selected = crate::runtime::state::State::new(false);
+        let source = crate::interaction::MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, state: crate::runtime::state::State<bool>, src: crate::interaction::MutableInteractionSource| {
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                Chip::filter(
+                    state.get(),
+                    |ctx| crate::components::Text::new("Lunch").build(ctx),
+                    || {},
+                )
+                .interaction_source(src.clone())
+                .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer, selected.clone(), src.clone());
+        source.emit_hover_enter();
+        build(&mut composer, selected.clone(), src.clone());
+
+        let painted_shadow = |composer: &Composer| -> f32 {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|n| {
+                    n.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                            Some((params_fn)().shadow_elevation)
+                        }
+                        _ => None,
+                    })
+                })
+                .expect("the chip keeps its elevation layer")
+        };
+
+        // Hovered but unselected: no lift at all.
+        assert_eq!(painted_shadow(&composer), 0.0, "an unselected hovered chip shows no shadow");
+
+        // Becoming selected while hovered: the fill is on its way IN, so the shadow must stay off...
+        selected.set(true);
+        build(&mut composer, selected.clone(), src.clone());
+        for _ in 0..3 {
+            crate::animation::update_animations();
+        }
+        build(&mut composer, selected.clone(), src.clone());
+        let mid = painted_shadow(&composer);
+        assert!(
+            mid < 0.5,
+            "the shadow waits for the container to arrive (mid-fade it was {mid})"
+        );
+
+        // ...and once the colour has arrived, the lift happens. The fill lands first, then the shadow runs its
+        // own `elevation_spec_for_pair` tween, so the assertion waits for both.
+        for _ in 0..120 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        build(&mut composer, selected.clone(), src.clone());
+        for _ in 0..120 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        let settled = painted_shadow(&composer);
+        assert!(
+            settled > 0.5,
+            "a selected hovered chip lifts to Level1 once the fill is in (got {settled})"
+        );
+
+        // The other direction: becoming unselected drops the shadow at once, while the fill is still fading
+        // out, so nothing is left to show through the transparent container.
+        selected.set(false);
+        build(&mut composer, selected.clone(), src.clone());
+        let leaving = painted_shadow(&composer);
+        assert!(
+            leaving <= 0.001,
+            "the shadow leaves at once when the chip becomes transparent (got {leaving})"
+        );
+        let _ = theme;
     }
 
     #[test]
