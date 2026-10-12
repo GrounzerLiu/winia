@@ -103,11 +103,13 @@ impl CardColors {
     }
 }
 
-/// 卡片阴影高度（对标 material3 `CardElevation`——六状态：default/pressed/
-/// focused/hovered/dragged/disabled）。默认值对齐 M3 1.4.0 tokens：
-/// - `card_elevation()`（Filled）：0/0/0/1/3/0
-/// - `elevated_card_elevation()`（Elevated）：1/1/1/2/4/1
-/// - `outlined_card_elevation()`（Outlined）：0/0/0/0/3/0
+/// Card shadow elevation (the material3 `CardElevation` counterpart — six states: default/pressed/
+/// focused/hovered/dragged/disabled), in DP, resolved from the token LEVELS in
+/// `material3/tokens/ElevationTokens.kt:24-29`: Level0 0, Level1 1, Level2 3, Level3 6, Level4 8 dp. winia
+/// used to carry the level INDEX here, which is the same number only for Level0 and Level1.
+/// - `card_elevation()`（Filled）：0/0/0/1/6/0
+/// - `elevated_card_elevation()`（Elevated）：1/1/1/3/8/1
+/// - `outlined_card_elevation()`（Outlined）：0/0/0/1/6/0
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CardElevation {
     pub default: f32,
@@ -123,32 +125,30 @@ impl CardElevation {
         Self { default, pressed, focused, hovered, dragged, disabled }
     }
 
-    /// FilledCard 默认（对齐 M3 1.4.0 `FilledCardTokens`：
-    /// rest 0 / pressed 0 / focused 0 / hovered 1 / dragged 3 / disabled 0——
-    /// Filled 平时无阴影，hover/拖动时升高）
+    /// FilledCard defaults from `FilledCardTokens`, in dp: `ContainerElevation` / `PressedContainerElevation`
+    /// / `FocusContainerElevation` / `DisabledContainerElevation` are `ElevationTokens.Level0` (0),
+    /// `HoverContainerElevation` is `Level1` (1) and `DraggedContainerElevation` is `Level3` — 6 dp, not 3.
+    /// winia stored the level index, so a dragged Filled card lifted half as far as M3's.
     pub fn default_elevation() -> Self {
-        Self::new(0.0, 0.0, 0.0, 1.0, 3.0, 0.0)
+        Self::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0)
     }
 
-    /// ElevatedCard 默认（对齐 M3 1.4.0 `ElevatedCardTokens`：
-    /// rest 1 / pressed 1 / focused 1 / hovered 2 / dragged 4 / disabled 1）
+    /// ElevatedCard defaults from `ElevatedCardTokens`, in dp: `ContainerElevation`, `PressedContainerElevation`,
+    /// `FocusContainerElevation` and `DisabledContainerElevation` are `ElevationTokens.Level1` (1),
+    /// `HoverContainerElevation` is `Level2` (**3**) and `DraggedContainerElevation` is `Level4` (**8**).
     pub fn elevated() -> Self {
-        Self::new(1.0, 1.0, 1.0, 2.0, 4.0, 1.0)
+        Self::new(1.0, 1.0, 1.0, 3.0, 8.0, 1.0)
     }
 
-    /// OutlinedCard 默认（对齐 M3 1.4.0 `OutlinedCardTokens`：
-    /// rest 0 / pressed 0 / focused 0 / hovered 0 / dragged 3 / disabled 0——
-    /// Outlined 阴影靠边框表达，仅拖动时升高）
+    /// An OutlinedCard is flat at rest and lifts 1 dp on HOVER and 6 dp while DRAGGED — `OutlinedCardTokens`:
+    /// `ContainerElevation`/`PressedContainerElevation`/`FocusContainerElevation`/`DisabledContainerElevation`
+    /// are `ElevationTokens.Level0`, `HoverContainerElevation` is `Level1` (1) and `DraggedContainerElevation`
+    /// is `Level3` (6). winia carried hovered 0 here, which read as "an outlined card only ever moves when
+    /// dragged", and the level index (3) for the drag.
     pub fn outlined() -> Self {
-        Self::new(0.0, 0.0, 0.0, 0.0, 3.0, 0.0)
+        Self::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0)
     }
 
-    /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused >
-    /// default——与 material3 的"最近交互优先"一致；各状态取独立配置值）。
-    ///
-    /// pressed 分支取 `max(pressed, hovered)`（与 Button 同一语义）：按下不低于
-    /// hover 高度——触屏无 hover，按下升高才有阴影反馈（Elevated 默认 pressed=1
-    /// 低于 hovered=2，按下若回落则触屏按下无反馈）。
     /// Whether every state's elevation is 0 — the card then has nothing to animate and no shadow layer to pay
     /// for. Note that a style's REST elevation being 0 does NOT make it shadow-free: Filled is 0 at rest and
     /// still 1 on hover and 3 while dragged.
@@ -237,17 +237,17 @@ impl CardDefaults {
         CardColors::from_theme(theme, style)
     }
 
-    /// FilledCard 默认阴影（M3 FilledCardTokens：0/0/0/1/3/0）
+    /// FilledCard defaults (`FilledCardTokens`): 0/0/0/1/6/0 dp.
     pub fn card_elevation() -> CardElevation {
         CardElevation::default_elevation()
     }
 
-    /// ElevatedCard 默认阴影（M3 ElevatedCardTokens：1/1/1/2/4/1）
+    /// ElevatedCard defaults (`ElevatedCardTokens`): 1/1/1/3/8/1 dp.
     pub fn elevated_card_elevation() -> CardElevation {
         CardElevation::elevated()
     }
 
-    /// OutlinedCard 默认阴影（M3 OutlinedCardTokens：0/0/0/0/3/0）
+    /// OutlinedCard defaults (`OutlinedCardTokens`): 0/0/0/1/6/0 dp.
     pub fn outlined_card_elevation() -> CardElevation {
         CardElevation::outlined()
     }
@@ -394,19 +394,20 @@ impl Card {
         let content_color = colors.content_color_for(&state);
         // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
         // 平滑过渡——悬停/按下时阴影逐渐升高、移出后逐渐回落，不跳变。
-        // The spec is Compose's — the same directional rule the Button uses
-        // (`animation::elevation_spec_for`, from `material3/internal/Elevation.kt:101-118`); this used one
-        // 180 ms `EaseOutCubic` for every direction. It needs the elevation being LEFT, which is the last
-        // target this build pushed, kept in a backchannel so reading it registers no dependency.
-        let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
-            ctx.remember_backchannel(|| None);
+        // The spec is Compose's, and Compose keys it on the interaction PAIR
+        // (`animation::elevation_spec_for_pair`, from `material3/internal/Elevation.kt:50-61`), so the build
+        // remembers the interaction kind the last target came from in a backchannel — reading it registers no
+        // dependency, and `(None, None)` (idle to idle) is Compose's snap. This used one 180 ms `EaseOutCubic`
+        // for every direction.
+        let last_kind: crate::runtime::state::Backchannel<
+            Option<crate::animation::ElevationInteraction>,
+        > = ctx.remember_backchannel(|| None);
         // The elevation is the caller's when there is one, otherwise the style's own token set. Compose
         // ALWAYS has an elevation — `CardDefaults.cardElevation()` for a Filled card is
-        // `0 / 0 / 0 / 1 / 3 / 0`, not "nothing" — so a style whose REST elevation happens to be 0 still needs
-        // the animated layer: hovering raises it to 1 and dragging to 3 (`FilledCardTokens`,
-        // `CardTokens.DraggedContainerElevation`). winia stored `None` for Filled and Outlined and then skipped
-        // the layer entirely, so those cards could never show a shadow at all — a dragged Filled card moved
-        // and nothing else happened.
+        // `0 / 0 / 0 / 1 / 6 / 0` dp, not "nothing" — so a style whose REST elevation happens to be 0 still
+        // needs the animated layer: hovering raises it to 1 and dragging to 6 (`FilledCardTokens`). winia stored
+        // `None` for Filled and Outlined and then skipped the layer entirely, so those cards could never show a
+        // shadow at all — a dragged Filled card moved and nothing else happened.
         let elevation = self.elevation.unwrap_or_else(|| match self.style {
             CardStyle::Filled => CardDefaults::card_elevation(),
             CardStyle::Elevated => CardDefaults::elevated_card_elevation(),
@@ -416,10 +417,11 @@ impl Card {
             None // every state is 0: no shadow to animate, and no layer to pay for
         } else {
             let target = elevation.for_state(&state);
-            let from = last_elevation.peek().unwrap_or(target);
-            let spec =
-                crate::animation::elevation_spec_for(from, target, state.hovered && target < from);
-            last_elevation.set(Some(target));
+            let to = state.elevation_interaction();
+            let from = if state.enabled { last_kind.peek() } else { None };
+            let spec = crate::animation::elevation_spec_for_pair(from, to)
+                .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+            last_kind.set(to);
             Some(ctx.animate_float_as_state(target, spec))
         };
 
@@ -578,19 +580,32 @@ mod tests {
         );
     }
 
-    /// The elevation animation is directional, as Compose's is (`material3/internal/Elevation.kt:101-118`) —
-    /// the same rule the Button uses. One 180 ms `EaseOutCubic` for every direction was winia's.
+    /// The elevation spec keys on the PAIR of interactions, as Compose's `ElevationDefaults` does
+    /// (`material3/internal/Elevation.kt:50-61`, `:113-117`) — the same rule the Button uses. Comparing VALUES
+    /// instead (window's previous form) got two reachable cases wrong: a hover followed by a press took the
+    /// hovered curve where Compose takes `FastOutSlowIn`, and a release that leaves the pointer hovering was
+    /// read as an outgoing change although `HoverInteraction.Enter` is still the latest interaction.
     #[test]
-    fn the_card_elevation_spec_follows_compose_direction_and_source() {
-        let millis = |current: f32, target: f32, hovered: bool| {
-            match crate::animation::elevation_spec_for(current, target, hovered) {
-                crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis(),
-                other => panic!("an elevation animation is a tween, got {other:?}"),
+    fn the_card_elevation_spec_keys_on_the_interaction_pair() {
+        use crate::animation::ElevationInteraction as I;
+        let millis = |from: Option<I>, to: Option<I>| {
+            match crate::animation::elevation_spec_for_pair(from, to) {
+                Some(crate::animation::AnimationSpec::Tween(t)) => t.duration.as_millis(),
+                Some(other) => panic!("an elevation animation is a tween, got {other:?}"),
+                None => 0,
             }
         };
-        assert_eq!(millis(0.0, 1.0, false), 120, "growing is the incoming 120 ms");
-        assert_eq!(millis(1.0, 0.0, false), 150, "falling is the outgoing 150 ms");
-        assert_eq!(millis(1.0, 0.0, true), 120, "falling out of hover is shorter");
+        assert_eq!(millis(None, Some(I::Hover)), 120, "entering hover is the incoming 120 ms");
+        assert_eq!(millis(Some(I::Hover), Some(I::Press)), 120, "hover to press is incoming too");
+        assert_eq!(
+            millis(Some(I::Press), Some(I::Hover)),
+            120,
+            "releasing into a hover is still an incoming interaction"
+        );
+        assert_eq!(millis(Some(I::Press), None), 150, "back to rest is the outgoing 150 ms");
+        assert_eq!(millis(Some(I::Focus), None), 150, "and so is leaving focus");
+        assert_eq!(millis(Some(I::Hover), None), 120, "leaving hover is shorter");
+        assert_eq!(millis(None, None), 0, "idle to idle snaps, as Compose does");
     }
 
     #[test]
@@ -605,7 +620,11 @@ mod tests {
 
         let outlined = Card::outlined();
         assert_eq!(outlined.get_style(), CardStyle::Outlined);
-        assert_eq!(outlined.get_elevation(), None, "Outlined 默认阴影全 0");
+        assert_eq!(
+            outlined.get_elevation(),
+            None,
+            "None means \"use the style's token default\", which for Outlined is 0/0/0/1/6/0 dp"
+        );
     }
 
     #[test]
@@ -722,17 +741,20 @@ mod tests {
         assert!(frames > 5, "the elevation animation must actually run ({frames} frames)");
         let dragged = painted_shadow(&composer).expect("still there");
         assert!(
-            (dragged - 3.0).abs() < 0.01,
-            "dragging raises the shadow to `DraggedContainerElevation` (3), got {dragged}"
+            (dragged - 6.0).abs() < 0.01,
+            "dragging raises the shadow to `DraggedContainerElevation` (Level3 = 6 dp), got {dragged}"
         );
     }
 
     #[test]
     fn test_card_elevation_defaults() {
-        // M3 1.4.0 tokens
-        assert_eq!(CardElevation::default_elevation(), CardElevation::new(0.0, 0.0, 0.0, 1.0, 3.0, 0.0));
-        assert_eq!(CardElevation::elevated(), CardElevation::new(1.0, 1.0, 1.0, 2.0, 4.0, 1.0));
-        assert_eq!(CardElevation::outlined(), CardElevation::new(0.0, 0.0, 0.0, 0.0, 3.0, 0.0));
+        // M3 1.4.0 tokens, in DP: `ElevationTokens` maps Level1 -> 1, Level2 -> 3, Level3 -> 6, Level4 -> 8.
+        // Carrying the LEVEL INDEX here is what made a dragged card lift 3 dp instead of 6 on a Filled style
+        // and 4 instead of 8 on an Elevated one.
+        assert_eq!(CardElevation::default_elevation(), CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0));
+        assert_eq!(CardElevation::elevated(), CardElevation::new(1.0, 1.0, 1.0, 3.0, 8.0, 1.0));
+        // `OutlinedCardTokens.HoverContainerElevation = Level1` — an outlined card lifts on hover too.
+        assert_eq!(CardElevation::outlined(), CardElevation::new(0.0, 0.0, 0.0, 1.0, 6.0, 0.0));
         assert_eq!(CardDefaults::card_elevation(), CardElevation::default_elevation());
         assert_eq!(CardDefaults::elevated_card_elevation(), CardElevation::elevated());
         assert_eq!(CardDefaults::outlined_card_elevation(), CardElevation::outlined());
@@ -746,7 +768,7 @@ mod tests {
         assert_eq!(e.for_state(&ComponentState { pressed: true, ..ComponentState::idle() }), 8.0);
         assert_eq!(e.for_state(&ComponentState { hovered: true, ..ComponentState::idle() }), 2.0);
         assert_eq!(e.for_state(&ComponentState { focused: true, ..ComponentState::idle() }), 2.0);
-        // 优先级：disabled > pressed > dragged > hovered > focused > default
+        // Order: disabled > dragged > pressed > hovered > focused > default (latest interaction wins)
         assert_eq!(
             e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
             8.0
@@ -785,7 +807,8 @@ mod tests {
         );
         assert_eq!(
             CardElevation::elevated().for_state(&ComponentState { dragged: true, ..ComponentState::idle() }),
-            4.0
+            8.0,
+            "`ElevatedCardTokens.DraggedContainerElevation` is Level4 = 8 dp"
         );
     }
 

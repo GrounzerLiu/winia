@@ -912,24 +912,53 @@ pub fn cancel_animation_by_id(sid: crate::runtime::state::StateId) {
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != sid);
 }
 
-/// The spec material3 animates an elevation change with — one rule for every component that has a
-/// per-state elevation (`Button`, `Card`, and anything else that follows `animateElevation`).
+/// The interactions that carry an elevation — the `Interaction` kinds `ElevationDefaults` knows about
+/// (`material3/internal/Elevation.kt:75-108`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElevationInteraction {
+    Press,
+    Drag,
+    Hover,
+    Focus,
+}
+
+/// The spec material3 animates an elevation change with — one rule for every component that has a per-state
+/// elevation (`Button`, `Card`, and anything else that follows `animateElevation`).
 ///
-/// Compose picks it by DIRECTION and by what is being left (`material3/internal/Elevation.kt:101-118`):
-/// towards an interaction `TweenSpec(120, FastOutSlowInEasing)`, away from one
-/// `TweenSpec(150, CubicBezierEasing(0.40, 0.00, 0.60, 1.00))`, and away from HOVER the shorter
-/// `TweenSpec(120, <the same easing>)`. `was_hovered` is the state being left, which the caller knows
-/// from the interaction it read before pushing the animation.
-pub fn elevation_spec_for(current: f32, target: f32, was_hovered: bool) -> AnimationSpec {
+/// Compose keys it on the PAIR of interactions, not on the direction of the value
+/// (`material3/internal/Elevation.kt:50-61`):
+/// - moving TO an interaction (`to` is `Some`): 120 ms `FastOutSlowIn`, whatever the interaction is
+///   (`DefaultIncomingSpec`, `:113`);
+/// - moving back to the DEFAULT state (`to` is `None`, `from` is `Some`): 150 ms of
+///   `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` (`DefaultOutgoingSpec`, `:115`), except leaving HOVER, which is
+///   the same curve in 120 ms (`HoveredOutgoingSpec`, `:117`);
+/// - neither (`None`, `None`): Compose SNAPS to the value (`:60`), which is what `None` asks of the caller.
+///
+/// A previous `(current, target, was_hovered)` form compared VALUES instead, which gets two reachable cases
+/// wrong: hovering then pressing took the hovered curve where Compose takes `FastOutSlowIn`, and releasing a
+/// press while still hovering was read as an outgoing change even though `HoverInteraction.Enter` is still the
+/// latest interaction.
+pub fn elevation_spec_for_pair(
+    from: Option<ElevationInteraction>,
+    to: Option<ElevationInteraction>,
+) -> Option<AnimationSpec> {
     use interpolator::{fast_out_slow_in, CubicBezier};
-    let (millis, easing): (u64, CubicBezier) = if target > current {
-        (120, fast_out_slow_in())
-    } else if was_hovered {
-        (120, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
-    } else {
-        (150, CubicBezier::new(0.40, 0.00, 0.60, 1.00))
-    };
-    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(millis), easing))
+    let outgoing_easing = || CubicBezier::new(0.40, 0.00, 0.60, 1.00);
+    match (from, to) {
+        (_, Some(_)) => Some(AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(120),
+            fast_out_slow_in(),
+        ))),
+        (Some(ElevationInteraction::Hover), None) => Some(AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(120),
+            outgoing_easing(),
+        ))),
+        (Some(_), None) => Some(AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(150),
+            outgoing_easing(),
+        ))),
+        (None, None) => None,
+    }
 }
 
 /// Whether an animation is still running for ONE state.

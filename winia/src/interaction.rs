@@ -84,6 +84,31 @@ impl ComponentState {
     pub fn is_interactive(&self) -> bool {
         self.enabled
     }
+
+    /// Which interaction the elevation should follow, in Compose's "latest wins" order, or `None` for the
+    /// default (rest) state.
+    ///
+    /// Compose reads `interactions.lastOrNull()`; winia keeps four independent flags, so the order below is the
+    /// latest-first approximation: a drag outlives the press that started it, a press outlives a hover, and a
+    /// hover outlives a focus. A DISABLED component has no interaction at all — Compose returns the disabled
+    /// elevation without animating (`material3/Button.kt:975-990`) — so a caller that sees `None` here while the
+    /// state is disabled should snap rather than animate away from the previous interaction.
+    pub fn elevation_interaction(&self) -> Option<crate::animation::ElevationInteraction> {
+        use crate::animation::ElevationInteraction as I;
+        if !self.enabled {
+            None
+        } else if self.dragged {
+            Some(I::Drag)
+        } else if self.pressed {
+            Some(I::Press)
+        } else if self.hovered {
+            Some(I::Hover)
+        } else if self.focused {
+            Some(I::Focus)
+        } else {
+            None
+        }
+    }
 }
 
 /// 可变的交互源——组件（Button/TextField/clickable/focusable/hoverable）发射

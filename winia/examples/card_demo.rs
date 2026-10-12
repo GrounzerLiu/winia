@@ -8,7 +8,8 @@
 //!    Tab — `CardTokens.FocusIndicatorColor` is `secondary`), beside a disabled one;
 //! 4. the 48 dp touch target a CLICKABLE card reserves even when its content is smaller, which Compose
 //!    gets from the `Surface(onClick)` it is built on;
-//! 5. custom shape / colors / border.
+//! 5. custom shape / colors / border;
+//! 6. dragging, which is what the `dragged` elevation token exists for.
 
 use letclone::clone;
 use winia::prelude::*;
@@ -190,7 +191,7 @@ fn card_demo(ctx: &mut ComposeCtx) {
             caption(
                 ctx,
                 "DragInteraction.Start is the last interaction the card saw, so the dragged token wins over the \
-                 press — Filled 0 → 3, Elevated 1 → 4.",
+                 press — Filled 0 → 6, Elevated 1 → 8 (the tokens' Level3 and Level4, in dp).",
             );
         });
 }

@@ -178,9 +178,10 @@ impl ButtonColors {
     }
 }
 
-/// 按钮阴影高度（对标 material3 `ButtonElevation`）——各交互状态取不同 elevation，
-/// 由 `Button::elevation` 应用为 `Modifier.shadow`。默认 FilledButton 全 0
-/// （M3 tokens）；`ButtonElevation::elevated()` 给出 ElevatedButton 近似值。
+/// Button shadow elevation (the material3 `ButtonElevation` counterpart): a per-state elevation, applied as a
+/// `Modifier.shadow` by `Button::build`. The Filled and Tonal defaults are `ElevationTokens.Level0` in every
+/// state except HOVER, which is `Level1` (1 dp) — not all-zero; `ButtonElevation::elevated()` is
+/// `ElevatedButtonTokens` (1/1/1/3/0 dp); Outlined and Text have no elevation entry at all.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ButtonElevation {
     pub default: f32,
@@ -218,21 +219,26 @@ impl ButtonElevation {
             && self.disabled <= 0.0
     }
 
-    /// ElevatedButton 默认阴影（对齐 M3 `ElevatedButtonTokens`）：
-    /// rest 1 / pressed 1 / focused 1 / hovered 2 / disabled 0。
+    /// `ElevatedButtonTokens`, in dp: `ContainerElevation`/`PressedContainerElevation`/`FocusedContainerElevation`
+    /// are `ElevationTokens.Level1` (1), `HoveredContainerElevation` is `Level2` — which is **3** dp, not the
+    /// level index 2 — and `DisabledContainerElevation` is `Level0`.
     pub fn elevated() -> Self {
-        Self::new(1.0, 1.0, 1.0, 2.0, 0.0)
+        Self::new(1.0, 1.0, 1.0, 3.0, 0.0)
     }
 
-    /// The spec for a change of elevation — Compose's rule, shared with every other component that
-    /// animates one ([`crate::animation::elevation_spec_for`], from
-    /// `material3/internal/Elevation.kt:101-118`): 120 ms `FastOutSlowIn` towards an interaction, 150 ms
-    /// of `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, 120 ms of the same curve out of
-    /// HOVER. winia used one 180 ms `EaseOutCubic` for every direction.
+    /// The spec for a change of elevation — Compose's rule, shared with every other component that animates
+    /// one ([`crate::animation::elevation_spec_for_pair`], from `material3/internal/Elevation.kt:50-61`,
+    /// `:113-117`): 120 ms `FastOutSlowIn` towards an interaction, 150 ms of
+    /// `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, 120 ms of the same curve out of HOVER.
+    /// winia used one 180 ms `EaseOutCubic` for every direction.
     ///
-    /// `was_hovered` is the state being left, which the caller reads before the animation starts.
-    pub fn spec_for(current: f32, target: f32, was_hovered: bool) -> crate::animation::AnimationSpec {
-        crate::animation::elevation_spec_for(current, target, was_hovered)
+    /// `from` and `to` are the interactions being left and entered; `(None, None)` means Compose snaps, which
+    /// the callers express as an explicit `Snap`.
+    pub fn spec_for(
+        from: Option<crate::animation::ElevationInteraction>,
+        to: Option<crate::animation::ElevationInteraction>,
+    ) -> Option<crate::animation::AnimationSpec> {
+        crate::animation::elevation_spec_for_pair(from, to)
     }
 
     /// The elevation for a state snapshot, by Compose's "latest interaction wins" order
@@ -241,15 +247,18 @@ impl ButtonElevation {
     /// press flattening below the hover it followed is deliberate — `PressedContainerElevation` sits below
     /// `HoverContainerElevation` in every token set, which is M3's press feedback.
     ///
-    /// Deviation, recorded: M3's Button has no `draggedElevation` parameter, so a dragged button falls through
-    /// to its default elevation; winia treats a drag as a press, which keeps whatever press feedback the style
-    /// has. (The `Card`, which does have the state, takes it from the drag itself.)
+    /// A DRAGGED button takes the default elevation, because Compose's `ButtonElevation` matches only
+    /// `PressInteraction.Press`, `HoverInteraction.Enter` and `FocusInteraction.Focus` and falls through to
+    /// `defaultElevation` for anything else (`material3/Button.kt:978-988`) — and a drag is the latest
+    /// interaction while it lasts. winia reported the pressed value here, which its own `pressed` guard made
+    /// unreachable anyway: every drag holds a press (`MutableInteractionSource` has four independent flags).
+    /// The `Card`, whose elevation DOES have a dragged entry, takes the drag's own value.
     pub fn for_state(&self, state: &ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
-        } else if state.pressed {
-            self.pressed
         } else if state.dragged {
+            self.default
+        } else if state.pressed {
             self.pressed
         } else if state.hovered {
             self.hovered
@@ -323,7 +332,8 @@ impl ButtonDefaults {
         ButtonColors::from_theme(theme, style)
     }
 
-    /// 默认阴影（对标 `ButtonDefaults.buttonElevation()`——Filled 系全 0）
+    /// `ButtonDefaults.buttonElevation()` — `FilledButtonTokens`: flat at rest and while pressed or focused,
+    /// `Level1` (1 dp) while hovered.
     pub fn button_elevation() -> ButtonElevation {
         ButtonElevation::default_elevation()
     }
@@ -426,7 +436,7 @@ pub struct Button {
     colors: Option<ButtonColors>,
     /// 交互源（None = build 时内部 remember——对标 Compose 可选注入）
     interaction_source: Option<MutableInteractionSource>,
-    /// 阴影高度（None = 默认全 0——对标 material3 ButtonElevation）
+    /// Shadow elevation (`None` = the style's token default — see `Button::build`)
     elevation: Option<ButtonElevation>,
     /// 容器/边框/阴影形状（对标 material3 `Button(shape = ...)`——默认胶囊）
     shape: Shape,
@@ -612,11 +622,12 @@ impl Button {
         // 阴影高度：状态变化（hover/focus/press 进入与离开）用动画 State
         // 平滑过渡——悬停时阴影逐渐升高、移出后逐渐回落，不跳变。
         //
-        // The spec is Compose's, direction and source included (`ButtonElevation::spec_for`), and it needs the
-        // elevation being LEFT: the last target this build pushed, kept in a backchannel so reading it
-        // registers no dependency.
-        let last_elevation: crate::runtime::state::Backchannel<Option<f32>> =
-            ctx.remember_backchannel(|| None);
+        // The spec is Compose's, and Compose keys it on the interaction PAIR (`ButtonElevation::spec_for`), so
+        // the build remembers the interaction kind the last target came from in a backchannel — reading it
+        // registers no dependency, and `(None, None)` (idle to idle) is Compose's snap.
+        let last_kind: crate::runtime::state::Backchannel<
+            Option<crate::animation::ElevationInteraction>,
+        > = ctx.remember_backchannel(|| None);
         // The elevation is the caller's when there is one, otherwise the style's own token set — Compose always
         // has one (`ButtonDefaults.buttonElevation()` is 0/0/0/1/0 for a Filled button: flat at rest, 1 dp while
         // hovered), and `OutlinedButtonTokens`/`TextButtonTokens` declare none at all. winia stored `None` and
@@ -630,9 +641,11 @@ impl Button {
             None // every state is 0: no shadow to animate, and no layer to pay for
         } else {
             let target = elevation.for_state(&state);
-            let from = last_elevation.peek().unwrap_or(target);
-            let spec = ButtonElevation::spec_for(from, target, state.hovered && target < from);
-            last_elevation.set(Some(target));
+            let to = state.elevation_interaction();
+            let from = if state.enabled { last_kind.peek() } else { None };
+            let spec = ButtonElevation::spec_for(from, to)
+                .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+            last_kind.set(to);
             Some(ctx.animate_float_as_state(target, spec))
         };
 
@@ -1081,20 +1094,26 @@ mod tests {
     /// `CubicBezierEasing(0.40, 0.00, 0.60, 1.00)` away from one, and 120 ms of that same curve when what is
     /// being left is hover. winia animated every direction with one 180 ms `EaseOutCubic`.
     #[test]
-    fn the_elevation_spec_follows_compose_direction_and_source() {
-        let millis = |current: f32, target: f32, hovered: bool| {
-            match ButtonElevation::spec_for(current, target, hovered) {
-                crate::animation::AnimationSpec::Tween(t) => t.duration.as_millis(),
-                other => panic!("an elevation animation is a tween, got {other:?}"),
+    fn the_elevation_spec_keys_on_the_interaction_pair() {
+        use crate::animation::ElevationInteraction as I;
+        let millis = |from: Option<I>, to: Option<I>| {
+            match ButtonElevation::spec_for(from, to) {
+                Some(crate::animation::AnimationSpec::Tween(t)) => t.duration.as_millis(),
+                Some(other) => panic!("an elevation animation is a tween, got {other:?}"),
+                None => 0,
             }
         };
-        assert_eq!(millis(1.0, 2.0, false), 120, "growing is the incoming 120 ms");
+        assert_eq!(millis(None, Some(I::Hover)), 120, "entering hover is the incoming 120 ms");
+        assert_eq!(millis(Some(I::Hover), Some(I::Press)), 120, "hover to press is incoming too");
         assert_eq!(
-            millis(2.0, 1.0, false),
-            150,
-            "falling from press or focus is the outgoing 150 ms"
+            millis(Some(I::Press), Some(I::Hover)),
+            120,
+            "releasing into a hover is still an incoming interaction"
         );
-        assert_eq!(millis(2.0, 1.0, true), 120, "falling out of hover is shorter");
+        assert_eq!(millis(Some(I::Press), None), 150, "back to rest is the outgoing 150 ms");
+        assert_eq!(millis(Some(I::Drag), None), 150, "and so is leaving a drag");
+        assert_eq!(millis(Some(I::Hover), None), 120, "leaving hover is shorter");
+        assert_eq!(millis(None, None), 0, "idle to idle snaps, as Compose does");
     }
 
     /// A Filled button is flat at rest and carries 1 dp while hovered — `FilledButtonTokens.HoveredContainerElevation`
@@ -1239,7 +1258,15 @@ mod tests {
         assert_eq!(e.for_state(&ComponentState { pressed: true, ..ComponentState::idle() }), 8.0);
         assert_eq!(e.for_state(&ComponentState { hovered: true, ..ComponentState::idle() }), 2.0);
         assert_eq!(e.for_state(&ComponentState { focused: true, ..ComponentState::idle() }), 2.0);
-        // 优先级：disabled > pressed > dragged > hovered > focused > default
+        // Order: disabled > dragged > pressed > hovered > focused > default (latest interaction wins)
+        // A drag is the latest interaction and Compose's ButtonElevation has no arm for it (`Button.kt:978-988`),
+        // so a dragged button sits at its DEFAULT elevation — and its own press is ignored even though every
+        // drag holds one.
+        assert_eq!(
+            e.for_state(&ComponentState { dragged: true, pressed: true, ..ComponentState::idle() }),
+            1.0,
+            "a dragged button takes the default elevation, as Compose's fall-through does"
+        );
         assert_eq!(
             e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
             8.0
@@ -1251,12 +1278,13 @@ mod tests {
             1.0,
             "按下使用 pressed elevation"
         );
-        // ElevatedButton 官方 token：rest 1 / pressed 1 / focused 1 / hovered 2 / disabled 0
-        assert_eq!(ButtonElevation::elevated(), ButtonElevation::new(1.0, 1.0, 1.0, 2.0, 0.0));
+        // ElevatedButton tokens, in dp: rest 1 / pressed 1 / focused 1 / hovered Level2 = 3 / disabled 0
+        assert_eq!(ButtonElevation::elevated(), ButtonElevation::new(1.0, 1.0, 1.0, 3.0, 0.0));
         assert_eq!(ButtonElevation::elevated().for_state(&ComponentState::idle()), 1.0);
         assert_eq!(
             ButtonElevation::elevated().for_state(&ComponentState { hovered: true, ..ComponentState::idle() }),
-            2.0
+            3.0,
+            "`ElevatedButtonTokens.HoveredContainerElevation` is Level2, i.e. 3 dp"
         );
         assert_eq!(
             ButtonElevation::elevated().for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),

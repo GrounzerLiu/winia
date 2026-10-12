@@ -148,15 +148,21 @@ impl FloatingActionButtonElevation {
         }
     }
 
-    /// Material 3 FAB elevation: 6dp at rest, 12dp while pressed, and 8dp
-    /// while focused or hovered.
+    /// `FabPrimaryContainerTokens` / `FabSecondaryContainerTokens`: `ContainerElevation`,
+    /// `PressedContainerElevation` and `FocusedContainerElevation` are all `ElevationTokens.Level3` (6 dp) and
+    /// only `HoveredContainerElevation` is `Level4` (8 dp) — pressing a FAB does NOT lift it higher, and
+    /// focusing does not either. winia carried 12 dp for pressed and 8 dp for focused, i.e. a press grew the
+    /// shadow to `Level5`, which no M3 token asks for.
     pub fn default_elevation() -> Self {
-        Self::new(6.0, 12.0, 8.0, 8.0, 0.0)
+        Self::new(6.0, 6.0, 6.0, 8.0, 0.0)
     }
 
-    /// Lowered elevation used when a FAB is attached to another surface.
+    /// `FloatingActionButtonDefaults.loweredElevation` (`material3/FloatingActionButton.kt:568-575`):
+    /// Level1 (1 dp) at rest, pressed and focused, `Level2` (3 dp) while hovered.
+    ///
+    /// winia had 2 dp for the hover, which is not a token level at all (`Level2` is 3 dp).
     pub fn lowered() -> Self {
-        Self::new(1.0, 1.0, 1.0, 2.0, 0.0)
+        Self::new(1.0, 1.0, 1.0, 3.0, 0.0)
     }
 
     /// Zero elevation used by bottom app bars.

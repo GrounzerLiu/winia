@@ -22,8 +22,13 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
 use crate::modifier::{Modifier};
-use crate::graphics::Shape;
+use crate::graphics::{Color, Shape};
 use crate::theme::WiniaTheme;
+
+/// `SnackbarTokens.ContainerShape` = `ShapeTokens.CornerExtraSmall` = 4 dp.
+pub const SNACKBAR_CORNER_RADIUS: f32 = 4.0;
+/// `SnackbarTokens.ContainerElevation` = `ElevationTokens.Level3` = 6 dp (`Snackbar.kt:117`).
+pub const SNACKBAR_SHADOW_ELEVATION: f32 = 6.0;
 
 /// Snackbar 显示时长（对标 Compose `SnackbarDuration`）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,7 +339,17 @@ impl Snackbar {
                 .fill_max_width()
                 .padding_horizontal(16.0)
                 .padding_vertical(10.0)
-                .background(bg, Shape::RoundedRect { corner_radius: 8.0 }))
+                // `SnackbarTokens.ContainerShape` is `ShapeKeyTokens.CornerExtraSmall`, which
+                // `ShapeTokens.CornerExtraSmall` resolves to `RoundedCornerShape(4.0.dp)` — winia drew 8 dp.
+                .background(bg, Shape::RoundedRect { corner_radius: SNACKBAR_CORNER_RADIUS })
+                // `Snackbar.kt:117` gives its Surface `shadowElevation = SnackbarTokens.ContainerElevation`,
+                // i.e. `ElevationTokens.Level3` = 6 dp; winia drew no shadow at all.
+                .shadow(
+                    SNACKBAR_SHADOW_ELEVATION,
+                    Shape::RoundedRect { corner_radius: SNACKBAR_CORNER_RADIUS },
+                    false,
+                    Color::from_argb(40, 0, 0, 0),
+                ))
             .spacing(8.0)
             .build(ctx, |ctx| {
                 // message（weight 弹性占位——action/dismiss 靠右）
