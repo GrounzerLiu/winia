@@ -285,8 +285,11 @@ fn checkbox_impl(
     let node_size = if on_click.is_some() { CHECKBOX_TOUCH_TARGET } else { CHECKBOX_IDLE_SIZE };
     let mut m = Modifier::new()
         .size(node_size, node_size)
-        // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
-        .clip(Shape::Circle);
+        // The ring's SHAPE, carried without clipping: the renderer infers it from the nearest
+        // Background/Border/Clip and strokes the ring OUTSIDE the node's box, so a `clip` here cut the ring away
+        // — the same trap the Button's Text style and the radio button hit. A zero-width transparent border
+        // states the shape and clips nothing.
+        .border(0.0, crate::graphics::Color::from_argb(0, 0, 0, 0), Shape::Circle);
     if enabled {
         if let Some(on_click) = on_click {
             m = m

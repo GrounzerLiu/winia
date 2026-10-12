@@ -1581,6 +1581,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
         // Outlined/Text 无背景元素时仍按胶囊裁剪）优先；否则从链上最近的
         // Background/Border 推断（通用 clickable + ripple 保持可用）
+        let mut clipped = false;
         if *bounded {
             let clip_shape = (*shape).or_else(|| {
                 node.modifier.elements().iter().rev().find_map(|el| match el {
@@ -1594,6 +1595,7 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 })
             });
             canvas.save();
+            clipped = true;
             match clip_shape {
                 Some(crate::graphics::Shape::RoundedRect { corner_radius }) => {
                     canvas.clip_rrect(
@@ -1642,10 +1644,15 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
-        } else {
-            // unbounded: the press layer is clipped to the state-layer circle rather than the node's rect.
+        } else if radius.is_none() {
+            // Unbounded with an UNSPECIFIED radius: the press layer is clipped to the halo circle, which is the
+            // original shape. A NAMED radius sizes the halo only (that is what `ripple(bounded, radius)` names):
+            // Compose's unbounded ripple is an unclipped disc centred on the press point, and clipping it to a
+            // node-centred circle of that radius cut it into a crescent — the reported "the ripple does not
+            // spread fully", where the press circle and its clip had the same radius but different centres.
             let r = layer_radius;
             canvas.save();
+            clipped = true;
             canvas.clip_rrect(
                 skia_safe::RRect::new_oval(Rect::from_xywh(
                     x + w / 2.0 - r,
@@ -1686,9 +1693,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            // The press layer expands to the state-layer radius when the ripple named one, and to the node's
-            // diagonal otherwise (the original behaviour, which keeps a press near a corner covered).
-            let r = if radius.is_some() { layer_radius } else { diagonal } * progress;
+            // The press layer keeps the original coverage — it grows to the node's diagonal so a press near a
+            // corner still covers the control. The named radius sizes the HOVER/FOCUS halo, not this.
+            let r = diagonal * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;
             }
@@ -1707,7 +1714,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
             );
         }
 
-        canvas.restore();
+        if clipped {
+            canvas.restore();
+        }
     }
 }
 

@@ -170,8 +170,15 @@ fn radio_button_impl(
             if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
             if on_click.is_some() { RADIO_TOUCH_TARGET } else { RADIO_IDLE_SIZE },
         )
-        // 状态层形状 = Circle（焦点环跟随圆形；波纹 unbounded 不受 clip 影响）
-        .clip(RadioButtonDefaults::shape());
+        // The ring's SHAPE, carried without clipping: the renderer infers it from the nearest
+        // Background/Border/Clip and strokes the ring OUTSIDE the node's box, so a `clip` here cut the ring away
+        // (the reported "the focus ring is gone") — the same trap the Button's Text style hit. A zero-width
+        // transparent border states the shape and clips nothing.
+        .border(
+            0.0,
+            crate::graphics::Color::from_argb(0, 0, 0, 0),
+            RadioButtonDefaults::shape(),
+        );
     if enabled {
         if let Some(on_click) = on_click {
             m = m
@@ -511,6 +518,82 @@ mod tests {
         assert_eq!(size, RADIO_IDLE_SIZE, "with no click handler the minimum is not applied");
         assert_eq!(clickables, 0, "and nothing is clickable");
         assert_eq!(radius, None, "and there is no ripple");
+    }
+
+    /// A focused radio paints its focus ring OUTSIDE its box, and an unfocused one does not.
+    ///
+    /// The ring is drawn 3 dp wide with its centre line `gap (2) + 1.5` outside the node's rect, and the node
+    /// used to carry `clip(Circle)` — which the renderer sets up BEFORE the ring, so it cut the ring away. That
+    /// is the "the focus ring is gone" report: the shape now travels as a zero-width transparent border, which
+    /// states the shape without clipping (measured here at the ring's mid-stroke radius).
+    #[test]
+    fn a_focused_radio_paints_its_ring_outside_the_node() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let pixels = |focused: bool| -> Vec<[u8; 4]> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let source = MutableInteractionSource::new();
+            let src = source.clone();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                RadioButton::new(false)
+                    .on_click(|| {})
+                    .interaction_source(src.clone())
+                    .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            if focused {
+                source.emit_focus();
+            }
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                RadioButton::new(false)
+                    .on_click(|| {})
+                    .interaction_source(source.clone())
+                    .build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            // Real frames so the ring's fade-in is complete.
+            for _ in 0..40 {
+                if !crate::animation::update_animations() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let mut surface2 = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas2 = surface2.canvas();
+            canvas2.clear(SkColor::WHITE);
+            crate::render::render(composer.arena_nodes(), root, canvas2);
+            let pm = surface2.peek_pixels().expect("pixmap");
+            pm.pixels::<[u8; 4]>().expect("pixels").to_vec()
+        };
+
+        // The ring's centre line: half the node plus gap + half the 3 dp stroke.
+        let ring_radius = RADIO_TOUCH_TARGET / 2.0 + 2.0 + 1.5;
+        let centre = RADIO_TOUCH_TARGET / 2.0;
+        let ring_pixel = |px: &[[u8; 4]], angle_deg: f32| -> (i32, i32, i32) {
+            let a = angle_deg.to_radians();
+            let x = (centre + ring_radius * a.cos()) as usize;
+            let y = (centre + ring_radius * a.sin()) as usize;
+            let p = px[y * 300 + x];
+            (p[2] as i32, p[1] as i32, p[0] as i32)
+        };
+        let is_white = |p: (i32, i32, i32)| p.0 > 245 && p.1 > 245 && p.2 > 245;
+
+        let unfocused = pixels(false);
+        assert!(
+            is_white(ring_pixel(&unfocused, 0.0)) && is_white(ring_pixel(&unfocused, 180.0)),
+            "no ring while the radio is not focused"
+        );
+
+        let focused = pixels(true);
+        let on_ring = [ring_pixel(&focused, 0.0), ring_pixel(&focused, 180.0), ring_pixel(&focused, 90.0)];
+        assert!(
+            on_ring.iter().any(|p| !is_white(*p)),
+            "the focused radio paints its ring at radius {ring_radius} (sampled {on_ring:?})"
+        );
     }
 
     #[test]
