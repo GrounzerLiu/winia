@@ -1570,12 +1570,13 @@ fn render_pass1(
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape, radius } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
-        // Compose's `ripple(bounded, radius)` names the state-layer radius; without one winia derives it from
-        // the node's diagonal (its original behaviour, which is what a plain `clickable` wants).
-        let layer_radius = radius.unwrap_or(diagonal / 2.0);
+        // winia's ripple is its own two-layer model, deliberately different from Compose's `ripple(bounded,
+        // radius)`: the BACKGROUND layers are a circle at the node's centre whose DIAMETER is the node's
+        // DIAGONAL, and the spreading foreground layer grows to that same diagonal.
+        let layer_radius = diagonal / 2.0;
         let rect = Rect::new(x, y, x + w, y + h);
 
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
@@ -1644,12 +1645,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
-        } else if radius.is_none() {
-            // Unbounded with an UNSPECIFIED radius: the press layer is clipped to the halo circle, which is the
-            // original shape. A NAMED radius sizes the halo only (that is what `ripple(bounded, radius)` names):
-            // Compose's unbounded ripple is an unclipped disc centred on the press point, and clipping it to a
-            // node-centred circle of that radius cut it into a crescent — the reported "the ripple does not
-            // spread fully", where the press circle and its clip had the same radius but different centres.
+        } else {
+            // unbounded: the foreground layer is clipped to the background circle (diameter = the diagonal),
+            // so a spreading press stays inside the ripple's own layers.
             let r = layer_radius;
             canvas.save();
             clipped = true;
@@ -1693,8 +1691,8 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            // The press layer keeps the original coverage — it grows to the node's diagonal so a press near a
-            // corner still covers the control. The named radius sizes the HOVER/FOCUS halo, not this.
+            // Foreground radius = the background circle's diameter x progress (winia's rule: the spreading
+            // layer must be able to cover the control from a corner press, which the half-diagonal cannot).
             let r = diagonal * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;

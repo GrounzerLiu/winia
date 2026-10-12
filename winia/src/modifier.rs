@@ -441,15 +441,7 @@ pub(crate) enum ModifierElement {
     /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
-    Ripple {
-        source: MutableInteractionSource,
-        color: Color,
-        bounded: bool,
-        shape: Option<Shape>,
-        /// Explicit state-layer radius (`Compose` `ripple(bounded, radius)`); `None` derives it from the
-        /// node's diagonal.
-        radius: Option<f32>,
-    },
+    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
     /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
@@ -1467,25 +1459,6 @@ impl Modifier {
             color,
             bounded,
             shape: None,
-            radius: None,
-        })
-    }
-
-    /// Ripple indication with an EXPLICIT state-layer radius — Compose's `ripple(bounded, radius)`. material3's
-    /// Checkbox, RadioButton and Switch pass `StateLayerSize / 2` rather than letting the node's size decide it.
-    pub fn ripple_with_radius(
-        self,
-        source: &MutableInteractionSource,
-        color: Color,
-        bounded: bool,
-        radius: f32,
-    ) -> Self {
-        self.push(ModifierElement::Ripple {
-            source: source.clone(),
-            color,
-            bounded,
-            shape: None,
-            radius: Some(radius),
         })
     }
 
@@ -1504,7 +1477,6 @@ impl Modifier {
             color,
             bounded,
             shape: Some(shape),
-            radius: None,
         })
     }
 
@@ -3495,10 +3467,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
-        (
-            Ripple { source: as_, color: ac, bounded: abc, shape: ash, radius: ar },
-            Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, radius: br },
-        ) => as_ == bs && ac == bc && abc == bbc && ash == bsh && ar == br,
+        (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
+            as_ == bs && ac == bc && abc == bbc && ash == bsh
+        }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
          ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {
