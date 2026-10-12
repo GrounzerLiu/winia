@@ -603,6 +603,155 @@ mod tests {
         );
     }
 
+    /// A hovered radio paints exactly ONE halo, and its radius is `StateLayerSize / 2` (20 dp).
+    ///
+    /// The halo's size is the thing the user kept correcting, so it is measured here by walking a ray out of the
+    /// node's centre and reporting the radius at which the colour stops differing from the background — on four
+    /// rays, so a stray second layer of any size shows up as a disagreement. `RADIO_STATE_LAYER_SIZE` is the only
+    /// number involved; if a bigger disc appears again, this test names it.
+    #[test]
+    fn a_hovered_radio_paints_one_halo_of_its_state_layer_size() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let mut composer = crate::runtime::composer::Composer::new();
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            RadioButton::new(false)
+                .on_click(|| {})
+                .interaction_source(src.clone())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        source.emit_hover_enter();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            RadioButton::new(false)
+                .on_click(|| {})
+                .interaction_source(source.clone())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        for _ in 0..40 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(SkColor::WHITE);
+        let root = composer.layout_root_idx().expect("root");
+        crate::render::render(composer.arena_nodes(), root, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let at = |x: f32, y: f32| -> (i32, i32, i32) {
+            let p = px[(y as usize) * 300 + (x as usize)];
+            (p[2] as i32, p[1] as i32, p[0] as i32)
+        };
+
+        // The node sits at the surface's origin (a single-node scene), so its centre is half the target size.
+        let centre = RADIO_TOUCH_TARGET / 2.0;
+        let background = at(2.0, 2.0);
+        let mut outermost = 0.0f32;
+        for step in 0..40 {
+            let r = step as f32;
+            let mut painted = false;
+            for angle_deg in [0.0f32, 90.0, 180.0, 270.0] {
+                let a = angle_deg.to_radians();
+                let p = at(centre + r * a.cos(), centre + r * a.sin());
+                if p != background {
+                    painted = true;
+                }
+            }
+            if painted {
+                outermost = r;
+            }
+        }
+        assert!(
+            (outermost - RADIO_STATE_LAYER_SIZE / 2.0).abs() <= 1.5,
+            "the halo's outermost painted row is radius {outermost}, expected {} (StateLayerSize / 2)",
+            RADIO_STATE_LAYER_SIZE / 2.0
+        );
+    }
+
+    /// The press ripple must finish: after a press and release and enough frames, nothing is painted outside the
+    /// halo again. The user's screenshot showed a second, wider disc around a radio they had just clicked, so
+    /// this measures whether a ripple layer outlives its animation.
+    #[test]
+    fn the_press_ripple_does_not_outlive_its_animation() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let mut composer = crate::runtime::composer::Composer::new();
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            RadioButton::new(false)
+                .on_click(|| {})
+                .interaction_source(src.clone())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        source.emit_press_at((60.0, 60.0));
+        let src2 = source.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            RadioButton::new(false)
+                .on_click(|| {})
+                .interaction_source(src2.clone())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        for _ in 0..80 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        source.emit_release();
+
+        let sample = |composer: &crate::runtime::composer::Composer| -> f32 {
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            let at = |x: f32, y: f32| -> (i32, i32, i32) {
+                let p = px[(y as usize) * 300 + (x as usize)];
+                (p[2] as i32, p[1] as i32, p[0] as i32)
+            };
+            let centre = RADIO_TOUCH_TARGET / 2.0;
+            let background = at(2.0, 2.0);
+            let mut outermost = 0.0f32;
+            for step in 0..60 {
+                let r = step as f32;
+                for angle_deg in [0.0f32, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0] {
+                    let a = angle_deg.to_radians();
+                    if at(centre + r * a.cos(), centre + r * a.sin()) != background {
+                        outermost = r;
+                    }
+                }
+            }
+            outermost
+        };
+
+        let during = sample(&composer);
+        assert!(
+            during > RADIO_STATE_LAYER_SIZE / 2.0,
+            "while the press is live the ripple spreads past the halo (measured radius {during})"
+        );
+
+        for _ in 0..400 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        let after = sample(&composer);
+        assert!(
+            after <= RADIO_STATE_LAYER_SIZE / 2.0 + 1.5,
+            "after the ripple has faded nothing may remain outside the halo (measured radius {after})"
+        );
+    }
+
     #[test]
     fn selected_renders_ring_and_dot() {
         // 选中：圆环 + 内点都是 selected 色（红），圆环外角为白
