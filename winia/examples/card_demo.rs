@@ -155,6 +155,43 @@ fn card_demo(ctx: &mut ComposeCtx) {
                         .modifier(Modifier::new().padding(16.0))
                         .build(ctx);
                 });
+
+            // ── 6. the dragged elevation ──
+            section_title(ctx, "6. Dragging");
+            // Compose reaches the dragged elevation through the interaction source: the gesture that drags the
+            // card emits `DragInteraction.Start`/`Stop` and the card's own elevation follows it
+            // (`FilledCardTokens.DraggedContainerElevation` = 3, `ElevatedCardTokens` = 4). That is also why a
+            // drag outranks the press that started it — the drag is the later interaction.
+            let drag_x = ctx.remember(|| 0.0f32);
+            let drag_y = ctx.remember(|| 0.0f32);
+            let drag_source = ctx.remember(|| MutableInteractionSource::new()).get();
+            Card::filled()
+                .interaction_source(drag_source.clone())
+                .modifier(
+                    Modifier::new()
+                        .offset_x(drag_x.get())
+                        .offset_y(drag_y.get())
+                        .on_drag_start({ clone!(drag_source); move |_pos| drag_source.emit_drag_start() })
+                        .on_drag({
+                            clone!(drag_x, drag_y);
+                            move |_pos, delta| {
+                                drag_x.update(|v| *v += delta.0);
+                                drag_y.update(|v| *v += delta.1);
+                            }
+                        })
+                        .on_drag_end({ clone!(drag_source); move || drag_source.emit_drag_end() }),
+                )
+                .build(ctx, |ctx| {
+                    Text::new("Drag me — the shadow lifts while the drag is live")
+                        .font_size(12.0)
+                        .modifier(Modifier::new().padding(16.0))
+                        .build(ctx);
+                });
+            caption(
+                ctx,
+                "DragInteraction.Start is the last interaction the card saw, so the dragged token wins over the \
+                 press — Filled 0 → 3, Elevated 1 → 4.",
+            );
         });
 }
 

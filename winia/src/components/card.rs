@@ -149,15 +149,27 @@ impl CardElevation {
     /// pressed 分支取 `max(pressed, hovered)`（与 Button 同一语义）：按下不低于
     /// hover 高度——触屏无 hover，按下升高才有阴影反馈（Elevated 默认 pressed=1
     /// 低于 hovered=2，按下若回落则触屏按下无反馈）。
+    /// The elevation for a state snapshot.
+    ///
+    /// Compose resolves it from the LAST interaction the card received (`material3/Card.kt:705-719`:
+    /// `val interaction = interactions.lastOrNull()` then a `when` over it) — not from a fixed priority, and
+    /// not from a maximum. So a drag wins over the press that started it (which is why dragging shows the
+    /// `dragged` elevation at all), and a press wins over the hover it followed, which is M3's deliberate
+    /// "an M3 button and card FLATTEN when pressed": `PressedContainerElevation` is below
+    /// `HoverContainerElevation` in every token set (Filled card: 0 against 1; Elevated card: 1 against 2).
+    ///
+    /// This used to rank `pressed` above `dragged` and to take `max(pressed, hovered)`, which made the
+    /// `dragged` elevation unreachable with any real pointer (a drag always holds a press) and made a pressed
+    /// card keep its hover height instead of flattening. The state order below is the same "latest wins"
+    /// ordering Compose gets from its interaction list.
     pub fn for_state(&self, state: &ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
-        } else if state.pressed {
-            self.pressed.max(self.hovered)
         } else if state.dragged {
-            // 拖动有独立配置值（M3 DraggedContainerElevation 通常最高）——
-            // 不 max pressed/hovered 配置值（状态互斥，各自独立取值）
+            // A drag is always the latest interaction: it began with a press and outlives it.
             self.dragged
+        } else if state.pressed {
+            self.pressed
         } else if state.hovered {
             self.hovered
         } else if state.focused {
@@ -650,27 +662,37 @@ mod tests {
             e.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
             8.0
         );
-        // 拖动取独立配置值（dragged=5——M3 DraggedContainerElevation 语义）
+        // Compose takes the elevation of the LATEST interaction (`Card.kt:705-719`), so a drag outranks the
+        // press that started it …
         assert_eq!(
             e.for_state(&ComponentState { dragged: true, ..ComponentState::idle() }),
             5.0
         );
-        // 按下+拖动同时：pressed 优先（最近交互优先）→ max(pressed, hovered)=8
         assert_eq!(
             e.for_state(&ComponentState { dragged: true, pressed: true, ..ComponentState::idle() }),
-            8.0
+            5.0,
+            "a drag is always later than its own press, and it is what the `dragged` token is for"
         );
-        // pressed < hovered 的自定义配置：按下取 max(pressed, hovered)——按下不回落
+        // … and a press outranks the hover it followed, because M3 flattens on press (`PressedContainerElevation`
+        // sits below `HoverContainerElevation` in every token set).
         let low_press = CardElevation::new(1.0, 1.0, 1.0, 3.0, 5.0, 0.0);
         assert_eq!(
             low_press.for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
-            3.0,
-            "按下至少保持 hover 高度（触屏兼容：按下升高释放降低）"
+            1.0,
+            "pressed, not the hover it followed — this used to take max(pressed, hovered)"
         );
-        // Elevated 默认：hover 2 > press 1 → 按下取 2（max 语义，触屏按下=hover 高度）
+        // The real Elevated tokens (1/1/1/2/4/1): a press flattens to 1 where the hover above it was 2 — the
+        // M3 press feedback — and a drag carries the card up to 4.
         assert_eq!(
             CardElevation::elevated().for_state(&ComponentState { pressed: true, ..ComponentState::idle() }),
-            2.0
+            1.0,
+            "pressed flattens below hover, as the tokens say"
+        );
+        assert_eq!(
+            CardElevation::elevated()
+                .for_state(&ComponentState { pressed: true, hovered: true, ..ComponentState::idle() }),
+            1.0,
+            "and hovering before the press does not keep it up"
         );
         assert_eq!(
             CardElevation::elevated().for_state(&ComponentState { dragged: true, ..ComponentState::idle() }),

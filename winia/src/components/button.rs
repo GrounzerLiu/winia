@@ -217,7 +217,15 @@ impl ButtonElevation {
         crate::animation::elevation_spec_for(current, target, was_hovered)
     }
 
-    /// 按状态取 elevation（优先级 disabled > pressed > dragged > hovered > focused > default）。
+    /// The elevation for a state snapshot, by Compose's "latest interaction wins" order
+    /// (`material3/Card.kt:705-719` is the same rule spelled out; the Button resolves it through the shared
+    /// `animateElevation`): disabled, then a drag, then a press, then hover, then focus, then the default. A
+    /// press flattening below the hover it followed is deliberate — `PressedContainerElevation` sits below
+    /// `HoverContainerElevation` in every token set, which is M3's press feedback.
+    ///
+    /// Deviation, recorded: M3's Button has no `draggedElevation` parameter, so a dragged button falls through
+    /// to its default elevation; winia treats a drag as a press, which keeps whatever press feedback the style
+    /// has. (The `Card`, which does have the state, takes it from the drag itself.)
     pub fn for_state(&self, state: &ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
