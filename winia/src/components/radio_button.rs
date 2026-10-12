@@ -673,11 +673,14 @@ mod tests {
         );
     }
 
-    /// The press ripple must finish: after a press and release and enough frames, nothing is painted outside the
-    /// halo again. The user's screenshot showed a second, wider disc around a radio they had just clicked, so
-    /// this measures whether a ripple layer outlives its animation.
+    /// The press ripple is CLIPPED to the halo, and it still finishes.
+    ///
+    /// The missing clip is what made a wider disc appear around a pressed radio: the foreground spread to its
+    /// own maximum instead of being held inside the background circle. This measures the outermost painted
+    /// radius while the press is live (it must be the halo and no more) and after the animation is done (it must
+    /// fall back to nothing outside the halo).
     #[test]
-    fn the_press_ripple_does_not_outlive_its_animation() {
+    fn the_press_ripple_is_clipped_to_the_halo_and_still_finishes() {
         use skia_safe::{Color as SkColor, surfaces};
         let mut composer = crate::runtime::composer::Composer::new();
         let source = MutableInteractionSource::new();
@@ -698,11 +701,13 @@ mod tests {
                 .build(ctx);
         });
         composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
-        for _ in 0..80 {
+        // Enough frames for the foreground to reach the halo: the ripple expands over its own duration, so a
+        // short run samples a half-grown disc (10 dp after 80 frames, 19 dp once it is done).
+        for _ in 0..300 {
             if !crate::animation::update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(std::time::Duration::from_millis(3));
         }
         source.emit_release();
 
@@ -735,8 +740,8 @@ mod tests {
 
         let during = sample(&composer);
         assert!(
-            during > RADIO_STATE_LAYER_SIZE / 2.0,
-            "while the press is live the ripple spreads past the halo (measured radius {during})"
+            during <= RADIO_STATE_LAYER_SIZE / 2.0 + 1.5,
+            "the clip holds the foreground inside the halo — a wider disc is the missing clip (measured {during})"
         );
 
         for _ in 0..400 {

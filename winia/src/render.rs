@@ -1647,12 +1647,10 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
-        } else if state_layer_diameter.is_none() {
-            // unbounded with a DERIVED halo: the foreground layer is clipped to the background circle
-            // (diameter = the diagonal), so a spreading press stays inside the ripple's own layers. A NAMED
-            // halo is smaller than the node (40 dp inside a 48 dp node), and clipping the press disc to a
-            // circle of the same radius but a different centre cut it into a crescent — so a named halo skips
-            // the clip and the press spreads freely to the diagonal, as Compose's unbounded ripple does.
+        } else {
+            // unbounded: the foreground layer is CLIPPED to the background circle — winia's two-layer rule, and
+            // the missing clip is what made a spread wider than its own halo appear. The background circle is
+            // the halo (`state_layer_diameter` when the component named one, the node's diagonal otherwise).
             let r = layer_radius;
             canvas.save();
             clipped = true;
@@ -1696,10 +1694,9 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            // Foreground radius = the BACKGROUND layer's DIAMETER x progress — winia's rule, which the user
-            // restated as "the foreground's radius is the background's diagonal length". With a derived halo
-            // that diameter IS the node's diagonal, so this is the original behaviour; with a named 40 dp halo
-            // it is 40 dp, and the press still covers a 48 dp node from a corner.
+            // Foreground radius = the background layer's diameter x progress, i.e. the foreground grows until
+            // it fills the background circle; the clip above then holds it there. With a derived halo that
+            // diameter is the node's diagonal (the original behaviour), with a named 40 dp halo it is 40 dp.
             let r = layer_radius * 2.0 * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;
