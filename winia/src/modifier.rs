@@ -441,7 +441,16 @@ pub(crate) enum ModifierElement {
     /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
-    Ripple { source: MutableInteractionSource, color: Color, bounded: bool, shape: Option<Shape> },
+    Ripple {
+        source: MutableInteractionSource,
+        color: Color,
+        bounded: bool,
+        shape: Option<Shape>,
+        /// The BACKGROUND state layer's diameter when it is fixed (Compose's `ripple(bounded, radius)` names a
+        /// radius; material3's checkbox and radio pass `StateLayerSize`, 40 dp). `None` = derive it from the
+        /// node's diagonal, which is this framework's original behaviour.
+        state_layer_diameter: Option<f32>,
+    },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
     /// 禁用框架焦点环（组件自绘焦点环时用——如 Slider 焦点环包围 thumb 而非整组件）
@@ -1459,6 +1468,28 @@ impl Modifier {
             color,
             bounded,
             shape: None,
+            state_layer_diameter: None,
+        })
+    }
+
+    /// Ripple indication whose BACKGROUND state layer has an explicit DIAMETER — Compose's
+    /// `ripple(bounded, radius)`, where `radius` is half that. material3 hands it `StateLayerSize / 2`: the
+    /// checkbox/radio state layer is 40 dp while the node (the touch target) is 48 dp, so the halo cannot be
+    /// derived from the node. The spreading foreground layer is unaffected and still grows to the node's
+    /// diagonal.
+    pub fn ripple_with_state_layer_size(
+        self,
+        source: &MutableInteractionSource,
+        color: Color,
+        bounded: bool,
+        diameter: f32,
+    ) -> Self {
+        self.push(ModifierElement::Ripple {
+            source: source.clone(),
+            color,
+            bounded,
+            shape: None,
+            state_layer_diameter: Some(diameter),
         })
     }
 
@@ -1477,6 +1508,7 @@ impl Modifier {
             color,
             bounded,
             shape: Some(shape),
+            state_layer_diameter: None,
         })
     }
 
@@ -3467,9 +3499,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
-        (Ripple { source: as_, color: ac, bounded: abc, shape: ash }, Ripple { source: bs, color: bc, bounded: bbc, shape: bsh }) => {
-            as_ == bs && ac == bc && abc == bbc && ash == bsh
-        }
+        (
+            Ripple { source: as_, color: ac, bounded: abc, shape: ash, state_layer_diameter: asl },
+            Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, state_layer_diameter: bsl },
+        ) => as_ == bs && ac == bc && abc == bbc && ash == bsh && asl == bsl,
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
          ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {

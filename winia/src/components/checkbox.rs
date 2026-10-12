@@ -21,9 +21,13 @@ use std::sync::Arc;
 /// 视觉勾选框尺寸（M3 实现 `CheckboxSize = 20dp`）
 pub const CHECKBOX_SIZE: f32 = 20.0;
 /// The node a CLICKABLE checkbox occupies: `Modifier.minimumInteractiveComponentSize()` = 48 dp, with the 20 dp
-/// visual centred inside (`material3/Checkbox.kt:293-302`; the minimum is applied whenever `onClick != null`,
-/// disabled or not).
+/// box centred inside (`material3/Checkbox.kt:293-302`; the minimum applies whenever `onClick != null`, disabled
+/// or not).
 pub const CHECKBOX_TOUCH_TARGET: f32 = 48.0;
+/// `CheckboxTokens.StateLayerSize = 40dp` — the DIAMETER of the hover/focus halo, which is what Compose hands to
+/// `ripple` as its radius. It is smaller than the node, so it is named rather than derived from the node's
+/// diagonal.
+pub const CHECKBOX_STATE_LAYER_SIZE: f32 = 40.0;
 /// The node a checkbox WITHOUT a click handler occupies: the 20 dp visual plus Compose's 2 dp padding on each
 /// side (`CheckboxDefaultPadding`, `material3/Checkbox.kt:736`), and no minimum interactive size.
 pub const CHECKBOX_IDLE_SIZE: f32 = CHECKBOX_SIZE + 4.0;
@@ -288,11 +292,16 @@ fn checkbox_impl(
         if let Some(on_click) = on_click {
             m = m
                 .clickable_with_source(&interaction, move || on_click())
-                // winia's ripple keeps its own two-layer model: the halo is a circle whose diameter is the
-                // node's DIAGONAL, and the spreading layer grows to that same diagonal. Compose passes
-                // `radius = StateLayerSize / 2` instead (`Checkbox.kt:285`); that is recorded in
-                // `docs/` as a deliberate difference, not silently mixed in here.
-                .ripple(&interaction, theme.on_surface, false);
+                // `Checkbox.kt:285`: `ripple(bounded = false, radius = CheckboxTokens.StateLayerSize / 2)` —
+                // the halo is `StateLayerSize` (40 dp), which is SMALLER than the 48 dp node, so it has to be
+                // named rather than derived from the node. The spreading layer still grows to the node's
+                // diagonal.
+                .ripple_with_state_layer_size(
+                    &interaction,
+                    theme.on_surface,
+                    false,
+                    CHECKBOX_STATE_LAYER_SIZE,
+                );
         }
     }
     // Accessibility: role plus the tri-state value — Off and Indeterminate are different answers,
@@ -541,16 +550,16 @@ impl Checkbox {
 mod tests {
     use super::*;
 
-    /// The node an interactive checkbox occupies, and the ripple it carries.
+    /// The node an interactive checkbox occupies, and the state layer it names.
     ///
-    /// `material3/Checkbox.kt:293-302` puts `Modifier.minimumInteractiveComponentSize()` (48 dp) in front of
-    /// the toggleable modifier ONLY when the checkbox takes clicks, and draws its 20 dp box inside that. winia
-    /// used `StateLayerSize` (40 dp) as the node itself, an 8 dp-short touch target. The halo stays winia's own
-    /// two-layer model — a background circle whose diameter is the node's DIAGONAL — so it is NOT Compose's
-    /// `radius = StateLayerSize / 2`, which is the deliberate difference recorded in the ripple's own docs.
+    /// `material3/Checkbox.kt:293-302` applies `Modifier.minimumInteractiveComponentSize()` (48 dp) whenever the
+    /// checkbox takes clicks with its 20 dp box centred inside; a checkbox with no click handler is 24 dp (the
+    /// box plus `CheckboxDefaultPadding`, `:736`) and takes no minimum. The halo is `StateLayerSize` (40 dp,
+    /// `:285`) — smaller than the node, so it travels as a NAMED size and the spreading layer still reaches the
+    /// node's diagonal.
     #[test]
-    fn an_interactive_checkbox_reserves_a_48_dp_target() {
-        let geometry = |interactive: bool| -> (f32, bool, usize) {
+    fn an_interactive_checkbox_reserves_48_dp_and_names_a_40_dp_state_layer() {
+        let geometry = |interactive: bool| -> (f32, bool, usize, Option<f32>) {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 crate::layout::components::Column::new()
@@ -583,20 +592,29 @@ mod tests {
                         || n.measured_size.width == CHECKBOX_IDLE_SIZE
                 })
                 .expect("the checkbox node");
-            let has_ripple = checkout
-                .modifier
-                .elements()
-                .iter()
-                .any(|el| matches!(el, crate::modifier::ModifierElement::Ripple { .. }));
-            (checkout.measured_size.width, has_ripple, clickables)
+            let has_ripple = checkout.modifier.elements().iter().any(|el| {
+                matches!(el, crate::modifier::ModifierElement::Ripple { .. })
+            });
+            let state_layer = checkout.modifier.elements().iter().find_map(|el| match el {
+                crate::modifier::ModifierElement::Ripple { state_layer_diameter, .. } => {
+                    *state_layer_diameter
+                }
+                _ => None,
+            });
+            (checkout.measured_size.width, has_ripple, clickables, state_layer)
         };
 
-        let (size, has_ripple, clickables) = geometry(true);
+        let (size, has_ripple, clickables, state_layer) = geometry(true);
         assert_eq!(size, 48.0, "an interactive checkbox reserves 48 dp");
         assert_eq!(clickables, 1, "and carries one clickable node");
         assert!(has_ripple, "with an unbounded ripple");
+        assert_eq!(
+            state_layer,
+            Some(CHECKBOX_STATE_LAYER_SIZE),
+            "and names a 40 dp state layer, smaller than the node"
+        );
 
-        let (size, has_ripple, clickables) = geometry(false);
+        let (size, has_ripple, clickables, _) = geometry(false);
         assert_eq!(size, CHECKBOX_IDLE_SIZE, "with no click handler the minimum is not applied");
         assert_eq!(clickables, 0, "and nothing is clickable");
         assert!(!has_ripple, "and there is no ripple");

@@ -1570,13 +1570,15 @@ fn render_pass1(
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
 fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
     for el in node.modifier.elements() {
-        let ModifierElement::Ripple { source, color, bounded, shape } = el else { continue };
+        let ModifierElement::Ripple { source, color, bounded, shape, state_layer_diameter } = el else { continue };
 
         let diagonal = (w * w + h * h).sqrt();
-        // winia's ripple is its own two-layer model, deliberately different from Compose's `ripple(bounded,
-        // radius)`: the BACKGROUND layers are a circle at the node's centre whose DIAMETER is the node's
-        // DIAGONAL, and the spreading foreground layer grows to that same diagonal.
-        let layer_radius = diagonal / 2.0;
+        // The BACKGROUND state layer is winia's own two-layer model: a circle at the node's centre whose
+        // diameter is the node's DIAGONAL — unless the component named one (Compose's `ripple(bounded, radius)`,
+        // which material3's checkbox and radio use for their 40 dp `StateLayerSize`, smaller than their 48 dp
+        // node). The spreading FOREGROUND layer is unaffected by it: its radius always grows to the node's
+        // diagonal, so a press near a corner still covers the control.
+        let layer_radius = state_layer_diameter.map(|d| d / 2.0).unwrap_or(diagonal / 2.0);
         let rect = Rect::new(x, y, x + w, y + h);
 
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——
@@ -1645,9 +1647,12 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
-        } else {
-            // unbounded: the foreground layer is clipped to the background circle (diameter = the diagonal),
-            // so a spreading press stays inside the ripple's own layers.
+        } else if state_layer_diameter.is_none() {
+            // unbounded with a DERIVED halo: the foreground layer is clipped to the background circle
+            // (diameter = the diagonal), so a spreading press stays inside the ripple's own layers. A NAMED
+            // halo is smaller than the node (40 dp inside a 48 dp node), and clipping the press disc to a
+            // circle of the same radius but a different centre cut it into a crescent — so a named halo skips
+            // the clip and the press spreads freely to the diagonal, as Compose's unbounded ripple does.
             let r = layer_radius;
             canvas.save();
             clipped = true;
@@ -1691,9 +1696,11 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
         for layer in source.ripple_layers() {
             let progress = layer.progress.get();
             let opacity = layer.opacity.get();
-            // Foreground radius = the background circle's diameter x progress (winia's rule: the spreading
-            // layer must be able to cover the control from a corner press, which the half-diagonal cannot).
-            let r = diagonal * progress;
+            // Foreground radius = the BACKGROUND layer's DIAMETER x progress — winia's rule, which the user
+            // restated as "the foreground's radius is the background's diagonal length". With a derived halo
+            // that diameter IS the node's diagonal, so this is the original behaviour; with a named 40 dp halo
+            // it is 40 dp, and the press still covers a 48 dp node from a corner.
+            let r = layer_radius * 2.0 * progress;
             if r <= 0.0 || opacity <= 0.0 {
                 continue;
             }

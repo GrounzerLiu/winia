@@ -23,9 +23,12 @@ use std::sync::Arc;
 /// 视觉图标尺寸（`RadioButtonTokens.IconSize = 20dp`）
 pub const RADIO_BUTTON_SIZE: f32 = 20.0;
 /// The node a CLICKABLE radio occupies: `Modifier.minimumInteractiveComponentSize()` = 48 dp, with the 20 dp
-/// icon centred inside (`material3/RadioButton.kt:100-115`; applied whenever `onClick != null`, disabled or
-/// not).
+/// icon centred inside (`material3/RadioButton.kt:100-115`; applied whenever `onClick != null`, disabled or not).
 pub const RADIO_TOUCH_TARGET: f32 = 48.0;
+/// `RadioButtonTokens.StateLayerSize = 40dp` — the DIAMETER of the hover/focus halo, which is what Compose hands
+/// to `ripple` as its radius. It is smaller than the node, so it is named rather than derived from the node's
+/// diagonal.
+pub const RADIO_STATE_LAYER_SIZE: f32 = 40.0;
 /// The node a radio WITHOUT a click handler occupies: the 20 dp icon plus Compose's 2 dp padding on each side
 /// (`RadioButtonPadding`, `material3/RadioButton.kt:264`), and no minimum interactive size.
 pub const RADIO_IDLE_SIZE: f32 = RADIO_BUTTON_SIZE + 4.0;
@@ -177,10 +180,15 @@ fn radio_button_impl(
         if let Some(on_click) = on_click {
             m = m
                 .clickable_with_source(&interaction, move || on_click())
-                // winia's ripple keeps its own two-layer model: the halo is a circle whose diameter is the
-                // node's DIAGONAL, and the spreading layer grows to that same diagonal. Compose passes
-                // `radius = StateLayerSize / 2` instead (`RadioButton.kt:97`) — a recorded difference.
-                .ripple(&interaction, theme.on_surface, false);
+                // `RadioButton.kt:97`: `ripple(bounded = false, radius = RadioButtonTokens.StateLayerSize / 2)`
+                // — the halo is `StateLayerSize` (40 dp), SMALLER than the 48 dp node, so it has to be named
+                // rather than derived from the node. The spreading layer still grows to the node's diagonal.
+                .ripple_with_state_layer_size(
+                    &interaction,
+                    theme.on_surface,
+                    false,
+                    RADIO_STATE_LAYER_SIZE,
+                );
         }
     }
     // Accessibility: a radio is SELECTED, not checked (Compose's `selectable` → `Selected`).
@@ -417,8 +425,8 @@ mod tests {
             let x = ox + node.position.x;
             let y = oy + node.position.y;
             if node.measured_size.width == RADIO_TOUCH_TARGET {
-                // The sample offsets are written against the old 40 dp frame, so rebase the node's centre onto
-                // it (half of 40).
+                // The sample offsets below are written against the OLD 40 dp frame (its centre at +20,+20, the
+                // ring's mid-stroke 9 dp from it), so rebase the node's centre onto that frame.
                 let half = 20.0;
                 return Some((
                     x + node.measured_size.width / 2.0 - half,
@@ -452,15 +460,15 @@ mod tests {
         (a.0 - b.0).abs() <= 6 && (a.1 - b.1).abs() <= 6 && (a.2 - b.2).abs() <= 6
     }
 
-    /// The node an interactive radio occupies, and the ripple it carries.
+    /// The node an interactive radio occupies, and the state layer it names.
     ///
-    /// `material3/RadioButton.kt:100-115` puts `Modifier.minimumInteractiveComponentSize()` (48 dp) in front of
-    /// the selectable modifier ONLY when the radio takes clicks, and draws its 20 dp icon inside that. winia
-    /// used `StateLayerSize` (40 dp) as the node itself — an 8 dp-short touch target. The halo stays winia's own
-    /// two-layer model (diameter = the node's diagonal), NOT Compose's named radius.
+    /// `material3/RadioButton.kt:100-115` applies `Modifier.minimumInteractiveComponentSize()` (48 dp) whenever
+    /// the radio takes clicks, with its 20 dp icon centred; a radio with no click handler is 24 dp (no minimum).
+    /// The halo is `StateLayerSize` (40 dp, `:97`) — smaller than the node, so it travels as a NAMED size while
+    /// the spreading layer still reaches the node's diagonal.
     #[test]
-    fn an_interactive_radio_reserves_a_48_dp_target() {
-        let geometry = |interactive: bool| -> (f32, bool, usize) {
+    fn an_interactive_radio_reserves_48_dp_and_names_a_40_dp_state_layer() {
+        let geometry = |interactive: bool| -> (f32, bool, usize, Option<f32>) {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 crate::layout::components::Column::new()
@@ -494,15 +502,26 @@ mod tests {
                 .elements()
                 .iter()
                 .any(|el| matches!(el, crate::modifier::ModifierElement::Ripple { .. }));
-            (node.measured_size.width, has_ripple, clickables)
+            let state_layer = node.modifier.elements().iter().find_map(|el| match el {
+                crate::modifier::ModifierElement::Ripple { state_layer_diameter, .. } => {
+                    *state_layer_diameter
+                }
+                _ => None,
+            });
+            (node.measured_size.width, has_ripple, clickables, state_layer)
         };
 
-        let (size, has_ripple, clickables) = geometry(true);
+        let (size, has_ripple, clickables, state_layer) = geometry(true);
         assert_eq!(size, 48.0, "an interactive radio reserves 48 dp");
         assert_eq!(clickables, 1, "and carries one clickable node");
         assert!(has_ripple, "with an unbounded ripple");
+        assert_eq!(
+            state_layer,
+            Some(RADIO_STATE_LAYER_SIZE),
+            "and names a 40 dp state layer, smaller than the node"
+        );
 
-        let (size, has_ripple, clickables) = geometry(false);
+        let (size, has_ripple, clickables, _) = geometry(false);
         assert_eq!(size, RADIO_IDLE_SIZE, "with no click handler the minimum is not applied");
         assert_eq!(clickables, 0, "and nothing is clickable");
         assert!(!has_ripple, "and there is no ripple");
