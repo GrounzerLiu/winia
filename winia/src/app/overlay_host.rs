@@ -525,36 +525,41 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             (Some((x, y)), Some(s)) => (x, y, s.width, s.height),
             _ => (0.0, 0.0, 0.0, 0.0),
         };
-        use crate::overlay::PopupPosition as P;
-        let pos = match ov.position {
-            // 窗口对齐（无锚点）
-            P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
-            P::TopLeft => (0.0, 0.0),
-            P::TopCenter => ((w - size.0) / 2.0, 0.0),
-            P::TopRight => (w - size.0, 0.0),
-            P::BottomLeft => (0.0, h - size.1),
-            P::BottomCenter => ((w - size.0) / 2.0, h - size.1),
-            P::BottomRight => (w - size.0, h - size.1),
+        // The direction a `*Start`/`*End` position resolves against: the ANCHOR node's own resolved
+        // direction when there is one (the same field the anchored popup padding reads just below), the
+        // root's otherwise. Reading it off the node rather than off the ambient composition local is what
+        // makes it correct at placement time — placement runs after composition, and the local is not a
+        // placement-time concept.
+        let direction = {
+            let anchor_node = ov
+                .anchor_slot
+                .and_then(|s| root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s)));
+            let from_node = anchor_node
+                .and_then(|nid| root.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, nid)))
+                .map(|idx| nodes[idx].layout_direction)
+                .or_else(|| root.map(|r| nodes[r].layout_direction));
+            from_node.unwrap_or(crate::layout::direction::current())
         };
-        // 有锚点（且在主树中找到）时：按位置相对锚点（Bottom* = 锚点下方，
-        // Top* = 锚点上方）；锚点缺失/未物化（scope）回退窗口对齐——避免 (0,0)
+        use crate::overlay::PopupPosition as P;
+        // `fit_around_anchor` candidate walk (material3's `MenuPosition.kt` lists, in
+        // `dropdown_menu::dropdown_menu_position`) when there is an anchor, plain anchored placement
+        // otherwise, and window alignment when there is no anchor at all — the three cases the arithmetic
+        // has always had, now spelled once in `overlay::resolve_popup_position` for everything but the walk.
         let pos = if anchored && ov.fit_around_anchor {
-            // material3's candidate lists, in `overlay::dropdown_menu_position`: below the anchor, above it,
-            // centred on its top edge, then pinned to the nearer window edge — each taken only if the menu
-            // fits inside `MenuVerticalMargin` (48dp). winia's placement used to do the first alone, which is
-            // why a long menu hung off the bottom edge with its last rows unreachable.
-            crate::components::dropdown_menu::dropdown_menu_position((ax, ay, aw, ah), size, (w, h))
-        } else if anchored {
-            match ov.position {
-                P::BottomLeft => (ax, ay + ah),
-                P::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),
-                P::BottomRight => (ax + aw - size.0, ay + ah),
-                P::TopLeft => (ax, ay - size.1),
-                P::TopCenter => (ax + (aw - size.0) / 2.0, ay - size.1),
-                P::TopRight => (ax + aw - size.0, ay - size.1),
-                P::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
-            }
-        } else { pos };
+            // material3's candidate lists: below the anchor, above it, centred on its top edge, then pinned
+            // to the nearer window edge — each taken only if the menu fits inside `MenuVerticalMargin` (48dp).
+            // winia's placement used to do the first alone, which is why a long menu hung off the bottom edge
+            // with its last rows unreachable.
+            crate::components::dropdown_menu::dropdown_menu_position((ax, ay, aw, ah), size, (w, h), direction)
+        } else {
+            crate::overlay::resolve_popup_position(
+                ov.position,
+                direction,
+                if anchored { Some((ax, ay, aw, ah)) } else { None },
+                size,
+                (w, h),
+            )
+        };
         // Anchor slide: the panel starts at the anchor's corner and ends at the window's, both axes moving
         // together — Compose's `(lerp(collapsedBounds.left, offsetX, progress),
         // lerp(collapsedBounds.top, offsetY, progress))` with both offsets 0. Only this pass knows the

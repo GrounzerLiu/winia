@@ -26,9 +26,11 @@ pub(crate) fn dropdown_menu_position(
     anchor: (f32, f32, f32, f32),
     size: (f32, f32),
     window: (f32, f32),
+    direction: crate::layout::LayoutDirection,
 ) -> (f32, f32) {
     let (ax, ay, aw, ah) = anchor;
     let (w, h) = window;
+    let rtl = direction == crate::layout::LayoutDirection::Rtl;
     let v = MENU_VERTICAL_MARGIN;
 
     let fits = |y: f32| y >= v && y + size.1 <= h - v;
@@ -46,11 +48,17 @@ pub(crate) fn dropdown_menu_position(
         h - v - size.1
     };
 
+    // Horizontal candidates, direction-resolved like material3's `MenuPosition.Horizontal`: align the
+    // popup's START edge with the anchor's start edge first, then its END edge with the anchor's end, then
+    // fall back to the window. Before this the first two were "the anchor's left edge" and "its right edge"
+    // in both directions, which put a menu under the wrong corner of its field under RTL.
+    let start_x = if rtl { ax + aw - size.0 } else { ax };
+    let end_x = if rtl { ax } else { ax + aw - size.0 };
     let fits_x = |x: f32| x >= 0.0 && x + size.0 <= w;
-    let x = if fits_x(ax) {
-        ax
-    } else if fits_x(ax + aw - size.0) {
-        ax + aw - size.0
+    let x = if fits_x(start_x) {
+        start_x
+    } else if fits_x(end_x) {
+        end_x
     } else if size.0 >= w {
         (w - size.0) / 2.0
     } else if ax + aw / 2.0 < w / 2.0 {
@@ -231,7 +239,9 @@ impl DropdownMenu {
             match_anchor_width: false,
             focus_scope: true,
             // M3: `DpOffset(0.dp, 0.dp)`. The drop-down placement itself comes from the anchor
-            // (`PopupPosition::BottomLeft`), which is the equivalent of the platform popup's anchoring.
+            // (`PopupPosition::BottomStart` — the menu hangs below the anchor, flush with the anchor's START
+            // edge, which is its left edge in LTR and its right edge in RTL), the equivalent of the platform
+            // popup's direction-resolved anchoring.
             offset: (0.0, 0.0),
             shape: None,
             container_color: None,
@@ -372,7 +382,7 @@ impl DropdownMenu {
             ctx.open_overlay(crate::overlay::OverlayDesc {
                 id: id.get(),
                 anchor_slot: Some(anchor_slot),
-                position: PopupPosition::BottomLeft,
+                position: PopupPosition::BottomStart,
                 offset: self.offset,
                 anchor_slide: None,
                 modal: false,
@@ -1100,45 +1110,63 @@ mod tests {
 
     #[test]
     fn dropdown_menu_position_follows_the_material3_candidates() {
+        use crate::layout::LayoutDirection::{Ltr, Rtl};
         let window = (420.0, 520.0);
         let size = (120.0, 100.0);
         // 1. Below the anchor, when the whole menu fits under it.
-        let below = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), size, window);
+        let below = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), size, window, Ltr);
         assert_eq!(below, (16.0, 132.0), "below the anchor, start-aligned");
         // 2. Above it, when below would overflow: the anchor sits low, the menu is too tall for the room left.
-        let above = dropdown_menu_position((16.0, 400.0, 80.0, 32.0), (120.0, 200.0), window);
+        let above = dropdown_menu_position((16.0, 400.0, 80.0, 32.0), (120.0, 200.0), window, Ltr);
         assert_eq!(above, (16.0, 200.0), "above the anchor");
         // 3. Centred on the anchor's TOP edge — both of the first two fail, this one fits.
-        let centred = dropdown_menu_position((16.0, 260.0, 80.0, 32.0), (120.0, 400.0), window);
+        let centred = dropdown_menu_position((16.0, 260.0, 80.0, 32.0), (120.0, 400.0), window, Ltr);
         assert_eq!(centred.1, 60.0, "centred on the anchor's top edge: 260 - 400/2");
         // 4. Pinned to the nearer window edge: nothing fits, so the anchor's half decides which edge. The
         //    menu has to be no taller than the margin band (520 - 96), or the case below takes over.
-        let pinned_top = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 400.0), window);
+        let pinned_top = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 400.0), window, Ltr);
         assert_eq!(pinned_top.1, MENU_VERTICAL_MARGIN, "anchor in the top half pins to the top margin");
-        let pinned_bottom = dropdown_menu_position((16.0, 420.0, 80.0, 32.0), (120.0, 400.0), window);
+        let pinned_bottom = dropdown_menu_position((16.0, 420.0, 80.0, 32.0), (120.0, 400.0), window, Ltr);
         assert_eq!(
             pinned_bottom.1,
             520.0 - MENU_VERTICAL_MARGIN - 400.0,
             "anchor in the bottom half pins to the bottom margin"
         );
         // 5. Taller than the margin band: centred, not pushed out of the window.
-        let too_tall = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 520.0), window);
+        let too_tall = dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 520.0), window, Ltr);
         assert_eq!(too_tall.1, 0.0, "a window-sized menu is centred: (520 - 520) / 2");
 
         // Horizontal candidates, with M3's zero margin.
         assert_eq!(
-            dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 100.0), window).0,
+            dropdown_menu_position((16.0, 100.0, 80.0, 32.0), (120.0, 100.0), window, Ltr).0,
             16.0,
             "start-aligned when it fits"
         );
-        let end = dropdown_menu_position((380.0, 100.0, 40.0, 32.0), (120.0, 100.0), window);
+        let end = dropdown_menu_position((380.0, 100.0, 40.0, 32.0), (120.0, 100.0), window, Ltr);
         assert_eq!(end.0, 380.0 + 40.0 - 120.0, "end-aligned: right edges meet");
         // Neither alignment fits, so the anchor's half decides the edge. The menu has to be wide enough that
         // both start- and end-alignment overflow, or one of them takes the case.
-        let pinned_left = dropdown_menu_position((30.0, 100.0, 40.0, 32.0), (400.0, 100.0), window);
+        let pinned_left = dropdown_menu_position((30.0, 100.0, 40.0, 32.0), (400.0, 100.0), window, Ltr);
         assert_eq!(pinned_left.0, 0.0, "neither alignment fits: the anchor's half picks the edge");
-        let pinned_right = dropdown_menu_position((300.0, 100.0, 40.0, 32.0), (400.0, 100.0), window);
+        let pinned_right = dropdown_menu_position((300.0, 100.0, 40.0, 32.0), (400.0, 100.0), window, Ltr);
         assert_eq!(pinned_right.0, 420.0 - 400.0, "and the other half picks the other edge");
+
+        // …and the same geometry under RTL picks the MIRRORED edge, because the two candidates are the
+        // anchor's start and end, not its left and right (`internal/MenuPosition.kt`'s direction-resolved
+        // horizontal positions). The anchor and the menu both sit fully inside the window, so this is about
+        // which candidate wins, not about a fallback.
+        let anchor = (100.0, 100.0, 60.0, 32.0);
+        let fits = (80.0, 100.0);
+        assert_eq!(
+            dropdown_menu_position(anchor, fits, window, Ltr).0,
+            100.0,
+            "LTR: the popup's left edge on the anchor's left edge"
+        );
+        assert_eq!(
+            dropdown_menu_position(anchor, fits, window, Rtl).0,
+            80.0,
+            "RTL: its right edge on the anchor's right edge (100 + 60 - 80)"
+        );
     }
 
     #[test]

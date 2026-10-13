@@ -112,6 +112,72 @@ pub enum PopupPosition {
     BottomLeft,
     BottomCenter,
     BottomRight,
+    /// Below the anchor, aligned to the anchor's **start** edge — the leading edge in the ambient layout
+    /// direction, so `BottomStart` is the left edge in LTR and the right edge in RTL. material3 anchors with
+    /// `Alignment.TopStart`-style values, which resolve against the direction; the absolute corners here cannot
+    /// express that, and making a variant named `Left` mirror would be a lie, so the resolved forms are their
+    /// own variants.
+    BottomStart,
+    /// Below the anchor, aligned to its **end** edge (trailing edge: right in LTR, left in RTL).
+    BottomEnd,
+    /// Above the anchor, aligned to its start edge.
+    TopStart,
+    /// Above the anchor, aligned to its end edge.
+    TopEnd,
+}
+
+/// Where a popup or overlay goes, resolved from its [`PopupPosition`] — the one place this arithmetic lives.
+///
+/// `anchor` is the anchor's rect `(x, y, width, height)` when the popup is anchored and the anchor was found;
+/// `None` means the popup is window-aligned. `direction` is the direction the anchor resolved to, which is
+/// what the four `*Start`/`*End` variants consult; the seven absolute variants ignore it, because a name that
+/// says `Left` has to keep meaning left in both directions.
+///
+/// The anchored `fit_around_anchor` candidate walk is deliberately NOT here: it needs material3's candidate
+/// lists (`internal/MenuPosition.kt`) and lives with the menu (`dropdown_menu::dropdown_menu_position`).
+pub(crate) fn resolve_popup_position(
+    position: PopupPosition,
+    direction: crate::layout::LayoutDirection,
+    anchor: Option<(f32, f32, f32, f32)>,
+    size: (f32, f32),
+    window: (f32, f32),
+) -> (f32, f32) {
+    let (w, h) = window;
+    let rtl = direction == crate::layout::LayoutDirection::Rtl;
+    let window_aligned = |p: PopupPosition| -> (f32, f32) {
+        match p {
+            PopupPosition::Center => ((w - size.0) / 2.0, (h - size.1) / 2.0),
+            PopupPosition::TopLeft => (0.0, 0.0),
+            PopupPosition::TopCenter => ((w - size.0) / 2.0, 0.0),
+            PopupPosition::TopRight => (w - size.0, 0.0),
+            PopupPosition::BottomLeft => (0.0, h - size.1),
+            PopupPosition::BottomCenter => ((w - size.0) / 2.0, h - size.1),
+            PopupPosition::BottomRight => (w - size.0, h - size.1),
+            // Start is the leading edge: the window's left in LTR, its right in RTL.
+            PopupPosition::TopStart => (if rtl { w - size.0 } else { 0.0 }, 0.0),
+            PopupPosition::TopEnd => (if rtl { 0.0 } else { w - size.0 }, 0.0),
+            PopupPosition::BottomStart => (if rtl { w - size.0 } else { 0.0 }, h - size.1),
+            PopupPosition::BottomEnd => (if rtl { 0.0 } else { w - size.0 }, h - size.1),
+        }
+    };
+    let Some((ax, ay, aw, ah)) = anchor else {
+        return window_aligned(position);
+    };
+    match position {
+        PopupPosition::BottomLeft => (ax, ay + ah),
+        PopupPosition::BottomCenter => (ax + (aw - size.0) / 2.0, ay + ah),
+        PopupPosition::BottomRight => (ax + aw - size.0, ay + ah),
+        PopupPosition::TopLeft => (ax, ay - size.1),
+        PopupPosition::TopCenter => (ax + (aw - size.0) / 2.0, ay - size.1),
+        PopupPosition::TopRight => (ax + aw - size.0, ay - size.1),
+        PopupPosition::Center => window_aligned(PopupPosition::Center),
+        // Start/end put the popup's matching edge on the anchor's: in RTL the popup's right edge sits on the
+        // anchor's right edge, which is what "below the field, flush with its start" means there.
+        PopupPosition::BottomStart => (if rtl { ax + aw - size.0 } else { ax }, ay + ah),
+        PopupPosition::BottomEnd => (if rtl { ax } else { ax + aw - size.0 }, ay + ah),
+        PopupPosition::TopStart => (if rtl { ax + aw - size.0 } else { ax }, ay - size.1),
+        PopupPosition::TopEnd => (if rtl { ax } else { ax + aw - size.0 }, ay - size.1),
+    }
 }
 
 /// Overlay **enter animation** spec (mirrors Compose content-layer
@@ -682,6 +748,66 @@ mod tests {
         assert_eq!(under.progress(), 0.0);
         let mid = AnchorSlide::new(std::sync::Arc::new(|| 0.25));
         assert_eq!(mid.progress(), 0.25);
+    }
+
+    /// The four direction-resolved positions, with the absolute ones as their control: `*Start`/`*End` follow
+    /// the layout direction, and a variant named `Left` stays left in BOTH directions, so migrating a caller is
+    /// an explicit choice rather than a silent behaviour change.
+    ///
+    /// Teeth: ignoring `direction` (returning the LTR result in both) fails every RTL assertion below.
+    #[test]
+    fn start_and_end_positions_resolve_against_the_layout_direction() {
+        use crate::layout::LayoutDirection::{Ltr, Rtl};
+        use PopupPosition as P;
+        let size = (80.0, 30.0);
+        let window = (400.0, 400.0);
+        let anchor = Some((100.0, 50.0, 60.0, 40.0));
+
+        // Anchored: the popup's start edge sits on the anchor's start edge.
+        assert_eq!(
+            resolve_popup_position(P::BottomStart, Ltr, anchor, size, window),
+            (100.0, 90.0),
+            "LTR: left edges meet, below the anchor"
+        );
+        assert_eq!(
+            resolve_popup_position(P::BottomStart, Rtl, anchor, size, window),
+            (80.0, 90.0),
+            "RTL: right edges meet (100 + 60 - 80), below the anchor"
+        );
+        assert_eq!(
+            resolve_popup_position(P::BottomEnd, Rtl, anchor, size, window),
+            (100.0, 90.0),
+            "and `End` in RTL is the mirrored candidate"
+        );
+        assert_eq!(
+            resolve_popup_position(P::TopStart, Rtl, anchor, size, window),
+            (80.0, 20.0),
+            "`Top*` keeps the vertical side while mirroring horizontally"
+        );
+
+        // Window-aligned: the same question one level up.
+        assert_eq!(resolve_popup_position(P::BottomStart, Ltr, None, size, window), (0.0, 370.0));
+        assert_eq!(resolve_popup_position(P::BottomStart, Rtl, None, size, window), (320.0, 370.0));
+        assert_eq!(resolve_popup_position(P::TopStart, Rtl, None, size, window), (320.0, 0.0));
+
+        // The absolute corners are the control: they do not mirror, which is the whole reason the resolved
+        // variants exist instead of making `Left` direction-dependent.
+        assert_eq!(
+            resolve_popup_position(P::BottomLeft, Rtl, anchor, size, window),
+            (100.0, 90.0),
+            "a corner named Left stays left under RTL"
+        );
+        assert_eq!(
+            resolve_popup_position(P::BottomRight, Rtl, anchor, size, window),
+            (80.0, 90.0),
+            "and Right stays right"
+        );
+        assert_eq!(resolve_popup_position(P::TopLeft, Rtl, None, size, window), (0.0, 0.0));
+        assert_eq!(resolve_popup_position(P::Center, Rtl, anchor, size, window), (160.0, 185.0));
+
+        // No anchor at all falls back to window alignment for every variant, including the resolved ones.
+        assert_eq!(resolve_popup_position(P::BottomLeft, Ltr, None, size, window), (0.0, 370.0));
+        assert_eq!(resolve_popup_position(P::Center, Ltr, None, size, window), (160.0, 185.0));
     }
 
 }
