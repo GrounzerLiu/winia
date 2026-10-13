@@ -165,7 +165,7 @@ unit：dp/sp 转换、算术、扩展语法、offset/size 运算、AnimatableVal
 |-----|------|--------|
 | `AnimatedVisibility` | 内容出现/消失（fade/expand/shrink） | 高 |
 | `animateDpAsState` / `animateSizeAsState` / `animateOffsetAsState` | unit 类型高层 API | 中（低投入） |
-| `Crossfade` | 两内容交叉淡入淡出 | 中 |
+| `Crossfade` | 内容交叉淡入淡出（保留全部未淡完的代，无尺寸动画） | 中 |
 | `animateContentSize` | 尺寸变化自动动画 | 中 |
 
 ### 中层

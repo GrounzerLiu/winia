@@ -31,7 +31,7 @@
 | `AnimatedVisibility` | visible 切换 → enter/exit 过渡 |
 | — enter/exit 过渡 | `fadeIn/fadeOut`、`slideInHorizontally/slideOutHorizontally`、`slideInVertically`、`expandVertically/shrinkVertically`、`scaleIn/scaleOut`、`togetherWith` 组合 |
 | `AnimatedContent` | targetState 切换（内容交叉过渡 + sizeTransform） |
-| `Crossfade` | 两内容交叉淡入淡出（简单版 AnimatedContent） |
+| `Crossfade` | 内容交叉淡入淡出（每次切换保留全部未淡完的代；无尺寸动画，这一点是与 AnimatedContent 的分界） |
 | Scope | `AnimatedVisibilityScope`/`AnimatedContentScope`（内部读动画进度） |
 
 ### 3. 过渡（updateTransition）

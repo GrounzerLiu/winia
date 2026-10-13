@@ -8,26 +8,32 @@
 //!     });
 //! ```
 //!
-//! Mechanism (BOTH generations on screen, overlapping inside one tween — Compose's semantics):
-//! - State: `current` (the incoming generation) + `previous: Option<T>` (the outgoing one)
-//!   + `enter` (incoming 0→1) and `exit` (outgoing 1→0) progresses
-//! - Switch: a target change moves the old target into `previous` and the new one into `current`
-//!   IMMEDIATELY; both compose into their own container slot, the incoming composed last so it
-//!   draws on top, and the outgoing is dropped when its own `exit` bottoms out
-//! - Draw layers: each generation's `graphics_layer` reads its own progress (render-time `peek` —
-//!   no remeasure, no recompose)
+//! Mechanism (EVERY generation that has not finished fading stays on screen — Compose's semantics):
+//! - `VisibleSet`, a `remember`ed backchannel, holds the entries on screen, one `State<f32>` alpha per
+//!   entry keyed by that entry's era, and the counter the next era comes from
+//! - A target change that is not on screen yet pushes an entry at alpha 0; when a visible entry shares
+//!   the target's `content_key` (or equals it, with no key) that entry is replaced IN PLACE instead, so it
+//!   keeps its alpha and its slots and simply reverses its fade
+//! - Each entry's alpha is pushed toward 1 when it matches the target and 0 otherwise; an entry that is
+//!   not the target and has bottomed out (alpha <= 0.001) is dropped
+//! - Draw layers: each generation's `graphics_layer` reads its own alpha at render time (no remeasure, no
+//!   recompose); generations compose oldest first, so the newest one draws on top
 //! - Layout: `BoxLayout` stack semantics, the container is the content's size — there is NO size
-//!   animation. That is the only thing separating this from `AnimatedContent`, which is how
-//!   Compose draws the line too.
+//!   animation. That is the only thing separating this from `AnimatedContent`, which is how Compose draws
+//!   the line too.
 //!
-//! Compose's `Crossfade` keeps a `currentlyVisible` list (`Crossfade.kt:104`) and gives every
-//! visible state its own `animateFloat` alpha; `previous`/`current` are that list here.
+//! Compose's `Crossfade` keeps a `currentlyVisible` list (`Crossfade.kt:104`) and gives every visible state
+//! its own `animateFloat` alpha; `VisibleSet::entries` is that list, and it really does hold several
+//! generations — a switch made mid-fade leaves three on screen for a moment
+//! (`a_switch_during_a_transition_puts_the_target_on_screen_at_once` asserts `[50, 60, 70]`).
 //!
 //! Known differences from Compose:
-//! - **One outgoing generation only.** Compose's list can hold three at once (a switch made
-//!   mid-transition); `previous` is a single `Option`, so a rapid re-switch hard-cuts the middle
-//!   generation.
-//! - No `label` (the engine's parameter is `_label`, unused).
+//! - No `label` (Compose's `label: String = "Crossfade"`, `Crossfade.kt:53`); the engine's own label
+//!   parameter is not threaded through here.
+//! - `content_key` maps to a `u64` rather than Compose's `Any?`.
+//! - A `Decay` spec cannot drive a fade (it coasts from a velocity and has no target), so `build` falls
+//!   back to the default tween. Compose cannot spell it at all: its parameter is a `FiniteAnimationSpec`.
+//!   A `Repeatable` spec is accepted and settles like Compose's (it is finite — its iterations end).
 
 use crate::animation::visibility::VisibilityTransition;
 use crate::animation::{interpolator, push_animatable, AnimationSpec, TweenSpec};
@@ -125,7 +131,15 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
         // struct because the alphas have to be indexed by entry — a `ctx.remember` call site is a
         // statement position, so it cannot hand out one slot per entry.
         let core = ctx.remember_backchannel(|| VisibleSet::new(target.clone()));
-        let fade = VisibilityTransition::fade_in(self.spec.clone());
+        // A fade needs a spec that REACHES its target. `Decay` has none — it coasts from a velocity — so an
+        // incoming generation would sit at alpha 0 while the outgoing one never left; the engine normalises a
+        // Decay on a multi-component value the same way (`normalise_multi_component_decay`). Compose cannot
+        // express this at all: `Crossfade`'s parameter is a `FiniteAnimationSpec<Float>`.
+        let spec = match self.spec {
+            AnimationSpec::Decay(_) => default_spec(),
+            ref other => other.clone(),
+        };
+        let fade = VisibilityTransition::fade_in(spec.clone());
 
         let key = ctx.next_key();
         match ctx.start_restartable_group(key, self.modifier.clone(), BoxLayout::new()) {
@@ -187,7 +201,7 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
                 // ── One alpha per entry: toward 1 if it is the target, 0 otherwise ──
                 for entry in set.entries.iter() {
                     let goal = if self.matches(&entry.value, &target_now) { 1.0 } else { 0.0 };
-                    push_animatable(set.alpha(entry.era), goal, self.spec.clone());
+                    push_animatable(set.alpha(entry.era), goal, spec.clone());
                 }
 
                 // ── Drop what has finished leaving. The target itself never drops: a brand new
@@ -754,6 +768,174 @@ mod tests {
         assert!(!crate::animation::is_animating(), "nothing is left animating");
     }
 
+    /// A spec that cannot reach a target must not be able to strand a generation. `Decay` has no target —
+    /// it coasts from a velocity — so an incoming generation would sit at alpha 0 while the outgoing one
+    /// never left; `build` normalises it to the default tween, the same way the engine normalises a Decay
+    /// on a multi-component value. Compose's `FiniteAnimationSpec` cannot even name a decay here.
+    ///
+    /// Falsified by removing the normalisation: the fade never settles (the loop below reports the leaves
+    /// still on screen).
+    #[test]
+    fn a_decay_spec_still_settles_the_cross_fade() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone())
+                    .animation(crate::animation::DecaySpec::default())
+                    .build(ctx, |ctx, page| {
+                        SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
 
+        recompose(&mut composer);
+        assert_eq!(leaf_widths(&composer), vec![50.0], "the first state is alone");
+        target.set(1);
+        recompose(&mut composer);
 
+        let mut left = Vec::new();
+        let mut settled = false;
+        for _ in 0..80 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(&mut composer);
+            left = leaf_widths(&composer);
+            if left == vec![60.0] && !crate::animation::is_animating() {
+                settled = true;
+                break;
+            }
+        }
+        assert!(
+            settled,
+            "a decay spec must not strand the fade: leaves on screen = {left:?}"
+        );
+    }
+
+    /// The container's `modifier` is applied to the cross-fading box itself (Compose's `modifier`
+    /// parameter), which no test had checked.
+    #[test]
+    fn the_container_modifier_is_applied() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            Crossfade::new(State::new(0u32))
+                .modifier(Modifier::new().size(123.0, 45.0))
+                .build(ctx, |ctx, page| {
+                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("root");
+        let size = composer.arena_nodes()[root].measured_size;
+        assert_eq!(
+            (size.width, size.height),
+            (123.0, 45.0),
+            "the modifier sizes the container, and the content is clipped to it by the layout"
+        );
+    }
+
+    /// Each generation's layer alpha paired with the width of the leaf inside it (50 = the first state,
+    /// 60 = the second): the alpha alone cannot say which generation is which on an early frame.
+    fn alphas_by_width(composer: &Composer) -> Vec<(f32, f32)> {
+        let Some(root) = composer.layout_root_idx() else { return Vec::new() };
+        let mut out = Vec::new();
+        fn leaves(nodes: &[LayoutNode], idx: usize, out: &mut Vec<f32>) {
+            if nodes[idx].children.is_empty() {
+                out.push(nodes[idx].measured_size.width);
+                return;
+            }
+            for &c in &nodes[idx].children {
+                leaves(nodes, c, out);
+            }
+        }
+        fn walk(nodes: &[LayoutNode], idx: usize, out: &mut Vec<(f32, f32)>) {
+            for el in nodes[idx].modifier.elements() {
+                if let crate::modifier::ModifierElement::GraphicsLayer { params_fn } = el {
+                    let mut widths = Vec::new();
+                    leaves(nodes, idx, &mut widths);
+                    if let Some(w) = widths.first() {
+                        out.push((*w, (params_fn)().alpha));
+                    }
+                }
+            }
+            for &c in &nodes[idx].children {
+                walk(nodes, c, out);
+            }
+        }
+        walk(composer.arena_nodes(), root, &mut out);
+        out
+    }
+
+    /// The cross-fade invariant: the outgoing generation and the incoming one run the SAME curve from the
+    /// same moment, one from 1 down to 0 and one from 0 up to 1, so at any instant their alphas sum to 1 —
+    /// and the target's alpha RISES while the other's falls. Compose gets this from one `animateFloat` per
+    /// visible state (`Crossfade.kt:127-131`); a component that faded only one side, or gave the two sides
+    /// different clocks, fails here. The width-based assertions elsewhere never looked at the alpha at all.
+    #[test]
+    fn both_generations_share_the_fade_so_their_alphas_sum_to_one() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let mut composer = Composer::new();
+        let target = State::new(0u32);
+        let t = target.clone();
+        let mut recompose = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                Crossfade::new(t.clone()).build(ctx, |ctx, page| {
+                    SizedLeaf { w: 50.0 + page as f32 * 10.0 }.build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        recompose(&mut composer);
+        assert_eq!(
+            alphas_by_width(&composer),
+            vec![(50.0, 1.0)],
+            "one generation, fully opaque"
+        );
+        target.set(1);
+        recompose(&mut composer);
+
+        let mut sampled = None;
+        for _ in 0..30 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(&mut composer);
+            let alphas = alphas_by_width(&composer);
+            if alphas.len() == 2 && alphas.iter().all(|(_, a)| *a > 0.02 && *a < 0.98) {
+                sampled = Some(alphas);
+                break;
+            }
+        }
+        let first = sampled.expect("both generations are mid-fade on some frame");
+        let sum: f32 = first.iter().map(|(_, a)| *a).sum();
+        assert!(
+            (sum - 1.0).abs() < 0.05,
+            "the two alphas are complementary (got {first:?}, sum {sum})"
+        );
+
+        for _ in 0..3 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            recompose(&mut composer);
+        }
+        let later = alphas_by_width(&composer);
+        let alpha_of = |v: &[(f32, f32)], w: f32| {
+            v.iter().find(|(width, _)| *width == w).map(|(_, a)| *a).expect("that generation")
+        };
+        assert!(
+            alpha_of(&later, 60.0) > alpha_of(&first, 60.0),
+            "the target's alpha rises ({first:?} → {later:?})"
+        );
+        assert!(
+            alpha_of(&later, 50.0) < alpha_of(&first, 50.0),
+            "and the generation it replaced falls ({first:?} → {later:?})"
+        );
+    }
 }
