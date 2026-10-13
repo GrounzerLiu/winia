@@ -232,6 +232,13 @@ impl FloatingActionButtonDefaults {
         }
     }
 
+    /// `FloatingActionButtonDefaults.extendedFabShape` (`material3/FloatingActionButton.kt:525-526`):
+    /// `ExtendedFabPrimaryTokens.ContainerShape` = CornerLarge (16 dp). Both extended-FAB forms
+    /// default to it, so a caller can name the shape the component would pick for itself.
+    pub fn extended_fab_shape() -> Shape {
+        Shape::rounded(16.0)
+    }
+
     /// Primary-container FAB colors, the default mapping.
     pub fn colors(theme: &ThemeColors) -> FloatingActionButtonColors {
         Self::from_pair(theme, theme.primary_container, theme.on_primary_container)
@@ -534,6 +541,40 @@ mod tests {
             Some(FloatingActionButtonElevation::default_elevation())
         );
         assert!(fab.get_enabled());
+    }
+
+    /// `FloatingActionButtonDefaults.extendedFabShape` (`material3/FloatingActionButton.kt:525-526`)
+    /// is CornerLarge, and it is the shape an extended FAB with no explicit shape resolves to.
+    #[test]
+    fn the_extended_fab_default_shape_is_corner_large() {
+        let def = FloatingActionButtonDefaults::extended_fab_shape();
+        assert_eq!(
+            def,
+            Shape::rounded(16.0),
+            "ExtendedFabPrimaryTokens.ContainerShape"
+        );
+
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::content(|ctx| Text::new("Create").build(ctx))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let painted_shape = nodes[root]
+            .modifier
+            .elements()
+            .iter()
+            .find_map(|el| match el {
+                crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                _ => None,
+            })
+            .expect("the extended FAB paints a background");
+        assert_eq!(
+            painted_shape, def,
+            "the component defaults to the shared accessor, not a second literal"
+        );
     }
 
     #[test]
@@ -1042,8 +1083,10 @@ impl ExtendedFloatingActionButton {
         );
         let content_color = colors.content_color(self.enabled);
         let ripple_color = colors.ripple_color(self.enabled);
-        // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge（16dp 圆角）
-        let shape = self.shape.unwrap_or_else(|| Shape::rounded(16.0));
+        // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge (16 dp) — the shared default.
+        let shape = self
+            .shape
+            .unwrap_or_else(FloatingActionButtonDefaults::extended_fab_shape);
 
         // Elevation animates exactly like `FloatingActionButton::build`: same interaction-pair
         // spec rule, same backchannel. This used to take `for_state`'s instantaneous value, so

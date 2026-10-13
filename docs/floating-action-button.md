@@ -97,7 +97,7 @@ ExtendedFloatingActionButton::new(
 | 高度 | 56 | `EXTENDED_FAB_HEIGHT` |
 | 收起宽 | 56（= FabBaseline.ContainerWidth） | `EXTENDED_FAB_COLLAPSED_WIDTH` |
 | 展开最小宽 | 80 | `EXTENDED_FAB_MIN_EXPANDED_WIDTH` |
-| 形状 | CornerLarge（16dp 圆角） | `Shape::rounded(16.0)` |
+| Shape | CornerLarge (16 dp) | `FloatingActionButtonDefaults::extended_fab_shape()` |
 | 展开态 padding | start 16 / 图标-文本 12 / end 20 | 私有常量 |
 | 容器/内容色 | PrimaryContainer / OnPrimaryContainer | theme 直取 |
 | 文本样式 | LabelLarge | theme.typography().label_large |
