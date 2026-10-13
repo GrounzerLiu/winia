@@ -612,6 +612,23 @@ impl Chip {
             self.shape,
             label_color,
             on_click,
+            // material3's roles: `Chip.kt:1963` gives the non-selectable chip `Role.Button`, and the
+            // selectable one `Role.Checkbox` (`:2010`, whose `Surface(selected = …)` publishes the selected
+            // state beside the role).
+            {
+                let mut config = crate::semantics::SemanticsConfig::new()
+                    .role(if self.variant.is_selectable() {
+                        crate::semantics::SemanticsRole::Checkbox
+                    } else {
+                        crate::semantics::SemanticsRole::Button
+                    })
+                    .merge_descendants(true)
+                    .state(crate::semantics::SemanticsState::new().enabled(self.enabled));
+                if self.variant.is_selectable() {
+                    config = config.state(crate::semantics::SemanticsState::new().selected(sel));
+                }
+                config
+            },
             move |ctx| {
                 // ⚠ Row 必须显式交叉轴居中（默认 Alignment::Start 顶部对齐）——
                 // 有图标（18dp）时文字会顶对齐而非垂直居中
@@ -659,6 +676,7 @@ fn build_chip(
     shape: Shape,
     content_color: crate::graphics::Color,
     on_click: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    semantics: crate::semantics::SemanticsConfig,
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let key = ctx.next_key();
@@ -690,6 +708,9 @@ fn build_chip(
                 .ripple_with_shape(&interaction, content_color, true, shape);
         }
     }
+    // Accessibility: one element per chip (its label and icons are inside it), with the role the variant
+    // carries and the state a reader needs — `selected` for a selectable chip, `enabled` for all of them.
+    m = m.semantics(semantics);
     m = m.then(modifier);
     match ctx.start_restartable_group(key, m, crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
         GroupStatus::Skip => {}
@@ -1108,6 +1129,74 @@ mod tests {
             crate::graphics::Color::TRANSPARENT,
             "a disabled UNSELECTED chip has no fill, so its disabled outline carries the state"
         );
+    }
+
+    /// material3 gives each chip family its own role: the non-selectable ones are `Role.Button`
+    /// (`Chip.kt:1963`, the `Surface(onClick = …)` behind assist/suggestion and their elevated forms) and the
+    /// selectable ones `Role.Checkbox` (`:2010`), whose `Surface(selected = …)` publishes the selected state
+    /// beside the role. winia declared no role at all, so a reader saw an unnamed box.
+    #[test]
+    fn the_variants_declare_the_roles_material3_gives_them() {
+        use crate::semantics::{SemanticsRole, SemanticsState};
+        // Composing a chip drives its container-colour animation; the registry is global, so hold the lock.
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let only_element = |chip: Chip| -> crate::semantics::SemanticsNode {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| chip.build(ctx));
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().expect("root");
+            let tree = crate::semantics::semantics_tree(composer.arena_nodes(), root);
+            assert_eq!(tree.len(), 1, "a chip is ONE accessibility element, label and icons included");
+            tree.into_iter().next().expect("the chip element")
+        };
+
+        for (name, chip) in [
+            ("assist", Chip::assist(label("A"), || {})),
+            ("elevated assist", Chip::elevated_assist(label("A"), || {})),
+            ("suggestion", Chip::suggestion(label("S"), || {})),
+            ("elevated suggestion", Chip::elevated_suggestion(label("S"), || {})),
+        ] {
+            let element = only_element(chip);
+            assert_eq!(element.role, Some(SemanticsRole::Button), "{name} is a button");
+            assert_eq!(
+                element.state.selected_value(),
+                None,
+                "{name} says nothing about selection — it has none"
+            );
+        }
+
+        for (name, chip) in [
+            ("filter (selected)", Chip::filter(true, label("F"), || {})),
+            ("filter (unselected)", Chip::filter(false, label("F"), || {})),
+            ("elevated filter", Chip::elevated_filter(true, label("F"), || {})),
+            ("input", Chip::input(true, label("I"), || {})),
+        ] {
+            let element = only_element(chip);
+            assert_eq!(element.role, Some(SemanticsRole::Checkbox), "{name} is a checkbox");
+            assert!(
+                element.state.selected_value().is_some(),
+                "{name} must state its selection either way, so a reader can tell checked from unchecked"
+            );
+        }
+
+        assert_eq!(
+            only_element(Chip::filter(true, label("F"), || {})).state.selected_value(),
+            Some(true),
+            "a selected filter chip reads as selected"
+        );
+        assert_eq!(
+            only_element(Chip::filter(false, label("F"), || {})).state.selected_value(),
+            Some(false),
+            "and an unselected one as unselected, not as silent"
+        );
+        assert_eq!(
+            only_element(Chip::assist(label("A"), || {}).enabled(false)).state.enabled_value(),
+            Some(false),
+            "a disabled chip says so (every variant publishes enabled)"
+        );
+        assert!(SemanticsState::new().is_unspecified(), "the helper above is only a constructor");
     }
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {

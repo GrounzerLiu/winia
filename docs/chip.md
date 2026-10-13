@@ -108,7 +108,18 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 `DraggedContainerElevation = Level4 = 8dp`）；`Level2 = 3dp`。以上都是"容器不透明时"的值——平铺
 assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴影，这是有意行为（见上）。
 
-## 4. 已知限制 / 待改进
+## 4. 语义（无障碍）
+
+每个 chip 是**一个**无障碍元素（label 与 icon 都在里面，`merge_descendants(true)`），role 按 material3：
+
+| 变体 | role | state |
+|---|---|---|
+| Assist / ElevatedAssist / Suggestion / ElevatedSuggestion | `Role.Button`（`Chip.kt:1963`） | `enabled` |
+| Filter / ElevatedFilter / Input | `Role.Checkbox`（`Chip.kt:2010`） | `enabled` + **`selected`**（true/false 都发声，不是"沉默") |
+
+调试通道 `sem` 与语义树里可直接读到：`role: "checkbox"` + `state.selected`。
+
+## 5. 已知限制 / 待改进
 
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
