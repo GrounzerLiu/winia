@@ -1173,13 +1173,17 @@ mod tests {
                 .build(ctx, |ctx| crate::components::Text::new("Ok").build(ctx));
         });
         composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
-        let mut frames = 0;
-        for _ in 0..120 {
+        // Assert that the animation is registered rather than counting real frames (see the card
+        // test): under load a couple of long frames can reach the target.
+        assert!(
+            crate::animation::is_animating(),
+            "hovering registers an elevation animation"
+        );
+        for _ in 0..600 {
             if !crate::animation::update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
-            frames += 1;
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let hovered = composer
             .arena_nodes()
@@ -1193,7 +1197,6 @@ mod tests {
                 })
             })
             .expect("still there");
-        assert!(frames > 5, "the elevation animation must actually run ({frames} frames)");
         assert!(
             (hovered - 1.0).abs() < 0.01,
             "hovering raises the shadow to `HoveredContainerElevation` (1), got {hovered}"

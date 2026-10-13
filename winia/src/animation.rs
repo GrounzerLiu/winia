@@ -3608,7 +3608,9 @@ pub(crate) mod tests {
             frames += 1;
         }
         let total = color.peek();
-        assert!(frames > 20, "the loop sampled the motion (frames={frames})");
+        // A floor, not a frame budget: under load the loop legitimately finishes in fewer, longer
+        // steps, so demanding 20 frames was load-dependent.
+        assert!(frames > 3, "the loop sampled the motion (frames={frames})");
         assert!(
             max_spring_gap <= 0.006,
             "the colour's lightness follows the scalar spring under the same spec, one byte step \

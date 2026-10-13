@@ -825,21 +825,23 @@ mod tests {
 
         let mut max_spring_gap = 0.0f32;
         let mut max_tween_gap = 0.0f32;
-        let mut frames = 0;
+        // Assert the animation is running instead of counting frames: under load a single long step
+        // reaches the target, so `frames > 5` was load-dependent.
+        assert!(
+            crate::animation::is_animating(),
+            "both animatables are running"
+        );
         for _ in 0..2_000 {
             if !crate::animation::update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            std::thread::sleep(std::time::Duration::from_millis(2));
             recompose(&mut composer);
             let box_w = container_width(&composer);
             max_spring_gap = max_spring_gap.max((box_w - spring_ref.peek()).abs());
             max_tween_gap = max_tween_gap.max((box_w - tween_ref.peek()).abs());
-            frames += 1;
         }
         recompose(&mut composer);
-
-        assert!(frames > 5, "the loop sampled the motion (frames={frames})");
         assert!(
             max_spring_gap < 1.0,
             "the box follows the scalar spring the default spec names (largest gap={max_spring_gap})"

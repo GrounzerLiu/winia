@@ -730,15 +730,19 @@ mod tests {
         composer.layout(constraints);
         // Real frames, not a tight loop: the animation integrates over the time since the last update, so a
         // tight loop would step it by ~0.
-        let mut frames = 0;
-        for _ in 0..120 {
+        // Assert that the animation is registered rather than counting real frames: under load a step
+        // can take long enough to reach the target in a frame or two, which is what made
+        // `frames > 5` fail intermittently in a full run while passing when run alone.
+        assert!(
+            crate::animation::is_animating(),
+            "dragging registers an elevation animation"
+        );
+        for _ in 0..600 {
             if !crate::animation::update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
-            frames += 1;
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        assert!(frames > 5, "the elevation animation must actually run ({frames} frames)");
         let dragged = painted_shadow(&composer).expect("still there");
         assert!(
             (dragged - 6.0).abs() < 0.01,
