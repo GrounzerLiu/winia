@@ -243,13 +243,11 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
         ctx.end_restartable_group();
     }
 
-    /// Whether an entry's value counts as the same content as the target — Compose's `contentKey`
-    /// comparison, which is value equality when the caller supplied no key.
+    /// Whether an entry's value counts as the same content as the target — the one comparison, kept in
+    /// [`same`] so `VisibleSet::position_by_key` and this agree by construction. Compose's `contentKey`
+    /// comparison, which is plain equality when the caller gave no key.
     fn matches(&self, a: &T, b: &T) -> bool {
-        match &self.content_key {
-            Some(k) => k(a) == k(b),
-            None => a == b,
-        }
+        same(a, b, &self.content_key)
     }
 }
 
@@ -336,6 +334,9 @@ impl<T: Clone + PartialEq + 'static> VisibleSet<T> {
     }
 }
 
+/// The content-key comparison, in one place: `key(a) == key(b)` when the caller gave a key, plain value
+/// equality otherwise (Compose's `contentKey` defaults to the state itself). `Crossfade::matches` and
+/// `VisibleSet::position_by_key` both go through this, so they cannot drift apart.
 fn same<T: PartialEq>(a: &T, b: &T, key: &Option<Box<dyn Fn(&T) -> u64 + Send + Sync>>) -> bool {
     match key {
         Some(k) => k(a) == k(b),
