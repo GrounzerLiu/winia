@@ -52,7 +52,7 @@ use windows::Win32::UI::Accessibility::{
     UIA_HasKeyboardFocusPropertyId, UIA_ImageControlTypeId, UIA_InvokePatternId,
     UIA_IsContentElementPropertyId, UIA_IsControlElementPropertyId, UIA_IsEnabledPropertyId,
     UIA_IsInvokePatternAvailablePropertyId, UIA_IsKeyboardFocusablePropertyId,
-    UIA_IsOffscreenPropertyId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID,
+    UIA_IsOffscreenPropertyId, UIA_ListControlTypeId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID,
     UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_PROPERTY_ID,
     IRangeValueProvider, IRangeValueProvider_Impl, ISelectionItemProvider,
     ISelectionItemProvider_Impl, IToggleProvider, IToggleProvider_Impl,
@@ -606,7 +606,7 @@ impl Provider {
             node_id: node.node_id,
             role: node.role,
             name: node.effective_name(),
-            state: node.state,
+            state: node.state.clone(),
             clickable: node.clickable,
             focused: node.focused,
             live_region: node.live_region,
@@ -697,6 +697,9 @@ fn control_type_for(role: Option<SemanticsRole>) -> UIA_CONTROLTYPE_ID {
         Some(SemanticsRole::Image) => UIA_ImageControlTypeId,
         Some(SemanticsRole::ProgressBar) => UIA_ProgressBarControlTypeId,
         Some(SemanticsRole::Dialog) => UIA_PaneControlTypeId,
+        // `Role.DropdownList` — the exposed dropdown menu's anchor. UIA's closest control type is
+        // List: what the anchor opens is a list of options.
+        Some(SemanticsRole::DropdownList) => UIA_ListControlTypeId,
         // A named element with no role is text — the shape `Text` composes.
         None => UIA_TextControlTypeId,
     }
@@ -1374,6 +1377,7 @@ mod tests {
             (SemanticsRole::Image, UIA_ImageControlTypeId),
             (SemanticsRole::ProgressBar, UIA_ProgressBarControlTypeId),
             (SemanticsRole::Dialog, UIA_PaneControlTypeId),
+            (SemanticsRole::DropdownList, UIA_ListControlTypeId),
         ];
         for (role, expected) in cases {
             assert_eq!(control_type_for(Some(role)).0, expected.0, "{role:?}");
