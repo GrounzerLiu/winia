@@ -536,13 +536,15 @@ impl Chip {
             let shown_colour = container_anim.get();
             let wanted = ChipElevation::shadow_for(&state, shown_colour.a, &elevation);
             let shown = last_shadow.peek();
+            let to = state.elevation_interaction();
+            let from = if state.enabled { last_kind.peek() } else { None };
+            // The tracker follows the CURRENT interaction on every change, falls included: leaving it stale made a
+            // repeated hover SNAP (`elevation_spec_for_pair(Hover, Hover)` is `None`) instead of tweening.
+            last_kind.set(to);
             // Leaving is immediate: nothing may linger behind a container on its way to transparent.
             let spec = if wanted <= shown {
                 crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
             } else {
-                let to = state.elevation_interaction();
-                let from = if state.enabled { last_kind.peek() } else { None };
-                last_kind.set(to);
                 crate::animation::elevation_spec_for_pair(from, to)
                     .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()))
             };
