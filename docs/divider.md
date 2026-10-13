@@ -50,6 +50,12 @@ DIVIDER_HAIRLINE: f32 = NAN;    // sentinel: one DEVICE pixel (Compose's Dp.Hair
   `fill_max_height` 因父约束无界而跳过，高度为 0。需显式给高度
   （`.modifier(Modifier::new().height(20.0))`）与兄弟文本对齐——Compose 同样依赖
   父容器有确定高度。
+- **发丝线的设备行吸附假设变换是轴对齐的**：`draw_divider_line` 的吸附用
+  `canvas.local_to_device_as_3x3()` 的 `scale_x/scale_y` 与 `translate_x/y`
+  （`divider.rs:247-252`），在缩放+平移下正确；winia 另有 `rotation_z/x/y`
+  （`modifier.rs:1666`、`:1684`），旋转之后"设备行"不再平行于本地 y 轴，吸附会落到错误
+  轴上（最多半像素偏差）。分数平移的情况已经在三条用例里覆盖（`:527`、`:555`、`:587`），
+  旋转没有。
 
 ### 2.3 绘制
 
@@ -73,14 +79,25 @@ DIVIDER_HAIRLINE: f32 = NAN;    // sentinel: one DEVICE pixel (Compose's Dp.Hair
   `pub(crate)`）：`{vertical/thickness/color/pad_s/pad_t/pad_e/pad_b}`——
   padding 内缩解耦为四个静态 f32（build 期 `get_padding_sides()` 快照；
   inset 变体为静态值，动态 padding 快照一次，存 Modifier 进 node 涉 Debug/key）；
-  `node_key` 全参数 `to_bits`（同 payload NaN key 相等；注 build 侧 `changed`
-  用 `PartialEq`，NaN != NaN 恒 dirty → Hairline 无 Skip 收益，正确无损）。
+  `node_key` 全参数 `to_bits`（同 payload NaN key 相等）。
+  **Skip 判定读的是 `Modifier::param_eq`**（`modifier.rs:3397-3412`：node 轨道按
+  `node_key_of` 字符串比、元素按值比），而 `build` 让哨兵只进**绘制**厚度、布局厚度仍取
+  1.0（`divider.rs:108`），所以发丝线的整条链在两个实例间比较**相等**、组照常 Skip。
+  曾经的注释（以及一轮审计）写"Hairline 无 Skip 收益"，那是把 `ctx.changed` 的
+  `PartialEq` 当成了判定路径——`build` 丢弃了 `changed` 的返回值（`:90-92`），它不决定
+  任何事。真正的陷阱在别处：若把 NaN 也当成**布局**尺寸（`Size{height: Static(NaN)}`），
+  元素比较里 `NaN != NaN` 会让链自身不相等，Skip 才会失效。
+  `a_hairline_dividers_chain_compares_equal_so_it_can_skip` 把这一正一反都钉住了。
 
 ## 3. 与 Compose 的差异
 
 - Compose 旧 `Divider` 名已废弃改名 `HorizontalDivider`；winia 用
   `Divider::horizontal()/vertical()` 双构造（无历史包袱）。
 - `Dp.Hairline` is expressed in winia as the `f32::NAN` sentinel — `Divider::thickness` takes an `f32`, so the sentinel rides in the thickness rather than in a `Dp` (winia has one; it is in the prelude).
+- **负厚度静默变成发丝线**：`divider.rs:108` 与 `:208` 的判定是"NaN 或 <= 0"，所以
+  `.thickness(-2.0)` 既不会报错也不会画 2 逻辑像素的线，而是画发丝线。Compose 的 `Dp` 在
+  `height`/`width` 上不接受负值（构造期就抛），winia 选择宽容处理；文档这一条以前只写了 0
+  与哨兵，没写负数。
 - 无无障碍语义（winia 语义系统未覆盖，同其它组件）。
 
 ## 4. 运行与测试
@@ -91,6 +108,6 @@ cargo test -p winia --lib components::divider
 ```
 
 测试覆盖：默认值（1dp/OutlineVariant）、水平/垂直像素渲染、自定义颜色+厚度、
-Hairline 单像素、padding 内缩；
+Hairline 单像素、padding 内缩、Hairline 链可比较相等（可 Skip，含 NaN 布局尺寸的反例）；
 DrawNode 迁移：node_key 全覆盖（含 Hairline NaN 语义）、双路像素对照
 （横线 padding 内缩 + 垂直线逐字节）。

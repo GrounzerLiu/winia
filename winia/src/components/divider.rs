@@ -463,13 +463,66 @@ mod tests {
         assert_ne!(base.node_key(), mk(false, 1.0, other, 0.0).node_key(), "color 应进 key");
         assert_ne!(base.node_key(), mk(false, 1.0, color, 20.0).node_key(), "pad_s 应进 key");
         // Hairline（NaN）：同 payload NaN → to_bits 相等 → key 相等。
-        // 注：build 侧 changed 用 PartialEq（NaN != NaN 恒 dirty → 恒 Enter），
-        // 与 node_key（to_bits 按位比）语义不同——Hairline 下迁移无 Skip 收益，
-        // 但正确性无损（Enter 重跑结果正确）。
+        // This IS the skip decision's input for this node: `Modifier::param_eq` compares the node track by
+        // `node_key_of` (`modifier.rs:3397-3412`), so a hairline divider's key is stable and the group can
+        // skip. The NaN only defeats `ctx.changed`'s own `PartialEq` — and `build` discards that return value,
+        // so it decides nothing here.
         let h1 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
         let h2 = mk(false, DIVIDER_HAIRLINE, color, 0.0);
         assert_eq!(h1.node_key(), h2.node_key(), "同 Hairline key 应相等（to_bits 按位比）");
         assert_ne!(base.node_key(), h1.node_key(), "Hairline 与 1.0 key 应不等");
+    }
+
+    /// The chain a hairline divider builds compares EQUAL across two instances, which is what the group's
+    /// Skip decision reads (`Modifier::param_eq`, `modifier.rs:3397-3412`: the node track by `node_key_of`,
+    /// the elements by value). Two things make that work, and the second assertion shows what would break it:
+    ///
+    /// - `build` keeps the sentinel OUT of the layout extent (`layout_thickness` is 1.0 for a hairline,
+    ///   `divider.rs:108`) and puts NaN only in the draw node, whose key is `to_bits()`-based and therefore
+    ///   bitwise stable;
+    /// - the elements of the chain are compared by value, and a `Size` holding NaN would compare unequal to
+    ///   itself (`size_value_eq`, `modifier.rs:3581-3590`: `Static(a) == Static(b)` with `NaN != NaN`), so a
+    ///   NaN in the LAYOUT extent would cost the group its skip — the shape the first version of this test
+    ///   accidentally built.
+    #[test]
+    fn a_hairline_dividers_chain_compares_equal_so_it_can_skip() {
+        use crate::modifier::{DrawNode, Modifier};
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let color = DividerDefaults::color(&theme);
+        // `layout` mirrors `build`'s `layout_thickness`, `paint` the thickness the node draws with.
+        let chain = |layout: f32, paint: f32| -> Modifier {
+            Modifier::new()
+                .fill_max_width()
+                .height(layout)
+                .draw_node(DividerNode {
+                    vertical: false,
+                    thickness: paint,
+                    color,
+                    pad_s: 0.0,
+                    pad_t: 0.0,
+                    pad_e: 0.0,
+                    pad_b: 0.0,
+                })
+        };
+        assert!(
+            chain(1.0, DIVIDER_HAIRLINE).param_eq(&chain(1.0, DIVIDER_HAIRLINE)),
+            "the hairline chain `build` produces must compare equal, or its group can never skip"
+        );
+        assert!(
+            chain(DIVIDER_THICKNESS, DIVIDER_THICKNESS)
+                .param_eq(&chain(DIVIDER_THICKNESS, DIVIDER_THICKNESS)),
+            "and a 1 dp divider's, for the same reason"
+        );
+        assert!(
+            !chain(1.0, DIVIDER_HAIRLINE).param_eq(&chain(DIVIDER_THICKNESS, DIVIDER_THICKNESS)),
+            "the hairline and a real thickness are different nodes"
+        );
+        // The trap, asserted so nobody reintroduces it: NaN as the LAYOUT extent is not bitwise-compared by
+        // the element track.
+        assert!(
+            !chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE).param_eq(&chain(DIVIDER_HAIRLINE, DIVIDER_HAIRLINE)),
+            "a NaN height in the chain compares unequal to itself through the Size element"
+        );
     }
 
     #[test]
