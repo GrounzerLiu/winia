@@ -63,7 +63,8 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 |---|---|---|---|---|---|
 | unselected | transparent | onSurfaceVariant | primary | onSurfaceVariant | 1dp **outlineVariant** |
 | selected | secondaryContainer | onSecondaryContainer | onSecondaryContainer | onSecondaryContainer | 无 |
-| disabled | transparent | onSurface@38% | onSurface@38% | onSurface@38% | 无交互 |
+| disabled 未选中 | transparent | onSurface@38% | onSurface@38% | onSurface@38% | 1dp `OnSurface@12%` |
+| disabled 选中 | **onSurface@12%** | onSurface@38% | onSurface@38% | onSurface@38% | 无 |
 
 **InputChip**（`input_chip_colors()`）：与 FilterChip 相同，**唯一差别**是选中时前导 icon 保持 **primary**（specs 把 input chip 的前导 icon 定为 Primary 角色；`InputChipTokens.SelectedLeadingIconColor` 同）。
 
@@ -111,8 +112,5 @@ assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴
 
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
-- **disabled 选中容器**：token 里 `FlatDisabledSelectedContainerOpacity` / `DisabledSelectedContainerOpacity`
-  是 **0.12**，winia 目前仍按 0.38 画（{`disabled_selected_container`}）。这条与已修的禁用边框是同一类
-  修正，尚未做。
 - **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
 - 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。

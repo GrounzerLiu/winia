@@ -111,6 +111,9 @@ impl ChipDefaults {
     /// `FlatDisabledOutlineOpacity` / `FlatDisabledUnselectedOutlineOpacity` /
     /// `DisabledUnselectedOutlineOpacity` — every flat chip's disabled outline is `OnSurface` at 12 %.
     pub const DISABLED_OUTLINE_OPACITY: f32 = 0.12;
+    /// `FlatDisabledSelectedContainerOpacity` (filter) / `DisabledSelectedContainerOpacity` (input) — a
+    /// disabled SELECTED chip's container is `OnSurface` at 12 %, the same value as its outline.
+    pub const DISABLED_SELECTED_CONTAINER_OPACITY: f32 = 0.12;
 
     /// The disabled outline's colour: `OnSurface` at `DISABLED_OUTLINE_OPACITY`.
     pub fn disabled_outline(theme: &crate::theme::ThemeColors) -> crate::graphics::Color {
@@ -162,7 +165,15 @@ impl ChipDefaults {
             selected_trailing_icon: theme.on_secondary_container,
             disabled_container: crate::graphics::Color::TRANSPARENT,
             disabled_label: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
-            disabled_selected_container: crate::graphics::Color::from_argb(97, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b),
+            // A disabled SELECTED container is `OnSurface` at 12 % — `FlatDisabledSelectedContainerColor` /
+            // `FlatDisabledSelectedContainerOpacity` (filter) and `DisabledSelectedContainerColor` /
+            // `DisabledSelectedContainerOpacity` (input). winia painted 38 % here.
+            disabled_selected_container: crate::graphics::Color::from_argb(
+                (255.0 * Self::DISABLED_SELECTED_CONTAINER_OPACITY).round() as u8,
+                theme.on_surface.r,
+                theme.on_surface.g,
+                theme.on_surface.b,
+            ),
         }
     }
 
@@ -490,7 +501,11 @@ impl Chip {
                     _ => ChipDefaults::selectable_chip_colors(&theme),
                 });
                 let (container, label, icon) = if !self.enabled {
-                    (c.disabled_container, c.disabled_label, c.disabled_label)
+                    // A disabled chip keeps its selected/unselected distinction: selected fills with the 12 %
+                    // `OnSurface` role, unselected stays transparent and carries the outline instead. winia
+                    // used the transparent one for both, so a disabled selected chip lost its fill entirely.
+                    let container = if sel { c.disabled_selected_container } else { c.disabled_container };
+                    (container, c.disabled_label, c.disabled_label)
                 } else if sel {
                     (c.selected_container, c.selected_label, c.selected_leading_icon)
                 } else {
@@ -1059,6 +1074,40 @@ mod tests {
         assert_eq!(outline_of(&enabled, e), Some((1.0, theme.outline)), "enabled keeps its role colour");
         let (elevated, el) = chip_container(Chip::elevated_assist(label("E"), || {}).enabled(false));
         assert_eq!(outline_of(&elevated, el), None, "an elevated chip never outlines");
+    }
+
+    /// A disabled SELECTED chip's container is `OnSurface` at 12 % (`FlatDisabledSelectedContainerColor` /
+    /// `FlatDisabledSelectedContainerOpacity`, `DisabledSelectedContainerColor` / `DisabledSelectedContainerOpacity`),
+    /// where winia painted 38 %. The enabled selected container stays `secondaryContainer` as the control, and a
+    /// disabled UNSELECTED chip stays transparent.
+    #[test]
+    fn a_disabled_selected_chip_fills_with_on_surface_at_twelve_percent() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let expected = crate::graphics::Color::from_argb(
+            (255.0 * ChipDefaults::DISABLED_SELECTED_CONTAINER_OPACITY).round() as u8,
+            theme.on_surface.r,
+            theme.on_surface.g,
+            theme.on_surface.b,
+        );
+        assert_eq!(expected.a, 31, "12 % of 255 rounds to 31");
+
+        let (filter, f) = chip_container(Chip::filter(true, label("F"), || {}).enabled(false));
+        assert_eq!(painted_background(&filter, f), expected, "a disabled selected filter chip");
+        let (input, i) = chip_container(Chip::input(true, label("I"), || {}).enabled(false));
+        assert_eq!(painted_background(&input, i), expected, "and an input chip");
+
+        let (on, o) = chip_container(Chip::filter(true, label("F"), || {}));
+        assert_eq!(
+            painted_background(&on, o),
+            theme.secondary_container,
+            "enabled keeps the selected container"
+        );
+        let (off, u) = chip_container(Chip::filter(false, label("F"), || {}).enabled(false));
+        assert_eq!(
+            painted_background(&off, u),
+            crate::graphics::Color::TRANSPARENT,
+            "a disabled UNSELECTED chip has no fill, so its disabled outline carries the state"
+        );
     }
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {
