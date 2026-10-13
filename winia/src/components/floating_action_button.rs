@@ -768,6 +768,55 @@ mod tests {
         let icon_ltr = child(&nodes2, ltr.layout_root_idx().unwrap(), 0);
         assert_eq!(icon_ltr.position.x, EXT_START_ICON_PADDING, "LTR 图标在左侧");
     }
+
+    /// The content-only overload (`FloatingActionButton.kt:312`): one row, 20 dp horizontal
+    /// padding, an 80 dp floor, 56 dp tall, with the content centred.
+    #[test]
+    fn extended_fab_content_only_pads_20_and_floors_at_80() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::content(|ctx| Text::new("Create").build(ctx))
+                .on_click(|| {})
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let content = child(&nodes, root, 0);
+        let size = nodes[root].measured_size;
+        assert_eq!(size.height, EXTENDED_FAB_HEIGHT);
+        assert!(
+            size.width >= EXTENDED_FAB_MIN_EXPANDED_WIDTH,
+            "a short label still floors at 80 dp, got {size:?}"
+        );
+        assert_eq!(content.position.x, (size.width - content.measured_size.width) / 2.0);
+        assert_eq!(
+            content.position.y,
+            (size.height - content.measured_size.height) / 2.0
+        );
+    }
+
+    /// Content wider than the floor widens the bar: width = 20 + content + 20.
+    #[test]
+    fn extended_fab_content_only_widens_for_wide_content() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            ExtendedFloatingActionButton::content(|ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().size(200.0, 24.0));
+                ctx.end_node();
+            })
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(
+            nodes[root].measured_size.width,
+            200.0 + 2.0 * EXT_TEXT_PADDING,
+        );
+        assert_eq!(nodes[root].measured_size.height, EXTENDED_FAB_HEIGHT);
+    }
 }
 
 // ── ExtendedFloatingActionButton（M3 扩展 FAB）──
@@ -791,9 +840,7 @@ const EXT_END_ICON_PADDING: f32 = 12.0;
 const EXT_TEXT_PADDING: f32 = 20.0;
 
 pub struct ExtendedFloatingActionButton {
-    text: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
-    icon: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
-    expanded: State<bool>,
+    content: ExtendedFabContent,
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
     enabled: bool,
     colors: Option<FloatingActionButtonColors>,
@@ -801,6 +848,20 @@ pub struct ExtendedFloatingActionButton {
     elevation: Option<FloatingActionButtonElevation>,
     shape: Option<Shape>,
     modifier: Modifier,
+}
+
+/// The extended FAB's two content forms, one per material3 overload.
+enum ExtendedFabContent {
+    /// `FloatingActionButton.kt:381`: separate icon/text slots whose width, positions and label
+    /// alpha all follow `expanded`.
+    IconText {
+        text: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+        icon: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+        expanded: State<bool>,
+    },
+    /// `FloatingActionButton.kt:312`: one caller-composed row instead of the icon/text split —
+    /// no expand/collapse, 20 dp horizontal padding, 80 dp minimum width.
+    Row(Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>),
 }
 
 impl ExtendedFloatingActionButton {
@@ -811,9 +872,28 @@ impl ExtendedFloatingActionButton {
         expanded: State<bool>,
     ) -> Self {
         Self {
-            text: Box::new(text),
-            icon: Box::new(icon),
-            expanded,
+            content: ExtendedFabContent::IconText {
+                text: Box::new(text),
+                icon: Box::new(icon),
+                expanded,
+            },
+            on_click: None,
+            enabled: true,
+            colors: None,
+            interaction_source: None,
+            elevation: Some(FloatingActionButtonDefaults::elevation()),
+            shape: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The content-only overload (`material3/FloatingActionButton.kt:312-340`): a single
+    /// caller-composed row instead of the icon/text split, with no expand/collapse to drive.
+    /// The row keeps material3's geometry — 20 dp horizontal padding and a minimum width of
+    /// 80 dp — inside the 56 dp-tall CornerLarge container.
+    pub fn content(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self {
+            content: ExtendedFabContent::Row(Box::new(content)),
             on_click: None,
             enabled: true,
             colors: None,
@@ -865,7 +945,9 @@ impl ExtendedFloatingActionButton {
         ctx.changed(&self.enabled);
         ctx.changed(&self.colors);
         ctx.changed(&self.shape);
-        ctx.changed(&self.expanded.get());
+        if let ExtendedFabContent::IconText { expanded, .. } = &self.content {
+            ctx.changed(&expanded.get());
+        }
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self.colors.unwrap_or_else(|| {
@@ -885,12 +967,6 @@ impl ExtendedFloatingActionButton {
         // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge（16dp 圆角）
         let shape = self.shape.unwrap_or_else(|| Shape::rounded(16.0));
 
-        // The expand/collapse progress — see `fab_size_spec`.
-        let progress = ctx.animate_float_as_state(
-            if self.expanded.get() { 1.0 } else { 0.0 },
-            fab_size_spec(),
-        );
-
         // Elevation animates exactly like `FloatingActionButton::build`: same interaction-pair
         // spec rule, same backchannel. This used to take `for_state`'s instantaneous value, so
         // the shadow jumped while the plain FAB's glided.
@@ -909,9 +985,11 @@ impl ExtendedFloatingActionButton {
             }
         });
 
-        let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
-        let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
 
         let mut modifier = Modifier::new().background(container, shape);
         if let Some(anim) = elevation_anim {
@@ -938,29 +1016,51 @@ impl ExtendedFloatingActionButton {
             }
         }
 
-        match ctx.start_restartable_group(key, modifier, policy) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {
-                // 子节点顺序 [icon, text]——放置由 ExtendedFabLayoutPolicy 负责
-                let icon = self.icon;
-                wrap_fab_slot(ctx, icon);
-                // 文本槽：透明度随进度淡入淡出（FastEffects 近似 stiffness200 淡入）
-                let alpha_progress = progress.clone();
-                let text_alpha = Modifier::new().graphics_layer(move || {
-                    crate::graphics::GraphicsLayerParams {
-                        alpha: alpha_progress.peek(),
-                        ..Default::default()
-                    }
-                });
-                let text = self.text;
-                wrap_fab_slot_with(ctx, text_alpha, |ctx| {
-                    WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                        crate::components::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
-                            // 图标-文本间距 12dp（ExtendedFabEndIconPadding）
-                            text(ctx);
+        match self.content {
+            ExtendedFabContent::IconText { text, icon, expanded } => {
+                // The expand/collapse progress — see `fab_size_spec`.
+                let progress = ctx.animate_float_as_state(
+                    if expanded.get() { 1.0 } else { 0.0 },
+                    fab_size_spec(),
+                );
+                let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
+                match ctx.start_restartable_group(key, modifier, policy) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        // Child order [icon, text] — placement belongs to ExtendedFabLayoutPolicy.
+                        wrap_fab_slot(ctx, icon);
+                        // The label slot fades with the progress (M3's FastEffects fade).
+                        let alpha_progress = progress.clone();
+                        let text_alpha = Modifier::new().graphics_layer(move || {
+                            crate::graphics::GraphicsLayerParams {
+                                alpha: alpha_progress.peek(),
+                                ..Default::default()
+                            }
                         });
-                    });
-                });
+                        wrap_fab_slot_with(ctx, text_alpha, |ctx| {
+                            WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                                crate::components::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                                    // The 12 dp icon-label gap (ExtendedFabEndIconPadding).
+                                    text(ctx);
+                                });
+                            });
+                        });
+                    }
+                }
+            }
+            ExtendedFabContent::Row(content) => {
+                match ctx.start_restartable_group(key, modifier, ExtendedFabContentPolicy) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        wrap_fab_slot(ctx, |ctx| {
+                            WiniaTheme::with_content_color(content_color, ctx, |ctx| {
+                                crate::components::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                                    content(ctx);
+                                });
+                            });
+                        });
+                    }
+                }
             }
         }
         ctx.set_current_node_focus_color(theme.primary);
@@ -988,6 +1088,45 @@ fn wrap_fab_slot_with(
         GroupStatus::Enter => content(ctx),
     }
     ctx.end_restartable_group();
+}
+
+/// The content-only form's layout (`material3/FloatingActionButton.kt:312-340`): one centred row
+/// inside `sizeIn(minWidth = 80).padding(horizontal = 20)`, the container at least 56 dp tall.
+/// There is no progress — this form does not collapse.
+#[derive(Debug)]
+struct ExtendedFabContentPolicy;
+
+impl MeasurePolicy for ExtendedFabContentPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        constraints: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let loose = constraints.loosen();
+        let (content_size, _) = measure_node(nodes, policies, children[0], loose);
+        // The 80 dp floor is the OUTER width; the 20 dp padding sits inside it, which is why the
+        // row's content is centred in the container rather than offset by the padding.
+        let width =
+            (content_size.width + 2.0 * EXT_TEXT_PADDING).max(EXTENDED_FAB_MIN_EXPANDED_WIDTH);
+        let height = content_size.height.max(EXTENDED_FAB_HEIGHT);
+        let position = Offset::new(
+            (width - content_size.width) / 2.0,
+            (height - content_size.height) / 2.0,
+        );
+        (
+            Size::new(width, height),
+            vec![Placement { size: content_size, position }],
+        )
+    }
+
+    fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
+    }
 }
 
 /// Extended FAB 布局：宽度在收起（56×56 仅图标居中）与展开
