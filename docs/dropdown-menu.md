@@ -317,6 +317,11 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
   两条锚点的角色现在都齐了：secondary 是 `Button` + expanded（已有断言），**primary 是 `Role.DropdownList`**
   （`dropdown_menu.rs` 的 wrapper 分支，出处 `ExposedDropdownMenu.kt:1472-1474`；`SemanticsRole` 已加该变体，
   单测 `a_primary_anchor_is_a_dropdown_list_and_a_secondary_one_is_a_button` 一并钉住 primary / editable primary / secondary 三种）。
+- **没有夹菜单宽度**：菜单宽来自 `width(IntrinsicSize.Max)`，项自身有 112–280 的上限，所以正常情况超不出窗口；
+  但 M3 还有一个兜底——`internal/MenuPosition.kt:246-259` 把 x 夹进 `[margin, windowWidth - margin - menuWidth]`，
+  并在"菜单比窗口还宽"时走专门分支。winia 的水平候选（见 §4.15）在**所有候选都放不下**时回落到第一候选，
+  既不夹宽度也不居中，所以窄窗口 + 很宽的项（自定义 `content_padding` 或长标签逼近 280）时理论上会溢到窗口外。
+  这条**没有实测**，是读 M3 与 winia 两侧代码得出的边界；要真遇到再按上面的公式补一个夹取即可。
 
 ### 4.13 Editable anchors (`PrimaryEditable`): what was implemented
 
