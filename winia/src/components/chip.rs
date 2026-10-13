@@ -1079,8 +1079,17 @@ mod tests {
     #[test]
     fn a_disabled_chip_outlines_with_on_surface_at_twelve_percent() {
         let theme = crate::theme::WiniaTheme::colors();
-        let expected = ChipDefaults::disabled_outline(&theme);
+        // The expectation is built HERE from the scheme colour and the token's opacity, never from
+        // `ChipDefaults::disabled_outline`: an expectation taken from the function under test would accept a
+        // wrong base colour, which is exactly the mistake this test exists to catch.
+        let expected = crate::graphics::Color::from_argb(31, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b);
         assert_eq!(expected.a, 31, "12 % of 255 rounds to 31");
+        assert_ne!(expected, theme.outline, "the disabled role is NOT the enabled outline colour");
+        assert_eq!(
+            ChipDefaults::disabled_outline(&theme),
+            expected,
+            "and the helper the component asks agrees with that"
+        );
 
         let (assist, a) = chip_container(Chip::assist(label("A"), || {}).enabled(false));
         assert_eq!(outline_of(&assist, a), Some((1.0, expected)), "assist");

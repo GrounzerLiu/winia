@@ -1103,7 +1103,7 @@ impl Modifier {
     }
 
     /// Compose's `Modifier.selectableGroup()`
-    /// (`foundation/selection/SelectableGroup.kt:31`): one line, `semantics { selectableGroup() }`. Wrap a
+    /// (`foundation/selection/SelectableGroup.kt:30`): one line, `semantics { selectableGroup() }`. Wrap a
     /// group of selectable children (radio buttons, tabs) so a reader announces them as a collection whose
     /// items are this node's children, instead of as unrelated controls.
     pub fn selectable_group(self) -> Self {

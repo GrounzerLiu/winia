@@ -234,7 +234,7 @@ impl SemanticsConfig {
     }
 
     /// Mark this node as a group of selectable children — Compose's `Modifier.selectableGroup()`
-    /// (`foundation/selection/SelectableGroup.kt:31`, the property at `ui/semantics/SemanticsProperties.kt:67`).
+    /// (`foundation/selection/SelectableGroup.kt:30`, the property at `ui/semantics/SemanticsProperties.kt:67`).
     pub fn selectable_group(mut self) -> Self {
         self.selectable_group = true;
         self

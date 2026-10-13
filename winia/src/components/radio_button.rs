@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(custom.radio_color(false, true), Color::from_argb(255, 128, 128, 128));
     }
 
-    /// `Modifier.selectable_group()` (Compose's `foundation/selection/SelectableGroup.kt:31`, property at
+    /// `Modifier.selectable_group()` (Compose's `foundation/selection/SelectableGroup.kt:30`, property at
     /// `ui/semantics/SemanticsProperties.kt:67`): the row around a set of radio buttons becomes one element that
     /// says its children are a collection, INSTEAD of being folded away as a transparent container. Without the
     /// modifier there is no such element — that is this test's control.

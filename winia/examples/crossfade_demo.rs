@@ -224,14 +224,12 @@ fn crossfade_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new("Toggle.").build(ctx);
                 });
-            let size = size_page.get();
             Crossfade::new(size_page.clone())
                 .modifier(Modifier::new().padding_top(8.0))
                 .build(ctx, |ctx, p| {
                     let (w, h) = if p == 0 { (90.0, 90.0) } else { (320.0, 44.0) };
                     page_card(ctx, p + 1, w, h);
                 });
-            let _ = size;
             caption(
                 ctx,
                 "The card's size changes with the page and the container follows it in one step — Crossfade \

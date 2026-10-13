@@ -91,7 +91,7 @@ Selected/Unselected Hover/Focus/Pressed IconColor 与静态色同值，Compose
 ## 5. 语义（无障碍）
 
 - **组**：`Modifier::selectable_group()`（对标 Compose 的 `Modifier.selectableGroup()`，
-  `foundation/selection/SelectableGroup.kt:31`）把一组 radio 标成一个"可选中集合"的节点，语义树与调试通道
+  `foundation/selection/SelectableGroup.kt:30`）把一组 radio 标成一个"可选中集合"的节点，语义树与调试通道
   `sem` 里以 `selectableGroup: true` 出现，item 是它的子节点（各带 `role: "radioButton"`）。
   注意 winia 目前**没有** Compose 那套 `CollectionInfo` 推导（`ui/platform/accessibility/CollectionInfo.android.kt`
   会把组 + 子项折算成"第 N 项，共 M 项"）；winia 只暴露该标记，跨平台桥接留给接入端。
