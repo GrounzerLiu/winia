@@ -13,7 +13,18 @@ RadioButton::new(selected: bool)              // 对标 RadioButton(selected, ..
     .interaction_source(source)               // 对标 interactionSource（hoist）
     .modifier(Modifier)                       // 外部修饰符
     .build(ctx);
+
+// 颜色部分覆盖（对标 RadioButtonDefaults.colors(...)：未给的参数保持默认）：
+RadioButtonDefaults::radio_button_colors(&theme)
+    .copy(Some(selected_color), None, None, None)   // 只改选中色，其余三个保持 token
+// 组语义（对标 Modifier.selectableGroup()）：
+Row::new().modifier(Modifier::new().selectable_group()).build(ctx, |ctx| { /* radios */ })
 ```
+
+- `RadioButtonColors::copy(selected, unselected, disabled_selected, disabled_unselected)` 对应 Compose 的
+  `RadioButtonColors.copy(...)`，其 KDoc 写明 `Color.Unspecified` 表示"沿用来源值"。winia 的 `Color` 是 8 位
+  sRGB、没有"未指定色彩空间"这种状态（`TRANSPARENT` 是真实颜色而非占位），所以这里用 `Option<Color>`，
+  `None` 即 Compose 的 `Unspecified`。
 
 - 组件本身不持有状态：`selected` 由调用方传入，点击回调由调用方决定新选中项
   （受控语义，与 `Checkbox`/`IconToggleButton` 一致）。
@@ -77,10 +88,20 @@ Selected/Unselected Hover/Focus/Pressed IconColor 与静态色同值，Compose
 | 状态 | ToggleableState（含 Indeterminate） | bool |
 | 形状 | RoundedRect(2) | Circle |
 
-## 5. 未实现项（对齐 Compose 差距）
+## 5. 语义（无障碍）
 
-- `Modifier.selectableGroup()` / `selectable(role = Role.RadioButton)`——
-  无障碍语义分组（winia 暂无 semantics 系统，demo 用显式 key + 状态维护互斥）；
+- **组**：`Modifier::selectable_group()`（对标 Compose 的 `Modifier.selectableGroup()`，
+  `foundation/selection/SelectableGroup.kt:31`）把一组 radio 标成一个"可选中集合"的节点，语义树与调试通道
+  `sem` 里以 `selectableGroup: true` 出现，item 是它的子节点（各带 `role: "radioButton"`）。
+  注意 winia 目前**没有** Compose 那套 `CollectionInfo` 推导（`ui/platform/accessibility/CollectionInfo.android.kt`
+  会把组 + 子项折算成"第 N 项，共 M 项"）；winia 只暴露该标记，跨平台桥接留给接入端。
+- **单项**：`RadioButton` 声明 `Role.RadioButton` + `selected` 状态（已有）。
+- 键盘方向键组内导航仍未做（框架级 focus 已支持，但组内上下键切换未实现）。
+
+## 6. 未实现项（对齐 Compose 差距）
+
+- `selectable(role = Role.RadioButton)` 这类"给任意节点加可选中语义"的通用修饰符（winia 目前由
+  `RadioButton` 组件自己声明）；
 - `minimumInteractiveComponentSize()`（Compose 交互最小 48dp）——winia 以
   StateLayerSize 40×40 为触摸目标（与 checkbox 一致）；
-- 焦点环/键盘方向键组内导航（框架级 focus 已支持，组语义未实现）。
+- 组内方向键导航（见上）。

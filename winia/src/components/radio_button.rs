@@ -76,6 +76,33 @@ impl RadioButtonColors {
         )
     }
 
+    /// Override some of the four colours and keep the rest — Compose's `RadioButtonColors.copy(...)`, whose
+    /// KDoc says `Color.Unspecified` "means 'use the value from the source'" (`material3/RadioButton.kt:200-203`),
+    /// and the implementation `RadioButtonDefaults.colors(...)` is built on (`:149-161`, every parameter
+    /// defaulting to `Color.Unspecified`).
+    ///
+    /// Compose spells "not given" as `Color.Unspecified`, a colour carrying an unspecified colour SPACE; winia's
+    /// `Color` is an 8-bit sRGB value with no such state (`TRANSPARENT` is a real colour, not a placeholder), so
+    /// a gap is `None` here. Start from the token set and override what you need:
+    ///
+    /// ```ignore
+    /// RadioButtonDefaults::radio_button_colors(&theme).copy(Some(my_colour), None, None, None)
+    /// ```
+    pub fn copy(
+        &self,
+        selected_color: Option<Color>,
+        unselected_color: Option<Color>,
+        disabled_selected_color: Option<Color>,
+        disabled_unselected_color: Option<Color>,
+    ) -> Self {
+        Self {
+            selected_color: selected_color.unwrap_or(self.selected_color),
+            unselected_color: unselected_color.unwrap_or(self.unselected_color),
+            disabled_selected_color: disabled_selected_color.unwrap_or(self.disabled_selected_color),
+            disabled_unselected_color: disabled_unselected_color.unwrap_or(self.disabled_unselected_color),
+        }
+    }
+
     /// 按 enabled×selected 解析当前色（对标 M3 `radioColor(enabled, selected)`）
     pub fn radio_color(&self, enabled: bool, selected: bool) -> Color {
         if !enabled {
@@ -375,6 +402,96 @@ mod tests {
         assert_eq!(custom.radio_color(false, true), Color::from_argb(255, 128, 128, 128));
     }
 
+    /// `Modifier.selectable_group()` (Compose's `foundation/selection/SelectableGroup.kt:31`, property at
+    /// `ui/semantics/SemanticsProperties.kt:67`): the row around a set of radio buttons becomes one element that
+    /// says its children are a collection, INSTEAD of being folded away as a transparent container. Without the
+    /// modifier there is no such element — that is this test's control.
+    #[test]
+    fn a_selectable_group_keeps_its_place_and_says_so() {
+        // Composing a radio starts its colour/halo animations, and the animation registry is global: without
+        // this guard the pixel tests in this module (which read a hover halo mid-fade) see a half-grown halo.
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let group = |with_modifier: bool| -> Vec<crate::semantics::SemanticsNode> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx: &mut ComposeCtx| {
+                let modifier = if with_modifier {
+                    Modifier::new().selectable_group()
+                } else {
+                    Modifier::new()
+                };
+                crate::layout::Row::new().modifier(modifier).build(ctx, |ctx| {
+                    RadioButton::new(true).on_click(|| {}).build(ctx);
+                    RadioButton::new(false).on_click(|| {}).build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let root = composer.layout_root_idx().expect("root");
+            crate::semantics::semantics_tree(composer.arena_nodes(), root)
+        };
+
+        let tree = group(true);
+        let json = crate::semantics::semantics_json(&tree);
+        let node = tree
+            .iter()
+            .find(|n| n.selectable_group)
+            .expect("the group element survives in the tree");
+        assert_eq!(node.children.len(), 2, "and keeps both radio buttons as its children");
+        assert!(
+            node.children.iter().all(|c| c.role == Some(crate::semantics::SemanticsRole::RadioButton)),
+            "the children are the selectable items"
+        );
+        // A reader is told about the collection through the same channel the debug server reads.
+        assert!(json.contains("\"selectableGroup\":true"), "the flag reaches the semantics JSON: {json}");
+
+        let plain = group(false);
+        assert!(
+            plain.iter().all(|n| !n.selectable_group),
+            "without the modifier nothing claims to be a group"
+        );
+        assert!(
+            crate::semantics::semantics_json(&plain).contains("\"selectableGroup\":false"),
+            "the field is present either way, so a consumer can tell the difference"
+        );
+        // Leave the registry as it was found: this test only wanted the semantics tree, and a parallel pixel
+        // test in this module would otherwise read a halo mid-fade.
+        crate::animation::clear_all_animations();
+    }
+
+    /// `RadioButtonColors::copy` is Compose's partial override: the colours it is not given stay whatever the
+    /// source said, which is why a caller can change one state's colour without restating the other three.
+    #[test]
+    fn colors_copy_overrides_only_what_it_is_given() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let tokens = RadioButtonDefaults::radio_button_colors(&theme);
+        let custom = Color::RED;
+
+        let partial = tokens.copy(Some(custom), None, None, None);
+        assert_eq!(partial.selected_color, custom, "the one colour it was given");
+        assert_eq!(partial.unselected_color, tokens.unselected_color, "unselected keeps its token");
+        assert_eq!(
+            partial.disabled_selected_color, tokens.disabled_selected_color,
+            "disabled selected keeps its token"
+        );
+        assert_eq!(
+            partial.disabled_unselected_color, tokens.disabled_unselected_color,
+            "disabled unselected keeps its token"
+        );
+        // And the resolved colour follows, so the override reaches the component's own lookup.
+        assert_eq!(partial.radio_color(true, true), custom);
+        assert_eq!(partial.radio_color(true, false), tokens.unselected_color);
+
+        assert_eq!(tokens.copy(None, None, None, None), tokens, "giving nothing keeps everything");
+        let all = RadioButtonColors::new(Color::RED, Color::GREEN, Color::BLUE, Color::from_argb(255, 1, 2, 3));
+        assert_eq!(
+            tokens.copy(Some(Color::RED), Some(Color::GREEN), Some(Color::BLUE), Some(Color::from_argb(255, 1, 2, 3))),
+            all,
+            "and giving everything reproduces the whole-set form"
+        );
+    }
+
     // ── 渲染级像素测试（对齐 checkbox 模式：raster surface + 像素断言）──
     // `origin` is the touch target's OWN top-left corner: its 20 dp visual is centred inside, so the samples
     // below (the visual's centre at +20,+20, the ring's mid-stroke at radius 9 from that centre) hold for any
@@ -612,6 +729,12 @@ mod tests {
     #[test]
     fn a_hovered_radio_paints_one_halo_of_its_state_layer_size() {
         use skia_safe::{Color as SkColor, surfaces};
+        // The halo grows over frames, and the animation registry is global: without the guard a test running in
+        // parallel can clear it mid-growth and this one then measures a half-grown disc (radius 10 of 20).
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
         let mut composer = crate::runtime::composer::Composer::new();
         let source = MutableInteractionSource::new();
         let src = source.clone();

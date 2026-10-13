@@ -222,11 +222,27 @@ pub struct SemanticsConfig {
     state: SemanticsState,
     merge_descendants: bool,
     live_region: LiveRegionMode,
+    /// Compose's `SemanticsProperties.SelectableGroup`: this node is a GROUP of selectable children (radio
+    /// buttons, tabs), not a selectable thing itself. A reader announces the group as a collection and lets the
+    /// user move inside it, which is why the flag has to survive on the tree rather than being folded away.
+    selectable_group: bool,
 }
 
 impl SemanticsConfig {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Mark this node as a group of selectable children — Compose's `Modifier.selectableGroup()`
+    /// (`foundation/selection/SelectableGroup.kt:31`, the property at `ui/semantics/SemanticsProperties.kt:67`).
+    pub fn selectable_group(mut self) -> Self {
+        self.selectable_group = true;
+        self
+    }
+
+    /// Whether this node declares itself a selectable group.
+    pub fn is_selectable_group(&self) -> bool {
+        self.selectable_group
     }
 
     pub fn role(mut self, role: SemanticsRole) -> Self {
@@ -302,6 +318,8 @@ impl SemanticsConfig {
             merge_descendants: self.merge_descendants || fallback.merge_descendants,
             // Same rule: `Off` is the default, so the loudest declaration wins.
             live_region: self.live_region.max(fallback.live_region),
+            // And a group is a group: `false` is the default, so a `true` from either side stands.
+            selectable_group: self.selectable_group || fallback.selectable_group,
         }
     }
 }
@@ -336,6 +354,9 @@ pub struct SemanticsNode {
     /// Whether this element is announced when it changes without focus (see
     /// [`SemanticsConfig::live_region`]).
     pub live_region: LiveRegionMode,
+    /// Whether this element is a group of selectable children (`Modifier::selectable_group`). A reader treats
+    /// such a node as a collection whose items are its children.
+    pub selectable_group: bool,
     /// Absolute bounds in logical pixels: `(x, y, width, height)`, scroll offsets applied — the same
     /// space `hit_test` works in, so a platform bridge can hand these to the OS and an action can be
     /// fired by id without hit-testing.
@@ -671,6 +692,7 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             live_region: config
                 .live_region_mode()
                 .max(absorbed.iter().map(|child| child.live_region).max().unwrap_or_default()),
+            selectable_group: config.is_selectable_group(),
             bounds,
             children: Vec::new(),
         });
@@ -683,7 +705,13 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
     }
 
     let role = config.role_value();
-    if role.is_some() || declared_name.is_some() || !config.state_value().is_unspecified() {
+    if role.is_some()
+        || declared_name.is_some()
+        || !config.state_value().is_unspecified()
+        // A group flag is a declaration too: without this the group node would be transparent and the tree
+        // would lose the one thing that says its children are a collection.
+        || config.is_selectable_group()
+    {
         // A declared node keeps its place and its children (nothing was claimed).
         out.push(SemanticsNode {
             node_id: node.id,
@@ -693,6 +721,7 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             clickable,
             focused: node.focused,
             live_region: config.live_region_mode(),
+            selectable_group: config.is_selectable_group(),
             bounds,
             children,
         });
@@ -828,7 +857,7 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
         state.push(format!("\"error\":{}", json_string(message)));
     }
     out.push_str(&format!(
-        "{{{}}},\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
+        "{{{}}},\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
         state.join(","),
         node.clickable,
         node.focused,
@@ -837,6 +866,7 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
             LiveRegionMode::Polite => "\"polite\"",
             LiveRegionMode::Assertive => "\"assertive\"",
         },
+        node.selectable_group,
     ));
     for (i, child) in node.children.iter().enumerate() {
         if i > 0 {
@@ -994,6 +1024,7 @@ mod tests {
                 clickable: false,
                 focused: false,
                 live_region: LiveRegionMode::Off,
+                selectable_group: false,
                 bounds: (0.0, 0.0, 50.0, 50.0),
                 children: Vec::new(),
             }],

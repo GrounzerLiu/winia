@@ -1102,6 +1102,14 @@ impl Modifier {
         self.push(ModifierElement::Semantics(config))
     }
 
+    /// Compose's `Modifier.selectableGroup()`
+    /// (`foundation/selection/SelectableGroup.kt:31`): one line, `semantics { selectableGroup() }`. Wrap a
+    /// group of selectable children (radio buttons, tabs) so a reader announces them as a collection whose
+    /// items are this node's children, instead of as unrelated controls.
+    pub fn selectable_group(self) -> Self {
+        self.semantics(crate::semantics::SemanticsConfig::new().selectable_group())
+    }
+
     /// This chain's merged accessibility declaration: every `semantics` element folded in chain
     /// order, later fields winning over earlier ones.
     pub fn semantics_config(&self) -> crate::semantics::SemanticsConfig {
