@@ -202,6 +202,13 @@ impl FloatingActionButtonElevation {
             && self.hovered <= 0.0
             && self.disabled <= 0.0
     }
+
+    /// `material3/FloatingActionButton.kt:624-626`: a FAB's tonal elevation IS its default one.
+    /// Compose paints the FAB through a `Surface(tonalElevation = ...)` (`:155`), so a container
+    /// that resolves to `surface` is tinted by it.
+    pub fn tonal_elevation(&self) -> f32 {
+        self.default
+    }
 }
 
 impl Default for FloatingActionButtonElevation {
@@ -356,7 +363,20 @@ impl FloatingActionButton {
             .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
-        let container = colors.container_color(self.enabled);
+        // Compose paints the FAB through a `Surface(onClick = ...)`, so its container goes through
+        // the tonal overlay: `Surface(tonalElevation = elevation.tonalElevation())`
+        // (`FloatingActionButton.kt:155`), where `tonalElevation()` is the DEFAULT elevation
+        // (`:624-626`). Only a container that resolves to `surface` is tinted, so the usual
+        // `primaryContainer` FAB is unaffected.
+        let tonal_elevation = self
+            .elevation
+            .map(|e| e.tonal_elevation())
+            .unwrap_or(0.0);
+        let container = crate::components::surface::tonal_background(
+            theme,
+            colors.container_color(self.enabled),
+            tonal_elevation,
+        );
         let content_color = colors.content_color(self.enabled);
         let ripple_color = colors.ripple_color(self.enabled);
         let shape = self
@@ -608,6 +628,54 @@ mod tests {
         assert!(FloatingActionButtonElevation::bottom_app_bar().is_shadow_free());
         assert!(!FloatingActionButtonElevation::new(1.0, 3.0, 2.0, 4.0, 0.0).is_shadow_free());
         assert!(!FloatingActionButtonElevation::new(0.0, 0.0, 0.0, 0.0, 1.0).is_shadow_free());
+    }
+
+    /// Compose paints the FAB through a `Surface(tonalElevation = elevation.tonalElevation())`
+    /// (`FloatingActionButton.kt:155`), and `tonalElevation()` IS the default elevation
+    /// (`:624-626`). So a container that resolves to `surface` is tinted by that value — and only
+    /// a `surface` container is.
+    #[test]
+    fn a_surface_coloured_fab_is_tinted_by_its_tonal_elevation() {
+        let theme = ThemeColors::default_light();
+        let painted = |colors: FloatingActionButtonColors| -> Color {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    FloatingActionButton::new().colors(colors).build(ctx, |_| {});
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { color_fn, .. } => {
+                            Some(color_fn())
+                        }
+                        _ => None,
+                    })
+                })
+                .expect("the FAB paints a background")
+        };
+
+        // The token set's default is Level3 = 6 dp, so the tint's alpha is (4.5·ln 7 + 2)/100.
+        let alpha = ((4.5 * (6.0f32 + 1.0).ln()) + 2.0) / 100.0;
+        let on_surface =
+            FloatingActionButtonColors::from_pair(&theme, theme.surface, theme.on_surface);
+        assert_eq!(
+            painted(on_surface),
+            theme.surface.overlay(theme.surface_tint, alpha),
+            "a surface-coloured FAB is tinted by its default elevation"
+        );
+
+        // Any other container is left alone — the gate `applyTonalElevation` has, and the reason
+        // the usual `primaryContainer` FAB never shows a tint.
+        assert_eq!(
+            painted(FloatingActionButtonDefaults::primary_colors(&theme)),
+            theme.primary,
+            "a non-surface container is untouched"
+        );
     }
 
     #[test]
@@ -963,7 +1031,15 @@ impl ExtendedFloatingActionButton {
             .interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
-        let container = colors.container_color(self.enabled);
+        let tonal_elevation = self
+            .elevation
+            .map(|e| e.tonal_elevation())
+            .unwrap_or(0.0);
+        let container = crate::components::surface::tonal_background(
+            theme,
+            colors.container_color(self.enabled),
+            tonal_elevation,
+        );
         let content_color = colors.content_color(self.enabled);
         let ripple_color = colors.ripple_color(self.enabled);
         // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge（16dp 圆角）

@@ -36,6 +36,28 @@ fn surface_color_at_elevation(theme: crate::theme::ThemeColors, elevation: f32) 
     theme.surface.overlay(theme.surface_tint, alpha)
 }
 
+/// The colour a `Surface` paints for `color`: Compose's tonal overlay, applied when — and only
+/// when — the background IS `surface` (`ColorScheme.kt:1540-1543`) and the tonal switch is on,
+/// using the ABSOLUTE elevation (this surface's own plus everything above it, `Surface.kt:106`).
+///
+/// `pub(crate)` because a component that paints a surface-coloured container without a
+/// `Surface` must resolve the same colour: the FAB is one — its Compose form is a `Surface`
+/// (`FloatingActionButton.kt:155`).
+pub(crate) fn tonal_background(
+    theme: crate::theme::ThemeColors,
+    color: Color,
+    tonal_elevation: f32,
+) -> Color {
+    if color == theme.surface && crate::theme::WiniaTheme::tonal_elevation_enabled() {
+        surface_color_at_elevation(
+            theme,
+            crate::theme::WiniaTheme::absolute_tonal_elevation() + tonal_elevation,
+        )
+    } else {
+        color
+    }
+}
+
 /// 边框描边（对齐 Compose `BorderStroke(width, color)`——winia 用 (f32, Color) 表达；
 /// shape 在绘制时传入）。为与 Compose Surface 参数名一致，此处用 `border: Option<Border>`。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,13 +231,7 @@ impl Surface {
         // return surface`), and `Surface.kt:106` hands it the ABSOLUTE number. Testing the local value
         // here therefore left a `Surface(0)` nested in a `Surface(3)` flat while Compose tints it, which
         // is precisely what `Surface.kt:146-150` says the local exists to prevent.
-        let color = if base_color == theme.surface
-            && crate::theme::WiniaTheme::tonal_elevation_enabled()
-        {
-            surface_color_at_elevation(theme, absolute_elevation)
-        } else {
-            base_color
-        };
+        let color = tonal_background(theme, base_color, self.tonal_elevation);
         // 内容色：显式传入优先；否则按主题匹配——color==theme.surface→on_surface，
         // 否则保持上层 content_color()（Compose 语义：非标准色时沿用父 Surface 内容色）。
         // NOTE：判据用 base_color（未经 tint 的原始底色），与 Compose 的
