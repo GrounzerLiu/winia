@@ -6,7 +6,7 @@
 
 use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::runtime::state::State;
+use crate::runtime::state::{Backchannel, State};
 use crate::layout::constraints::Constraints;
 use crate::layout::LayoutDirection;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
@@ -170,9 +170,16 @@ impl FloatingActionButtonElevation {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
     }
 
+    /// The elevation for a state snapshot, by Compose's "latest interaction wins" order: disabled,
+    /// then a dragged FAB (which takes the DEFAULT — Compose's elevation animatable matches only
+    /// `PressInteraction.Press`, `HoverInteraction.Enter` and `FocusInteraction.Focus` and falls
+    /// through to `defaultElevation` for anything else, `FloatingActionButton.kt:713-719`; the
+    /// Button follows the same rule), then a press, then hover, then focus.
     pub fn for_state(&self, state: &ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
+        } else if state.dragged {
+            self.default
         } else if state.pressed {
             self.pressed
         } else if state.hovered {
@@ -182,6 +189,16 @@ impl FloatingActionButtonElevation {
         } else {
             self.default
         }
+    }
+
+    /// Whether every state's elevation is 0 — nothing to animate, and no layer to pay for. A FAB
+    /// whose every entry is 0 (`bottom_app_bar`) skips the animated layer entirely.
+    pub fn is_shadow_free(&self) -> bool {
+        self.default <= 0.0
+            && self.pressed <= 0.0
+            && self.focused <= 0.0
+            && self.hovered <= 0.0
+            && self.disabled <= 0.0
     }
 }
 
@@ -345,22 +362,24 @@ impl FloatingActionButton {
             .unwrap_or_else(|| FloatingActionButtonDefaults::shape(self.size));
         let size = self.size.container_size();
 
+        // The spec is Compose's, keyed on the interaction PAIR being left and entered
+        // (`animation::elevation_spec_for_pair`, from `material3/internal/Elevation.kt:50-61`):
+        // 120 ms `FastOutSlowIn` towards an interaction, 150 ms of the exit curve away from one
+        // (120 ms out of HOVER), and a snap between two idle frames. winia used one 180 ms
+        // `EaseOutCubic` for every direction. The interaction the last target came from is kept in
+        // a backchannel — reading it registers no dependency.
         let elevation_anim = self.elevation.and_then(|elevation| {
-            if elevation.default <= 0.0
-                && elevation.pressed <= 0.0
-                && elevation.focused <= 0.0
-                && elevation.hovered <= 0.0
-                && elevation.disabled <= 0.0
-            {
-                None
+            if elevation.is_shadow_free() {
+                None // every state is 0: no shadow to animate, and no layer to pay for
             } else {
-                Some(ctx.animate_float_as_state(
-                    elevation.for_state(&state),
-                    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-                        std::time::Duration::from_millis(180),
-                        crate::animation::interpolator::EaseOutCubic::new(),
-                    )),
-                ))
+                let last_kind: Backchannel<Option<crate::animation::ElevationInteraction>> =
+                    ctx.remember_backchannel(|| None);
+                let to = state.elevation_interaction();
+                let from = if state.enabled { last_kind.peek() } else { None };
+                let spec = crate::animation::elevation_spec_for_pair(from, to)
+                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+                last_kind.set(to);
+                Some(ctx.animate_float_as_state(elevation.for_state(&state), spec))
             }
         });
 
@@ -561,6 +580,32 @@ mod tests {
         assert_eq!(elevation.for_state(&state), 3.0);
         state.enabled = false;
         assert_eq!(elevation.for_state(&state), 0.0);
+    }
+
+    /// A DRAGGED FAB takes the default — Compose's `FloatingActionButtonElevationAnimatable`
+    /// matches only Press/Hover/Focus and falls through to the default for a drag
+    /// (`FloatingActionButton.kt:713-719`), and the Button follows the same rule. A drag always
+    /// holds a press, so without the dragged branch the value would be the pressed one.
+    #[test]
+    fn a_dragged_fab_takes_the_default_elevation() {
+        let elevation = FloatingActionButtonElevation::new(1.0, 3.0, 2.0, 4.0, 0.0);
+        let mut state = ComponentState::idle();
+        state.dragged = true;
+        state.pressed = true;
+        assert_eq!(elevation.for_state(&state), 1.0);
+        assert_eq!(
+            state.elevation_interaction(),
+            Some(crate::animation::ElevationInteraction::Drag)
+        );
+    }
+
+    /// The short-circuit both FABs share: a token set whose every state is 0 gets no animated
+    /// layer at all (`FloatingActionButtonElevation::bottom_app_bar`).
+    #[test]
+    fn a_shadow_free_elevation_is_recognised() {
+        assert!(FloatingActionButtonElevation::bottom_app_bar().is_shadow_free());
+        assert!(!FloatingActionButtonElevation::new(1.0, 3.0, 2.0, 4.0, 0.0).is_shadow_free());
+        assert!(!FloatingActionButtonElevation::new(0.0, 0.0, 0.0, 0.0, 1.0).is_shadow_free());
     }
 
     #[test]
@@ -846,17 +891,32 @@ impl ExtendedFloatingActionButton {
             fab_size_spec(),
         );
 
-        // 高程动画（同 FAB）
-        let elevation_value = self.elevation.map(|e| e.for_state(&state));
+        // Elevation animates exactly like `FloatingActionButton::build`: same interaction-pair
+        // spec rule, same backchannel. This used to take `for_state`'s instantaneous value, so
+        // the shadow jumped while the plain FAB's glided.
+        let elevation_anim = self.elevation.and_then(|elevation| {
+            if elevation.is_shadow_free() {
+                None
+            } else {
+                let last_kind: Backchannel<Option<crate::animation::ElevationInteraction>> =
+                    ctx.remember_backchannel(|| None);
+                let to = state.elevation_interaction();
+                let from = if state.enabled { last_kind.peek() } else { None };
+                let spec = crate::animation::elevation_spec_for_pair(from, to)
+                    .unwrap_or(crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default()));
+                last_kind.set(to);
+                Some(ctx.animate_float_as_state(elevation.for_state(&state), spec))
+            }
+        });
 
         let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
         let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
 
         let mut modifier = Modifier::new().background(container, shape);
-        if let Some(elev) = elevation_value {
+        if let Some(anim) = elevation_anim {
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
-                shadow_elevation: elev,
+                shadow_elevation: anim.get(),
                 shadow_shape: Some(shape),
                 ..Default::default()
             });
