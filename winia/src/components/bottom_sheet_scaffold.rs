@@ -1674,17 +1674,17 @@ mod tests {
                     })
                 })
                 .map(|node| {
-                    node.modifier
-                        .elements()
-                        .iter()
-                        .filter(|el| matches!(el, crate::modifier::ModifierElement::Shadow { .. }))
-                        .count()
+                    usize::from(
+                        node.modifier
+                            .graphics_layer_params()
+                            .is_some_and(|p| p.shadow_elevation > 0.0),
+                    )
                 })
                 .max()
                 .unwrap_or(0)
         }
-        // `Modifier::shadow` pushes an ambient and a spot layer per call.
-        assert_eq!(sheet_shadow_count(1.0), 2, "the default elevation draws a shadow");
+        // `Modifier::shadow` puts the elevation on a graphics layer now.
+        assert_eq!(sheet_shadow_count(1.0), 1, "the default elevation draws a shadow");
         assert_eq!(sheet_shadow_count(0.0), 0, "zero elevation draws none");
     }
 

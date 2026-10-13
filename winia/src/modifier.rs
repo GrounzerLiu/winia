@@ -1145,12 +1145,18 @@ impl Modifier {
         self.push(ModifierElement::TextFieldSlot { role })
     }
 
-    /// `shadow(elevation, shape, clip, color)`（对标 Compose `Modifier.shadow`）——
-    /// elevation 便捷版：展开为 **ambient + spot 两层**（Compose DropShadow
-    /// 物理阴影——ambient 无偏移大模糊低 alpha、spot 偏移 e*0.5 小模糊中
-    /// alpha；alpha 随 elevation 增强——Material 层级感）。
-    /// 默认：RectangleShape、`clip = elevation > 0`、黑色阴影。
-    /// elevation <= 0 且 !clip 时返回自身（Compose early-return 语义）。
+    /// `shadow(elevation, shape, clip, color)` — Compose's `Modifier.shadow`, which is a graphics
+    /// layer: `graphicsLayer { shadowElevation = …; shape = …; clip = … }`. Skia's `SkShadowUtils`
+    /// then derives the blur and the offset from the elevation as a physical Z height (see
+    /// `render.rs::draw_elevation_shadow`) — the path FAB/Button/Card/Chip already take.
+    ///
+    /// This used to expand the call into winia's own analytic ambient+spot pair, whose alpha
+    /// `render.rs` faded a second time; measured on a white surface that shadow was all but
+    /// invisible beside the same colour on this path.
+    ///
+    /// `color` becomes both the ambient and the spot colour, as Compose's single
+    /// `DefaultShadowColor` does. Returns `self` unchanged when there is nothing to draw
+    /// (`elevation <= 0` and `clip == false`) — Compose's early return.
     pub fn shadow(
         self,
         elevation: f32,
@@ -1161,22 +1167,14 @@ impl Modifier {
         if elevation <= 0.0 && !clip {
             return self;
         }
-        let strength = (elevation / 12.0).min(1.0);
-        // ambient：无偏移、模糊半径 = e（SkShadowUtils：ambient blur = elevation——
-        // 大范围环境光）、alpha 0.18（桌面观感——宽而淡；之前 0.25 偏深）
-        let ambient = ShadowParams::new(
-            elevation, 0.0, 0.0,
-            color, 0.18 * strength,
-        );
-        // spot：偏移 (0, e*0.5)、模糊半径 = e*0.25（SkShadowUtils 同款——
-        // 边缘清晰的下阴影）、alpha 0.30
-        let spot = ShadowParams::new(
-            elevation * 0.25, 0.0, elevation * 0.5,
-            color, 0.30 * strength,
-        );
         let shape = shape.into();
-        self.push(ModifierElement::Shadow { params: ambient, shape: shape.clone(), clip })
-            .push(ModifierElement::Shadow { params: spot, shape, clip })
+        self.merge_graphics_layer(move |p| {
+            p.shadow_elevation = elevation;
+            p.shadow_shape = Some(shape);
+            p.clip = clip;
+            p.ambient_shadow_color = color;
+            p.spot_shadow_color = color;
+        })
     }
 
     /// `shadow(elevation)`——便捷版（默认形状/黑色/自动 clip）
@@ -3723,29 +3721,28 @@ mod param_eq_tests {
     // ── shadow / drop_shadow ──
 
     #[test]
-    fn shadow_expands_to_ambient_and_spot() {
-        // elevation 便捷版展开为两层（ambient 无偏移 + spot 偏移 e*0.5）
-        let m = Modifier::new().shadow(8.0, Shape::rounded(4.0), true, Color::from_argb(255, 0, 0, 0));
-        let layers: Vec<_> = m.elements().iter().filter_map(|el| {
-            if let ModifierElement::Shadow { params, .. } = el {
-                Some((params.radius, params.offset_x, params.offset_y, params.alpha))
-            } else {
-                None
-            }
-        }).collect();
-        assert_eq!(layers.len(), 2, "shadow() 展开 ambient + spot 两层");
-        let (r0, _, oy0, a0) = layers[0];
-        let (r1, _, oy1, a1) = layers[1];
-        // ambient：无偏移、模糊半径 = e（SkShadowUtils）、低 alpha
-        assert_eq!(oy0, 0.0);
-        assert!((r0 - 8.0).abs() < 1e-6, "ambient 模糊半径 = e");
-        assert!(a0 < a1, "ambient alpha 低于 spot");
-        // spot：偏移 e*0.5、模糊半径 e*0.25（SkShadowUtils）
-        assert!((oy1 - 4.0).abs() < 1e-6, "spot 偏移 e*0.5");
-        assert!((r1 - 2.0).abs() < 1e-6, "spot 模糊半径 e*0.25");
-        // strength = 8/12 → ambient 0.18×0.667、spot 0.30×0.667
-        assert!((a0 - 0.18 * 8.0 / 12.0).abs() < 1e-3);
-        assert!((a1 - 0.30 * 8.0 / 12.0).abs() < 1e-3);
+    fn shadow_goes_to_the_graphics_layer() {
+        // Compose's `Modifier.shadow` is a graphicsLayer: the elevation reaches Skia as a Z height,
+        // and the one colour serves as both the ambient and the spot colour.
+        let ink = Color::from_argb(40, 0, 0, 0);
+        let m = Modifier::new().shadow(8.0, Shape::rounded(4.0), true, ink);
+        let p = m.graphics_layer_params().expect("shadow() adds a graphics layer");
+        assert_eq!(p.shadow_elevation, 8.0);
+        assert_eq!(p.shadow_shape, Some(Shape::rounded(4.0)));
+        assert!(p.clip);
+        assert_eq!(p.ambient_shadow_color, ink);
+        assert_eq!(p.spot_shadow_color, ink);
+        assert!(
+            m.elements().iter().all(|el| !matches!(el, ModifierElement::Shadow { .. })),
+            "nothing is expanded into an ambient/spot pair any more"
+        );
+    }
+
+    #[test]
+    fn shadow_with_nothing_to_draw_returns_self() {
+        // Compose's early return: no elevation and no clip means no layer at all.
+        let m = Modifier::new().shadow(0.0, Shape::Rectangle, false, Color::from_argb(40, 0, 0, 0));
+        assert!(m.elements().is_empty(), "elevation 0 without clip adds nothing");
     }
 
     #[test]
