@@ -313,7 +313,10 @@ val showCursor = enabled && !readOnly && windowInfo.isWindowFocused && !state.ha
 ### 4.12 有意保留的偏差
 
 - **锚点由调用方显式给出**（`build(ctx, anchor, menu)`）。M3 的 `DropdownMenu` 没有 anchor 参数，因为 popup 以“父布局节点”的 bounds 为锚（用法是把菜单与触发器放进同一个 `Box`）。winia 没有等价的隐式父锚点，故把锚点内容作为参数；语义等价（锚点即那块 `Box`），但形状不同 —— 记录而非隐藏。
-- **`SecondaryEditable` 的逐元素锚点已实现，但两条附带条件仍是偏差**（§4.14）：① 弹层焦点性在 M3 里取决于"是否开启无障碍服务"，winia 没有该信号，故实现的是**非可访问分支**（不带焦点打开，字段保住光标与 IME）；② M3 给两个 primary 锚点发布的 `role = DropdownList` 在 winia 的 `SemanticsRole` 里还没有变体（只有 Button/Checkbox/Switch/RadioButton/Tab/Image/ProgressBar/Dialog），secondary 锚点的 `Button` + expanded 已发布并断言。
+- **`SecondaryEditable` 的逐元素锚点已实现，但一条附带条件仍是偏差**（§4.14）：弹层焦点性在 M3 里取决于"是否开启无障碍服务"，winia 没有该信号，故实现的是**非可访问分支**（不带焦点打开，字段保住光标与 IME）。
+  两条锚点的角色现在都齐了：secondary 是 `Button` + expanded（已有断言），**primary 是 `Role.DropdownList`**
+  （`dropdown_menu.rs` 的 wrapper 分支，出处 `ExposedDropdownMenu.kt:1472-1474`；`SemanticsRole` 已加该变体，
+  单测 `a_primary_anchor_is_a_dropdown_list_and_a_secondary_one_is_a_button` 一并钉住 primary / editable primary / secondary 三种）。
 
 ### 4.13 Editable anchors (`PrimaryEditable`): what was implemented
 

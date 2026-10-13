@@ -827,6 +827,17 @@ impl ExposedDropdownMenuBox {
                         crate::modifier::Modifier::new()
                             .clickable(toggler)
                             .on_pre_key_event(keys)
+                            // material3's other semantics branch (`ExposedDropdownMenu.kt:1472-1474`): a
+                            // PRIMARY anchor is a dropdown list, not a button — the field it heads is
+                            // already an editable node, so the anchor says what it is and nothing else (no
+                            // expanded state, no toggle description; those are the secondary branch's).
+                            // winia's wrapper is the clickable node, which is why it claims its subtree —
+                            // the same outcome Compose's `clickable` gets from `mergeDescendants = true`.
+                            .semantics(
+                                crate::semantics::SemanticsConfig::new().role(
+                                    crate::semantics::SemanticsRole::DropdownList,
+                                ),
+                            )
                     } else {
                         crate::modifier::Modifier::new()
                     };
@@ -1159,6 +1170,77 @@ mod tests {
             MenuDefaults::dropdown_menu_item_content_padding(),
             (DROPDOWN_ITEM_HORIZONTAL_PADDING, 0.0),
             "the published padding and the constant the item applies must be the same value"
+        );
+    }
+
+    /// material3 splits the anchor's semantics by type (`ExposedDropdownMenu.kt:1464-1476`): a PRIMARY anchor
+    /// is `Role.DropdownList` and nothing else — the field it heads is already an editable node — while a
+    /// SECONDARY anchor is a `Role.Button` that reports whether the list is showing. winia published only the
+    /// secondary half, so a primary anchor reached a reader as an unnamed node.
+    #[test]
+    fn a_primary_anchor_is_a_dropdown_list_and_a_secondary_one_is_a_button() {
+        use crate::semantics::{SemanticsNode, SemanticsRole};
+
+        let element = |anchor_type: ExposedDropdownMenuAnchorType, element_anchor: bool| -> SemanticsNode {
+            let expanded = crate::runtime::state::State::new(false);
+            let mut composer = crate::runtime::composer::Composer::new();
+            let box_ = ExposedDropdownMenuBox::new(expanded).anchor_type(anchor_type);
+            composer.compose(move |ctx| {
+                if element_anchor {
+                    box_.build_with_anchor_modifier(
+                        ctx,
+                        |ctx, m: crate::modifier::Modifier| {
+                            crate::components::text::Text::new("pick").modifier(m).build(ctx);
+                        },
+                        |_ctx| {},
+                    );
+                } else {
+                    box_.build(
+                        ctx,
+                        |ctx| {
+                            crate::components::text::Text::new("pick").build(ctx);
+                        },
+                        |_ctx| {},
+                    );
+                }
+            });
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+            let root = composer.layout_root_idx().expect("the anchor's node");
+            let tree = crate::semantics::semantics_tree(composer.arena_nodes(), root);
+            tree.into_iter()
+                .find(|n| n.role.is_some())
+                .expect("the anchor declares a role")
+        };
+
+        let primary = element(ExposedDropdownMenuAnchorType::PrimaryNotEditable, false);
+        assert_eq!(
+            primary.role,
+            Some(SemanticsRole::DropdownList),
+            "a primary anchor is a dropdown list (and says nothing else)"
+        );
+        assert_eq!(
+            primary.state.expanded_value(),
+            None,
+            "the expanded state belongs to the secondary branch only"
+        );
+
+        let editable = element(ExposedDropdownMenuAnchorType::PrimaryEditable, false);
+        assert_eq!(
+            editable.role,
+            Some(SemanticsRole::DropdownList),
+            "…and the editable primary anchor is one too"
+        );
+
+        let secondary = element(ExposedDropdownMenuAnchorType::SecondaryEditable, true);
+        assert_eq!(
+            secondary.role,
+            Some(SemanticsRole::Button),
+            "a secondary anchor is a button"
+        );
+        assert_eq!(
+            secondary.state.expanded_value(),
+            Some(false),
+            "…that reports the list as collapsed"
         );
     }
 

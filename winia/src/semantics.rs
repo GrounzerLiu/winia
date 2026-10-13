@@ -44,6 +44,10 @@ pub enum SemanticsRole {
     Image,
     ProgressBar,
     Dialog,
+    /// Compose's `Role.DropdownList` — the node that a dropdown list (an exposed dropdown menu's anchor)
+    /// hangs off, so a reader announces "dropdown list" rather than "button". material3 publishes it on a
+    /// primary anchor (`ExposedDropdownMenu.kt:1472-1474`) and `Role.Button` on a secondary one (`:1469-1471`).
+    DropdownList,
 }
 
 impl SemanticsRole {
@@ -58,6 +62,7 @@ impl SemanticsRole {
             SemanticsRole::Image => "image",
             SemanticsRole::ProgressBar => "progressbar",
             SemanticsRole::Dialog => "dialog",
+            SemanticsRole::DropdownList => "dropdownlist",
         }
     }
 
@@ -72,6 +77,7 @@ impl SemanticsRole {
             SemanticsRole::Image,
             SemanticsRole::ProgressBar,
             SemanticsRole::Dialog,
+            SemanticsRole::DropdownList,
         ]
         .into_iter()
         .find(|role| role.name() == name)

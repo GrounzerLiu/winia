@@ -55,6 +55,8 @@ role.
 | `LinearProgressIndicator`, `CircularProgressIndicator` (and the wavy pair) | `ProgressBar` | `progress(current, min, max)` when determinate |
 | `LoadingIndicator` | `ProgressBar` | — (a spinner has no value) |
 | `Snackbar` | *(none — a message)* | `live_region(Polite)` |
+| `ExposedDropdownMenuBox` (primary anchor) | `DropdownList` | — (the field it heads carries the value) |
+| `ExposedDropdownMenuBox` (secondary anchor) | `Button` | `expanded` |
 | `Text`, `RichText` | *(none — a name and no role)* | — |
 
 A progress bar reports its **value**, not just its role: `UIA_RangeValue` with `value`/`min`/`max`
