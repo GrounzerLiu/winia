@@ -1,5 +1,9 @@
 //! `Crossfade` — cross-fading content switch (mirrors Compose `Crossfade`)
 //!
+//! See it run: `cargo run -p winia --example crossfade_demo` (the default spec, a rapid three-generation
+//! switch, `content_key` replacing an entry with no animation, two specs on one state, and the container
+//! jumping with the content's size because there is no size animation).
+//!
 //! ```ignore
 //! Crossfade::new(page)                            // State<Page>
 //!     .animation(TweenSpec::default())
