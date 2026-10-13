@@ -124,6 +124,16 @@ impl FloatingActionButtonColors {
         Self::new(container, content, disabled_container, disabled_content)
     }
 
+    /// Builds a pair from a container colour alone, deriving the content colour the way Compose's
+    /// `contentColor: Color = contentColorFor(containerColor)` default does
+    /// (`material3/FloatingActionButton.kt:114`): the theme maps every scheme role that has a paired
+    /// "on" colour, and a colour with no pair — a caller's own — falls back to `on_surface`, which
+    /// is what the ambient content colour carries for the default theme.
+    pub fn from_container(theme: &ThemeColors, container: Color) -> Self {
+        let content = theme.content_color_for(container).unwrap_or(theme.on_surface);
+        Self::from_pair(theme, container, content)
+    }
+
     pub fn from_theme(theme: &ThemeColors) -> Self {
         FloatingActionButtonDefaults::colors(theme)
     }
@@ -628,6 +638,29 @@ mod tests {
 
         let primary = FloatingActionButtonDefaults::primary_colors(&theme);
         assert_eq!(primary.ripple_color(true), theme.on_primary);
+    }
+
+    /// `contentColorFor(containerColor)` is Compose's default (`FloatingActionButton.kt:114`): a
+    /// paired role derives its "on" colour, and anything else falls back to `on_surface`.
+    #[test]
+    fn from_container_derives_the_content_colour() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let paired = FloatingActionButtonColors::from_container(&theme, theme.secondary_container);
+        assert_eq!(paired.container, theme.secondary_container);
+        assert_eq!(paired.content, theme.on_secondary_container);
+
+        let custom = Color::from_argb(255, 1, 2, 3);
+        let unpaired = FloatingActionButtonColors::from_container(&theme, custom);
+        assert_eq!(unpaired.container, custom);
+        assert_eq!(
+            unpaired.content, theme.on_surface,
+            "a colour with no paired \"on\" role falls back to on_surface"
+        );
+        // The disabled pair still comes from the theme, exactly as `from_pair` builds it.
+        assert_eq!(
+            unpaired.disabled_container.a,
+            (theme.on_surface.a as f32 * 0.12) as u8
+        );
     }
 
     #[test]

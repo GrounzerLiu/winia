@@ -42,6 +42,8 @@ FloatingActionButton::new()
 - `secondary_colors`：Secondary / On Secondary
 - `tertiary_colors`：Tertiary / On Tertiary
 - `from_pair`：自定义容器色和内容色
+- `from_container`：derives the content colour from the container alone (`contentColorFor`), for a
+  caller-supplied container that names no pair
 
 禁用态不注册点击、焦点和 Ripple，使用 `onSurface` 的 12% 容器色与 38% 内容色近似 Material 3 disabled token。
 
