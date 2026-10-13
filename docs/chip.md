@@ -20,6 +20,7 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
     .enabled(bool)
     .shape(Shape)                                    // 默认 8dp 圆角
     .elevation(ChipElevation)                        // 覆盖变体默认的阴影高度
+    .interaction_source(MutableInteractionSource)    // 调用方提供交互源（否则组件自己 remember 一个）
     .colors(ChipColors)                              // 非选择型配色（assist/suggestion）
     .selectable_colors(SelectableChipColors)         // 选择型配色（filter/input）
     .leading_icon(|ctx| { ... })                     // 前置图标（18dp）
@@ -43,7 +44,7 @@ Chip::elevated_suggestion(label, on_click)          // ElevatedSuggestionChip
 | avatar | 24dp、12dp 圆角（InputChip——specs 明确是圆角方块，不是圆） |
 | 左右 padding | 无 icon 16dp / 有 icon 8dp；InputChip 带头像时左侧 **4dp** |
 | 元素间距 | 8dp |
-| 边框 | 1dp outline（无填充时）；**有填充（selected）0 边框——不挂 border modifier** |
+| 边框 | 1dp outline（无填充时）；**有填充（selected）0 边框——不挂 border modifier**；禁用态改画 `OnSurface @12%`（`FlatDisabledOutlineOpacity` 等），elevated 变体默认无边框 |
 
 ### 配色（`ChipDefaults`）
 
@@ -110,7 +111,8 @@ assist/suggestion 和未选中的 filter 容器透明，实际永远不显示阴
 
 - **hover/focus/press 配色**：Compose ChipColors 有 hover/focus/drag 状态色，
   winia 仅 enabled/disabled/selected（ripple 已覆盖 press 视觉；`Chip.kt` 的默认工厂同样只用这两态）。
-- **disabled 边框不透明度**：token 里是 `OnSurface @0.12`，当前禁用态仍画 1dp `Outline`/`OutlineVariant` 原色。
-- **交互源**：未暴露 `interaction_source`（Button 有）。
+- **disabled 选中容器**：token 里 `FlatDisabledSelectedContainerOpacity` / `DisabledSelectedContainerOpacity`
+  是 **0.12**，winia 目前仍按 0.38 画（{`disabled_selected_container`}）。这条与已修的禁用边框是同一类
+  修正，尚未做。
 - **contentPadding 定制**：写死 16/8/4（specs 的规则），未开放成参数。
 - 视觉验证：chip_demo 展示 7 变体 + selected 切换 + 过渡动画 + Elevated 阴影。

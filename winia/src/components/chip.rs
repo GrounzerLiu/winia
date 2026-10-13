@@ -108,6 +108,15 @@ impl ChipDefaults {
     pub const AVATAR_SIZE: f32 = 24.0; // InputChip avatar 24dp
     /// The specs page: "avatar shape 12dp corner radius" — a rounded square, NOT a circle.
     pub const AVATAR_CORNER_RADIUS: f32 = 12.0;
+    /// `FlatDisabledOutlineOpacity` / `FlatDisabledUnselectedOutlineOpacity` /
+    /// `DisabledUnselectedOutlineOpacity` — every flat chip's disabled outline is `OnSurface` at 12 %.
+    pub const DISABLED_OUTLINE_OPACITY: f32 = 0.12;
+
+    /// The disabled outline's colour: `OnSurface` at `DISABLED_OUTLINE_OPACITY`.
+    pub fn disabled_outline(theme: &crate::theme::ThemeColors) -> crate::graphics::Color {
+        let alpha = (255.0 * Self::DISABLED_OUTLINE_OPACITY).round() as u8;
+        crate::graphics::Color::from_argb(alpha, theme.on_surface.r, theme.on_surface.g, theme.on_surface.b)
+    }
     /// How long a chip fades between its container colours. A winia addition: M3's `Chip.kt` applies the colour
     /// directly. The shadow's gate reads this same animation (see `Chip::build`), so a chip whose container is
     /// transparent — or still on its way to being filled — shows no shadow.
@@ -355,6 +364,9 @@ pub struct Chip {
     selectable_colors: Option<SelectableChipColors>,
     /// Shadow elevation (`None` = the variant's token default; `ChipElevation?` upstream).
     elevation: Option<ChipElevation>,
+    /// A caller-supplied interaction source (`interactionSource: MutableInteractionSource?` upstream). When it
+    /// is absent the component remembers one of its own.
+    interaction_source: Option<crate::interaction::MutableInteractionSource>,
 }
 
 impl Chip {
@@ -408,6 +420,7 @@ impl Chip {
             flat_colors: None,
             selectable_colors: None,
             elevation: None,
+            interaction_source: None,
         }
     }
 
@@ -420,6 +433,16 @@ impl Chip {
     pub fn selectable_colors(mut self, c: SelectableChipColors) -> Self { self.selectable_colors = Some(c); self }
     /// Shadow elevation (`ChipElevation?`; `ChipElevation::flat()` removes it in the states that can show one).
     pub fn elevation(mut self, e: ChipElevation) -> Self { self.elevation = Some(e); self }
+    /// A caller-supplied interaction source (`interactionSource: MutableInteractionSource?`), so a test or a
+    /// parent component can put a state in place before the first composition — the same parameter every other
+    /// clickable in winia exposes.
+    pub fn interaction_source(
+        mut self,
+        source: crate::interaction::MutableInteractionSource,
+    ) -> Self {
+        self.interaction_source = Some(source);
+        self
+    }
     pub fn leading_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.leading_icon = Some(Box::new(f)); self }
     pub fn trailing_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.trailing_icon = Some(Box::new(f)); self }
     /// 头像（InputChip——24dp、12dp 圆角）
@@ -430,10 +453,14 @@ impl Chip {
     pub fn build(self, ctx: &mut ComposeCtx) {
         let theme = crate::theme::WiniaTheme::colors();
         let sel = self.selected;
-        // 配色解析（按变体取对应默认）——颜色角色来自 M3 specs 页面
-        // (m3.material.io/components/chips/specs) 各变体的 "color roles" 列表：
-        // Assist 标签是 On surface、Suggestion 是 On surface variant；Assist/Suggestion 的
-        // outline 角色是 `Outline`，Filter/Input 是 `Outline variant`。
+        // Colour roles come from the M3 specs page (m3.material.io/components/chips/specs), one list per
+        // variant: an assist chip's label is `On surface` and a suggestion chip's is `On surface variant`;
+        // assist and suggestion outline with `Outline` while filter and input use `Outline variant`.
+        //
+        // A DISABLED chip's outline is `OnSurface` at 12 % — `FlatDisabledOutlineColor` /
+        // `FlatDisabledOutlineOpacity` (assist, suggestion), `FlatDisabledUnselectedOutlineColor` / `…Opacity`
+        // (filter) and `DisabledUnselectedOutlineColor` / `…Opacity` (input) — not the enabled role's colour.
+        let disabled_outline = ChipDefaults::disabled_outline(&theme);
         let (container, label_color, icon_color, border_w, border_color) = match self.variant {
             ChipVariant::Assist
             | ChipVariant::ElevatedAssist
@@ -450,9 +477,11 @@ impl Chip {
                 } else {
                     (c.disabled_container, c.disabled_label, c.disabled_label)
                 };
-                // 无填充的 assist/suggestion 用 `Outline`；elevated 变体默认不带边框。
+                // A flat assist or suggestion chip outlines with `Outline`; the elevated variants carry no
+                // outline by default. Disabled swaps in the 12 % `OnSurface` role above.
                 let w = if self.variant.is_elevated() { 0.0 } else { ChipDefaults::BORDER_WIDTH };
-                (container, label, icon, w, theme.outline)
+                let colour = if self.enabled { theme.outline } else { disabled_outline };
+                (container, label, icon, w, colour)
             }
             ChipVariant::Filter | ChipVariant::ElevatedFilter | ChipVariant::Input => {
                 let c = self.selectable_colors.unwrap_or_else(|| match self.variant {
@@ -467,13 +496,15 @@ impl Chip {
                 } else {
                     (c.container, c.label, c.leading_icon)
                 };
-                // 选中：0 边框；未选中：1dp outline variant；elevated 变体默认不带边框。
+                // A selected chip draws no outline; unselected draws 1 dp of `Outline variant` (or the disabled
+                // role above), and the elevated variants carry none by default.
                 let w = if sel || self.variant.is_elevated() {
                     0.0
                 } else {
                     ChipDefaults::BORDER_WIDTH
                 };
-                (container, label, icon, w, theme.outline_variant)
+                let colour = if self.enabled { theme.outline_variant } else { disabled_outline };
+                (container, label, icon, w, colour)
             }
         };
         // 左右 padding 按 specs：无 icon 16dp、有 icon 8dp；InputChip 带头像时左 4dp / 右 8dp。
@@ -522,7 +553,10 @@ impl Chip {
                 crate::animation::interpolator::EaseOutCubic::new(),
             )),
         );
-        let interaction = ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get();
+        let interaction = self
+            .interaction_source
+            .clone()
+            .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
         let last_kind: crate::runtime::state::Backchannel<
             Option<crate::animation::ElevationInteraction>,
@@ -538,10 +572,10 @@ impl Chip {
             let shown = last_shadow.peek();
             let to = state.elevation_interaction();
             let from = if state.enabled { last_kind.peek() } else { None };
-            // The tracker follows the CURRENT interaction on every change, falls included: leaving it stale made a
-            // repeated hover SNAP (`elevation_spec_for_pair(Hover, Hover)` is `None`) instead of tweening.
+            // The tracker records the CURRENT interaction on every change, falls included. `from` only matters
+            // for a rise that carries no interaction kind (a lift caused by the container becoming opaque),
+            // where `elevation_spec_for_pair` would otherwise pick the hover-outgoing curve for the stale kind.
             last_kind.set(to);
-            // Leaving is immediate: nothing may linger behind a container on its way to transparent.
             let spec = if wanted <= shown {
                 crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
             } else {
@@ -913,6 +947,118 @@ mod tests {
             theme.secondary_container,
             "a selected elevated filter chip keeps the selected container"
         );
+    }
+
+    /// The shadow the chip's layer would paint right now (the layer's closure reads the animated state).
+    fn painted_shadow(composer: &Composer) -> f32 {
+        composer
+            .arena_nodes()
+            .iter()
+            .find_map(|n| {
+                n.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
+                        Some((params_fn)().shadow_elevation)
+                    }
+                    _ => None,
+                })
+            })
+            .expect("the chip keeps its elevation layer")
+    }
+
+    /// Drive frames until the animations settle, re-composing each frame the way a real window does.
+    fn settle_shadow(
+        composer: &mut Composer,
+        source: crate::interaction::MutableInteractionSource,
+        selected: bool,
+    ) {
+        for _ in 0..200 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+            build_filter_chip(composer, source.clone(), selected);
+        }
+    }
+
+    fn build_filter_chip(
+        composer: &mut Composer,
+        source: crate::interaction::MutableInteractionSource,
+        selected: bool,
+    ) {
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            Chip::filter(selected, label("F"), || {})
+                .interaction_source(source.clone())
+                .build(ctx);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+    }
+
+    /// The caller-supplied interaction source drives the chip's state, and the shadow it produces has two
+    /// halves that are worth pinning: a hover lift RAMPS IN over the interaction-pair spec, and leaving hover
+    /// drops it ON THE FIRST FRAME (`wanted <= shown` uses a Snap) so nothing lingers behind a container on its
+    /// way out. The second half is what the falsification for this test removes.
+    #[test]
+    fn a_hover_lift_ramps_in_and_drops_at_once() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        // A SELECTED filter chip: its container is filled, so the transparency gate lets the shadow through.
+        let source = crate::interaction::MutableInteractionSource::new();
+        let mut composer = Composer::new();
+
+        source.emit_hover_enter();
+        build_filter_chip(&mut composer, source.clone(), true);
+        settle_shadow(&mut composer, source.clone(), true);
+        assert!(
+            painted_shadow(&composer) > 0.5,
+            "a hovered selected filter chip lifts to Level1 (got {})",
+            painted_shadow(&composer)
+        );
+
+        source.emit_hover_exit();
+        build_filter_chip(&mut composer, source.clone(), true);
+        assert!(
+            painted_shadow(&composer) <= 0.001,
+            "leaving hover drops the shadow immediately (got {})",
+            painted_shadow(&composer)
+        );
+
+        source.emit_hover_enter();
+        build_filter_chip(&mut composer, source.clone(), true);
+        let mid = painted_shadow(&composer);
+        assert!(
+            mid < 0.5,
+            "hovering again ramps the lift in over the pair spec (painted {mid} right after the state change)"
+        );
+        settle_shadow(&mut composer, source.clone(), true);
+        assert!(
+            painted_shadow(&composer) > 0.5,
+            "and it arrives once the spec has run (got {})",
+            painted_shadow(&composer)
+        );
+    }
+
+    /// A disabled chip's outline is `OnSurface` at 12 % (`FlatDisabledOutlineColor` /
+    /// `FlatDisabledOutlineOpacity` and their per-variant names), not the enabled role's colour; an elevated
+    /// chip still carries no outline in any state.
+    #[test]
+    fn a_disabled_chip_outlines_with_on_surface_at_twelve_percent() {
+        let theme = crate::theme::WiniaTheme::colors();
+        let expected = ChipDefaults::disabled_outline(&theme);
+        assert_eq!(expected.a, 31, "12 % of 255 rounds to 31");
+
+        let (assist, a) = chip_container(Chip::assist(label("A"), || {}).enabled(false));
+        assert_eq!(outline_of(&assist, a), Some((1.0, expected)), "assist");
+        let (suggestion, s) = chip_container(Chip::suggestion(label("S"), || {}).enabled(false));
+        assert_eq!(outline_of(&suggestion, s), Some((1.0, expected)), "suggestion");
+        let (filter, f) = chip_container(Chip::filter(false, label("F"), || {}).enabled(false));
+        assert_eq!(outline_of(&filter, f), Some((1.0, expected)), "filter");
+        let (input, i) = chip_container(Chip::input(false, label("I"), || {}).enabled(false));
+        assert_eq!(outline_of(&input, i), Some((1.0, expected)), "input");
+
+        let (enabled, e) = chip_container(Chip::assist(label("A"), || {}));
+        assert_eq!(outline_of(&enabled, e), Some((1.0, theme.outline)), "enabled keeps its role colour");
+        let (elevated, el) = chip_container(Chip::elevated_assist(label("E"), || {}).enabled(false));
+        assert_eq!(outline_of(&elevated, el), None, "an elevated chip never outlines");
     }
 
     fn find_text_style(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> Option<(f32, FontWeight, f32, Option<f32>)> {
