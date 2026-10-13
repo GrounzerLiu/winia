@@ -15,6 +15,9 @@
 //!    with a minimum width of 80 — width, icon position and the label's alpha all follow one progress.
 //!    Hover it too: its elevation animates through the same rule (it used to jump). Switch the layout
 //!    direction in the settings sheet to watch the expanded FAB mirror.
+//! 6. The content-only extended FAB — material3's other overload. One caller-composed row instead of
+//!    the icon/text split: 20 dp of horizontal padding, an 80 dp floor, 56 dp tall, and nothing to
+//!    expand or collapse. The second FAB builds its own icon-plus-label row, gap and all.
 
 use letclone::clone;
 use winia::prelude::*;
@@ -194,6 +197,35 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                  with a minimum width of 80. Width, icon position and the label's alpha all follow one \
                  progress. Hover it: its elevation now animates through the same interaction-pair rule as \
                  the others — it used to jump. Switch the settings sheet's direction to watch it mirror.",
+            );
+
+            // ── 6: the content-only extended FAB ──
+            section_title(ctx, "6. Extended FAB, content-only — one row, no icon slot");
+            Row::new().spacing(20.0).build(ctx, |ctx| {
+                // The case this overload exists for: a label with no icon at all.
+                ExtendedFloatingActionButton::content(|ctx| Text::new("Create").build(ctx))
+                    .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
+                    .build(ctx);
+
+                // The row is the caller's, so an icon plus a label is just as easy — you write the gap.
+                ExtendedFloatingActionButton::content(|ctx| {
+                    Row::new()
+                        .spacing(8.0)
+                        .alignment(Alignment::Center)
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(PLUS_PATH).size(24.0).build(ctx);
+                            Text::new("Compose freely").build(ctx);
+                        });
+                })
+                .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
+                .build(ctx);
+            });
+            caption(
+                ctx,
+                "One caller-composed row instead of the icon/text split: 20 dp of horizontal padding, an \
+                 80 dp floor, 56 dp tall, and nothing to expand or collapse. The first is the case the \
+                 overload exists for — a label with no icon; the second shows the row is yours, so the \
+                 icon, the 8 dp gap and the order are all the caller's.",
             );
         });
 }
