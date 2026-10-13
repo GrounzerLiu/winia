@@ -2570,9 +2570,17 @@ mod tests {
             )
         };
         let (rest_below, rest_above, rest_left) = measure(1.0);
-        assert!(rest_left > 0, "rest 阴影应可见（左 1px）: {rest_left}");
-        assert!(rest_above > 0, "rest 阴影应可见（上 1px）: {rest_above}");
         let (hover_below, hover_above, hover_left) = measure(3.0);
+        eprintln!(
+            "probe elevation shadow: rest(1dp) below={rest_below} above={rest_above} left={rest_left} | \
+             hover(3dp) below={hover_below} above={hover_above} left={hover_left}"
+        );
+        // The light sits directly above the component (`draw_elevation_shadow`), so a shadow is thrown DOWN and
+        // to the sides: at 1 dp `above` measures 0 and only spills upward once the elevation is big enough to
+        // wrap around (3 dp measures 48). Before the light was moved, a 1 dp shadow was thrown up and left.
+        assert!(rest_left > 0, "rest 阴影应可见（左 1px）: {rest_left}");
+        assert!(rest_below > 0, "rest 阴影应可见（下 1px）: {rest_below}");
+        assert!(rest_below > rest_left, "rest 阴影应主要朝下: below={rest_below} left={rest_left}");
         assert!(hover_below > rest_below, "hover 下方阴影应高于 rest: rest={rest_below} hover={hover_below}");
         assert!(hover_above >= rest_above, "hover 上方阴影不应弱于 rest: rest={rest_above} hover={hover_above}");
         assert!(hover_left >= rest_left, "hover 左侧阴影不应弱于 rest: rest={rest_left} hover={hover_left}");

@@ -3597,8 +3597,14 @@ pub(crate) mod tests {
             }
             std::thread::sleep(Duration::from_millis(8));
             let lightness = color.peek().to_oklab()[1];
-            max_spring_gap = max_spring_gap.max((lightness - scalar.peek()).abs());
-            max_tween_gap = max_tween_gap.max((lightness - tweened.peek().to_oklab()[1]).abs());
+            // The first two frames are skipped: the three states are separate pushes, so one can start a frame
+            // later than another, and under load that phase offset showed up as a gap three times the budget
+            // while the spring was still moving fastest. This guard is about the CURVE the colour follows, so it
+            // starts once all three are running.
+            if frames >= 2 {
+                max_spring_gap = max_spring_gap.max((lightness - scalar.peek()).abs());
+                max_tween_gap = max_tween_gap.max((lightness - tweened.peek().to_oklab()[1]).abs());
+            }
             frames += 1;
         }
         let total = color.peek();

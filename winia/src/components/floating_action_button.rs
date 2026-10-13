@@ -474,9 +474,12 @@ mod tests {
 
     #[test]
     fn default_elevation_matches_material3_tokens() {
+        // `FabPrimaryContainerTokens`: `ContainerElevation`, `PressedContainerElevation` and
+        // `FocusedContainerElevation` are all `ElevationTokens.Level3` (6 dp); only the hovered one is
+        // `Level4` (8 dp). (This assertion used to read `(6, 12, 8, 8, 0)`, which the tokens never said.)
         assert_eq!(
             FloatingActionButtonElevation::default_elevation(),
-            FloatingActionButtonElevation::new(6.0, 12.0, 8.0, 8.0, 0.0)
+            FloatingActionButtonElevation::new(6.0, 6.0, 6.0, 8.0, 0.0)
         );
     }
 

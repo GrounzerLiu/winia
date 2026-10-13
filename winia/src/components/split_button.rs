@@ -1251,6 +1251,45 @@ mod tests {
         composer.arena_nodes()[root].children.clone()
     }
 
+    /// A half's VISUAL node: since `Button` reserves its 48 dp touch target in a wrapper node of its own
+    /// (`ModifierElement::MinimumInteractiveSize`), the row's children are targets whose visual box is their only
+    /// child. Tests that ask what a half PAINTS or how its content sits walk through this; tests about the pair's
+    /// geometry keep using the row's children, whose x is unchanged (the wrapper only shifts itself up by 4 dp to
+    /// centre a 40 dp visual inside the taller target).
+    fn half_visual(nodes: &[LayoutNode], node: usize) -> usize {
+        let is_target = nodes[node]
+            .modifier
+            .elements()
+            .iter()
+            .any(|el| matches!(el, crate::modifier::ModifierElement::MinimumInteractiveSize { .. }));
+        if is_target {
+            nodes[node].children.first().copied().unwrap_or(node)
+        } else {
+            node
+        }
+    }
+
+    /// A node's absolute position: the arena stores each position relative to its parent, so a test that wants
+    /// to sample the pixels of a nested node has to walk down from the root adding them up.
+    fn absolute_position(nodes: &[LayoutNode], root: usize, target: usize) -> Option<(f32, f32)> {
+        if root == target {
+            return Some((0.0, 0.0));
+        }
+        for &child in &nodes[root].children {
+            if let Some((x, y)) = absolute_position(nodes, child, target) {
+                return Some((nodes[child].position.x + x, nodes[child].position.y + y));
+            }
+        }
+        None
+    }
+
+    /// The two halves' visual nodes, measured and ready.
+    fn split_visuals(composer: &mut Composer) -> Vec<usize> {
+        let children = split_children(composer);
+        let nodes = composer.arena_nodes();
+        children.iter().map(|&c| half_visual(nodes, c)).collect()
+    }
+
     #[test]
     fn shape_for_state_is_material3s_shape_by_interaction() {
         let leading = SplitButtonDefaults::leading_shapes(ButtonSize::Small);
@@ -1282,7 +1321,7 @@ mod tests {
     fn a_resting_button_draws_its_resting_shape_and_no_state_layer() {
         let interaction = MutableInteractionSource::new();
         let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
-        let children = split_children(&mut composer);
+        let children = split_visuals(&mut composer);
         let leading = SplitButtonDefaults::leading_shapes(ButtonSize::Small);
         let trailing = SplitButtonDefaults::trailing_shapes(ButtonSize::Small);
         assert_eq!(
@@ -1300,7 +1339,7 @@ mod tests {
         // already picks the pressed shape, and the animation starts at its target.
         interaction.emit_press();
         let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
-        let children = split_children(&mut composer);
+        let children = split_visuals(&mut composer);
         let expected = SplitButtonDefaults::leading_shapes(ButtonSize::Small).pressed_shape;
         assert_eq!(
             drawn_backgrounds(&composer, children[0]),
@@ -1325,7 +1364,7 @@ mod tests {
             let interaction = MutableInteractionSource::new();
             let state = if checked { Some(State::new(true)) } else { None };
             let mut composer = compose_split_with_source(&interaction, state, LayoutDirection::Ltr);
-            let children = split_children(&mut composer);
+            let children = split_visuals(&mut composer);
             let backgrounds = drawn_backgrounds(&composer, children[1]);
             let layers = composer.arena_nodes()[children[1]].modifier.draw_wrap_nodes().count();
             (backgrounds, layers)
@@ -1372,13 +1411,10 @@ mod tests {
             .children
             .iter()
             .map(|i| {
-                let node = &nodes[*i];
-                (
-                    node.position.x,
-                    node.position.y,
-                    node.measured_size.width,
-                    node.measured_size.height,
-                )
+                let visual = half_visual(nodes, *i);
+                let (x, y) = absolute_position(nodes, root, visual).expect("the half's visual box");
+                let node = &nodes[visual];
+                (x, y, node.measured_size.width, node.measured_size.height)
             })
             .collect();
 
@@ -1503,10 +1539,11 @@ mod tests {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
         let root = composer.layout_root_idx().expect("root");
         let nodes = composer.arena_nodes();
-        let trailing = nodes[root].children[1];
+        let trailing = half_visual(nodes, nodes[root].children[1]);
+        let (ax, ay) = absolute_position(nodes, root, trailing).expect("the half's visual box");
         let (x, y, w) = (
-            nodes[trailing].position.x.round() as usize,
-            nodes[trailing].position.y.round() as usize,
+            ax.round() as usize,
+            ay.round() as usize,
             nodes[trailing].measured_size.width.round() as usize,
         );
         let mut surface = skia_safe::surfaces::raster_n32_premul((400, 200)).expect("surface");
@@ -1599,10 +1636,8 @@ mod tests {
                 interaction.emit_press();
             }
             let mut composer = compose_split_with_source(&interaction, None, LayoutDirection::Ltr);
-            split_children(&mut composer);
-            let root = composer.layout_root_idx().expect("root");
+            let buttons = split_visuals(&mut composer);
             let nodes = composer.arena_nodes();
-            let buttons = nodes[root].children.clone();
             let offsets: Vec<f32> = buttons
                 .iter()
                 .map(|b| {
@@ -1648,7 +1683,7 @@ mod tests {
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
             let root = composer.layout_root_idx().expect("root");
             let nodes = composer.arena_nodes();
-            let trailing = nodes[root].children[1];
+            let trailing = half_visual(nodes, nodes[root].children[1]);
             let panel = nodes[trailing].children.first().copied().expect("the content box");
             let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
             nodes[wrapper].position.x
@@ -1704,7 +1739,7 @@ mod tests {
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
             let root = composer.layout_root_idx().expect("root");
             let nodes = composer.arena_nodes();
-            let trailing = nodes[root].children[1];
+            let trailing = half_visual(nodes, nodes[root].children[1]);
             let panel = nodes[trailing].children.first().copied().expect("the content box");
             let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
             nodes[wrapper].position.x
@@ -1767,7 +1802,7 @@ mod tests {
                 composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
                 let root = composer.layout_root_idx().expect("root");
                 let nodes = composer.arena_nodes();
-                let trailing = nodes[root].children[1];
+                let trailing = half_visual(nodes, nodes[root].children[1]);
                 let panel = nodes[trailing].children.first().copied().expect("the content box");
                 let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
                 nodes[wrapper].position.x
@@ -1825,7 +1860,7 @@ mod tests {
                     },
                 );
             });
-            let children = split_children(&mut composer);
+            let children = split_visuals(&mut composer);
             drawn_backgrounds(&composer, children[1])
         };
         let inner = SplitButtonDefaults::inner_corner_size(ButtonSize::Small);
@@ -1904,7 +1939,7 @@ mod tests {
         composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
         let root = composer.layout_root_idx().expect("root");
         let nodes = composer.arena_nodes();
-        let leading = nodes[root].children[0];
+        let leading = half_visual(nodes, nodes[root].children[0]);
         let panel = nodes[leading].children.first().copied().expect("the content box");
         let wrapper = nodes[panel].children.first().copied().expect("the offset wrapper");
         let kids = nodes[wrapper].children.clone();
@@ -1918,4 +1953,5 @@ mod tests {
             "no spacing is added between the caller's children (measured {gap})"
         );
     }
+
 }
