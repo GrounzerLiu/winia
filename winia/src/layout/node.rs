@@ -1370,8 +1370,13 @@ fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: IntrinsicQuery
             return 0.0;
         };
         return match query {
-            IntrinsicQuery::MinWidth => para.min_intrinsic_width(),
-            IntrinsicQuery::MaxWidth => para.max_intrinsic_width(),
+            // Both width answers are CEILED, exactly like the layout path (`measure_and_cache_text` does
+            // `para.max_intrinsic_width().ceil()`): the paragraph's own width is fractional, while what the
+            // text needs when it lays out is that width rounded up. Answering with the raw fraction made a
+            // parent that shrinks to the intrinsic (`width(IntrinsicSize.Max)`) hand the label 28.2 and watch
+            // it wrap into two lines needing 29.0 — measured in a dropdown menu item ("复制" in `label_large`).
+            IntrinsicQuery::MinWidth => para.min_intrinsic_width().ceil(),
+            IntrinsicQuery::MaxWidth => para.max_intrinsic_width().ceil(),
             // The paragraph was laid out at `other` (the width the parent asked about), so its
             // height is the answer. `measure_and_cache_text` would round the same way.
             IntrinsicQuery::MinHeight | IntrinsicQuery::MaxHeight => {
@@ -4380,6 +4385,52 @@ mod intrinsic_tests {
             intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MinHeight, 200.0),
             "a single line has the same min and max height"
         );
+    }
+
+    /// A parent that shrinks to its child's intrinsic width (`width(IntrinsicSize.Max)`) must leave the text
+    /// on ONE line: the intrinsic it reads is the width it then hands over, so an answer narrower than the
+    /// laid-out line makes the text wrap inside its own intrinsic width.
+    ///
+    /// Measured before the fix, on "复制" in `label_large`: the intrinsic came back 28.2 while the line lays
+    /// out 29.0 wide, and the `IntrinsicSize::Max` column produced a 28.2-wide, 40-tall text — two stacked
+    /// glyphs. That is the dropdown menu item whose label the user saw running vertically.
+    #[test]
+    fn an_intrinsic_width_parent_leaves_its_text_on_one_line() {
+        for content in ["复制", "New file", "带图标", "⧉ 粘贴 Ctrl+V"] {
+            // (a) With room to spare: the text's own single-line size.
+            let roomy = text_in_a_column(content, Modifier::new().fill_max_width());
+            // (b) Shrunk to the intrinsic: the parent's width comes from the same answer it then gives.
+            let intrinsic = text_in_a_column(content, Modifier::new().width(IntrinsicSize::Max));
+            assert!(
+                intrinsic.0 >= roomy.0 - 0.001,
+                "{content:?}: an intrinsic-width parent gave {:?} where the line needs {:?}",
+                intrinsic,
+                roomy
+            );
+            assert_eq!(
+                intrinsic.1, roomy.1,
+                "{content:?}: the text must stay on one line (height {:?} against {:?})",
+                intrinsic.1, roomy.1
+            );
+        }
+    }
+
+    /// The `(width, height)` a text leaf ends up with inside a column carrying `modifier`.
+    fn text_in_a_column(content: &str, modifier: Modifier) -> (f32, f32) {
+        let mut composer = crate::runtime::composer::Composer::new();
+        let content = content.to_string();
+        composer.compose(move |ctx| {
+            crate::layout::components::Column::new()
+                .modifier(modifier.clone())
+                .build(ctx, |ctx| {
+                    crate::components::text::Text::new(content.clone()).build(ctx);
+                });
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let root = composer.layout_root_idx().expect("a root");
+        let nodes = composer.arena_nodes();
+        let leaf = nodes[root].children[0];
+        (nodes[leaf].measured_size.width, nodes[leaf].measured_size.height)
     }
 
     #[test]

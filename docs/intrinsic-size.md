@@ -421,3 +421,17 @@ Acceptance is by the existing suite: menu width 112 dp (icon menu) / 136 dp ("Co
 item widths, the segmented geometry and the tab row's own geometry (equal tab widths, indicator
 positions, RTL mirroring, scrollable natural widths) all had to stay put — they did.
 
+### 8.8 The leaf answers are CEILED (a later fix)
+
+The width answers a text leaf gives (`leaf_intrinsic`, `winia/src/layout/node.rs`) are rounded **up** —
+`para.max_intrinsic_width().ceil()` — because the paragraph's own width is fractional while what the text
+needs when it lays out is that width rounded up. The layout path always did this (`measure_and_cache_text`),
+so the two disagreed by up to one logical pixel, and a parent that shrinks to the intrinsic
+(`Modifier::width(IntrinsicSize::Max)`) hands over exactly the width the answer reported: a dropdown menu
+item's label got 28.2 and wrapped into two stacked glyphs needing 29.0, and "New file" got 50.23 against the
+51.0 its line lays out. Reported from a demo screenshot; the two tests that pin it are
+`layout::node::intrinsic_tests::an_intrinsic_width_parent_leaves_its_text_on_one_line` (four strings, each
+compared against the same text laid out with room to spare — fails without the `ceil` for "New file" alone)
+and `components::dropdown_menu::tests::a_menu_items_label_stays_on_one_line` (the user-visible case, with the
+item's width budget checked too).
+

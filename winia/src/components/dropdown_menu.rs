@@ -1272,6 +1272,53 @@ mod tests {
         );
     }
 
+    /// The user-visible half of the intrinsic fix: a menu item whose label sits between a leading and a
+    /// trailing icon must keep that label on ONE line inside the menu's own chain (`width(IntrinsicSize.Max)`
+    /// on the column, the label weighted in the row). Before the fix the label was handed its fractional
+    /// intrinsic width (28.2 for "复制") and wrapped into two stacked glyphs, which is exactly what the demo
+    /// screenshot showed.
+    ///
+    /// Teeth: removing the `ceil` from the text leaf's intrinsic answer (`layout/node.rs`, `leaf_intrinsic`)
+    /// fails the last assertion with the label two lines tall.
+    #[test]
+    fn a_menu_items_label_stays_on_one_line() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            crate::layout::components::Column::new()
+                .modifier(crate::modifier::Modifier::new().width(crate::layout::IntrinsicSize::Max))
+                .build(ctx, |ctx| {
+                    DropdownMenuItem::new("复制")
+                        .leading_icon(|ctx| {
+                            crate::components::text::Text::new("⧉").font_size(16.0).build(ctx);
+                        })
+                        .trailing_icon(|ctx| {
+                            crate::components::text::Text::new("Ctrl+C").font_size(12.0).build(ctx);
+                        })
+                        .build(ctx);
+                });
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 600.0));
+        let root = composer.layout_root_idx().expect("root");
+        let nodes = composer.arena_nodes();
+        // The item is the column's only child; its label is the weighted child of the item's row.
+        let item = nodes[root].children[0];
+        let label_column = nodes[item].children[1];
+        let label = nodes[label_column].children[0];
+        let label_size = nodes[label].measured_size;
+        assert!(
+            label_size.height < 2.0 * 19.0,
+            "the label must be one line tall, got {label_size:?} (item {:?})",
+            nodes[item].measured_size
+        );
+        // …and the item is wide enough for icon + padding + label + shortcut.
+        assert!(
+            nodes[item].measured_size.width >= 24.0 + 12.0 + label_size.width + 12.0 + 35.0 - 1.0,
+            "the item spans its label and the shortcut: item {:?}, label {:?}",
+            nodes[item].measured_size,
+            label_size
+        );
+    }
+
     #[test]
     fn menu_defaults_are_what_the_components_resolve_to() {
         let theme = crate::theme::WiniaTheme::colors();
