@@ -58,7 +58,9 @@ pub const FAB_MEDIUM_SIZE: f32 = 80.0;
 pub const FAB_LARGE_SIZE: f32 = 96.0;
 pub const FAB_ICON_SIZE: f32 = 24.0;
 pub const FAB_MEDIUM_ICON_SIZE: f32 = 28.0;
-pub const FAB_LARGE_ICON_SIZE: f32 = 32.0;
+/// `FloatingActionButtonDefaults.LargeIconSize` (`material3/FloatingActionButton.kt:509-510`) is
+/// 36 dp: the source marks `FabLargeTokens.IconSize` (32) as incorrect.
+pub const FAB_LARGE_ICON_SIZE: f32 = 36.0;
 
 /// Container/content colors for a FAB, including disabled colors.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -488,7 +490,7 @@ mod tests {
         assert_eq!(FloatingActionButtonSize::Large.container_size(), 96.0);
         assert_eq!(FloatingActionButtonSize::Regular.icon_size(), 24.0);
         assert_eq!(FloatingActionButtonSize::Medium.icon_size(), 28.0);
-        assert_eq!(FloatingActionButtonSize::Large.icon_size(), 32.0);
+        assert_eq!(FloatingActionButtonSize::Large.icon_size(), 36.0);
     }
 
     #[test]

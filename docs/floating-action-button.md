@@ -21,7 +21,9 @@ FloatingActionButton::medium();  // 80dp，M3 Expressive
 FloatingActionButton::large();   // 96dp
 ```
 
-`FloatingActionButtonSize::icon_size()` 提供推荐图标尺寸：Small/Regular 为 24dp，Medium 为 28dp，Large 为 32dp。
+`FloatingActionButtonSize::icon_size()` gives the recommended icon size: 24 dp for Small/Regular,
+28 dp for Medium, and 36 dp for Large — material3's corrected `LargeIconSize`
+(`FloatingActionButton.kt:509-510`), which overrides the 32 dp token it calls incorrect.
 
 ## 颜色
 
