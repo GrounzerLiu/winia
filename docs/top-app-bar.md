@@ -108,6 +108,14 @@ Column::new()
     .build(ctx, content);
 ```
 
+## BottomAppBar (not implemented)
+
+Material 3's `BottomAppBar` — the other half of the `AppBar.kt` family — can embed a Floating
+Action Button in the bar and colours it with `BottomAppBarDefaults.bottomAppBarFabColor`
+(`AppBar.kt:2155-2156`, the `FabSecondaryContainerTokens.ContainerColor` = SecondaryContainer
+token). winia does not have the component yet; `FloatingActionButtonDefaults::bottom_app_bar_elevation()`
+(the all-zero shadow set) is already in place for that use. Deferred.
+
 ## 测试
 
 ```bash

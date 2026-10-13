@@ -56,6 +56,13 @@ Scaffold
 
 content slot 当前接收 `ScaffoldContentPadding` 的显式值，但不接收运行期测得的 top/bottom bar 高度；布局 policy 会自动应用这些高度。需要根据实时 bar 高度改变内容内部 padding 时，应由 content 本身与共享状态协作。
 
+## Deferred
+
+- `ScaffoldFabPosition::Start` / `EndOverlay` — upstream `FabPosition` is a four-value value class
+  (`Start` / `Center` / `End` / `EndOverlay`, `Scaffold.kt:307-331`); winia's enum
+  (`winia/src/components/scaffold.rs:18`) exposes `End` and `Center` only. `EndOverlay` is the
+  position that overlaps the bottom bar (`Scaffold.kt:231`); `Start` pins the FAB to the start edge.
+
 ## 测试
 
 ```bash
