@@ -204,13 +204,13 @@ impl IconButtonColors {
                 let content = crate::theme::WiniaTheme::content_color();
                 Self::new(transparent, content, transparent, alpha(content, 0.38))
             }
+            // `IconButtonDefaults.outlinedIconButtonColors` hands the icon `LocalContentColor.current`
+            // too, exactly like the standard style (`material3/IconButtonDefaults.kt:505-513`). The
+            // token's `OnSurfaceVariant` is what the VIBRANT set pins, and using it here made the plain
+            // and the vibrant outlined button indistinguishable.
             IconButtonStyle::Outlined => {
-                Self::new(
-                    transparent,
-                    theme.on_surface_variant,
-                    transparent,
-                    disabled_content,
-                )
+                let content = crate::theme::WiniaTheme::content_color();
+                Self::new(transparent, content, transparent, alpha(content, 0.38))
             }
             IconButtonStyle::Filled => {
                 Self::new(theme.primary, theme.on_primary, disabled_container, disabled_content)
@@ -258,14 +258,12 @@ impl IconButtonDefaults {
 
     /// Outlined 边框：OutlineVariant 色；disabled 为 38% alpha；
     /// 宽度按尺寸变体（token OutlinedOutlineWidth）
-    pub fn outlined_border(theme: &ThemeColors, enabled: bool, width: f32) -> ButtonBorder {
-        // OutlinedIconButtonTokens.OutlineColor = OutlineVariant
-        let c = theme.outline_variant;
-        let color = if enabled {
-            c
-        } else {
-            Color::from_argb((c.a as f32 * 0.38) as u8, c.r, c.g, c.b)
-        };
+    /// `IconButtonDefaults.outlinedIconButtonBorder` (`material3/IconButtonDefaults.kt:819-826`): the
+    /// plain border takes `LocalContentColor`, NOT the token's `OutlineVariant` — that one belongs to
+    /// the vibrant border, and using it here made the plain and vibrant outlines the same colour.
+    pub fn outlined_border(_theme: &ThemeColors, enabled: bool, width: f32) -> ButtonBorder {
+        let c = crate::theme::WiniaTheme::content_color();
+        let color = if enabled { c } else { Self::faded(c, 0.38) };
         ButtonBorder::new(width, color)
     }
 
@@ -574,17 +572,22 @@ mod tests {
     #[test]
     fn default_colors_per_style() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        // The standard style hands the icon `LocalContentColor.current`, exactly as
-        // `IconButtonDefaults.iconButtonColors` does, so it has to resolve while composing. The
-        // filled/tonal/outlined styles use fixed roles and need no composition.
+        // The standard and outlined styles both hand the icon `LocalContentColor.current`, exactly as
+        // `IconButtonDefaults` does, so they have to resolve while composing; only the filled styles use
+        // fixed roles. The VIBRANT sets are what pin `OnSurfaceVariant`, so the plain outlined button
+        // must not read it — that collision made the plain and vibrant buttons indistinguishable.
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |_ctx| {
+                let local = WiniaTheme::content_color();
                 let s = IconButtonDefaults::icon_button_colors(&theme);
                 assert_eq!(s.container.a, 0, "standard container is transparent");
-                let local = WiniaTheme::content_color();
                 assert_eq!(s.content, local, "standard content follows LocalContentColor");
                 assert_eq!(s.disabled_content.a, (local.a as f32 * 0.38) as u8);
+
+                let o = IconButtonDefaults::outlined_icon_button_colors(&theme);
+                assert_eq!(o.container.a, 0, "outlined container is transparent");
+                assert_eq!(o.content, local, "outlined content follows LocalContentColor");
             });
         });
         let f = IconButtonDefaults::filled_icon_button_colors(&theme);
@@ -593,9 +596,6 @@ mod tests {
         let t = IconButtonDefaults::filled_tonal_icon_button_colors(&theme);
         assert_eq!(t.container, theme.secondary_container);
         assert_eq!(t.content, theme.on_secondary_container);
-        let o = IconButtonDefaults::outlined_icon_button_colors(&theme);
-        assert_eq!(o.container.a, 0);
-        assert_eq!(o.content, theme.on_surface_variant);
     }
 
     #[test]
@@ -649,18 +649,37 @@ mod tests {
     }
 
     #[test]
-    fn outlined_border_disabled_alpha() {
+    fn outlined_border_follows_the_content_colour() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let enabled = IconButtonDefaults::outlined_border(&theme, true, 1.0);
-        assert_eq!(enabled.color, theme.outline_variant, "Outlined 边框 = OutlineVariant");
-        let disabled = IconButtonDefaults::outlined_border(&theme, false, 1.0);
-        assert_eq!(disabled.color.a, (theme.outline_variant.a as f32 * 0.38) as u8);
-        assert_eq!(
-            IconButtonDefaults::outlined_border(&theme, true, IconButtonSize::Large.outline_width())
-                .width,
-            2.0,
-            "Large 边框 2dp"
-        );
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |_ctx| {
+                let local = WiniaTheme::content_color();
+                let enabled = IconButtonDefaults::outlined_border(&theme, true, 1.0);
+                assert_eq!(enabled.color, local, "the plain outline takes LocalContentColor");
+                let disabled = IconButtonDefaults::outlined_border(&theme, false, 1.0);
+                assert_eq!(disabled.color.a, (local.a as f32 * 0.38) as u8);
+                assert_eq!(
+                    IconButtonDefaults::outlined_border(
+                        &theme,
+                        true,
+                        IconButtonSize::Large.outline_width()
+                    )
+                    .width,
+                    2.0,
+                    "Large outline is 2 dp"
+                );
+                // The VIBRANT border is the one that pins the token's OutlineVariant — the plain one
+                // must differ from it, or the two buttons look the same.
+                let vibrant =
+                    IconButtonDefaults::outlined_icon_button_vibrant_border(&theme, true, 1.0);
+                assert_eq!(vibrant.color, theme.outline_variant);
+                assert_ne!(
+                    enabled.color, vibrant.color,
+                    "plain and vibrant outlines must not be the same colour"
+                );
+            });
+        });
     }
 
     #[test]
