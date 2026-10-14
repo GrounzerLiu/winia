@@ -1543,8 +1543,17 @@ fn render_pass1(
         }
     }
 
-    // Ripple indication — above content, inside shape/scroll clipping
-    draw_ripple(node, canvas, x, y, w, h);
+    // Ripple indication — above content, inside shape/scroll clipping. `paint_rect`, so the ripple
+    // matches the container that was painted: a node grown to the 48 dp touch target paints its 40 dp
+    // container, and a ripple spanning the node would spill outside it.
+    draw_ripple(
+        node,
+        canvas,
+        paint_rect.x(),
+        paint_rect.y(),
+        paint_rect.width(),
+        paint_rect.height(),
+    );
 
     // Wrapping draw nodes, after half (exp/draw-wrap-node): above children and
     // above ripple, inside the scroll translate (same stack as ripple — the node
