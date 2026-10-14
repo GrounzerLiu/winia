@@ -173,7 +173,9 @@ pub struct IconToggleButton {
     enabled: bool,
     colors: Option<IconToggleButtonColors>,
     interaction_source: Option<MutableInteractionSource>,
-    shape: Shape,
+    /// `None` means "use the size's Round container and morph it on press", which is what
+    /// `IconButton`'s `shape: Option<Shape>` does; `Some` pins an explicit shape and skips the morph.
+    shape: Option<Shape>,
     border: Option<ButtonBorder>,
     size_variant: IconButtonSize,
     modifier: Modifier,
@@ -188,7 +190,7 @@ impl IconToggleButton {
             enabled: true,
             colors: None,
             interaction_source: None,
-            shape: IconButtonDefaults::shape(),
+            shape: None,
             border: None,
             size_variant: IconButtonSize::Small,
             modifier: Modifier::new(),
@@ -238,7 +240,7 @@ impl IconToggleButton {
     }
 
     pub fn shape(mut self, shape: Shape) -> Self {
-        self.shape = shape;
+        self.shape = Some(shape);
         self
     }
 
@@ -264,6 +266,7 @@ impl IconToggleButton {
         ctx.changed(&self.enabled);
         ctx.changed(&self.checked);
         ctx.changed(&self.colors);
+        ctx.changed(&self.shape);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self
@@ -274,15 +277,36 @@ impl IconToggleButton {
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let container = colors.container_color(self.enabled, self.checked);
         let content_color = colors.content_color(self.enabled, self.checked);
-        let shape = self.shape;
-
         let size = self.size_variant.container_size();
+
+        // The press morph, spelled as `IconButton` spells it: with no explicit shape the container is the
+        // size's Round one, so the resting radius is half the container, and a press interpolates it down to
+        // that size's `PressedContainerShape`. `Shape::Circle` carries no radius to interpolate, hence the
+        // arithmetic; an explicit shape is pinned and skips the morph entirely.
+        let shape = match self.shape {
+            Some(explicit) => explicit,
+            None => {
+                let round = size / 2.0;
+                let morph = ctx.animate_float_as_state(
+                    if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
+                    crate::animation::AnimationSpec::Spring(
+                        crate::animation::SpringSpec::spatial_fast(),
+                    ),
+                );
+                let pressed = self.size_variant.pressed_container_radius();
+                Shape::rounded(round + (pressed - round) * morph.get())
+            }
+        };
+
         // The node is grown to the 48 dp touch target and the paint is inset back to the container by the
         // offset that publishes — without this an IconToggleButton lost both the target and 8 dp of its own
-        // box when the Small container went 48 -> 40.
+        // box when the Small container went 48 -> 40. `.clip(shape)` sits before the background, as in
+        // compose (`IconButton.kt:180`), and the renderer clips at `paint_rect` — the token container, not
+        // the touch target.
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
             .size(size, size)
+            .clip(shape)
             .background(container, shape);
         let border = self.border.or_else(|| {
             if self.style == IconButtonStyle::Outlined {
@@ -345,7 +369,9 @@ impl IconToggleButton {
         self.colors
     }
     pub fn get_shape(&self) -> Shape {
-        self.shape
+        // The resting shape is the size's Round container, so a caller who never pinned one still gets
+        // what the button paints while it is not pressed.
+        self.shape.unwrap_or_else(IconButtonDefaults::shape)
     }
     pub fn get_border(&self) -> Option<ButtonBorder> {
         self.border
@@ -394,6 +420,108 @@ mod tests {
             (widest, tallest),
             (48.0, 48.0),
             "the node is the 48 dp touch target, with the token container painted inside it"
+        );
+    }
+
+    /// The parity half of `IconButton`'s `.clip(shape)`: without it a toggle button's ripple and children
+    /// spill past the container's corners.
+    #[test]
+    fn the_container_is_clipped_to_its_shape() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                IconToggleButton::new(false)
+                    .on_checked_change(|_| {})
+                    .build(ctx, |ctx| {
+                        crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                            .build(ctx);
+                    });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let clipped = composer.arena_nodes().iter().any(|node| {
+            node.modifier
+                .elements()
+                .iter()
+                .any(|el| matches!(el, crate::modifier::ModifierElement::Clip { .. }))
+        });
+        assert!(
+            clipped,
+            "the container carries a clip, so its children cannot spill past the corners"
+        );
+    }
+
+    /// The same press morph `IconButton` has. Round is CornerFull over the token container, so at rest the
+    /// radius is half the container and a press interpolates down to that size's PressedContainerShape —
+    /// deleting the morph leaves the radius at 20 and fails this test.
+    #[test]
+    fn a_press_morphs_the_container_shape_over_time() {
+        // `update_animations` below drives the process-wide table, which `clear_all_animations` (200+ call
+        // sites) empties for everyone — so this holds the same lock the animation tests take.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::new(false)
+                        .on_checked_change(|_| {})
+                        .interaction_source(src.clone())
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                .build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        let radius = |composer: &crate::runtime::composer::Composer| -> f32 {
+            let painted = composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                    _ => None,
+                })
+            });
+            match painted {
+                Some(Shape::RoundedRect { corner_radius }) => corner_radius,
+                other => panic!("the container should be a rounded rect, got {other:?}"),
+            }
+        };
+
+        build(&mut composer);
+        // Round over the token container: the paint is inset back to 40 dp inside the 48 dp touch target.
+        assert_eq!(radius(&composer), 20.0, "at rest the container is Round");
+
+        source.emit_press();
+        build(&mut composer);
+        // The morph must be REGISTERED, and the shape must not have switched yet. `assert_ne!` on its own
+        // would also pass if no animation had started at all: the resting radius is 20, not 8.
+        assert!(
+            crate::animation::is_animating(),
+            "pressing registers the shape morph"
+        );
+        assert_ne!(
+            radius(&composer),
+            8.0,
+            "a press starts a morph instead of switching the shape"
+        );
+
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        assert!(
+            (radius(&composer) - 8.0).abs() < 0.5,
+            "and it arrives at Small's PressedContainerShape, got {}",
+            radius(&composer)
         );
     }
 
