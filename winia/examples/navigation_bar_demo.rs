@@ -130,11 +130,17 @@ fn navigation_bar_demo(ctx: &mut ComposeCtx) {
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new()
-            .size(720.0, 484.0)
-            .title("Navigation Bar Demo")
-            .build(ctx, |ctx| {
-                settings::shell("Navigation Bar Demo", ctx, navigation_bar_demo);
-            });
+        // `settings::shell` switches the theme mode through `set_system_dark_mode`, which only wakes the
+        // compositions that did a TRACKED read of the system theme — i.e. those inside `WiniaTheme::auto`
+        // (`theme.rs`: "Wake every window that follows the system (the tracked read in the content
+        // wrapper)"). Without this wrapper the sheet's Auto option pins nothing and looks broken.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(720.0, 484.0)
+                .title("Navigation Bar Demo")
+                .build(ctx, |ctx| {
+                    settings::shell("Navigation Bar Demo", ctx, navigation_bar_demo);
+                });
+        });
     });
 }

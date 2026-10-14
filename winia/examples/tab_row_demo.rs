@@ -208,11 +208,17 @@ Column::new()
 
 fn main() {
     winia::run_app!(|ctx| {
-        Window::new()
-            .size(500.0, 564.0)
-            .title("TabRow Demo")
-            .build(ctx, |ctx| {
-                settings::shell("TabRow Demo", ctx, tab_row_demo);
-            });
+        // `settings::shell`'s Auto option goes through `set_system_dark_mode`, which only wakes the
+        // compositions that did a TRACKED read of the system theme — those inside `WiniaTheme::auto`
+        // (`theme.rs`: "Wake every window that follows the system (the tracked read in the content
+        // wrapper)"). Without that wrapper the Auto option has nothing to wake and looks broken.
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(500.0, 564.0)
+                .title("TabRow Demo")
+                .build(ctx, |ctx| {
+                    settings::shell("TabRow Demo", ctx, tab_row_demo);
+                });
+        });
     });
 }
