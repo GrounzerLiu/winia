@@ -447,8 +447,17 @@ fn parse_svg_attr_len(tag: &str, name: &str) -> Option<f32> {
         return None;
     }
     let value = after[quote.len_utf8()..].split(quote).next()?;
-    let num: String = value.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
-    num.parse::<f32>().ok()
+    // Only a bare number is a length. This used to collect the leading digit-ish characters and parse those,
+    // so `width="100%"` came out as 100 and `width="2em"` as 2 — an intrinsic size nobody asked for. The doc
+    // above already promises `None` for anything that is not a plain number.
+    let numeric = !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+');
+    if !numeric {
+        return None;
+    }
+    value.parse::<f32>().ok()
 }
 
 /// 在开标签内查找 `name=`，要求属性名前是空白/引号/标签开头——

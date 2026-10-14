@@ -45,7 +45,7 @@ Icon::svg_path(ARROW_BACK).auto_mirror(true).build(ctx);
 ```
 
 常用链式方法：`tint` / `auto_mirror` / `size` / `content_description`
-（当前存储，semantics 实现后接入）/ `modifier` / 四个轴方法（feature 启用时）。
+(resolved against the content colour; an undescribed icon publishes no semantics node) / `modifier` / the four axis methods (with the symbol features on).
 
 ## 3. 实现细节
 
@@ -95,7 +95,7 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
 - 无内置默认图标；Compose 默认带 `Icons.Filled/Outlined/...`。
 - 来源不同：Compose 是 `ImageVector`；本实现是 SVG 文档/文件 + 字体符号。
 - `autoMirror` 是全局属性而非 AutoMirrored 变体（按需开启）。
-- `contentDescription` 仅存储，semantics 树未实现（全框架缺口）。
+- `contentDescription` publishes an `Image` semantics node; an icon without one stays out of the tree entirely, which is Compose's decorative case rather than "announced as empty".
 - 可变轴动画逐帧生成新 TextBlob（有缓存但连续动画会持续 miss）；
   后续可做离屏栅格化/位图缓存。
 - 文件缓存不监听 mtime 变化（进程内同一路径复用首次解码结果）。

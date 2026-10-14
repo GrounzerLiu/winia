@@ -846,7 +846,7 @@ mod inject_tests_extra {
         // 嵌套 content 闭包内语句也注入（不同 id——继续递增）
         let body: syn::Block = syn::parse_quote!({
             Row::new().build(ctx, |ctx| {
-                Icon::new(crate::icon::IconSource::Empty).build(ctx);
+                Icon::svg_path("M0 0h1v1z").build(ctx);
             });
         });
         let mut counter = (loc_hash as u32).wrapping_add(1);

@@ -72,7 +72,7 @@ pub struct Icon {
     source: IconSource,
     tint: Tint,
     auto_mirror: bool,
-    size: Option<f32>,
+    size: Option<crate::layout::SizeValue>,
     content_description: Option<String>,
     axes: SymbolAxes,
     modifier: Modifier,
@@ -123,9 +123,11 @@ impl Icon {
         self
     }
 
-    /// 覆盖尺寸（默认按源固有尺寸，失败回退 24×24）
-    pub fn size(mut self, size: f32) -> Self {
-        self.size = Some(size);
+    /// Override the size. Takes whatever `Modifier::size` takes — `f32`, `Dimension`, or a `SizeValue`
+    /// including a `Dynamic` closure — so an icon can follow a size animated at LAYOUT time without
+    /// recomposing. Unset, the source's own measurement is used (24×24 when it has none).
+    pub fn size(mut self, size: impl Into<crate::layout::SizeValue>) -> Self {
+        self.size = Some(size.into());
         self
     }
 
@@ -202,11 +204,18 @@ impl Icon {
             Tint::None if self.source.carries_no_colour() => Some(content_color),
             other => other.resolve(&self.source, content_color),
         };
-        let (w, h) = self
-            .size
-            .map(|s| (s, s))
-            .or_else(|| self.source.intrinsic_size())
-            .unwrap_or((24.0, 24.0));
+        // An explicit size applies to both axes; otherwise the source's own measurement wins, which for an
+        // SVG document need not be square.
+        let (width, height) = match self.size.clone() {
+            Some(size) => (size.clone(), size),
+            None => {
+                let (w, h) = self.source.intrinsic_size().unwrap_or((24.0, 24.0));
+                (
+                    crate::layout::SizeValue::from(w),
+                    crate::layout::SizeValue::from(h),
+                )
+            }
+        };
         let spec = IconSpec {
             source: self.source,
             tint,
@@ -216,7 +225,10 @@ impl Icon {
         // An icon that was given a description is an image with a name; one without is decorative
         // and must stay out of the semantics tree entirely (Compose: a null `contentDescription` is
         // "not announced", which is not the same as "announced as empty").
-        let mut modifier = Modifier::new().size(w, h);
+        // The caller's modifier goes FIRST so the component's own semantics land after it — the order
+        // `image.rs` uses, and the one that matters when a caller supplies their own `content_description`:
+        // the component's name wins either way, instead of depending on which component you reached for.
+        let mut modifier = self.modifier.then(Modifier::new().size(width, height));
         if let Some(description) = self.content_description.as_deref() {
             modifier = modifier.semantics(
                 crate::semantics::SemanticsConfig::new()
@@ -224,7 +236,7 @@ impl Icon {
                     .content_description(description),
             );
         }
-        let modifier = modifier.draw_icon(spec).then(self.modifier);
+        let modifier = modifier.draw_icon(spec);
         let key = ctx.next_key();
         // `start_leaf` / `end_node`, as `image.rs` does. A restartable group around an EMPTY body only adds
         // group bookkeeping — the body has already run — and reads like a body that was skipped. The
