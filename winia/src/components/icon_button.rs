@@ -99,8 +99,13 @@ impl IconButtonColors {
         let disabled_container = alpha(theme.on_surface, 0.10);
         let disabled_content = alpha(theme.on_surface, 0.38);
         match style {
+            // `IconButtonDefaults.iconButtonColors` hands the icon `LocalContentColor.current`
+            // (`material3/IconButtonDefaults.kt:43-46`), so a standard icon button follows the
+            // surface it sits on rather than a fixed role. `theme.on_surface` was neither that nor
+            // the token (`StandardIconButtonTokens.Color` is `OnSurfaceVariant`).
             IconButtonStyle::Standard => {
-                Self::new(transparent, theme.on_surface, transparent, disabled_content)
+                let content = crate::theme::WiniaTheme::content_color();
+                Self::new(transparent, content, transparent, alpha(content, 0.38))
             }
             IconButtonStyle::Outlined => {
                 Self::new(
@@ -273,6 +278,12 @@ impl IconButton {
         ctx.changed(&self.style);
         ctx.changed(&self.enabled);
         ctx.changed(&self.colors);
+        // Declared because `build` reads them below: the Skip contract is a whitelist, so a
+        // parameter that changes without being declared here leaves a Clean slot skipping straight
+        // past the new value (the container size, the background/border shape, the border).
+        ctx.changed(&self.size_variant);
+        ctx.changed(&self.shape);
+        ctx.changed(&self.border);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self
@@ -370,9 +381,19 @@ mod tests {
     #[test]
     fn default_colors_per_style() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
-        let s = IconButtonDefaults::icon_button_colors(&theme);
-        assert_eq!(s.container.a, 0, "标准版容器透明");
-        assert_eq!(s.content, theme.on_surface);
+        // The standard style hands the icon `LocalContentColor.current`, exactly as
+        // `IconButtonDefaults.iconButtonColors` does, so it has to resolve while composing. The
+        // filled/tonal/outlined styles use fixed roles and need no composition.
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |_ctx| {
+                let s = IconButtonDefaults::icon_button_colors(&theme);
+                assert_eq!(s.container.a, 0, "standard container is transparent");
+                let local = WiniaTheme::content_color();
+                assert_eq!(s.content, local, "standard content follows LocalContentColor");
+                assert_eq!(s.disabled_content.a, (local.a as f32 * 0.38) as u8);
+            });
+        });
         let f = IconButtonDefaults::filled_icon_button_colors(&theme);
         assert_eq!(f.container, theme.primary);
         assert_eq!(f.content, theme.on_primary);
@@ -382,6 +403,50 @@ mod tests {
         let o = IconButtonDefaults::outlined_icon_button_colors(&theme);
         assert_eq!(o.container.a, 0);
         assert_eq!(o.content, theme.on_surface_variant);
+    }
+
+    #[test]
+    fn a_size_change_reaches_the_restartable_group() {
+        // `size_variant` is read by `build` (container size and outlined border width), so it must be
+        // declared with `ctx.changed`: the Skip contract is a whitelist, and an undeclared parameter
+        // that changes leaves a Clean slot skipping straight past the new value.
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let size = crate::runtime::state::State::new(IconButtonSize::Small);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let widest = |composer: &crate::runtime::composer::Composer| -> f32 {
+            composer
+                .arena_nodes()
+                .iter()
+                .map(|node| node.measured_size.width)
+                .fold(0.0f32, f32::max)
+        };
+        let mut compose = |composer: &mut crate::runtime::composer::Composer| {
+            let chosen = size.get();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconButton::new()
+                        .size(chosen)
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                .build(ctx);
+                        });
+                });
+            });
+        };
+        let constraints = crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0);
+        compose(&mut composer);
+        composer.layout(constraints);
+        assert_eq!(widest(&composer), 48.0, "Small is a 48 dp container");
+
+        size.update(|s| *s = IconButtonSize::Large);
+        compose(&mut composer);
+        composer.layout(constraints);
+        assert_eq!(
+            widest(&composer),
+            96.0,
+            "the new size reaches the slot instead of being skipped"
+        );
     }
 
     #[test]
