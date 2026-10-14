@@ -86,6 +86,42 @@ impl IconButtonSize {
     pub fn container_width(self, option: IconButtonWidthOption) -> f32 {
         self.icon_size() + self.horizontal_space(option)
     }
+
+    /// `ContainerShapeRound` / `ContainerShapeSquare` for this size. `Round` is `CornerFull` at every
+    /// size; `Square` is the size's rounded-rectangle token (CornerMedium / CornerLarge /
+    /// CornerExtraLarge).
+    pub fn container_shape(self, family: IconButtonShape) -> Shape {
+        match family {
+            IconButtonShape::Round => Shape::Circle,
+            IconButtonShape::Square => match self {
+                IconButtonSize::XSmall | IconButtonSize::Small => Shape::rounded(12.0),
+                IconButtonSize::Medium => Shape::rounded(16.0),
+                IconButtonSize::Large | IconButtonSize::XLarge => Shape::rounded(28.0),
+            },
+        }
+    }
+
+    /// `PressedContainerShape` for this size — the shape the container morphs to while pressed
+    /// (CornerSmall / CornerMedium / CornerLarge).
+    ///
+    /// Note: these tokens exist in the material3 token set but nothing in the compose snapshot reads
+    /// them yet, so this shape and the morph below are ours until upstream wires them up.
+    pub fn pressed_container_shape(self) -> Shape {
+        match self {
+            IconButtonSize::XSmall | IconButtonSize::Small => Shape::rounded(8.0),
+            IconButtonSize::Medium => Shape::rounded(12.0),
+            IconButtonSize::Large | IconButtonSize::XLarge => Shape::rounded(16.0),
+        }
+    }
+}
+
+/// Which of a size's two container shapes to use — `ContainerShapeRound` or `ContainerShapeSquare`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconButtonShape {
+    /// `CornerFull`: a circle, for all sizes.
+    Round,
+    /// The size's rounded-rectangle token.
+    Square,
 }
 
 /// `IconButtonWidthOption` (`material3/IconButtonDefaults.kt:886-905`): how much horizontal room the
@@ -272,7 +308,8 @@ pub struct IconButton {
     enabled: bool,
     colors: Option<IconButtonColors>,
     interaction_source: Option<MutableInteractionSource>,
-    shape: Shape,
+    shape: Option<Shape>,
+    shape_family: IconButtonShape,
     border: Option<ButtonBorder>,
     size_variant: IconButtonSize,
     width_option: IconButtonWidthOption,
@@ -288,7 +325,8 @@ impl IconButton {
             enabled: true,
             colors: None,
             interaction_source: None,
-            shape: IconButtonDefaults::shape(),
+            shape: None,
+            shape_family: IconButtonShape::Round,
             border: None,
             size_variant: IconButtonSize::Small,
             width_option: IconButtonWidthOption::Uniform,
@@ -337,7 +375,13 @@ impl IconButton {
     }
 
     pub fn shape(mut self, shape: Shape) -> Self {
-        self.shape = shape;
+        self.shape = Some(shape);
+        self
+    }
+
+    /// The size's shape family — `Round` (the default) or `Square`. An explicit `shape()` wins.
+    pub fn shape_family(mut self, family: IconButtonShape) -> Self {
+        self.shape_family = family;
         self
     }
 
@@ -378,6 +422,7 @@ impl IconButton {
         ctx.changed(&self.shape);
         ctx.changed(&self.border);
         ctx.changed(&self.width_option);
+        ctx.changed(&self.shape_family);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self
@@ -388,7 +433,16 @@ impl IconButton {
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let container = colors.container_color(self.enabled);
         let content_color = colors.content_color(self.enabled);
-        let shape = self.shape;
+        // The container's shape: an explicit `shape()` wins, otherwise the size's shape family. A press
+        // morphs it to the size's `PressedContainerShape` (upstream has the token but no consumer yet).
+        let rest = self
+            .shape
+            .unwrap_or_else(|| self.size_variant.container_shape(self.shape_family));
+        let shape = if interaction.state(self.enabled).pressed {
+            self.size_variant.pressed_container_shape()
+        } else {
+            rest
+        };
 
         // Compose: `.minimumInteractiveComponentSize().size(smallContainerSize())`
         // (`material3/IconButton.kt:178-179`) — the token container (40 dp tall for Small) sits
@@ -464,6 +518,7 @@ impl IconButton {
     }
     pub fn get_shape(&self) -> Shape {
         self.shape
+            .unwrap_or_else(|| self.size_variant.container_shape(self.shape_family))
     }
     pub fn get_border(&self) -> Option<ButtonBorder> {
         self.border
@@ -671,6 +726,94 @@ mod tests {
         assert_eq!(IconButtonSize::XLarge.container_width(Wide), 184.0);
         assert_eq!(IconButtonSize::Small.horizontal_space(Narrow), 8.0);
         assert_eq!(IconButtonSize::Large.horizontal_space(Uniform), 64.0);
+    }
+
+    #[test]
+    fn shape_families_and_pressed_shapes_match_the_tokens() {
+        for size in [
+            IconButtonSize::XSmall,
+            IconButtonSize::Small,
+            IconButtonSize::Medium,
+            IconButtonSize::Large,
+            IconButtonSize::XLarge,
+        ] {
+            assert_eq!(
+                size.container_shape(IconButtonShape::Round),
+                Shape::Circle,
+                "ContainerShapeRound is CornerFull at every size"
+            );
+        }
+        assert_eq!(
+            IconButtonSize::Small.container_shape(IconButtonShape::Square),
+            Shape::rounded(12.0),
+            "ContainerShapeSquare is CornerMedium for Small"
+        );
+        assert_eq!(
+            IconButtonSize::Medium.container_shape(IconButtonShape::Square),
+            Shape::rounded(16.0)
+        );
+        assert_eq!(
+            IconButtonSize::XLarge.container_shape(IconButtonShape::Square),
+            Shape::rounded(28.0)
+        );
+        // PressedContainerShape: CornerSmall / CornerMedium / CornerLarge.
+        assert_eq!(
+            IconButtonSize::Small.pressed_container_shape(),
+            Shape::rounded(8.0)
+        );
+        assert_eq!(
+            IconButtonSize::Medium.pressed_container_shape(),
+            Shape::rounded(12.0)
+        );
+        assert_eq!(
+            IconButtonSize::XLarge.pressed_container_shape(),
+            Shape::rounded(16.0)
+        );
+    }
+
+    #[test]
+    fn a_press_morphs_the_container_shape() {
+        // The container paints through `background(color, shape)`, so the shape its node carries is the
+        // one a press should have morphed.
+        let painted = |source: &MutableInteractionSource| -> Option<Shape> {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let src = source.clone();
+            composer.compose(move |ctx| {
+                IconButton::new()
+                    .on_click(|| {})
+                    .interaction_source(src.clone())
+                    .build(ctx, |ctx| {
+                        crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                            .build(ctx);
+                    });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                    _ => None,
+                })
+            })
+        };
+
+        let source = MutableInteractionSource::new();
+        assert_eq!(
+            painted(&source),
+            Some(Shape::Circle),
+            "at rest a standard icon button is the round container"
+        );
+        source.emit_press();
+        assert_eq!(
+            painted(&source),
+            Some(Shape::rounded(8.0)),
+            "pressing morphs it to Small's PressedContainerShape"
+        );
+        source.emit_release();
+        assert_eq!(
+            painted(&source),
+            Some(Shape::Circle),
+            "and it returns when released"
+        );
     }
 
     #[test]
