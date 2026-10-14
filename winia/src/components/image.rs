@@ -131,7 +131,7 @@ impl Image {
 
     /// 修饰符链（尺寸/裁剪等——覆盖固有尺寸布局）
     pub fn modifier(mut self, modifier: Modifier) -> Self {
-        self.modifier = modifier;
+        self.modifier = self.modifier.then(modifier);
         self
     }
 
@@ -249,5 +249,20 @@ mod tests {
         let img2 = Image::file("a.png").color_filter(gray.clone());
         assert_eq!(img2.get_color_filter(), Some(&gray));
         assert_ne!(img.get_color_filter(), Some(&gray), "Tint 与 Matrix 是不同滤镜");
+    }
+
+    #[test]
+    fn test_image_modifier_appends_rather_than_replaces() {
+        // A second `.modifier()` has to ADD to the chain, as `Icon` and `IconToggleButton` do. A replacing
+        // setter silently drops the first one; the two different axes below make that observable through
+        // `resolved_size`.
+        let img = Image::file("a.png")
+            .modifier(Modifier::new().width(100.0))
+            .modifier(Modifier::new().height(50.0));
+        assert_eq!(
+            img.get_modifier().resolved_size(),
+            Some((Some(100.0), Some(50.0))),
+            "both calls contribute — a replacing setter would leave only the height"
+        );
     }
 }
