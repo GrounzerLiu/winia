@@ -1574,6 +1574,8 @@ fn render_pass1(
         paint_rect.y(),
         paint_rect.width(),
         paint_rect.height(),
+        rect.x(),
+        rect.y(),
     );
 
     // Wrapping draw nodes, after half (exp/draw-wrap-node): above children and
@@ -1615,7 +1617,19 @@ fn render_pass1(
 /// - 前景层裁剪到背景的范围和形状：bounded → 节点形状；unbounded →
 ///   背景圆（直径=对角线）——波纹不会超出背景层
 /// - hover/focus 状态层透明度动画值；每层扩散/淡出由动画系统驱动
-fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f32) {
+/// `x, y, w, h` describe the CONTAINER — the node's box minus its own minimum-interactive inset — which is
+/// what the halo and the clip use. `node_x, node_y` are the node's own origin: the recorded press point is
+/// node-local, so the spreading foreground must be drawn from there or it lands inset by that same amount.
+fn draw_ripple(
+    node: &LayoutNode,
+    canvas: &Canvas,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    node_x: f32,
+    node_y: f32,
+) {
     for el in node.modifier.elements() {
         let ModifierElement::Ripple { source, color, bounded, shape, state_layer_diameter } = el else { continue };
 
@@ -1756,8 +1770,10 @@ fn draw_ripple(node: &LayoutNode, canvas: &Canvas, x: f32, y: f32, w: f32, h: f3
                 color.g,
                 color.b,
             ));
+            // The press point is node-local, so the foreground spreads from the NODE origin, not the
+            // container's — using the container's put the whole layer inset by the same offset.
             canvas.draw_circle(
-                skia_safe::Point::new(x + layer.center.0, y + layer.center.1),
+                skia_safe::Point::new(node_x + layer.center.0, node_y + layer.center.1),
                 r,
                 &paint,
             );

@@ -277,7 +277,13 @@ impl IconToggleButton {
         let shape = self.shape;
 
         let size = self.size_variant.container_size();
-        let mut modifier = Modifier::new().size(size, size).background(container, shape);
+        // The node is grown to the 48 dp touch target and the paint is inset back to the container by the
+        // offset that publishes — without this an IconToggleButton lost both the target and 8 dp of its own
+        // box when the Small container went 48 -> 40.
+        let mut modifier = Modifier::new()
+            .minimum_interactive_component_size()
+            .size(size, size)
+            .background(container, shape);
         let border = self.border.or_else(|| {
             if self.style == IconButtonStyle::Outlined {
                 IconToggleButtonDefaults::outlined_border(
