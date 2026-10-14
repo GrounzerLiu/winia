@@ -52,6 +52,29 @@ static MORPH_SEQUENCE: LazyLock<Vec<Morph<'static>>> = LazyLock::new(|| {
     morph_sequence(polygons)
 });
 
+/// The two shapes a determinate indicator morphs between — `LoadingIndicatorDefaults
+/// .DeterminateIndicatorPolygons`.
+///
+/// Upstream pre-rotates the circle by `360 / 20` degrees before normalising it ("Rotating the circle gets
+/// us a smoother morphing to the soft-burst shapes"), which changes the vertex correspondence the morph
+/// interpolates even though a circle looks identical either way. winia cannot reproduce that: the rotation
+/// would have to go through `RoundedPolygon::transformed`, whose closure returns the crate's `Offset`, and
+/// `material-shapes` keeps `mod offset` private (`lib.rs:17`). Unrotated, the morph still runs between the
+/// same two shapes, just with a different vertex pairing.
+static DETERMINATE_POLYGONS: LazyLock<[RoundedPolygon; 2]> = LazyLock::new(|| {
+    [
+        MaterialShapes::circle().normalized(),
+        MaterialShapes::soft_burst().normalized(),
+    ]
+});
+
+/// A determinate indicator runs ONE morph across its two shapes with no wrap-around: its progress travels
+/// 0 → 1 once, where the indeterminate sequence loops through all seven shapes.
+static DETERMINATE_MORPH: LazyLock<Morph<'static>> = LazyLock::new(|| {
+    let polygons: &'static [RoundedPolygon] = &DETERMINATE_POLYGONS[..];
+    Morph::new(&polygons[0], &polygons[1])
+});
+
 /// 把归一化 shape 缩放/平移到容器内 active indicator 区域的缩放因子
 static SHAPE_SCALE_FACTOR: LazyLock<f32> = LazyLock::new(|| {
     calculate_scale_factor(&POLYGONS[..]) * (LOADING_INDICATOR_ACTIVE_SIZE / LOADING_INDICATOR_SIZE)
@@ -71,6 +94,10 @@ pub struct LoadingIndicator {
     indicator_color: Option<Color>,
     container_color: Option<Color>,
     container_shape: Shape,
+    /// `Some(progress)` makes this a **determinate** indicator: it morphs between two shapes according to
+    /// that 0..1 progress (values outside the range are coerced) and never spins. `None` is the ordinary
+    /// indeterminate spinner.
+    progress: Option<State<f32>>,
 }
 
 impl Default for LoadingIndicator {
@@ -80,7 +107,7 @@ impl Default for LoadingIndicator {
 }
 
 impl LoadingIndicator {
-    /// 创建 uncontained loading indicator。
+    /// Create an uncontained **indeterminate** loading indicator (the spinner).
     pub fn new() -> Self {
         Self {
             is_contained: false,
@@ -88,7 +115,20 @@ impl LoadingIndicator {
             indicator_color: None,
             container_color: None,
             container_shape: LOADING_INDICATOR_CONTAINER_SHAPE,
+            progress: None,
         }
+    }
+
+    /// Create a **determinate** loading indicator: it morphs between two shapes according to `progress`
+    /// (0..1; values outside that range are coerced) instead of spinning.
+    ///
+    /// Upstream expresses this as an overload of `LoadingIndicator` whose first parameter is
+    /// `progress: () -> Float`; winia keeps the builder and adds a constructor. Like upstream's determinate
+    /// overload it has **no container** (`LoadingIndicatorImpl` is reached with `containerColor =
+    /// Color.Unspecified`) and it does **not** rotate — the rotation in the default shape sequence is baked
+    /// into the shapes, not animated.
+    pub fn determinate(progress: State<f32>) -> Self {
+        Self { progress: Some(progress), ..Self::new() }
     }
 
     /// Switch to the Container configuration (`ContainedLoadingIndicator`): a round container with the
@@ -133,6 +173,11 @@ impl LoadingIndicator {
         self.is_contained
     }
 
+    /// Whether this is the determinate variant — see [`determinate`](Self::determinate).
+    pub fn is_determinate(&self) -> bool {
+        self.progress.is_some()
+    }
+
     /// Default colour resolution, matching `LoadingIndicatorDefaults`.
     ///
     /// Uncontained takes `ActiveIndicatorColor` (Primary). Contained takes the contained pair:
@@ -164,43 +209,50 @@ impl LoadingIndicator {
         let morph_index: State<usize> = ctx.remember(|| 0);
         let morph_rotation_target: State<f32> = ctx.remember(|| QUARTER_ROTATION);
 
-        // Morph 序列循环：Spring 0→1 → 切到下一 shape + 90° 步进 → 重置 progress
-        LaunchedEffect::new(()).build(ctx, {
-            let morph_progress = morph_progress.clone();
-            let morph_index = morph_index.clone();
-            let morph_rotation_target = morph_rotation_target.clone();
-            move |_scope| async move {
-                let sequence_len = MORPH_SEQUENCE.len();
-                loop {
-                    crate::animation::push_animatable(
-                        morph_progress.clone(),
-                        1.0,
-                        crate::animation::AnimationSpec::Spring(SpringSpec::bouncy()),
-                    );
-                    tokio::time::sleep(Duration::from_millis(650)).await;
-                    // 防止弹簧尚未完全收敛时被下一轮覆盖
-                    crate::animation::cancel_animation(&morph_progress);
-                    let current = morph_index.get();
-                    let next = (current + 1) % sequence_len;
-                    morph_index.set(next);
-                    let angle = morph_rotation_target.get();
-                    morph_rotation_target.set((angle + QUARTER_ROTATION) % FULL_ROTATION);
-                    morph_progress.set(0.0);
+        // Indeterminate only. The determinate variant is driven by its progress alone: it neither loops
+        // through the shapes nor rotates, which is what upstream reaches `LoadingIndicatorImpl` with
+        // (`containerColor = Color.Unspecified`, no rotation animation).
+        let global_rotation = if self.progress.is_none() {
+            // Morph 序列循环：Spring 0→1 → 切到下一 shape + 90° 步进 → 重置 progress
+            LaunchedEffect::new(()).build(ctx, {
+                let morph_progress = morph_progress.clone();
+                let morph_index = morph_index.clone();
+                let morph_rotation_target = morph_rotation_target.clone();
+                move |_scope| async move {
+                    let sequence_len = MORPH_SEQUENCE.len();
+                    loop {
+                        crate::animation::push_animatable(
+                            morph_progress.clone(),
+                            1.0,
+                            crate::animation::AnimationSpec::Spring(SpringSpec::bouncy()),
+                        );
+                        tokio::time::sleep(Duration::from_millis(650)).await;
+                        // 防止弹簧尚未完全收敛时被下一轮覆盖
+                        crate::animation::cancel_animation(&morph_progress);
+                        let current = morph_index.get();
+                        let next = (current + 1) % sequence_len;
+                        morph_index.set(next);
+                        let angle = morph_rotation_target.get();
+                        morph_rotation_target.set((angle + QUARTER_ROTATION) % FULL_ROTATION);
+                        morph_progress.set(0.0);
+                    }
                 }
-            }
-        });
+            });
 
-        // 全局旋转：360° / 4666ms 线性无限循环
-        let mut inf = ctx.remember_infinite_transition();
-        let global_rotation = inf.animate_float(
-            ctx,
-            0.0,
-            FULL_ROTATION,
-            InfiniteRepeatableSpec::restart_tween(
-                Duration::from_millis(4666),
-                TweenSpec::new(Duration::from_millis(4666), interpolator::Linear::new()),
-            ),
-        );
+            // 全局旋转：360° / 4666ms 线性无限循环
+            let mut inf = ctx.remember_infinite_transition();
+            Some(inf.animate_float(
+                ctx,
+                0.0,
+                FULL_ROTATION,
+                InfiniteRepeatableSpec::restart_tween(
+                    Duration::from_millis(4666),
+                    TweenSpec::new(Duration::from_millis(4666), interpolator::Linear::new()),
+                ),
+            ))
+        } else {
+            None
+        };
 
         let m = Modifier::new()
             .size(LOADING_INDICATOR_SIZE, LOADING_INDICATOR_SIZE)
@@ -213,10 +265,11 @@ impl LoadingIndicator {
                 morph_index: morph_index.clone(),
                 morph_rotation_target: morph_rotation_target.clone(),
                 global_rotation: global_rotation.clone(),
+                determinate: self.progress.clone(),
             });
 
-        // A loading indicator is a spinner: it is always indeterminate, so it declares the role and
-        // no value (there is no progress to report).
+        // The role is the same either way; the determinate variant reports no value, since winia's
+        // semantics layer has no range to carry it.
         let m = m.semantics(crate::semantics::SemanticsConfig::new()
             .role(crate::semantics::SemanticsRole::ProgressBar));
 
@@ -242,7 +295,11 @@ pub(crate) struct LoadingIndicatorNode {
     pub(crate) morph_progress: State<f32>,
     pub(crate) morph_index: State<usize>,
     pub(crate) morph_rotation_target: State<f32>,
-    pub(crate) global_rotation: crate::runtime::state::Visual<f32>,
+    /// `None` for the determinate variant, which has no global spin to apply.
+    pub(crate) global_rotation: Option<crate::runtime::state::Visual<f32>>,
+    /// `Some(progress)` makes this the determinate variant: the morph `t` is that 0..1 value over the single
+    /// determinate morph, and nothing rotates.
+    pub(crate) determinate: Option<State<f32>>,
 }
 
 impl crate::modifier::DrawNode for LoadingIndicatorNode {
@@ -251,21 +308,26 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
             draw_container(canvas, rect, self.container_color, self.container_shape);
         }
 
-        let current_index = self.morph_index.peek();
-        let progress = self.morph_progress.peek();
-        let morph = &MORPH_SEQUENCE[current_index];
-        let path = morph.to_path(progress, 0, None, None, None, None);
-        let path =
-            progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
+        // Determinate: one morph across the two shapes, with `t` straight from the progress and nothing
+        // rotating. Indeterminate: the seven-shape sequence at the loop's own progress, plus the 90°-per-cycle
+        // step it accumulates and the global spin.
+        let (path, total_rotation) = if let Some(progress) = &self.determinate {
+            let t = progress.peek().clamp(0.0, 1.0);
+            (DETERMINATE_MORPH.to_path(t, 0, None, None, None, None), 0.0)
+        } else {
+            let current_index = self.morph_index.peek();
+            let morph_progress = self.morph_progress.peek();
+            let path = MORPH_SEQUENCE[current_index].to_path(morph_progress, 0, None, None, None, None);
+            let global_rotation = self.global_rotation.as_ref().map_or(0.0, |r| r.peek());
+            let rotation = morph_progress * 90.0 + self.morph_rotation_target.peek() + global_rotation;
+            (path, rotation)
+        };
+        let path = progress_path(path, (rect.width(), rect.height()), *SHAPE_SCALE_FACTOR);
 
         let mut paint = skia_safe::Paint::default();
         paint.set_anti_alias(true);
         paint.set_color(skia_color(self.indicator_color));
         paint.set_style(skia_safe::paint::Style::Fill);
-
-        let morph_rotation_target = self.morph_rotation_target.peek();
-        let global_rotation = self.global_rotation.peek();
-        let total_rotation = progress * 90.0 + morph_rotation_target + global_rotation;
 
         canvas.save();
         canvas.translate((rect.left, rect.top));
@@ -275,12 +337,15 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
         canvas.restore();
     }
     fn node_key(&self) -> String {
+        // The static parameters, plus WHICH variant this is — indeterminate and determinate paint through
+        // different paths. The animation values stay out, as before.
         format!(
-            "loading:{:?}:{:?}:{:?}:{:?}",
+            "loading:{:?}:{:?}:{:?}:{:?}:{}",
             self.is_contained,
             self.container_shape,
             self.indicator_color,
             self.container_color,
+            self.determinate.is_some(),
         )
     }
 }
@@ -531,6 +596,46 @@ mod tests {
     }
 
     #[test]
+    fn determinate_reports_its_variant_and_morphs_between_two_shapes() {
+        let progress = State::new(0.0_f32);
+        assert!(LoadingIndicator::determinate(progress.clone()).is_determinate());
+        assert!(!LoadingIndicator::new().is_determinate(), "new() stays indeterminate");
+
+        // The morph really answers to the progress: its two endpoints are the two different shapes.
+        assert_eq!(DETERMINATE_POLYGONS.len(), 2);
+        // `bounds()` borrows the path, so the paths have to outlive the comparison.
+        let path_a = DETERMINATE_MORPH.to_path(0.0, 0, None, None, None, None);
+        let path_b = DETERMINATE_MORPH.to_path(1.0, 0, None, None, None, None);
+        let (a, b) = (path_a.bounds(), path_b.bounds());
+        assert!(
+            (a.width() - b.width()).abs() > 0.01 || (a.height() - b.height()).abs() > 0.01,
+            "progress 0.0 and 1.0 must land on different shapes"
+        );
+    }
+
+    /// The determinate variant drives its morph from the progress alone, so rendering it must leave the
+    /// animation table EMPTY — the opposite of the indeterminate spinner, which registers a loop and a
+    /// global rotation that never finish.
+    #[test]
+    fn a_determinate_indicator_does_not_spin() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let progress = State::new(0.4_f32);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(ThemeColors::default_light(), ctx, |ctx| {
+                LoadingIndicator::determinate(progress.clone()).build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert!(
+            !crate::animation::is_animating(),
+            "a determinate indicator registers no animation of its own"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
     fn uncontained_renders_indicator_without_container() {
         let theme = ThemeColors::default_light();
         let (buf, w) = render_loading(|ctx| {
@@ -593,7 +698,8 @@ mod tests {
             morph_progress: State::new(0.0),
             morph_index: State::new(0usize),
             morph_rotation_target: State::new(90.0),
-            global_rotation: crate::runtime::state::Visual::new(10.0),
+            global_rotation: Some(crate::runtime::state::Visual::new(10.0)),
+            determinate: None,
         };
         assert_eq!(mk(true).node_key(), mk(true).node_key());
         assert_ne!(mk(true).node_key(), mk(false).node_key(), "is_contained 应进 key");
@@ -606,7 +712,8 @@ mod tests {
             morph_progress: State::new(0.7),
             morph_index: State::new(2usize),
             morph_rotation_target: State::new(180.0),
-            global_rotation: crate::runtime::state::Visual::new(300.0),
+            global_rotation: Some(crate::runtime::state::Visual::new(300.0)),
+            determinate: None,
         };
         assert_eq!(mk(true).node_key(), moved.node_key(), "morph/旋转动画值不应进 key");
     }
@@ -646,7 +753,8 @@ mod tests {
                 morph_progress: State::new(0.0),
                 morph_index: State::new(0usize),
                 morph_rotation_target: State::new(90.0),
-                global_rotation: crate::runtime::state::Visual::new(0.0),
+                global_rotation: Some(crate::runtime::state::Visual::new(0.0)),
+                determinate: None,
             });
         let enum_mod = crate::modifier::Modifier::new()
             .size(40.0, 40.0)
