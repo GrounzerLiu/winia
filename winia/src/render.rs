@@ -2545,6 +2545,59 @@ mod tests {
     }
 
     #[test]
+    /// The cross-fade wrapper must not change the glyph's colour: it only adds a per-generation alpha
+    /// layer, and a resting generation sits at alpha 1. Painting the same button with and without
+    /// `Crossfade` and comparing the glyph's centre pixel is what catches a colour the layer machinery
+    /// gets wrong. `Standard` is the style to use here because its container is transparent, so the pixel
+    /// read is the glyph over the white background rather than over a container that masks the difference.
+    #[test]
+    fn the_crossfade_wrapper_does_not_change_the_glyph_colour() {
+        use crate::components::icon_toggle_button::IconToggleButton;
+        use crate::components::Crossfade;
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+        use crate::theme::{ThemeColors, WiniaTheme};
+
+        const SQUARE: &str = "M0 0h24v24H0z";
+
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let sample = |wrapped: bool| -> [u8; 4] {
+            let state = State::new(false);
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::new(state.get())
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            if wrapped {
+                                Crossfade::new(state.clone()).build(ctx, |ctx, _on| {
+                                    crate::components::icon::Icon::svg_path(SQUARE).build(ctx);
+                                });
+                            } else {
+                                crate::components::icon::Icon::svg_path(SQUARE).build(ctx);
+                            }
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 64.0, 0.0, 64.0));
+            let root = composer.layout_root_idx().expect("root");
+            let mut surface = skia_safe::surfaces::raster_n32_premul((64, 64)).expect("surface");
+            surface.canvas().clear(skia_safe::Color::WHITE);
+            render(composer.arena_nodes(), root, surface.canvas());
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            px[24 * 64 + 24]
+        };
+
+        let plain = sample(false);
+        let wrapped = sample(true);
+        assert_ne!(plain, [255, 255, 255, 255], "the glyph should paint at all");
+        assert_eq!(
+            wrapped, plain,
+            "wrapping the glyph in a Crossfade must not change its colour"
+        );
+    }
+
     fn tf_aux_text_paints() {
         // label/支持文本绘制路径：build_plain_paragraph + layout + paint
         let mut surface = skia_safe::surfaces::raster_n32_premul((200, 40)).unwrap();

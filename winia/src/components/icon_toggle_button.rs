@@ -289,19 +289,31 @@ impl IconToggleButton {
         let content_color = colors.content_color(self.enabled, self.checked);
         let size = self.size_variant.container_size();
 
-        // The checked/unchecked colour fade — `icon_toggle_button_colour_spec` records why this is a winia
-        // addition. Enabled/disabled does NOT fade: Compose's rule is that there should be no animation
-        // between those two states (`material3/Checkbox.kt:634-643`), which `checkbox.rs` already honours,
-        // so that branch snaps.
+        // The CONTAINER colour fade — `icon_toggle_button_colour_spec` records why this is a winia addition.
+        // Enabled/disabled does NOT fade: Compose's rule is that there should be no animation between those
+        // two states (`material3/Checkbox.kt:634-643`), which `checkbox.rs` already honours, so that branch
+        // snaps.
         let colour_spec = if self.enabled {
             crate::animation::AnimationSpec::Spring(icon_toggle_button_colour_spec())
         } else {
             crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
         };
-        // Reading the animated values is what re-runs this build on every colour frame, so the icon's tint
-        // and the text style follow the container rather than jumping with it.
         let container = ctx.animate_color_as_state(container, colour_spec.clone()).get();
-        let content_color = ctx.animate_color_as_state(content_color, colour_spec).get();
+        // The RIPPLE keeps the animated content colour: it is painted, read per frame by `draw_ripple`, so
+        // it can follow the fade. The GLYPH cannot — its tint is captured at build time, which is the note
+        // below.
+        let ripple_color = ctx.animate_color_as_state(content_color, colour_spec).get();
+
+        // The CONTENT colour is deliberately NOT animated, and this is the one thing to keep in mind here.
+        // `Icon`'s tint is resolved at build time, and a `Crossfade` generation only rebuilds its content
+        // when its own slot parameters change (`crossfade.rs`, the `ctx.changed(&value)` in the generation
+        // loop) — so a glyph built on the first frame of a colour animation captures the colour it is
+        // LEAVING and keeps it for good. Measured: a Filled button switched to checked went on painting its
+        // glyph in `on_surface_variant` (68, 71, 78) instead of `on_primary`.
+        //
+        // Handing each generation its own resting colour is also what gives the ICON its transition: the
+        // outgoing glyph fades out in the old colour while the incoming one arrives in the new one. The
+        // container still animates, so the surface moves smoothly underneath either way.
 
         // The press morph, spelled as `IconButton` spells it: with no explicit shape the container is the
         // size's Round one, so the resting radius is half the container, and a press interpolates it down to
@@ -355,7 +367,7 @@ impl IconToggleButton {
                 let checked = self.checked;
                 modifier = modifier
                     .clickable_with_source(&interaction, move || cb(!checked))
-                    .ripple_with_shape(&interaction, content_color, true, shape);
+                    .ripple_with_shape(&interaction, ripple_color, true, shape);
             }
         }
 
@@ -688,6 +700,117 @@ mod tests {
             icons(&composer),
             2,
             "the outgoing icon stays on screen while the incoming one fades in"
+        );
+    }
+
+    /// The colour must survive the cross-fade wrapper: the content colour this button provides has to reach
+    /// a glyph built INSIDE a `Crossfade` generation, or every icon in the fade paints in the wrong colour.
+    #[test]
+    fn the_icon_keeps_its_content_colour_inside_the_crossfade() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(true);
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                IconToggleButton::filled(checked.get())
+                    .on_checked_change(|_| {})
+                    .build(ctx, |ctx| {
+                        crate::components::Crossfade::new(checked.clone()).build(ctx, |ctx, on| {
+                            let path = if on { "M0 0h1v1z" } else { "M0 0h2v2z" };
+                            crate::components::icon::Icon::svg_path(path).build(ctx);
+                        });
+                    });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let mut tints = Vec::new();
+        for node in composer.arena_nodes() {
+            for el in node.modifier.elements() {
+                if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
+                    tints.push(spec.tint);
+                }
+            }
+        }
+        assert!(
+            !tints.is_empty(),
+            "the icon should be built inside the crossfade"
+        );
+        for tint in &tints {
+            assert_eq!(
+                *tint,
+                Some(theme.on_primary),
+                "every generation's icon takes the checked content colour"
+            );
+        }
+    }
+
+    /// Switching `checked` must move the glyph to the checked colour. This is the case the "starts checked"
+    /// test above cannot see: the content colour is ANIMATED, and a `Crossfade` generation only rebuilds its
+    /// content when its own slot parameters change — so a generation built on the first frame of that
+    /// animation can capture the colour it is leaving and keep it forever.
+    #[test]
+    fn the_glyph_follows_the_content_colour_after_a_checked_switch() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(false);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::filled(checked.get())
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            crate::components::Crossfade::new(checked.clone()).build(
+                                ctx,
+                                |ctx, on| {
+                                    let path = if on { "M0 0h1v1z" } else { "M0 0h2v2z" };
+                                    crate::components::icon::Icon::svg_path(path).build(ctx);
+                                },
+                            );
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        let tints = |composer: &crate::runtime::composer::Composer| -> Vec<Option<Color>> {
+            composer
+                .arena_nodes()
+                .iter()
+                .flat_map(|node| {
+                    node.modifier.elements().iter().filter_map(|el| match el {
+                        crate::modifier::ModifierElement::DrawIcon { spec } => Some(spec.tint),
+                        _ => None,
+                    })
+                })
+                .collect()
+        };
+
+        let colors = IconToggleButtonDefaults::colors_for(&theme, IconButtonStyle::Filled);
+        let unchecked = colors.content_color(true, false);
+        let target = colors.content_color(true, true);
+
+        build(&mut composer);
+        assert_eq!(
+            tints(&composer),
+            vec![Some(unchecked)],
+            "an unchecked button paints the unchecked content colour"
+        );
+
+        checked.update(|c| *c = true);
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        assert_eq!(
+            tints(&composer),
+            vec![Some(target)],
+            "once the switch settles only the checked generation is left, in the checked colour"
         );
     }
 
