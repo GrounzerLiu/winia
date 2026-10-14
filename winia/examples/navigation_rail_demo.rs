@@ -75,11 +75,12 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
             Button::text()
                 .on_click({ clone!(wide_state); move || wide_state.toggle() })
                 .build(ctx, |ctx| Text::new("Toggle").build(ctx));
+            // The item morph's own progress, on the token the component uses internally
+            // (`MotionSchemeKeyTokens.DefaultSpatial`, 0.9 / 700). The demo used to hand-roll
+            // 1.0 / 400 here, which made the items settle out of step with the container beside them.
             let progress = ctx.animate_float_as_state(
                 if wide_state.is_expanded() { 1.0 } else { 0.0 },
-                winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec {
-                    damping_ratio: 1.0, stiffness: 400.0, mass: 1.0, threshold: 0.01,
-                }),
+                winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::spatial_default()),
             );
             WideNavigationRail::new(wide_state.clone(), {
                 clone!(wide_sel);
@@ -123,9 +124,7 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                     // animate to their own end of it.
                     let progress = ctx.animate_float_as_state(
                         if modal_state_for_items.is_expanded() { 1.0 } else { 0.0 },
-                        winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec {
-                            damping_ratio: 1.0, stiffness: 400.0, mass: 1.0, threshold: 0.01,
-                        }),
+                        winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::spatial_default()),
                     );
                     for index in 0..DESTINATIONS.len() {
                         let (name, path) = DESTINATIONS[index];

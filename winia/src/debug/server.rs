@@ -927,6 +927,35 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::Text("ok swipe up".into())).await;
                 wake();
             }
+            // The read-only reports the stdin channel already answers. They take no arguments worth
+            // differing over, and a script driving the WebSocket could not reach them before: the
+            // fallback arm answered "?", so the two channels disagreed about what the protocol is.
+            // `q` is deliberately still absent here - closing the process is the stdin side's own
+            // teardown, and a stray message over a socket should not be able to kill a running app.
+            "fp" => {
+                let _ = write.send(Message::text(format!("FRAME_PASSES:{}", frame_passes_line()))).await;
+            }
+            "fpc" => {
+                clear_frame_passes();
+                let _ = write.send(Message::text("ok fpc")).await;
+            }
+            "al" => {
+                let lines = crate::animation::active_animations_report();
+                let mut report = format!("ANIMATIONS:{}", lines.len());
+                for line in lines {
+                    report.push('\n');
+                    report.push_str("ANIM:");
+                    report.push_str(&line);
+                }
+                let _ = write.send(Message::text(report)).await;
+            }
+            "save" if parts.len() >= 2 => {
+                let reply = match save_frame_png(parts[1]) {
+                    Ok((w, h)) => format!("SAVED:{} {}x{}", parts[1], w, h),
+                    Err(e) => format!("SAVED:error {e}"),
+                };
+                let _ = write.send(Message::text(reply)).await;
+            }
             _ => { let _ = write.send(Message::Text("?".into())).await; }
         }
     }

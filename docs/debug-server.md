@@ -36,7 +36,14 @@ WebSocket 文本命令（空格分隔参数）；stdin 同协议，响应走 std
 | `t` | 读全部窗口布局树 JSON | JSON 字符串 |
 | `px <x> <y>` | one pixel of the current frame as TEXT — `WxH:x y r g b a`, `WxH:out-of-frame` or `none`. The line form of `p`, usable over the stdin channel (a UI test) and easy for a script to parse; the frame must be captured first (`r`). Coordinates are FRAME (physical) pixels — the exception to the note below — and `WxH` comes back with the answer, so a caller that only knows logical coordinates can scale. The four color bytes are RGBA, premultiplied by alpha. The layout tree cannot replace it: a theme-derived color is resolved at build time, so every `bg(...)` prints as `<dynamic>`. | `<W>x<H>:…`（不带 `PIXEL:` 前缀） |
 | `sem` | The SEMANTICS tree of the last rendered frame — role / name / state / bounds per accessible element, once per window: `{"main":[…],"overlays":[{"id":N,"tree":[…]}]}`. Published on every rendered frame while this feature is on, so it says what the frame that just drew declared, not what a later frame will. See `docs/semantics.md`. | JSON string (stdin: `SEMANTICS:` prefix) |
-| `q` | 强制退出应用（测试收尾兜底） | （进程退出） |
+| `fp` | 每帧的 compose+layout 轮数（环形缓冲 32 条）：`frames=<n> multi=<m> passes=<csv>`。唯一能区分"一帧内跑了 2 轮收敛"与"两帧各 1 轮"的通道——树查询看不到这个差别（查询被回答时帧已经过去了）。测输入前先 `fpc` 清空。 | `FRAME_PASSES:…` |
+| `fpc` | 清空帧轮数记录与帧计数 | `ok fpc` |
+| `al` | 当前运行中的动画：首行 `ANIMATIONS:<n>`，随后每行 `ANIM:`（状态 id、spec 及其数值、from/target、elapsed、velocity）。一个值因为错误原因在动时，没有这个只能猜。 | `ANIMATIONS:…` |
+| `save <path>` | 把**已捕获**的帧（先发 `r`）写成 PNG——进程内出图，fixture/demo 不必自己解二进制。 | `SAVED:<path> <W>x<H>` 或 `SAVED:error …` |
+| `q` | 强制退出应用（测试收尾兜底）。**仅 stdin 通道**——socket 上的一条杂散消息不该能杀掉运行中的应用。 | （进程退出） |
+
+上表所有命令两条通道都支持，只有两处例外：`p` 的**二进制帧**只有 WebSocket 能承载
+（stdin 侧用 `px`/`save`），`q` 只有 stdin 有。
 
 ⚠ **坐标均为逻辑像素**（非物理像素；HiDPI 下物理 = 逻辑 × scale_factor，
 demo 截图 1350x720 = 窗口 900x480 × 1.5）。**例外：`px` 与 `p` 的坐标是帧/物理像素**

@@ -83,12 +83,25 @@ const HEADER_SPACER: f32 = 8.0;
 const DISABLED_ALPHA: f32 = 0.38;
 /// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
 const WIDE_INDICATOR_H_PADDING: f32 = 16.0;
-/// 宽轨 header 之后的间距 = NavigationRailBaselineItemTokens.HeaderSpaceMinimum.
-/// androidx computes `headerOffset = headerPlaceable.height + WNRHeaderPadding` with
-/// `WNRHeaderPadding` taken from that token (`WideNavigationRail.kt:1144`). The plain rail uses a
-/// DIFFERENT token for the same slot (`NavigationRailHeaderPadding` = 8), so the two rails are
-/// deliberately not equal here: 40 against 12.
+/// The gap after the wide rail's header = `NavigationRailBaselineItemTokens.HeaderSpaceMinimum`.
+/// androidx computes `headerOffset = headerPlaceable.height + WNRHeaderPadding`
+/// (`WideNavigationRail.kt:427`) with `WNRHeaderPadding` read from that token
+/// (`WideNavigationRail.kt:1395-1396`), whose value is 40.
+///
+/// The plain rail uses a DIFFERENT token for the same slot — `NavigationRailHeaderPadding` = 8,
+/// placed as a `Spacer` inside a `Column` whose `verticalArrangement` is
+/// `spacedBy(NavigationRailVerticalPadding)` = 4 (`NavigationRail.kt:126-140`), so its gap is
+/// 4 + 8 + 4 = 16. The two rails are deliberately not equal: 40 against 16.
 const WIDE_RAIL_HEADER_PADDING: f32 = 40.0;
+
+/// The wide rail item's own horizontal padding — `WNRItemHorizontalPadding`
+/// (`WideNavigationRail.kt:1387`), 20. It is the margin the pill hangs off inside the item
+/// (`placeAnimatedLabelAndIcon`: `rippleXTopIcon = itemHorizontalPadding`,
+/// `NavigationItem.kt:1143`) and, applied on each side, what the rail measures an expanded item
+/// against (`expandedItemMaxWidth = maxItemWidth + WNRItemHorizontalPadding`,
+/// `WideNavigationRail.kt:378-381`). The width policy below adds it on both sides — see the
+/// comment there.
+const WIDE_RAIL_ITEM_H_PADDING: f32 = 20.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
@@ -135,23 +148,40 @@ fn with_alpha_factor(color: Color, factor: f32) -> Color {
 
 // ── The motion-scheme tokens this component names (all verified against androidx) ──
 
-/// An item's icon/label fade: `NavigationRail.kt:265` uses `DefaultEffects` (damping 1.0 /
-/// stiffness 1600). winia used damping 1.0 / stiffness 200.
+/// An item's icon/label fade: `NavigationRail.kt:236-240` animates `alphaAnimationProgress` on
+/// `DefaultEffects` (damping 1.0 / stiffness 1600). winia used damping 1.0 / stiffness 200.
 fn rail_alpha_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
 
-/// The indicator pill's size and shape morph: `NavigationRail.kt:271` uses `FastSpatial`
-/// (0.9 / 1400), whose damping is what makes the pill settle with a slight overshoot. winia used
-/// damping 1.0 / stiffness 400.
+/// The indicator pill's size and shape morph: `NavigationRail.kt:242-246` animates
+/// `sizeAnimationProgress` on `FastSpatial` (0.9 / 1400), whose damping is what makes the pill
+/// settle with a slight overshoot. winia used damping 1.0 / stiffness 400.
+///
+/// Note this is the PLAIN rail's own token. The wide rail item morphs on `DefaultSpatial` instead —
+/// see `wide_rail_item_morph_spec`.
 fn rail_item_size_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
 }
 
-/// The container's own expand/collapse progress: `WideNavigationRail.kt:230` uses `DefaultSpatial`
-/// (0.9 / 700) — the rail is not a modal drawer, so the `FastSpatial` it reserves for the modal form
-/// does not apply. winia used damping 1.0 / stiffness 400.
+/// The container's own expand/collapse progress: `WideNavigationRail.kt:265-266` animates
+/// `minWidth`/`widthFullRange` on `DefaultSpatial` (0.9 / 700). winia used damping 1.0 /
+/// stiffness 400.
 fn rail_container_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
+}
+
+/// The MODAL rail's width animation: upstream swaps in `FastSpatial` (0.9 / 1400) for the modal
+/// form (`WideNavigationRail.kt:269`: `modalAnimationSpec = MotionSchemeKeyTokens.FastSpatial`),
+/// which is what makes a modal rail open faster than an in-flow one.
+fn modal_rail_container_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
+}
+
+/// The wide rail item's own morph (icon position and pill size): `NavigationItem.kt:486-491` and
+/// `:1232-1237` both use `DefaultSpatial` (0.9 / 700), NOT the plain rail's `FastSpatial`. The wide
+/// rail item is the one that travels between two full layouts, so it uses the slower spatial token.
+fn wide_rail_item_morph_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_default())
 }
 
@@ -585,6 +615,24 @@ mod tests {
             }
             other => panic!("the container must be a spring, got {other:?}"),
         }
+        // The modal form swaps the container token for the fast one
+        // (`WideNavigationRail.kt:269`: `modalAnimationSpec = FastSpatial`), and the wide rail ITEM
+        // morphs on `DefaultSpatial` rather than the plain item's `FastSpatial`
+        // (`NavigationItem.kt:486-491`, `:1232-1237`).
+        match modal_rail_container_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_fast());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 1400.0));
+            }
+            other => panic!("the modal container must be a spring, got {other:?}"),
+        }
+        match wide_rail_item_morph_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::spatial_default());
+                assert_eq!((spec.damping_ratio, spec.stiffness), (0.9, 700.0));
+            }
+            other => panic!("the wide rail item morph must be a spring, got {other:?}"),
+        }
     }
 
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
@@ -625,13 +673,16 @@ mod tests {
         assert_eq!(RAIL_VERTICAL_PADDING, 4.0, "NavigationRailVerticalPadding");
         assert_eq!(HEADER_SPACER, 8.0, "NavigationRailHeaderPadding");
         // The wide rail uses a DIFFERENT token for the same slot and it is much larger: androidx computes
-        // `headerOffset = headerPlaceable.height + WNRHeaderPadding`, with WNRHeaderPadding taken from
-        // `NavigationRailBaselineItemTokens.HeaderSpaceMinimum` (`WideNavigationRail.kt:1144`). The two
-        // rails are deliberately not equal here, which is why the gap reads 16 on one and 40 on the other.
+        // `headerOffset = headerPlaceable.height + WNRHeaderPadding` (`WideNavigationRail.kt:427`), with
+        // WNRHeaderPadding taken from `NavigationRailBaselineItemTokens.HeaderSpaceMinimum`
+        // (`WideNavigationRail.kt:1395-1396`). The plain rail's gap is 4 + 8 + 4 = 16 — its 8dp Spacer
+        // sits inside a Column whose `spacedBy(4)` adds 4 on each side (`NavigationRail.kt:126-140`) —
+        // so the two rails are deliberately not equal: 40 against 16.
         assert_eq!(
             WIDE_RAIL_HEADER_PADDING, 40.0,
             "WNRHeaderPadding = HeaderSpaceMinimum"
         );
+        assert_eq!(WIDE_RAIL_ITEM_H_PADDING, 20.0, "WNRItemHorizontalPadding");
     }
 
     #[test]
@@ -817,9 +868,10 @@ mod tests {
         let nodes = composer.arena_nodes();
         assert_eq!(nodes[root].measured_size.width, WIDE_RAIL_COLLAPSED_WIDTH);
 
-        // Expanded: the width is `min(available, ContainerWidthMaximum)`, never below the minimum —
-        // upstream animates both the min and the max end and lets the constraints settle it. So 400dp of
-        // room gives the MAX, and a 200dp window gives the 200dp it has (the outer `.min(c.max_width)`).
+        // Expanded, the width is the MINIMUM unless the content wants more — `ContainerWidthMaximum`
+        // is a ceiling, not the target (`WideNavigationRail.kt:387-405`, and upstream's own
+        // `rail_expanded_size` test expects `ContainerWidthMinimum` for exactly this shape of tree).
+        // `wide_rail_expands_past_the_minimum_for_a_wide_header` below covers the other end.
         let build_expanded = |max_w: f32| {
             let mut composer = Composer::new();
             composer.compose(|ctx| {
@@ -838,8 +890,107 @@ mod tests {
             let root = composer.layout_root_idx().unwrap();
             composer.arena_nodes()[root].measured_size.width
         };
-        assert_eq!(build_expanded(400.0), WIDE_RAIL_EXPANDED_MAX_WIDTH);
+        assert_eq!(build_expanded(400.0), WIDE_RAIL_EXPANDED_MIN_WIDTH);
+        // A window narrower than the minimum gets what it has (the `.min(c.max_width)`), and a window
+        // narrower still than the COLLAPSED width cannot collapse below it either.
         assert_eq!(build_expanded(200.0), 200.0);
+        assert_eq!(build_expanded(90.0), 90.0);
+    }
+
+    /// RTL mirrors the wide rail's HEADER, and only the header.
+    ///
+    /// `WIDE_INDICATOR_H_PADDING` is a LEADING value: 16 is not "left", it is the leading edge, which
+    /// under RTL is the right one. The header is the only child that moves — an item sits at
+    /// `(width - w) / 2`, which is symmetric, so mirroring leaves it exactly where it was. That
+    /// asymmetry is the whole reason `rtl` is captured at compose time and carried into the policy
+    /// (placement runs after composition, where `direction::current()` is no longer the truth).
+    ///
+    /// Upstream resolves the same value through `Modifier.padding(start = 24.dp)` in its own sample
+    /// and through `placeRelative` inside the layout; a leading inset is direction-relative in both.
+    #[test]
+    fn wide_rail_header_mirrors_under_rtl_and_items_do_not() {
+        const RAIL_W: f32 = 400.0;
+        const HEADER: f32 = 56.0;
+        const ITEM: f32 = 96.0;
+
+        // (header x, item x, rail width) for one direction.
+        let geometry = |direction: crate::layout::LayoutDirection| {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme_and_direction(
+                    crate::theme::ThemeColors::default_light(),
+                    direction,
+                    ctx,
+                    |ctx| {
+                        let state = WideNavigationRailState::new(ctx);
+                        state.expand();
+                        WideNavigationRail::new(state, |ctx| {
+                            NavigationRailItem::new(true, |ctx| icon_leaf(ctx, ITEM))
+                                .label(|ctx| crate::components::Text::new("A").build(ctx))
+                                .on_click(|| {})
+                                .build(ctx);
+                        })
+                        .header(|ctx| icon_leaf(ctx, HEADER))
+                        .build(ctx);
+                    },
+                );
+            });
+            composer.layout(Constraints::new(0.0, RAIL_W, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let rail_w = nodes[root].measured_size.width;
+            // children[0] is the header slot, children[1] the first item.
+            (
+                nodes[nodes[root].children[0]].position.x,
+                nodes[nodes[root].children[1]].position.x,
+                rail_w,
+            )
+        };
+
+        let (ltr_header, ltr_item, ltr_w) = geometry(crate::layout::LayoutDirection::Ltr);
+        let (rtl_header, rtl_item, rtl_w) = geometry(crate::layout::LayoutDirection::Rtl);
+
+        // The header is one 16dp leading inset in from the leading edge.
+        assert_eq!(ltr_header, WIDE_INDICATOR_H_PADDING, "LTR header hugs the left edge");
+        assert_eq!(
+            rtl_header,
+            ltr_w - WIDE_INDICATOR_H_PADDING - HEADER,
+            "RTL header hugs the right edge"
+        );
+        // ...and the item does NOT mirror: its x is the same in both directions.
+        assert_eq!(ltr_item, rtl_item, "an item is centred, so mirroring is a no-op");
+        assert_eq!(ltr_w, rtl_w, "and the rail itself is the same width either way");
+    }
+
+    /// The other end of the same rule: the rail only travels past the minimum when an element is
+    /// wider than it, and it stops at `ContainerWidthMaximum` however wide that element is. Upstream's
+    /// `rail_expanded_maxSize` asserts the same with a 400dp header spacer.
+    #[test]
+    fn wide_rail_expands_past_the_minimum_for_a_wide_header() {
+        let width_with_header = |header_w: f32| {
+            let mut composer = Composer::new();
+            composer.compose(move |ctx| {
+                let state = WideNavigationRailState::new(ctx);
+                state.expand();
+                WideNavigationRail::new(state, |ctx| {
+                    NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                        .label(|ctx| crate::components::Text::new("A").build(ctx))
+                        .on_click(|| {})
+                        .build(ctx);
+                })
+                .header(move |ctx| icon_leaf(ctx, header_w))
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size.width
+        };
+        // A 100dp header is still narrower than the 220dp minimum, so the rail stays at 220.
+        assert_eq!(width_with_header(100.0), WIDE_RAIL_EXPANDED_MIN_WIDTH);
+        // A 300dp header pushes it to the header's own width...
+        assert_eq!(width_with_header(300.0), 300.0);
+        // ...and a 500dp one stops at the ceiling.
+        assert_eq!(width_with_header(500.0), WIDE_RAIL_EXPANDED_MAX_WIDTH);
     }
 
     #[test]
@@ -1324,7 +1475,7 @@ impl ModalWideNavigationRail {
                 // (`composer.rs`: `Animating::new(target.clone())`), so its first frame would be at rest.
                 let progress: State<f32> = ctx.remember(|| 0.0_f32);
                 let target = if panel_state.is_expanded() { 1.0 } else { 0.0 };
-                crate::animation::push_animatable(progress.clone(), target, rail_container_spec());
+                crate::animation::push_animatable(progress.clone(), target, modal_rail_container_spec());
                 let panel = outer
                     .clone()
                     .fill_max_size()
@@ -1474,16 +1625,62 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         c: Constraints,
     ) -> (Size, Vec<Placement>) {
         let p = self.progress.get().max(0.0).min(1.0);
-        // Upstream animates BOTH ends (Collapsed -> ExpandedRailMinWidth and Collapsed ->
-        // ExpandedRailMaxWidth) and then lets the constraints settle the width, so an expanded rail is
-        // `min(available, max)` and never below the minimum. Pinning it at the minimum left the rail
-        // narrower than M3 on any window wider than 220dp.
-        let expanded = c
-            .max_width
+
+        // How wide the rail rests when expanded. `ContainerWidthMaximum` (360) is a CEILING, not the
+        // target: upstream animates a min end and a max end and then lets the measurement settle it
+        // (`WideNavigationRail.kt:270-305`):
+        //
+        //     var width = actualMinWidth                     // the 96 -> 220 animation
+        //     if (expanded) {
+        //         val widestElementWidth = maxOf(expandedItemMaxWidth, headerPlaceable?.width ?: 0)
+        //         if (widestElementWidth > actualMinWidth && widestElementWidth > actualExpandedMinWidth)
+        //             width = widthFullRange.coerceAtMost(widthConstrain)   // the 96 -> 360 animation
+        //     }
+        //
+        // So an expanded rail is 220 unless the CONTENT is wider, and only then does it travel towards
+        // 360 (`WideNavigationRail.kt:387-405`). Its own tests pin both ends: `rail_expanded_size`
+        // (three items, no wide header) expects `ContainerWidthMinimum`, and `rail_expanded_maxSize`
+        // (a 400dp header) expects `ContainerWidthMaximum`.
+        //
+        // Pinning it at `min(available, 360)` — which this policy used to do — makes the rail as wide
+        // as the window on any wide screen, which is neither end of the upstream behaviour.
+        //
+        // The first pass measures every child with a LOOSE width so each reports what it wants instead
+        // of filling the rail: the item policy returns its natural width when `max_width` is unbounded
+        // (see `WideNavigationRailItemLayoutPolicy::measure`). The loop below then measures at the
+        // settled width, which is the width the children are actually placed in.
+        let mut natural_widest = 0.0f32;
+        for (index, &child) in children.iter().enumerate() {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                child,
+                Constraints::new(0.0, f32::MAX, 0.0, c.max_height),
+            );
+            // An ITEM contributes its own width plus `WNRItemHorizontalPadding` on EACH side. The
+            // header contributes its measured width unchanged.
+            //
+            // The two margins are upstream's: the item's own is inside its width
+            // (`widthStartIcon = indicatorRipplePlaceable.width + itemHorizontalPadding`,
+            // `NavigationItem.kt:1128-1131`) and the rail adds a second around the widest element
+            // (`expandedItemMaxWidth = maxItemWidth + WNRItemHorizontalPadding`,
+            // `WideNavigationRail.kt:378-381`, used as `maxOf(expandedItemMaxWidth,
+            // headerPlaceable?.width ?: 0)` at `:392`). winia's item reports the PILL width, which is
+            // upstream's `indicatorRipplePlaceable.width` — the item's own 20dp is not in it — so
+            // both margins are added here. A header is measured as it is by both.
+            let wanted = if index == 0 && self.has_header {
+                size.width
+            } else {
+                size.width + WIDE_RAIL_ITEM_H_PADDING * 2.0
+            };
+            natural_widest = natural_widest.max(wanted);
+        }
+        let collapsed = WIDE_RAIL_COLLAPSED_WIDTH.min(c.max_width);
+        let expanded = natural_widest
+            .max(WIDE_RAIL_EXPANDED_MIN_WIDTH)
             .min(WIDE_RAIL_EXPANDED_MAX_WIDTH)
-            .max(WIDE_RAIL_EXPANDED_MIN_WIDTH);
-        let width = (WIDE_RAIL_COLLAPSED_WIDTH + (expanded - WIDE_RAIL_COLLAPSED_WIDTH) * p)
             .min(c.max_width);
+        let width = collapsed + (expanded - collapsed) * p;
 
         // 子项垂直堆叠。水平位置：
         // - item：x=0（收起 item 宽=rail 宽；展开 item 填满轨宽——居中恒等）
@@ -1723,11 +1920,11 @@ impl WideNavigationRailItem {
             Some(p) => p.clone(),
             None => ctx.animate_float_as_state(
                 if selected { 1.0 } else { 0.0 },
-                rail_item_size_spec(),
+                wide_rail_item_morph_spec(),
             ),
         };
         // 胶囊展开进度（选中态）——与变形进度相互独立
-        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, rail_item_size_spec());
+        let size_progress = ctx.animate_float_as_state(if selected { 1.0 } else { 0.0 }, wide_rail_item_morph_spec());
 
         let icon_color = colors.icon_color(selected, enabled);
         let label_color = colors.text_color(selected, enabled);

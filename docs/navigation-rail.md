@@ -11,7 +11,8 @@
 | 组件 | 对应 M3 | 宽度 | item 图标位置 | label |
 |---|---|---|---|---|
 | `NavigationRail` | Collapsed 基线 | 80dp | 上（Top） | 可选，alwaysShowLabel 控制 |
-| `WideNavigationRail` | Expressive 宽轨 | **96 ↔ 220dp 动画** | 收起上/展开左（变形） | **必选恒显示** |
+| `WideNavigationRail` | Expressive 宽轨 | **96 ↔ 220..360dp 动画**（见 §5） | 收起上/展开左（变形） | **必选恒显示** |
+| `ModalWideNavigationRail` | Expressive 模态宽轨 | 收起同宽轨；展开抬 scrim 层 | 同上 | 同上 |
 
 ## 2. NavigationRail API
 
@@ -81,8 +82,50 @@ WideNavigationRailItem::new(selected, |ctx| { Icon... }, |ctx| { Text... })
     .build(ctx);
 ```
 
-- 容器宽 = lerp(**96**, **220**, progress)，measure 期读进度注册 layout_deps
-  ——动画帧只重测不重组。
+### 5.1 ModalWideNavigationRail（模态宽轨）
+
+折叠时就是一条普通折叠宽轨、留在布局流内；展开时走 `open_overlay(modal: true)`
+抬起一层带 scrim 的浮层。上游用 `ModalWideNavigationRailDialog` 做同一件事。
+
+```rust
+let state = WideNavigationRailState::new(ctx);
+ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
+    .header(|ctx| { /* 菜单/FAB */ })
+    .hide_on_collapse(false)        // true = dismissible 变体，折叠时完全不画
+    .collapsed_shape(Shape::Rectangle)
+    .expanded_shape(modal_rail_expanded_shape())   // CornerLarge 16dp
+    .container_color(c)             // 折叠态，默认 surface
+    .modal_container_color(c)       // 展开态，默认 surfaceContainer
+    .build(ctx);
+```
+
+- 内容闭包是 `Fn` 不是 `FnOnce`——overlay 每帧重新组合它的内容。
+- 展开容器的宽度走与宽轨相同的测量策略（220 起、内容驱动、360 封顶），
+  但动画 token 换成 `FastSpatial`。
+- scrim 由 `modal: true` 渲染，不自己画；点击遮罩与 Escape 都经 overlay 的
+  dismiss 通道落到 `on_dismiss`，收起同一份 state。
+- 位置是 `PopupPosition::TopStart`（不是 `TopLeft`，也不是 `Center`）：
+  `TopStart` 会按方向镜像，`Center` 会按自身尺寸居中——模态轨要贴前导边。
+
+- 容器宽在 **96 ↔ 展开宽度** 之间按 progress 插值，measure 期读进度注册
+  layout_deps——动画帧只重测不重组。
+- **展开宽度不是固定值，也不是"窗口多宽就多宽"**。androidx 把
+  `ExpandedRailMinWidth`(220) 与 `ExpandedRailMaxWidth`(360) 作为两个动画值，
+  再由测量落定（`WideNavigationRail.kt:270-305`、`:387-405`）：
+
+  ```
+  width = actualMinWidth                       // 220
+  if (expanded && widestElement > max(220, 实际展开宽))
+      width = widthFullRange 向着 360 收窄
+  ```
+
+  即：**默认展开就是 220**，只有内容（item 内容 + `WNRItemHorizontalPadding`×1，
+  或 header 自身宽度）比 220 宽时才往上长，360 封顶，且不超过窗口宽。
+  上游自己的测试钉死了两端：`rail_expanded_size`（三个 item）断言
+  `ContainerWidthMinimum`，`rail_expanded_maxSize`（400dp header spacer）断言
+  `ContainerWidthMaximum`。winia 对应
+  `wide_rail_width_endpoints_match_tokens` +
+  `wide_rail_expands_past_the_minimum_for_a_wide_header`。
 - item 几何在 Top/Start 两套端点间按进度线性插值：指示器从 56×32（图标后）
   过渡到包裹 [icon+gap4+label] 的横向大胶囊（高 max(iconH,labelH)+16）；
   图标/标签位置随之滑移。
@@ -91,6 +134,13 @@ WideNavigationRailItem::new(selected, |ctx| { Icon... }, |ctx| { Text... })
 - 容器顶部 padding 44dp（TopSpace）；展开态 item 填满轨宽（全宽命中目标），
   内容起始对齐（前导缩进 16，对齐 androidx FullWidthLeadingSpace）。
 - item 同样拥抱内容、最小宽 96（CollapsedTokens.ContainerWidth）。
+- 宽轨 header 之后的间距 = **40dp**（`HeaderSpaceMinimum`），与普通轨的 16dp
+  不是同一个 token：普通轨是 8dp Spacer 落在 `spacedBy(4)` 的 Column 里
+  （4+8+4=16），宽轨是 `headerPlaceable.height + WNRHeaderPadding`。
+- 宽轨 header 在 **RTL 下镜像到右边缘**（`WIDE_INDICATOR_H_PADDING` 是 leading
+  值，不是 left 值）；item 位于 `(width - w)/2` 是对称的，镜像后位置不变。
+  方向在 compose 期捕获并传入 policy——placement 跑在组合之后，
+  `direction::current()` 那时已不是真相。
 
 ## 6. Token 对照表
 
@@ -102,11 +152,30 @@ WideNavigationRailItem::new(selected, |ctx| { Icon... }, |ctx| { Text... })
 | ItemHeight（=ActiveIndicatorWidth） | 56 | `NAVIGATION_RAIL_ITEM_HEIGHT` |
 | CollapsedTokens.ContainerWidth | 96 | `WIDE_RAIL_COLLAPSED_WIDTH` |
 | ExpandedTokens.ContainerWidthMinimum | 220 | `WIDE_RAIL_EXPANDED_MIN_WIDTH` |
+| ExpandedTokens.ContainerWidthMaximum | 360 | `WIDE_RAIL_EXPANDED_MAX_WIDTH` |
+| ExpandedTokens.ModalContainerShape（CornerLarge） | 16 | `modal_rail_expanded_shape()` |
 | CollapsedTokens.TopSpace | 44 | `WIDE_RAIL_TOP_PADDING` |
+| WNRItemHorizontalPadding | 20 | `WIDE_RAIL_ITEM_H_PADDING` |
+| BaselineItem.HeaderSpaceMinimum（宽轨 header 间距） | 40 | `WIDE_RAIL_HEADER_PADDING` |
 | ItemVerticalPadding / RailVerticalPadding | 4 / 4 | 私有常量 |
-| HeaderPadding | 8 | 私有常量 `HEADER_SPACER` |
+| NavigationRailHeaderPadding（普通轨 header 间距，含两侧 spacing） | 4+8+4=16 | 私有常量 `HEADER_SPACER` |
 | ItemActiveIndicatorIconLabelSpace | 4 | 私有常量 `ITEM_ICON_LABEL_GAP` |
 | 颜色 7 token | 同导航栏 | `rail_item_colors(&theme)` |
+
+### 动效 token（`MotionScheme`，随主题 standard/expressive 切换）
+
+| 用途 | Token | standard 值 | winia |
+|---|---|---|---|
+| 普通轨 item 淡入 | `DefaultEffects` | 1.0 / 1600 | `rail_alpha_spec()` |
+| 普通轨胶囊尺寸 | `FastSpatial` | 0.9 / 1400 | `rail_item_size_spec()` |
+| 宽轨容器展开 | `DefaultSpatial` | 0.9 / 700 | `rail_container_spec()` |
+| **模态**宽轨展开 | `FastSpatial` | 0.9 / 1400 | `modal_rail_container_spec()` |
+| 宽轨 item 变形 | `DefaultSpatial` | 0.9 / 700 | `wide_rail_item_morph_spec()` |
+
+注意最后两行与直觉相反：宽轨 item 的变形用的是**较慢**的 `DefaultSpatial`
+（`NavigationItem.kt:486-491`、`:1232-1237`），而模态轨容器用 `FastSpatial`
+（`WideNavigationRail.kt:269`）。`the_rail_springs_are_the_tokens_its_sources_name`
+逐个断言。
 
 ## 7. 平台差异与有意简化
 
@@ -128,7 +197,12 @@ WideNavigationRailItem::new(selected, |ctx| { Icon... }, |ctx| { Text... })
 | `bounded_item_hugs_content_instead_of_filling_width` | 拥抱宽度回归 |
 | `disabled_item_has_no_interaction_elements` | 禁用态无交互元素 |
 | `unselected_item_hover_shows_state_layer_on_full_pill_rect` | 悬浮状态层像素 |
-| `wide_rail_width_endpoints_match_tokens` | 宽度端点 96/220 |
+| `wide_rail_width_endpoints_match_tokens` | 宽度端点 96/220/窗口约束 |
+| `wide_rail_expands_past_the_minimum_for_a_wide_header` | 内容驱动增长与 360 封顶 |
+| `wide_rail_header_mirrors_under_rtl_and_items_do_not` | RTL header 镜像、item 不镜像 |
+| `modal_rail_is_a_plain_rail_until_it_expands` | 模态轨 overlay + TopStart |
+| `hide_on_collapse_draws_nothing_until_expanded` | dismissible 变体 |
 | `wide_rail_item_morphs_between_top_and_start_layouts` | 变形两布局端点 |
 | `wide_rail_state_toggles_expansion` | 状态机 |
 | `wide_rail_item_target_width_expands_when_expanded` | 展开态目标区全宽（M3） |
+| `the_rail_springs_are_the_tokens_its_sources_name` | 五个动效 token |
