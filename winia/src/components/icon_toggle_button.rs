@@ -165,6 +165,16 @@ impl IconToggleButtonDefaults {
     }
 }
 
+/// The checked/unchecked colour fade. `IconButton` takes its colours from `enabled` alone and animates
+/// none of them, and `IconToggleButton` inherited that shape — which left this the only toggle in the
+/// framework that snapped on a state change, while chip, checkbox and radio all fade. So this is a
+/// winia addition rather than a ported behaviour, recorded here the way `navigation_drawer` records its
+/// own fade. `effects_default` is M3's `DefaultEffects`: the token the framework already uses for a
+/// state arriving (`top_app_bar_container_spec`, `radio_colour_spec`).
+fn icon_toggle_button_colour_spec() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec::effects_default()
+}
+
 /// IconToggleButton 组件 Builder
 pub struct IconToggleButton {
     style: IconButtonStyle,
@@ -278,6 +288,20 @@ impl IconToggleButton {
         let container = colors.container_color(self.enabled, self.checked);
         let content_color = colors.content_color(self.enabled, self.checked);
         let size = self.size_variant.container_size();
+
+        // The checked/unchecked colour fade — `icon_toggle_button_colour_spec` records why this is a winia
+        // addition. Enabled/disabled does NOT fade: Compose's rule is that there should be no animation
+        // between those two states (`material3/Checkbox.kt:634-643`), which `checkbox.rs` already honours,
+        // so that branch snaps.
+        let colour_spec = if self.enabled {
+            crate::animation::AnimationSpec::Spring(icon_toggle_button_colour_spec())
+        } else {
+            crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
+        };
+        // Reading the animated values is what re-runs this build on every colour frame, so the icon's tint
+        // and the text style follow the container rather than jumping with it.
+        let container = ctx.animate_color_as_state(container, colour_spec.clone()).get();
+        let content_color = ctx.animate_color_as_state(content_color, colour_spec).get();
 
         // The press morph, spelled as `IconButton` spells it: with no explicit shape the container is the
         // size's Round one, so the resting radius is half the container, and a press interpolates it down to
@@ -522,6 +546,97 @@ mod tests {
             (radius(&composer) - 8.0).abs() < 0.5,
             "and it arrives at Small's PressedContainerShape, got {}",
             radius(&composer)
+        );
+    }
+
+    /// Switching `checked` fades the container rather than snapping. `Filled` is the style this test has
+    /// to use: its two container colours actually differ (`surfaceContainer` -> `primary`), while the
+    /// Standard one is transparent in both states. Deleting the `animate_color_as_state` call leaves the
+    /// colour at the checked value on the first frame and fails the `assert_ne!` below.
+    #[test]
+    fn a_checked_switch_fades_the_container_over_time() {
+        // `update_animations` drives the process-wide table, so this takes the same lock the other
+        // animation tests hold.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(false);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let on = checked.get();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::filled(on)
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                .build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        let container = |composer: &crate::runtime::composer::Composer| -> Color {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { color_fn, .. } => {
+                            Some(color_fn())
+                        }
+                        _ => None,
+                    })
+                })
+                .expect("the container paints a background")
+        };
+        // A spring settles within its threshold rather than exactly on the target, so compare per channel.
+        let near = |got: Color, want: Color| {
+            (got.r as i32 - want.r as i32).abs() <= 2
+                && (got.g as i32 - want.g as i32).abs() <= 2
+                && (got.b as i32 - want.b as i32).abs() <= 2
+        };
+
+        build(&mut composer);
+        let colors = IconToggleButtonDefaults::colors_for(&theme, IconButtonStyle::Filled);
+        let unchecked = colors.container_color(true, false);
+        let target = colors.container_color(true, true);
+        assert_ne!(
+            unchecked, target,
+            "this test needs a style whose two container colours differ"
+        );
+        assert_eq!(
+            container(&composer),
+            unchecked,
+            "at rest the container is the unchecked colour"
+        );
+
+        checked.update(|c| *c = true);
+        build(&mut composer);
+        // The fade must be REGISTERED and must not have landed yet: `assert_ne!` alone would also pass if
+        // no animation had started and the paint were simply stale.
+        assert!(
+            crate::animation::is_animating(),
+            "switching checked registers the colour fade"
+        );
+        assert!(
+            !near(container(&composer), target),
+            "the colour does not jump to the checked value, got {:?}",
+            container(&composer)
+        );
+
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        assert!(
+            near(container(&composer), target),
+            "and the fade arrives at the checked colour, got {:?}",
+            container(&composer)
         );
     }
 
