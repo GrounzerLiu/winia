@@ -15,8 +15,14 @@ pub const LIST_ITEM_ONE_LINE_HEIGHT: f32 = 56.0;
 pub const LIST_ITEM_TWO_LINE_HEIGHT: f32 = 72.0;
 pub const LIST_ITEM_THREE_LINE_HEIGHT: f32 = 88.0;
 pub const LIST_ITEM_HORIZONTAL_PADDING: f32 = 16.0;
-pub const LIST_ITEM_VERTICAL_PADDING: f32 = 10.0;
-pub const LIST_ITEM_SLOT_GAP: f32 = 12.0;
+/// One- and two-line vertical inset (`ListItemVerticalPadding`, `ListItem.kt:743`).
+pub const LIST_ITEM_VERTICAL_PADDING: f32 = 8.0;
+/// Three-line vertical inset (`ListItemThreeLineVerticalPadding`, `ListItem.kt:745`). Compose pads the
+/// taller layout more — the `verticalPadding(listItemType)` branch at `ListItem.kt:766`.
+pub const LIST_ITEM_THREE_LINE_VERTICAL_PADDING: f32 = 12.0;
+/// Gap between the leading slot, the text column and the trailing slot
+/// (`LeadingContentEndPadding` / `TrailingContentStartPadding`, both 16dp, `ListItem.kt:753-757`).
+pub const LIST_ITEM_SLOT_GAP: f32 = 16.0;
 pub const LIST_ITEM_CONTENT_GAP: f32 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -123,6 +129,10 @@ impl ListItem {
         let has_two_lines = self.overline.is_some() || self.supporting.is_some();
         let has_three_lines = self.overline.is_some() && self.supporting.is_some();
         let height = if has_three_lines { LIST_ITEM_THREE_LINE_HEIGHT } else if has_two_lines { LIST_ITEM_TWO_LINE_HEIGHT } else { LIST_ITEM_ONE_LINE_HEIGHT };
+        // The three-line layout is not padded by a shared constant: Compose's `verticalPadding(listItemType)`
+        // picks `ListItemThreeLineVerticalPadding` for it and `ListItemVerticalPadding` for the other two
+        // (`ListItem.kt:766-770`).
+        let vertical_padding = if has_three_lines { LIST_ITEM_THREE_LINE_VERTICAL_PADDING } else { LIST_ITEM_VERTICAL_PADDING };
         let content_color = if self.enabled { colors.content } else { colors.disabled_content };
         let shape = ListItemDefaults::shape();
         let interaction = (self.enabled && self.on_click.is_some()).then(|| {
@@ -131,7 +141,7 @@ impl ListItem {
         let mut modifier = Modifier::new()
             .fill_max_width()
             .height(height)
-            .padding_sides(LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING, LIST_ITEM_HORIZONTAL_PADDING, LIST_ITEM_VERTICAL_PADDING)
+            .padding_sides(LIST_ITEM_HORIZONTAL_PADDING, vertical_padding, LIST_ITEM_HORIZONTAL_PADDING, vertical_padding)
             .background(colors.container, shape)
             .then(self.modifier);
         if self.enabled {
@@ -210,7 +220,9 @@ mod tests {
         assert_eq!(LIST_ITEM_TWO_LINE_HEIGHT, 72.0);
         assert_eq!(LIST_ITEM_THREE_LINE_HEIGHT, 88.0);
         assert_eq!(LIST_ITEM_HORIZONTAL_PADDING, 16.0);
-        assert_eq!(LIST_ITEM_SLOT_GAP, 12.0);
+        assert_eq!(LIST_ITEM_VERTICAL_PADDING, 8.0, "one/two-line vertical inset");
+        assert_eq!(LIST_ITEM_THREE_LINE_VERTICAL_PADDING, 12.0, "three-line vertical inset");
+        assert_eq!(LIST_ITEM_SLOT_GAP, 16.0, "leading/trailing slot gap");
         assert_eq!(ListItemDefaults::headline_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(16.0))));
         assert_eq!(ListItemDefaults::supporting_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(14.0))));
         assert_eq!(ListItemDefaults::overline_style().font_size, Some(crate::unit::TextUnit::Sp(crate::unit::Sp(11.0))));
@@ -230,9 +242,20 @@ mod tests {
             assert_eq!(nodes[root].measured_size.width, 320.0);
             assert_eq!(nodes[root].measured_size.height, expected_height);
             let row = child(nodes, root, 0);
+            // The vertical inset follows the line count. Assert the modifier's own padding rather than the
+            // row's `y`: the row is CENTRED inside what the padding leaves, so its position also carries a
+            // centring offset (which is why the old `>=` bound could not tell 8 from 10).
+            let expected_vertical = if expected_height == LIST_ITEM_THREE_LINE_HEIGHT {
+                LIST_ITEM_THREE_LINE_VERTICAL_PADDING
+            } else {
+                LIST_ITEM_VERTICAL_PADDING
+            };
+            let (_, pad_t, _, pad_b) = nodes[root].modifier.get_padding_sides();
+            assert_eq!(pad_t, expected_vertical, "top inset follows the line count");
+            assert_eq!(pad_b, expected_vertical, "bottom inset follows the line count");
             assert_eq!(row.position.x, LIST_ITEM_HORIZONTAL_PADDING);
-            assert!(row.position.y >= LIST_ITEM_VERTICAL_PADDING);
-            assert!(row.position.y + row.measured_size.height <= expected_height - LIST_ITEM_VERTICAL_PADDING + 0.01);
+            assert!(row.position.y >= expected_vertical);
+            assert!(row.position.y + row.measured_size.height <= expected_height - expected_vertical + 0.01);
             assert_eq!(row.measured_size.width, 320.0 - 2.0 * LIST_ITEM_HORIZONTAL_PADDING);
         }
     }

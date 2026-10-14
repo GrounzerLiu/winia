@@ -17,7 +17,11 @@ Winia 的 `ListItem` 对齐 AndroidX Material 3 `ListItem` 的 slot 结构和高
 | 二行 | 72dp | headline 加 overline 或 supporting |
 | 三行 | 88dp | 同时提供 overline 和 supporting |
 
-默认水平内边距为 16dp，leading、文本列和 trailing 之间为 12dp。组件默认填满父级宽度；外部 `modifier` 在默认 modifier 之后应用，可继续叠加尺寸、背景或测试标记。
+The horizontal inset is 16dp, and the gap between the leading slot, the text column and the trailing slot
+is 16dp as well (`LeadingContentEndPadding` / `TrailingContentStartPadding`). The vertical inset is 8dp for
+the one- and two-line layouts and 12dp for the three-line one, matching Compose's
+`verticalPadding(listItemType)`. The component fills its parent's width by default; an external `modifier`
+is applied after the default one, so it can add size, background or test tags.
 
 ## Slots
 
