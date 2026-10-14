@@ -8,6 +8,9 @@
 //! - The determinate variant, which morphs between its two shapes by progress instead of spinning
 
 use winia::prelude::*;
+// `MaterialShapes` is not re-exported by winia (only `RoundedPolygon` is), so this demo names the shapes
+// crate directly — it is a dependency of winia, which is all an example in this package needs.
+use material_shapes::MaterialShapes;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
 #[path = "common/settings.rs"]
 mod settings;
@@ -96,6 +99,26 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
                 .font_size(11.0)
                 .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
+
+            // `shapes` replaces the built-in sequence, as upstream's `polygons` parameter does. On the
+            // determinate variant the first two shapes are the ends of its single morph; the indeterminate
+            // one walks the whole sequence in order and wraps from the last shape back to the first.
+            section_title(ctx, "Custom shape sequence");
+            Row::new().spacing(24.0).build(ctx, |ctx| {
+                LoadingIndicator::determinate(ctx.remember(|| 0.5_f32))
+                    .shapes(vec![
+                        MaterialShapes::soft_burst().normalized(),
+                        MaterialShapes::pentagon().normalized(),
+                    ])
+                    .build(ctx);
+                LoadingIndicator::new()
+                    .shapes(vec![
+                        MaterialShapes::circle().normalized(),
+                        MaterialShapes::pill().normalized(),
+                        MaterialShapes::sunny().normalized(),
+                    ])
+                    .build(ctx);
+            });
         });
 }
 
