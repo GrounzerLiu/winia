@@ -471,6 +471,8 @@ impl IconButton {
         let shape = match self.shape {
             Some(explicit) => explicit,
             None => {
+                // The paint is inset back to the token container (see `inset` below), so CornerFull is
+                // half of that — not half the 48 dp touch target the node is measured at.
                 let round = width.min(height) / 2.0;
                 let morph = ctx.animate_float_as_state(
                     if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
@@ -484,8 +486,16 @@ impl IconButton {
             }
         };
 
+        // The two smallest sizes are narrower than the 48 dp touch target, and that target grows the NODE.
+        // `background` paints on the content box, so without this the content box would be the 48 dp node
+        // and XSmall would look exactly like Small. Compose gets the split for free by nesting — `.size(40)`
+        // is the placeable measured inside `minimumInteractiveComponentSize` — while winia has one flat box,
+        // so the difference has to be expressed as padding.
+        let inset = |token: f32| ((Modifier::MINIMUM_INTERACTIVE_SIZE_DP - token) / 2.0).max(0.0);
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
+            .padding_horizontal(inset(width))
+            .padding_vertical(inset(height))
             .size(width, height)
             .background(container, shape);
         // 边框：显式优先；Outlined 默认 OutlineVariant，宽度随尺寸变体
@@ -843,7 +853,8 @@ mod tests {
         };
 
         build(&mut composer);
-        // Round is CornerFull — half the 40 dp container, which is what `Shape::Circle` paints.
+        // Round is CornerFull over the token container: the paint is inset back to 40 dp inside the
+        // 48 dp touch target, which is where `Shape::Circle` used to paint.
         assert_eq!(radius(&composer), 20.0, "at rest the container is Round");
 
         source.emit_press();
