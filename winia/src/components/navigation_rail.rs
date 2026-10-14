@@ -1251,6 +1251,9 @@ impl ModalWideNavigationRail {
         let modal_shape = self.expanded_shape;
         let outer = self.modifier;
         let dismiss_state = self.state.clone();
+        // The panel's own progress follows this same state (see the content closure): collapsing flips
+        // `is_expanded()` while the overlay is still fading out, and that is what runs the width back down.
+        let panel_state = self.state.clone();
         let id: State<u64> = ctx.remember(next_overlay_id);
         // `has_header` is captured by the `Fn` content closure below, which may run every frame. The panel's
         // own progress is animated INSIDE that closure instead: an overlay composes its content per frame,
@@ -1295,13 +1298,14 @@ impl ModalWideNavigationRail {
                 // tokens rather than the plain rail's. Both the modifier and the policy are rebuilt here:
                 // this closure is `Fn` (the overlay composes it every frame it is up), so nothing can be
                 // moved out of it.
-                // Grows out of the collapsed width on the rail's own spring, so opening reads as the rail
-                // widening rather than a panel appearing. NOT `animate_float_as_state`: that seeds its
-                // `Animating` with the TARGET (`composer.rs`: `Animating::new(target.clone())`), so its
-                // first frame is already at rest and nothing animates. `push_animatable` drives the
-                // remembered 0 up to 1, and since the target never changes it runs exactly once.
+                // Grows out of the collapsed width on the rail's own spring, and shrinks back the same way:
+                // the target FOLLOWS the state, so collapsing — which flips `is_expanded()` immediately,
+                // while this overlay is still fading out — runs the width back down. NOT
+                // `animate_float_as_state`: that seeds its `Animating` with the TARGET
+                // (`composer.rs`: `Animating::new(target.clone())`), so its first frame would be at rest.
                 let progress: State<f32> = ctx.remember(|| 0.0_f32);
-                crate::animation::push_animatable(progress.clone(), 1.0, rail_container_spec());
+                let target = if panel_state.is_expanded() { 1.0 } else { 0.0 };
+                crate::animation::push_animatable(progress.clone(), target, rail_container_spec());
                 let panel = outer
                     .clone()
                     .fill_max_size()
