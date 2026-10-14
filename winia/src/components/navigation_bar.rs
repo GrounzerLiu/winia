@@ -213,15 +213,18 @@ fn with_alpha_factor(color: Color, factor: f32) -> Color {
 // ── 动画规格 ──
 
 /// An item's icon/label fade: M3 runs it on the `DefaultEffects` token
-/// (`material3/NavigationBar.kt:265`: `animationSpec = MotionSchemeKeyTokens.DefaultEffects.value()`),
-/// i.e. damping 1.0 / stiffness 1600. winia used damping 1.0 / stiffness 200, five times softer.
+/// (`material3/NavigationBar.kt:264`: `animationSpec = MotionSchemeKeyTokens.DefaultEffects.value()`),
+/// i.e. damping 1.0 / stiffness 1600 (`tokens/StandardMotionTokens.kt`:
+/// `SpringDefaultEffectsDamping/Stiffness = 1.0f / 1600.0f`). winia used damping 1.0 / stiffness 200,
+/// five times softer.
 fn nav_alpha_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
 
 /// The indicator pill's size: M3 runs it on the `FastSpatial` token
-/// (`material3/NavigationBar.kt:270`), damping 0.9 / stiffness 1400 — the 0.9 is why the pill settles
-/// with a slight overshoot where winia's no-bouncy 400 settled flat.
+/// (`material3/NavigationBar.kt:270`), damping 0.9 / stiffness 1400
+/// (`tokens/StandardMotionTokens.kt`: `SpringFastSpatialDamping/Stiffness`) — the 0.9 is why the pill
+/// settles with a slight overshoot where winia's no-bouncy 400 settled flat.
 fn nav_size_spec() -> crate::animation::AnimationSpec {
     crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast())
 }
@@ -904,6 +907,17 @@ mod tests {
         assert_eq!(
             label.position.y,
             v_pad + NAVIGATION_BAR_ICON_SIZE + INDICATOR_VERTICAL_PADDING + INDICATOR_TO_LABEL_PADDING
+        );
+        // The label shares the indicator's axis: both are centred on the container. Nothing pinned the
+        // label's x before this, so the centring basis could have drifted with no test noticing. Note that
+        // M3 centres it elsewhere — its `labelXTopIcon` ignores the measured width and centres the label in
+        // a fixed 72dp band (iconW + 2x(IndicatorHorizontalPadding + ItemHorizontalPadding)). That is a
+        // different basis, not a different result on this geometry; running upstream to compare is not
+        // possible here, so this test pins what winia actually does rather than claiming parity.
+        assert_eq!(
+            label.position.x + label.measured_size.width / 2.0,
+            indicator.position.x + indicator.measured_size.width / 2.0,
+            "label 居中在与指示器相同的轴上"
         );
     }
 
