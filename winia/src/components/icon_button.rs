@@ -31,12 +31,13 @@ pub enum IconButtonSize {
 }
 
 impl IconButtonSize {
-    /// 容器边长（Small = 48：本框架把 M3 的 40dp 视觉容器与 48dp 触摸目标
-    /// 合并为一个容器；其余按 token：32/56/96/136）
+    /// Container height in dp — the `ContainerHeight` token for this size (32/40/56/96/136). Small
+    /// used to read 48, merging M3's 40 dp container with the 48 dp touch target; the two are
+    /// separate now, and `build` reserves the target with `minimum_interactive_component_size`.
     pub fn container_size(self) -> f32 {
         match self {
             IconButtonSize::XSmall => 32.0,
-            IconButtonSize::Small => 48.0,
+            IconButtonSize::Small => 40.0,
             IconButtonSize::Medium => 56.0,
             IconButtonSize::Large => 96.0,
             IconButtonSize::XLarge => 136.0,
@@ -169,7 +170,8 @@ impl IconButtonColors {
 pub struct IconButtonDefaults;
 
 impl IconButtonDefaults {
-    /// 容器尺寸：M3 为 40dp 容器 + 48dp 最小触摸目标；本框架直接用 48
+    /// The small container's height — M3's 40 dp container, inside the 48 dp touch target that
+    /// `build` reserves via `minimum_interactive_component_size`.
     pub fn container_size() -> f32 {
         IconButtonSize::Small.container_size()
     }
@@ -273,6 +275,7 @@ pub struct IconButton {
     shape: Shape,
     border: Option<ButtonBorder>,
     size_variant: IconButtonSize,
+    width_option: IconButtonWidthOption,
     modifier: Modifier,
 }
 
@@ -288,6 +291,7 @@ impl IconButton {
             shape: IconButtonDefaults::shape(),
             border: None,
             size_variant: IconButtonSize::Small,
+            width_option: IconButtonWidthOption::Uniform,
             modifier: Modifier::new(),
         }
     }
@@ -348,6 +352,13 @@ impl IconButton {
         self
     }
 
+    /// How much horizontal room the container leaves around the icon (default `Uniform`, the square
+    /// container). See [`IconButtonSize::container_width`].
+    pub fn width_option(mut self, option: IconButtonWidthOption) -> Self {
+        self.width_option = option;
+        self
+    }
+
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
@@ -366,6 +377,7 @@ impl IconButton {
         ctx.changed(&self.size_variant);
         ctx.changed(&self.shape);
         ctx.changed(&self.border);
+        ctx.changed(&self.width_option);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self
@@ -378,9 +390,14 @@ impl IconButton {
         let content_color = colors.content_color(self.enabled);
         let shape = self.shape;
 
-        let size = self.size_variant.container_size();
+        // Compose: `.minimumInteractiveComponentSize().size(smallContainerSize())`
+        // (`material3/IconButton.kt:178-179`) — the token container (40 dp tall for Small) sits
+        // inside a 48 dp touch target, and the width option sets the horizontal space.
+        let width = self.size_variant.container_width(self.width_option);
+        let height = self.size_variant.container_size();
         let mut modifier = Modifier::new()
-            .size(size, size)
+            .minimum_interactive_component_size()
+            .size(width, height)
             .background(container, shape);
         // 边框：显式优先；Outlined 默认 OutlineVariant，宽度随尺寸变体
         let border = self.border.or_else(|| {
@@ -495,6 +512,8 @@ mod tests {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let size = crate::runtime::state::State::new(IconButtonSize::Small);
         let mut composer = crate::runtime::composer::Composer::new();
+        // `build` reserves a 48 dp touch target around the token container, so the widest node is the
+        // target: 48 for Small (whose container is 40), and the container itself for Large (96).
         let widest = |composer: &crate::runtime::composer::Composer| -> f32 {
             composer
                 .arena_nodes()
@@ -519,7 +538,11 @@ mod tests {
         let constraints = crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0);
         compose(&mut composer);
         composer.layout(constraints);
-        assert_eq!(widest(&composer), 48.0, "Small is a 48 dp container");
+        assert_eq!(
+            widest(&composer),
+            48.0,
+            "Small's 40 dp container sits inside a 48 dp touch target"
+        );
 
         size.update(|s| *s = IconButtonSize::Large);
         compose(&mut composer);
@@ -607,7 +630,7 @@ mod tests {
     #[test]
     fn size_variant_dimensions() {
         assert_eq!(IconButtonSize::XSmall.container_size(), 32.0);
-        assert_eq!(IconButtonSize::Small.container_size(), 48.0);
+        assert_eq!(IconButtonSize::Small.container_size(), 40.0);
         assert_eq!(IconButtonSize::Medium.container_size(), 56.0);
         assert_eq!(IconButtonSize::Large.container_size(), 96.0);
         assert_eq!(IconButtonSize::XLarge.container_size(), 136.0);
