@@ -23,8 +23,10 @@ fn section_title(ctx: &mut ComposeCtx, text: &str) {
 
 #[composable]
 fn loading_indicator_demo(ctx: &mut ComposeCtx) {
+    // The determinate section made this taller than the window, so the column scrolls.
+    let scroll_y = ctx.remember(|| ScrollState::new()).get();
     Column::new()
-        .modifier(Modifier::new().fill_max_size().padding(16.0))
+        .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll_y))
         .build(ctx, |ctx| {
             section_title(ctx, "Uncontained（默认）");
             Row::new().spacing(24.0).build(ctx, |ctx| {
