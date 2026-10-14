@@ -1,10 +1,11 @@
-//! Loading Indicator 演示（M3 Expressive 对齐——Compose LoadingIndicator / ContainedLoadingIndicator）
+//! Loading Indicator demo (M3 Expressive — Compose's `LoadingIndicator` / `ContainedLoadingIndicator`).
 //!
-//! 展示：
-//! - Uncontained（默认，无容器，Primary indicator）
-//! - Contained（圆形容器，PrimaryContainer + OnPrimaryContainer indicator）
-//! - 自定义颜色 / 容器形状 / 缩放尺寸（24–96dp）
-//! - 与旧版一致的 7-shape Morph 动画
+//! Shows:
+//! - Uncontained (the default: no container, a Primary indicator)
+//! - Contained (a round container, PrimaryContainer + OnPrimaryContainer)
+//! - Custom colours, container shapes and scales (24–96dp)
+//! - The seven-shape morph loop
+//! - The determinate variant, which morphs between its two shapes by progress instead of spinning
 
 use winia::prelude::*;
 // Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
@@ -67,6 +68,33 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
                     .modifier(Modifier::new().size(96.0, 96.0))
                     .build(ctx);
             });
+
+            // Determinate: `progress` picks the morph between two shapes (circle → soft burst), with no
+            // looping and no rotation. The three fixed ones show the ends and a midpoint of that one morph.
+            section_title(ctx, "Determinate — driven by progress, no spin");
+            Row::new().spacing(24.0).build(ctx, |ctx| {
+                LoadingIndicator::determinate(ctx.remember(|| 0.0_f32)).build(ctx);
+                LoadingIndicator::determinate(ctx.remember(|| 0.5_f32)).build(ctx);
+                LoadingIndicator::determinate(ctx.remember(|| 1.0_f32)).build(ctx);
+            });
+            // ... and one that follows state, so the morph can be watched moving. A determinate indicator
+            // registers no animation of its own: it only redraws when this state changes.
+            let determinate_progress = ctx.remember(|| 0.25_f32);
+            Row::new().spacing(16.0).build(ctx, |ctx| {
+                LoadingIndicator::determinate(determinate_progress.clone()).build(ctx);
+                let advanced = determinate_progress.clone();
+                Button::new()
+                    .on_click(move || {
+                        advanced.update(|p| *p = if *p >= 1.0 { 0.0 } else { *p + 0.25 })
+                    })
+                    .build(ctx, |ctx| {
+                        Text::new("Advance").build(ctx);
+                    });
+            });
+            Text::new("the glyph morphs circle → soft burst as the progress goes 0 → 1")
+                .font_size(11.0)
+                .color(WiniaTheme::colors().on_surface_variant)
+                .build(ctx);
         });
 }
 
