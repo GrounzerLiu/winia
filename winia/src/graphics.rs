@@ -332,6 +332,13 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
         IconSource::File(path) => DecodeKey::File(path.clone()),
         // A symbol has no bytes to decode: it is rasterised from the embedded variable font by
         // `symbol_blob`, so this cache has nothing to hold for it — and nothing to hand back.
+        // Gated on the same features as the variant itself: without a symbol feature `IconSource` has no
+        // `Symbol`, and an ungated arm here failed to compile for every build that left them off.
+        #[cfg(any(
+            feature = "material-symbols-outlined",
+            feature = "material-symbols-rounded",
+            feature = "material-symbols-sharp"
+        ))]
         IconSource::Symbol(_) => return None,
     };
     DECODED_CACHE.with(|cell| {
@@ -349,6 +356,11 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
             IconSource::File(path) => decode_file(path),
             // Unreachable — the match above returns early for a symbol — but written out because `match`
             // must be exhaustive, and a catch-all here would silently absorb a future variant instead.
+            #[cfg(any(
+                feature = "material-symbols-outlined",
+                feature = "material-symbols-rounded",
+                feature = "material-symbols-sharp"
+            ))]
             IconSource::Symbol(_) => None,
         };
         // 成功与失败都缓存（失败带 TTL——避免每帧重读，但会过期重试）
