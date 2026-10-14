@@ -1127,6 +1127,21 @@ fn render_pass1(
         ),
     };
 
+    // `minimum_interactive_size` reported a box bigger than its content and centred the content in it
+    // (Compose `InteractiveComponentSize.kt:125-133`), publishing where that content begins on the two
+    // `MinimumInteractive*AlignmentLine`s. Only the PAINT is inset by that, and only by that: a
+    // component whose node was grown to the 48 dp touch target still paints its own container, which is
+    // how a 40 dp IconButton escapes being drawn at 48. Padding is deliberately NOT folded in here — it
+    // has its own meaning for text and children, and composing the two would move the background of
+    // every padded component (Badge, SearchBar, SplitButton all rely on it filling their node).
+    let (min_left, min_top) = (
+        node.alignment_line(crate::layout::AlignmentLine::minimum_interactive_left())
+            .unwrap_or(0.0),
+        node.alignment_line(crate::layout::AlignmentLine::minimum_interactive_top())
+            .unwrap_or(0.0),
+    );
+    let paint_rect = Rect::new(x + min_left, y + min_top, x + w - min_left, y + h - min_top);
+
     // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
     // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
     // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
@@ -1240,7 +1255,9 @@ fn render_pass1(
                 if let Some(tp) = render_modifier_element(
                     canvas,
                     el,
-                    rect,
+                    // `paint_rect`, not the node rect: it is inset by whatever
+                    // `minimum_interactive_size` added to reach the 48 dp touch target.
+                    paint_rect,
                     x,
                     y,
                     w,
