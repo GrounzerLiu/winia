@@ -435,7 +435,6 @@ fn render_modifier_element<'a>(
     canvas: &Canvas,
     el: &'a ModifierElement,
     rect: Rect,
-    x: f32, y: f32, w: f32, h: f32,
     last_background: &mut Option<(crate::graphics::Color, crate::graphics::Shape)>,
     morph_radii: Option<[(f32, f32); 4]>,
 ) -> Option<TextParams<'a>> {
@@ -1280,10 +1279,6 @@ fn render_pass1(
                     // `paint_rect`, not the node rect: it is inset by whatever
                     // `minimum_interactive_size` added to reach the 48 dp touch target.
                     paint_rect,
-                    x,
-                    y,
-                    w,
-                    h,
                     &mut last_background,
                     tf_radii,
                 ) {
