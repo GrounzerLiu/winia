@@ -1233,9 +1233,11 @@ impl ModalWideNavigationRail {
             }
             let container = self.container_color.unwrap_or(theme.surface);
             let shape = self.collapsed_shape;
+            let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
             let policy = WideNavigationRailLayoutPolicy {
                 progress: ctx.animate_float_as_state(0.0, rail_container_spec()),
                 has_header: header.is_some(),
+                rtl,
             };
             let content = content.clone();
             let header = header.clone();
@@ -1273,6 +1275,9 @@ impl ModalWideNavigationRail {
         // own progress is animated INSIDE that closure instead: an overlay composes its content per frame,
         // and that is where a rail growing out of its collapsed width has to happen.
         let has_header = header.is_some();
+        // Captured out here for the same reason `direction` is passed to the overlay above: the content
+        // closure below runs after composition, where `direction::current()` is no longer the truth.
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
             anchor_slot: None,
@@ -1328,6 +1333,7 @@ impl ModalWideNavigationRail {
                 let policy = WideNavigationRailLayoutPolicy {
                     progress,
                     has_header,
+                    rtl,
                 };
                 match ctx.start_restartable_group(key, panel, policy) {
                     GroupStatus::Skip => {}
@@ -1453,6 +1459,10 @@ struct WideNavigationRailLayoutPolicy {
     progress: State<f32>,
     /// children[0] 是否为 header 槽（FAB/logo）——header 水平位置随展开态迁移
     has_header: bool,
+    /// Whether the header's leading indent hangs off the RIGHT edge. Captured by `build` at compose
+    /// time: placement runs after composition, where the direction local is gone. Only the header is
+    /// mirrored — an item sits at `(width - w) / 2`, which is symmetric and so unchanged by mirroring.
+    rtl: bool,
 }
 
 impl MeasurePolicy for WideNavigationRailLayoutPolicy {
@@ -1493,6 +1503,12 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
             if index == 0 && self.has_header {
                 let leading = WIDE_INDICATOR_H_PADDING;
                 x += (leading - x) * p;
+                if self.rtl {
+                    // `leading` is not "left": it resolves against the direction, so under RTL the
+                    // header hangs off the RIGHT edge instead. The item path needs no equivalent —
+                    // `(width - size.width) / 2.0` is symmetric, so mirroring leaves it where it was.
+                    x = width - x - size.width;
+                }
             }
             placements.push(Placement {
                 size,
@@ -1587,7 +1603,12 @@ impl WideNavigationRail {
         );
         // 挂载进度到状态机——current()/is_animating() 的数据源
         self.state.attach_progress(progress.clone());
-        let policy = WideNavigationRailLayoutPolicy { progress, has_header: self.header.is_some() };
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
+        let policy = WideNavigationRailLayoutPolicy {
+            progress,
+            has_header: self.header.is_some(),
+            rtl,
+        };
         let header = self.header;
         let content = self.content;
         let key = ctx.next_key();
