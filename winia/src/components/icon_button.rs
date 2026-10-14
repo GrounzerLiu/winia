@@ -208,6 +208,51 @@ impl IconButtonDefaults {
         ButtonBorder::new(width, color)
     }
 
+    /// `color` at `factor` of its own alpha — the token sets express a disabled state as the enabled
+    /// colour with `DisabledOpacity` (0.38) applied.
+    fn faded(color: Color, factor: f32) -> Color {
+        Color::from_argb((color.a as f32 * factor) as u8, color.r, color.g, color.b)
+    }
+
+    /// `IconButtonDefaults.iconButtonVibrantColors` (`material3/IconButtonDefaults.kt:110-155`): the
+    /// standard style's high-contrast set. Where the plain standard colours hand the icon
+    /// `LocalContentColor`, the vibrant set pins the token's role — `StandardIconButtonTokens.Color`,
+    /// which is `OnSurfaceVariant`.
+    pub fn icon_button_vibrant_colors(theme: &ThemeColors) -> IconButtonColors {
+        let transparent = Color::from_argb(0, 0, 0, 0);
+        IconButtonColors::new(
+            transparent,
+            theme.on_surface_variant,
+            transparent,
+            Self::faded(theme.on_surface, 0.38),
+        )
+    }
+
+    /// `IconButtonDefaults.outlinedIconButtonVibrantColors` (`:581-628`) — the same shape for the
+    /// outlined style, whose token `Color` is `OnSurfaceVariant` as well.
+    pub fn outlined_icon_button_vibrant_colors(theme: &ThemeColors) -> IconButtonColors {
+        let transparent = Color::from_argb(0, 0, 0, 0);
+        IconButtonColors::new(
+            transparent,
+            theme.on_surface_variant,
+            transparent,
+            Self::faded(theme.on_surface, 0.38),
+        )
+    }
+
+    /// `IconButtonDefaults.outlinedIconButtonVibrantBorder` (`:837-848`): the vibrant border takes the
+    /// token's `OutlineColor` (`OutlineVariant`), whereas the plain one takes `LocalContentColor`.
+    /// Both fade by `DisabledOpacity` (0.38) when disabled.
+    pub fn outlined_icon_button_vibrant_border(
+        theme: &ThemeColors,
+        enabled: bool,
+        width: f32,
+    ) -> ButtonBorder {
+        let c = theme.outline_variant;
+        let color = if enabled { c } else { Self::faded(c, 0.38) };
+        ButtonBorder::new(width, color)
+    }
+
     fn colors_for(theme: &ThemeColors, style: IconButtonStyle) -> IconButtonColors {
         match style {
             IconButtonStyle::Standard => Self::icon_button_colors(theme),
@@ -499,6 +544,35 @@ mod tests {
             2.0,
             "Large 边框 2dp"
         );
+    }
+
+    #[test]
+    fn vibrant_colors_use_the_token_roles() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        // Standard: the vibrant set pins `StandardIconButtonTokens.Color` (OnSurfaceVariant), where the
+        // plain set hands the icon `LocalContentColor`.
+        let standard = IconButtonDefaults::icon_button_vibrant_colors(&theme);
+        assert_eq!(
+            standard.container.a, 0,
+            "vibrant standard keeps a transparent container"
+        );
+        assert_eq!(standard.content, theme.on_surface_variant);
+        assert_eq!(
+            standard.disabled_content.a,
+            (theme.on_surface.a as f32 * 0.38) as u8,
+            "disabled content is OnSurface at DisabledOpacity"
+        );
+
+        let outlined = IconButtonDefaults::outlined_icon_button_vibrant_colors(&theme);
+        assert_eq!(outlined.container.a, 0);
+        assert_eq!(outlined.content, theme.on_surface_variant);
+
+        // Vibrant border: the token's OutlineColor, not the LocalContentColor the plain border uses.
+        let on = IconButtonDefaults::outlined_icon_button_vibrant_border(&theme, true, 1.0);
+        assert_eq!(on.color, theme.outline_variant);
+        assert_eq!(on.width, 1.0);
+        let off = IconButtonDefaults::outlined_icon_button_vibrant_border(&theme, false, 1.0);
+        assert_eq!(off.color.a, (theme.outline_variant.a as f32 * 0.38) as u8);
     }
 
     #[test]
