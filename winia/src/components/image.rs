@@ -97,7 +97,8 @@ pub struct Image {
     alpha: f32,
     color_filter: Option<ColorFilter>,
     filter_quality: FilterQuality,
-    /// a11y 描述（winia 无 semantics 树——预留；不影响渲染）
+    /// The accessible description. `build` publishes it as an `Image` semantics node; an image without one
+    /// stays out of the tree entirely, which is Compose's decorative case.
     content_description: Option<String>,
 }
 
@@ -163,7 +164,8 @@ impl Image {
         self
     }
 
-    /// a11y 描述（winia 无 semantics 树——预留参数，不影响渲染）
+    /// The accessible description. `build` publishes it as an `Image` semantics node, so this is what a
+    /// screen reader announces; an image without one stays out of the tree.
     pub fn content_description(mut self, desc: impl Into<String>) -> Self {
         self.content_description = Some(desc.into());
         self

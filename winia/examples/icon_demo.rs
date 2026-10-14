@@ -278,9 +278,9 @@ fn icon_demo(ctx: &mut ComposeCtx) {
         });
 
         section_title(ctx, "Tint — Auto follows the content colour / explicit / None keeps the source");
-        let two_tone = "<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" \
-                        rx=\"4\" fill=\"#1B5E20\"/><circle cx=\"12\" cy=\"12\" r=\"5\" \
-                        fill=\"#B8860B\"/></svg>";
+        let two_tone = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">\
+                        <rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" fill=\"#1B5E20\"/>\
+                        <circle cx=\"12\" cy=\"12\" r=\"5\" fill=\"#B8860B\"/></svg>";
         Row::new()
             .spacing(16.0)
             .modifier(Modifier::new().padding_vertical(4.0))

@@ -106,8 +106,9 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
 
 - 变体：`IconButton::new()`（标准）/ `filled()` / `filled_tonal()` /
   `outlined()`（默认 1px outline 边框）。
-- 默认：48×48 圆形容器（M3 为 40dp 容器 + 48dp 触摸目标，本框架直接 48）、
-  点击波纹、焦点环（主题 primary、圆形跟随）、禁用不响应。
+- Defaults: a 40×40 round container inside a 48 dp minimum touch target (as in M3), a press
+  ripple, a focus ring (theme `primary`, following the container's shape), and no response while
+  disabled.
 - 颜色：`IconButtonColors`（container/content/disabled 变体），
   `IconButtonDefaults` 提供四套默认色（标准透明底 on_surface；
   Filled primary/on_primary；Tonal secondary_container；Outlined 透明底

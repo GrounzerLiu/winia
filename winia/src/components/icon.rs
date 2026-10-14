@@ -50,12 +50,14 @@ impl From<Option<Color>> for Tint {
 }
 
 impl Tint {
-    /// Auto：单色源染当前内容色（默认主题 on_surface），File 保留原色
+    /// `Auto` tints the single-colour sources with the current content colour and leaves `File` alone.
+    /// `None` means "leave the source as it is" — except for a glyph, which has no colour of its own
+    /// (`IconSource::carries_no_colour`), where that would paint it BLACK and vanish on a dark surface.
     fn resolve(self, source: &IconSource, default_content: Color) -> Option<Color> {
         match self {
             Tint::Auto => source.default_tinted().then_some(default_content),
             Tint::Color(c) => Some(c),
-            Tint::None => None,
+            Tint::None => source.carries_no_colour().then_some(default_content),
         }
     }
 }
@@ -195,15 +197,8 @@ impl Icon {
         ctx.changed(&self.tint);
         ctx.changed(&self.auto_mirror);
         ctx.changed(&self.axes);
-        // A `Symbol` is a monochrome glyph with no colour of its own, so `Tint::None` would paint it BLACK and
-        // make it vanish on a dark surface. That one source gets the content colour; the sources that DO carry
-        // colours — an SVG document, an image file — keep `Tint::None`'s literal meaning of "leave me alone",
-        // which is the case that option exists for.
-        let content_color = WiniaTheme::content_color();
-        let tint = match self.tint {
-            Tint::None if self.source.carries_no_colour() => Some(content_color),
-            other => other.resolve(&self.source, content_color),
-        };
+        // The `Symbol` + `None` rule lives in `Tint::resolve`, with the rest of the tint policy.
+        let tint = self.tint.resolve(&self.source, WiniaTheme::content_color());
         // An explicit size applies to both axes; otherwise the source's own measurement wins, which for an
         // SVG document need not be square.
         let (width, height) = match self.size.clone() {

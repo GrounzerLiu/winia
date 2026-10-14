@@ -590,6 +590,10 @@ impl LayoutNode {
         self.measured_size = from.measured_size;
         self.flight_content_size = from.flight_content_size;
         self.cached_constraints = from.cached_constraints;
+        // Another layout product, so it travels with the rest: the measure writes it from the node's own
+        // `minimum_interactive_size`, exactly like `measured_size`, and a stale one would inset the paint of
+        // a node that has not measured yet this frame.
+        self.minimum_interactive_inset = from.minimum_interactive_inset;
         self.dirty = false;
     }
 }

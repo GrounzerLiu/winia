@@ -378,13 +378,21 @@ mod tests {
             });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
-        let widest = composer
-            .arena_nodes()
-            .iter()
-            .map(|node| node.measured_size.width)
-            .fold(0.0f32, f32::max);
+        // Both axes: the touch target is a 48 square, and folding only the width would miss a height left at
+        // the token container's 40.
+        let (widest, tallest) =
+            composer
+                .arena_nodes()
+                .iter()
+                .fold((0.0f32, 0.0f32), |(w, h), node| {
+                    (
+                        w.max(node.measured_size.width),
+                        h.max(node.measured_size.height),
+                    )
+                });
         assert_eq!(
-            widest, 48.0,
+            (widest, tallest),
+            (48.0, 48.0),
             "the node is the 48 dp touch target, with the token container painted inside it"
         );
     }
