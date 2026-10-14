@@ -214,6 +214,30 @@ impl IconSource {
         !matches!(self, IconSource::File(_))
     }
 
+    /// True when the source carries no colour of its own, so `Tint::None` would leave it painted in the
+    /// glyph's own default — BLACK — and therefore invisible on a dark surface. Only `Symbol` qualifies: it
+    /// is a monochrome variable-font glyph. An SVG document and an image file both bring fills of their own,
+    /// which is exactly what `Tint::None` exists to preserve for them.
+    pub(crate) fn carries_no_colour(&self) -> bool {
+        #[cfg(any(
+            feature = "material-symbols-outlined",
+            feature = "material-symbols-rounded",
+            feature = "material-symbols-sharp"
+        ))]
+        {
+            matches!(self, IconSource::Symbol(_))
+        }
+        #[cfg(not(any(
+            feature = "material-symbols-outlined",
+            feature = "material-symbols-rounded",
+            feature = "material-symbols-sharp"
+        )))]
+        {
+            let _ = self;
+            false
+        }
+    }
+
     /// 固有尺寸：SvgPath/Symbol 默认 24×24；SVG 文档解析 viewBox（失败回退
     /// 24×24——与 `decode_svg_str` 回退一致，避免 Image 测量 0 尺寸空白而
     /// Icon 正常显示的不一致）；位图取像素尺寸（解码失败 None——调用方按 0 处理）

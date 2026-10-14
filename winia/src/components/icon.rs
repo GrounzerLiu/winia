@@ -12,8 +12,7 @@
 
 use crate::graphics::{IconSource, IconSpec, SymbolAxes};
 use crate::composable;
-use crate::runtime::composer::{ComposeCtx, GroupStatus};
-use crate::layout::BoxLayout;
+use crate::runtime::composer::ComposeCtx;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color};
 use crate::theme::WiniaTheme;
@@ -24,7 +23,12 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tint {
-    /// 单色源（SvgPath/Svg/Symbol）染主题 on_surface；File 保留原色
+    /// Tints the single-colour sources — `SvgPath`, `Svg` and `Symbol` — with the current content colour;
+    /// `File` keeps its own colours.
+    ///
+    /// The tint is a layer-wide `SrcIn` filter (`render.rs:558-563`), so an SVG *document* carrying several
+    /// fills is flattened to one colour and nothing reports it. Compose behaves the same way and warns about
+    /// it in `Icon`'s KDoc; use `Tint::None` when the artwork is meant to be multi-coloured.
     Auto,
     Color(Color),
     None,
@@ -125,7 +129,10 @@ impl Icon {
         self
     }
 
-    /// 无障碍描述（当前存储；semantics 树实现后接入）
+    /// The node's accessible name. `build` publishes it as an `Image` semantics node, so a described icon
+    /// is announced by that name; an icon WITHOUT one publishes nothing at all, which is Compose's
+    /// decorative case (`material3/Icon.kt:146-154`) — not the same as being announced as empty.
+    /// (This doc used to say the description was merely stored until the semantics tree existed.)
     pub fn content_description(mut self, desc: impl Into<String>) -> Self {
         self.content_description = Some(desc.into());
         self
@@ -186,7 +193,15 @@ impl Icon {
         ctx.changed(&self.tint);
         ctx.changed(&self.auto_mirror);
         ctx.changed(&self.axes);
-        let tint = self.tint.resolve(&self.source, WiniaTheme::content_color());
+        // A `Symbol` is a monochrome glyph with no colour of its own, so `Tint::None` would paint it BLACK and
+        // make it vanish on a dark surface. That one source gets the content colour; the sources that DO carry
+        // colours — an SVG document, an image file — keep `Tint::None`'s literal meaning of "leave me alone",
+        // which is the case that option exists for.
+        let content_color = WiniaTheme::content_color();
+        let tint = match self.tint {
+            Tint::None if self.source.carries_no_colour() => Some(content_color),
+            other => other.resolve(&self.source, content_color),
+        };
         let (w, h) = self
             .size
             .map(|s| (s, s))
@@ -211,11 +226,11 @@ impl Icon {
         }
         let modifier = modifier.draw_icon(spec).then(self.modifier);
         let key = ctx.next_key();
-        match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {
-            GroupStatus::Skip => {}
-            GroupStatus::Enter => {}
-        }
-        ctx.end_restartable_group();
+        // `start_leaf` / `end_node`, as `image.rs` does. A restartable group around an EMPTY body only adds
+        // group bookkeeping — the body has already run — and reads like a body that was skipped. The
+        // alignment is dead config too: a childless node is centred by `fit_rect`, not by its layout.
+        ctx.start_leaf(key, modifier);
+        ctx.end_node();
     }
 }
 
@@ -232,9 +247,53 @@ mod tests {
         let path_src = IconSource::svg_path("M0 0h1z");
         assert_eq!(Tint::Auto.resolve(&path_src, theme.on_surface), Some(theme.on_surface));
         let file_src = IconSource::file("logo.png");
-        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface), None, "File 默认保留原色");
+        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface), None, "a file keeps its own colours");
         assert_eq!(Tint::None.resolve(&path_src, theme.on_surface), None);
         assert_eq!(Tint::Color(Color::RED).resolve(&file_src, theme.on_surface), Some(Color::RED));
     }
 
+    /// Two frames, the pattern `icon_button.rs` uses for the same class of bug: a leaf that Skips still has
+    /// to receive the CURRENT frame's modifier, and a changed parameter has to re-enter. Worth pinning here
+    /// because `Icon` used to wrap an already-executed body in a restartable group.
+    #[test]
+    fn a_skipping_frame_still_paints_and_a_changed_tint_re_enters() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let tint = State::new(Color::RED);
+        let mut composer = Composer::new();
+        let mut compose = |composer: &mut Composer| {
+            let chosen = tint.get();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    Icon::svg_path("M0 0h1v1z").tint(chosen).build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        };
+        let painted_tint = |composer: &Composer| -> Option<Color> {
+            composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::DrawIcon { spec } => spec.tint,
+                    _ => None,
+                })
+            })
+        };
+
+        compose(&mut composer);
+        assert_eq!(painted_tint(&composer), Some(Color::RED), "the first frame paints the tint");
+
+        // Unchanged parameters: this frame Skips, and the modifier must still be applied.
+        compose(&mut composer);
+        assert_eq!(painted_tint(&composer), Some(Color::RED), "a skipping frame still paints");
+
+        tint.update(|c| *c = Color::BLUE);
+        compose(&mut composer);
+        assert_eq!(
+            painted_tint(&composer),
+            Some(Color::BLUE),
+            "a changed tint re-enters the leaf"
+        );
+    }
 }
