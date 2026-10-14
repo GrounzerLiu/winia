@@ -115,7 +115,20 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                     });
                 }
             });
-        Text::new("XSmall 32 / Small 48 / Medium 56 / Large 96 / XLarge 136")
+        // Derived from the tokens instead of written out: this line still said "Small 48" long after the
+        // Small container became 40. A caption that cannot drift is worth the extra lines.
+        let size_note = [
+            IconButtonSize::XSmall,
+            IconButtonSize::Small,
+            IconButtonSize::Medium,
+            IconButtonSize::Large,
+            IconButtonSize::XLarge,
+        ]
+        .iter()
+        .map(|s| format!("{s:?} {:.0}", s.container_size()))
+        .collect::<Vec<_>>()
+        .join(" / ");
+        Text::new(size_note)
             .font_size(12.0)
             .color(WiniaTheme::colors().on_surface_variant)
             .build(ctx);
@@ -263,6 +276,67 @@ fn icon_demo(ctx: &mut ComposeCtx) {
                         .build(ctx);
                 });
         });
+
+        section_title(ctx, "Tint — Auto follows the content colour / explicit / None keeps the source");
+        let two_tone = "<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" \
+                        rx=\"4\" fill=\"#1B5E20\"/><circle cx=\"12\" cy=\"12\" r=\"5\" \
+                        fill=\"#B8860B\"/></svg>";
+        Row::new()
+            .spacing(16.0)
+            .modifier(Modifier::new().padding_vertical(4.0))
+            .build(ctx, |ctx| {
+                // Auto: the icon is tinted with the content colour supplied around it.
+                Icon::svg_path(star).build(ctx);
+                // An explicit colour ignores the surroundings.
+                Icon::svg_path(star)
+                    .tint(Color::from_argb(255, 0x1B, 0x5E, 0x20))
+                    .build(ctx);
+                // `None` leaves the source alone. That is what it exists for, and the reason the caption
+                // below is a two-fill document rather than a glyph: the tint is a layer-wide `SrcIn`, so
+                // `Auto` would flatten these two colours into one.
+                Icon::svg(two_tone).tint(Tint::None).build(ctx);
+            });
+        Text::new("Tint::None keeps both fills of the SVG above; Tint::Auto would render it in one colour")
+            .font_size(11.0)
+            .color(WiniaTheme::colors().on_surface_variant)
+            .build(ctx);
+
+        section_title(ctx, "Size — a plain f32, or a value resolved at LAYOUT time");
+        let growth = ctx.remember(|| 0.0f32);
+        Row::new()
+            .spacing(12.0)
+            .modifier(Modifier::new().padding_vertical(4.0))
+            .build(ctx, |ctx| {
+                // `size()` takes the same `SizeValue` `Modifier::size` does, so a closure is enough to make
+                // the icon follow a size that changes during layout — no recomposition involved.
+                let factor = growth.clone();
+                Icon::svg_path(star)
+                    .size(move || 24.0 + factor.get() * 16.0)
+                    .build(ctx);
+                Button::new()
+                    .on_click({
+                        clone!(growth);
+                        move || growth.update(|g| *g = if *g > 0.5 { 0.0 } else { 1.0 })
+                    })
+                    .build(ctx, |ctx| {
+                        Text::new("Grow").build(ctx);
+                    });
+            });
+        Text::new("the star is 24 or 40 dp depending on the button, driven through SizeValue")
+            .font_size(11.0)
+            .color(WiniaTheme::colors().on_surface_variant)
+            .build(ctx);
+
+        section_title(ctx, "Accessibility — a described icon is announced, an undescribed one is not");
+        Row::new()
+            .spacing(16.0)
+            .modifier(Modifier::new().padding_vertical(4.0))
+            .build(ctx, |ctx| {
+                Icon::svg_path(star).content_description("Favourite").build(ctx);
+                // No description: decorative, and deliberately absent from the semantics tree rather than
+                // announced as empty.
+                Icon::svg_path(star).build(ctx);
+            });
 
         Text::new("").modifier(Modifier::new().height(40.0)).build(ctx);
     });
