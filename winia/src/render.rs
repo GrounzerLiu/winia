@@ -823,13 +823,10 @@ fn render_pass1(
     // `InteractiveComponentSize.kt:125-133` measures an inner `.size(40)` and reports `max(content, 48)`
     // for the outer box — while winia has one flat box.
     //
-    // Used by the background, border, ripple, backdrop blur, graphics-layer transform and focus ring. NOT by
-    // everything: `draw_shadow_layer`, the elevation-shadow shape, custom draw nodes and the clip
-    // (`render.rs:1322-1340`) still take `rect`.
-    //
-    // For the clip that is not hypothetical: `IconButton` puts `minimum_interactive_component_size()` and
-    // `clip(shape)` on the same node, so on the two smallest sizes the clip is the 48 dp touch target while
-    // the background paints the 40 dp container. Harmless for a 24 dp icon, but a real gap.
+    // Used by the background, border, ripple, backdrop blur, the graphics layer (its clip AND its
+    // transform) and the focus ring. NOT by everything: `draw_shadow_layer`, the elevation-shadow shape,
+    // custom draw nodes, draw nodes and wrapping draw nodes still take `rect` — none of which any in-repo
+    // component pairs with a minimum-interactive inset.
     //
     // It comes from the node's inset FIELD, not from the `MinimumInteractive*AlignmentLine`s: a container
     // merges its children's alignment lines (`layout/node.rs:3346-3367`), so reading the LINE would inset

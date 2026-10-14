@@ -486,11 +486,9 @@ impl IconButton {
 
         // The node is grown to the 48 dp touch target; the renderer insets the paint back to the content
         // box using the offset this publishes, so the container keeps its token size.
-        // `.clip(shape)` sits before the background, as in compose (`IconButton.kt:180`). Note the renderer
-        // clips at the NODE box — `render.rs:1322-1340` hands `rect`, not `paint_rect`, to every clip call —
-        // so on the two smallest sizes this clips the 48 dp touch target rather than the token container
-        // (40 dp at Small, 32 at XSmall). Harmless for a 24 dp icon, but not the "clipped to the container"
-        // the shape might suggest.
+        // `.clip(shape)` sits before the background, as in compose (`IconButton.kt:180`). The renderer clips
+        // at `paint_rect` — the token container the background paints, not the 48 dp touch target the node is
+        // measured at — so this clips the container's own shape.
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
             .size(width, height)
