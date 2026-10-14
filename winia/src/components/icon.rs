@@ -14,7 +14,7 @@ use crate::graphics::{IconSource, IconSpec, SymbolAxes};
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::modifier::{Modifier};
-use crate::graphics::{Color};
+use crate::graphics::{AxisValue, Color};
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 

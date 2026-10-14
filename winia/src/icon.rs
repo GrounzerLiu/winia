@@ -9,6 +9,28 @@
 //! （Apache License 2.0，见本目录 NOTICE）。
 
 
+/// The Skia and std types the symbol path needs. `Typeface`, `Font`, `TextBlob`, `FontMgr`,
+/// `FontArguments` and the variation coordinates are all used by name below, so the imports have to be
+/// gated on the same features the code is — without them the module does not compile at all.
+#[cfg(any(
+    feature = "material-symbols-outlined",
+    feature = "material-symbols-rounded",
+    feature = "material-symbols-sharp"
+))]
+use skia_safe::font_arguments::{variation_position::Coordinate, VariationPosition};
+#[cfg(any(
+    feature = "material-symbols-outlined",
+    feature = "material-symbols-rounded",
+    feature = "material-symbols-sharp"
+))]
+use skia_safe::{Font, FontArguments, FontMgr, FourByteTag, TextBlob, Typeface};
+#[cfg(any(
+    feature = "material-symbols-outlined",
+    feature = "material-symbols-rounded",
+    feature = "material-symbols-sharp"
+))]
+use std::sync::OnceLock;
+
 #[cfg(feature = "material-symbols-outlined")]
 mod outlined;
 #[cfg(feature = "material-symbols-outlined")]

@@ -7,7 +7,7 @@
 //! describe what they were drawing.
 
 use crate::runtime::state::State;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 
 pub mod brush;
@@ -329,7 +329,9 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
         IconSource::SvgPath { data, fill_type } => DecodeKey::SvgPath(data.clone(), *fill_type),
         IconSource::Svg(data) => DecodeKey::Doc(data.clone()),
         IconSource::File(path) => DecodeKey::File(path.clone()),
-        // Every other variant is rejected here, so the second match below has no catch-all to write.
+        // A symbol has no bytes to decode: it is rasterised from the embedded variable font by
+        // `symbol_blob`, so this cache has nothing to hold for it — and nothing to hand back.
+        IconSource::Symbol(_) => return None,
     };
     DECODED_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
@@ -344,6 +346,9 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
             }
             IconSource::Svg(data) => decode_svg_str(data),
             IconSource::File(path) => decode_file(path),
+            // Unreachable — the match above returns early for a symbol — but written out because `match`
+            // must be exhaustive, and a catch-all here would silently absorb a future variant instead.
+            IconSource::Symbol(_) => None,
         };
         // 成功与失败都缓存（失败带 TTL——避免每帧重读，但会过期重试）
         let entry = (Instant::now(), decoded.map(Arc::new));
@@ -495,6 +500,18 @@ static BLOB_CACHE: LazyLock<Mutex<HashMap<BlobKey, Option<Arc<skia_safe::TextBlo
     feature = "material-symbols-rounded",
     feature = "material-symbols-sharp"
 ))]
+/// An `f32` axis value as the integer the blob cache keys on: hundredths. Fine enough that two visibly
+/// different sizes never share a blob, coarse enough that float noise from an animation does not miss the
+/// cache on every frame.
+fn quant_axis(v: f32) -> i32 {
+    (v * 100.0).round() as i32
+}
+
+#[cfg(any(
+    feature = "material-symbols-outlined",
+    feature = "material-symbols-rounded",
+    feature = "material-symbols-sharp"
+))]
 #[derive(Hash, PartialEq, Eq)]
 struct BlobKey {
     symbol: crate::icon::MaterialSymbol,
@@ -525,7 +542,9 @@ pub(crate) fn symbol_blob(
         opsz: quant_axis(opsz),
         wght: quant_axis(wght),
     };
-    let mut cache = BLOB_CACHE.lock();
+    // `std::sync::Mutex::lock` hands back a `LockResult`; a poisoned lock means some other thread panicked
+    // mid-insert, and the map itself is still usable, so take the guard out of the error rather than panic.
+    let mut cache = BLOB_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(b) = cache.get(&key) {
         return b.clone();
     }
