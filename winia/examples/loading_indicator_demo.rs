@@ -77,21 +77,20 @@ fn loading_indicator_demo(ctx: &mut ComposeCtx) {
                 LoadingIndicator::determinate(ctx.remember(|| 0.5_f32)).build(ctx);
                 LoadingIndicator::determinate(ctx.remember(|| 1.0_f32)).build(ctx);
             });
-            // ... and one that follows state, so the morph can be watched moving. A determinate indicator
-            // registers no animation of its own: it only redraws when this state changes.
+            // ... and one driven from state, so the morph AND the −180° rotation can both be watched as
+            // the progress moves. A determinate indicator registers no animation of its own: it redraws
+            // only when this state changes.
             let determinate_progress = ctx.remember(|| 0.25_f32);
             Row::new().spacing(16.0).build(ctx, |ctx| {
                 LoadingIndicator::determinate(determinate_progress.clone()).build(ctx);
-                let advanced = determinate_progress.clone();
-                Button::new()
-                    .on_click(move || {
-                        advanced.update(|p| *p = if *p >= 1.0 { 0.0 } else { *p + 0.25 })
-                    })
-                    .build(ctx, |ctx| {
-                        Text::new("Advance").build(ctx);
-                    });
+                let dragged = determinate_progress.clone();
+                Slider::new(determinate_progress.get())
+                    .value_range(0.0, 1.0)
+                    .modifier(Modifier::new().width(200.0))
+                    .on_value_change(move |v| dragged.update(|p| *p = v))
+                    .build(ctx);
             });
-            Text::new("the glyph morphs circle → soft burst as the progress goes 0 → 1")
+            Text::new("drag the slider: the glyph morphs circle → soft burst and turns as progress goes 0 → 1")
                 .font_size(11.0)
                 .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
