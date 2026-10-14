@@ -1329,9 +1329,12 @@ mod tests {
             let mut stack = vec![root];
             while let Some(i) = stack.pop() {
                 for el in nodes[i].modifier.elements() {
+                    // ONLY the clip. The search bar's container carries one; a `Background` may belong
+                    // to something inside it — an IconButton's container is a rounded rect as well once
+                    // its shape animates — and this walk keeps the LAST match it sees, so accepting
+                    // `Background` here measured that instead of the container.
                     let shape = match el {
                         crate::modifier::ModifierElement::Clip { shape } => Some(shape),
-                        crate::modifier::ModifierElement::Background { shape, .. } => Some(shape),
                         _ => None,
                     };
                     if let Some(crate::graphics::Shape::RoundedRect { corner_radius }) = shape {
