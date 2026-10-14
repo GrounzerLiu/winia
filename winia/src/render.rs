@@ -825,8 +825,11 @@ fn render_pass1(
     //
     // Used by the background, border, ripple, backdrop blur, graphics-layer transform and focus ring. NOT by
     // everything: `draw_shadow_layer`, the elevation-shadow shape, custom draw nodes and the clip
-    // (`render.rs:1322-1340`) still take `rect`. That is a known gap rather than a claim that they are right
-    // — no in-repo node carries both one of those and a minimum-interactive inset today.
+    // (`render.rs:1322-1340`) still take `rect`.
+    //
+    // For the clip that is not hypothetical: `IconButton` puts `minimum_interactive_component_size()` and
+    // `clip(shape)` on the same node, so on the two smallest sizes the clip is the 48 dp touch target while
+    // the background paints the 40 dp container. Harmless for a 24 dp icon, but a real gap.
     //
     // It comes from the node's inset FIELD, not from the `MinimumInteractive*AlignmentLine`s: a container
     // merges its children's alignment lines (`layout/node.rs:3346-3367`), so reading the LINE would inset

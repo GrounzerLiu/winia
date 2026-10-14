@@ -225,10 +225,11 @@ impl Icon {
         // An icon that was given a description is an image with a name; one without is decorative
         // and must stay out of the semantics tree entirely (Compose: a null `contentDescription` is
         // "not announced", which is not the same as "announced as empty").
-        // The caller's modifier goes FIRST so the component's own semantics land after it — the order
-        // `image.rs` uses, and the one that matters when a caller supplies their own `content_description`:
-        // the component's name wins either way, instead of depending on which component you reached for.
-        let mut modifier = self.modifier.then(Modifier::new().size(width, height));
+        // `size` stays AHEAD of the caller's modifier and only the semantics go after it. Appending the whole
+        // chain after the caller made their own `.size(..)` win here and lose for every other component,
+        // because only the LAST size element per axis survives — a silent change to public behaviour. The
+        // thing that needed fixing was the semantics precedence, so only that moved.
+        let mut modifier = Modifier::new().size(width, height).then(self.modifier);
         if let Some(description) = self.content_description.as_deref() {
             modifier = modifier.semantics(
                 crate::semantics::SemanticsConfig::new()
@@ -264,11 +265,11 @@ mod tests {
         assert_eq!(Tint::Color(Color::RED).resolve(&file_src, theme.on_surface), Some(Color::RED));
     }
 
-    /// Two frames, the pattern `icon_button.rs` uses for the same class of bug: a leaf that Skips still has
-    /// to receive the CURRENT frame's modifier, and a changed parameter has to re-enter. Worth pinning here
-    /// because `Icon` used to wrap an already-executed body in a restartable group.
+    /// A changed tint must reach the painted spec, and repainting unchanged must keep it. NOT a test of Skip:
+    /// `Icon` is a leaf (`start_leaf`/`end_node`), so there is no restartable group inside it to skip and the
+    /// node always receives the current frame's modifier — an earlier name claimed otherwise.
     #[test]
-    fn a_skipping_frame_still_paints_and_a_changed_tint_re_enters() {
+    fn a_changed_tint_reaches_the_painted_icon() {
         use crate::runtime::composer::Composer;
         use crate::runtime::state::State;
 
@@ -296,9 +297,9 @@ mod tests {
         compose(&mut composer);
         assert_eq!(painted_tint(&composer), Some(Color::RED), "the first frame paints the tint");
 
-        // Unchanged parameters: this frame Skips, and the modifier must still be applied.
+        // Painting again with nothing changed must keep the same spec.
         compose(&mut composer);
-        assert_eq!(painted_tint(&composer), Some(Color::RED), "a skipping frame still paints");
+        assert_eq!(painted_tint(&composer), Some(Color::RED), "an unchanged frame paints the same tint");
 
         tint.update(|c| *c = Color::BLUE);
         compose(&mut composer);
