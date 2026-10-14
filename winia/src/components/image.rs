@@ -5,9 +5,11 @@
 //! 绘制支持 `ContentScale`（Fit 默认）缩放 + 9 向对齐 + alpha；
 //! 来源复用 `IconSource`（文件位图 png/jpg/webp/bmp + SVG 文档，统一解码缓存）。
 //!
-//! 差距（对标 Compose foundation Image）：
-//! - `contentDescription`：winia 无 semantics 树（全框架缺口），参数保留预留；
-//! - SVG 来源与位图统一走 `content_scale_rect`（完整缩放/对齐/RTL + clipToBounds）。
+//! Accessibility: `contentDescription` publishes an `Image` semantics node; an image without one stays
+//! out of the tree entirely, which is Compose's decorative case.
+//!
+//! Both sources scale through the same `content_scale_rect` — scaling, alignment and RTL, then
+//! clipToBounds — so an SVG and a bitmap behave identically.
 
 use crate::graphics::{ContentScale, ImageAlignment};
 use crate::composable;
