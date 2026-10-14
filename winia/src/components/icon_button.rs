@@ -61,6 +61,43 @@ impl IconButtonSize {
             IconButtonSize::XLarge => 3.0,
         }
     }
+
+    /// Leading + trailing space this size leaves around the icon for a width option —
+    /// `{Narrow,Default,Wide}LeadingSpace` + the matching `...TrailingSpace` in the size's token set.
+    pub fn horizontal_space(self, option: IconButtonWidthOption) -> f32 {
+        let (narrow, uniform, wide) = match self {
+            IconButtonSize::XSmall => (8.0, 12.0, 20.0),
+            IconButtonSize::Small => (8.0, 16.0, 28.0),
+            IconButtonSize::Medium => (24.0, 32.0, 48.0),
+            IconButtonSize::Large => (32.0, 64.0, 96.0),
+            IconButtonSize::XLarge => (64.0, 96.0, 144.0),
+        };
+        match option {
+            IconButtonWidthOption::Narrow => narrow,
+            IconButtonWidthOption::Uniform => uniform,
+            IconButtonWidthOption::Wide => wide,
+        }
+    }
+
+    /// Container width: `IconSize + horizontal space`, the arithmetic `smallContainerSize` performs
+    /// (`material3/IconButtonDefaults.kt:880-883`). `Uniform` reproduces the square container, so it
+    /// equals that size's `ContainerHeight`.
+    pub fn container_width(self, option: IconButtonWidthOption) -> f32 {
+        self.icon_size() + self.horizontal_space(option)
+    }
+}
+
+/// `IconButtonWidthOption` (`material3/IconButtonDefaults.kt:886-905`): how much horizontal room the
+/// container leaves around the icon. Upstream names these the narrow, uniform and wide
+/// configurations, recommending them for small, medium and wide screens respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconButtonWidthOption {
+    /// The dense configuration: `NarrowLeadingSpace` + `NarrowTrailingSpace`.
+    Narrow,
+    /// `DefaultLeadingSpace` + `DefaultTrailingSpace` — the square container, and the default.
+    Uniform,
+    /// The roomy configuration: `WideLeadingSpace` + `WideTrailingSpace`.
+    Wide,
 }
 
 /// 图标按钮颜色集——容器/内容各含 enabled/disabled 变体
@@ -509,6 +546,34 @@ mod tests {
         assert_eq!(IconButtonSize::Medium.outline_width(), 1.0);
         assert_eq!(IconButtonSize::Large.outline_width(), 2.0);
         assert_eq!(IconButtonSize::XLarge.outline_width(), 3.0);
+    }
+
+    #[test]
+    fn width_options_match_the_tokens() {
+        use IconButtonWidthOption::{Narrow, Uniform, Wide};
+        // Uniform is the square container, so its width IS that size's `ContainerHeight` token.
+        for (size, height) in [
+            (IconButtonSize::XSmall, 32.0),
+            (IconButtonSize::Small, 40.0),
+            (IconButtonSize::Medium, 56.0),
+            (IconButtonSize::Large, 96.0),
+            (IconButtonSize::XLarge, 136.0),
+        ] {
+            assert_eq!(
+                size.container_width(Uniform),
+                height,
+                "Uniform reproduces the square container"
+            );
+        }
+        // Narrow and Wide are the token spaces around the icon: Small 4+4 / 14+14, Medium 12+12 /
+        // 24+24, XLarge 32+32 / 72+72.
+        assert_eq!(IconButtonSize::Small.container_width(Narrow), 32.0);
+        assert_eq!(IconButtonSize::Small.container_width(Wide), 52.0);
+        assert_eq!(IconButtonSize::Medium.container_width(Narrow), 48.0);
+        assert_eq!(IconButtonSize::Medium.container_width(Wide), 72.0);
+        assert_eq!(IconButtonSize::XLarge.container_width(Wide), 184.0);
+        assert_eq!(IconButtonSize::Small.horizontal_space(Narrow), 8.0);
+        assert_eq!(IconButtonSize::Large.horizontal_space(Uniform), 64.0);
     }
 
     #[test]
