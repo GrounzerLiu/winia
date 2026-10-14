@@ -1132,11 +1132,12 @@ fn render_pass1(
             );
             canvas.restore();
         }
-        // clip 到节点原始 bounds（变换**前**——Compose 语义：先裁剪到图层
-        // bounds 再变换，旋转后角落会被切掉；变换后裁剪会随内容一起转，
-        // clip 变成无效操作）
+        // Clip to the layer's bounds, BEFORE the transform (Compose semantics: clip to the layer bounds
+        // first and transform second, so a rotation cuts the corners off — clipping after the transform
+        // would rotate with the content and cancel itself out). `paint_rect`: the layer's bounds are the
+        // container, not the 48 dp touch target the node was grown to.
         if gl.clip {
-            canvas.clip_rect(rect, None, true);
+            canvas.clip_rect(paint_rect, None, true);
         }
         // `paint_rect` too: the layer's bounds are the container, not the 48 dp touch target the node was
         // grown to — the same box the shadow transform above rotates around.
