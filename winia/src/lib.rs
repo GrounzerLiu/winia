@@ -42,6 +42,10 @@ macro_rules! debug_log {
     };
 }
 
+/// The shape type a caller passes to `LoadingIndicator::shapes` — the very `RoundedPolygon` winia builds
+/// its Material shapes from, re-exported so a caller does not need to depend on `material-shapes` itself.
+pub use material_shapes::RoundedPolygon;
+
 pub mod graphics;
 pub mod icon;
 pub mod modifier;

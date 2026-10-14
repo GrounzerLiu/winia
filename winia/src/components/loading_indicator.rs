@@ -23,7 +23,7 @@ use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::theme::{ThemeColors, WiniaTheme};
 use material_shapes::{MaterialShapes, Morph, MorphToPath, RoundedPolygon};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 /// 容器总尺寸（`md.comp.loading-indicator.container.width/height = 48dp`）
@@ -98,6 +98,9 @@ pub struct LoadingIndicator {
     /// that 0..1 progress (values outside the range are coerced) and never spins. `None` is the ordinary
     /// indeterminate spinner.
     progress: Option<State<f32>>,
+    /// A caller-supplied shape sequence in place of the built-in one — upstream's `polygons` parameter.
+    /// `Arc` so the node can hold a copy without cloning the shapes every frame.
+    shapes: Option<Arc<[RoundedPolygon]>>,
 }
 
 impl Default for LoadingIndicator {
@@ -116,6 +119,7 @@ impl LoadingIndicator {
             container_color: None,
             container_shape: LOADING_INDICATOR_CONTAINER_SHAPE,
             progress: None,
+            shapes: None,
         }
     }
 
@@ -165,6 +169,21 @@ impl LoadingIndicator {
     /// 覆盖容器形状（默认圆形；仅在 contained 配置下可见）。
     pub fn container_shape(mut self, shape: Shape) -> Self {
         self.container_shape = shape;
+        self
+    }
+
+    /// Morph through a shape sequence of the caller's own instead of the built-in one — upstream's
+    /// `polygons` parameter. The indeterminate indicator walks the sequence in order and wraps from the
+    /// last shape back to the first; the determinate one takes its first two shapes as the ends of its
+    /// single morph.
+    ///
+    /// Two shapes are the minimum, as upstream requires (it throws `IllegalArgumentException` for a shorter
+    /// list). A shorter list is ignored here and the defaults stay in place — a panic at paint time would
+    /// report the same mistake far worse.
+    pub fn shapes(mut self, shapes: Vec<RoundedPolygon>) -> Self {
+        if shapes.len() >= 2 {
+            self.shapes = Some(Arc::from(shapes));
+        }
         self
     }
 
@@ -266,6 +285,7 @@ impl LoadingIndicator {
                 morph_rotation_target: morph_rotation_target.clone(),
                 global_rotation: global_rotation.clone(),
                 determinate: self.progress.clone(),
+                shapes: self.shapes.clone(),
             });
 
         // The role is the same either way; the determinate variant reports no value, since winia's
@@ -286,7 +306,6 @@ impl LoadingIndicator {
 /// Loading 绘制节点（exp/wavy-node 迁移：原 `.draw` 匿名闭包）。
 /// 4 个动画值（morph_progress/index/rotation_target/global_rotation）peek，
 /// 不进 key；静态参数全进。
-#[derive(Debug)]
 pub(crate) struct LoadingIndicatorNode {
     pub(crate) is_contained: bool,
     pub(crate) container_shape: Shape,
@@ -300,6 +319,23 @@ pub(crate) struct LoadingIndicatorNode {
     /// `Some(progress)` makes this the determinate variant: the morph `t` is that 0..1 value over the single
     /// determinate morph, and nothing rotates.
     pub(crate) determinate: Option<State<f32>>,
+    /// The caller's shape sequence when they supplied one. Those polygons are not `'static`, so unlike the
+    /// built-in sequences they cannot be baked into a cached `Morph` — the draw builds one per frame.
+    pub(crate) shapes: Option<Arc<[RoundedPolygon]>>,
+}
+
+/// `RoundedPolygon` implements neither `Debug` nor `Clone` (material-shapes derives nothing on it), so a
+/// derived impl would not compile once the node holds a caller's sequence. It is reported by length.
+impl std::fmt::Debug for LoadingIndicatorNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadingIndicatorNode")
+            .field("is_contained", &self.is_contained)
+            .field("container_shape", &self.container_shape)
+            .field("indicator_color", &self.indicator_color)
+            .field("container_color", &self.container_color)
+            .field("custom_shapes", &self.shapes.as_ref().map(|s| s.len()))
+            .finish()
+    }
 }
 
 impl crate::modifier::DrawNode for LoadingIndicatorNode {
@@ -318,11 +354,24 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
             // Skia's positive angle is already clockwise, so the sign carries over unchanged — the glyph
             // starts upright and ends upside down at full progress.
             let rotation = -t * 180.0;
-            (DETERMINATE_MORPH.to_path(t, 0, None, None, None, None), rotation)
+            let path = match &self.shapes {
+                // A caller's pair is not `'static`, so its single morph is built on the spot.
+                Some(shapes) => Morph::new(&shapes[0], &shapes[1]).to_path(t, 0, None, None, None, None),
+                None => DETERMINATE_MORPH.to_path(t, 0, None, None, None, None),
+            };
+            (path, rotation)
         } else {
             let current_index = self.morph_index.peek();
             let morph_progress = self.morph_progress.peek();
-            let path = MORPH_SEQUENCE[current_index].to_path(morph_progress, 0, None, None, None, None);
+            let path = match &self.shapes {
+                // Same reason as above: walk the caller's sequence in order, wrapping back to the first.
+                Some(shapes) => {
+                    let n = shapes.len();
+                    let (a, b) = (&shapes[current_index % n], &shapes[(current_index + 1) % n]);
+                    Morph::new(a, b).to_path(morph_progress, 0, None, None, None, None)
+                }
+                None => MORPH_SEQUENCE[current_index].to_path(morph_progress, 0, None, None, None, None),
+            };
             let global_rotation = self.global_rotation.as_ref().map_or(0.0, |r| r.peek());
             let rotation = morph_progress * 90.0 + self.morph_rotation_target.peek() + global_rotation;
             (path, rotation)
@@ -690,6 +739,33 @@ mod tests {
         assert!(found_container, "contained 应绘制 container");
     }
 
+    /// A caller-supplied sequence replaces the built-in one — upstream's `polygons` parameter.
+    #[test]
+    fn a_caller_supplied_shape_sequence_replaces_the_built_in_one() {
+        // `RoundedPolygon` is not `Clone`, so this sequence is built once, compared with below, then moved
+        // into the builder rather than cloned into it.
+        let custom = vec![
+            MaterialShapes::circle().normalized(),
+            MaterialShapes::pill().normalized(),
+        ];
+        // It really drives the morph: the caller's pair does not end where the built-in one does.
+        let built_in = DETERMINATE_MORPH.to_path(1.0, 0, None, None, None, None);
+        let supplied = Morph::new(&custom[0], &custom[1]).to_path(1.0, 0, None, None, None, None);
+        assert_ne!(
+            built_in.bounds(),
+            supplied.bounds(),
+            "the caller's pair must not end where the built-in pair does"
+        );
+
+        let kept = LoadingIndicator::new().shapes(custom);
+        assert_eq!(kept.shapes.as_ref().map(|s| s.len()), Some(2));
+
+        // One shape is not a sequence. Upstream throws for that; here it is ignored and the defaults stay,
+        // because a panic at paint time would report the same mistake far worse.
+        let ignored = LoadingIndicator::new().shapes(vec![MaterialShapes::circle().normalized()]);
+        assert!(ignored.shapes.is_none(), "a single shape is ignored");
+    }
+
     // ── LoadingIndicatorNode 迁移（exp/wavy-node）──
     #[test]
     fn loading_node_key_covers_static_params() {
@@ -705,6 +781,7 @@ mod tests {
             morph_rotation_target: State::new(90.0),
             global_rotation: Some(crate::runtime::state::Visual::new(10.0)),
             determinate: None,
+            shapes: None,
         };
         assert_eq!(mk(true).node_key(), mk(true).node_key());
         assert_ne!(mk(true).node_key(), mk(false).node_key(), "is_contained 应进 key");
@@ -719,6 +796,7 @@ mod tests {
             morph_rotation_target: State::new(180.0),
             global_rotation: Some(crate::runtime::state::Visual::new(300.0)),
             determinate: None,
+            shapes: None,
         };
         assert_eq!(mk(true).node_key(), moved.node_key(), "morph/旋转动画值不应进 key");
     }
@@ -760,6 +838,7 @@ mod tests {
                 morph_rotation_target: State::new(90.0),
                 global_rotation: Some(crate::runtime::state::Visual::new(0.0)),
                 determinate: None,
+                shapes: None,
             });
         let enum_mod = crate::modifier::Modifier::new()
             .size(40.0, 40.0)
