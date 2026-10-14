@@ -44,7 +44,7 @@ use crate::layout::{Alignment, BoxLayout};
 use crate::layout::components::Column;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
-use crate::overlay::{next_overlay_id, OverlayDesc, PopupPosition};
+use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
@@ -1252,13 +1252,18 @@ impl ModalWideNavigationRail {
         let outer = self.modifier;
         let dismiss_state = self.state.clone();
         let id: State<u64> = ctx.remember(next_overlay_id);
-        // Captured by the `Fn` content closure below, which may run every frame: both are rebuilt inside it
-        // rather than moved, because an `Fn` closure cannot give them up.
-        let panel_progress: State<f32> = ctx.remember(|| 1.0_f32);
+        // `has_header` is captured by the `Fn` content closure below, which may run every frame. The panel's
+        // own progress is animated INSIDE that closure instead: an overlay composes its content per frame,
+        // and that is where a rail growing out of its collapsed width has to happen.
         let has_header = header.is_some();
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
             anchor_slot: None,
+            // The rail knows its direction from COMPOSE time, where the composition local is still valid —
+            // that is the only way `TopStart` can mirror under RTL: placement-time direction comes from the
+            // anchor node, else the root node, and the root sits OUTSIDE the theme's direction provider
+            // (settings::shell provides the direction for the window content, not for the window root).
+            direction: Some(crate::layout::direction::current()),
             // `TopStart`, not `Center`: a modal rail hangs off the leading edge, and `Center` places the
             // panel by its OWN size in the middle of the window (`overlay.rs`: `Center => ((w - size.0) /
             // 2.0, (h - size.1) / 2.0)`). It is also what lets the container reach full height — the layout
@@ -1278,8 +1283,11 @@ impl ModalWideNavigationRail {
             on_dismiss: Some(Arc::new(move || dismiss_state.collapse())),
             fit_around_anchor: false,
             match_anchor_width: false,
-            enter_anim: None,
-            exit_anim: None,
+            // Fade with the scrim. The panel ALSO animates its width and shape out of the collapsed rail
+            // (see the content closure below): that is winia's stand-in for upstream's `positionProgress` +
+            // `modalState` driving the container out of its collapsed position.
+            enter_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
+            exit_anim: Some(OverlayAnimSpec::fade_only(std::time::Duration::from_millis(200))),
             local_snapshot: Vec::new(),
             content: Box::new(move |ctx| {
                 // The container hugs the leading edge and fills the height; its width is the layout
@@ -1287,13 +1295,20 @@ impl ModalWideNavigationRail {
                 // tokens rather than the plain rail's. Both the modifier and the policy are rebuilt here:
                 // this closure is `Fn` (the overlay composes it every frame it is up), so nothing can be
                 // moved out of it.
+                // Grows out of the collapsed width on the rail's own spring, so opening reads as the rail
+                // widening rather than a panel appearing. NOT `animate_float_as_state`: that seeds its
+                // `Animating` with the TARGET (`composer.rs`: `Animating::new(target.clone())`), so its
+                // first frame is already at rest and nothing animates. `push_animatable` drives the
+                // remembered 0 up to 1, and since the target never changes it runs exactly once.
+                let progress: State<f32> = ctx.remember(|| 0.0_f32);
+                crate::animation::push_animatable(progress.clone(), 1.0, rail_container_spec());
                 let panel = outer
                     .clone()
                     .fill_max_size()
                     .background(modal_color, modal_shape);
                 let key = ctx.next_key();
                 let policy = WideNavigationRailLayoutPolicy {
-                    progress: panel_progress.clone(),
+                    progress,
                     has_header,
                 };
                 match ctx.start_restartable_group(key, panel, policy) {

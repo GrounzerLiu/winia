@@ -63,6 +63,9 @@ pub(crate) struct OverlayWindow {
     pub(crate) id: u64,
     pub(crate) composer: crate::runtime::composer::Composer,
     pub(crate) anchor_slot: Option<u64>,
+    /// The direction `*Start`/`*End` positions resolve against, when the caller supplied one at compose time
+    /// (see `OverlayDesc::direction`). `None` falls back to the anchor node's direction, else the root's.
+    pub(crate) direction: Option<crate::layout::LayoutDirection>,
     pub(crate) position: crate::overlay::PopupPosition,
     pub(crate) offset: (f32, f32),
     /// Grow the panel out of its anchor along both axes (see `OverlayDesc::anchor_slide`).
@@ -531,13 +534,17 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
         // makes it correct at placement time — placement runs after composition, and the local is not a
         // placement-time concept.
         let direction = {
-            let anchor_node = ov
-                .anchor_slot
-                .and_then(|s| root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s)));
-            let from_node = anchor_node
-                .and_then(|nid| root.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, nid)))
-                .map(|idx| nodes[idx].layout_direction)
-                .or_else(|| root.map(|r| nodes[r].layout_direction));
+            // An overlay may know its own direction from COMPOSE time, where the composition local is still
+            // valid — placement runs after composition, which is why the node rule below cannot recover it.
+            let from_node = ov.direction.or_else(|| {
+                let anchor_node = ov
+                    .anchor_slot
+                    .and_then(|s| root.and_then(|r| crate::layout::node::find_node_id_by_slot_key(nodes, r, s)));
+                anchor_node
+                    .and_then(|nid| root.and_then(|r| crate::layout::node::find_node_by_id(nodes, r, nid)))
+                    .map(|idx| nodes[idx].layout_direction)
+                    .or_else(|| root.map(|r| nodes[r].layout_direction))
+            });
             from_node.unwrap_or(crate::layout::direction::current())
         };
         use crate::overlay::PopupPosition as P;
@@ -1133,6 +1140,7 @@ impl OverlayWindow {
             id: desc.id,
             composer,
             anchor_slot: desc.anchor_slot,
+            direction: desc.direction,
             position: desc.position,
             offset: desc.offset,
             dismiss_on_back_press: desc.dismiss_on_back_press,
@@ -1373,6 +1381,7 @@ mod overlay_close_tests {
         let desc = |enter: Option<OverlayAnimSpec>, exit: Option<OverlayAnimSpec>| OverlayDesc {
             id: 7,
             anchor_slot: None,
+            direction: None,
             position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slide: None,
@@ -1430,6 +1439,7 @@ mod overlay_close_tests {
         let desc = |dismiss_on_back_press: bool| OverlayDesc {
             id: 9,
             anchor_slot: None,
+            direction: None,
             position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slide: None,
@@ -1485,6 +1495,7 @@ mod overlay_close_tests {
         let desc = |defers: bool, called: Arc<std::sync::atomic::AtomicUsize>| OverlayDesc {
             id: 11,
             anchor_slot: None,
+            direction: None,
             position: PopupPosition::Center,
             offset: (0.0, 0.0),
             anchor_slide: None,

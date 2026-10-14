@@ -139,6 +139,7 @@ impl Tooltip {
             };
             ctx.open_overlay(crate::overlay::OverlayDesc {
                 id: id.get(),
+                direction: None,
                 anchor_slot: Some(anchor_slot),
                 position: self.position,
                 offset: self.offset,

@@ -360,6 +360,11 @@ impl Default for OverlayAnimSpec {
 pub struct OverlayDesc {
     pub(crate) id: u64,
     pub(crate) anchor_slot: Option<u64>,
+    /// The direction the `*Start`/`*End` positions resolve against. `None` keeps the existing rule: the
+    /// anchor node's own resolved direction when there is one, else the root node's. A component that knows
+    /// its direction at COMPOSE time — where the composition local is still valid — can pass it here.
+    /// Placement runs after composition, which is exactly why the local cannot be consulted there.
+    pub(crate) direction: Option<crate::layout::LayoutDirection>,
     pub(crate) position: PopupPosition,
     pub(crate) offset: (f32, f32),
     pub(crate) anchor_slide: Option<AnchorSlide>,
@@ -505,6 +510,7 @@ impl Popup {
             // Anchor = caller-supplied (see `anchor_slot`); default = last sibling
             // in the current scope — always None inside build's own scope ->
             // window alignment.
+            direction: None,
             anchor_slot: anchor,
             position: self.position,
             offset: self.offset,
@@ -641,6 +647,7 @@ impl Dialog {
         }
         ctx.open_overlay(crate::overlay::OverlayDesc {
             id: id.get(),
+            direction: None,
             anchor_slot: self.anchor_slot,
             position: self.position,
             offset: self.offset,

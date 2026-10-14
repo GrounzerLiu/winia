@@ -381,6 +381,7 @@ impl DropdownMenu {
             exit_anim.anchor_pivot = true;
             ctx.open_overlay(crate::overlay::OverlayDesc {
                 id: id.get(),
+                direction: None,
                 anchor_slot: Some(anchor_slot),
                 position: PopupPosition::BottomStart,
                 offset: self.offset,

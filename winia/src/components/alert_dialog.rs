@@ -261,6 +261,7 @@ impl BasicAlertDialog {
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
             anchor_slot: None,
+            direction: None,
             // `Center` positions the overlay's own size, i.e. the dialog box, in the window.
             position: PopupPosition::Center,
             offset: (0.0, 0.0),

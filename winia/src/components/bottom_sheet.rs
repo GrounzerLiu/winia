@@ -195,6 +195,7 @@ impl ModalBottomSheet {
         let content_dismiss = on_dismiss_req.clone();
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
+            direction: None,
             anchor_slot: None,
             position: PopupPosition::Center, // 面板 fill_max_size 占满 overlay；内容 Stack(End) 贴底
             offset: (0.0, 0.0),
