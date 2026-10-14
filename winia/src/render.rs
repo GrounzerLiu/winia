@@ -821,8 +821,12 @@ fn render_pass1(
     // The box this node's OWN content occupies: `rect` minus whatever its
     // `Modifier::minimum_interactive_size` moved inward. Compose gets the same split by nesting —
     // `InteractiveComponentSize.kt:125-133` measures an inner `.size(40)` and reports `max(content, 48)`
-    // for the outer box — while winia has one flat box, so every paint (background, border, ripple, blur,
-    // layer transform, focus ring) walks this instead of the node box.
+    // for the outer box — while winia has one flat box.
+    //
+    // Used by the background, border, ripple, backdrop blur, graphics-layer transform and focus ring. NOT by
+    // everything: `draw_shadow_layer`, the elevation-shadow shape, custom draw nodes and the clip
+    // (`render.rs:1322-1340`) still take `rect`. That is a known gap rather than a claim that they are right
+    // — no in-repo node carries both one of those and a minimum-interactive inset today.
     //
     // It comes from the node's inset FIELD, not from the `MinimumInteractive*AlignmentLine`s: a container
     // merges its children's alignment lines (`layout/node.rs:3346-3367`), so reading the LINE would inset

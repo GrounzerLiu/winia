@@ -3074,6 +3074,12 @@ fn measure_node_inner(
     // reporting one (text that became empty, a leaf that became a container) cannot leave a stale
     // position for a Row/Column to align by. Folded nodes never reach this, so they keep theirs.
     nodes[idx].alignment_lines.clear();
+    // The inset belongs to the same measurement, for the same reason: a node that stops carrying
+    // `Modifier::minimum_interactive_size` — removed from the chain, or disabled with
+    // `minimum_interactive_size(0.0)` — must not keep the offset from when it did, or the paint insets a box
+    // that was never grown (a 40 dp container drawn at 32). The write further down only happens while the
+    // element is in force, so clearing here is what makes its absence meaningful.
+    nodes[idx].minimum_interactive_inset = None;
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
