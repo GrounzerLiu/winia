@@ -113,6 +113,29 @@ impl IconButtonSize {
             IconButtonSize::Large | IconButtonSize::XLarge => Shape::rounded(16.0),
         }
     }
+
+    /// The corner radius `container_shape` paints, as a number — with `CornerFull` expressed through
+    /// `round`, half the container's shorter side, which is what `Shape::Circle` resolves to at paint
+    /// time. The press morph interpolates these, and a `Circle` carries no radius to interpolate.
+    pub fn container_radius(self, family: IconButtonShape, round: f32) -> f32 {
+        match family {
+            IconButtonShape::Round => round,
+            IconButtonShape::Square => match self {
+                IconButtonSize::XSmall | IconButtonSize::Small => 12.0,
+                IconButtonSize::Medium => 16.0,
+                IconButtonSize::Large | IconButtonSize::XLarge => 28.0,
+            },
+        }
+    }
+
+    /// `PressedContainerShape`'s corner radius (CornerSmall / CornerMedium / CornerLarge).
+    pub fn pressed_container_radius(self) -> f32 {
+        match self {
+            IconButtonSize::XSmall | IconButtonSize::Small => 8.0,
+            IconButtonSize::Medium => 12.0,
+            IconButtonSize::Large | IconButtonSize::XLarge => 16.0,
+        }
+    }
 }
 
 /// Which of a size's two container shapes to use — `ContainerShapeRound` or `ContainerShapeSquare`.
@@ -433,22 +456,34 @@ impl IconButton {
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
         let container = colors.container_color(self.enabled);
         let content_color = colors.content_color(self.enabled);
-        // The container's shape: an explicit `shape()` wins, otherwise the size's shape family. A press
-        // morphs it to the size's `PressedContainerShape` (upstream has the token but no consumer yet).
-        let rest = self
-            .shape
-            .unwrap_or_else(|| self.size_variant.container_shape(self.shape_family));
-        let shape = if interaction.state(self.enabled).pressed {
-            self.size_variant.pressed_container_shape()
-        } else {
-            rest
-        };
-
         // Compose: `.minimumInteractiveComponentSize().size(smallContainerSize())`
         // (`material3/IconButton.kt:178-179`) — the token container (40 dp tall for Small) sits
-        // inside a 48 dp touch target, and the width option sets the horizontal space.
+        // inside a 48 dp touch target, and the width option sets the horizontal space. The morph
+        // below needs the container's own size, because `CornerFull` is half the shorter side.
         let width = self.size_variant.container_width(self.width_option);
         let height = self.size_variant.container_size();
+
+        // The container's shape. An explicit `shape()` wins outright, press included; otherwise the
+        // size's shape family with a press travelling to that size's `PressedContainerShape` — an
+        // animated morph rather than a switch, so the corners move. (`Shape::Circle` has no radius to
+        // interpolate, hence the arithmetic.) The animation runs through recomposition: reading the
+        // animated value here re-runs this build every frame, so the painted corner follows it.
+        let shape = match self.shape {
+            Some(explicit) => explicit,
+            None => {
+                let round = width.min(height) / 2.0;
+                let morph = ctx.animate_float_as_state(
+                    if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
+                    crate::animation::AnimationSpec::Spring(
+                        crate::animation::SpringSpec::spatial_fast(),
+                    ),
+                );
+                let rest = self.size_variant.container_radius(self.shape_family, round);
+                let pressed = self.size_variant.pressed_container_radius();
+                Shape::rounded(rest + (pressed - rest) * morph.get())
+            }
+        };
+
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
             .size(width, height)
@@ -772,47 +807,64 @@ mod tests {
     }
 
     #[test]
-    fn a_press_morphs_the_container_shape() {
-        // The container paints through `background(color, shape)`, so the shape its node carries is the
-        // one a press should have morphed.
-        let painted = |source: &MutableInteractionSource| -> Option<Shape> {
-            let mut composer = crate::runtime::composer::Composer::new();
-            let src = source.clone();
-            composer.compose(move |ctx| {
-                IconButton::new()
-                    .on_click(|| {})
-                    .interaction_source(src.clone())
-                    .build(ctx, |ctx| {
-                        crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
-                            .build(ctx);
-                    });
+    fn a_press_morphs_the_container_shape_over_time() {
+        // The container paints through `background(color, shape)`, so the shape its node carries is
+        // wherever the morph has reached. The animation lives in the composer's slot, so this reuses
+        // one composer instead of rebuilding per sample.
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconButton::new()
+                        .on_click(|| {})
+                        .interaction_source(src.clone())
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                .build(ctx);
+                        });
+                });
             });
             composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
-            composer.arena_nodes().iter().find_map(|node| {
+        };
+        let radius = |composer: &crate::runtime::composer::Composer| -> f32 {
+            let painted = composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
                     crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
                     _ => None,
                 })
-            })
+            });
+            match painted {
+                Some(Shape::RoundedRect { corner_radius }) => corner_radius,
+                other => panic!("the container should be a rounded rect, got {other:?}"),
+            }
         };
 
-        let source = MutableInteractionSource::new();
-        assert_eq!(
-            painted(&source),
-            Some(Shape::Circle),
-            "at rest a standard icon button is the round container"
-        );
+        build(&mut composer);
+        // Round is CornerFull — half the 40 dp container, which is what `Shape::Circle` paints.
+        assert_eq!(radius(&composer), 20.0, "at rest the container is Round");
+
         source.emit_press();
-        assert_eq!(
-            painted(&source),
-            Some(Shape::rounded(8.0)),
-            "pressing morphs it to Small's PressedContainerShape"
+        build(&mut composer);
+        assert_ne!(
+            radius(&composer),
+            8.0,
+            "a press starts a morph instead of switching the shape"
         );
-        source.emit_release();
-        assert_eq!(
-            painted(&source),
-            Some(Shape::Circle),
-            "and it returns when released"
+
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        assert!(
+            (radius(&composer) - 8.0).abs() < 0.5,
+            "and it arrives at Small's PressedContainerShape, got {}",
+            radius(&composer)
         );
     }
 
