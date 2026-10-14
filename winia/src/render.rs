@@ -481,12 +481,16 @@ fn render_modifier_element<'a>(
             None
         }
         ModifierElement::Border { width, color, shape } => {
-            // 边框色与形状均等于容器时合并为纯填充（M3 drawBox 语义）：
-            // 半透明色在填充上再叠一层 stroke 会双重混合，边框带明显深于内部
+            // When the border's colour and shape both equal the container's, collapse it into the fill
+            // (M3 `drawBox` semantics): stroking a translucent colour over that same fill blends it
+            // twice, and the border reads visibly darker than the interior.
             if *last_background != Some((*color, shape.clone())) {
+                // `rect`, not the node: the outline belongs to the container, which is smaller than the
+                // node once `minimum_interactive_size` grew the node to the touch target.
+                let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
                 match morph_radii {
-                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, color, r),
-                    None => draw_border(canvas, x, y, w, h, *width, color, shape),
+                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, *width, color, r),
+                    None => draw_border(canvas, bx, by, bw, bh, *width, color, shape),
                 }
             }
             None
@@ -494,9 +498,10 @@ fn render_modifier_element<'a>(
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
             let color = (color_fn)();
             if *last_background != Some((color, shape.clone())) {
+                let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
                 match morph_radii {
-                    Some(r) => draw_border_morphed(canvas, x, y, w, h, *width, &color, r),
-                    None => draw_border(canvas, x, y, w, h, *width, &color, shape),
+                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, *width, &color, r),
+                    None => draw_border(canvas, bx, by, bw, bh, *width, &color, shape),
                 }
             }
             None
@@ -1030,7 +1035,16 @@ fn render_pass1(
     // backdropBlur 语义。参考 v1 item.rs 实现：物理像素 snapshot + CropRect
     // blur + clip 到节点 + 像素网格对齐画回（draw_image 无采样缩放）。
     if let Some(radius) = node.modifier.backdrop_blur_radius() {
-        draw_backdrop_blur(canvas, x, y, w, h, radius);
+        // The blurred region is the container, not the node: the node may have been grown to the 48 dp
+        // touch target, and blurring that samples outside the control that owns it.
+        draw_backdrop_blur(
+            canvas,
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            radius,
+        );
     }
 
     // 图形层：包住整个节点（background + text + children），应用 alpha/变换/颜色滤镜
@@ -1077,7 +1091,15 @@ fn render_pass1(
         // 随 3D 形变，且不参与内容 clip（对标 Compose：层阴影在边界外）
         if gl.shadow_elevation > 0.0 {
             canvas.save();
-            apply_gl_transform(canvas, &gl, x, y, w, h);
+            // Transform around the container's centre, for the same reason.
+            apply_gl_transform(
+                canvas,
+                &gl,
+                rect.x(),
+                rect.y(),
+                rect.width(),
+                rect.height(),
+            );
             let shape = gl.shadow_shape.clone().unwrap_or(crate::graphics::Shape::Rectangle);
             draw_elevation_shadow(
                 canvas,
@@ -2400,6 +2422,47 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The outline belongs to the container, not to the node that `minimum_interactive_size` grew to the
+    /// 48 dp touch target: a Small Outlined IconButton paints a 40 dp box, stroke included. Before the fix
+    /// the stroke followed the node and measured 48, which is what made it look oversized.
+    #[test]
+    fn an_outlined_icon_button_paints_its_outline_at_the_container_size() {
+        use crate::components::icon_button::IconButton;
+        use crate::runtime::composer::Composer;
+        use crate::theme::{ThemeColors, WiniaTheme};
+
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                IconButton::outlined().on_click(|| {}).build(ctx, |_ctx| {});
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 120.0, 0.0, 120.0));
+        let root = composer.layout_root_idx().expect("root");
+        let mut surface = skia_safe::surfaces::raster_n32_premul((120, 120)).expect("surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        render(composer.arena_nodes(), root, surface.canvas());
+
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // Scan the vertical middle: a transparent container leaves only the two stroke edges painted.
+        let row = &px[24 * 120..25 * 120];
+        let painted: Vec<usize> = (0..120)
+            .filter(|x| row[*x][0] < 250 || row[*x][1] < 250 || row[*x][2] < 250)
+            .collect();
+        let (left, right) = (
+            *painted.first().expect("the outline should paint something"),
+            *painted.last().unwrap(),
+        );
+        assert_eq!(
+            (right - left + 1) as f32,
+            40.0,
+            "a Small Outlined IconButton's outline spans its 40 dp container, not the 48 dp node \
+             (painted columns {left}..={right})"
+        );
+    }
 
     #[test]
     fn tf_aux_text_paints() {
