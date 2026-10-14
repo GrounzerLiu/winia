@@ -3,7 +3,8 @@
 //! Run: `cargo run -p winia --example icon_button_demo`
 //!
 //! 1. The four styles — Standard / Filled / FilledTonal / Outlined — each with the colours it
-//!    resolves from the theme, and the Outlined border from `outlineVariant`.
+//!    resolves from the theme, and the Outlined border from the content colour — only the VIBRANT
+//!    outlined set pins `outlineVariant`.
 //! 2. The five sizes (32 / 40 / 56 / 96 / 136 dp), each with its own icon size and outline width.
 //!    Every size reserves a 48 dp touch target, so on Small and XSmall the pressable area is wider
 //!    than the paint — click just outside the circle and it still responds.
@@ -74,7 +75,7 @@ fn icon_button_demo(ctx: &mut ComposeCtx) {
                 ctx,
                 "Standard and Outlined paint no container and take their icon colour from the \
                  surrounding content colour; Filled is primary/on-primary, FilledTonal is \
-                 secondary-container; Outlined adds an outlineVariant border. The last one is \
+                 secondary-container; Outlined adds a border in the content colour. The last one is \
                  disabled: a transparent container, an on-surface icon at 38 %, and no click target.",
             );
 

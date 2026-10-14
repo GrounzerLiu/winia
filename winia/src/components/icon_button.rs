@@ -486,9 +486,12 @@ impl IconButton {
 
         // The node is grown to the 48 dp touch target; the renderer insets the paint back to the content
         // box using the offset this publishes, so the container keeps its token size.
+        // `.clip(shape)` sits before the background, as in compose (`IconButton.kt:180`): the icon is clipped
+        // to the container, which is what the Square family and the pressed morph rely on.
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
             .size(width, height)
+            .clip(shape)
             .background(container, shape);
         // 边框：显式优先；Outlined 默认 OutlineVariant，宽度随尺寸变体
         let border = self.border.or_else(|| {
@@ -831,6 +834,11 @@ mod tests {
 
     #[test]
     fn a_press_morphs_the_container_shape_over_time() {
+        // `update_animations` below drives the process-wide table, which `clear_all_animations` (200+ call
+        // sites) empties for everyone — so this holds the same lock the animation tests take.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // The container paints through `background(color, shape)`, so the shape its node carries is
         // wherever the morph has reached. The animation lives in the composer's slot, so this reuses
         // one composer instead of rebuilding per sample.
@@ -872,6 +880,12 @@ mod tests {
 
         source.emit_press();
         build(&mut composer);
+        // The morph must be REGISTERED, and the shape must not have switched yet. `assert_ne!` on its own
+        // would also pass if no animation had started at all: the resting radius is 20, not 8.
+        assert!(
+            crate::animation::is_animating(),
+            "pressing registers the shape morph"
+        );
         assert_ne!(
             radius(&composer),
             8.0,
