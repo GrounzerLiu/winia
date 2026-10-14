@@ -381,6 +381,13 @@ pub struct LayoutNode {
     /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
     /// lines. Usually empty, and an empty `Vec` does not allocate.
     pub alignment_lines: Vec<(AlignmentLine, f32)>,
+    /// How far this node's OWN `Modifier::minimum_interactive_size` moved its content in from the node
+    /// box, as `(left, top)`. Kept as a field rather than read back from the
+    /// `MinimumInteractive*AlignmentLine`s because a container MERGES its children's alignment lines
+    /// (`node.rs:3346-3367`), so every ancestor of a Button inherits that offset — and reading the line
+    /// while painting an ancestor would inset the ancestor's own background. Only the node the modifier
+    /// belongs to writes this, and only while painting itself does it read it.
+    pub minimum_interactive_inset: Option<(f32, f32)>,
     /// Where a LEAF's own content sits inside its box when a modifier moved it — the measured
     /// `(x, y, content width, content height)`, or `None` for the ordinary case.
     ///
@@ -606,6 +613,7 @@ impl LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
+            minimum_interactive_inset: None,
             content_box_override: None,
             children: Vec::new(),
             measure_policy,
@@ -692,6 +700,7 @@ impl Default for LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
+            minimum_interactive_inset: None,
             content_box_override: None,
             has_image_content: false,
             children: Vec::new(),
@@ -3670,6 +3679,10 @@ fn measure_node_inner(
             let top = ((size_px - content.height) / 2.0).max(0.0);
             nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_left(), left);
             nodes[idx].set_alignment_line(AlignmentLine::minimum_interactive_top(), top);
+            // The paint reads THIS field, not the lines just above: a container merges its children's
+            // alignment lines (see the field's comment), so an ancestor reading the line would inset its
+            // own background. Only the node the modifier belongs to ever sets this.
+            nodes[idx].minimum_interactive_inset = Some((left, top));
             {
                 let cx = (width - content.width) / 2.0;
                 let cy = (height - content.height) / 2.0;

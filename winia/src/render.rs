@@ -818,6 +818,21 @@ fn render_pass1(
 
     let rect = Rect::new(x, y, x + w, y + h);
 
+    // The box this node's OWN content occupies: `rect` minus whatever its
+    // `Modifier::minimum_interactive_size` moved inward. Compose gets the same split by nesting —
+    // `InteractiveComponentSize.kt:125-133` measures an inner `.size(40)` and reports `max(content, 48)`
+    // for the outer box — while winia has one flat box, so every paint (background, border, ripple, blur,
+    // layer transform, focus ring) walks this instead of the node box.
+    //
+    // It comes from the node's inset FIELD, not from the `MinimumInteractive*AlignmentLine`s: a container
+    // merges its children's alignment lines (`layout/node.rs:3346-3367`), so reading the LINE would inset
+    // the background of every ancestor that merely CONTAINS a Button — the expanded SearchBar panel among
+    // them. Padding is deliberately NOT folded in: it has its own meaning for text and children, and
+    // composing the two would move the background of every padded component (Badge, SearchBar and
+    // SplitButton rely on their background filling the node).
+    let (min_left, min_top) = node.minimum_interactive_inset.unwrap_or((0.0, 0.0));
+    let paint_rect = Rect::new(x + min_left, y + min_top, x + w - min_left, y + h - min_top);
+
     // Shared-element flight visuals (Tier 0): outermost morph — pure
     // render-phase (translate/scale/alpha/clip), zero recomposition.
     // Backdrop blur snapshots AFTER the transform (whatever lies beneath the
@@ -1038,10 +1053,10 @@ fn render_pass1(
         // touch target, and blurring that samples outside the control that owns it.
         draw_backdrop_blur(
             canvas,
-            rect.x(),
-            rect.y(),
-            rect.width(),
-            rect.height(),
+            paint_rect.x(),
+            paint_rect.y(),
+            paint_rect.width(),
+            paint_rect.height(),
             radius,
         );
     }
@@ -1094,10 +1109,10 @@ fn render_pass1(
             apply_gl_transform(
                 canvas,
                 &gl,
-                rect.x(),
-                rect.y(),
-                rect.width(),
-                rect.height(),
+                paint_rect.x(),
+                paint_rect.y(),
+                paint_rect.width(),
+                paint_rect.height(),
             );
             let shape = gl.shadow_shape.clone().unwrap_or(crate::graphics::Shape::Rectangle);
             draw_elevation_shadow(
@@ -1148,20 +1163,7 @@ fn render_pass1(
         ),
     };
 
-    // `minimum_interactive_size` reported a box bigger than its content and centred the content in it
-    // (Compose `InteractiveComponentSize.kt:125-133`), publishing where that content begins on the two
-    // `MinimumInteractive*AlignmentLine`s. Only the PAINT is inset by that, and only by that: a
-    // component whose node was grown to the 48 dp touch target still paints its own container, which is
-    // how a 40 dp IconButton escapes being drawn at 48. Padding is deliberately NOT folded in here — it
-    // has its own meaning for text and children, and composing the two would move the background of
-    // every padded component (Badge, SearchBar, SplitButton all rely on it filling their node).
-    let (min_left, min_top) = (
-        node.alignment_line(crate::layout::AlignmentLine::minimum_interactive_left())
-            .unwrap_or(0.0),
-        node.alignment_line(crate::layout::AlignmentLine::minimum_interactive_top())
-            .unwrap_or(0.0),
-    );
-    let paint_rect = Rect::new(x + min_left, y + min_top, x + w - min_left, y + h - min_top);
+    // `paint_rect` (computed beside `rect` above) is the box the backgrounds and borders use.
 
     // ⚠ 阴影必须**垫底**（主循环绘制背景之前——无论链序）：Compose shadow
     // 是 graphicsLayer 独立层（垫底）。此前预扫描代码误放在主循环之后——
@@ -1499,7 +1501,9 @@ fn render_pass1(
             | ModifierElement::Clip { shape } => Some(*shape),
             _ => None,
         }).unwrap_or(crate::graphics::Shape::Rectangle);
-        draw_focus(canvas, rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
+        // `paint_rect`, not `rect`: the ring hugs the container. Drawing the container's rounded shape on
+        // the (possibly grown) node box put a squircle outside the control on the two smallest sizes.
+        draw_focus(canvas, paint_rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
     }
 
     // Scroll clip + translate
@@ -2417,6 +2421,57 @@ fn surface_snapshot(canvas: &Canvas, bounds: skia_safe::IRect) -> Option<skia_sa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression this guards: a container MERGES its children's alignment lines
+    /// (`layout/node.rs:3346-3367`), so reading `minimum_interactive_left/top` off the node while painting
+    /// an ancestor inset that ancestor's own background. The inset lives on the min-sized node now, and the
+    /// container above it must paint its full box.
+    #[test]
+    fn a_container_above_a_minimum_interactive_child_does_not_inset_itself() {
+        use crate::components::icon_button::IconButton;
+        use crate::modifier::Modifier;
+        use crate::runtime::composer::{Composer, GroupStatus};
+        use crate::theme::{ThemeColors, WiniaTheme};
+
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let key = ctx.next_key();
+                match ctx.start_restartable_group(
+                    key,
+                    Modifier::new()
+                        .size(200.0, 100.0)
+                        .background(theme.primary, crate::graphics::Shape::Rectangle),
+                    crate::layout::BoxLayout::new(),
+                ) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        IconButton::filled().on_click(|| {}).build(ctx, |_ctx| {});
+                    }
+                }
+                ctx.end_restartable_group();
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 100.0));
+        let root = composer.layout_root_idx().expect("root");
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 100)).expect("surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        render(composer.arena_nodes(), root, surface.canvas());
+
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // A row below the 48 dp child (which sits at the origin), so the whole width is the container.
+        let row = &px[70 * 200..71 * 200];
+        let painted = |x: usize| row[x][0] < 250 || row[x][1] < 250 || row[x][2] < 250;
+        assert!(
+            painted(0) && painted(199),
+            "the container must paint its full 200 dp box: the child's minimum-interactive inset belongs \
+             to the child, not to this node (left={}, right={})",
+            painted(0),
+            painted(199)
+        );
+    }
 
     /// The outline belongs to the container, not to the node that `minimum_interactive_size` grew to the
     /// 48 dp touch target: a Small Outlined IconButton paints a 40 dp box, stroke included. Before the fix
