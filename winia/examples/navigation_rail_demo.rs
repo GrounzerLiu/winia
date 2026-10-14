@@ -150,11 +150,13 @@ fn main() {
         // Follow the system theme: without a theme node the window is pinned to the light default.
         WiniaTheme::auto(ctx, |ctx| {
             Window::new()
-                // Wide enough for every column with the wide rail EXPANDED: the rail is in-flow (upstream
-                // uses `widthIn(max = 360)` too), so opening it pushes its neighbours right — 836dp of
-                // columns at 900dp left the last one pinned to the window edge, which reads as "pushed far
-                // away" rather than as a layout that simply made room.
-                .size(1100.0, 544.0)
+                // Wide enough for every column with the wide rail EXPANDED. The rail is in-flow, so
+                // opening it pushes its neighbours right: the columns end at 900dp expanded
+                // (0/80/380 wide-rail/600 modal-rail, measured through the debug server), which is
+                // exactly the window width. This was 1100dp while the expanded rail was pinned at
+                // 360; with the width back to its 220dp baseline (ContainerWidthMinimum, unless the
+                // content wants more) the original window fits again.
+                .size(900.0, 544.0)
                 .title("Navigation Rail Demo")
                 .build(ctx, |ctx| {
                     settings::shell("Navigation Rail Demo", ctx, navigation_rail_demo);
