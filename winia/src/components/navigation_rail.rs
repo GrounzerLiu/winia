@@ -1727,6 +1727,8 @@ impl WideNavigationRailItem {
             Modifier::new()
         };
 
+        // Captured at COMPOSE time: placement runs after composition, where the direction local is gone.
+        let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
         let policy = WideNavigationRailItemLayoutPolicy {
             position_progress: position_progress.clone(),
             size_progress: size_progress.clone(),
@@ -1734,6 +1736,7 @@ impl WideNavigationRailItem {
                 crate::components::navigation_bar::NavigationItemIconPosition::Top => 0.0,
                 crate::components::navigation_bar::NavigationItemIconPosition::Start => 1.0,
             }),
+            rtl,
         };
 
         let mut item_modifier = Modifier::new().min_width(NAVIGATION_RAIL_WIDTH);
@@ -1788,6 +1791,11 @@ struct WideNavigationRailItemLayoutPolicy {
     /// 图标位置覆盖（Some = 钉死 Top(0.0)/Start(1.0)，不读进度——静态 item
     /// 不因容器动画帧重测；None = 跟随 position_progress）
     position_override: Option<f32>,
+    /// RTL: the Start endpoint measures its indent off the LEADING edge (androidx names the token
+    /// `FullWidthLeadingSpace`, and a leading value resolves against the direction — 16 is not "left",
+    /// it is "leading"). The direction is captured by `build` at compose time because placement runs
+    /// after composition, where `direction::current()` is no longer the placement-time truth.
+    rtl: bool,
 }
 
 impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
@@ -1870,14 +1878,31 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         // FullWidthLeadingSpace）：胶囊锚定前导缩进、icon/label 固定 x——
         // 不可随容器居中：组含 label，居中会把图标左缘右推（container 越宽
         // 偏移越大 → 展开动画中图标向右漂移，androidx 行为是图标横向不动）
-        let start_icon_x = WIDE_INDICATOR_H_PADDING * 2.0; // 胶囊(16) + 胶囊内边距(16)
+        // The leading indent: 16 to the pill, 32 to the icon inside it. Under RTL the leading edge is the
+        // RIGHT one, so all three x are mirrored within the container.
+        let start_icon_x = if self.rtl {
+            container_w - WIDE_INDICATOR_H_PADDING * 2.0 - icon_size.width
+        } else {
+            WIDE_INDICATOR_H_PADDING * 2.0
+        };
         let start_height = min_h.max(start_ind_h);
         let start_icon = Offset::new(start_icon_x, (start_height - icon_size.height) / 2.0);
         let start_label = Offset::new(
-            start_icon_x + icon_size.width + ITEM_ICON_LABEL_GAP,
+            if self.rtl {
+                start_icon_x - ITEM_ICON_LABEL_GAP - label_size.width
+            } else {
+                start_icon_x + icon_size.width + ITEM_ICON_LABEL_GAP
+            },
             (start_height - label_size.height) / 2.0,
         );
-        let start_pill = Offset::new(WIDE_INDICATOR_H_PADDING, (start_height - start_ind_h) / 2.0);
+        let start_pill = Offset::new(
+            if self.rtl {
+                container_w - WIDE_INDICATOR_H_PADDING - full_w
+            } else {
+                WIDE_INDICATOR_H_PADDING
+            },
+            (start_height - start_ind_h) / 2.0,
+        );
 
         // ── lerp 合成 ──
         let height = top_height + (start_height - top_height) * p;
