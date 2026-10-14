@@ -1138,7 +1138,16 @@ fn render_pass1(
         if gl.clip {
             canvas.clip_rect(rect, None, true);
         }
-        apply_gl_transform(canvas, &gl, x, y, w, h);
+        // `paint_rect` too: the layer's bounds are the container, not the 48 dp touch target the node was
+        // grown to — the same box the shadow transform above rotates around.
+        apply_gl_transform(
+            canvas,
+            &gl,
+            paint_rect.x(),
+            paint_rect.y(),
+            paint_rect.width(),
+            paint_rect.height(),
+        );
         true
     } else { false };
     let mut blur_radius: Option<f32> = None;
