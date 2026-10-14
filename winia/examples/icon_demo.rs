@@ -144,21 +144,34 @@ fn icon_demo(ctx: &mut ComposeCtx) {
             .modifier(Modifier::new().padding_vertical(3.0))
             .spacing(12.0)
             .build(ctx, |ctx| {
+            // The icon itself changes with `checked`, so each switch goes through `Crossfade`: the outgoing
+            // glyph stays on screen while it fades out and the incoming one fades in. The component cannot
+            // do this for you — its `content` is a `FnOnce`, so it never sees the glyph, and Compose's
+            // `IconToggleButton` leaves the icon to the caller as well. Handing `Crossfade` the STATE (not
+            // the already-resolved `checkedN`) is what gives each generation its own icon.
             let checked0 = t0.get();
             IconToggleButton::new(checked0).on_checked_change({ clone!(t0); move |v| t0.update(|cur| *cur = v) }).build(ctx, |ctx| {
-                Icon::svg_path(if checked0 { check } else { star }).build(ctx);
+                Crossfade::new(t0.clone()).build(ctx, |ctx, on| {
+                    Icon::svg_path(if on { check } else { star }).build(ctx);
+                });
             });
             let checked1 = t1.get();
             IconToggleButton::filled(checked1).on_checked_change({ clone!(t1); move |v| t1.update(|cur| *cur = v) }).build(ctx, |ctx| {
-                Icon::svg_path(if checked1 { check } else { star }).build(ctx);
+                Crossfade::new(t1.clone()).build(ctx, |ctx, on| {
+                    Icon::svg_path(if on { check } else { star }).build(ctx);
+                });
             });
             let checked2 = t2.get();
             IconToggleButton::filled_tonal(checked2).on_checked_change({ clone!(t2); move |v| t2.update(|cur| *cur = v) }).build(ctx, |ctx| {
-                Icon::svg_path(if checked2 { check } else { star }).build(ctx);
+                Crossfade::new(t2.clone()).build(ctx, |ctx, on| {
+                    Icon::svg_path(if on { check } else { star }).build(ctx);
+                });
             });
             let checked3 = t3.get();
             IconToggleButton::outlined(checked3).on_checked_change({ clone!(t3); move |v| t3.update(|cur| *cur = v) }).build(ctx, |ctx| {
-                Icon::svg_path(if checked3 { check } else { star }).build(ctx);
+                Crossfade::new(t3.clone()).build(ctx, |ctx, on| {
+                    Icon::svg_path(if on { check } else { star }).build(ctx);
+                });
             });
             // 禁用
             IconToggleButton::new(false).enabled(false).on_checked_change(|_| {}).build(ctx, |ctx| {

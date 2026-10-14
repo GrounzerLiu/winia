@@ -640,6 +640,57 @@ mod tests {
         );
     }
 
+    /// The documented way to fade the ICON as well as the colour: `content` is a `FnOnce`, so the caller
+    /// wraps the glyph in `Crossfade` (see `docs/icon.md`, and the four buttons in `icon_demo`). What this
+    /// pins is that the two compose: `IconToggleButton` opens a restartable group, and the crossfade has to
+    /// stay functional inside it — the outgoing generation must remain on screen next to the incoming one.
+    #[test]
+    fn the_icon_cross_fades_with_the_checked_state() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(false);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::new(checked.get())
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            crate::components::Crossfade::new(checked.clone())
+                                .build(ctx, |ctx, on| {
+                                    let path = if on { "M0 0h1v1z" } else { "M0 0h2v2z" };
+                                    crate::components::icon::Icon::svg_path(path).build(ctx);
+                                });
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        // Each generation draws its own icon, so counting them counts the generations on screen.
+        let icons = |composer: &crate::runtime::composer::Composer| -> usize {
+            composer
+                .arena_nodes()
+                .iter()
+                .filter(|node| {
+                    node.modifier
+                        .elements()
+                        .iter()
+                        .any(|el| matches!(el, crate::modifier::ModifierElement::DrawIcon { .. }))
+                })
+                .count()
+        };
+
+        build(&mut composer);
+        assert_eq!(icons(&composer), 1, "one generation while nothing is changing");
+
+        checked.update(|c| *c = true);
+        build(&mut composer);
+        assert_eq!(
+            icons(&composer),
+            2,
+            "the outgoing icon stays on screen while the incoming one fades in"
+        );
+    }
+
     #[test]
     fn color_state_resolution() {
         let theme = ThemeColors::light_from_seed(0x6750A4);

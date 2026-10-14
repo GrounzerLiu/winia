@@ -132,22 +132,41 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
   重解析 tint；改变颜色请通过 IconButton 的 `colors()` 参数触发
   （`colors` 已注册进 `ctx.changed`，参数变化会重组合）。
 
-### IconToggleButton（已实现）
+### IconToggleButton (implemented)
 
-对标 material3 `IconToggleButton` 一族（`winia/src/components/icon_toggle_button.rs`）：
+Tracks material3's `IconToggleButton` family (`winia/src/components/icon_toggle_button.rs`):
 
-- 构造：`IconToggleButton::new(checked)` / `filled` / `filled_tonal` /
-  `outlined`；`on_checked_change(|checked| ...)` 回调（点击取反后调用）。
-- 六色模型 `IconToggleButtonColors`（container/content/disabled/
-  checked_container/checked_content），默认（M3 14_1_0 token）：
-  Standard checked 内容 = primary；Filled 未选 = SurfaceContainer/
-  OnSurfaceVariant、checked = Primary/OnPrimary；FilledTonal 未选 =
-  SecondaryContainer、checked = **Secondary/OnSecondary**；Outlined 未选
-  透明 + OnSurfaceVariant、checked = **InverseSurface/InverseOnSurface**
-  且**无边框**（`outlinedIconToggleButtonBorder`——checked 返回 null；
-  边框色 = OutlineVariant）。
-- 内容色下传与 IconButton 相同（checked 态内容色同样生效）。
-- 差异：disabled 容器 = OnSurface 10%、内容 = OnSurface 38%。
+- Constructors: `IconToggleButton::new(checked)` / `filled` / `filled_tonal` /
+  `outlined`; `on_checked_change(|checked| ...)` fires with the INVERTED value.
+- Six-colour model `IconToggleButtonColors` (container / content / disabled /
+  checked_container / checked_content). Defaults, per the M3 14_1_0 tokens:
+  Standard checked content = primary; Filled unchecked = SurfaceContainer /
+  OnSurfaceVariant and checked = Primary / OnPrimary; FilledTonal unchecked =
+  SecondaryContainer and checked = **Secondary / OnSecondary**; Outlined unchecked
+  = transparent + OnSurfaceVariant and checked = **InverseSurface /
+  InverseOnSurface**, with **no border** (`outlinedIconToggleButtonBorder` returns
+  null when checked; the border colour is OutlineVariant).
+- The content colour propagates exactly as IconButton's does, checked state included.
+- Differences: the disabled container is OnSurface at 10%, the disabled content
+  OnSurface at 38%.
+- The **container and content colours fade** when `checked` changes
+  (`SpringSpec::effects_default`, M3's `DefaultEffects`); enabled/disabled snaps
+  instead, per Compose's rule that there is no animation between those two states.
+- The **icon** does NOT fade on its own: `content` is a `FnOnce`, so the component
+  never sees which glyph is being drawn, and material3 leaves this to the caller
+  too. When the two states use different glyphs, wrap the icon in `Crossfade` —
+  handing it the STATE (not an already-resolved value) is what gives each
+  generation its own icon:
+
+  ```rust
+  IconToggleButton::new(checked)
+      .on_checked_change({ clone!(checked); move |v| checked.update(|c| *c = v) })
+      .build(ctx, |ctx| {
+          Crossfade::new(checked.clone()).build(ctx, |ctx, on| {
+              Icon::svg_path(if on { CHECK } else { STAR }).build(ctx);
+          });
+      });
+  ```
 
 ## 5. Demo
 
