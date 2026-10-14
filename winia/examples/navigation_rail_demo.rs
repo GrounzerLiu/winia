@@ -113,9 +113,20 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
             .build(ctx);
 
             // ── 模态宽轨（折叠时是普通轨道，展开时抬起一层带 scrim 的浮层）──
+            let modal_state_for_items = modal_state.clone();
             ModalWideNavigationRail::new(modal_state.clone(), {
                 clone!(modal_sel);
                 move |ctx| {
+                    // The items need the rail's own progress. Without it they lay out as EXPANDED even while
+                    // the rail is collapsed — the debug-server tree showed an indicator 95 wide inside a
+                    // 96-wide rail. The state is shared, so the collapsed rail and the modal layer each
+                    // animate to their own end of it.
+                    let progress = ctx.animate_float_as_state(
+                        if modal_state_for_items.is_expanded() { 1.0 } else { 0.0 },
+                        winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec {
+                            damping_ratio: 1.0, stiffness: 400.0, mass: 1.0, threshold: 0.01,
+                        }),
+                    );
                     for index in 0..DESTINATIONS.len() {
                         let (name, path) = DESTINATIONS[index];
                         WideNavigationRailItem::new(
@@ -125,6 +136,7 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                             },
                             move |ctx| Text::new(name).build(ctx),
                         )
+                        .progress(progress.clone())
                         .on_click({ clone!(modal_sel); move || modal_sel.set(index) })
                         .build(ctx);
                     }
