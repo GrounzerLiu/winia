@@ -142,6 +142,10 @@ impl Icon {
         self
     }
 
+    /// The description this icon was given, or `None` when it is decorative — the same value `build`
+    /// turns into an `Image` semantics node. Nothing in this crate reads it: `build` takes the field
+    /// directly, as the other builders here do, so this is the query for a caller that holds an `Icon`
+    /// and wants to know what it would announce before composing it.
     pub fn content_description_value(&self) -> Option<&str> {
         self.content_description.as_deref()
     }
