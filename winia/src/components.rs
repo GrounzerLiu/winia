@@ -85,7 +85,7 @@ pub use text_field::{TextField, TextFieldValue, TextChange};
 pub use crate::text::field::{TextFieldColors, TextFieldSlotRole, TextFieldVariant};
 pub use icon::{Icon, Tint};
 pub use image::Image;
-pub use icon_button::{IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize, IconButtonStyle};
+pub use icon_button::{IconButton, IconButtonColors, IconButtonDefaults, IconButtonShape, IconButtonSize, IconButtonStyle, IconButtonWidthOption};
 pub use icon_toggle_button::{IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults};
 pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
 pub use switch::{Switch, SwitchColors, SwitchDefaults};

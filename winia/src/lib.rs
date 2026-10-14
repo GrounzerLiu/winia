@@ -107,7 +107,7 @@ pub mod prelude {
         Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize,
         ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface,
         SurfaceBorder, Icon, Tint, Image, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize,
-        IconButtonStyle, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox,
+        IconButtonShape, IconButtonStyle, IconButtonWidthOption, IconToggleButton, IconToggleButtonColors, IconToggleButtonDefaults, Checkbox,
         CheckboxColors, CheckboxDefaults, TriStateCheckbox, Switch, SwitchColors, SwitchDefaults, RadioButton,
         RadioButtonColors, RadioButtonDefaults, Badge, BadgedBox, Slider, SliderColors, SliderDefaults,
         RangeSlider, RangeThumb, RangeValue, SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,
