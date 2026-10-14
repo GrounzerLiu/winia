@@ -25,6 +25,8 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
     let selected = ctx.remember(|| 0usize);
     let wide_state = WideNavigationRailState::new(ctx);
     let wide_sel = ctx.remember(|| 0usize);
+    let modal_state = WideNavigationRailState::new(ctx);
+    let modal_sel = ctx.remember(|| 0usize);
 
     Row::new()
         .modifier(Modifier::new().fill_max_size())
@@ -62,6 +64,11 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                         if wide_state.current() { "Expanded" } else { "Collapsed" },
                     ))
                     .build(ctx);
+                    // The modal rail below is a rail like the other two, so it sits in this same row and
+                    // gets the row's full height; this button only opens its layer.
+                    Button::text()
+                        .on_click({ clone!(modal_state); move || modal_state.toggle() })
+                        .build(ctx, |ctx| Text::new("Open modal rail").build(ctx));
                 });
 
             // ── Expressive 宽轨（点击按钮收起/展开）──
@@ -104,20 +111,8 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
                 .build(ctx);
             } })
             .build(ctx);
-        });
 
-    // The modal form gets its own state and a button that opens it: it raises a scrim'd layer over the
-    // page (winia's `open_overlay(modal: true)`) rather than expanding in place, so there is nothing to
-    // put beside it in the row above.
-    let modal_state = WideNavigationRailState::new(ctx);
-    let modal_sel = ctx.remember(|| 0usize);
-    Row::new()
-        .spacing(12.0)
-        .modifier(Modifier::new().padding_top(16.0))
-        .build(ctx, |ctx| {
-            Button::new()
-                .on_click({ clone!(modal_state); move || modal_state.toggle() })
-                .build(ctx, |ctx| Text::new("Open modal rail").build(ctx));
+            // ── 模态宽轨（折叠时是普通轨道，展开时抬起一层带 scrim 的浮层）──
             ModalWideNavigationRail::new(modal_state.clone(), {
                 clone!(modal_sel);
                 move |ctx| {

@@ -1061,6 +1061,15 @@ mod tests {
             overlays[0].modal,
             "and it is modal: that flag is what draws the scrim"
         );
+        // `TopStart`, NOT `Center`, and not `TopLeft` either: `Center` positions the overlay by its own
+        // measured size in the middle of the window (which is where the container used to land), `TopStart`
+        // resolves against the direction the way `Alignment.TopStart` does, and `TopLeft` is an absolute
+        // corner that would not mirror under RTL.
+        assert_eq!(
+            overlays[0].position,
+            PopupPosition::TopStart,
+            "the modal container hangs off the leading edge"
+        );
     }
 
     /// `hide_on_collapse` (upstream's dismissible variant): collapsed, the rail is not drawn at all — the
@@ -1250,7 +1259,12 @@ impl ModalWideNavigationRail {
         ctx.open_overlay(OverlayDesc {
             id: id.get(),
             anchor_slot: None,
-            position: PopupPosition::Center,
+            // `TopStart`, not `Center`: a modal rail hangs off the leading edge, and `Center` places the
+            // panel by its OWN size in the middle of the window (`overlay.rs`: `Center => ((w - size.0) /
+            // 2.0, (h - size.1) / 2.0)`). It is also what lets the container reach full height — the layout
+            // policy takes `c.min_height` as its floor, and `fill_max_size` is what sets min = max; a
+            // centred, loosely constrained panel never got that.
+            position: PopupPosition::TopStart,
             offset: (0.0, 0.0),
             anchor_slide: None,
             modal: true,
