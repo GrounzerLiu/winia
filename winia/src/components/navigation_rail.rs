@@ -802,24 +802,29 @@ mod tests {
         let nodes = composer.arena_nodes();
         assert_eq!(nodes[root].measured_size.width, WIDE_RAIL_COLLAPSED_WIDTH);
 
-        // 展开：容器宽 220（ExpandedTokens.ContainerWidthMinimum）
-        let mut composer = Composer::new();
-        composer.compose(|ctx| {
-            let state = WideNavigationRailState::new(ctx);
-            state.expand();
-            WideNavigationRail::new(state, |ctx| {
-                NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
-                    .label(|ctx| crate::components::Text::new("A").build(ctx))
-                    .on_click(|| {})
-                    .build(ctx);
-            })
-            .header(|ctx| icon_leaf(ctx, 24.0))
-            .build(ctx);
-        });
-        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
-        let root = composer.layout_root_idx().unwrap();
-        let nodes = composer.arena_nodes();
-        assert_eq!(nodes[root].measured_size.width, WIDE_RAIL_EXPANDED_MIN_WIDTH);
+        // Expanded: the width is `min(available, ContainerWidthMaximum)`, never below the minimum —
+        // upstream animates both the min and the max end and lets the constraints settle it. So 400dp of
+        // room gives the MAX, and a 200dp window gives the 200dp it has (the outer `.min(c.max_width)`).
+        let build_expanded = |max_w: f32| {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                let state = WideNavigationRailState::new(ctx);
+                state.expand();
+                WideNavigationRail::new(state, |ctx| {
+                    NavigationRailItem::new(true, |ctx| icon_leaf(ctx, 24.0))
+                        .label(|ctx| crate::components::Text::new("A").build(ctx))
+                        .on_click(|| {})
+                        .build(ctx);
+                })
+                .header(|ctx| icon_leaf(ctx, 24.0))
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, max_w, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            composer.arena_nodes()[root].measured_size.width
+        };
+        assert_eq!(build_expanded(400.0), WIDE_RAIL_EXPANDED_MAX_WIDTH);
+        assert_eq!(build_expanded(200.0), 200.0);
     }
 
     #[test]
@@ -1006,7 +1011,9 @@ mod tests {
 // ── WideNavigationRail（M3 Expressive 宽轨）──
 //
 // 对齐 androidx-main WideNavigationRail.kt 的核心行为：
-// - 容器宽 Collapsed 96dp ↔ Expanded min 220dp 动画过渡
+// - 容器宽 Collapsed 96dp ↔ Expanded 220..360dp 动画过渡：展开后的宽度取
+//   min(可用宽, 360) 且不低于 220（androidx 把 ExpandedRailMinWidth 与
+//   ExpandedRailMaxWidth 作为两个动画值，再由约束落定）
 // - item 图标位置随展开态 Top(收起)↔Start(展开) 变形
 // - label 必选且恒显示；item 横向 padding 20dp、容器顶部 padding 44dp
 //
@@ -1018,6 +1025,10 @@ mod tests {
 pub const WIDE_RAIL_COLLAPSED_WIDTH: f32 = 96.0;
 /// 宽轨展开最小宽 = NavigationRailExpandedTokens.ContainerWidthMinimum
 pub const WIDE_RAIL_EXPANDED_MIN_WIDTH: f32 = 220.0;
+/// 宽轨展开最大宽 = NavigationRailExpandedTokens.ContainerWidthMaximum. Upstream keeps it as
+/// `private val ExpandedRailMaxWidth` and applies it as `.widthIn(max = ...)`, so the expanded rail is
+/// `min(available width, this)` — not a fixed width. winia used to pin the expansion at the minimum.
+pub const WIDE_RAIL_EXPANDED_MAX_WIDTH: f32 = 360.0;
 /// 宽轨容器顶部 padding = NavigationRailCollapsedTokens.TopSpace
 pub const WIDE_RAIL_TOP_PADDING: f32 = 44.0;
 
@@ -1115,8 +1126,15 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         c: Constraints,
     ) -> (Size, Vec<Placement>) {
         let p = self.progress.get().max(0.0).min(1.0);
-        let width = (WIDE_RAIL_COLLAPSED_WIDTH
-            + (WIDE_RAIL_EXPANDED_MIN_WIDTH - WIDE_RAIL_COLLAPSED_WIDTH) * p)
+        // Upstream animates BOTH ends (Collapsed -> ExpandedRailMinWidth and Collapsed ->
+        // ExpandedRailMaxWidth) and then lets the constraints settle the width, so an expanded rail is
+        // `min(available, max)` and never below the minimum. Pinning it at the minimum left the rail
+        // narrower than M3 on any window wider than 220dp.
+        let expanded = c
+            .max_width
+            .min(WIDE_RAIL_EXPANDED_MAX_WIDTH)
+            .max(WIDE_RAIL_EXPANDED_MIN_WIDTH);
+        let width = (WIDE_RAIL_COLLAPSED_WIDTH + (expanded - WIDE_RAIL_COLLAPSED_WIDTH) * p)
             .min(c.max_width);
 
         // 子项垂直堆叠。水平位置：
