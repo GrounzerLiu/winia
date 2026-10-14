@@ -134,6 +134,19 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
 - 容器顶部 padding 44dp（TopSpace）；展开态 item 填满轨宽（全宽命中目标），
   内容起始对齐（前导缩进 16，对齐 androidx FullWidthLeadingSpace）。
 - item 同样拥抱内容、最小宽 96（CollapsedTokens.ContainerWidth）。
+- **宽轨 item 的纵向节奏随展开变化**，两端各是一组不同的 token：
+
+  | | 收起（Top） | 展开（Start） |
+  |---|---|---|
+  | item 最小高 | `TopIconItemMinHeight` = BaselineItem.ContainerHeight = **64** | `minimumA11ySize` = **48** |
+  | item 之间的间距 | ItemVerticalSpace = **4** | **0** |
+  | 胶囊高 | VerticalItem.ActiveIndicatorHeight = **32** | HorizontalItem.ActiveIndicatorHeight = **56** |
+  | 图标-标签间距 | VerticalItem.IconLabelSpace = **4** | HorizontalItem.IconLabelSpace = **8** |
+  | 内容前导缩进 | 居中 | WNRItemHorizontalPadding **20** + FullWidthLeadingSpace **16** |
+
+  前两项上游是 `animateDpAsState` 动画值（`WideNavigationRail.kt:279-289`），
+  winia 按展开进度线性插值。注意宽轨 item 的 64 与普通轨的 56 是**不同的 token**，
+  不是同一个值的两种写法。
 - 宽轨 header 之后的间距 = **40dp**（`HeaderSpaceMinimum`），与普通轨的 16dp
   不是同一个 token：普通轨是 8dp Spacer 落在 `spacedBy(4)` 的 Column 里
   （4+8+4=16），宽轨是 `headerPlaceable.height + WNRHeaderPadding`。
@@ -158,6 +171,11 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
 | WNRItemHorizontalPadding | 20 | `WIDE_RAIL_ITEM_H_PADDING` |
 | BaselineItem.HeaderSpaceMinimum（宽轨 header 间距） | 40 | `WIDE_RAIL_HEADER_PADDING` |
 | ItemVerticalPadding / RailVerticalPadding | 4 / 4 | 私有常量 |
+| BaselineItem.ContainerHeight（宽轨 item 收起态最小高） | 64 | `WIDE_RAIL_ITEM_MIN_HEIGHT` |
+| minimumA11ySize（宽轨 item 展开态最小高） | 48 | `WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED` |
+| HorizontalItem.ActiveIndicatorHeight（Start 胶囊高） | 56 | 由 `WIDE_START_INDICATOR_V_PADDING` 推出 |
+| HorizontalItem.IconLabelSpace（Start 图标-标签间距） | 8 | `WIDE_START_ICON_LABEL_GAP` |
+| ItemVerticalSpace（展开态 item 间距） | 0 | `WIDE_RAIL_ITEM_GAP_EXPANDED` |
 | NavigationRailHeaderPadding（普通轨 header 间距，含两侧 spacing） | 4+8+4=16 | 私有常量 `HEADER_SPACER` |
 | ItemActiveIndicatorIconLabelSpace | 4 | 私有常量 `ITEM_ICON_LABEL_GAP` |
 | 颜色 7 token | 同导航栏 | `rail_item_colors(&theme)` |
@@ -202,7 +220,8 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
 | `wide_rail_header_mirrors_under_rtl_and_items_do_not` | RTL header 镜像、item 不镜像 |
 | `modal_rail_is_a_plain_rail_until_it_expands` | 模态轨 overlay + TopStart |
 | `hide_on_collapse_draws_nothing_until_expanded` | dismissible 变体 |
-| `wide_rail_item_morphs_between_top_and_start_layouts` | 变形两布局端点 |
+| `wide_rail_item_morphs_between_top_and_start_layouts` | 变形两布局端点（64/56 高、20+16 前导） |
+| `wide_rail_item_gap_and_floor_follow_the_expansion` | item 间距 4→0 与最小高 64→48 |
 | `wide_rail_state_toggles_expansion` | 状态机 |
 | `wide_rail_item_target_width_expands_when_expanded` | 展开态目标区全宽（M3） |
 | `the_rail_springs_are_the_tokens_its_sources_name` | 五个动效 token |

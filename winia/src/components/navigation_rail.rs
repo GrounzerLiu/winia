@@ -103,6 +103,35 @@ const WIDE_RAIL_HEADER_PADDING: f32 = 40.0;
 /// comment there.
 const WIDE_RAIL_ITEM_H_PADDING: f32 = 20.0;
 
+/// The wide rail item's collapsed minimum height — upstream's `TopIconItemMinHeight`
+/// (`WideNavigationRail.kt:1403-1404`), which reads `NavigationRailBaselineItemTokens.ContainerHeight`
+/// = 64. It is NOT the plain rail's `NavigationRailItemHeight` (56): the wide rail's top-icon item
+/// is taller, and upstream's `item_topIconPosition_withLongLabel_automaticallyResizesHeight` uses
+/// this very token as the "default height" a long label has to exceed.
+const WIDE_RAIL_ITEM_MIN_HEIGHT: f32 = 64.0;
+
+/// The wide rail item's EXPANDED minimum height — upstream animates `itemMinHeight` from
+/// `TopIconItemMinHeight` down to `minimumA11ySize` as the rail expands
+/// (`WideNavigationRail.kt:284-289`), and `minimumA11ySize` is
+/// `LocalMinimumInteractiveComponentSize`, 48 by default.
+const WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED: f32 = 48.0;
+
+/// The vertical gap between wide rail items: upstream animates `itemVerticalSpacedBy` from
+/// `NavigationRailCollapsedTokens.ItemVerticalSpace` (4) down to **0** when expanded
+/// (`WideNavigationRail.kt:279-283`) — the expanded items carry their own spacing through the pill.
+const WIDE_RAIL_ITEM_GAP_EXPANDED: f32 = 0.0;
+
+/// The expanded (Start) item's icon-to-label gap = `NavigationRailHorizontalItemTokens.IconLabelSpace`
+/// = 8 (`WideNavigationRail.kt:820`). The Top endpoint uses the VERTICAL item's `IconLabelSpace` = 4
+/// instead (`:818`) — the two endpoints genuinely differ here.
+const WIDE_START_ICON_LABEL_GAP: f32 = 8.0;
+
+/// The expanded (Start) pill's vertical padding, one side = `ItemStartIconIndicatorVerticalPadding`
+/// = (HorizontalItem.ActiveIndicatorHeight 56 − IconSize 24) / 2 = 16 (`WideNavigationRail.kt:1406-1408`,
+/// read through `IndicatorExpandedPadding` at `:1172-1176`). The Top endpoint uses the vertical
+/// item's 4 instead, so the pill grows 32 -> 56 tall across the morph.
+const WIDE_START_INDICATOR_V_PADDING: f32 = 16.0;
+
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
 /// 桌面平台默认全零（无系统栏叠加）。未来 Android 支持或自定义窗口装饰
@@ -993,6 +1022,68 @@ mod tests {
         assert_eq!(width_with_header(500.0), WIDE_RAIL_EXPANDED_MAX_WIDTH);
     }
 
+    /// The wide rail's vertical rhythm changes with expansion, and BOTH halves of it are upstream
+    /// tokens rather than constants:
+    ///
+    /// - the gap between items is `itemVerticalSpacedBy`, 4 collapsed and **0** expanded
+    ///   (`WideNavigationRail.kt:279-283`) — an expanded item carries its own spacing in the pill;
+    /// - the item's own floor is `itemMinHeight`, `TopIconItemMinHeight` (64) collapsed and
+    ///   `minimumA11ySize` (48) expanded (`:284-289`).
+    ///
+    /// winia used 4 and 56 at both ends. This pins the four numbers by reading the first two items'
+    /// placed positions, which is what the difference actually shows up as.
+    #[test]
+    fn wide_rail_item_gap_and_floor_follow_the_expansion() {
+        // (first item y, second item y, first item height) for one expansion progress.
+        //
+        // The item's morph and the rail's gap are TWO separate progress reads: the rail policy owns
+        // the gap, the item policy owns its own geometry, and winia does not push the rail's progress
+        // into its items — the caller wires `.progress()` (as `navigation_rail_demo` does). So both
+        // are driven from the same value here, which is what a caller has to do.
+        let geometry = |progress: f32| {
+            let mut composer = Composer::new();
+            composer.compose(move |ctx| {
+                let state = WideNavigationRailState::new(ctx);
+                if progress > 0.5 {
+                    state.expand();
+                }
+                WideNavigationRail::new(state, move |ctx| {
+                    for name in ["A", "B"] {
+                        WideNavigationRailItem::new(
+                            false,
+                            |ctx| icon_leaf(ctx, 24.0),
+                            move |ctx| crate::components::Text::new(name).build(ctx),
+                        )
+                        .progress(State::new(progress))
+                        .on_click(|| {})
+                        .build(ctx);
+                    }
+                })
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let first = child(nodes, root, 0);
+            let second = child(nodes, root, 1);
+            (
+                first.position.y,
+                second.position.y,
+                first.measured_size.height,
+            )
+        };
+
+        let (y0, y1, h0) = geometry(0.0);
+        // Collapsed: the item is `TopIconItemMinHeight` tall and the next one starts one 4dp gap later.
+        assert_eq!(h0, WIDE_RAIL_ITEM_MIN_HEIGHT, "collapsed floor = TopIconItemMinHeight");
+        assert_eq!(y1 - y0 - h0, RAIL_VERTICAL_PADDING, "collapsed gap = ItemVerticalSpace");
+
+        let (y0e, y1e, h0e) = geometry(1.0);
+        // Expanded: the pill is 56 tall and the items touch — no gap at all.
+        assert_eq!(h0e, NAVIGATION_RAIL_ICON_SIZE + WIDE_START_INDICATOR_V_PADDING * 2.0);
+        assert_eq!(y1e - y0e - h0e, WIDE_RAIL_ITEM_GAP_EXPANDED, "expanded gap = 0");
+    }
+
     #[test]
     fn wide_rail_item_morphs_between_top_and_start_layouts() {
         // p=0（收起）：Top 布局——胶囊 56x32 在图标后、图标标签垂直堆叠
@@ -1010,17 +1101,23 @@ mod tests {
         composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
+        let root_size = (nodes[root].measured_size.width, nodes[root].measured_size.height);
         let indicator = child(nodes, root, 0);
         let icon = child(nodes, root, 1);
         let label = child(nodes, root, 2);
         assert_eq!(indicator.measured_size.width, NAVIGATION_RAIL_INDICATOR_WIDTH);
         assert_eq!(indicator.measured_size.height, NAVIGATION_RAIL_INDICATOR_HEIGHT);
+        // The collapsed floor is TopIconItemMinHeight = BaselineItem.ContainerHeight = 64 — the
+        // token upstream names as "defaultHeight" in
+        // item_topIconPosition_withLongLabel_automaticallyResizesHeight. The wide rail is NOT the
+        // plain rail here: that one is 56.
+        assert_eq!(root_size.1, WIDE_RAIL_ITEM_MIN_HEIGHT);
         // 图标在标签上方（垂直堆叠）
         assert!(icon.position.y < label.position.y);
         // 中心点对齐（居中排列——宽度不同 x 不同）
         assert_eq!(icon.position.x + icon.measured_size.width / 2.0, label.position.x + label.measured_size.width / 2.0);
 
-        // p=1（展开）：Start 布局——胶囊包裹 [icon+gap+label]，高 40，水平排列
+        // p=1（展开）：Start 布局——胶囊包裹 [icon+gap+label]，高 56，水平排列
         let mut composer = Composer::new();
         composer.compose(|ctx| {
             WideNavigationRailItem::new(
@@ -1035,24 +1132,40 @@ mod tests {
         composer.layout(Constraints::new(0.0, 220.0, 0.0, f32::MAX));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
+        let root_size = (nodes[root].measured_size.width, nodes[root].measured_size.height);
         let ripple = child(nodes, root, 3);
         let indicator = child(nodes, root, 0);
         let icon = child(nodes, root, 1);
         let label = child(nodes, root, 2);
         // 水平排列：label 在 icon 右侧、同垂直中心
         assert!(icon.position.x < label.position.x, "Start 布局图标在左");
-        // 展开态起始对齐（androidx FullWidthLeadingSpace）：icon/label/胶囊 x
-        // 为固定值，不随容器加宽漂移（回归：居中实现会使图标 x 随展开 +20）
-        assert_eq!(indicator.position.x, WIDE_INDICATOR_H_PADDING);
-        assert_eq!(icon.position.x, WIDE_INDICATOR_H_PADDING * 2.0);
-        assert_eq!(label.position.x, WIDE_INDICATOR_H_PADDING * 2.0 + NAVIGATION_RAIL_ICON_SIZE + ITEM_ICON_LABEL_GAP);
+        // The Start endpoint anchors at `WNRItemHorizontalPadding` (20) and puts the icon one
+        // `FullWidthLeadingSpace` (16) further in, so the icon sits 36 from the leading edge
+        // (`placeAnimatedLabelAndIcon`, `NavigationItem.kt:1143-1152`). Both x are FIXED — they must
+        // not drift as the container widens (regression: a centred implementation pushed the icon
+        // right by 20 during the expand animation).
+        assert_eq!(indicator.position.x, WIDE_RAIL_ITEM_H_PADDING);
+        assert_eq!(icon.position.x, WIDE_RAIL_ITEM_H_PADDING + WIDE_INDICATOR_H_PADDING);
+        assert_eq!(
+            label.position.x,
+            WIDE_RAIL_ITEM_H_PADDING + WIDE_INDICATOR_H_PADDING + NAVIGATION_RAIL_ICON_SIZE + WIDE_START_ICON_LABEL_GAP,
+        );
         assert_eq!(
             icon.position.y + icon.measured_size.height / 2.0,
             label.position.y + label.measured_size.height / 2.0,
         );
-        // 胶囊高 40（max(24,labelH)+16）、宽包住整组
-        assert_eq!(ripple.measured_size.height, 40.0);
-        let content_w = 24.0 + ITEM_ICON_LABEL_GAP + label.measured_size.width;
+        // The Start pill is 56 tall: max(iconH, labelH) + 2 x `ItemStartIconIndicatorVerticalPadding`
+        // (16) — `NavigationRailHorizontalItemTokens.ActiveIndicatorHeight`. It was 40 when the code
+        // used the TOP endpoint's 4dp padding and 4dp gap for both ends.
+        assert_eq!(ripple.measured_size.height, 56.0);
+        // The expanded floor is minimumA11ySize (48); the content here is taller than that, so the
+        // item settles at the pill own height.
+        assert_eq!(
+            root_size.1,
+            56.0f32.max(WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED),
+            "expanded item height = the 56 pill"
+        );
+        let content_w = 24.0 + WIDE_START_ICON_LABEL_GAP + label.measured_size.width;
         assert_eq!(
             ripple.measured_size.width,
             content_w + WIDE_INDICATOR_H_PADDING * 2.0,
@@ -1096,7 +1209,8 @@ mod tests {
     }
 
     /// icon_position 覆盖：progress=0（收起）但钉死 Start——布局应为横排位形
-    /// （图标左 label 右、胶囊高 40），不随容器变形进度插值
+    /// （图标左 label 右、胶囊高 56 = HorizontalItem.ActiveIndicatorHeight），
+    /// 不随容器变形进度插值
     #[test]
     fn wide_rail_item_icon_position_override_pins_start_layout() {
         let mut composer = Composer::new();
@@ -1120,7 +1234,11 @@ mod tests {
         assert!(icon.position.x < label.position.x, "钉死 Start：图标在 label 左");
         assert_eq!(icon.position.y + 12.0, label.position.y + label.measured_size.height / 2.0,
             "同垂直中心");
-        assert_eq!(ripple.measured_size.height, 40.0, "Start 指示器高 40");
+        assert_eq!(
+            ripple.measured_size.height,
+            NAVIGATION_RAIL_ICON_SIZE + WIDE_START_INDICATOR_V_PADDING * 2.0,
+            "Start pill = HorizontalItem.ActiveIndicatorHeight"
+        );
     }
 
     /// 三态语义：target 立即翻转 / current 跟随进度收敛侧 / is_animating 中段为真
@@ -1713,11 +1831,16 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
             });
             // After the HEADER the next child is offset by `WNRHeaderPadding`, not by the item gap:
             // `WideNavigationRail.kt` computes `headerOffset = headerPlaceable.height + WNRHeaderPadding`,
-            // so the header-to-first-item space is 40 where every other gap is 4.
+            // so the header-to-first-item space is 40 where every other gap is the item gap.
+            //
+            // That gap is animated too: upstream takes `itemVerticalSpacedBy` from
+            // `NavigationRailCollapsedTokens.ItemVerticalSpace` (4) to **0** as the rail expands
+            // (`WideNavigationRail.kt:279-283`) — an expanded item carries its own spacing in the
+            // pill, so the collapsed 4dp between items disappears. winia used 4 at both ends.
             let advance = if index == 0 && self.has_header {
                 WIDE_RAIL_HEADER_PADDING
             } else {
-                RAIL_VERTICAL_PADDING
+                RAIL_VERTICAL_PADDING + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p
             };
             y += size.height + advance;
         }
@@ -2032,14 +2155,17 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         let (icon_size, _) = measure_node(nodes, policies, children[1], loose);
         let (label_size, _) = measure_node(nodes, policies, children[2], loose);
 
-        // ── 端点指标 ──
-        // Top：胶囊 56×32 在图标后
+        // ── 端点指标（androidx WideNavigationRail.kt 的 `IndicatorCollapsedPadding` /
+        // `IndicatorExpandedPadding`，:1163-1176）──
+        // Top（收起）：胶囊 56×32 在图标后——纵向内边距 = VerticalItem.ActiveIndicatorHeight 32
+        // 减 IconSize 24 的一半 = 4；图标-标签间距 = VerticalItem.IconLabelSpace = 4。
         let top_total_w = icon_size.width + INDICATOR_H_PADDING * 2.0;
         let top_ind_h = icon_size.height + INDICATOR_V_PADDING_WITH_LABEL * 2.0;
-        // Start：胶囊包裹 [icon+gap+label]，高 40
-        let start_content_w = icon_size.width + ITEM_ICON_LABEL_GAP + label_size.width;
+        // Start（展开）：胶囊包裹 [icon + HorizontalItem.IconLabelSpace(8) + label]，
+        // 纵向内边距 = HorizontalItem.ActiveIndicatorHeight 56 减 24 的一半 = 16（故胶囊高 56）。
+        let start_content_w = icon_size.width + WIDE_START_ICON_LABEL_GAP + label_size.width;
         let start_total_w = start_content_w + WIDE_INDICATOR_H_PADDING * 2.0;
-        let start_ind_h = icon_size.height.max(label_size.height) + 8.0 * 2.0;
+        let start_ind_h = icon_size.height.max(label_size.height) + WIDE_START_INDICATOR_V_PADDING * 2.0;
 
         let full_w = top_total_w + (start_total_w - top_total_w) * p;
         let full_h = top_ind_h + (start_ind_h - top_ind_h) * p;
@@ -2059,7 +2185,12 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
             Constraints::new(animated_w, animated_w, full_h, full_h),
         );
 
-        let min_h = NAVIGATION_RAIL_ITEM_HEIGHT.max(constraints.min_height);
+        // Upstream animates `itemMinHeight` from `TopIconItemMinHeight` (64) down to
+        // `minimumA11ySize` (48) as the rail expands (`WideNavigationRail.kt:284-289`), so the
+        // two endpoints have DIFFERENT floors. winia used the plain rail's 56 for both.
+        let endpoint_min_h =
+            WIDE_RAIL_ITEM_MIN_HEIGHT + (WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED - WIDE_RAIL_ITEM_MIN_HEIGHT) * p;
+        let min_h = endpoint_min_h.max(constraints.min_height);
         // 收起：拥抱内容、至少 96（CollapsedTokens.ContainerWidth）；
         // 展开：item 填满轨宽（androidx item 为全宽命中目标——若取"轨宽-内边距"
         // 再被容器居中，item x 会随展开漂移，图标绝对坐标跟着动）。
@@ -2098,26 +2229,32 @@ impl MeasurePolicy for WideNavigationRailItemLayoutPolicy {
         // 偏移越大 → 展开动画中图标向右漂移，androidx 行为是图标横向不动）
         // The leading indent: 16 to the pill, 32 to the icon inside it. Under RTL the leading edge is the
         // RIGHT one, so all three x are mirrored within the container.
+        // The Start endpoint anchors at `WNRItemHorizontalPadding` (20), not at the pill inset:
+        // upstream places the ripple and the indicator at `itemHorizontalPadding`
+        // (`placeAnimatedLabelAndIcon`, `NavigationItem.kt:1143-1152`) and puts the icon one
+        // `FullWidthLeadingSpace` (16) further in, so the icon sits 36 from the leading edge, not 32.
+        // winia anchored the pill at 16 and the icon at 32 — both 4 short.
+        let start_pill_x = WIDE_RAIL_ITEM_H_PADDING;
         let start_icon_x = if self.rtl {
-            container_w - WIDE_INDICATOR_H_PADDING * 2.0 - icon_size.width
+            container_w - WIDE_RAIL_ITEM_H_PADDING - WIDE_INDICATOR_H_PADDING - icon_size.width
         } else {
-            WIDE_INDICATOR_H_PADDING * 2.0
+            WIDE_RAIL_ITEM_H_PADDING + WIDE_INDICATOR_H_PADDING
         };
         let start_height = min_h.max(start_ind_h);
         let start_icon = Offset::new(start_icon_x, (start_height - icon_size.height) / 2.0);
         let start_label = Offset::new(
             if self.rtl {
-                start_icon_x - ITEM_ICON_LABEL_GAP - label_size.width
+                start_icon_x - WIDE_START_ICON_LABEL_GAP - label_size.width
             } else {
-                start_icon_x + icon_size.width + ITEM_ICON_LABEL_GAP
+                start_icon_x + icon_size.width + WIDE_START_ICON_LABEL_GAP
             },
             (start_height - label_size.height) / 2.0,
         );
         let start_pill = Offset::new(
             if self.rtl {
-                container_w - WIDE_INDICATOR_H_PADDING - full_w
+                container_w - start_pill_x - full_w
             } else {
-                WIDE_INDICATOR_H_PADDING
+                start_pill_x
             },
             (start_height - start_ind_h) / 2.0,
         );
