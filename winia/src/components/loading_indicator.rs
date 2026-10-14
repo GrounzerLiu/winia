@@ -313,7 +313,12 @@ impl crate::modifier::DrawNode for LoadingIndicatorNode {
         // step it accumulates and the global spin.
         let (path, total_rotation) = if let Some(progress) = &self.determinate {
             let t = progress.peek().clamp(0.0, 1.0);
-            (DETERMINATE_MORPH.to_path(t, 0, None, None, None, None), 0.0)
+            // Upstream also ROTATES the determinate indicator as far as the progress has come:
+            // `val rotation = -progressValue * 180` with the comment "Rotate counterclockwise."
+            // Skia's positive angle is already clockwise, so the sign carries over unchanged — the glyph
+            // starts upright and ends upside down at full progress.
+            let rotation = -t * 180.0;
+            (DETERMINATE_MORPH.to_path(t, 0, None, None, None, None), rotation)
         } else {
             let current_index = self.morph_index.peek();
             let morph_progress = self.morph_progress.peek();
