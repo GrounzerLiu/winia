@@ -83,6 +83,12 @@ const HEADER_SPACER: f32 = 8.0;
 const DISABLED_ALPHA: f32 = 0.38;
 /// 宽轨 Start 态指示器横向内边距（leading/trailing 各 16，与导航栏水平 item 一致）
 const WIDE_INDICATOR_H_PADDING: f32 = 16.0;
+/// 宽轨 header 之后的间距 = NavigationRailBaselineItemTokens.HeaderSpaceMinimum.
+/// androidx computes `headerOffset = headerPlaceable.height + WNRHeaderPadding` with
+/// `WNRHeaderPadding` taken from that token (`WideNavigationRail.kt:1144`). The plain rail uses a
+/// DIFFERENT token for the same slot (`NavigationRailHeaderPadding` = 8), so the two rails are
+/// deliberately not equal here: 40 against 12.
+const WIDE_RAIL_HEADER_PADDING: f32 = 40.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
@@ -618,6 +624,14 @@ mod tests {
         assert_eq!(ITEM_ICON_LABEL_GAP, 4.0, "NavigationRailItemVerticalPadding");
         assert_eq!(RAIL_VERTICAL_PADDING, 4.0, "NavigationRailVerticalPadding");
         assert_eq!(HEADER_SPACER, 8.0, "NavigationRailHeaderPadding");
+        // The wide rail uses a DIFFERENT token for the same slot and it is much larger: androidx computes
+        // `headerOffset = headerPlaceable.height + WNRHeaderPadding`, with WNRHeaderPadding taken from
+        // `NavigationRailBaselineItemTokens.HeaderSpaceMinimum` (`WideNavigationRail.kt:1144`). The two
+        // rails are deliberately not equal here, which is why the gap reads 16 on one and 40 on the other.
+        assert_eq!(
+            WIDE_RAIL_HEADER_PADDING, 40.0,
+            "WNRHeaderPadding = HeaderSpaceMinimum"
+        );
     }
 
     #[test]
@@ -1484,7 +1498,15 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
                 size,
                 position: Offset::new(x, y),
             });
-            y += size.height + RAIL_VERTICAL_PADDING;
+            // After the HEADER the next child is offset by `WNRHeaderPadding`, not by the item gap:
+            // `WideNavigationRail.kt` computes `headerOffset = headerPlaceable.height + WNRHeaderPadding`,
+            // so the header-to-first-item space is 40 where every other gap is 4.
+            let advance = if index == 0 && self.has_header {
+                WIDE_RAIL_HEADER_PADDING
+            } else {
+                RAIL_VERTICAL_PADDING
+            };
+            y += size.height + advance;
         }
         // 高度：内容拥抱，但尊重约束下限（fill_max_height → min=max——
         // 套件 Row 中须撑满窗口高，否则轨底色只到内容底）
