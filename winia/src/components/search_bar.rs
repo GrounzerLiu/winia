@@ -1322,28 +1322,30 @@ mod tests {
             let overlays = main.take_overlays();
             panel.compose(|ctx| (overlays[0].content)(ctx));
             panel.layout(Constraints::new(0.0, 420.0, 0.0, 700.0));
-            // The container is the node carrying a rounded clip whose radius is not the default 0.
+            // Breadth-first, and take the first node carrying a `Clip` — REGARDLESS of the shape it clips.
+            // The container encloses the IconButton, so the shallowest clipping node is the container.
+            // Requiring the clip to be ROUNDED was the bug: at the expanded end the container clips
+            // `Shape::Rectangle`, so the search slid past it onto the IconButton's 20 dp rounded clip and the
+            // test read that instead. Several earlier attempts patched the ordering; the identifier was wrong.
             let root = panel.layout_root_idx()?;
             let nodes = panel.arena_nodes();
             let mut found = None;
-            let mut stack = vec![root];
-            while let Some(i) = stack.pop() {
+            let mut queue = std::collections::VecDeque::from([root]);
+            'walk: while let Some(i) = queue.pop_front() {
                 for el in nodes[i].modifier.elements() {
-                    // ONLY the clip. The search bar's container carries one; a `Background` may belong
-                    // to something inside it — an IconButton's container is a rounded rect as well once
-                    // its shape animates — and this walk keeps the LAST match it sees, so accepting
-                    // `Background` here measured that instead of the container.
-                    let shape = match el {
-                        crate::modifier::ModifierElement::Clip { shape } => Some(shape),
-                        _ => None,
-                    };
-                    if let Some(crate::graphics::Shape::RoundedRect { corner_radius }) = shape {
-                        if *corner_radius > 0.5 {
-                            found = Some(*corner_radius);
-                        }
+                    if let crate::modifier::ModifierElement::Clip { shape } = el {
+                        found = match shape {
+                            crate::graphics::Shape::RoundedRect { corner_radius }
+                                if *corner_radius > 0.5 =>
+                            {
+                                Some(*corner_radius)
+                            }
+                            _ => None,
+                        };
+                        break 'walk;
                     }
                 }
-                stack.extend(nodes[i].children.iter().copied());
+                queue.extend(nodes[i].children.iter().copied());
             }
             found
         };

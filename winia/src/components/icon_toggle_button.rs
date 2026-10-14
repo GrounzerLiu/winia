@@ -359,6 +359,36 @@ impl IconToggleButton {
 mod tests {
     use super::*;
 
+    /// The node is grown to the 48 dp touch target while the container paints at the token size. Without
+    /// `minimum_interactive_component_size` a Small IconToggleButton is 40 dp AND has no touch target at all
+    /// — which is what happened when `IconButtonSize::container_size()` went 48 -> 40 and nothing here
+    /// compensated. Deleting that line again now fails this test.
+    #[test]
+    fn the_node_keeps_the_48_dp_touch_target() {
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                IconToggleButton::new(false)
+                    .on_checked_change(|_| {})
+                    .build(ctx, |ctx| {
+                        crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                            .build(ctx);
+                    });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let widest = composer
+            .arena_nodes()
+            .iter()
+            .map(|node| node.measured_size.width)
+            .fold(0.0f32, f32::max);
+        assert_eq!(
+            widest, 48.0,
+            "the node is the 48 dp touch target, with the token container painted inside it"
+        );
+    }
+
     #[test]
     fn color_state_resolution() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
