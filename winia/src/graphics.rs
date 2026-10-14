@@ -7,7 +7,8 @@
 //! describe what they were drawing.
 
 use crate::runtime::state::State;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 
 pub mod brush;
@@ -542,9 +543,9 @@ pub(crate) fn symbol_blob(
         opsz: quant_axis(opsz),
         wght: quant_axis(wght),
     };
-    // `std::sync::Mutex::lock` hands back a `LockResult`; a poisoned lock means some other thread panicked
-    // mid-insert, and the map itself is still usable, so take the guard out of the error rather than panic.
-    let mut cache = BLOB_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // `parking_lot::Mutex`, like `interaction.rs`'s ripple cache: its `lock()` hands back the guard
+    // directly, with no poisoning to unwrap, which is what this call site was written against.
+    let mut cache = BLOB_CACHE.lock();
     if let Some(b) = cache.get(&key) {
         return b.clone();
     }
