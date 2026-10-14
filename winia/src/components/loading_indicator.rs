@@ -1,9 +1,9 @@
 //! Loading Indicator 组件 — 对标 M3 Expressive `LoadingIndicator` / `ContainedLoadingIndicator`
 //!
 //! M3 实现要点（对齐项）：
-//! - **两种配置**：Uncontained（`LoadingIndicator`——无容器，indicator = Primary）与
-//!   Container（`.contained(true)`——圆形容器，container = SecondaryContainer，
-//!   indicator = Primary）；
+//! - **Two configurations**: Uncontained (`LoadingIndicator` — no container, the indicator is Primary)
+//!   and Container (`.contained(true)` — a round container in PrimaryContainer with the indicator in
+//!   OnPrimaryContainer);
 //! - **尺寸**：容器 48×48dp、active indicator 38dp（`md.comp.loading-indicator.container.width/
 //!   height = 48dp`、`active-indicator.size = 38dp`），容器 shape = Full（圆）；
 //! - **形状序列**：7 个 Material 3 shapes（SoftBurst → Cookie9Sided → Pentagon → Pill →
@@ -62,8 +62,8 @@ static SHAPE_SCALE_FACTOR: LazyLock<f32> = LazyLock::new(|| {
 /// 默认是 **uncontained**（对标 Compose `LoadingIndicator`）：
 /// - 无容器，indicator 色 = `Primary`
 ///
-/// 调用 [`.contained()`](Self::contained) 切换为 **Container 模式**（M3 Default 配置）：
-/// - 圆形容器 = `SecondaryContainer`，indicator 色 = `Primary`
+/// Call [`.contained()`](Self::contained) to switch to the **Container** configuration (M3's default):
+/// - the round container is `PrimaryContainer`, the indicator `OnPrimaryContainer`
 #[derive(Clone)]
 pub struct LoadingIndicator {
     is_contained: bool,
@@ -91,12 +91,14 @@ impl LoadingIndicator {
         }
     }
 
-    /// 切换为 Container 模式（带 SecondaryContainer 圆形容器 + Primary indicator）。
+    /// Switch to the Container configuration (`ContainedLoadingIndicator`): a round container with the
+    /// indicator inside it.
     ///
-    /// 配色按 M3 specs 配图（Primary + SecondaryContainer）；如需 Compose
-    /// `ContainedLoadingIndicator` 的 PrimaryContainer + OnPrimaryContainer，
-    /// 请用 [`indicator_color`](Self::indicator_color) 和
-    /// [`container_color`](Self::container_color) 显式覆盖。
+    /// The colours are the contained tokens — `PrimaryContainer` for the container and
+    /// `OnPrimaryContainer` for the indicator (`LoadingIndicatorTokens.kt:26-27`). winia used to follow the
+    /// M3 spec artwork instead (a Primary indicator over SecondaryContainer); use
+    /// [`indicator_color`](Self::indicator_color) and [`container_color`](Self::container_color) to
+    /// override either.
     pub fn contained(mut self, contained: bool) -> Self {
         self.is_contained = contained;
         self
@@ -131,15 +133,18 @@ impl LoadingIndicator {
         self.is_contained
     }
 
-    /// 默认颜色解析（对标 Compose `LoadingIndicatorDefaults`）。
+    /// Default colour resolution, matching `LoadingIndicatorDefaults`.
+    ///
+    /// Uncontained takes `ActiveIndicatorColor` (Primary). Contained takes the contained pair:
+    /// `ContainedActiveColor` / `ContainedContainerColor`, i.e. `OnPrimaryContainer` / `PrimaryContainer`
+    /// (`LoadingIndicatorTokens.kt:24-27`). The M3 spec artwork draws a Primary indicator over a
+    /// SecondaryContainer instead, and winia followed the artwork until now; from here it follows the
+    /// tokens, so the values agree with what `LoadingIndicatorDefaults` actually resolves.
     fn resolve_colors(&self, theme: &ThemeColors) -> (Color, Color) {
-        let indicator_color = self.indicator_color.unwrap_or(theme.primary);
+        let default_indicator = if self.is_contained { theme.on_primary_container } else { theme.primary };
+        let indicator_color = self.indicator_color.unwrap_or(default_indicator);
         let container_color = self.container_color.unwrap_or_else(|| {
-            if self.is_contained {
-                theme.secondary_container
-            } else {
-                Color::TRANSPARENT
-            }
+            if self.is_contained { theme.primary_container } else { Color::TRANSPARENT }
         });
         (indicator_color, container_color)
     }
@@ -434,8 +439,8 @@ mod tests {
         let contained = LoadingIndicator::new().contained(true);
         assert!(contained.is_contained());
         let (ic, cc) = contained.resolve_colors(&theme);
-        assert_eq!(ic, theme.primary);
-        assert_eq!(cc, theme.secondary_container);
+        assert_eq!(ic, theme.on_primary_container, "contained indicator is ContainedActiveColor");
+        assert_eq!(cc, theme.primary_container, "contained container is ContainedContainerColor");
     }
 
     #[test]
@@ -556,8 +561,8 @@ mod tests {
         let (buf, w) = render_loading(|ctx| {
             LoadingIndicator::new().contained(true).build(ctx);
         });
-        let indicator = theme.primary;
-        let container = theme.secondary_container;
+        let indicator = theme.on_primary_container;
+        let container = theme.primary_container;
         let mut found_indicator = false;
         let mut found_container = false;
         for y in 0..300 {

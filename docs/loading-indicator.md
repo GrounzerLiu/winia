@@ -11,16 +11,16 @@
   动画表达“短等待（<5s）”，替代 indeterminate circular progress indicator。
 - 与 Progress Indicator 的区别：**不能**从 indeterminate 过渡到 determinate，也不表达进度。
 
-## 2. API 面（对齐 M3 Default / Uncontained 配置）
+## 2. API surface
 
 ```rust
-// Uncontained（默认）——无容器，Primary indicator
+// Uncontained (the default) — no container, the indicator is Primary
 LoadingIndicator::new().build(ctx);
 
-// Container 模式——SecondaryContainer 圆形容器 + Primary indicator
+// Container configuration — a PrimaryContainer round container, an OnPrimaryContainer indicator
 LoadingIndicator::new().contained(true).build(ctx);
 
-// 自定义
+// Overrides
 LoadingIndicator::new()
     .contained(true)
     .indicator_color(color)
@@ -32,34 +32,33 @@ LoadingIndicator::new()
 
 ### 默认值
 
-| 项 | Uncontained | Container |
+| | Uncontained | Container |
 | --- | --- | --- |
-| indicator color | Primary | Primary |
-| container color | Transparent（不绘制） | SecondaryContainer |
+| indicator color | Primary | OnPrimaryContainer |
+| container color | Transparent (not painted) | PrimaryContainer |
 | container shape | Circle | Circle |
-| 容器尺寸 | 48×48dp | 48×48dp |
-| active indicator 尺寸 | 38dp | 38dp |
-| shapes | 7 个 M3 shapes | 同左 |
+| container size | 48×48dp | 48×48dp |
+| active indicator size | 38dp | 38dp |
+| shapes | 7 M3 shapes | same |
 
-### 配色说明
+### Colours
 
-M3 specs 页的配图里，带容器的 Loading indicator 视觉上是 **Primary 指示器 + SecondaryContainer 容器**；
-spec 的 token 表也列出了对应关系：
+The token table (`LoadingIndicatorTokens.kt:24-27`) is what the component resolves:
 
-- `Loading indicator active indicator color` = Primary
-- `Loading indicator container color` = SecondaryContainer
-- `Loading indicator contained active indicator color` = OnPrimaryContainer
-- `Loading indicator contained container color` = PrimaryContainer
+- `ActiveIndicatorColor` = Primary — the uncontained indicator
+- `ContainedActiveColor` = OnPrimaryContainer — the contained indicator
+- `ContainedContainerColor` = PrimaryContainer — the contained container
 
-注意：Compose/MDC 的 `ContainedLoadingIndicator` 源码默认是 **PrimaryContainer + OnPrimaryContainer**，
-与 M3 specs 配图不完全一致。本项目按 M3 specs 配图，将 `.contained(true)`（Container 模式）默认配色设为
-**Primary + SecondaryContainer**。如需 Compose 风格 Contained 配色，可显式传入：
+The M3 spec artwork draws the contained form as a Primary indicator over a SecondaryContainer, and winia
+followed that artwork until now: `.contained(true)` used to resolve to Primary + SecondaryContainer. It
+follows the tokens from here, so the defaults agree with what Compose's `LoadingIndicatorDefaults`
+actually resolves. Either colour can still be overridden — for instance back to the artwork pairing:
 
 ```rust
 LoadingIndicator::new()
     .contained(true)
-    .indicator_color(theme.on_primary_container)
-    .container_color(theme.primary_container)
+    .indicator_color(theme.primary)
+    .container_color(theme.secondary_container)
     .build(ctx);
 ```
 
