@@ -159,10 +159,11 @@ pub use tab_row::{
 };
 pub use navigation_rail::{
     NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
+    ModalWideNavigationRail, modal_rail_expanded_shape,
     WideNavigationRailItem, WideNavigationRailState, WindowInsets,
     NAVIGATION_RAIL_INDICATOR_HEIGHT, NAVIGATION_RAIL_INDICATOR_WIDTH, NAVIGATION_RAIL_ITEM_HEIGHT,
     NAVIGATION_RAIL_ICON_SIZE, NAVIGATION_RAIL_WIDTH, WIDE_RAIL_COLLAPSED_WIDTH,
-    WIDE_RAIL_EXPANDED_MIN_WIDTH,
+    WIDE_RAIL_EXPANDED_MIN_WIDTH, WIDE_RAIL_EXPANDED_MAX_WIDTH,
 };
 pub use tooltip::Tooltip;
 pub use alert_dialog::{

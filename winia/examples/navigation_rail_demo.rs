@@ -105,6 +105,38 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
             } })
             .build(ctx);
         });
+
+    // The modal form gets its own state and a button that opens it: it raises a scrim'd layer over the
+    // page (winia's `open_overlay(modal: true)`) rather than expanding in place, so there is nothing to
+    // put beside it in the row above.
+    let modal_state = WideNavigationRailState::new(ctx);
+    let modal_sel = ctx.remember(|| 0usize);
+    Row::new()
+        .spacing(12.0)
+        .modifier(Modifier::new().padding_top(16.0))
+        .build(ctx, |ctx| {
+            Button::new()
+                .on_click({ clone!(modal_state); move || modal_state.toggle() })
+                .build(ctx, |ctx| Text::new("Open modal rail").build(ctx));
+            ModalWideNavigationRail::new(modal_state.clone(), {
+                clone!(modal_sel);
+                move |ctx| {
+                    for index in 0..DESTINATIONS.len() {
+                        let (name, path) = DESTINATIONS[index];
+                        WideNavigationRailItem::new(
+                            modal_sel.get() == index,
+                            move |ctx| {
+                                Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
+                            },
+                            move |ctx| Text::new(name).build(ctx),
+                        )
+                        .on_click({ clone!(modal_sel); move || modal_sel.set(index) })
+                        .build(ctx);
+                    }
+                }
+            })
+            .build(ctx);
+        });
 }
 
 fn main() {

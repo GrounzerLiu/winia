@@ -44,6 +44,7 @@ use crate::layout::{Alignment, BoxLayout};
 use crate::layout::components::Column;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
+use crate::overlay::{next_overlay_id, OverlayDesc, PopupPosition};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
@@ -1005,7 +1006,297 @@ mod tests {
         assert!(state.is_expanded());
     }
 
+    /// The modal form: collapsed it is an ordinary rail and registers no overlay; expanded it raises a
+    /// modal overlay, and that `modal` flag is what draws the scrim (upstream opens a
+    /// `ModalWideNavigationRailDialog` for the same reason).
+    #[test]
+    fn modal_rail_is_a_plain_rail_until_it_expands() {
+        // Collapsed: no overlay, and the rail is on screen at the collapsed width.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            ModalWideNavigationRail::new(state, |ctx| {
+                WideNavigationRailItem::new(
+                    true,
+                    |ctx| icon_leaf(ctx, 24.0),
+                    |ctx| crate::components::Text::new("A").build(ctx),
+                )
+                .on_click(|| {})
+                .build(ctx);
+            })
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert!(
+            composer.take_overlays().is_empty(),
+            "a collapsed modal rail opens no overlay"
+        );
+        let root = composer.layout_root_idx().unwrap();
+        assert_eq!(
+            composer.arena_nodes()[root].measured_size.width,
+            WIDE_RAIL_COLLAPSED_WIDTH,
+            "and what is on screen is the collapsed rail"
+        );
 
+        // Expanded: exactly one overlay, and it is modal — that flag is the scrim.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            state.expand();
+            ModalWideNavigationRail::new(state, |ctx| {
+                WideNavigationRailItem::new(
+                    true,
+                    |ctx| icon_leaf(ctx, 24.0),
+                    |ctx| crate::components::Text::new("A").build(ctx),
+                )
+                .on_click(|| {})
+                .build(ctx);
+            })
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let overlays = composer.take_overlays();
+        assert_eq!(overlays.len(), 1, "an expanded modal rail opens one overlay");
+        assert!(
+            overlays[0].modal,
+            "and it is modal: that flag is what draws the scrim"
+        );
+    }
+
+    /// `hide_on_collapse` (upstream's dismissible variant): collapsed, the rail is not drawn at all — the
+    /// caller owns its offscreen position — but expanding still raises the modal layer.
+    #[test]
+    fn hide_on_collapse_draws_nothing_until_expanded() {
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            let state = WideNavigationRailState::new(ctx);
+            ModalWideNavigationRail::new(state, |ctx| {
+                WideNavigationRailItem::new(
+                    true,
+                    |ctx| icon_leaf(ctx, 24.0),
+                    |ctx| crate::components::Text::new("A").build(ctx),
+                )
+                .on_click(|| {})
+                .build(ctx);
+            })
+            .hide_on_collapse(true)
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let widths: Vec<f32> = composer
+            .arena_nodes()
+            .iter()
+            .map(|n| n.measured_size.width)
+            .collect();
+        assert!(
+            !widths.contains(&WIDE_RAIL_COLLAPSED_WIDTH),
+            "collapsed with hide_on_collapse, no rail is drawn: {widths:?}"
+        );
+        assert!(composer.take_overlays().is_empty(), "and no overlay either");
+    }
+}
+
+// ── ModalWideNavigationRail（M3 Expressive 模态宽轨）──
+//
+// 对齐 androidx-main `WideNavigationRail.kt` 的 `ModalWideNavigationRail`：
+// - 折叠时是一个普通折叠宽轨，留在布局流内；展开时抬起为一层 modal。上游用
+//   `ModalWideNavigationRailDialog` 包住展开态，winia 走自己的 `open_overlay(modal: true)`
+// - 展开容器的形状 = ModalContainerShape（CornerLarge 16dp）、颜色 = ModalContainerColor
+//   （SurfaceContainer）；折叠态沿用普通轨的形状与容器色
+// - 遮罩不自己画：overlay 的 `modal: true` 已经渲染半透明 scrim（110/255，与
+//   `ModalNavigationDrawer` 自绘的那层同一个 alpha），点击遮罩与 Escape 都走 overlay 的
+//   dismiss 通道，落到 `on_dismiss` 上收起同一份 state
+// - 内容因此是 `Fn` 而不是 `FnOnce`：overlay 每帧重新组合它的内容
+//   （`alert_dialog` 的注释记着同一件事），折叠那条路径每帧也只调用一次
+
+/// Modal 展开容器的形状 = NavigationRailExpandedTokens.ModalContainerShape（CornerLarge 16dp）。
+/// 折叠态沿用普通宽轨的形状（ContainerShape = CornerNone，即 `Shape::Rectangle`）。
+pub fn modal_rail_expanded_shape() -> Shape {
+    Shape::rounded(16.0)
+}
+
+pub struct ModalWideNavigationRail {
+    state: WideNavigationRailState,
+    content: Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>,
+    header: Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
+    hide_on_collapse: bool,
+    collapsed_shape: Shape,
+    expanded_shape: Shape,
+    container_color: Option<Color>,
+    modal_container_color: Option<Color>,
+    modifier: Modifier,
+}
+
+impl ModalWideNavigationRail {
+    pub fn new(
+        state: WideNavigationRailState,
+        content: impl Fn(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            state,
+            content: Arc::new(content),
+            header: None,
+            hide_on_collapse: false,
+            collapsed_shape: Shape::Rectangle,
+            expanded_shape: modal_rail_expanded_shape(),
+            container_color: None,
+            modal_container_color: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// Slide offscreen when collapsed instead of staying as a collapsed rail — upstream's dismissible
+    /// variant (`hideOnCollapse`). The caller owns moving its own container away; this only decides
+    /// whether the collapsed rail is drawn at all.
+    pub fn hide_on_collapse(mut self, hide: bool) -> Self {
+        self.hide_on_collapse = hide;
+        self
+    }
+
+    /// Collapsed container shape (default `Shape::Rectangle` = `ContainerShape`/`CornerNone`).
+    pub fn collapsed_shape(mut self, shape: Shape) -> Self {
+        self.collapsed_shape = shape;
+        self
+    }
+
+    /// Expanded (modal) container shape — defaults to `ModalContainerShape`.
+    pub fn expanded_shape(mut self, shape: Shape) -> Self {
+        self.expanded_shape = shape;
+        self
+    }
+
+    /// Collapsed container colour (default `Surface`, as for the plain rail).
+    pub fn container_color(mut self, c: Color) -> Self {
+        self.container_color = Some(c);
+        self
+    }
+
+    /// Expanded container colour (defaults to `ModalContainerColor` = `surfaceContainer`).
+    pub fn modal_container_color(mut self, c: Color) -> Self {
+        self.modal_container_color = Some(c);
+        self
+    }
+
+    pub fn header(mut self, h: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        self.header = Some(Arc::new(h));
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.hide_on_collapse);
+        ctx.changed(&self.collapsed_shape);
+        ctx.changed(&self.expanded_shape);
+        ctx.changed(&self.container_color);
+        ctx.changed(&self.modal_container_color);
+        let expanded = self.state.is_expanded();
+        ctx.changed(&expanded);
+        let theme = WiniaTheme::colors();
+        let header = self.header;
+        let content = self.content;
+
+        // Collapsed: the plain rail, unexpanded. Upstream draws this outside the dialog, next to a
+        // same-sized spacer that keeps the page from shifting when the modal opens; winia's rail already
+        // sits in the layout, so there is nothing to compensate for.
+        if !expanded {
+            if self.hide_on_collapse {
+                // Nothing on screen — the caller owns the offscreen position.
+                return;
+            }
+            let container = self.container_color.unwrap_or(theme.surface);
+            let shape = self.collapsed_shape;
+            let policy = WideNavigationRailLayoutPolicy {
+                progress: ctx.animate_float_as_state(0.0, rail_container_spec()),
+                has_header: header.is_some(),
+            };
+            let content = content.clone();
+            let header = header.clone();
+            let key = ctx.next_key();
+            let root_modifier = self
+                .modifier
+                .fill_max_height()
+                .background(container, shape);
+            match ctx.start_restartable_group(key, root_modifier, policy) {
+                GroupStatus::Skip => {}
+                GroupStatus::Enter => {
+                    WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
+                        if let Some(header) = &header {
+                            header(ctx);
+                        }
+                        content(ctx);
+                    });
+                }
+            }
+            ctx.end_restartable_group();
+            return;
+        }
+
+        // Expanded: a layer above the page. `modal: true` is what draws the scrim, and a dismiss request
+        // (scrim click or Escape) arrives as `on_dismiss`.
+        let modal_color = self.modal_container_color.unwrap_or(theme.surface_container);
+        let modal_shape = self.expanded_shape;
+        let outer = self.modifier;
+        let dismiss_state = self.state.clone();
+        let id: State<u64> = ctx.remember(next_overlay_id);
+        // Captured by the `Fn` content closure below, which may run every frame: both are rebuilt inside it
+        // rather than moved, because an `Fn` closure cannot give them up.
+        let panel_progress: State<f32> = ctx.remember(|| 1.0_f32);
+        let has_header = header.is_some();
+        ctx.open_overlay(OverlayDesc {
+            id: id.get(),
+            anchor_slot: None,
+            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: true,
+            // The modal rail owns the keyboard while it is up: Tab works inside the rail, and the page
+            // behind the scrim cannot be reached.
+            focus_scope: true,
+            dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            dismiss_defers_to_content: false,
+            click_passthrough: false,
+            on_dismiss: Some(Arc::new(move || dismiss_state.collapse())),
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            enter_anim: None,
+            exit_anim: None,
+            local_snapshot: Vec::new(),
+            content: Box::new(move |ctx| {
+                // The container hugs the leading edge and fills the height; its width is the layout
+                // policy's (`min(available, 360)`, the modal cap), and the shape and colour are the modal
+                // tokens rather than the plain rail's. Both the modifier and the policy are rebuilt here:
+                // this closure is `Fn` (the overlay composes it every frame it is up), so nothing can be
+                // moved out of it.
+                let panel = outer
+                    .clone()
+                    .fill_max_size()
+                    .background(modal_color, modal_shape);
+                let key = ctx.next_key();
+                let policy = WideNavigationRailLayoutPolicy {
+                    progress: panel_progress.clone(),
+                    has_header,
+                };
+                match ctx.start_restartable_group(key, panel, policy) {
+                    GroupStatus::Skip => {}
+                    GroupStatus::Enter => {
+                        WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
+                            if let Some(header) = &header {
+                                header(ctx);
+                            }
+                            content(ctx);
+                        });
+                    }
+                }
+                ctx.end_restartable_group();
+            }),
+        });
+    }
 }
 
 // ── WideNavigationRail（M3 Expressive 宽轨）──
@@ -1185,6 +1476,9 @@ pub struct WideNavigationRail {
     content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
     header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
     container_color: Option<Color>,
+    /// Container shape. `Shape::Rectangle` unless overridden — the modal form passes the modal container
+    /// shape (`NavigationRailExpandedTokens.ModalContainerShape`, CornerLarge) through this.
+    container_shape: Shape,
     modifier: Modifier,
 }
 
@@ -1198,12 +1492,19 @@ impl WideNavigationRail {
             content: Box::new(content),
             header: None,
             container_color: None,
+            container_shape: Shape::Rectangle,
             modifier: Modifier::new(),
         }
     }
 
     pub fn container_color(mut self, c: Color) -> Self {
         self.container_color = Some(c);
+        self
+    }
+
+    /// Override the container shape (default `Shape::Rectangle` = `ContainerShape`/`CornerNone`).
+    pub fn shape(mut self, shape: Shape) -> Self {
+        self.container_shape = shape;
         self
     }
 
@@ -1220,9 +1521,11 @@ impl WideNavigationRail {
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.container_color);
+        ctx.changed(&self.container_shape);
         ctx.changed(&self.state.is_expanded());
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.surface);
+        let shape = self.container_shape;
         let progress = ctx.animate_float_as_state(
             if self.state.is_expanded() { 1.0 } else { 0.0 },
             rail_container_spec(),
@@ -1235,7 +1538,7 @@ impl WideNavigationRail {
         let key = ctx.next_key();
         let root_modifier = Modifier::new()
             .fill_max_height()
-            .background(container, Shape::Rectangle);
+            .background(container, shape);
         match ctx.start_restartable_group(key, root_modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
