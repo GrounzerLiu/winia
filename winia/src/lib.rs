@@ -110,7 +110,8 @@ pub mod prelude {
     pub use crate::components::{
         Text, ProvideTextStyle, Button, ButtonBorder, ButtonColors, ButtonDefaults, ButtonElevation, ButtonSize,
         ButtonStyle, Card, CardBorder, CardColors, CardDefaults, CardElevation, CardStyle, Surface,
-        ButtonGroup, ButtonGroupDefaults, ButtonGroupShapes, BUTTON_GROUP_HEIGHT, BUTTON_GROUP_BETWEEN_SPACE,
+        ButtonGroup, ButtonGroupDefaults, ButtonGroupItem, ButtonGroupMenuState, ButtonGroupShapes,
+        BUTTON_GROUP_HEIGHT, BUTTON_GROUP_COMPRESSION_LIMIT, BUTTON_GROUP_BETWEEN_SPACE,
         CONNECTED_BUTTON_GROUP_BETWEEN_SPACE, BUTTON_GROUP_EXPANDED_RATIO, CONNECTED_INNER_CORNER_SIZE,
         CONNECTED_PRESSED_INNER_CORNER_SIZE,
         SurfaceBorder, Icon, Tint, Image, IconButton, IconButtonColors, IconButtonDefaults, IconButtonSize,

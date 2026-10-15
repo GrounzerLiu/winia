@@ -74,7 +74,7 @@ pub use button::ButtonDefaults;
 pub use button::ButtonElevation;
 pub use button::ButtonSize;
 pub use button::ButtonStyle;
-pub use button_group::{ButtonGroup, ButtonGroupDefaults, ButtonGroupShapes, BUTTON_GROUP_HEIGHT, BUTTON_GROUP_BETWEEN_SPACE, CONNECTED_BUTTON_GROUP_BETWEEN_SPACE, BUTTON_GROUP_EXPANDED_RATIO, CONNECTED_INNER_CORNER_SIZE, CONNECTED_PRESSED_INNER_CORNER_SIZE};
+pub use button_group::{ButtonGroup, ButtonGroupDefaults, ButtonGroupItem, ButtonGroupMenuState, ButtonGroupShapes, BUTTON_GROUP_HEIGHT, BUTTON_GROUP_COMPRESSION_LIMIT, BUTTON_GROUP_BETWEEN_SPACE, CONNECTED_BUTTON_GROUP_BETWEEN_SPACE, BUTTON_GROUP_EXPANDED_RATIO, CONNECTED_INNER_CORNER_SIZE, CONNECTED_PRESSED_INNER_CORNER_SIZE};
 pub use split_button::{
     LeadingButton, SplitButtonDefaults, SplitButtonLayout, SplitButtonShapes, TrailingButton,
 };

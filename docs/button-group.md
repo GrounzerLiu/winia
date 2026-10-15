@@ -104,6 +104,13 @@ multi-content layout, so the indicator is the group's LAST child and the policy 
 children are items. The menu's own anchor is a further child the policy places where the indicator
 sits, so the menu drops from the indicator rather than from the start of the row.
 
+**A hidden item still has a subtree.** winia's renderer draws a zero-sized node's children, so
+placing one at the origin is not enough — it would paint over the items that did fit. (Upstream
+never measures the hidden ones at all, which is why it does not have to think about this.) Each
+item is therefore wrapped in its own group node carrying a `graphics_layer` whose alpha reads the
+count back and is 0 for the ones in the menu. The alpha is evaluated at RENDER time, so it is last
+measure's answer. A group with no indicator does not pay for the wrapper.
+
 How many items fit is decided in MEASURE, so the count comes back through a `Backchannel` — the
 write-only handle the measure/layout write-back path exists for — and the menu is composed from
 it on the next composition, which is also when the indicator's click has just shown it. Upstream

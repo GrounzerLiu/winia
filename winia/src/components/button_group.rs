@@ -395,8 +395,25 @@ impl ButtonGroup {
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                for child in children.drain(..) {
-                    (child.item)(ctx);
+                // An item that did not fit is placed at nothing, but its SUBTREE still has a
+                // size and would paint over the items that did fit — winia's renderer draws a
+                // zero-sized node's children. Upstream never measures the hidden ones at all, so
+                // the equivalent here is to wrap each item in a layer whose alpha reads the
+                // count back: 0 for the ones in the menu. The alpha is evaluated at RENDER time
+                // (`graphics_layer` takes a closure), so it is last measure's answer.
+                for (index, child) in children.drain(..).enumerate() {
+                    if has_indicator {
+                        let shown = visible.clone();
+                        let alpha = Modifier::new().graphics_layer(move || {
+                            crate::graphics::GraphicsLayerParams {
+                                alpha: if index < shown.peek() { 1.0 } else { 0.0 },
+                                ..Default::default()
+                            }
+                        });
+                        wrap_item(ctx, alpha, |ctx| (child.item)(ctx));
+                    } else {
+                        (child.item)(ctx);
+                    }
                 }
                 if let Some(indicator) = overflow {
                     indicator(ctx, menu_state.clone());
@@ -434,6 +451,20 @@ impl Default for ButtonGroup {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Wraps one item in its own group node, so the group can hang a render-time layer on it.
+fn wrap_item(
+    ctx: &mut ComposeCtx,
+    modifier: Modifier,
+    content: impl FnOnce(&mut ComposeCtx),
+) {
+    let key = ctx.next_key();
+    match ctx.start_restartable_group(key, modifier, crate::layout::box_layout::BoxLayout::new()) {
+        GroupStatus::Skip => {}
+        GroupStatus::Enter => content(ctx),
+    }
+    ctx.end_restartable_group();
 }
 
 /// Lays the items out in a row at a fixed height, spaced by the group's token, dividing the space

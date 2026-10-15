@@ -1,0 +1,254 @@
+//! ButtonGroup demo — the plain row, the connected row, the selected item, the overflow and
+//! weighted items.
+//!
+//! Every group here is laid out from the token numbers the component carries: 12 dp between the
+//! items of a plain group, 2 dp between the items of a connected one (which also share their
+//! container's corners), 40 dp tall either way.
+
+use letclone::clone;
+use winia::prelude::*;
+// Shared example chrome: top app bar with the settings sheet (theme mode + layout direction).
+#[path = "common/settings.rs"]
+mod settings;
+
+/// Material Icons "add" — icon paths are data, and data gets looked up.
+const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
+/// Material Icons "more_horiz".
+const MORE_PATH: &str = "M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z";
+/// Material Icons "check".
+const CHECK_PATH: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+
+/// How wide an overflow menu row is. winia's menu sizes itself to its content, and a bare
+/// `Button::text()` comes out as a tight pill — the row is given a width instead.
+const BUTTON_GROUP_MENU_WIDTH: f32 = 160.0;
+
+fn label_color() -> Color {
+    WiniaTheme::colors().on_surface_variant
+}
+
+fn section_title(ctx: &mut ComposeCtx, text: &str) {
+    Text::new(text)
+        .font_size(14.0)
+        .color(label_color())
+        .modifier(Modifier::new().padding_top(14.0).padding_bottom(6.0))
+        .build(ctx);
+}
+
+fn caption(ctx: &mut ComposeCtx, text: &str) {
+    Text::new(text)
+        .font_size(12.0)
+        .color(label_color())
+        .modifier(Modifier::new().padding_top(6.0).padding_bottom(2.0))
+        .build(ctx);
+}
+
+/// One item of a group: a filled button painting whatever shape its position gives it.
+fn item(
+    label: &'static str,
+    shape: Shape,
+    on_click: impl Fn() + Send + Sync + 'static,
+) -> impl FnOnce(&mut ComposeCtx) + 'static {
+    move |ctx| {
+        Button::new()
+            .style(ButtonStyle::Filled)
+            .shape(shape)
+            .on_click(on_click)
+            .build(ctx, |ctx| {
+                Text::new(label).build(ctx);
+            });
+    }
+}
+
+#[composable]
+fn button_group_demo(ctx: &mut ComposeCtx) {
+    let scroll = ctx.remember(|| ScrollState::new()).get();
+    let plain = ctx.remember(|| 0usize);
+    let connected = ctx.remember(|| 0usize);
+    let direction = winia::layout::direction::current();
+
+    Column::new()
+        .modifier(Modifier::new().fill_max_size().padding(16.0).vertical_scroll(scroll))
+        .build(ctx, |ctx| {
+            // The item closures below are `'static`, so they need OWNED handles rather than a
+            // borrow of the outer ones.
+            let plain = plain.clone();
+            let connected = connected.clone();
+            section_title(ctx, "1. Plain group — ButtonGroupSmallTokens.BetweenSpace, 12 dp");
+            ButtonGroup::new()
+                .item(item("Start", Shape::Pill, { clone!(plain); move || plain.set(1) }))
+                .item(item("Middle", Shape::Pill, { clone!(plain); move || plain.set(2) }))
+                .item(item("End", Shape::Pill, { clone!(plain); move || plain.set(3) }))
+                .build(ctx);
+            caption(
+                ctx,
+                "The items take their natural width and sit 12 dp apart. Nothing is shared between \
+                 them — each one is its own pill, which is what the plain form looks like.",
+            );
+
+            section_title(ctx, "2. Connected group — one container, 2 dp between the items");
+            ButtonGroup::connected()
+                .item(item(
+                    "Start",
+                    ButtonGroupDefaults::item_shapes(0, 3, direction).shape,
+                    { clone!(plain); move || plain.set(1) },
+                ))
+                .item(item(
+                    "Middle",
+                    ButtonGroupDefaults::item_shapes(1, 3, direction).shape,
+                    { clone!(plain); move || plain.set(2) },
+                ))
+                .item(item(
+                    "End",
+                    ButtonGroupDefaults::item_shapes(2, 3, direction).shape,
+                    { clone!(plain); move || plain.set(3) },
+                ))
+                .build(ctx);
+            caption(
+                ctx,
+                "2 dp apart, so the items read as ONE container: the leading item rounds its START \
+                 corners to CornerFull (20 on a 40 dp item) and squares its end pair to 8, and the \
+                 trailing item mirrors that. The middle one is 8 all round. Switch the settings \
+                 sheet's direction and the rounded pair follows — the corners are resolved \
+                 against the direction, not baked in.",
+            );
+
+            section_title(ctx, "3. A selected item leaves the container — connectedButtonCheckedShape");
+            let shapes = |i: usize| ButtonGroupDefaults::item_shapes(i, 3, direction);
+            ButtonGroup::connected()
+                .item(item(
+                    "Day",
+                    shapes(0).shape_for(false, connected.get() == 0),
+                    { clone!(connected); move || connected.set(0) },
+                ))
+                .item(item(
+                    "Week",
+                    shapes(1).shape_for(false, connected.get() == 1),
+                    { clone!(connected); move || connected.set(1) },
+                ))
+                .item(item(
+                    "Month",
+                    shapes(2).shape_for(false, connected.get() == 2),
+                    { clone!(connected); move || connected.set(2) },
+                ))
+                .build(ctx);
+            caption(
+                ctx,
+                "The checked shape is CornerFull whatever the position, so the selected item pops \
+                 out as a stadium while its neighbours keep the shared container's corners.",
+            );
+
+            section_title(ctx, "4. Overflow — the indicator takes the room, the rest go in the menu");
+            let too_narrow = ctx.remember(|| 0usize);
+            ButtonGroup::new()
+                .modifier(Modifier::new().width(360.0))
+                .add(
+                    ButtonGroupItem::new(item("One", Shape::Pill, { clone!(too_narrow); move || too_narrow.set(1) }))
+                        .menu(|ctx, state| {
+                            Button::text()
+                                .modifier(Modifier::new().width(BUTTON_GROUP_MENU_WIDTH))
+                                .on_click({ clone!(state); move || state.dismiss() })
+                                .build(ctx, |ctx| Text::new("One").build(ctx));
+                        }),
+                )
+                .add(
+                    ButtonGroupItem::new(item("Two", Shape::Pill, { clone!(too_narrow); move || too_narrow.set(2) }))
+                        .menu(|ctx, state| {
+                            Button::text()
+                                .modifier(Modifier::new().width(BUTTON_GROUP_MENU_WIDTH))
+                                .on_click({ clone!(state); move || state.dismiss() })
+                                .build(ctx, |ctx| Text::new("Two").build(ctx));
+                        }),
+                )
+                .add(
+                    ButtonGroupItem::new(item("Three", Shape::Pill, { clone!(too_narrow); move || too_narrow.set(3) }))
+                        .menu(|ctx, state| {
+                            Button::text()
+                                .modifier(Modifier::new().width(BUTTON_GROUP_MENU_WIDTH))
+                                .on_click({ clone!(state); move || state.dismiss() })
+                                .build(ctx, |ctx| Text::new("Three").build(ctx));
+                        }),
+                )
+                .add(
+                    ButtonGroupItem::new(item("Four", Shape::Pill, { clone!(too_narrow); move || too_narrow.set(4) }))
+                        .menu(|ctx, state| {
+                            Button::text()
+                                .modifier(Modifier::new().width(BUTTON_GROUP_MENU_WIDTH))
+                                .on_click({ clone!(state); move || state.dismiss() })
+                                .build(ctx, |ctx| Text::new("Four").build(ctx));
+                        }),
+                )
+                .overflow_indicator(|ctx, state| {
+                    Button::new()
+                        .style(ButtonStyle::Filled)
+                        .shape(Shape::Pill)
+                        .on_click(move || state.show())
+                        .build(ctx, |ctx| {
+                            Icon::svg_path(MORE_PATH).size(24.0).build(ctx);
+                        });
+                })
+                .build(ctx);
+            caption(
+                ctx,
+                "The row is pinned to 360 dp, so four labels do not fit. The indicator is measured \
+                 FIRST — that is what leaves room for the items — then the items fill what is left \
+                 until one does not fit: it is measured at nothing and moves into the menu, which \
+                 opens on the indicator.",
+            );
+
+            section_title(ctx, "5. Weighted items — the leftover, divided by the total weight");
+            ButtonGroup::new()
+                .modifier(Modifier::new().width(460.0))
+                .item(item("Fixed", Shape::Pill, { clone!(plain); move || plain.set(1) }))
+                .weighted_item(1.0, item("1 share", Shape::Pill, { clone!(plain); move || plain.set(2) }))
+                .weighted_item(2.0, item("2 shares", Shape::Pill, { clone!(plain); move || plain.set(3) }))
+                .build(ctx);
+            caption(
+                ctx,
+                "'Fixed' takes its natural width first; the 360 dp that is left is split 1:2 between \
+                 the other two, and each is measured at a FIXED width so it fills its share rather \
+                 than shrinking to its label.",
+            );
+
+            section_title(ctx, "6. A connected group with an icon on one item");
+            ButtonGroup::connected()
+                .item(item("Add", Shape::Pill, { clone!(plain); move || plain.set(1) }))
+                .item({
+                    let plain = plain.clone();
+                    move |ctx| {
+                        Button::new()
+                            .style(ButtonStyle::Filled)
+                            .shape(ButtonGroupDefaults::connected_middle_shapes().shape)
+                            .on_click(move || plain.set(2))
+                            .build(ctx, |ctx| {
+                                Icon::svg_path(PLUS_PATH).size(24.0).build(ctx);
+                            });
+                    }
+                })
+                .item(item(
+                    "Check",
+                    ButtonGroupDefaults::connected_trailing_shapes(direction).shape,
+                    { clone!(plain); move || plain.set(3) },
+                ))
+                .build(ctx);
+            caption(
+                ctx,
+                "An item can be anything — the group only lays them out and spaces them, which is \
+                 upstream's customItem.",
+            );
+
+            Spacer::vertical(24.0).build(ctx);
+        });
+}
+
+fn main() {
+    winia::run_app!(|ctx| {
+        WiniaTheme::auto(ctx, |ctx| {
+            Window::new()
+                .size(560.0, 900.0)
+                .title("ButtonGroup Demo")
+                .build(ctx, |ctx| {
+                    settings::shell("ButtonGroup Demo", ctx, button_group_demo);
+                });
+        });
+    });
+}
