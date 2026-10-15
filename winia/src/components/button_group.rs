@@ -729,11 +729,16 @@ impl MeasurePolicy for ButtonGroupPolicy {
             x += indicator.width;
         }
         // Anything past the items and the indicator is the overflow menu's ANCHOR (see `build`).
-        // It paints nothing and takes no room; it only has to sit where the indicator does so the
-        // menu drops from it.
+        // It takes no room — but it must carry the INDICATOR's RECT, not a zero-sized one: the
+        // menu is positioned from the anchor's own rect, and its first candidate is "the menu's top
+        // at the anchor's bottom, its start at the anchor's start" (`MenuPosition.topToAnchorBottom`
+        // + `startToAnchorStart`, which is `MenuAnchorPosition.Below`, material3's default for
+        // `DropdownMenu`). Upstream's anchor is the `Box { indicator; DropdownMenu }`, whose rect IS
+        // the indicator's; a zero-sized anchor put the menu level with the indicator's TOP instead
+        // of below it, so it covered the button it came from.
         while placements.len() < n {
             placements.push(Placement {
-                size: Size::new(0.0, 0.0),
+                size: indicator,
                 position: Offset::new(indicator_x, 0.0),
             });
         }
