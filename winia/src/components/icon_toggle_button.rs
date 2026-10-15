@@ -279,6 +279,10 @@ impl IconToggleButton {
         ctx.changed(&self.checked);
         ctx.changed(&self.colors);
         ctx.changed(&self.shape);
+        // The size picks the container, the glyph AND the checked/pressed corner tokens, and
+        // without this the whitelist skipped it: `IconToggleButton::size()` on an already
+        // composed slot re-executed nothing. (`IconButton` declares its own size the same way.)
+        ctx.changed(&self.size_variant);
         let key = ctx.next_key();
         let theme = WiniaTheme::colors();
         let colors = self

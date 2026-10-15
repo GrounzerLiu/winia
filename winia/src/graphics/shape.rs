@@ -54,8 +54,11 @@ pub enum Shape {
     /// a `RoundedRect` radius is fixed, so the percent-50 end had nothing to travel FROM.
     ///
     /// The corner is a percent of the SHORT side, so it can only be resolved once the box is
-    /// known — see [`Shape::resolved_for_box`], which every paint, clip and shadow path calls
-    /// first.
+    /// known: [`Shape::resolved_for_box`] is that resolution, and each paint, clip, border and
+    /// shadow path applies the SAME arithmetic against its own rect (the border against the
+    /// inset one, the focus ring against the grown one). It is written out at each site rather
+    /// than routed through the resolver, so a new arm there must do the same — NOT fall back on
+    /// a rectangle, which is how the ripple once clipped a morphing button to a rect.
     PillToRounded {
         corner_radius: f32,
         t: f32,
@@ -66,15 +69,18 @@ impl Shape {
     /// The shape a `width` x `height` box actually paints, with a percent-corner morph resolved
     /// to the fixed radius it is at *now*.
     ///
-    /// Only [`Shape::PillToRounded`] is rewritten; every other variant is returned unchanged, so
-    /// the paint, clip and shadow paths keep matching the arms they already had. A caller that
-    /// skips this and matches on the raw shape would land on the `PillToRounded` arm, which is
-    /// why the renderer calls it at the top of each resolution.
+    /// Only [`Shape::PillToRounded`] is rewritten; every other variant is returned unchanged.
+    ///
+    /// The render paths write this arithmetic out inline, because each resolves it against a
+    /// different rect — so this entry point is for CALLERS and for tests, not the router the
+    /// paint code goes through. The radius is clamped at zero like every one of those arms: a
+    /// `t` outside `0..=1` in a box narrower than twice the pressed radius would otherwise drive
+    /// it negative. (Today's springs are critically damped, so `t` stays inside the range.)
     pub fn resolved_for_box(&self, width: f32, height: f32) -> Shape {
         match *self {
             Shape::PillToRounded { corner_radius, t } => {
                 let percent = width.min(height) / 2.0;
-                Shape::rounded(percent + (corner_radius - percent) * t)
+                Shape::rounded((percent + (corner_radius - percent) * t).max(0.0))
             }
             other => other,
         }
@@ -124,9 +130,19 @@ mod tests {
     fn a_pill_transition_resolves_against_the_box() {
         let at = |t: f32| Shape::PillToRounded { corner_radius: 8.0, t }.resolved_for_box(100.0, 40.0);
 
-        assert_eq!(at(0.0), Shape::rounded(20.0), "t = 0 is exactly Shape::Pill");
-        assert_eq!(at(1.0), Shape::rounded(8.0), "t = 1 is exactly the fixed radius");
+        // t = 0 resolves to the RADIUS Pill clamps to (half the short side), not to the `Pill`
+        // variant — every arm paints the two identically, and `Shape` is a plain enum with
+        // structural equality, so `rounded(20)` and `Pill` are different values.
+        assert_eq!(at(0.0), Shape::rounded(20.0), "t = 0 is Pill's radius");
+        assert_eq!(at(1.0), Shape::rounded(8.0), "t = 1 is the fixed radius");
         assert_eq!(at(0.5), Shape::rounded(14.0), "and it travels between them");
+        assert_eq!(
+            // A 100 x 40 box starts at a 20 radius and the fixed end is 8: t = 2 overshoots it
+            // by 24, i.e. past zero.
+            Shape::PillToRounded { corner_radius: 8.0, t: 2.0 }.resolved_for_box(100.0, 40.0),
+            Shape::rounded(0.0),
+            "an out-of-range t is clamped at zero, like every other radius arm"
+        );
 
         // Half the SHORT side, not half the width: the same call in a tall box uses the width.
         assert_eq!(
@@ -146,6 +162,8 @@ mod tests {
             Shape::Circle,
             Shape::corners(1.0, 2.0, 3.0, 4.0),
             Shape::top_rounded(6.0),
+            Shape::right_rounded(7.0),
+            Shape::left_rounded(8.0),
         ] {
             assert_eq!(shape.resolved_for_box(80.0, 40.0), shape, "{shape:?} is unchanged");
         }

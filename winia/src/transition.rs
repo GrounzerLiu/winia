@@ -807,8 +807,11 @@ pub(crate) fn rrect_vectors(pairs: [(f32, f32); 4]) -> [skia_safe::Vector; 4] {
 /// Pill/Circle resolve against the given (flight-start) size. No shape at
 /// all → plain rect.
 /// True when the marker's nearest shape derives its corners from the box
-/// (`Pill`/`Circle`): those must be evaluated on the painted box instead of
-/// being lerped between the endpoint radii.
+/// (`Pill`/`Circle`, and the percent end of a `PillToRounded` mid-press morph):
+/// those must be evaluated on the painted box instead of being lerped between
+/// the endpoint radii. `PillToRounded` was missing here, so a flight from a
+/// mid-press button lerped a radius frozen at flight start while
+/// `shared_shape_radii` resolved it against the box.
 pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
     modifier
         .elements()
@@ -821,7 +824,7 @@ pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
             | ModifierElement::Clip { shape } => Some(shape),
             _ => None,
         })
-        .is_some_and(|s| matches!(s, Shape::Pill | Shape::Circle))
+        .is_some_and(|s| matches!(s, Shape::Pill | Shape::Circle | Shape::PillToRounded { .. }))
 }
 
 pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4] {
