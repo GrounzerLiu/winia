@@ -580,19 +580,8 @@ impl MeasurePolicy for ButtonGroupPolicy {
         // The natural size is kept as well as the width, because a parked item needs a size that
         // is NOT zero — see the placement below.
         let mut natural = vec![Size::new(0.0, self.height); items];
-        // How narrow each item can actually get, measured by asking it for zero width: a button
-        // floors at its 48 dp touch target (`minimum_interactive_component_size`), a text item at
-        // its content. The press growth may only take the room a neighbour has SPARE.
-        let mut floors = vec![0.0f32; items];
         let mut fixed = 0.0f32;
         for i in 0..items {
-            let (floor_size, _) = measure_node(
-                nodes,
-                policies,
-                children[i],
-                Constraints::new(0.0, 0.0, 0.0, constraints.max_height),
-            );
-            floors[i] = floor_size.width;
             if weight_of(i) > 0.0 {
                 continue;
             }
@@ -668,23 +657,18 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 } else {
                     value * (BUTTON_GROUP_EXPANDED_RATIO * widths[index]).min(limit(index - 1))
                 };
-                // A neighbour can only give up what it has SPARE. Without this the pressed item
-                // grew by what it HOPED to take while a floored neighbour stayed exactly where it
-                // was, and the row grew with it: an icon-only group overflowed its own width on
-                // every press and everything to the right of the pressed item moved.
-                let spare = |n: usize| (widths[n] - floors[n]).max(0.0);
                 let actual_growth = if index > 0 && index + 1 < visible {
-                    let left = target_growth.min(spare(index - 1));
-                    let right = target_growth.min(spare(index + 1));
+                    let left = target_growth.min(widths[index - 1]);
+                    let right = target_growth.min(widths[index + 1]);
                     widths[index - 1] -= left;
                     widths[index + 1] -= right;
                     left + right
                 } else if index == 0 {
-                    let right = target_growth.min(spare(1));
+                    let right = target_growth.min(widths[1]);
                     widths[1] -= right;
                     right
                 } else {
-                    let left = target_growth.min(spare(index - 1));
+                    let left = target_growth.min(widths[index - 1]);
                     widths[index - 1] -= left;
                     left
                 };
@@ -725,7 +709,13 @@ impl MeasurePolicy for ButtonGroupPolicy {
             );
             placements.push(Placement { size, position: Offset::new(x, 0.0) });
             used_height = used_height.max(size.height);
-            x += size.width;
+            // Advance by the SLOT, not by what the child reported. A child may come back WIDER
+            // than its slot — a button floors at its 48 dp touch target and cannot shrink past
+            // it — and letting that widen the row is what made an icon-only group overflow its
+            // own width on every press (and shove everything to the right along). Upstream does
+            // the same: its positions come from `widths[]` and the layout size from
+            // `desiredWidth`, never from the placeables (`ButtonGroup.kt:700-760`).
+            x += widths[i];
             // Between items only — a trailing gap would widen the row by one spacing.
             if i + 1 < visible {
                 x += self.spacing;
@@ -1177,16 +1167,16 @@ mod tests {
         );
     }
 
-    /// The press growth may only take the room a neighbour has SPARE — what this pins is the
-    /// case where there is none.
+    /// THE ROW'S WIDTH IS THE SUM OF ITS SLOTS, never of what the children reported.
     ///
-    /// A button floors at its 48 dp touch target (`minimum_interactive_component_size`), so an
-    /// icon-only group's items have nothing to give. The growth used to add the room the pressed
-    /// item HOPED to take even though the neighbour never shrank, and the row grew by that much:
-    /// the demo's five icon buttons overflowed their own width on every press and everything to
-    /// the right of the pressed one moved.
+    /// A button floors at its 48 dp touch target (`minimum_interactive_component_size`), so a
+    /// neighbour that a press has squeezed reports back 48 anyway. Taking the layout's advance
+    /// from that reported size made the row GROW on every press — the demo's five icon buttons
+    /// overflowed their own width and everything to the right of the pressed item moved. Upstream
+    /// never does this: its positions come from `widths[]` and its layout size from
+    /// `desiredWidth`.
     #[test]
-    fn a_neighbour_with_no_spare_room_blocks_the_growth() {
+    fn the_row_keeps_its_width_when_a_squeezed_child_cannot_shrink() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1236,10 +1226,13 @@ mod tests {
             build(&mut composer);
         }
 
+        // The floored neighbour reports 48 whatever slot it is given, and the pressed item still
+        // grows into the slot the growth pass gave it — but the ROW is the sum of the slots, so it
+        // does not move: 160 + 15 of growth and 15 of squeeze.
         assert_eq!(
             widths(&composer),
-            (160.0, 100.0, 48.0),
-            "the pressed item must not grow into room that is not there, and the row must not "
+            (160.0, 115.0, 48.0),
+            "the pressed item grows into its slot and the FLOORED neighbour keeps its 48, while "
         );
     }
 
