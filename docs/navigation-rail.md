@@ -101,6 +101,12 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
 ```
 
 - 内容闭包是 `Fn` 不是 `FnOnce`——overlay 每帧重新组合它的内容。
+- **展开时折叠轨仍留在布局里**。上游的规则写得很直白：`if (!hideOnCollapse)` 里那条
+  轨是"Keep this rail even when expanded so that **screen layout doesn't change**"
+  （`WideNavigationRail.kt:570-571`），只是内容变成"仅折叠时组合"（`:585-590`）。
+  winia 此前展开时把整个节点抽掉，等于从调用方的行里拿走 96dp 一列，**后面的列全部左移**。
+  现在同上游：容器恒在（`progress` 钉在折叠端），只有模态层在动。
+  `hide_on_collapse` 是相反规则，两种状态都不画入流轨——那条位置由调用方负责。
 
 **折叠态与展开态的 item 对齐**（`expandedHeaderTopPadding`，`WideNavigationRail.kt:527`、
 `:666`）：上游对这个参数的说明是"通常用于**让展开动画的内容与折叠态对齐**"

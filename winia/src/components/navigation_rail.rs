@@ -1355,6 +1355,81 @@ mod tests {
         );
     }
 
+    /// Expanding the modal rail must NOT move the page: upstream keeps the collapsed rail in the layout
+    /// while the panel is up — "Keep this rail even when expanded so that screen layout doesn't
+    /// change" (`WideNavigationRail.kt:570-571`) — and composes its content only while collapsed
+    /// (`:585-590`).
+    ///
+    /// winia used to drop the whole node on expansion, which took a 96dp column out of the caller's
+    /// layout and pulled every column after it to the left. This pins the sibling's x.
+    ///
+    /// `hide_on_collapse` is the opposite rule and stays the opposite rule: there is no in-flow rail
+    /// in either state, so the caller owns the container.
+    #[test]
+    fn expanding_the_modal_rail_does_not_move_its_siblings() {
+        // (rail column width, follower x) for one expansion state.
+        let geometry = |expand: bool, hide_on_collapse: bool| {
+            let mut composer = Composer::new();
+            composer.compose(move |ctx| {
+                crate::layout::components::Row::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, |ctx| {
+                    let state = WideNavigationRailState::new(ctx);
+                    if expand {
+                        state.expand();
+                    }
+                    ModalWideNavigationRail::new(state, |ctx| {
+                        WideNavigationRailItem::new(
+                            true,
+                            |ctx| icon_leaf(ctx, 24.0),
+                            |ctx| crate::components::Text::new("A").build(ctx),
+                        )
+                        .on_click(|| {})
+                        .build(ctx);
+                    })
+                    .hide_on_collapse(hide_on_collapse)
+                    .build(ctx);
+                    // The follower: its x is what "the page moved" would show up as.
+                    let key = ctx.next_key();
+                    ctx.start_leaf(key, Modifier::new().size(100.0, 50.0));
+                    ctx.end_node();
+                });
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let children = nodes[root].children.clone();
+            // With `hide_on_collapse` there is no rail node at all, so the follower is the first
+            // child; otherwise it follows the rail.
+            if children.len() == 1 {
+                (0.0, nodes[children[0]].position.x)
+            } else {
+                (
+                    nodes[children[0]].measured_size.width,
+                    nodes[children[1]].position.x,
+                )
+            }
+        };
+
+        let (w_collapsed, x_collapsed) = geometry(false, false);
+        let (w_expanded, x_expanded) = geometry(true, false);
+        assert_eq!(w_collapsed, WIDE_RAIL_COLLAPSED_WIDTH, "collapsed rail column");
+        assert_eq!(
+            w_expanded, WIDE_RAIL_COLLAPSED_WIDTH,
+            "the in-flow rail stays collapsed-sized while the panel is up"
+        );
+        assert_eq!(
+            x_collapsed, x_expanded,
+            "and the column after it does not move"
+        );
+
+        // The dismissible variant is the other rule: no in-flow rail at all, in either state.
+        let (w_hidden_collapsed, _) = geometry(false, true);
+        let (w_hidden_expanded, _) = geometry(true, true);
+        assert_eq!(w_hidden_collapsed, 0.0, "hide_on_collapse draws nothing while collapsed");
+        assert_eq!(w_hidden_expanded, 0.0, "and nothing while expanded");
+    }
+
     /// `expanded_header_top_padding` (upstream's parameter of the same name) moves the expanded panel's
     /// content down by exactly that much, and leaves the collapsed rail alone.
     ///
@@ -1595,18 +1670,18 @@ impl ModalWideNavigationRail {
         let header = self.header;
         let content = self.content;
 
-        // Collapsed: the plain rail, unexpanded. Upstream draws this outside the dialog, next to a
-        // same-sized spacer that keeps the page from shifting when the modal opens; winia's rail already
-        // sits in the layout, so there is nothing to compensate for.
-        if !expanded {
-            if self.hide_on_collapse {
-                // Nothing on screen — the caller owns the offscreen position.
-                return;
-            }
+        // The IN-FLOW rail. Upstream draws it whenever `hideOnCollapse` is false, expanded or not —
+        // "Keep this rail even when expanded so that screen layout doesn't change"
+        // (`WideNavigationRail.kt:570-591`) — and composes its content only while collapsed. winia
+        // used to drop the whole node on expansion, which took a 96dp column out of the caller's
+        // layout and pulled every column after it to the left.
+        if !self.hide_on_collapse {
             let container = self.container_color.unwrap_or(theme.surface);
             let shape = self.collapsed_shape;
             let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
             let policy = WideNavigationRailLayoutPolicy {
+                // Pinned at the collapsed end: this node is the collapsed rail in BOTH states, and
+                // only the modal layer animates.
                 progress: ctx.animate_float_as_state(0.0, rail_container_spec()),
                 has_header: header.is_some(),
                 rtl,
@@ -1616,20 +1691,30 @@ impl ModalWideNavigationRail {
             let key = ctx.next_key();
             let root_modifier = self
                 .modifier
+                .clone()
                 .fill_max_height()
                 .background(container, shape);
             match ctx.start_restartable_group(key, root_modifier, policy) {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
-                    WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
-                        if let Some(header) = &header {
-                            header(ctx);
-                        }
-                        content(ctx);
-                    });
+                    // Content only while collapsed, so that it does not affect this collapsed rail
+                    // or the screen layout.
+                    if !expanded {
+                        WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
+                            if let Some(header) = &header {
+                                header(ctx);
+                            }
+                            content(ctx);
+                        });
+                    }
                 }
             }
             ctx.end_restartable_group();
+        }
+
+        if !expanded {
+            // Collapsed and nothing above the page. With `hide_on_collapse` there is not even the
+            // rail above: the caller owns the offscreen position.
             return;
         }
 
