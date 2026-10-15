@@ -13,8 +13,9 @@ mod settings;
 
 /// Material Icons "add" — icon paths are data, and data gets looked up.
 const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
-/// Material Icons "more_horiz".
-const MORE_PATH: &str = "M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z";
+/// Material Icons "more_vert" — the VERTICAL ellipsis, which is what upstream's default overflow
+/// indicator shows (`Icons.Filled.MoreVert`, `ButtonGroup.kt:333`).
+const MORE_VERT_PATH: &str = "M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z";
 /// Material Icons "check".
 const CHECK_PATH: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
 
@@ -202,13 +203,21 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                                 .build(ctx, |ctx| Text::new("Four").build(ctx));
                         }),
                 )
+                // Upstream's default indicator is a `FilledIconButton` with `Icons.Filled.MoreVert`
+                // and a click that TOGGLES the menu (`ButtonGroup.kt:296-336`) — a circle, not a
+                // pill, and a vertical ellipsis, not a horizontal one.
                 .overflow_indicator(|ctx, state| {
-                    Button::new()
-                        .style(ButtonStyle::Filled)
-                        .shape(Shape::Pill)
-                        .on_click(move || state.show())
+                    IconButton::new()
+                        .style(IconButtonStyle::Filled)
+                        .on_click(move || {
+                            if state.is_showing() {
+                                state.dismiss();
+                            } else {
+                                state.show();
+                            }
+                        })
                         .build(ctx, |ctx| {
-                            Icon::svg_path(MORE_PATH).size(24.0).build(ctx);
+                            Icon::svg_path(MORE_VERT_PATH).size(24.0).build(ctx);
                         });
                 })
                 .build(ctx);

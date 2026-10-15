@@ -88,6 +88,24 @@ recomposing — the same route the navigation rail's width animation takes.
 
 ## The overflow
 
+The indicator upstream ships as the default is a `FilledIconButton` showing
+`Icons.Filled.MoreVert`, and its click TOGGLES the menu (`ButtonGroup.kt:296-336`):
+
+```kotlin
+FilledIconButton(
+    onClick = { if (menuState.isShowing) menuState.dismiss() else menuState.show() },
+    shape = IconButtonDefaults.filledShape,   // a CIRCLE
+) { Icon(Icons.Filled.MoreVert, ...) }         // a VERTICAL ellipsis
+```
+
+So it is a circle, not a pill, and the dots are stacked vertically. The demo builds it from
+`IconButton` + `IconButtonStyle::Filled` (whose Round family is `Shape::Circle`) and the
+`more_vert` path.
+
+Upstream wraps it in a `TooltipBox` reading "More options"; winia has no tooltip, so that part
+is not reproduced.
+
+
 `ButtonGroup::overflow_indicator(|ctx, menu_state| ...)` is upstream's required
 `overflowIndicator` slot, except winia makes it optional: a group without one simply never
 overflows.
