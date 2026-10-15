@@ -196,7 +196,11 @@ pub struct ButtonGroupItem {
     weight: f32,
     press: Option<MutableInteractionSource>,
     compression_limit: f32,
-    item: Box<dyn FnOnce(&mut ComposeCtx)>,
+    /// The item's own content. It is handed the interaction source the group watches for the
+    /// press growth, because that is the only way the group can see the press: upstream's
+    /// `ClickableButtonGroupItem` creates the source and the `Button` inside it together
+    /// (`ButtonGroup.kt:1084-1113`).
+    item: Box<dyn FnOnce(&mut ComposeCtx, MutableInteractionSource)>,
     /// The row this item shows in the overflow menu when it does not fit. Upstream's
     /// `customItem` takes a `menuContent` alongside the button content for the same reason: only
     /// the caller knows what the item should look like as a menu row.
@@ -207,7 +211,16 @@ pub struct ButtonGroupItem {
 }
 
 impl ButtonGroupItem {
-    pub fn new(item: impl FnOnce(&mut ComposeCtx) + 'static) -> Self {
+    /// An item, handed the interaction source the group wants its presses reported through.
+    ///
+    /// USE THAT SOURCE on whatever clickable the item composes. Every item grows while it is
+    /// pressed and takes the room off its neighbours — that is not opt-in upstream:
+    /// `clickableItem` and `toggleableItem` attach `EnlargeOnPressElement` to every item they
+    /// build, in the plain group as much as the connected one (`ButtonGroup.kt:1075-1126`). An
+    /// item that ignores the source simply never grows, which is upstream's `customItem`.
+    pub fn new(
+        item: impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static,
+    ) -> Self {
         Self {
             weight: 0.0,
             press: None,
@@ -233,9 +246,9 @@ impl ButtonGroupItem {
         self
     }
 
-    /// Opt this item into the press growth: `Modifier.animateWidth(interactionSource)`. The group
-    /// watches the source, animates the progress on its own `FastSpatial` spring and grows the item
-    /// by squeezing its neighbours.
+    /// The source the group should watch for this item's presses, when the CALLER already owns
+    /// one — `Modifier.animateWidth(interactionSource)` with a source of your own. Without this
+    /// the group creates one and hands it to [`ButtonGroupItem::new`]'s closure.
     pub fn press_source(mut self, source: MutableInteractionSource) -> Self {
         self.press = Some(source);
         self
@@ -306,7 +319,10 @@ impl ButtonGroup {
         self.connected
     }
 
-    pub fn item(mut self, item: impl FnOnce(&mut ComposeCtx) + 'static) -> Self {
+    pub fn item(
+        mut self,
+        item: impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static,
+    ) -> Self {
         self.children.push(ButtonGroupItem::new(item));
         self
     }
@@ -318,7 +334,7 @@ impl ButtonGroup {
     pub fn weighted_item(
         self,
         weight: f32,
-        item: impl FnOnce(&mut ComposeCtx) + 'static,
+        item: impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static,
     ) -> Self {
         self.add(ButtonGroupItem::new(item).weight(weight))
     }
@@ -356,13 +372,30 @@ impl ButtonGroup {
         // The press progress, one per item — `FastSpatial`, the group's own spring upstream
         // (`ButtonGroup.kt:143-144`). An item with no press source stays at zero, which is what
         // makes `animateWidth` opt-in.
-        let mut progress = Vec::with_capacity(self.children.len());
-        for child in &self.children {
-            let target = child
-                .press
-                .as_ref()
-                .map(|src| if src.state(true).pressed { 1.0 } else { 0.0 })
-                .unwrap_or(0.0);
+        // One source per item, created here unless the caller brought its own, plus the press
+        // progress the policy reads. Every item gets them: upstream's own item constructors attach
+        // the growth unconditionally, and an item that ignores the source simply never presses it.
+        // REMEMBERED, not created per build. `clickable_with_source` watches the source it was
+        // handed, so a fresh one on every recomposition forgets the press the instant anything
+        // else re-composes the group — the button keeps working (it re-registers with the new
+        // source) but the progress this reads goes back to 0 and the item never grows. Upstream
+        // remembers its per-item source for the same reason
+        // (`ButtonGroup.kt:1085`: `remember { MutableInteractionSource() }`).
+        let mut sources: Vec<MutableInteractionSource> = ctx.remember(Vec::new).get();
+        let wanted = self.children.len();
+        while sources.len() < wanted {
+            sources.push(MutableInteractionSource::new());
+        }
+        sources.truncate(wanted);
+        // An item that brought its own source keeps it.
+        for (index, child) in self.children.iter().enumerate() {
+            if let Some(own) = &child.press {
+                sources[index] = own.clone();
+            }
+        }
+        let mut progress = Vec::with_capacity(sources.len());
+        for source in &sources {
+            let target = if source.state(true).pressed { 1.0 } else { 0.0 };
             progress.push(ctx.animate_float_as_state(
                 target,
                 crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
@@ -402,6 +435,7 @@ impl ButtonGroup {
                 // count back: 0 for the ones in the menu. The alpha is evaluated at RENDER time
                 // (`graphics_layer` takes a closure), so it is last measure's answer.
                 for (index, child) in children.drain(..).enumerate() {
+                    let source = sources[index].clone();
                     if has_indicator {
                         let shown = visible.clone();
                         let alpha = Modifier::new().graphics_layer(move || {
@@ -410,9 +444,9 @@ impl ButtonGroup {
                                 ..Default::default()
                             }
                         });
-                        wrap_item(ctx, alpha, |ctx| (child.item)(ctx));
+                        wrap_item(ctx, alpha, |ctx| (child.item)(ctx, source));
                     } else {
-                        (child.item)(ctx);
+                        (child.item)(ctx, source);
                     }
                 }
                 if let Some(indicator) = overflow {
@@ -807,8 +841,8 @@ mod tests {
             composer.compose(|ctx| {
                 let group = if connected { ButtonGroup::connected() } else { ButtonGroup::new() };
                 group
-                    .item(|ctx| leaf(ctx, 60.0, 40.0))
-                    .item(|ctx| leaf(ctx, 60.0, 40.0))
+                    .item(|ctx, _source| leaf(ctx, 60.0, 40.0))
+                    .item(|ctx, _source| leaf(ctx, 60.0, 40.0))
                     .build(ctx);
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -870,9 +904,9 @@ mod tests {
             for (weight, weighted) in &spec {
                 let w = *weight;
                 if *weighted {
-                    group = group.weighted_item(w, |ctx| leaf(ctx, 60.0, 40.0));
+                    group = group.weighted_item(w, |ctx, _source| leaf(ctx, 60.0, 40.0));
                 } else {
-                    group = group.item(|ctx| leaf(ctx, 60.0, 40.0));
+                    group = group.item(|ctx, _source| leaf(ctx, 60.0, 40.0));
                 }
             }
             group.build(ctx);
@@ -907,9 +941,9 @@ mod tests {
             let middle = src.clone();
             composer.compose(move |ctx| {
                 ButtonGroup::new()
-                    .item(|ctx| leaf(ctx, 100.0, 40.0))
-                    .add(ButtonGroupItem::new(|ctx| leaf(ctx, 100.0, 40.0)).press_source(middle))
-                    .item(|ctx| leaf(ctx, 100.0, 40.0))
+                    .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                    .add(ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0)).press_source(middle))
+                    .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
                     .build(ctx);
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
@@ -960,9 +994,9 @@ mod tests {
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             ButtonGroup::new()
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
                 .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
                 .build(ctx);
         });
@@ -1012,9 +1046,9 @@ mod tests {
             let mut composer = crate::runtime::composer::Composer::new();
             composer.compose(|ctx| {
                 ButtonGroup::new()
-                    .item(|ctx| leaf(ctx, 82.0, 40.0))
-                    .weighted_item(1.0, |ctx| leaf(ctx, 60.0, 40.0))
-                    .weighted_item(2.0, |ctx| leaf(ctx, 60.0, 40.0))
+                    .item(|ctx, _source| leaf(ctx, 82.0, 40.0))
+                    .weighted_item(1.0, |ctx, _source| leaf(ctx, 60.0, 40.0))
+                    .weighted_item(2.0, |ctx, _source| leaf(ctx, 60.0, 40.0))
                     .build(ctx);
             });
             composer.layout(Constraints::new(0.0, width, 0.0, 400.0));
@@ -1046,9 +1080,9 @@ mod tests {
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(|ctx| {
             ButtonGroup::new()
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
-                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
                 .build(ctx);
         });
         composer.layout(Constraints::new(0.0, 340.0, 0.0, 400.0));

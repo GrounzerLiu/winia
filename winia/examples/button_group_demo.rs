@@ -43,15 +43,19 @@ fn caption(ctx: &mut ComposeCtx, text: &str) {
 }
 
 /// One item of a group: a filled button painting whatever shape its position gives it.
+/// One item of a group: a filled button painting whatever shape its position gives it, and
+/// reporting its presses through the source the group hands it — which is what makes it grow while
+/// pressed and squeeze its neighbours, exactly as every item upstream does.
 fn item(
     label: &'static str,
     shape: Shape,
     on_click: impl Fn() + Send + Sync + 'static,
-) -> impl FnOnce(&mut ComposeCtx) + 'static {
-    move |ctx| {
+) -> impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static {
+    move |ctx, source| {
         Button::new()
             .style(ButtonStyle::Filled)
             .shape(shape)
+            .interaction_source(source)
             .on_click(on_click)
             .build(ctx, |ctx| {
                 Text::new(label).build(ctx);
@@ -214,10 +218,11 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 .item(item("Add", Shape::Pill, { clone!(plain); move || plain.set(1) }))
                 .item({
                     let plain = plain.clone();
-                    move |ctx| {
+                    move |ctx, source| {
                         Button::new()
                             .style(ButtonStyle::Filled)
                             .shape(ButtonGroupDefaults::connected_middle_shapes().shape)
+                            .interaction_source(source)
                             .on_click(move || plain.set(2))
                             .build(ctx, |ctx| {
                                 Icon::svg_path(PLUS_PATH).size(24.0).build(ctx);
