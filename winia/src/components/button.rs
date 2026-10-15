@@ -819,10 +819,17 @@ impl Button {
         // modifier is the outer one (`Surface(modifier = modifier…)`), so its explicit size wins and the touch
         // target cannot grow past it. winia's modifier chain cannot express "the caller's size clamps the
         // smaller node inside", which is why the two Node trees would be needed to match exactly.
+        // `propagate_min_constraints`: `Surface` is a `Box(propagateMinConstraints = true)`
+        // (`material3/Surface.kt:219`), so a parent that FORCES a width on the button gets a
+        // painted box that width — the touch target is not the only thing that grows. Without it
+        // a ButtonGroup item's press growth widened this 48 dp box while the visual box inside
+        // stayed at its content width, and the difference showed up as a gap on each side.
         crate::layout::components::build_container(
             ctx,
             Modifier::new().minimum_interactive_component_size(),
-            BoxLayout::new().alignment(crate::layout::Alignment::Center),
+            BoxLayout::new()
+                .alignment(crate::layout::Alignment::Center)
+                .propagate_min_constraints(true),
             |ctx| {
         // content 闭包自动成为组合 scope（与 Column 一致）
         match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(crate::layout::Alignment::Center)) {

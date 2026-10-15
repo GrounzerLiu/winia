@@ -23,6 +23,15 @@ pub struct BoxLayout {
     /// LTR and the RIGHT one in RTL (`Alignment.kt:114-121`). Captured at composition, like
     /// `Row`/`Column` do (`layout/components.rs:61`).
     pub direction: LayoutDirection,
+    /// Pass this box's own MINIMUM constraints down to its children instead of loosening them —
+    /// Compose's `Box(propagateMinConstraints = true)`. Off by default, as there.
+    ///
+    /// It matters where something FORCES a size on the box: without it the box reports the forced
+    /// size while its child still hugs its own content, so the box grows and the thing that paints
+    /// does not. `Surface` sets it (`material3/Surface.kt:219`), which is why a Compose button
+    /// widens with its box; winia's Button wraps its visual box in a min-interactive container and
+    /// that container needs the same.
+    pub propagate_min_constraints: bool,
 }
 
 impl BoxLayout {
@@ -31,6 +40,7 @@ impl BoxLayout {
             alignment: Alignment::Start,
             content_alignment: None,
             direction: LayoutDirection::Ltr,
+            propagate_min_constraints: false,
         }
     }
 
@@ -48,6 +58,12 @@ impl BoxLayout {
 
     pub fn direction(mut self, d: LayoutDirection) -> Self {
         self.direction = d;
+        self
+    }
+
+    /// See [`BoxLayout::propagate_min_constraints`].
+    pub fn propagate_min_constraints(mut self, on: bool) -> Self {
+        self.propagate_min_constraints = on;
         self
     }
 
@@ -75,9 +91,15 @@ impl MeasurePolicy for BoxLayout {
         let mut max_height: f32 = 0.0;
         let mut child_sizes: Vec<Size> = Vec::with_capacity(children.len());
 
-        // 测量所有子节点，每个子节点获得相同的约束
+        // 测量所有子节点，每个子节点获得相同的约束——除非开了 propagate_min_constraints，
+        // 这时把本盒子的 MIN 约束一并传下去（Compose 的 `Box(propagateMinConstraints = true)`）
+        let child_constraints = if self.propagate_min_constraints {
+            constraints
+        } else {
+            constraints.loosen()
+        };
         for &c in children {
-            let (child_size, _) = measure_node(nodes, policies, c, constraints.loosen());
+            let (child_size, _) = measure_node(nodes, policies, c, child_constraints);
             max_width = max_width.max(child_size.width);
             max_height = max_height.max(child_size.height);
             child_sizes.push(child_size);
@@ -221,5 +243,41 @@ mod tests {
                 "{alignment:?} should place the 50x30 child at {expected:?}"
             );
         }
+    }
+
+    /// `propagate_min_constraints` is Compose's `Box(propagateMinConstraints = true)`: the box's
+    /// MINIMUM goes to the children instead of being loosened away.
+    ///
+    /// The case that needs it: a parent FORCES a size on the box. Without propagation the box
+    /// reports the forced size while its child still hugs its content — the box grows and whatever
+    /// paints inside it does not, which is exactly what a ButtonGroup item's press growth looked
+    /// like before `Button`'s touch-target container set this (the visual box stayed its content
+    /// width in a box that had grown, and the difference showed as a gap).
+    #[test]
+    fn propagate_min_constraints_passes_the_minimum_to_the_children() {
+        let forced = Constraints::new(100.0, 100.0, 0.0, 100.0);
+        let leaf = |nodes: &mut Vec<LayoutNode>| {
+            nodes.clear();
+            nodes.push(make_leaf(20.0, 10.0) as LayoutNode);
+            vec![0usize]
+        };
+
+        let mut nodes = Vec::new();
+        let children = leaf(&mut nodes);
+        let loose = BoxLayout::new();
+        let (_, placements) = loose.measure(&mut nodes, &[], &children, forced);
+        assert_eq!(
+            placements[0].size.width, 20.0,
+            "by default the child keeps its own width"
+        );
+
+        let mut nodes = Vec::new();
+        let children = leaf(&mut nodes);
+        let propagating = BoxLayout::new().propagate_min_constraints(true);
+        let (_, placements) = propagating.measure(&mut nodes, &[], &children, forced);
+        assert_eq!(
+            placements[0].size.width, 100.0,
+            "with propagation the forced minimum reaches the child, so the child paints that wide"
+        );
     }
 }
