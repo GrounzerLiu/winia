@@ -170,20 +170,22 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
 - **形状 token**：`CornerFull` 用 `Shape::Pill` 近似（短边一半圆角），
   无主题级 shape 系统（`MaterialTheme.shapes` 对应物未实现）。
-  - **按下不形变（已确认的偏差，未修）**。上游的 Button 有 `ButtonShapes(shape,
-    pressedShape)` 并按 `shapeByInteraction(shapes, pressed, spec)` 在两者间插值
-    （`material3/Button.kt:1922-1939`），默认那对是
-    `ContainerShapeRound`(CornerFull) → 该尺寸的 `PressedContainerShape`，动效走
-    `MotionSchemeKeyTokens.DefaultEffects`（`:248-252`，注释写明 "intentional here
-    to prevent any bounce in this component"）。winia 的 `shape` 是一个固定
-    `Shape`，按下时不变——胶囊一直是胶囊。`ButtonDefaults` 里那组**按尺寸**的
-    `pressedShape`（8/8/12/16/16 = CornerSmall/CornerSmall/CornerMedium/
-    CornerLarge/CornerLarge）和 `squareShape`（12/12/16/28/28）因此全部未被使用。
-  - 修它需要一个框架能力：静止形状 `Shape::Pill` 的圆角是**短边的一半**，只在
-    绘制期才解析，而按下形状 `CornerMedium` 是固定 12dp——想插值就得让 `Shape`
-    带上"百分比圆角 → 固定圆角"的过渡参数（`graphics/shape.rs` + 渲染器 +
-    clip/ripple/shadow 各处）。`Modifier::background` 只收固定 `Shape`（动态的
-    只有颜色，见 `BorderDynamic`），所以这不是改 Button 一处能完成的。
+  - **按下形变（已实现）**。上游的 Button 有 `ButtonShapes(shape, pressedShape)`，按
+    `shapeByInteraction(shapes, pressed, spec)` 在两者间插值（`material3/Button.kt:1922-1939`），
+    默认那对是 `ContainerShapeRound`(CornerFull) → 该尺寸的 `PressedContainerShape`，动效走
+    `MotionSchemeKeyTokens.DefaultEffects`（`:248-252`，注释写明 "intentional here to prevent
+    any bounce in this component"）。
+  - 按尺寸的按下圆角 = `ButtonSize::pressed_container_radius()`：8/8/12/16/16
+    （CornerSmall/CornerSmall/CornerMedium/CornerLarge/CornerLarge）。默认按钮是
+    Pill(半径 20) → 8，40dp 高上肉眼可见。
+  - 静止端是**百分比圆角**（短边一半）、按下端是**固定半径**，两端单位不同，所以过渡由
+    `Shape::PillToRounded { corner_radius, t }` 承载：`t=0` 就是 `Shape::Pill`、`t=1` 就是
+    `Shape::rounded(corner_radius)`，半径由 `Shape::resolved_for_box(w, h)` 在绘制期解析。
+    `t` 恰好到 0 或 1 时返回的是普通 `Pill` / `RoundedRect`——**没按过的按钮拿到的仍是调用方
+    指定的那个 shape**。
+  - 传了固定半径的 `shape(...)` 时走固定半径那条插值分支；`PillToRounded` 之外的多角形状
+    （`Corners` / `TopRoundedRect` / `Rectangle`）原样返回，不做形变。
+  - `squareShape`（12/12/16/28/28）仍未作为 API 暴露。
 - **字体**：M3 Button 强制 `LabelLarge`；winia 跟随 `ProvideTextStyle`，
   不自动应用 LabelLarge。
 - **焦点指示器颜色**：M3 默认 secondary，winia 用主题 primary（有意选择，

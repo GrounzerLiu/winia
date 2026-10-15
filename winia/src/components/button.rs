@@ -86,6 +86,17 @@ impl ButtonSize {
         }
     }
 
+    /// `PressedContainerShape` as a corner radius — the shape the container morphs to while it is
+    /// pressed. `ButtonXSmallTokens`/`ButtonSmallTokens` say CornerSmall (8), `ButtonMediumTokens`
+    /// CornerMedium (12), `ButtonLargeTokens`/`ButtonXLargeTokens` CornerLarge (16).
+    pub fn pressed_container_radius(self) -> f32 {
+        match self {
+            ButtonSize::XSmall | ButtonSize::Small => 8.0,
+            ButtonSize::Medium => 12.0,
+            ButtonSize::Large | ButtonSize::XLarge => 16.0,
+        }
+    }
+
     /// Outlined 边框宽度（OutlinedOutlineWidth：1/1/1/2/3）
     pub fn outline_width(self) -> f32 {
         match self {
@@ -661,7 +672,44 @@ impl Button {
 
         // 对标 material3 Button：内部 Row = defaultMinSize(58,40) + contentPadding，
         // 容器/边框/阴影统一使用 shape 参数（默认胶囊 CornerFull）。
-        let shape = self.shape;
+        //
+        // The shape MORPHS on press, as upstream's does: `ButtonShapes(shape, pressedShape)`
+        // through `shapeByInteraction(shapes, pressed, spec)` (`material3/Button.kt:1922-1939`),
+        // defaulting to the size's `ContainerShapeRound` (CornerFull) and its
+        // `PressedContainerShape`. The spec is `MotionSchemeKeyTokens.DefaultEffects`, which
+        // upstream comments is "intentional here to prevent any bounce in this component"
+        // (`:248-252`) — the same rule the icon buttons follow, and the reason this is not a
+        // spatial spring.
+        let press_progress = ctx.animate_float_as_state(
+            if state.pressed { 1.0 } else { 0.0 },
+            crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default()),
+        );
+        let pressed_radius = self.size_variant.pressed_container_radius();
+        let shape = match self.shape {
+            // A percent-50 corner can only be resolved against the box it paints into, so the
+            // transition itself carries both ends: `PillToRounded { t: 0.0 }` IS the pill. The
+            // two ENDS still return the plain shapes — a button that never pressed should carry
+            // the very shape the caller asked for, not the transition resting at its start.
+            Shape::Pill | Shape::Circle => {
+                let t = press_progress.get();
+                if t <= 0.0 {
+                    self.shape
+                } else if t >= 1.0 {
+                    Shape::rounded(pressed_radius)
+                } else {
+                    Shape::PillToRounded {
+                        corner_radius: pressed_radius,
+                        t,
+                    }
+                }
+            }
+            // A fixed radius interpolates directly.
+            Shape::RoundedRect { corner_radius } => Shape::rounded(
+                corner_radius + (pressed_radius - corner_radius) * press_progress.get(),
+            ),
+            // Per-corner, top-only and rectangle shapes have nothing to interpolate.
+            other => other,
+        };
         let (pad_s, pad_t, pad_e, pad_b) = self.content_padding.unwrap_or_else(|| {
             if self.size_named {
                 // A named size takes that size's own tokens (`ButtonSmallTokens.LeadingSpace` = 16 for Small).
@@ -1385,5 +1433,119 @@ mod tests {
             1.0
         );
         assert_eq!(ButtonElevation::default_elevation().for_state(&ComponentState::idle()), 0.0);
+    }
+
+    /// `PressedContainerShape` per size — the shape a pressed container morphs to. The two ends of
+    /// the default button are therefore CornerFull (pill) -> CornerSmall (8), which is a visible
+    /// move on a 40 dp button.
+    #[test]
+    fn the_pressed_container_radii_are_the_tokens() {
+        for (size, radius) in [
+            (ButtonSize::XSmall, 8.0),
+            (ButtonSize::Small, 8.0),
+            (ButtonSize::Medium, 12.0),
+            (ButtonSize::Large, 16.0),
+            (ButtonSize::XLarge, 16.0),
+        ] {
+            assert_eq!(
+                size.pressed_container_radius(),
+                radius,
+                "{size:?}'s PressedContainerShape"
+            );
+        }
+    }
+
+    /// A press morphs the container's SHAPE, the way upstream's `ButtonShapes(shape, pressedShape)`
+    /// does through `shapeByInteraction` (`material3/Button.kt:1922-1939`). The default pair is the
+    /// pill (CornerFull, a percent corner that resolves against the box) and Small's
+    /// `PressedContainerShape` (CornerSmall, 8). The transition carries both ends because the
+    /// percent one cannot be resolved at compose time. Deleting the morph leaves `Shape::Pill` on
+    /// every frame and fails this test.
+    #[test]
+    fn a_press_morphs_the_container_shape_over_time() {
+        // `update_animations` drives the process-wide table, so this takes the same lock the other
+        // animation tests hold.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    Button::new()
+                        .interaction_source(src.clone())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            crate::components::text::Text::new("Save").build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let painted = |composer: &crate::runtime::composer::Composer| -> Shape {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                        _ => None,
+                    })
+                })
+                .expect("the container paints a background")
+        };
+
+        build(&mut composer);
+        assert_eq!(
+            painted(&composer),
+            Shape::Pill,
+            "at rest the default button is the CornerFull pill"
+        );
+
+        source.emit_press();
+        build(&mut composer);
+        // The morph must be REGISTERED and must not have landed yet. `assert_ne!` alone would also
+        // pass if nothing had started: the resting shape is a `Pill`, not a `PillToRounded`.
+        assert!(
+            crate::animation::is_animating(),
+            "pressing registers the shape morph"
+        );
+        // The morph is registered but has not moved yet — the frame that starts a spring still
+        // reads its start value, so the shape is the pill at t = 0 here.
+        assert_eq!(
+            painted(&composer),
+            Shape::Pill,
+            "the press is registered, not applied in one frame"
+        );
+
+        // What makes it a MORPH and not a switch: the corners are seen part-way through. A snap
+        // could never produce a `t` strictly between the ends.
+        let mut saw_intermediate = false;
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+            if let Shape::PillToRounded { t, .. } = painted(&composer) {
+                if (0.01..=0.99).contains(&t) {
+                    saw_intermediate = true;
+                }
+            }
+        }
+        assert!(
+            saw_intermediate,
+            "the corners travel through intermediate values instead of snapping"
+        );
+        // Resolved against a box, so this holds whether the settled shape is still the transition
+        // or the plain rounded rect its t = 1 end resolves to.
+        assert_eq!(
+            painted(&composer).resolved_for_box(58.0, 40.0),
+            Shape::rounded(8.0),
+            "and it arrives at Small's PressedContainerShape (CornerSmall = 8)"
+        );
     }
 }

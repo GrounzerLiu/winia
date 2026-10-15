@@ -44,6 +44,41 @@ pub enum Shape {
     },
     /// 直角矩形
     Rectangle,
+    /// A `CornerFull` (percent-50) corner part-way to a FIXED radius: `t = 0.0` is exactly
+    /// [`Shape::Pill`], `t = 1.0` exactly [`Shape::RoundedRect`] with `corner_radius`.
+    ///
+    /// This is what Compose animates when a shape morphs between a `PercentCornerSize(50)` and a
+    /// fixed `CornerSize` — material3's `ButtonShapes(shape, pressedShape)`
+    /// (`Button.kt:1922-1939`) and the icon buttons' press morph both do exactly that. winia's
+    /// `Shape` had no way to express it: `Pill` and `Circle` carry no radius to interpolate, and
+    /// a `RoundedRect` radius is fixed, so the percent-50 end had nothing to travel FROM.
+    ///
+    /// The corner is a percent of the SHORT side, so it can only be resolved once the box is
+    /// known — see [`Shape::resolved_for_box`], which every paint, clip and shadow path calls
+    /// first.
+    PillToRounded {
+        corner_radius: f32,
+        t: f32,
+    },
+}
+
+impl Shape {
+    /// The shape a `width` x `height` box actually paints, with a percent-corner morph resolved
+    /// to the fixed radius it is at *now*.
+    ///
+    /// Only [`Shape::PillToRounded`] is rewritten; every other variant is returned unchanged, so
+    /// the paint, clip and shadow paths keep matching the arms they already had. A caller that
+    /// skips this and matches on the raw shape would land on the `PillToRounded` arm, which is
+    /// why the renderer calls it at the top of each resolution.
+    pub fn resolved_for_box(&self, width: f32, height: f32) -> Shape {
+        match *self {
+            Shape::PillToRounded { corner_radius, t } => {
+                let percent = width.min(height) / 2.0;
+                Shape::rounded(percent + (corner_radius - percent) * t)
+            }
+            other => other,
+        }
+    }
 }
 
 impl Shape {
@@ -75,5 +110,44 @@ impl Shape {
     /// [`Shape::Corners`].
     pub fn corners(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
         Shape::Corners { top_left, top_right, bottom_right, bottom_left }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `PillToRounded` resolves to a plain radius once the box is known: its two ends are
+    /// exactly `Pill` and `RoundedRect`, and it travels linearly between them. The percent end is
+    /// half the SHORT side, so a 100 x 40 box starts at 20, not at 50.
+    #[test]
+    fn a_pill_transition_resolves_against_the_box() {
+        let at = |t: f32| Shape::PillToRounded { corner_radius: 8.0, t }.resolved_for_box(100.0, 40.0);
+
+        assert_eq!(at(0.0), Shape::rounded(20.0), "t = 0 is exactly Shape::Pill");
+        assert_eq!(at(1.0), Shape::rounded(8.0), "t = 1 is exactly the fixed radius");
+        assert_eq!(at(0.5), Shape::rounded(14.0), "and it travels between them");
+
+        // Half the SHORT side, not half the width: the same call in a tall box uses the width.
+        assert_eq!(
+            Shape::PillToRounded { corner_radius: 8.0, t: 0.0 }.resolved_for_box(40.0, 100.0),
+            Shape::rounded(20.0)
+        );
+    }
+
+    /// Every other variant passes through untouched — the resolution exists so the paint, clip and
+    /// shadow paths keep matching the arms they already had.
+    #[test]
+    fn every_other_shape_passes_through_the_resolver() {
+        for shape in [
+            Shape::Rectangle,
+            Shape::rounded(4.0),
+            Shape::Pill,
+            Shape::Circle,
+            Shape::corners(1.0, 2.0, 3.0, 4.0),
+            Shape::top_rounded(6.0),
+        ] {
+            assert_eq!(shape.resolved_for_box(80.0, 40.0), shape, "{shape:?} is unchanged");
+        }
     }
 }

@@ -423,6 +423,11 @@ fn draw_container(canvas: &skia_safe::Canvas, rect: skia_safe::Rect, color: Colo
             let r = rect.width().min(rect.height()) / 2.0;
             canvas.draw_round_rect(rect, r, r, &paint);
         }
+        Shape::PillToRounded { corner_radius, t } => {
+            let percent = rect.width().min(rect.height()) / 2.0;
+            let r = percent + (corner_radius - percent) * t;
+            canvas.draw_round_rect(rect, r, r, &paint);
+        }
         Shape::RoundedRect { corner_radius } => {
             canvas.draw_round_rect(rect, corner_radius, corner_radius, &paint);
         }

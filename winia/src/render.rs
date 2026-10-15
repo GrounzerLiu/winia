@@ -239,6 +239,11 @@ fn shadow_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_safe::Path {
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             skia_safe::Path::rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None)
         }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = rect.width().min(rect.height()) / 2.0;
+            let r = percent + (*corner_radius - percent) * *t;
+            skia_safe::Path::rrect(RRect::new_rect_xy(rect, r, r), None)
+        }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(rect, &[
                 skia_safe::Vector::new(*radius, *radius),
@@ -320,6 +325,11 @@ fn draw_shadow_layer(
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &mask);
         }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = local.width().min(local.height()) / 2.0;
+            let r = percent + (*corner_radius - percent) * *t;
+            sc.draw_rrect(RRect::new_rect_xy(local, r, r), &mask);
+        }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(local, &[
                 skia_safe::Vector::new(*radius, *radius),
@@ -361,6 +371,11 @@ fn draw_shadow_layer(
             crate::graphics::Shape::Rectangle => { sc.draw_rect(local, &stroke); }
             crate::graphics::Shape::RoundedRect { corner_radius } => {
                 sc.draw_rrect(RRect::new_rect_xy(local, *corner_radius, *corner_radius), &stroke);
+            }
+            crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+                let percent = local.width().min(local.height()) / 2.0;
+                let r = percent + (*corner_radius - percent) * *t;
+                sc.draw_rrect(RRect::new_rect_xy(local, r, r), &stroke);
             }
             crate::graphics::Shape::TopRoundedRect { radius } => {
                 let rr = RRect::new_rect_radii(local, &[
@@ -1340,6 +1355,11 @@ fn render_pass1(
             crate::graphics::Shape::RoundedRect { corner_radius } => {
                 canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
             }
+            crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+                let percent = rect.width().min(rect.height()) / 2.0;
+                let r = percent + (*corner_radius - percent) * *t;
+                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
+            }
             crate::graphics::Shape::TopRoundedRect { radius } => {
                 let rr = RRect::new_rect_radii(rect, &[
                     skia_safe::Vector::new(*radius, *radius),
@@ -1963,6 +1983,11 @@ fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::graphi
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), paint);
         }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = rect.width().min(rect.height()) / 2.0;
+            let r = percent + (*corner_radius - percent) * *t;
+            canvas.draw_rrect(RRect::new_rect_xy(rect, r, r), paint);
+        }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let rr = RRect::new_rect_radii(rect, &[
                 skia_safe::Vector::new(*radius, *radius),
@@ -2238,6 +2263,11 @@ fn draw_border(canvas: &Canvas, x: f32, y: f32, w: f32, h: f32, width: f32, colo
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             canvas.draw_rrect(RRect::new_rect_xy(sr, (*corner_radius - inset).max(0.0), (*corner_radius - inset).max(0.0)), &paint);
         }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = sr.width().min(sr.height()) / 2.0;
+            let r = (percent + (*corner_radius - percent) * *t - inset).max(0.0);
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
+        }
         crate::graphics::Shape::TopRoundedRect { radius } => {
             let r = (*radius - inset).max(0.0);
             let rr = RRect::new_rect_radii(sr, &[
@@ -2354,6 +2384,11 @@ pub(crate) fn draw_focus(
         crate::graphics::Shape::RoundedRect { corner_radius } => {
             // 外扩后圆角同步放大（保持与组件同心）
             let r = (*corner_radius + inset).max(0.0) * scale;
+            canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
+        }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = sr.width().min(sr.height()) / 2.0;
+            let r = (percent + (*corner_radius - percent) * *t + inset).max(0.0) * scale;
             canvas.draw_rrect(RRect::new_rect_xy(sr, r, r), &paint);
         }
         crate::graphics::Shape::TopRoundedRect { radius } => {

@@ -895,6 +895,13 @@ pub(crate) fn corner_radii(shape: &Shape, height: f32) -> (f32, f32, f32, f32) {
         Shape::RightRoundedRect { radius } => (0.0, *radius, *radius, 0.0),
         Shape::LeftRoundedRect { radius } => (*radius, 0.0, 0.0, *radius),
         Shape::Pill | Shape::Circle => (full, full, full, full),
+        // A pill part-way to a fixed radius. `corner_radii` resolves percent corners against the
+        // HEIGHT (a composition does not know the box it will be measured into), so that is the
+        // percent end here too.
+        Shape::PillToRounded { corner_radius, t } => {
+            let r = full + (corner_radius - full) * t;
+            (r, r, r, r)
+        }
         Shape::Corners {
             top_left,
             top_right,
