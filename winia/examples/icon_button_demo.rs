@@ -21,15 +21,6 @@ mod settings;
 
 const STAR_PATH: &str = "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z";
 
-// Four more Material Icons for the "one button, five icons" row. Icon paths are DATA and data
-// gets looked up: these are the `24px` outlines from Google's Material Icons set, the same `d`
-// this repository's other examples already carry (add in the FAB demo, favorite and home in the
-// navigation demos, edit in the text-field demo) — nothing here is hand-drawn geometry.
-const ADD_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
-const FAVORITE_PATH: &str = "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z";
-const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
-const EDIT_PATH: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
-
 fn label_color() -> Color {
     WiniaTheme::colors().on_surface_variant
 }
@@ -52,20 +43,10 @@ fn caption(ctx: &mut ComposeCtx, text: &str) {
 
 /// An IconButton with the demo's star icon, so each row stays readable.
 fn star(ctx: &mut ComposeCtx, button: IconButton, clicks: &State<i32>) {
-    with_icon(ctx, button, STAR_PATH, clicks);
-}
-
-/// The same button carrying a different icon.
-fn with_icon(
-    ctx: &mut ComposeCtx,
-    button: IconButton,
-    path: &'static str,
-    clicks: &State<i32>,
-) {
     let counted = clicks.clone();
     button
         .on_click(move || counted.update(|v| *v += 1))
-        .build(ctx, move |ctx| Icon::svg_path(path).build(ctx));
+        .build(ctx, |ctx| Icon::svg_path(STAR_PATH).build(ctx));
 }
 
 #[composable]
@@ -203,24 +184,6 @@ fn icon_button_demo(ctx: &mut ComposeCtx) {
                  role (on-surface-variant) instead of following the surrounding content colour, and \
                  the vibrant Outlined border takes outlineVariant where the plain one follows the \
                  content colour.",
-            );
-
-            // ── 6: one button, five icons ──
-            section_title(ctx, "6. One button, five icons");
-            Row::new().spacing(20.0).build(ctx, |ctx| {
-                with_icon(ctx, IconButton::filled(), ADD_PATH, &clicks);
-                with_icon(ctx, IconButton::filled(), FAVORITE_PATH, &clicks);
-                with_icon(ctx, IconButton::filled(), HOME_PATH, &clicks);
-                with_icon(ctx, IconButton::filled(), EDIT_PATH, &clicks);
-                with_icon(ctx, IconButton::filled(), STAR_PATH, &clicks);
-            });
-            caption(
-                ctx,
-                "The same Filled button five times, with five different Material Icons. Upstream's \
-                 `IconButtonSamples.kt` puts `Icons.Filled.Lock` in every one of its samples, so \
-                 this row is not a copy of a sample — it is the component against the icon set. \
-                 The paths are 24 dp Material Icons, looked up rather than drawn; the icon's own \
-                 size is the component's (`IconButtonSize::Small` ships 24).",
             );
         });
 }

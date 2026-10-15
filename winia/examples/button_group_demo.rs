@@ -18,6 +18,14 @@ const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
 const MORE_VERT_PATH: &str = "M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z";
 /// Material Icons "check".
 const CHECK_PATH: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+/// Material Icons "favorite".
+const FAVORITE_PATH: &str = "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z";
+/// Material Icons "home".
+const HOME_PATH: &str = "M10 20v-6h4v6h5v-9h3L12 3 2 11h3v9z";
+/// Material Icons "edit".
+const EDIT_PATH: &str = "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z";
+/// Material Icons "search".
+const SEARCH_PATH: &str = "M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z";
 
 /// How wide an overflow menu row is. winia's menu sizes itself to its content, and a bare
 /// `Button::text()` comes out as a tight pill — the row is given a width instead.
@@ -83,6 +91,24 @@ fn item(
     on_click: impl Fn() + Send + Sync + 'static,
 ) -> impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static {
     styled_item(label, shape, ButtonStyle::Filled, on_click)
+}
+
+/// One item of a group carrying an ICON and nothing else. An `IconButton`, not a `Button`:
+/// upstream's icon-only items are `FilledIconButton`s, and the icon button's own size and shape
+/// are what make the row read as a row of circles.
+fn icon_item(
+    path: &'static str,
+    on_click: impl Fn() + Send + Sync + 'static,
+) -> impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static {
+    move |ctx, source| {
+        IconButton::new()
+            .style(IconButtonStyle::Filled)
+            .interaction_source(source)
+            .on_click(on_click)
+            .build(ctx, |ctx| {
+                Icon::svg_path(path).size(24.0).build(ctx);
+            });
+    }
 }
 
 #[composable]
@@ -305,6 +331,23 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                  ITEM, which is why upstream's two item constructors attach it to every item they \
                  build and its `customItem` does not. An item that uses the source the group hands \
                  it grows; one that ignores it does not, whatever style it is.",
+            );
+
+            section_title(ctx, "8. Icon-only items — five IconButtons in a plain group");
+            ButtonGroup::new()
+                .item(icon_item(PLUS_PATH, { clone!(plain); move || plain.set(1) }))
+                .item(icon_item(FAVORITE_PATH, { clone!(plain); move || plain.set(2) }))
+                .item(icon_item(HOME_PATH, { clone!(plain); move || plain.set(3) }))
+                .item(icon_item(EDIT_PATH, { clone!(plain); move || plain.set(4) }))
+                .item(icon_item(SEARCH_PATH, { clone!(plain); move || plain.set(5) }))
+                .build(ctx);
+            caption(
+                ctx,
+                "The item's content is the caller's, so an icon-only button is an item like any \
+                 other — here a `FilledIconButton` per item, which is what makes the row five \
+                 circles 12 dp apart rather than five pills: `IconButton`'s Round family is a \
+                 circle, and its own size picks the 40 dp container and the 24 dp glyph. Press \
+                 one and it still grows, squeezing its neighbour.",
             );
 
             Spacer::vertical(24.0).build(ctx);
