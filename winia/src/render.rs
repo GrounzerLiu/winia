@@ -1725,6 +1725,14 @@ fn draw_ripple(
                     let r = rect.width().min(rect.height()) / 2.0;
                     canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
                 }
+                // The press morph's shape. WITHOUT this arm the catch-all below clipped the
+                // ripple to the full RECT, so while a Button morphed its corner the ripple kept
+                // painting the square corners the container had already given up.
+                Some(crate::graphics::Shape::PillToRounded { corner_radius, t }) => {
+                    let percent = rect.width().min(rect.height()) / 2.0;
+                    let r = percent + (corner_radius - percent) * t;
+                    canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
+                }
                 Some(crate::graphics::Shape::RightRoundedRect { radius }) => {
                     canvas.clip_rrect(rrect_right_rounded(rect, radius), None, Some(false));
                 }
@@ -1738,7 +1746,13 @@ fn draw_ripple(
                         Some(false),
                     );
                 }
-                _ => {
+                // NO wildcard arm here on purpose, and this is the guard that was missing: a
+                // `_ =>` clipped every shape it did not recognise to the full RECT, so when
+                // `PillToRounded` was added for the press morph the ripple silently went on
+                // painting the square corners the container had already given up. Listing the
+                // two cases that really mean "no rounding" turns the next new `Shape` into a
+                // compile error at this line instead.
+                Some(crate::graphics::Shape::Rectangle) | None => {
                     canvas.clip_rect(rect, None, Some(false));
                 }
             }
