@@ -849,8 +849,21 @@ fn render_pass1(
     // them. Padding is deliberately NOT folded in: it has its own meaning for text and children, and
     // composing the two would move the background of every padded component (Badge, SearchBar and
     // SplitButton rely on their background filling the node).
-    let (min_left, min_top) = node.minimum_interactive_inset.unwrap_or((0.0, 0.0));
-    let paint_rect = Rect::new(x + min_left, y + min_top, x + w - min_left, y + h - min_top);
+    // A node whose own minimum-interactive modifier grew its box paints its CONTENT box, centred in
+    // the box it ended up with — which is what Compose does (the modifier centres the content and
+    // the content keeps its own size). Sizing the paint from the touch target instead took the
+    // difference off BOTH sides, so a parent that forced the node narrower than the target (a
+    // ButtonGroup squeezing an item) got a box narrower than the layout asked for, offset from the
+    // slot it was placed in.
+    let paint_rect = match node.minimum_interactive_content {
+        Some((content_w, content_h)) => Rect::new(
+            x + (w - content_w) / 2.0,
+            y + (h - content_h) / 2.0,
+            x + (w + content_w) / 2.0,
+            y + (h + content_h) / 2.0,
+        ),
+        None => Rect::new(x, y, x + w, y + h),
+    };
 
     // Shared-element flight visuals (Tier 0): outermost morph — pure
     // render-phase (translate/scale/alpha/clip), zero recomposition.

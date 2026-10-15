@@ -381,13 +381,19 @@ pub struct LayoutNode {
     /// measurement that produced it; an unchanged node is folded by `measure_node` and keeps its
     /// lines. Usually empty, and an empty `Vec` does not allocate.
     pub alignment_lines: Vec<(AlignmentLine, f32)>,
-    /// How far this node's OWN `Modifier::minimum_interactive_size` moved its content in from the node
-    /// box, as `(left, top)`. Kept as a field rather than read back from the
+    /// The size of the CONTENT inside a node whose own `Modifier::minimum_interactive_size` grew the
+    /// box, as `(width, height)`. Kept as a field rather than read back from the
     /// `MinimumInteractive*AlignmentLine`s because a container MERGES its children's alignment lines
     /// (`node.rs:3346-3367`), so every ancestor of a Button inherits that offset — and reading the line
     /// while painting an ancestor would inset the ancestor's own background. Only the node the modifier
     /// belongs to writes this, and only while painting itself does it read it.
-    pub minimum_interactive_inset: Option<(f32, f32)>,
+    ///
+    /// The CONTENT size, not the inset: the renderer paints the component's box where the modifier
+    /// actually put it (centred in the node box), and a parent may force the node narrower than the
+    /// touch target — a ButtonGroup squeezing an item does. An inset computed from the touch target
+    /// then took twice the difference off the painted box, so a squeezed item drifted away from its
+    /// leading edge and shrank past what the layout had asked for.
+    pub minimum_interactive_content: Option<(f32, f32)>,
     /// Where a LEAF's own content sits inside its box when a modifier moved it — the measured
     /// `(x, y, content width, content height)`, or `None` for the ordinary case.
     ///
@@ -593,7 +599,7 @@ impl LayoutNode {
         // Another layout product, so it travels with the rest: the measure writes it from the node's own
         // `minimum_interactive_size`, exactly like `measured_size`, and a stale one would inset the paint of
         // a node that has not measured yet this frame.
-        self.minimum_interactive_inset = from.minimum_interactive_inset;
+        self.minimum_interactive_content = from.minimum_interactive_content;
         self.dirty = false;
     }
 }
@@ -617,7 +623,7 @@ impl LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
-            minimum_interactive_inset: None,
+            minimum_interactive_content: None,
             content_box_override: None,
             children: Vec::new(),
             measure_policy,
@@ -704,7 +710,7 @@ impl Default for LayoutNode {
             measured_size: Size::ZERO,
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
-            minimum_interactive_inset: None,
+            minimum_interactive_content: None,
             content_box_override: None,
             has_image_content: false,
             children: Vec::new(),
@@ -3083,7 +3089,7 @@ fn measure_node_inner(
     // `minimum_interactive_size(0.0)` — must not keep the offset from when it did, or the paint insets a box
     // that was never grown (a 40 dp container drawn at 32). The write further down only happens while the
     // element is in force, so clearing here is what makes its absence meaningful.
-    nodes[idx].minimum_interactive_inset = None;
+    nodes[idx].minimum_interactive_content = None;
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
@@ -3692,7 +3698,7 @@ fn measure_node_inner(
             // The paint reads THIS field, not the lines just above: a container merges its children's
             // alignment lines (see the field's comment), so an ancestor reading the line would inset its
             // own background. Only the node the modifier belongs to ever sets this.
-            nodes[idx].minimum_interactive_inset = Some((left, top));
+            nodes[idx].minimum_interactive_content = Some((content.width, content.height));
             {
                 let cx = (width - content.width) / 2.0;
                 let cy = (height - content.height) / 2.0;

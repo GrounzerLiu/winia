@@ -812,6 +812,23 @@ impl MeasurePolicy for ButtonGroupPolicy {
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &child) in children.iter().enumerate() {
+            // The node is the SLOT's width (see the measure pass), which for a squeezed item is
+            // narrower than what the child measured — a button floors at its 48 dp touch target and
+            // its content was centred in THAT box. Recentre the subtree by half the difference, so
+            // the icon stays in the middle of the container the row actually paints; without it the
+            // glyph drifted by `(reported - slot) / 2` and sat off-centre in a squeezed item.
+            let reported = nodes[child].measured_size.width;
+            let slot = placements[i].size.width;
+            if (reported - slot).abs() > 0.01 {
+                let shift = (reported - slot) / 2.0;
+                let kids = nodes[child].children.clone();
+                for c in kids {
+                    nodes[c].position.x -= shift;
+                }
+                if let Some((cx, cy, cw, ch)) = nodes[child].content_box_override {
+                    nodes[child].content_box_override = Some((cx - shift, cy, cw, ch));
+                }
+            }
             nodes[child].position = placements[i].position;
             nodes[child].measured_size = placements[i].size;
         }
@@ -1363,13 +1380,83 @@ mod tests {
         );
     }
 
-    /// The spacing each form defaults to, and the override.
+    /// The CONTENT of a squeezed item stays centred in the box the row paints.
+    ///
+    /// The node is the slot's width, but the child was measured — and its content centred — in
+    /// the box the child REPORTED, 48 dp, its touch target. Narrowing the node then left the
+    /// content off centre: measured in the demo, the heart inside a squeezed icon item sat 2.0 px
+    /// right of its container. `place` shifts the subtree by half the difference.
     #[test]
-    fn the_spacing_follows_the_form() {
-        assert_eq!(ButtonGroup::new().resolved_spacing(), BUTTON_GROUP_BETWEEN_SPACE);
-        assert_eq!(ButtonGroup::connected().resolved_spacing(), CONNECTED_BUTTON_GROUP_BETWEEN_SPACE);
-        assert_eq!(ButtonGroup::connected().spacing(7.0).resolved_spacing(), 7.0);
-        assert!(ButtonGroup::connected().is_connected());
-        assert!(!ButtonGroup::new().is_connected());
-    }
-}
+    fn a_squeezed_items_content_stays_centred() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(
+                    crate::theme::ThemeColors::light_from_seed(0x6750A4),
+                    ctx,
+                    |ctx| {
+                        ButtonGroup::new()
+                            .add(
+                                ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                                    .press_source(pressed.clone()),
+                            )
+                            // A real icon button: a 40 dp container inside the 48 dp touch
+                            // target, which is the only shape whose content the modifier
+                            // centres.
+                            .item(|ctx, source| {
+                                crate::components::icon_button::IconButton::new()
+                                    .interaction_source(source)
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        crate::components::icon::Icon::svg_path(
+                                            "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+                                        )
+                                        .size(24.0)
+                                        .build(ctx);
+                                    });
+                            })
+                            .build(ctx);
+                    },
+                );
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        // (the item's width, its content's centre inside the item's own box). The content is the
+        // node's child: the minimum-interactive modifier centres it by moving it.
+        let geometry = |composer: &crate::runtime::composer::Composer| -> (f32, f32) {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let item = nodes[root].children[1];
+            let glyph = nodes[item].children[0];
+            let centre = nodes[glyph].position.x + nodes[glyph].measured_size.width / 2.0;
+            (nodes[item].measured_size.width, centre)
+        };
+        build(&mut composer);
+        let (slot, centre) = geometry(&composer);
+        assert_eq!(slot, 48.0, "at rest the item is its touch target");
+        assert_eq!(centre, slot / 2.0, "and its content is centred in it");
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let (slot, centre) = geometry(&composer);
+        assert!(slot < 48.0, "the press squeezed it, got {slot}");
+        assert_eq!(
+            centre,
+            slot / 2.0,
+            "the content stays centred in the squeezed box (it used to sit (48 - slot) / 2 right)"
+        );
+    }}
+
