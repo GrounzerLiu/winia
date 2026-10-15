@@ -127,9 +127,12 @@ const WIDE_RAIL_ITEM_GAP_EXPANDED: f32 = 0.0;
 const WIDE_START_ICON_LABEL_GAP: f32 = 8.0;
 
 /// The expanded (Start) pill's vertical padding, one side = `ItemStartIconIndicatorVerticalPadding`
-/// = (HorizontalItem.ActiveIndicatorHeight 56 − IconSize 24) / 2 = 16 (`WideNavigationRail.kt:1406-1408`,
+/// = (HorizontalItem.ActiveIndicatorHeight 56 − IconSize 24) / 2 = 16 (`WideNavigationRail.kt:1411-1413`,
 /// read through `IndicatorExpandedPadding` at `:1172-1176`). The Top endpoint uses the vertical
 /// item's 4 instead, so the pill grows 32 -> 56 tall across the morph.
+///
+/// (`:1406-1408` is the TOP item's twin, `(VerticalItem.ActiveIndicatorHeight 32 − 24) / 2 = 4` —
+/// this comment cited it until a review checked the range.)
 const WIDE_START_INDICATOR_V_PADDING: f32 = 16.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
@@ -712,6 +715,22 @@ mod tests {
             "WNRHeaderPadding = HeaderSpaceMinimum"
         );
         assert_eq!(WIDE_RAIL_ITEM_H_PADDING, 20.0, "WNRItemHorizontalPadding");
+        // The four the wide ITEM's own geometry rides on. They are pinned as LITERALS here and not
+        // merely exercised through the constants: a test that reads the same constant the
+        // production code reads stays green when that constant is changed back to the value the
+        // commit fixed — which is how `WIDE_START_ICON_LABEL_GAP` could have gone back to 4 with
+        // all 22 tests passing.
+        assert_eq!(
+            WIDE_RAIL_ITEM_MIN_HEIGHT, 64.0,
+            "TopIconItemMinHeight = BaselineItem.ContainerHeight (collapsed)"
+        );
+        assert_eq!(WIDE_RAIL_ITEM_MIN_HEIGHT_EXPANDED, 48.0, "minimumA11ySize (expanded)");
+        assert_eq!(WIDE_RAIL_ITEM_GAP_EXPANDED, 0.0, "itemVerticalSpacedBy when expanded");
+        assert_eq!(WIDE_START_ICON_LABEL_GAP, 8.0, "HorizontalItem.IconLabelSpace (Start)");
+        assert_eq!(
+            WIDE_START_INDICATOR_V_PADDING, 16.0,
+            "ItemStartIconIndicatorVerticalPadding = (56 - 24) / 2"
+        );
     }
 
     #[test]
@@ -1833,9 +1852,10 @@ impl ModalWideNavigationRail {
 // ── WideNavigationRail（M3 Expressive 宽轨）──
 //
 // 对齐 androidx-main WideNavigationRail.kt 的核心行为：
-// - 容器宽 Collapsed 96dp ↔ Expanded 220..360dp 动画过渡：展开后的宽度取
-//   min(可用宽, 360) 且不低于 220（androidx 把 ExpandedRailMinWidth 与
-//   ExpandedRailMaxWidth 作为两个动画值，再由约束落定）
+// - 容器宽 Collapsed 96dp ↔ 展开动画过渡：展开后的宽度 = max(内容自然宽, 220)
+//   .min(360).min(可用宽)，即 **220 是默认值、360 只是上限**——只有内容确实更宽
+//   才超过 220（androidx 把 ExpandedRailMinWidth 当默认、ExpandedRailMaxWidth 当
+//   上限，再由约束落定；此前这里写的是 min(可用宽, 360)，已按上游更正）
 // - item 图标位置随展开态 Top(收起)↔Start(展开) 变形
 // - label 必选且恒显示；item 横向 padding 20dp、容器顶部 padding 44dp
 //
@@ -2012,8 +2032,10 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         // 子项垂直堆叠。水平位置：
         // - item：x=0（收起 item 宽=rail 宽；展开 item 填满轨宽——居中恒等）
         // - header（androidx 放 x=0、对齐由内容自理；M3 视觉为收起居中 ↔
-        //   展开与 item 胶囊前导对齐）：x = lerp(居中, 16, p)——FAB 图标展开后
-        //   与 item 图标（前导缩进 16 + 内边距 16 = 32）同 x，不随变宽漂移
+        //   展开靠前导）：x = lerp(居中, WIDE_INDICATOR_H_PADDING, p)，即展开后 header 的
+        //   前导内缩是 16，于是 FAB 图标落在 16+16 = 32；而 item 展开后的胶囊前导是 20
+        //   (`WNRItemHorizontalPadding`)、图标在 36——**两者差 4**。这里原先写“与 item 图标同 x”，
+        //   那是 6d1b560 之前 item 前导还是 16 时的说法；现在只是把事实写清楚，未改数值。
         let mut y = WIDE_RAIL_TOP_PADDING;
         let mut placements = Vec::with_capacity(children.len());
         for (index, &child) in children.iter().enumerate() {
@@ -2330,8 +2352,10 @@ impl WideNavigationRailItem {
 /// 端点数学：
 /// - Top(p=0)：同基础 rail item 有标签路径——胶囊 56×32 在图标后方，
 ///   图标/标签垂直堆叠居中
-/// - Start(p=1)：横向 item——胶囊包裹 [icon + gap(4) + label] 整组，
-///   高 = max(iconH,labelH)+2×8 = 40；内容行起始对齐（前导缩进 16）
+/// - Start(p=1)：横向 item——胶囊包裹 [icon + gap(8) + label] 整组，
+///   高 = max(iconH,labelH)+2×16 = 56（`WIDE_START_INDICATOR_V_PADDING`），胶囊 x = 20
+///   (`WNRItemHorizontalPadding`)、图标 x = 20+16 = 36、label x = 36+24+8 = 68。
+///   （这里原先写 gap 4 / 高 40 / 缩进 16，是 6d1b560 之前的数字。）
 ///
 /// 子节点顺序 [indicator, icon, label, ripple]。
 #[derive(Debug)]

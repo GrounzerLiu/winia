@@ -131,9 +131,18 @@ ExtendedFloatingActionButton::new(text, icon, expanded)
 用的是 `ExtendedFabPrimaryTokens`（高 56、CornerLarge 16）+ 四个私有常量（start 16 / 图标-文本 12 /
 end 20 / 最小宽 80）。它和 `Small` 高度相同但 padding 与文本样式都不同，所以 `size()` 不设默认值。
 
-**一处已知偏差**：上游无后缀那个形态收起时宽 = `ExtendedFabMinimumWidth` = **80**，
-winia 收起为 **56**（= `FabBaselineTokens.ContainerWidth`，普通 FAB 的宽度）——这是宽轨 header 收起时
-要的那个正方形外观，属有意为之，不带尺寸的形态保持这个行为。
+**No deviation here — checked against the source, because an earlier note claimed one.** This
+doc used to say the un-suffixed form collapses to `ExtendedFabMinimumWidth` (80) upstream while
+winia collapses to 56, calling it deliberate. Upstream does the opposite: the overload's own
+modifier is
+
+```kotlin
+Modifier.sizeIn(minWidth = if (expanded) ExtendedFabMinimumWidth else FabBaselineTokens.ContainerWidth)
+```
+
+(`FloatingActionButton.kt:889-896`), and `FabBaselineTokens.ContainerWidth` is 56.0.dp — so 56
+collapsed IS upstream's number, and 80 is where it starts once expanded. winia matches; there is
+nothing to restore.
 
 ### 动画语义（对齐 androidx）
 

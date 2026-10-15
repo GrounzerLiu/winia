@@ -44,8 +44,9 @@ precedence: pressed beats checked beats resting.
 ## What is implemented, and what is not
 
 Implemented: the constants above, the connected shape set (including the RTL mirror and the checked
-stadium), `item_shapes`, weighted items, the press growth, and `ButtonGroup` — a row that spaces
-its items by the token for the form it is in and is the token's height.
+stadium), `item_shapes`, weighted items, the press growth, the overflow indicator with its menu,
+and `ButtonGroup` — a row that spaces its items by the token for the form it is in and is the
+token's height.
 
 ## Weighted items
 
@@ -85,11 +86,16 @@ a child reports back. This matters because a child can refuse to shrink: a butto
 for a 41 dp slot. Advancing by the reported size made the row GROW on every press (the demo's
 five-icon row went 288 -> 295) and shoved everything to the right of the pressed item along.
 Upstream never has this problem: its positions come from `widths[]` and its layout size from
-`desiredWidth` (`ButtonGroup.kt:700-760`).
+`mainSpace` / `mainAxisLayoutSize` (`ButtonGroup.kt:688`, `:783`), with the placeables' own
+sizes never entering either. (`desiredWidth` at `:682` is only the fits-everything test — and in
+the overflow path it still counts the items that were hidden, so it is NOT the row's size.)
 
 Measured on the demo's five-icon row (items 48 dp, 12 dp apart, row 288): pressing the FIRST
-one gives slots 55 / 48 / 48 / 48 / 48, so the pressed item grows, its neighbour starts 7 dp
-later, and the three after it do not move at all — with the row still 288.
+one gives the slots **55 / 41 / 48 / 48 / 48** — they sum to 240, which with the four 12 dp gaps
+is the 288 the row keeps. The second item still REPORTS 48 (it floors at its touch target while
+sitting in a 41 dp slot), which is exactly why the layout must not read that number back: the
+pressed item grows into its own slot, its neighbour starts 7 dp later, and the three after it do
+not move at all.
 
 `limit` is the neighbour's `compressionLimit` — the most it will let a pressed sibling take off
 it, which upstream defaults to the item's END content padding
@@ -133,16 +139,18 @@ The layout reproduces upstream's (`ButtonGroup.kt:695-711`):
    dropped it at some widths and kept it at others, so it blinked while the window was resized.
 1. The indicator is measured FIRST, because it is what leaves room for the items.
 2. The items fill what is left greedily, from the start, until one does not fit.
-3. The ones that did not fit are measured at nothing and placed at the origin — they are in the
-   menu instead — and the indicator is placed one spacing after the last item that did fit.
+3. The ones that did not fit are parked OUTSIDE the row at their NATURAL size (`max_w + 1000`)
+   and are in the menu instead — never at zero width, and never at the origin — and the
+   indicator is placed one spacing after the last item that did fit.
 
 Upstream expresses the two content sets as a `MultiContentMeasurePolicy`. winia has no
 multi-content layout, so the indicator is the group's LAST child and the policy knows how many
 children are items. The menu's own anchor is a further child the policy places where the indicator
 sits, so the menu drops from the indicator rather than from the start of the row.
 
-**A hidden item still has a subtree.** winia's renderer draws a zero-sized node's children, so
-placing one at the origin is not enough — it would paint over the items that did fit. (Upstream
+**A hidden item still has a subtree.** winia's renderer draws a hidden node's children, so
+parking one off-screen is not enough on its own — it would still paint, over the items that did
+fit. (Upstream
 never measures the hidden ones at all, which is why it does not have to think about this.) Each
 item is therefore wrapped in its own group node carrying a `graphics_layer` whose alpha reads the
 count back and is 0 for the ones in the menu. The alpha is evaluated at RENDER time, so it is last

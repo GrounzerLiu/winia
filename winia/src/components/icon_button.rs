@@ -146,20 +146,12 @@ impl IconButtonSize {
     /// L/XL), while `ContainerShapeSquare` is that same rectangle and `SelectedContainerShapeSquare`
     /// is `CornerFull`. So a round toggle rests as a circle and becomes a rounded rectangle when
     /// selected, and a square one does the opposite.
-    pub fn selected_container_shape(self, family: IconButtonShape) -> Shape {
-        match family {
-            IconButtonShape::Round => match self {
-                IconButtonSize::XSmall | IconButtonSize::Small => Shape::rounded(12.0),
-                IconButtonSize::Medium => Shape::rounded(16.0),
-                IconButtonSize::Large | IconButtonSize::XLarge => Shape::rounded(28.0),
-            },
-            IconButtonShape::Square => Shape::Circle,
-        }
-    }
-
-    /// The corner radius `selected_container_shape` paints, as a number — with `CornerFull`
-    /// expressed through `round`, half the container's shorter side, exactly as
-    /// `container_radius` does.
+    /// The corner radius the SELECTED container paints, as a number — with `CornerFull` expressed
+    /// through `round`, half the container's shorter side, exactly as `container_radius` does.
+    ///
+    /// (There was a `selected_container_shape` beside this returning a `Shape`; it had no caller —
+    /// the toggle resolves this per size and the shape family is `Round` there — so it went rather
+    /// than sitting in the API waiting for one.)
     pub fn selected_container_radius(self, family: IconButtonShape, round: f32) -> f32 {
         match family {
             IconButtonShape::Round => match self {

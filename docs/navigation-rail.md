@@ -152,7 +152,8 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
       width = widthFullRange 向着 360 收窄
   ```
 
-  即：**默认展开就是 220**，只有内容（item 内容 + `WNRItemHorizontalPadding`×1，
+  即：**默认展开就是 220**，只有内容（item 内容 + `WNRItemHorizontalPadding`×**2**
+  ——item 自己两侧各留 20，代码里就是 `size.width + WIDE_RAIL_ITEM_H_PADDING * 2.0`，
   或 header 自身宽度）比 220 宽时才往上长，360 封顶，且不超过窗口宽。
   上游自己的测试钉死了两端：`rail_expanded_size`（三个 item）断言
   `ContainerWidthMinimum`，`rail_expanded_maxSize`（400dp header spacer）断言
@@ -160,12 +161,14 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
   `wide_rail_width_endpoints_match_tokens` +
   `wide_rail_expands_past_the_minimum_for_a_wide_header`。
 - item 几何在 Top/Start 两套端点间按进度线性插值：指示器从 56×32（图标后）
-  过渡到包裹 [icon+gap4+label] 的横向大胶囊（高 max(iconH,labelH)+16）；
-  图标/标签位置随之滑移。
+  过渡到包裹 [icon+gap(8)+label] 的横向大胶囊（高 = max(iconH,labelH)+2×16 = 56）；
+  胶囊 x=20、图标 x=36、label x=68，随进度滑移。这里原先写 gap4 / 高 +16 / 缩进 16，
+  是 6d1b560 之前的数字。
 - **简化注明**：androidx 用动态 PaddingValues + 分段 label 公式（p>0.5 切换 x
   公式并淡出标签）；本实现为连续 lerp，端点视觉一致。
 - 容器顶部 padding 44dp（TopSpace）；展开态 item 填满轨宽（全宽命中目标），
-  内容起始对齐（前导缩进 16，对齐 androidx FullWidthLeadingSpace）。
+  内容起始对齐：胶囊前导 20（`WNRItemHorizontalPadding`）、图标再进 16
+  （`FullWidthLeadingSpace`）= 36，label 到 68。
 - item 同样拥抱内容、最小宽 96（CollapsedTokens.ContainerWidth）。
 - **宽轨 item 的纵向节奏随展开变化**，两端各是一组不同的 token：
 

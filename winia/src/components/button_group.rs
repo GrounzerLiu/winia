@@ -22,10 +22,10 @@
 //! item height resolves it: 40 / 2 = 20. `Shape::Pill` carries the percent form where the whole
 //! item takes it (the checked state), which stays right if a caller ever changes the height.
 //!
-//! NOT IMPLEMENTED YET, and it is the other half of upstream's measure policy: the OVERFLOW
-//! indicator (a second content set plus a `DropdownMenu` listing the items that did not fit) and
-//! the pressed-width expansion (`Modifier.animateWidth`, `compressionLimit`). This module is
-//! the token geometry and the row; both are recorded in `docs/button-group.md`.
+//! The measure policy carries the rest of upstream's rules: weighted items, the OVERFLOW
+//! indicator (a second content set plus a `DropdownMenu` listing the items that did not fit),
+//! the pressed-width expansion (`Modifier.animateWidth`, `compressionLimit`) and the parking
+//! of an item that did not fit. `docs/button-group.md` records each with its source.
 
 use crate::composable;
 use crate::graphics::Shape;
@@ -544,8 +544,8 @@ fn wrap_item(
 /// Upstream does the same arithmetic in `ButtonGroupMeasurePolicy` (`:610-650`): the unweighted
 /// items are probed at their intrinsic width, the weighted ones take
 /// `(max - fixed - spacingTotal) / totalWeight * weight` at a FIXED width, and the whole row is
-/// then arranged along the main axis. The overflow indicator and the pressed-width expansion live
-/// in that same policy and are still open here.
+/// then arranged along the main axis. The overflow indicator, the pressed-width expansion and the
+/// parking of an item that did not fit are all in this policy too.
 #[derive(Debug)]
 struct ButtonGroupPolicy {
     spacing: f32,
@@ -744,8 +744,8 @@ impl MeasurePolicy for ButtonGroupPolicy {
             // than its slot — a button floors at its 48 dp touch target and cannot shrink past
             // it — and letting that widen the row is what made an icon-only group overflow its
             // own width on every press (and shove everything to the right along). Upstream does
-            // the same: its positions come from `widths[]` and the layout size from
-            // `desiredWidth`, never from the placeables (`ButtonGroup.kt:700-760`).
+            // the same: its positions come from `widths[]` and its layout size from `mainSpace` /
+            // `mainAxisLayoutSize` (`ButtonGroup.kt:688`, `:783`), never from the placeables.
             x += widths[i];
             // Between items only — a trailing gap would widen the row by one spacing.
             if i + 1 < visible {
@@ -773,7 +773,10 @@ impl MeasurePolicy for ButtonGroupPolicy {
         // `Box { indicator; DropdownMenu }`, whose rect IS the indicator's.
         //
         // A ZERO-SIZED node at the indicator's BOTTOM-LEFT gives the same two answers for that
-        // first candidate without being a hit target. Giving it the indicator's full rect instead
+        // first candidate and takes no clicks in practice: the hit test uses inclusive bounds, so
+        // the node IS hit at its one exact point, but nothing on that path is clickable
+        // (`fire_click_along_path` finds no handler) and siblings are tested in reverse, so only
+        // that single pixel is affected. Giving it the indicator's full rect instead
         // put a real, clickable-looking box on top of the indicator (later child, painted last),
         // and the indicator stopped opening its own menu: the click landed on an anchor with no
         // clickable. winia has no "ignore hits" modifier to opt out with.
@@ -1067,7 +1070,8 @@ mod tests {
         assert_eq!(nodes[children[1]].position.x, 112.0, "the second item follows the first + 12");
         // The one that did not fit keeps its NATURAL size and is parked outside the row. A zero
         // size here is a feedback loop, not a tidier answer: the next measure folds the clean
-        // node and reads that zero back as "it fits" — see `a_hidden_item_does_not_flip_the_fit`.
+        // node and reads that zero back as "it fits" — which is what the flicker test below, and
+        // the weighted case in `a_parked_weighted_item_keeps_a_size`, are about.
         assert_eq!(
             nodes[children[2]].measured_size.width, 100.0,
             "the item that did not fit keeps its natural width"
@@ -1270,8 +1274,8 @@ mod tests {
     /// neighbour that a press has squeezed reports back 48 anyway. Taking the layout's advance
     /// from that reported size made the row GROW on every press — the demo's five icon buttons
     /// overflowed their own width and everything to the right of the pressed item moved. Upstream
-    /// never does this: its positions come from `widths[]` and its layout size from
-    /// `desiredWidth`.
+    /// never does this: its positions come from `widths[]` and its layout size from `mainSpace` /
+    /// `mainAxisLayoutSize` (`ButtonGroup.kt:688`, `:783`).
     #[test]
     fn the_row_keeps_its_width_when_a_squeezed_child_cannot_shrink() {
         let _guard = crate::animation::tests::TEST_SERIAL
@@ -1329,7 +1333,8 @@ mod tests {
         assert_eq!(
             widths(&composer),
             (160.0, 115.0, 48.0),
-            "the pressed item grows into its slot and the FLOORED neighbour keeps its 48, while "
+            "the pressed item grows into its slot, the FLOORED neighbour keeps its 48, and the row \
+             stays the width it started at"
         );
     }
 

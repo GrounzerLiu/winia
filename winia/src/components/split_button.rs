@@ -947,10 +947,6 @@ pub(crate) fn optical_shift_of(radii: (f32, f32, f32, f32), rtl: bool, gap_paddi
     physical.clamp(-limit, limit)
 }
 
-/// The corner morph's spec. material3 animates it with the motion scheme's `DefaultEffects`
-/// (`MotionSchemeKeyTokens.DefaultEffects`), whose numbers are not in the extracted sources — so the
-/// duration and curve here are winia's, like the segmented button's check-mark motion. Recorded in
-/// `docs/split-button.md`.
 /// The spec every corner morph runs on: `MotionSchemeKeyTokens.DefaultEffects`
 /// (`SplitButton.kt:695`, `:775`, `:887`, applied through `shapeByInteraction` at
 /// `:1316-1334`) — damping 1.0, stiffness 1600, i.e. critically damped, so the corners settle

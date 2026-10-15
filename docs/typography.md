@@ -70,7 +70,9 @@ WiniaTheme::with_typography(custom_typography, ctx, |ctx| {
 - `line_height`
 - `soft_wrap`
 - `color`
-- `overflow`
+- `overflow` — 三档：`Clip`（默认，按节点盒子裁掉）、`Ellipsis`（裁掉并加省略号）、
+  `Visible`（**不裁**：段落按固有宽度排版、画到盒子外面——按钮组的 item 标签用它，
+  对齐 material3 `ButtonGroup.kt:1118-1124`，这样按下把 item 挤窄时文字不会被切）
 - `max_lines`
 
 优先级与 Compose 语义一致：

@@ -820,6 +820,23 @@ mod tests {
                 "{size:?}: *ExtendedFabMinimumWidth IS the tier's ContainerHeight"
             );
         }
+        // The label style is the one table the loop above does not carry.
+        let typography = crate::theme::Typography::default();
+        for (size, style, name) in [
+            (ExtendedFabSize::Small, &typography.title_medium, "TitleMedium"),
+            (ExtendedFabSize::Medium, &typography.title_large, "TitleLarge"),
+            (ExtendedFabSize::Large, &typography.headline_small, "HeadlineSmall"),
+        ] {
+            assert_eq!(
+                size.text_style(&typography).font_size,
+                style.font_size,
+                "{size:?} takes {name}"
+            );
+        }
+        // And they are three different styles, not one size repeated.
+        assert_ne!(typography.title_medium.font_size, typography.title_large.font_size);
+        assert_ne!(typography.title_large.font_size, typography.headline_small.font_size);
+
         // The three tiers are three distinct heights — nothing is shared between them.
         assert_ne!(
             ExtendedFabSize::Small.container_height(),
@@ -1121,7 +1138,7 @@ impl ExtendedFabSize {
     }
 
     /// `*ExtendedFabTokens.IconLabelSpace` — except that upstream overrides two of them and says
-    /// why (`FloatingActionButton.kt:1440`, `:1452`):
+    /// why (`FloatingActionButton.kt:1440`, `:1453`):
     ///
     ///     // TODO: ExtendedFabMediumTokens.IconLabelSpace is incorrect
     ///     private val MediumExtendedFabIconPadding get() = 12.dp
@@ -1138,7 +1155,7 @@ impl ExtendedFabSize {
     }
 
     /// `FloatingActionButtonDefaults.small/medium/largeExtendedFabShape`
-    /// (`FloatingActionButton.kt:1020-1032`): CornerLarge (16), then `ShapeDefaults.LargeIncreased`
+    /// (`FloatingActionButton.kt:1019-1028`): CornerLarge (16), then `ShapeDefaults.LargeIncreased`
     /// (20) — the medium token is commented out upstream behind a TODO — then CornerExtraLarge (28).
     pub fn shape(self) -> Shape {
         Shape::rounded(match self {
@@ -1159,8 +1176,8 @@ impl ExtendedFabSize {
         }
     }
 
-    /// `Small/Medium/LargeExtendedFabTextStyle` (`FloatingActionButton.kt:1429`, `:1443`,
-    /// `:1455`): TitleMedium, TitleLarge, HeadlineSmall.
+    /// `Small/Medium/LargeExtendedFabTextStyle` (`FloatingActionButton.kt:1430`, `:1443`,
+    /// `:1456`): TitleMedium, TitleLarge, HeadlineSmall.
     pub fn text_style(self, typography: &crate::theme::Typography) -> crate::text::TextStyle {
         match self {
             Self::Small => typography.title_medium.clone(),
@@ -1182,8 +1199,10 @@ struct ExtendedFabMetrics {
     end_padding: f32,
     /// Between the icon and the label.
     icon_label_space: f32,
-    /// Floor for the EXPANDED width. Upstream has no floor on the icon/text overload — the width
-    /// is the measured intrinsic — but the un-suffixed form ships `ExtendedFabMinimumWidth` 80.
+    /// Floor for the EXPANDED width. Every upstream overload applies `sizeIn(minWidth =
+    /// minWidth, minHeight = minHeight)` (`FloatingActionButton.kt:964`): a sized tier passes its
+    /// own `ContainerHeight`, the un-suffixed one `ExtendedFabMinimumWidth` (80). Same floors
+    /// here, so an expanded FAB never comes out narrower than its collapsed square.
     min_expanded_width: f32,
     /// The content-only (Row) form's two paddings and its own minimum width. They differ from the
     /// icon/text pair above at the un-suffixed tier: that overload pads BOTH sides by
@@ -1195,14 +1214,17 @@ struct ExtendedFabMetrics {
 }
 
 /// The un-suffixed `ExtendedFloatingActionButton`'s metrics — `ExtendedFabPrimaryTokens` plus the
-/// four private constants next to it (`FloatingActionButton.kt:1462-1478`):
+/// four private constants next to it (`FloatingActionButton.kt:1458-1468`):
 /// `ExtendedFabStartIconPadding` 16, `ExtendedFabEndIconPadding` 12, `ExtendedFabTextPadding` 20,
 /// `ExtendedFabMinimumWidth` 80; height `ContainerHeight` 56 and shape CornerLarge 16.
 ///
-/// `collapsed_width` is winia's OWN value and a recorded deviation: upstream collapses this form to
-/// `ExtendedFabMinimumWidth` (80), while this component collapses to the square
-/// `FabBaselineTokens.ContainerWidth` (56) — the shape the wide navigation rail's header FAB has
-/// while the rail is collapsed.
+/// `collapsed_width` is 56 and that is upstream's own number, NOT a deviation: this overload
+/// collapses to `FabBaselineTokens.ContainerWidth` (56.0.dp) and only reaches
+/// `ExtendedFabMinimumWidth` (80) once expanded —
+/// `Modifier.sizeIn(minWidth = if (expanded) ExtendedFabMinimumWidth else
+/// FabBaselineTokens.ContainerWidth)` (`FloatingActionButton.kt:889-896`). A comment here used to
+/// claim the opposite (that upstream collapses to 80 and winia deviates), which would have sent a
+/// maintainer to "restore" 80 and break the match.
 const EXTENDED_FAB_BASELINE: ExtendedFabMetrics = ExtendedFabMetrics {
     height: EXTENDED_FAB_HEIGHT,
     collapsed_width: EXTENDED_FAB_COLLAPSED_WIDTH,

@@ -16,8 +16,6 @@ const PLUS_PATH: &str = "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z";
 /// Material Icons "more_vert" — the VERTICAL ellipsis, which is what upstream's default overflow
 /// indicator shows (`Icons.Filled.MoreVert`, `ButtonGroup.kt:333`).
 const MORE_VERT_PATH: &str = "M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z";
-/// Material Icons "check".
-const CHECK_PATH: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
 /// Material Icons "favorite".
 const FAVORITE_PATH: &str = "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z";
 /// Material Icons "home".
@@ -51,7 +49,6 @@ fn caption(ctx: &mut ComposeCtx, text: &str) {
         .build(ctx);
 }
 
-/// One item of a group: a filled button painting whatever shape its position gives it.
 /// One item of a group: a button painting whatever shape its position gives it, and reporting its
 /// presses through the source the group hands it — which is what makes it grow while pressed and
 /// squeeze its neighbours. Upstream attaches that to EVERY item its own constructors build
@@ -231,9 +228,6 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 )
                 // Upstream's default indicator is a `FilledIconButton` with `Icons.Filled.MoreVert`
                 // and a click that TOGGLES the menu (`ButtonGroup.kt:296-336`) — a circle, not a
-                // pill, and a vertical ellipsis, not a horizontal one.
-                // Upstream's default indicator is a `FilledIconButton` with `Icons.Filled.MoreVert`
-                // and a click that TOGGLES the menu (`ButtonGroup.kt:296-336`) — a circle, not a
                 // pill, and a vertical ellipsis, not a horizontal one. It also sits in a
                 // `TooltipBox` reading `Strings.ButtonGroupMoreOptions`, which is `Tooltip` here
                 // (hover-triggered, anchored above, 8 dp away — the same defaults).
@@ -258,8 +252,8 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 ctx,
                 "The row is pinned to 360 dp, so four labels do not fit. The indicator is measured \
                  FIRST — that is what leaves room for the items — then the items fill what is left \
-                 until one does not fit: it is measured at nothing and moves into the menu, which \
-                 opens on the indicator.",
+                 until one does not fit: it is parked outside the row and moves into the menu, \
+                 which opens on the indicator.",
             );
 
             section_title(ctx, "5. Weighted items — the leftover, divided by the total weight");
@@ -345,7 +339,8 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 ctx,
                 "The item's content is the caller's, so an icon-only button is an item like any \
                  other — here a `FilledIconButton` per item, which is what makes the row five \
-                 circles 12 dp apart rather than five pills: `IconButton`'s Round family is a \
+                 circles rather than five pills (the item boxes are 12 dp apart; each is a 48 dp \
+                 touch target around a 40 dp circle, so the circles show 20 dp of gap): `IconButton`'s Round family is a \
                  circle, and its own size picks the 40 dp container and the 24 dp glyph. Press \
                  one and it still grows, squeezing its neighbour.",
             );

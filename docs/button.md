@@ -170,22 +170,25 @@ shadow(graphics_layer) → 用户 modifier → clickable/ripple。
 
 - **形状 token**：`CornerFull` 用 `Shape::Pill` 近似（短边一半圆角），
   无主题级 shape 系统（`MaterialTheme.shapes` 对应物未实现）。
-  - **按下形变（已实现）**。上游的 Button 有 `ButtonShapes(shape, pressedShape)`，按
-    `shapeByInteraction(shapes, pressed, spec)` 在两者间插值（`material3/Button.kt:1922-1939`），
-    默认那对是 `ContainerShapeRound`(CornerFull) → 该尺寸的 `PressedContainerShape`，动效走
-    `MotionSchemeKeyTokens.DefaultEffects`（`:248-252`，注释写明 "intentional here to prevent
-    any bounce in this component"）。
-  - 按尺寸的按下圆角 = `ButtonSize::pressed_container_radius()`：8/8/12/16/16
-    （CornerSmall/CornerSmall/CornerMedium/CornerLarge/CornerLarge）。默认按钮是
-    Pill(半径 20) → 8，40dp 高上肉眼可见。
-  - 静止端是**百分比圆角**（短边一半）、按下端是**固定半径**，两端单位不同，所以过渡由
-    `Shape::PillToRounded { corner_radius, t }` 承载：`t=0` 就是 `Shape::Pill`、`t=1` 就是
-    `Shape::rounded(corner_radius)`，半径由 `Shape::resolved_for_box(w, h)` 在绘制期解析。
-    `t` 恰好到 0 或 1 时返回的是普通 `Pill` / `RoundedRect`——**没按过的按钮拿到的仍是调用方
-    指定的那个 shape**。
-  - 传了固定半径的 `shape(...)` 时走固定半径那条插值分支；`PillToRounded` 之外的多角形状
-    （`Corners` / `TopRoundedRect` / `Rectangle`）原样返回，不做形变。
-  - `squareShape`（12/12/16/28/28）仍未作为 API 暴露。
+  - **The press morph IS implemented.** Upstream's Button carries
+    `ButtonShapes(shape, pressedShape)` and interpolates between the two through
+    `shapeByInteraction(shapes, pressed, spec)` (`material3/Button.kt:1922-1939`); the default
+    pair is `ContainerShapeRound` (CornerFull) to that size's `PressedContainerShape`, on
+    `MotionSchemeKeyTokens.DefaultEffects` (`:248-252`, whose comment reads "intentional here to
+    prevent any bounce in this component").
+  - The per-size pressed radius is `ButtonSize::pressed_container_radius()`: 8/8/12/16/16
+    (CornerSmall/CornerSmall/CornerMedium/CornerLarge/CornerLarge). The default button goes from
+    a Pill (radius 20) to 8, which is visible on a 40 dp container.
+  - The resting end is a **percent** corner (half the short side) and the pressed end a **fixed**
+    radius — different units, so the transition is carried by
+    `Shape::PillToRounded { corner_radius, t }`: `t = 0` is `Shape::Pill`, `t = 1` is
+    `Shape::rounded(corner_radius)`, and the radius is resolved against the painted box. At
+    exactly 0 or 1 the plain `Pill` / `RoundedRect` comes back, so **a button that was never
+    pressed still carries the shape its caller asked for**.
+  - A caller-supplied fixed-radius `shape(...)` takes the fixed-radius interpolation branch;
+    multi-corner shapes (`Corners` / `TopRoundedRect` / `Rectangle`) are returned unchanged and do
+    not morph.
+  - `squareShape` (12/12/16/28/28) is still not exposed as API.
 - **字体**：M3 Button 强制 `LabelLarge`；winia 跟随 `ProvideTextStyle`，
   不自动应用 LabelLarge。
 - **焦点指示器颜色**：M3 默认 secondary，winia 用主题 primary（有意选择，
