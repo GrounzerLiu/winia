@@ -44,20 +44,41 @@ precedence: pressed beats checked beats resting.
 ## What is implemented, and what is not
 
 Implemented: the constants above, the connected shape set (including the RTL mirror and the checked
-stadium), `item_shapes`, and `ButtonGroup` — a row that spaces its items by the token for
-the form it is in and is the token's height.
+stadium), `item_shapes`, weighted items, and `ButtonGroup` — a row that spaces its items by the
+token for the form it is in and is the token's height.
 
-NOT implemented, and it is the other half of upstream's `ButtonGroupMeasurePolicy`:
+## Weighted items
+
+`ButtonGroup::item(...)` takes a natural width; `weighted_item(weight, ...)` takes a proportional
+share of what is left after the unweighted items have taken theirs. Upstream spells this
+`Modifier.weight` inside the group (`ButtonGroup.kt:826`) and does the arithmetic in
+`ButtonGroupMeasurePolicy` (`:610-650`); winia has no parent data for a modifier to carry the
+weight, so it is a builder argument. The rule is upstream's:
+
+```
+remaining = max_width - sum(unweighted natural widths) - spacing * (count - 1)
+each weighted item = remaining / totalWeight * its weight
+```
+
+A weighted item is measured at a FIXED width (min = max), which is what makes it fill its share
+rather than shrink to its content.
+
+## What is still open
 
 - **The overflow indicator.** Upstream takes a required `overflowIndicator` slot and lays out
   TWO content sets — the items and the indicator — with a `ButtonGroupOverflowState` deciding
   how many items fit; the rest move into a `DropdownMenu`. winia has no multi-content layout yet,
   so the row never overflows.
-- **Weighted items.** `Modifier.weight` inside the group distributes the space left after the
-  unweighted items have taken their intrinsic width.
 - **The pressed-width expansion.** `Modifier.animateWidth(interactionSource)` grows the pressed
-  item by `ExpandedRatio` and squeezes its neighbours, on the group's own
-  `FastSpatial` animatable. The ratio constant is here; the behaviour is not.
+  item and squeezes its neighbours, on the group's own `FastSpatial` animatable. The rule is
+  known — a middle item grows by `value * min(expandedRatio * width / 2, compressionLimit of each
+  neighbour)` and takes that much off both, an end item by `value * min(expandedRatio * width,
+  compressionLimit of its one neighbour)` (`ButtonGroup.kt:729-770`) — but the compression limit
+  comes from parent data that winia has no equivalent of, so it needs an API decision first. The
+  ratio constant is here; the behaviour is not.
 - **The item constructors.** Upstream's scope offers `clickableItem` / `toggleableItem` /
   `customItem`; winia takes plain children and leaves the button to the caller, so an item is a
   `Button` / `IconToggleButton` that the caller gives the right shape.
+- **The distribution of the row's leftover space when nothing is weighted.** Upstream arranges
+  through `Arrangement.Horizontal` (`Arrangement.spacedBy(12)` by default), which also decides
+  what happens to space no item claims; winia lays the items out from the start edge.

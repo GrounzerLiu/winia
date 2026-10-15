@@ -153,7 +153,10 @@ impl ButtonGroupDefaults {
 pub struct ButtonGroup {
     connected: bool,
     spacing: Option<f32>,
-    children: Vec<Box<dyn FnOnce(&mut ComposeCtx)>>,
+    /// `(weight, item)`. A weight of 0 means take your natural width — upstream expresses the
+    /// same thing with `Modifier.weight`, which winia has no parent data for, so it is a builder
+    /// argument here.
+    children: Vec<(f32, Box<dyn FnOnce(&mut ComposeCtx)>)>,
     modifier: Modifier,
 }
 
@@ -193,7 +196,20 @@ impl ButtonGroup {
     }
 
     pub fn item(mut self, item: impl FnOnce(&mut ComposeCtx) + 'static) -> Self {
-        self.children.push(Box::new(item));
+        self.children.push((0.0, Box::new(item)));
+        self
+    }
+
+    /// An item that takes a PROPORTIONAL share of the space left after the unweighted items have
+    /// taken their natural width. Upstream spells this `Modifier.weight` inside the group
+    /// (`ButtonGroup.kt:826`) and divides the leftover by the total weight in its measure policy
+    /// (`:610-650`) — that branch is what this reproduces: leftover / totalWeight * weight.
+    pub fn weighted_item(
+        mut self,
+        weight: f32,
+        item: impl FnOnce(&mut ComposeCtx) + 'static,
+    ) -> Self {
+        self.children.push((weight.max(0.0), Box::new(item)));
         self
     }
 
@@ -209,13 +225,14 @@ impl ButtonGroup {
         ctx.changed(&spacing);
         let height = BUTTON_GROUP_HEIGHT;
         let key = ctx.next_key();
-        let policy = ButtonGroupPolicy { spacing, height };
+        let weights: Vec<f32> = self.children.iter().map(|(w, _)| *w).collect();
+        let policy = ButtonGroupPolicy { spacing, height, weights };
         let modifier = self.modifier.height(height);
         let mut children = self.children;
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                for child in children.drain(..) {
+                for (_, child) in children.drain(..) {
                     child(ctx);
                 }
             }
@@ -230,15 +247,20 @@ impl Default for ButtonGroup {
     }
 }
 
-/// Lays the items out in a row at a fixed height, spaced by the group's token.
+/// Lays the items out in a row at a fixed height, spaced by the group's token, dividing the space
+/// left after the unweighted items among the weighted ones.
 ///
-/// Upstream measures each item at its intrinsic width and hands the leftover space to the weighted
-/// ones (`ButtonGroupMeasurePolicy`); the overflow indicator and the pressed-width expansion live
-/// in that same policy.
+/// Upstream does the same arithmetic in `ButtonGroupMeasurePolicy` (`:610-650`): the unweighted
+/// items are probed at their intrinsic width, the weighted ones take
+/// `(max - fixed - spacingTotal) / totalWeight * weight` at a FIXED width, and the whole row is
+/// then arranged along the main axis. The overflow indicator and the pressed-width expansion live
+/// in that same policy and are still open here.
 #[derive(Debug)]
 struct ButtonGroupPolicy {
     spacing: f32,
     height: f32,
+    /// One entry per child; 0 means the item takes its natural width.
+    weights: Vec<f32>,
 }
 
 impl MeasurePolicy for ButtonGroupPolicy {
@@ -250,21 +272,57 @@ impl MeasurePolicy for ButtonGroupPolicy {
         constraints: Constraints,
     ) -> (Size, Vec<Placement>) {
         let max_w = constraints.max_width;
-        let mut placements = Vec::with_capacity(children.len());
-        let mut x = 0.0f32;
-        let mut used_height = self.height;
-        for (i, &child) in children.iter().enumerate() {
-            let remaining = (max_w - x).max(0.0);
+        let n = children.len();
+        let gaps = if n > 1 { self.spacing * (n as f32 - 1.0) } else { 0.0 };
+        let weight_of = |i: usize| self.weights.get(i).copied().unwrap_or(0.0);
+        let total_weight: f32 = (0..n).map(weight_of).sum();
+
+        // Pass 1: the unweighted items at their natural width. That is what the leftover is
+        // measured against, and it is the width they are finally laid out at too (upstream probes
+        // with `maxIntrinsicWidth` as well).
+        let mut widths = vec![0.0f32; n];
+        let mut fixed = 0.0f32;
+        for i in 0..n {
+            if weight_of(i) > 0.0 {
+                continue;
+            }
             let (size, _) = measure_node(
                 nodes,
                 policies,
-                child,
-                Constraints::new(0.0, remaining, 0.0, constraints.max_height),
+                children[i],
+                Constraints::new(0.0, max_w, 0.0, constraints.max_height),
+            );
+            widths[i] = size.width;
+            fixed += size.width;
+        }
+
+        // Pass 2: the weighted items share what is left, proportionally.
+        if total_weight > 0.0 {
+            let remaining = (max_w - fixed - gaps).max(0.0);
+            let unit = remaining / total_weight;
+            for i in 0..n {
+                let w = weight_of(i);
+                if w > 0.0 {
+                    widths[i] = unit * w;
+                }
+            }
+        }
+
+        // Pass 3: settle at those widths and place, left to right.
+        let mut placements = Vec::with_capacity(n);
+        let mut x = 0.0f32;
+        let mut used_height = self.height;
+        for i in 0..n {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                children[i],
+                Constraints::new(widths[i], widths[i], 0.0, constraints.max_height),
             );
             placements.push(Placement { size, position: Offset::new(x, 0.0) });
             used_height = used_height.max(size.height);
             x += size.width;
-            if i + 1 < children.len() {
+            if i + 1 < n {
                 x += self.spacing;
             }
         }
@@ -408,6 +466,60 @@ mod tests {
             "and a connected one by 2, so its items share a container"
         );
         assert_eq!(connected.width, 120.0 + CONNECTED_BUTTON_GROUP_BETWEEN_SPACE);
+    }
+
+    /// Weighted items share what the unweighted ones leave, proportionally — upstream's
+    /// `(max - fixed - spacingTotal) / totalWeight * weight` (`ButtonGroup.kt:610-650`).
+    #[test]
+    fn weighted_items_share_the_space_left_over() {
+        // Two equal weights in a 400 dp row, with the pair's 12 dp between them.
+        let (size, second_x, second_w) = weighted_row(400.0, &[(1.0, true), (1.0, true)]);
+        assert_eq!(second_x, 194.0 + BUTTON_GROUP_BETWEEN_SPACE, "the first takes half the leftover");
+        assert_eq!(second_w, 194.0, "and so does the second");
+        assert_eq!(size.width, 400.0, "the two fill the row");
+
+        // 3:1 splits the same 388 dp into 291 and 97.
+        let (_, three_x, one_w) = weighted_row(400.0, &[(3.0, true), (1.0, true)]);
+        assert_eq!(three_x, 291.0 + BUTTON_GROUP_BETWEEN_SPACE);
+        assert_eq!(one_w, 97.0);
+
+        // An unweighted item keeps its natural 60 dp and the weighted one takes the rest.
+        let (_, natural_x, weighted_w) = weighted_row(400.0, &[(0.0, false), (1.0, true)]);
+        assert_eq!(natural_x, 60.0 + BUTTON_GROUP_BETWEEN_SPACE, "the natural item did not move");
+        assert_eq!(weighted_w, 328.0, "400 - 60 - 12");
+
+        // Nothing weighted: every item is natural, so the row is 120 + 12 wide.
+        let (size, _, _) = weighted_row(400.0, &[(0.0, false), (0.0, false)]);
+        assert_eq!(size.width, 120.0 + BUTTON_GROUP_BETWEEN_SPACE);
+    }
+
+    /// Lays out a group of `(weight, weighted)` items over a `width`-wide box. An unweighted or
+    /// weighted-by-zero item is a 60 x 40 leaf, so a weighted one is visibly different from it.
+    fn weighted_row(width: f32, spec: &[(f32, bool)]) -> (Size, f32, f32) {
+        let spec = spec.to_vec();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let mut group = ButtonGroup::new();
+            for (weight, weighted) in &spec {
+                let w = *weight;
+                if *weighted {
+                    group = group.weighted_item(w, |ctx| leaf(ctx, 60.0, 40.0));
+                } else {
+                    group = group.item(|ctx| leaf(ctx, 60.0, 40.0));
+                }
+            }
+            group.build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, width, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let size = nodes[root].measured_size;
+        let children = nodes[root].children.clone();
+        (
+            size,
+            nodes[children[1]].position.x,
+            nodes[children[1]].measured_size.width,
+        )
     }
 
     /// The spacing each form defaults to, and the override.
