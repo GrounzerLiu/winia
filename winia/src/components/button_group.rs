@@ -533,6 +533,9 @@ impl MeasurePolicy for ButtonGroupPolicy {
         // measured against, and it is the width they are finally laid out at too (upstream probes
         // with `maxIntrinsicWidth` as well).
         let mut widths = vec![0.0f32; items];
+        // The natural size is kept as well as the width, because a parked item needs a size that
+        // is NOT zero — see the placement below.
+        let mut natural = vec![Size::new(0.0, self.height); items];
         let mut fixed = 0.0f32;
         for i in 0..items {
             if weight_of(i) > 0.0 {
@@ -545,6 +548,7 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 Constraints::new(0.0, budget, 0.0, constraints.max_height),
             );
             widths[i] = size.width;
+            natural[i] = size;
             fixed += size.width;
         }
 
@@ -622,11 +626,22 @@ impl MeasurePolicy for ButtonGroupPolicy {
         let mut placements = Vec::with_capacity(n);
         let mut x = 0.0f32;
         let mut used_height = self.height;
+        // An item that did not fit is PARKED: placed off to the side with its own natural size,
+        // never with a zero one. A zero is a feedback loop, not just a cosmetic choice — the
+        // next measure's natural-width probe FOLDS a clean node whose constraints have not
+        // changed and reads its `measured_size` back, so a zero there reads as "it fits", the
+        // visible count flips, the row's width changes with it and the indicator jumps a spacing
+        // to the side on alternate frames. Hovering is enough to trigger it, because a recompose
+        // dirties the node and the fold and the real measurement then alternate.
+        //
+        // Parking it far to the right also keeps it out of the hit test, which a zero-sized node
+        // at the origin would not be.
+        let parked_x = max_w + 1000.0;
         for i in 0..items {
             if i >= visible {
                 placements.push(Placement {
-                    size: Size::new(0.0, 0.0),
-                    position: Offset::new(0.0, 0.0),
+                    size: natural[i],
+                    position: Offset::new(parked_x, 0.0),
                 });
                 continue;
             }
@@ -948,9 +963,17 @@ mod tests {
         assert_eq!(nodes[children[0]].position.x, 0.0);
         assert_eq!(nodes[children[0]].measured_size.width, 100.0);
         assert_eq!(nodes[children[1]].position.x, 112.0, "the second item follows the first + 12");
+        // The one that did not fit keeps its NATURAL size and is parked outside the row. A zero
+        // size here is a feedback loop, not a tidier answer: the next measure folds the clean
+        // node and reads that zero back as "it fits" — see `a_hidden_item_does_not_flip_the_fit`.
         assert_eq!(
-            nodes[children[2]].measured_size.width, 0.0,
-            "the third one did not fit, so it takes no room — it is in the menu"
+            nodes[children[2]].measured_size.width, 100.0,
+            "the item that did not fit keeps its natural width"
+        );
+        assert!(
+            nodes[children[2]].position.x >= 340.0,
+            "and it is parked outside the row, got x={}",
+            nodes[children[2]].position.x
         );
         assert_eq!(
             nodes[children[3]].position.x, 224.0,
@@ -962,6 +985,7 @@ mod tests {
             "the row is the two items, their gaps and the indicator"
         );
     }
+
 
     /// Without an indicator the row never overflows: all three items are laid out even though they
     /// are wider than the box, which is what a plain Row does too.
