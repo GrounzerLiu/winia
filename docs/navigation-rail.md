@@ -96,10 +96,37 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
     .expanded_shape(modal_rail_expanded_shape())   // CornerLarge 16dp
     .container_color(c)             // 折叠态，默认 surface
     .modal_container_color(c)       // 展开态，默认 surfaceContainer
+    .expanded_header_top_padding(64.0)   // 见下方"对齐"
     .build(ctx);
 ```
 
 - 内容闭包是 `Fn` 不是 `FnOnce`——overlay 每帧重新组合它的内容。
+
+**折叠态与展开态的 item 对齐**（`expandedHeaderTopPadding`，`WideNavigationRail.kt:527`、
+`:666`）：上游对这个参数的说明是"通常用于**让展开动画的内容与折叠态对齐**"
+（`:508-510`）。两种状态的纵向节奏本来就不同：
+
+| | 收起 | 展开 |
+|---|---|---|
+| item 高 | 64 | 56 |
+| item 间距 | 4 | 0 |
+| **节距** | **68** | **56** |
+
+所以**逐项一一对应在数学上不可能**，两端每项差 12dp（实测：首项 delta 0，
+第 2/3/4 项 12/24/36）。能对齐的是**首项**，`expanded_header_top_padding` 就是干这个的——
+它加在展开面板的 header 槽上（因此经 `headerOffset = header高度 + HeaderSpaceMinimum(40)`
+把首项推下去）。上游两处用法都传 `64.dp`（`NavigationRailSamples.kt:206`、
+`NavigationSuiteScaffoldDemo.kt:164`），值是"面板要跨过的顶栏高度"，所以文档说它取决于布局。
+
+两个前提才能对上：
+
+1. **轨道必须在窗口前导边**——面板永远开在窗口前导边（`TopStart`），轨道放在别处就不可能
+   被它盖住。上游 sample 把模态轨放在 `Row` 的第一个子节点。
+2. **展开面板的 header 槽即使调用方没给 header 也存在**——上游的调用点是
+   `header = { Box(Modifier.padding(top = ...)) { header?.invoke() } }`，lambda 恒非 null，
+   所以布局总会量到一个 header placeable，padding 才带得动 item。winia 同构。
+
+实测（900dp 窗口，Scaffold 顶栏 64dp）：首项 window y 两边都是 204，delta = 0。
 - 展开容器的宽度走与宽轨相同的测量策略（220 起、内容驱动、360 封顶），
   但动画 token 换成 `FastSpatial`。
 - scrim 由 `modal: true` 渲染，不自己画；点击遮罩与 Escape 都经 overlay 的

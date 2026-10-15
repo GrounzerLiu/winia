@@ -31,6 +31,61 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
     Row::new()
         .modifier(Modifier::new().fill_max_size())
         .build(ctx, |ctx| {
+            // ── 模态宽轨（折叠时是普通轨道，展开时抬起一层带 scrim 的浮层）──
+            //
+            // FIRST in the row, like upstream's own sample (`NavigationRailSamples.kt:201`:
+            // `Row(Modifier.fillMaxWidth()) { ModalWideNavigationRail(...) ; Column { ... } }`). The
+            // expanded panel opens at the WINDOW's leading edge, so a rail anywhere else cannot be
+            // under it — this is the arrangement in which the two can line up at all.
+            let modal_state_for_items = modal_state.clone();
+            ModalWideNavigationRail::new(modal_state.clone(), {
+                clone!(modal_sel);
+                move |ctx| {
+                    // The items need the rail's own progress. Without it they lay out as EXPANDED even while
+                    // the rail is collapsed — the debug-server tree showed an indicator 95 wide inside a
+                    // 96-wide rail. The state is shared, so the collapsed rail and the modal layer each
+                    // animate to their own end of it.
+                    let progress = ctx.animate_float_as_state(
+                        if modal_state_for_items.is_expanded() { 1.0 } else { 0.0 },
+                        winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::spatial_default()),
+                    );
+                    for index in 0..DESTINATIONS.len() {
+                        let (name, path) = DESTINATIONS[index];
+                        WideNavigationRailItem::new(
+                            modal_sel.get() == index,
+                            move |ctx| {
+                                Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
+                            },
+                            move |ctx| Text::new(name).build(ctx),
+                        )
+                        .progress(progress.clone())
+                        .on_click({ clone!(modal_sel); move || modal_sel.set(index) })
+                        .build(ctx);
+                    }
+                }
+            })
+            // A header, like the other two rails — and it is what makes the alignment number below
+            // come out at upstream's own value. Both states then measure a header, so the expanded
+            // panel's `headerOffset = headerPlaceable.height + WNRHeaderPadding` and the collapsed
+            // rail's `44 + header + 40` differ only by the app bar the panel has to skip.
+            .header({ clone!(modal_state); move |ctx| {
+                ExtendedFloatingActionButton::new(
+                    |ctx| Text::new("Create").build(ctx),
+                    |ctx| Icon::svg_path(PLUS_PATH).size(24.0).build(ctx),
+                    modal_state.expanded_state(),
+                )
+                .on_click(|| {})
+                .build(ctx);
+            } })
+            // The two states have different vertical rhythms (a collapsed item is 64 tall with a 4dp
+            // gap, an expanded one is 56 with none), so their items cannot line up one for one. The
+            // FIRST item can, and this is upstream's parameter for it: the 64dp Scaffold top bar the
+            // panel has to skip to reach where the collapsed rail already sits. Both of upstream's own
+            // usages pass 64dp too (`NavigationRailSamples.kt:206`,
+            // `NavigationSuiteScaffoldDemo.kt:164`), and its doc calls the value layout-dependent.
+            .expanded_header_top_padding(64.0)
+            .build(ctx);
+
             // ── 基础 NavigationRail ──
             NavigationRail::new({
                 clone!(selected);
@@ -113,35 +168,6 @@ fn navigation_rail_demo(ctx: &mut ComposeCtx) {
             } })
             .build(ctx);
 
-            // ── 模态宽轨（折叠时是普通轨道，展开时抬起一层带 scrim 的浮层）──
-            let modal_state_for_items = modal_state.clone();
-            ModalWideNavigationRail::new(modal_state.clone(), {
-                clone!(modal_sel);
-                move |ctx| {
-                    // The items need the rail's own progress. Without it they lay out as EXPANDED even while
-                    // the rail is collapsed — the debug-server tree showed an indicator 95 wide inside a
-                    // 96-wide rail. The state is shared, so the collapsed rail and the modal layer each
-                    // animate to their own end of it.
-                    let progress = ctx.animate_float_as_state(
-                        if modal_state_for_items.is_expanded() { 1.0 } else { 0.0 },
-                        winia::animation::AnimationSpec::Spring(winia::animation::SpringSpec::spatial_default()),
-                    );
-                    for index in 0..DESTINATIONS.len() {
-                        let (name, path) = DESTINATIONS[index];
-                        WideNavigationRailItem::new(
-                            modal_sel.get() == index,
-                            move |ctx| {
-                                Icon::svg_path(path).size(NAVIGATION_RAIL_ICON_SIZE).build(ctx);
-                            },
-                            move |ctx| Text::new(name).build(ctx),
-                        )
-                        .progress(progress.clone())
-                        .on_click({ clone!(modal_sel); move || modal_sel.set(index) })
-                        .build(ctx);
-                    }
-                }
-            })
-            .build(ctx);
         });
 }
 

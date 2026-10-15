@@ -1355,6 +1355,88 @@ mod tests {
         );
     }
 
+    /// `expanded_header_top_padding` (upstream's parameter of the same name) moves the expanded panel's
+    /// content down by exactly that much, and leaves the collapsed rail alone.
+    ///
+    /// That is what upstream documents the parameter for: "It's usually needed in order to align the
+    /// content of the rail between the collapsed and expanded animation"
+    /// (`WideNavigationRail.kt:508-510`). The first item is the one thing that CAN line up between the
+    /// two states — their pitches differ (68 collapsed against 56 expanded), so the items after it
+    /// cannot.
+    #[test]
+    fn expanded_header_top_padding_moves_the_panel_content_only() {
+        // (collapsed first-item y, expanded first-item y) for one padding value.
+        let first_item_ys = |padding: f32| {
+            // Collapsed: the padding must not reach this branch at all.
+            let mut collapsed = Composer::new();
+            collapsed.compose(|ctx| {
+                ModalWideNavigationRail::new(WideNavigationRailState::new(ctx), |ctx| {
+                    WideNavigationRailItem::new(
+                        true,
+                        |ctx| icon_leaf(ctx, 24.0),
+                        |ctx| crate::components::Text::new("A").build(ctx),
+                    )
+                    .on_click(|| {})
+                    .build(ctx);
+                })
+                .header(|ctx| icon_leaf(ctx, 24.0))
+                .expanded_header_top_padding(padding)
+                .build(ctx);
+            });
+            collapsed.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let croot = collapsed.layout_root_idx().unwrap();
+            let cnodes = collapsed.arena_nodes();
+            let collapsed_y = cnodes[cnodes[croot].children[1]].position.y;
+
+            // Expanded: the panel is an overlay, so it has to be measured through the descriptor.
+            let mut expanded = Composer::new();
+            expanded.compose(|ctx| {
+                let state = WideNavigationRailState::new(ctx);
+                state.expand();
+                ModalWideNavigationRail::new(state, |ctx| {
+                    WideNavigationRailItem::new(
+                        true,
+                        |ctx| icon_leaf(ctx, 24.0),
+                        |ctx| crate::components::Text::new("A").build(ctx),
+                    )
+                    .on_click(|| {})
+                    .build(ctx);
+                })
+                .header(|ctx| icon_leaf(ctx, 24.0))
+                .expanded_header_top_padding(padding)
+                .build(ctx);
+            });
+            expanded.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let overlays = expanded.take_overlays();
+            assert_eq!(overlays.len(), 1, "an expanded modal rail opens one overlay");
+            // Compose the overlay's own tree so its policy runs, then read the first item's y.
+            let content = &overlays[0].content;
+            let mut panel = Composer::new();
+            panel.compose(|ctx| content(ctx));
+            panel.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+            let proot = panel.layout_root_idx().unwrap();
+            let pnodes = panel.arena_nodes();
+            let expanded_y = pnodes[pnodes[proot].children[1]].position.y;
+
+            (collapsed_y, expanded_y)
+        };
+
+        let (collapsed_y, base_y) = first_item_ys(0.0);
+        let (collapsed_y_padded, padded_y) = first_item_ys(64.0);
+
+        // The collapsed rail is untouched by the parameter...
+        assert_eq!(
+            collapsed_y, collapsed_y_padded,
+            "the padding belongs to the expanded panel only"
+        );
+        // ...and the expanded panel's first item moves down by exactly the padding.
+        assert_eq!(
+            padded_y - base_y,
+            64.0,
+            "the panel's first item moves down by the padding"
+        );
+    }
+
     /// `hide_on_collapse` (upstream's dismissible variant): collapsed, the rail is not drawn at all — the
     /// caller owns its offscreen position — but expanding still raises the modal layer.
     #[test]
@@ -1416,6 +1498,7 @@ pub struct ModalWideNavigationRail {
     expanded_shape: Shape,
     container_color: Option<Color>,
     modal_container_color: Option<Color>,
+    expanded_header_top_padding: f32,
     modifier: Modifier,
 }
 
@@ -1433,6 +1516,7 @@ impl ModalWideNavigationRail {
             expanded_shape: modal_rail_expanded_shape(),
             container_color: None,
             modal_container_color: None,
+            expanded_header_top_padding: 0.0,
             modifier: Modifier::new(),
         }
     }
@@ -1469,6 +1553,24 @@ impl ModalWideNavigationRail {
         self
     }
 
+    /// Padding above the header in the EXPANDED panel — upstream's `expandedHeaderTopPadding`
+    /// (`WideNavigationRail.kt:527`), applied as
+    /// `Box(modifier = Modifier.padding(top = expandedHeaderTopPadding)) { header() }` at `:666`.
+    ///
+    /// Upstream's own documentation says what it is for: "It's usually needed in order to align the
+    /// content of the rail between the collapsed and expanded animation" (`:508-510`). The two states
+    /// do not share a vertical rhythm — a collapsed item is `TopIconItemMinHeight` 64 tall with a 4dp
+    /// gap between items, an expanded one is 56 tall with no gap — so their items cannot line up one
+    /// for one. What CAN line up is the first item, and this padding is how a caller moves the
+    /// expanded panel's content to meet the collapsed rail's.
+    ///
+    /// Default 0.0, like upstream. Both of upstream's own usages pass 64dp (the height of the app bar
+    /// above them): `NavigationRailSamples.kt:206` and `NavigationSuiteScaffoldDemo.kt:164`.
+    pub fn expanded_header_top_padding(mut self, padding: f32) -> Self {
+        self.expanded_header_top_padding = padding;
+        self
+    }
+
     pub fn header(mut self, h: impl Fn(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
         self.header = Some(Arc::new(h));
         self
@@ -1486,6 +1588,7 @@ impl ModalWideNavigationRail {
         ctx.changed(&self.expanded_shape);
         ctx.changed(&self.container_color);
         ctx.changed(&self.modal_container_color);
+        ctx.changed(&self.expanded_header_top_padding);
         let expanded = self.state.is_expanded();
         ctx.changed(&expanded);
         let theme = WiniaTheme::colors();
@@ -1540,10 +1643,16 @@ impl ModalWideNavigationRail {
         // `is_expanded()` while the overlay is still fading out, and that is what runs the width back down.
         let panel_state = self.state.clone();
         let id: State<u64> = ctx.remember(next_overlay_id);
-        // `has_header` is captured by the `Fn` content closure below, which may run every frame. The panel's
-        // own progress is animated INSIDE that closure instead: an overlay composes its content per frame,
-        // and that is where a rail growing out of its collapsed width has to happen.
-        let has_header = header.is_some();
+        // Upstream applies the padding to the header INSIDE the expanded panel only
+        // (`WideNavigationRail.kt:666`), never to the collapsed rail, so the collapsed branch above
+        // keeps composing its header bare.
+        let expanded_header_top_padding = self.expanded_header_top_padding;
+        // The expanded panel's header slot exists whenever there is a header OR there is padding to
+        // apply. Upstream's call site is `header = { Box(Modifier.padding(top = ...)) { header?.invoke() } }`
+        // (`:665-669`) — a NON-null lambda even when the caller passed no header — so its layout always
+        // measures a header placeable and `headerOffset = height + WNRHeaderPadding` always carries the
+        // padding. Without that, a caller who only wants to shift the items would get nothing.
+        let has_header = header.is_some() || expanded_header_top_padding > 0.0;
         // Captured out here for the same reason `direction` is passed to the overlay above: the content
         // closure below runs after composition, where `direction::current()` is no longer the truth.
         let rtl = crate::layout::direction::current() == crate::layout::LayoutDirection::Rtl;
@@ -1608,7 +1717,22 @@ impl ModalWideNavigationRail {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         WiniaTheme::with_content_color(theme.on_surface, ctx, |ctx| {
-                            if let Some(header) = &header {
+                            // The header slot carries the padding, so the rail's own
+                            // `headerOffset = headerPlaceable.height + WNRHeaderPadding` moves the first
+                            // item down by exactly this much — which is the whole point of the
+                            // parameter. The slot is emitted even when the caller gave no header, as
+                            // upstream's always-present wrapper Box is.
+                            if expanded_header_top_padding > 0.0 {
+                                wrap_slot(
+                                    ctx,
+                                    Modifier::new().padding_top(expanded_header_top_padding),
+                                    |ctx| {
+                                        if let Some(header) = &header {
+                                            header(ctx);
+                                        }
+                                    },
+                                );
+                            } else if let Some(header) = &header {
                                 header(ctx);
                             }
                             content(ctx);
