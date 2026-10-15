@@ -729,17 +729,21 @@ impl MeasurePolicy for ButtonGroupPolicy {
             x += indicator.width;
         }
         // Anything past the items and the indicator is the overflow menu's ANCHOR (see `build`).
-        // It takes no room — but it must carry the INDICATOR's RECT, not a zero-sized one: the
-        // menu is positioned from the anchor's own rect, and its first candidate is "the menu's top
-        // at the anchor's bottom, its start at the anchor's start" (`MenuPosition.topToAnchorBottom`
-        // + `startToAnchorStart`, which is `MenuAnchorPosition.Below`, material3's default for
-        // `DropdownMenu`). Upstream's anchor is the `Box { indicator; DropdownMenu }`, whose rect IS
-        // the indicator's; a zero-sized anchor put the menu level with the indicator's TOP instead
-        // of below it, so it covered the button it came from.
+        // The menu is positioned from the anchor's own rect, and its first candidate is "the menu's
+        // top at the anchor's bottom, its start at the anchor's start"
+        // (`MenuPosition.topToAnchorBottom` + `startToAnchorStart` — `MenuAnchorPosition.Below`,
+        // material3's default for `DropdownMenu`). Upstream's anchor is the
+        // `Box { indicator; DropdownMenu }`, whose rect IS the indicator's.
+        //
+        // A ZERO-SIZED node at the indicator's BOTTOM-LEFT gives the same two answers for that
+        // first candidate without being a hit target. Giving it the indicator's full rect instead
+        // put a real, clickable-looking box on top of the indicator (later child, painted last),
+        // and the indicator stopped opening its own menu: the click landed on an anchor with no
+        // clickable. winia has no "ignore hits" modifier to opt out with.
         while placements.len() < n {
             placements.push(Placement {
-                size: indicator,
-                position: Offset::new(indicator_x, 0.0),
+                size: Size::new(0.0, 0.0),
+                position: Offset::new(indicator_x, indicator.height),
             });
         }
         (Size::new(x.min(max_w), used_height), placements)
