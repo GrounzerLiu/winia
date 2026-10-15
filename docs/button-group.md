@@ -94,6 +94,11 @@ overflows.
 
 The layout reproduces upstream's (`ButtonGroup.kt:695-711`):
 
+0. With NO indicator there is no fitting at all: every item is laid out however narrow the row
+   is, which is what a plain Row does. Fitting without one is not just pointless, it is wrong —
+   a WEIGHTED item's width is derived from the budget, so the widths plus the gaps sum to exactly
+   it and `widths[i] <= remaining` becomes a floating-point coin flip on the last item. The row
+   dropped it at some widths and kept it at others, so it blinked while the window was resized.
 1. The indicator is measured FIRST, because it is what leaves room for the items.
 2. The items fill what is left greedily, from the start, until one does not fit.
 3. The ones that did not fit are measured at nothing and placed at the origin — they are in the

@@ -567,17 +567,29 @@ impl MeasurePolicy for ButtonGroupPolicy {
         // How many of them the budget actually holds — upstream's greedy loop
         // (`ButtonGroup.kt:700-711`). It is decided in MEASURE, so it goes back through the
         // backchannel for the menu to read on the next composition.
-        let mut remaining = budget;
-        let mut visible = 0usize;
-        for i in 0..items {
-            if widths[i] <= remaining {
-                remaining -= widths[i] + self.spacing;
-                visible += 1;
-            } else {
-                break;
+        //
+        // ONLY AN INDICATOR CAN PUSH AN ITEM OUT. Without one every item is laid out however
+        // narrow the row is, which is what a plain Row does and what the `visible` value the
+        // menu reads has always said — but the layout used to run the greedy loop anyway, and
+        // that made the row's own arithmetic decide it. A WEIGHTED item's width is derived FROM
+        // the budget, so the widths plus the gaps sum to exactly `budget`: `widths[i] <= remaining`
+        // is then a coin flip on the last item and it blinks in and out as the window is resized.
+        let visible = if indicator_index.is_some() {
+            let mut remaining = budget;
+            let mut shown = 0usize;
+            for i in 0..items {
+                if widths[i] <= remaining {
+                    remaining -= widths[i] + self.spacing;
+                    shown += 1;
+                } else {
+                    break;
+                }
             }
-        }
-        self.visible.set(if indicator_index.is_some() { visible } else { items });
+            shown
+        } else {
+            items
+        };
+        self.visible.set(visible);
 
         // Pass 3: the press growth — upstream's loop at `ButtonGroup.kt:729-770`. A pressed item
         // grows by `expandedRatio * its own width`, halved for a middle item, and takes that much
@@ -986,6 +998,46 @@ mod tests {
         );
     }
 
+
+    /// The FLICKER guard: with no indicator the laid-out item count must not depend on the
+    /// available width, swept one dp at a time.
+    ///
+    /// A weighted item's width is derived FROM the budget, so the widths plus the gaps sum to
+    /// exactly it — `widths[i] <= remaining` is then decided by floating point on the last item,
+    /// and the row dropped it at some widths and kept it at others. Resizing the window walked
+    /// through those widths, so the last button blinked.
+    #[test]
+    fn a_weighted_row_without_an_indicator_never_drops_an_item() {
+        let placed = |width: f32| -> usize {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx| {
+                ButtonGroup::new()
+                    .item(|ctx| leaf(ctx, 82.0, 40.0))
+                    .weighted_item(1.0, |ctx| leaf(ctx, 60.0, 40.0))
+                    .weighted_item(2.0, |ctx| leaf(ctx, 60.0, 40.0))
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, width, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[root]
+                .children
+                .iter()
+                .filter(|&&c| nodes[c].measured_size.width > 0.0)
+                .count()
+        };
+
+        // A fine sweep, because the boundary is a floating-point one.
+        let mut width = 180.0f32;
+        while width <= 512.0 {
+            assert_eq!(
+                placed(width),
+                3,
+                "the row dropped an item at {width} — that is the blink"
+            );
+            width += 1.0;
+        }
+    }
 
     /// Without an indicator the row never overflows: all three items are laid out even though they
     /// are wider than the box, which is what a plain Row does too.
