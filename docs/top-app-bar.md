@@ -35,6 +35,32 @@ TopAppBar::large(|ctx| Text::new("Settings").build(ctx))
 - Large expanded：`headline_medium`
 - Medium/Large collapsed：`title_large`
 - subtitle：`body_medium`
+- MediumFlexible expanded：`headline_medium`，subtitle `label_large`
+- LargeFlexible expanded：`display_small`，subtitle `title_medium`
+
+### The two flexible variants
+
+`MediumFlexibleTopAppBar` / `LargeFlexibleTopAppBar` (`material3/AppBar.kt:614`, `:808`) round out
+the set — winia had only the four un-suffixed ones. They are two-row bars like Medium/Large, and
+they take `TopAppBar::medium_flexible(title)` / `TopAppBar::large_flexible(title)`.
+
+Their expanded height is NOT a single constant: each carries two and picks on the subtitle.
+
+| variant | without subtitle | with subtitle |
+|---|---|---|
+| `MediumFlexible` | 112 (`AppBarMediumFlexibleTokens.ContainerHeight`) | 136 (its `LargeContainerHeight`) |
+| `LargeFlexible` | 120 (`AppBarLargeFlexibleTokens.ContainerHeight`) | 152 (its `LargeContainerHeight`) |
+
+`pub fn top_app_bar_expanded_height(variant, subtitle_present)` is that rule, and it is public
+because a caller building a `TopAppBarScrollBehavior` has to hand it the same number the layout
+will use — `TopAppBarScrollBehavior::new(scroll, top_app_bar_expanded_height(variant, true))`.
+Passing `TOP_APP_BAR_LARGE_HEIGHT` for a flexible bar with a subtitle trips the behavior's own
+debug assert rather than producing a wrong height.
+
+The title and subtitle styles are their own too, and they are NOT the ones the same-size
+un-suffixed variant uses: a `MediumFlexible` bar titles at `HeadlineMedium` where `Medium` uses
+`HeadlineSmall`, and `LargeFlexible` uses `DisplaySmall` where `Large` uses `HeadlineMedium`.
+The bottom inset follows the size tier: 24 for the medium pair, 28 for the large pair.
 
 布局对齐 AndroidX 的两种基础结构：
 

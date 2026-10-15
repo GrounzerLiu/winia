@@ -22,8 +22,29 @@ pub const TOP_APP_BAR_ICON_SLOT_SIZE: f32 = 48.0;
 pub const TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET: f32 = 24.0;
 pub const TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET: f32 = 28.0;
 
+/// `MediumFlexibleAppBarWithoutSubtitleExpandedHeight` = `AppBarMediumFlexibleTokens.ContainerHeight`.
+pub const TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT: f32 = 112.0;
+/// `MediumFlexibleAppBarWithSubtitleExpandedHeight` = its `LargeContainerHeight`.
+pub const TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT: f32 = 136.0;
+/// `LargeFlexibleAppBarWithoutSubtitleExpandedHeight` = `AppBarLargeFlexibleTokens.ContainerHeight`.
+pub const TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT: f32 = 120.0;
+/// `LargeFlexibleAppBarWithSubtitleExpandedHeight` = its `LargeContainerHeight`.
+pub const TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT: f32 = 152.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TopAppBarVariant { Standard, CenterAligned, Medium, Large }
+pub enum TopAppBarVariant {
+    Standard,
+    CenterAligned,
+    Medium,
+    Large,
+    /// `MediumFlexibleTopAppBar` — a two-row bar whose EXPANDED height depends on whether a
+    /// subtitle is present (112 without, 136 with: `AppBarMediumFlexibleTokens.ContainerHeight`
+    /// against its `LargeContainerHeight`).
+    MediumFlexible,
+    /// `LargeFlexibleTopAppBar` — the same two-row shape at 120 without a subtitle and 152 with
+    /// (`AppBarLargeFlexibleTokens`), and the only variant whose title is `DisplaySmall`.
+    LargeFlexible,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TopAppBarColors {
@@ -37,7 +58,7 @@ impl TopAppBarColors {
     pub fn container_color(&self, variant: TopAppBarVariant, scroll_offset: f32, collapse_fraction: f32) -> Color {
         match variant {
             TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => if scroll_offset != 0.0 { self.scrolled_container } else { self.container },
-            TopAppBarVariant::Medium | TopAppBarVariant::Large => color_lerp(self.container, self.scrolled_container, fast_out_linear_in(collapse_fraction)),
+            TopAppBarVariant::Medium | TopAppBarVariant::Large | TopAppBarVariant::MediumFlexible | TopAppBarVariant::LargeFlexible => color_lerp(self.container, self.scrolled_container, fast_out_linear_in(collapse_fraction)),
         }
     }
 }
@@ -174,6 +195,13 @@ impl TopAppBar {
     pub fn center_aligned(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::CenterAligned, title) }
     pub fn medium(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Medium, title) }
     pub fn large(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::Large, title) }
+    /// `MediumFlexibleTopAppBar` (`material3/AppBar.kt:614`): a two-row bar whose expanded height
+    /// follows the SUBTITLE — 112 without one, 136 with. The subtitle is optional here, exactly as
+    /// `subtitle: (@Composable () -> Unit)? = null` is upstream.
+    pub fn medium_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::MediumFlexible, title) }
+    /// `LargeFlexibleTopAppBar` (`material3/AppBar.kt:808`): 120 without a subtitle, 152 with, and
+    /// the only variant that sets its title in `DisplaySmall`.
+    pub fn large_flexible(title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self::with_variant(TopAppBarVariant::LargeFlexible, title) }
     fn with_variant(variant: TopAppBarVariant, title: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { Self { variant, title: Box::new(title), subtitle: None, navigation_icon: None, actions: None, colors: None, modifier: Modifier::new(), scroll_behavior: None } }
     pub fn navigation_icon(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.navigation_icon = Some(Box::new(f)); self }
     pub fn actions(mut self, f: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self { self.actions = Some(Box::new(f)); self }
@@ -197,15 +225,22 @@ impl TopAppBar {
         let colors = self.colors.unwrap_or_else(|| TopAppBarColors::from_theme(&theme));
         let direction = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
         ctx.changed(&direction);
-        let expanded = expanded_height(self.variant);
+        // The subtitle is read BEFORE the height: a flexible bar's expanded height depends on it
+        // (112/136 and 120/152 — `expanded_height`).
+        let subtitle_present = self.subtitle.is_some();
+        let expanded = expanded_height(self.variant, subtitle_present);
         let fraction = self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0);
         let height = expanded - (expanded - TOP_APP_BAR_HEIGHT) * fraction;
         let navigation_present = self.navigation_icon.is_some();
         let actions_present = self.actions.is_some();
-        let subtitle_present = self.subtitle.is_some();
-        let bottom_inset = if self.variant == TopAppBarVariant::Large { TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET } else { TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET };
+        // `Medium/LargeTitleBottomPadding` (`AppBar.kt:3548-3551`) — 24 / 28, and the flexible pair
+        // takes the one its own size tier names.
+        let bottom_inset = match self.variant {
+            TopAppBarVariant::Large | TopAppBarVariant::LargeFlexible => TOP_APP_BAR_LARGE_TITLE_BOTTOM_INSET,
+            _ => TOP_APP_BAR_MEDIUM_TITLE_BOTTOM_INSET,
+        };
         let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
-        let title_style = title_style(if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
+        let title_style = title_style(if is_two_row(self.variant) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
         let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0);
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
         let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
@@ -219,13 +254,13 @@ impl TopAppBar {
         };
         let rendered_container = container_color.clone();
         let root_modifier = Modifier::new().fill_max_width().height(height).background(move || rendered_container.peek(), Shape::Rectangle).clip(Shape::Rectangle).then(self.modifier);
-        let title = self.title; let subtitle = self.subtitle; let navigation = self.navigation_icon; let actions = self.actions;
+        let title = self.title; let subtitle = self.subtitle; let navigation = self.navigation_icon; let actions = self.actions; let variant_for_subtitle = self.variant;
         match ctx.start_restartable_group(key, root_modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 slot(ctx, Modifier::new().size(TOP_APP_BAR_ICON_SLOT_SIZE, TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-navigation"), |ctx| { if let Some(navigation) = navigation { WiniaTheme::with_content_color(colors.navigation, ctx, navigation); } });
                 slot(ctx, Modifier::new().test_tag("top-app-bar-title"), |ctx| { ProvideTextStyle(title_style, ctx, title); });
-                slot(ctx, alpha(fraction).test_tag("top-app-bar-subtitle"), |ctx| { if let Some(subtitle) = subtitle { let mut style = WiniaTheme::typography().body_medium; style.color = Some(colors.subtitle); ProvideTextStyle(style, ctx, subtitle); } });
+                slot(ctx, alpha(fraction).test_tag("top-app-bar-subtitle"), |ctx| { if let Some(subtitle) = subtitle { let mut style = subtitle_style(variant_for_subtitle); style.color = Some(colors.subtitle); ProvideTextStyle(style, ctx, subtitle); } });
                 // actions 横向排列（Compose 契约：多个 action 并排而非叠放——
                 // 槽位本身是 BoxLayout/Stack 语义，直接放多个子组件会重叠）
                 slot(ctx, Modifier::new().min_height(TOP_APP_BAR_ICON_SLOT_SIZE).test_tag("top-app-bar-actions"), |ctx| { if let Some(actions) = actions { WiniaTheme::with_content_color(colors.actions, ctx, |ctx| { crate::layout::Row::new().build(ctx, actions); }); } });
@@ -249,8 +284,56 @@ fn color_lerp(from: Color, to: Color, fraction: f32) -> Color {
 
 fn slot(ctx: &mut ComposeCtx, modifier: Modifier, content: impl FnOnce(&mut ComposeCtx)) { let key = ctx.next_key(); match ctx.start_restartable_group(key, modifier, BoxLayout::new().alignment(Alignment::Center)) { GroupStatus::Skip => {}, GroupStatus::Enter => content(ctx) }; ctx.end_restartable_group(); }
 fn alpha(fraction: f32) -> Modifier { Modifier::new().graphics_layer(move || GraphicsLayerParams { alpha: 1.0 - fraction, clip: true, ..Default::default() }) }
-fn expanded_height(v: TopAppBarVariant) -> f32 { match v { TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => TOP_APP_BAR_HEIGHT, TopAppBarVariant::Medium => TOP_APP_BAR_MEDIUM_HEIGHT, TopAppBarVariant::Large => TOP_APP_BAR_LARGE_HEIGHT } }
-fn expanded_title_style(v: TopAppBarVariant) -> TextStyle { let t = WiniaTheme::typography(); match v { TopAppBarVariant::Medium => t.headline_small, TopAppBarVariant::Large => t.headline_medium, _ => t.title_large } }
+/// The bar's EXPANDED height, which for the two flexible variants depends on the subtitle —
+/// upstream carries two constants per variant and picks between them at the call site
+/// (`AppBar.kt:1938-1945` for medium, `:1952-1959` for large). Public because a caller building
+/// a `TopAppBarScrollBehavior` has to hand it the same number this layout will use
+/// (`TopAppBarScrollBehavior::new(scroll, expanded_height)`).
+pub fn expanded_height(v: TopAppBarVariant, subtitle_present: bool) -> f32 {
+    match v {
+        TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned => TOP_APP_BAR_HEIGHT,
+        TopAppBarVariant::Medium => TOP_APP_BAR_MEDIUM_HEIGHT,
+        TopAppBarVariant::Large => TOP_APP_BAR_LARGE_HEIGHT,
+        TopAppBarVariant::MediumFlexible => {
+            if subtitle_present { TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT } else { TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT }
+        }
+        TopAppBarVariant::LargeFlexible => {
+            if subtitle_present { TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT } else { TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT }
+        }
+    }
+}
+/// The variants whose title starts on a row of its own and slides down while the bar expands.
+fn is_two_row(v: TopAppBarVariant) -> bool {
+    matches!(v, TopAppBarVariant::Medium | TopAppBarVariant::Large | TopAppBarVariant::MediumFlexible | TopAppBarVariant::LargeFlexible)
+}
+
+/// The title's text style while the bar is EXPANDED — `AppBar*Tokens.TitleFont`, with the small
+/// bar's `TitleLarge` for everything that does not have one (`AppBarSmallTokens.TitleFont`).
+/// Upstream's flexible bars are the odd ones out: `MediumFlexibleTopAppBar` takes
+/// `AppBarMediumFlexibleTokens.TitleFont` (`HeadlineMedium`) and `LargeFlexibleTopAppBar` takes
+/// `DisplaySmall` (`AppBar.kt:1076-1093`).
+fn expanded_title_style(v: TopAppBarVariant) -> TextStyle {
+    let t = WiniaTheme::typography();
+    match v {
+        TopAppBarVariant::Medium => t.headline_small,
+        TopAppBarVariant::Large | TopAppBarVariant::MediumFlexible => t.headline_medium,
+        TopAppBarVariant::LargeFlexible => t.display_small,
+        _ => t.title_large,
+    }
+}
+
+/// The subtitle's style while the bar is expanded. Only the flexible bars carry one upstream, and
+/// each names its own token: `AppBarMediumFlexibleTokens.SubtitleFont` is `LabelLarge`, the large
+/// bar's is `TitleMedium` (`AppBar.kt:1076-1093`). The non-flexible variants have no subtitle in
+/// material3, so they keep winia's existing `BodyMedium`.
+fn subtitle_style(v: TopAppBarVariant) -> TextStyle {
+    let t = WiniaTheme::typography();
+    match v {
+        TopAppBarVariant::MediumFlexible => t.label_large,
+        TopAppBarVariant::LargeFlexible => t.title_medium,
+        _ => t.body_medium,
+    }
+}
 
 /// The container-colour spec for the two bar variants that animate it: M3 uses `DefaultEffects`
 /// (`material3/AppBar.kt:2529-2532`: `animateColorAsState(…, MotionSchemeKeyTokens.DefaultEffects.value())`),
@@ -279,9 +362,9 @@ impl MeasurePolicy for TopAppBarLayoutPolicy {
         let expanded_x_ltr = TOP_APP_BAR_HORIZONTAL_PADDING + TOP_APP_BAR_TITLE_INSET;
         let collapsed_y = (TOP_APP_BAR_HEIGHT - title.height).max(0.0) / 2.0;
         let expanded_y = (self.expanded_height - self.bottom_inset - title.height - if self.subtitle_present { gap + subtitle.height } else { 0.0 }).max(TOP_APP_BAR_HEIGHT);
-        let x_ltr = if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_x_ltr + (collapsed_x_ltr - expanded_x_ltr) * self.fraction } else { collapsed_x_ltr };
+        let x_ltr = if is_two_row(self.variant) { expanded_x_ltr + (collapsed_x_ltr - expanded_x_ltr) * self.fraction } else { collapsed_x_ltr };
         let title_x = if self.direction == LayoutDirection::Ltr { x_ltr } else { width - x_ltr - title.width };
-        let title_y = if matches!(self.variant, TopAppBarVariant::Medium | TopAppBarVariant::Large) { expanded_y + (collapsed_y - expanded_y) * self.fraction } else { collapsed_y };
+        let title_y = if is_two_row(self.variant) { expanded_y + (collapsed_y - expanded_y) * self.fraction } else { collapsed_y };
         let subtitle_x = if self.direction == LayoutDirection::Ltr { expanded_x_ltr } else { width - expanded_x_ltr - subtitle.width };
         let subtitle_y = expanded_y + title.height + gap;
         let nav_x = if self.direction == LayoutDirection::Ltr { TOP_APP_BAR_HORIZONTAL_PADDING } else { width - TOP_APP_BAR_HORIZONTAL_PADDING - nav.width };
@@ -298,6 +381,99 @@ mod tests {
     fn layout(bar: TopAppBar, w: f32) -> Composer { let mut c = Composer::new(); c.compose(|ctx| bar.build(ctx)); c.layout(Constraints::new(0.0, w, 0.0, 200.0)); c }
     fn leaf(ctx: &mut ComposeCtx, w: f32, h: f32) { let k = ctx.next_key(); ctx.start_leaf(k, Modifier::new().size(w, h)); ctx.end_node(); }
     #[test] fn variants_have_expected_heights() { for (bar,h) in [(TopAppBar::new(|_| {}),64.),(TopAppBar::center_aligned(|_| {}),64.),(TopAppBar::medium(|_| {}),112.),(TopAppBar::large(|_| {}),152.)] { let c=layout(bar,400.); assert_eq!(c.arena_nodes()[c.layout_root_idx().unwrap()].measured_size.height,h); } }
+
+    /// The flexible pair carry TWO expanded heights each and pick between them on the subtitle
+    /// (`AppBar.kt:1938-1945` / `:1952-1959`). Measured on the laid-out bar, and the subtitle is a
+    /// real child — putting one in without the taller box is the bug this pins.
+    #[test] fn the_flexible_variants_take_their_height_from_the_subtitle() {
+        // `TopAppBar` holds `FnOnce` title/subtitle slots, so it is not Clone: each case builds
+        // its own bar.
+        let heights = |bar: TopAppBar| {
+            let c = layout(bar, 400.0);
+            let root = c.layout_root_idx().unwrap();
+            c.arena_nodes()[root].measured_size.height
+        };
+
+        assert_eq!(
+            heights(TopAppBar::medium_flexible(|ctx| leaf(ctx, 100.0, 20.0))),
+            TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT,
+            "a medium flexible bar without a subtitle"
+        );
+        assert_eq!(
+            heights(TopAppBar::medium_flexible(|ctx| leaf(ctx, 100.0, 20.0)).subtitle(|ctx| leaf(ctx, 80.0, 16.0))),
+            TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT,
+            "and with one it grows by exactly the 24 dp the subtitle row needs"
+        );
+        assert_eq!(
+            heights(TopAppBar::large_flexible(|ctx| leaf(ctx, 100.0, 20.0))),
+            TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT,
+            "a large flexible bar without a subtitle"
+        );
+        assert_eq!(
+            heights(TopAppBar::large_flexible(|ctx| leaf(ctx, 100.0, 20.0)).subtitle(|ctx| leaf(ctx, 80.0, 16.0))),
+            TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT,
+            "and with one"
+        );
+        // Neither flexible height is a copy of its non-flexible sibling at the same tier.
+        assert_ne!(TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT, TOP_APP_BAR_LARGE_HEIGHT);
+        assert_ne!(TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT, TOP_APP_BAR_MEDIUM_HEIGHT);
+    }
+
+    /// The four height constants themselves, against the tokens:
+    /// `AppBarMediumFlexibleTokens.ContainerHeight` / `.LargeContainerHeight` (112 / 136) and
+    /// `AppBarLargeFlexibleTokens` (120 / 152). The large bar's SUBTITLE height happens to equal the
+    /// plain large bar's 152 and its plain height is 120 — neither is a copy of the other.
+    #[test] fn the_flexible_height_constants_are_the_tokens() {
+        assert_eq!(
+            (TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT, TOP_APP_BAR_MEDIUM_FLEXIBLE_SUBTITLE_HEIGHT),
+            (112.0, 136.0),
+            "AppBarMediumFlexibleTokens ContainerHeight / LargeContainerHeight"
+        );
+        assert_eq!(
+            (TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT, TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT),
+            (120.0, 152.0),
+            "AppBarLargeFlexibleTokens ContainerHeight / LargeContainerHeight"
+        );
+        // And the helper agrees with each constant.
+        assert_eq!(expanded_height(TopAppBarVariant::MediumFlexible, false), 112.0);
+        assert_eq!(expanded_height(TopAppBarVariant::MediumFlexible, true), 136.0);
+        assert_eq!(expanded_height(TopAppBarVariant::LargeFlexible, false), 120.0);
+        assert_eq!(expanded_height(TopAppBarVariant::LargeFlexible, true), 152.0);
+    }
+
+    /// The text styles the flexible pair names — and they are NOT the ones their non-flexible
+    /// siblings use. `MediumFlexibleTopAppBar` titles at `HeadlineMedium` (the plain Medium bar
+    /// uses `HeadlineSmall`), and `LargeFlexibleTopAppBar` at `DisplaySmall` (the plain Large uses
+    /// `HeadlineMedium`). Subtitles are `LabelLarge` / `TitleMedium` (`AppBar.kt:1076-1093`).
+    #[test] fn the_flexible_variants_take_their_own_text_styles() {
+        // `TextStyle` is not PartialEq, so compare the resolved styles by their debug form — the
+        // function returns the typography token itself, so an exact match is the right assertion.
+        let shown = |s: TextStyle| format!("{s:?}");
+        let t = || WiniaTheme::typography();
+
+        assert_eq!(
+            shown(expanded_title_style(TopAppBarVariant::MediumFlexible)),
+            shown(t().headline_medium),
+            "AppBarMediumFlexibleTokens.TitleFont is HeadlineMedium"
+        );
+        assert_eq!(
+            shown(expanded_title_style(TopAppBarVariant::LargeFlexible)),
+            shown(t().display_small),
+            "AppBarLargeFlexibleTokens.TitleFont is DisplaySmall"
+        );
+        assert_ne!(
+            shown(expanded_title_style(TopAppBarVariant::MediumFlexible)),
+            shown(expanded_title_style(TopAppBarVariant::Medium)),
+            "the flexible medium bar is not the plain medium bar (HeadlineMedium vs HeadlineSmall)"
+        );
+        assert_ne!(
+            shown(expanded_title_style(TopAppBarVariant::LargeFlexible)),
+            shown(expanded_title_style(TopAppBarVariant::Large)),
+            "and the flexible large bar is not the plain large bar (DisplaySmall vs HeadlineMedium)"
+        );
+        assert_eq!(shown(subtitle_style(TopAppBarVariant::MediumFlexible)), shown(t().label_large));
+        assert_eq!(shown(subtitle_style(TopAppBarVariant::LargeFlexible)), shown(t().title_medium));
+    }
 
     /// M3's `DefaultEffects` spring, not the 180 ms tween this used to be.
     #[test] fn the_container_colour_spec_is_m3s_default_effects_spring() {
