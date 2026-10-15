@@ -15,6 +15,9 @@
 //!    with a minimum width of 80 — width, icon position and the label's alpha all follow one progress.
 //!    Hover it too: its elevation animates through the same rule (it used to jump). Switch the layout
 //!    direction in the settings sheet to watch the expanded FAB mirror.
+//! 5b. The three size tiers: `ExtendedFabSize::Small / Medium / Large` replace the height, both
+//!    paddings, the icon-label gap, the label text style and the default shape together, and each
+//!    collapses to its own square (56 / 80 / 96).
 //! 6. The content-only extended FAB — material3's other overload. One caller-composed row instead of
 //!    the icon/text split: 20 dp of horizontal padding, an 80 dp floor, 56 dp tall, and nothing to
 //!    expand or collapse. The second FAB builds its own icon-plus-label row, gap and all.
@@ -197,6 +200,34 @@ fn floating_action_button_demo(ctx: &mut ComposeCtx) {
                  with a minimum width of 80. Width, icon position and the label's alpha all follow one \
                  progress. Hover it: its elevation now animates through the same interaction-pair rule as \
                  the others — it used to jump. Switch the settings sheet's direction to watch it mirror.",
+            );
+
+            // ── 5b: the three size tiers ──
+            section_title(ctx, "5b. Extended FAB size tiers — Small / Medium / Large");
+            Row::new().spacing(20.0).alignment(Alignment::Center).build(ctx, |ctx| {
+                for size in [
+                    ExtendedFabSize::Small,
+                    ExtendedFabSize::Medium,
+                    ExtendedFabSize::Large,
+                ] {
+                    ExtendedFloatingActionButton::new(
+                        |ctx| Text::new("Create").build(ctx),
+                        move |ctx| Icon::svg_path(PLUS_PATH).size(size.icon_size()).build(ctx),
+                        ext_expanded.clone(),
+                    )
+                    .size(size)
+                    .on_click({ clone!(clicks); move || clicks.update(|v| *v += 1) })
+                    .build(ctx);
+                }
+            });
+            caption(
+                ctx,
+                "Naming a tier swaps the whole metric set, not one number: height 56 / 80 / 96, \
+                 padding 16 / 26 / 28, icon-label gap 8 / 12 / 16 and the label's text style \
+                 (TitleMedium / TitleLarge / HeadlineSmall) all move together, and the collapsed \
+                 width is the tier's own height, so each collapses to a different square. The gap \
+                 and the medium shape do not come from the token file — upstream overrides them \
+                 and says the tokens are wrong; winia follows the code.",
             );
 
             // ── 6: the content-only extended FAB ──

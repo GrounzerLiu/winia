@@ -797,6 +797,103 @@ mod tests {
         assert_eq!(EXTENDED_FAB_MIN_EXPANDED_WIDTH, 80.0, "ExtendedFabMinimumWidth");
     }
 
+    /// Each tier's metric set, against `*ExtendedFabTokens` — including the three values upstream
+    /// does NOT take from the token file. The Medium and Large icon-label gaps are overridden in
+    /// the source (its own TODO says the tokens are wrong: 16 and 20 against the code's 12 and 16),
+    /// the medium shape is `ShapeDefaults.LargeIncreased` because that token line is commented out
+    /// upstream, and the collapsed width is the tier's `ContainerHeight`, not a shared constant.
+    #[test]
+    fn the_extended_fab_size_tiers_are_the_tokens() {
+        for (size, height, padding, gap, radius, icon) in [
+            (ExtendedFabSize::Small, 56.0, 16.0, 8.0, 16.0, 24.0),
+            (ExtendedFabSize::Medium, 80.0, 26.0, 12.0, 20.0, 28.0),
+            (ExtendedFabSize::Large, 96.0, 28.0, 16.0, 28.0, 32.0),
+        ] {
+            assert_eq!(size.container_height(), height, "{size:?} ContainerHeight");
+            assert_eq!(size.horizontal_padding(), padding, "{size:?} Leading/TrailingSpace");
+            assert_eq!(size.icon_label_space(), gap, "{size:?} IconLabelSpace");
+            assert_eq!(size.shape(), Shape::rounded(radius), "{size:?} extendedFabShape");
+            assert_eq!(size.icon_size(), icon, "{size:?} IconSize");
+            assert_eq!(
+                size.metrics().collapsed_width,
+                height,
+                "{size:?}: *ExtendedFabMinimumWidth IS the tier's ContainerHeight"
+            );
+        }
+        // The three tiers are three distinct heights — nothing is shared between them.
+        assert_ne!(
+            ExtendedFabSize::Small.container_height(),
+            ExtendedFabSize::Medium.container_height()
+        );
+        assert_ne!(
+            ExtendedFabSize::Medium.container_height(),
+            ExtendedFabSize::Large.container_height()
+        );
+    }
+
+    /// A named tier moves the whole metric set at once. The collapsed box is the tier's own square,
+    /// and the expanded one is `start + icon + gap + text + end` with the icon at the start padding
+    /// and the label one icon-plus-gap further in (upstream's private overload, which takes all four
+    /// numbers as parameters: `FloatingActionButton.kt:917-986`).
+    #[test]
+    fn a_named_tier_moves_the_collapsed_and_expanded_geometry() {
+        let geom = |size: ExtendedFabSize, expanded: bool| {
+            let mut composer = Composer::new();
+            // `move` because the icon slot captures `size`, and a composable closure has to own
+            // what it captures.
+            composer.compose(move |ctx| {
+                ExtendedFloatingActionButton::new(
+                    |ctx| Text::new("Create").build(ctx),
+                    move |ctx| icon_leaf(ctx, size.icon_size()),
+                    State::new(expanded),
+                )
+                .size(size)
+                .on_click(|| {})
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 600.0, 0.0, 400.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let icon = child(&nodes, root, 0);
+            let text = child(&nodes, root, 1);
+            (
+                nodes[root].measured_size,
+                icon.position.x,
+                text.position.x,
+                text.measured_size.width,
+            )
+        };
+
+        for size in [
+            ExtendedFabSize::Small,
+            ExtendedFabSize::Medium,
+            ExtendedFabSize::Large,
+        ] {
+            let h = size.container_height();
+            let (collapsed, _, _, _) = geom(size, false);
+            assert_eq!(
+                (collapsed.width, collapsed.height),
+                (h, h),
+                "{size:?} collapses to its own square"
+            );
+
+            let (expanded, icon_x, text_x, text_w) = geom(size, true);
+            let padding = size.horizontal_padding();
+            assert_eq!(expanded.height, h, "{size:?} height");
+            assert_eq!(
+                expanded.width,
+                padding + size.icon_size() + size.icon_label_space() + text_w + padding,
+                "{size:?}: start + icon + gap + text + end"
+            );
+            assert_eq!(icon_x, padding, "{size:?} icon sits at the start padding");
+            assert_eq!(
+                text_x,
+                padding + size.icon_size() + size.icon_label_space(),
+                "{size:?} label sits one icon plus the gap further in"
+            );
+        }
+    }
+
     #[test]
     fn extended_fab_collapsed_is_56_square_icon_centered() {
         let mut composer = Composer::new();
@@ -983,6 +1080,164 @@ const EXT_START_ICON_PADDING: f32 = 16.0;
 const EXT_END_ICON_PADDING: f32 = 12.0;
 const EXT_TEXT_PADDING: f32 = 20.0;
 
+/// The extended FAB's three size tiers — material3's `SmallExtendedFloatingActionButton`,
+/// `MediumExtendedFloatingActionButton` and `LargeExtendedFloatingActionButton`
+/// (`FloatingActionButton.kt:396`, `:461`, `:526`, and the icon/text overloads at `:659`,
+/// `:726`, `:793`).
+///
+/// Each tier is a full metric set, not a scale factor: height, shape, both horizontal paddings,
+/// the icon-label gap, the icon size and the label text style all move together, and two of the
+/// gaps do NOT come from the token file — upstream overrides them, see `icon_label_space`.
+///
+/// The DEFAULT extended FAB (no tier named) stays on its own metric set: upstream's un-suffixed
+/// `ExtendedFloatingActionButton` is a separate composable with its own constants, not one of
+/// these three. See `EXTENDED_FAB_BASELINE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtendedFabSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl ExtendedFabSize {
+    /// `*ExtendedFabTokens.ContainerHeight` — also the tier's MINIMUM width, so a collapsed sized
+    /// FAB is square (`SmallExtendedFabMinimumWidth = ExtendedFabSmallTokens.ContainerHeight`,
+    /// `FloatingActionButton.kt:1420-1423`).
+    pub fn container_height(self) -> f32 {
+        match self {
+            Self::Small => 56.0,
+            Self::Medium => 80.0,
+            Self::Large => 96.0,
+        }
+    }
+
+    /// `*ExtendedFabTokens.LeadingSpace` / `TrailingSpace` — the two are equal at every tier.
+    pub fn horizontal_padding(self) -> f32 {
+        match self {
+            Self::Small => 16.0,
+            Self::Medium => 26.0,
+            Self::Large => 28.0,
+        }
+    }
+
+    /// `*ExtendedFabTokens.IconLabelSpace` — except that upstream overrides two of them and says
+    /// why (`FloatingActionButton.kt:1440`, `:1452`):
+    ///
+    ///     // TODO: ExtendedFabMediumTokens.IconLabelSpace is incorrect
+    ///     private val MediumExtendedFabIconPadding get() = 12.dp
+    ///     // TODO: ExtendedFabLargeTokens.IconLabelSpace is incorrect
+    ///     private val LargeExtendedFabIconPadding get() = 16.dp
+    ///
+    /// The tokens say 16 and 20. winia follows the CODE, like every other component here.
+    pub fn icon_label_space(self) -> f32 {
+        match self {
+            Self::Small => 8.0,
+            Self::Medium => 12.0,
+            Self::Large => 16.0,
+        }
+    }
+
+    /// `FloatingActionButtonDefaults.small/medium/largeExtendedFabShape`
+    /// (`FloatingActionButton.kt:1020-1032`): CornerLarge (16), then `ShapeDefaults.LargeIncreased`
+    /// (20) — the medium token is commented out upstream behind a TODO — then CornerExtraLarge (28).
+    pub fn shape(self) -> Shape {
+        Shape::rounded(match self {
+            Self::Small => 16.0,
+            Self::Medium => 20.0,
+            Self::Large => 28.0,
+        })
+    }
+
+    /// `*ExtendedFabTokens.IconSize`. The component does not force it — upstream's private
+    /// overload takes no icon size and the icon slot is the caller's — so this is the value to
+    /// hand to the icon, not a value this component applies.
+    pub fn icon_size(self) -> f32 {
+        match self {
+            Self::Small => 24.0,
+            Self::Medium => 28.0,
+            Self::Large => 32.0,
+        }
+    }
+
+    /// `Small/Medium/LargeExtendedFabTextStyle` (`FloatingActionButton.kt:1429`, `:1443`,
+    /// `:1455`): TitleMedium, TitleLarge, HeadlineSmall.
+    pub fn text_style(self, typography: &crate::theme::Typography) -> crate::text::TextStyle {
+        match self {
+            Self::Small => typography.title_medium.clone(),
+            Self::Medium => typography.title_large.clone(),
+            Self::Large => typography.headline_small.clone(),
+        }
+    }
+}
+
+/// The metric set one extended FAB measures with — the tier's, or the un-suffixed default's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ExtendedFabMetrics {
+    height: f32,
+    /// Width while collapsed. Upstream's `lerp(minWidth, expandedWidth, progress)` starts here
+    /// (`FloatingActionButton.kt:960`).
+    collapsed_width: f32,
+    /// The gap before the icon, and the one after the label.
+    start_padding: f32,
+    end_padding: f32,
+    /// Between the icon and the label.
+    icon_label_space: f32,
+    /// Floor for the EXPANDED width. Upstream has no floor on the icon/text overload — the width
+    /// is the measured intrinsic — but the un-suffixed form ships `ExtendedFabMinimumWidth` 80.
+    min_expanded_width: f32,
+    /// The content-only (Row) form's two paddings and its own minimum width. They differ from the
+    /// icon/text pair above at the un-suffixed tier: that overload pads BOTH sides by
+    /// `ExtendedFabTextPadding` (20) inside a `sizeIn(minWidth = 80)`, while the icon/text one
+    /// splits 16 / 20 (`FloatingActionButton.kt:611-615` against `:955-965`).
+    row_start_padding: f32,
+    row_end_padding: f32,
+    row_min_width: f32,
+}
+
+/// The un-suffixed `ExtendedFloatingActionButton`'s metrics — `ExtendedFabPrimaryTokens` plus the
+/// four private constants next to it (`FloatingActionButton.kt:1462-1478`):
+/// `ExtendedFabStartIconPadding` 16, `ExtendedFabEndIconPadding` 12, `ExtendedFabTextPadding` 20,
+/// `ExtendedFabMinimumWidth` 80; height `ContainerHeight` 56 and shape CornerLarge 16.
+///
+/// `collapsed_width` is winia's OWN value and a recorded deviation: upstream collapses this form to
+/// `ExtendedFabMinimumWidth` (80), while this component collapses to the square
+/// `FabBaselineTokens.ContainerWidth` (56) — the shape the wide navigation rail's header FAB has
+/// while the rail is collapsed.
+const EXTENDED_FAB_BASELINE: ExtendedFabMetrics = ExtendedFabMetrics {
+    height: EXTENDED_FAB_HEIGHT,
+    collapsed_width: EXTENDED_FAB_COLLAPSED_WIDTH,
+    start_padding: EXT_START_ICON_PADDING,
+    end_padding: EXT_TEXT_PADDING,
+    icon_label_space: EXT_END_ICON_PADDING,
+    min_expanded_width: EXTENDED_FAB_MIN_EXPANDED_WIDTH,
+    row_start_padding: EXT_TEXT_PADDING,
+    row_end_padding: EXT_TEXT_PADDING,
+    row_min_width: EXTENDED_FAB_MIN_EXPANDED_WIDTH,
+};
+
+impl ExtendedFabSize {
+    fn metrics(self) -> ExtendedFabMetrics {
+        let height = self.container_height();
+        let padding = self.horizontal_padding();
+        ExtendedFabMetrics {
+            height,
+            // Upstream: `*ExtendedFabMinimumWidth` IS the tier's `ContainerHeight`.
+            collapsed_width: height,
+            start_padding: padding,
+            end_padding: padding,
+            icon_label_space: self.icon_label_space(),
+            // Upstream leaves the expanded width to the measured intrinsic; flooring it at the
+            // collapsed width keeps the box from ever being narrower than the spring's start.
+            min_expanded_width: height,
+            // The sized Row overload pads by `LeadingSpace` / `TrailingSpace` and floors the
+            // container at the tier's `ContainerHeight` (`FloatingActionButton.kt:409-420`).
+            row_start_padding: padding,
+            row_end_padding: padding,
+            row_min_width: height,
+        }
+    }
+}
+
 pub struct ExtendedFloatingActionButton {
     content: ExtendedFabContent,
     on_click: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -991,6 +1246,8 @@ pub struct ExtendedFloatingActionButton {
     interaction_source: Option<MutableInteractionSource>,
     elevation: Option<FloatingActionButtonElevation>,
     shape: Option<Shape>,
+    /// The size tier, when the caller named one. `None` keeps the un-suffixed metric set.
+    size: Option<ExtendedFabSize>,
     modifier: Modifier,
 }
 
@@ -1027,6 +1284,7 @@ impl ExtendedFloatingActionButton {
             interaction_source: None,
             elevation: Some(FloatingActionButtonDefaults::elevation()),
             shape: None,
+            size: None,
             modifier: Modifier::new(),
         }
     }
@@ -1044,8 +1302,27 @@ impl ExtendedFloatingActionButton {
             interaction_source: None,
             elevation: Some(FloatingActionButtonDefaults::elevation()),
             shape: None,
+            size: None,
             modifier: Modifier::new(),
         }
+    }
+
+    /// The size tier — material3's `SmallExtendedFloatingActionButton`,
+    /// `MediumExtendedFloatingActionButton` and `LargeExtendedFloatingActionButton`, which are
+    /// three separate composables over one private implementation
+    /// (`material3/FloatingActionButton.kt:917-986`).
+    ///
+    /// Naming a tier replaces the whole metric set at once: height, minimum (collapsed) width,
+    /// both horizontal paddings, the icon-label gap, the label text style and the default shape.
+    /// Every one of those moves between tiers, so they are not independently settable upstream
+    /// either — an explicit `.shape(...)` still wins over the tier's, as it does over the default.
+    ///
+    /// Left unset the component keeps the un-suffixed `ExtendedFloatingActionButton`'s metrics,
+    /// which is a different set from any tier even at the same height (56): the baseline pads
+    /// 16 / 20 around the label with a 12 dp icon gap, while `Small` pads 16 / 16 with 8.
+    pub fn size(mut self, size: ExtendedFabSize) -> Self {
+        self.size = Some(size);
+        self
     }
 
     pub fn on_click(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
@@ -1089,6 +1366,7 @@ impl ExtendedFloatingActionButton {
         ctx.changed(&self.enabled);
         ctx.changed(&self.colors);
         ctx.changed(&self.shape);
+        ctx.changed(&self.size);
         if let ExtendedFabContent::IconText { expanded, .. } = &self.content {
             ctx.changed(&expanded.get());
         }
@@ -1116,10 +1394,26 @@ impl ExtendedFloatingActionButton {
         );
         let content_color = colors.content_color(self.enabled);
         let ripple_color = colors.ripple_color(self.enabled);
-        // ExtendedFabPrimaryTokens.ContainerShape = CornerLarge (16 dp) — the shared default.
-        let shape = self
-            .shape
-            .unwrap_or_else(FloatingActionButtonDefaults::extended_fab_shape);
+        // The tier's whole metric set, or the un-suffixed default's. Naming a tier moves the
+        // height, the collapsed width, both paddings, the icon gap, the text style and the shape
+        // together — they are not independently settable upstream either.
+        let metrics = self
+            .size
+            .map(ExtendedFabSize::metrics)
+            .unwrap_or(EXTENDED_FAB_BASELINE);
+        // The shape: an explicit caller shape wins, then the tier's, then
+        // `ExtendedFabPrimaryTokens.ContainerShape` = CornerLarge (16 dp).
+        let shape = self.shape.unwrap_or_else(|| {
+            self.size
+                .map(ExtendedFabSize::shape)
+                .unwrap_or_else(FloatingActionButtonDefaults::extended_fab_shape)
+        });
+        // The label style: `Small/Medium/LargeExtendedFabTextStyle` per tier, else
+        // `ExtendedFabPrimaryTokens.LabelTextFont` = LabelLarge.
+        let label_style = match self.size {
+            Some(size) => size.text_style(&WiniaTheme::typography()),
+            None => WiniaTheme::typography().label_large.clone(),
+        };
 
         // Elevation animates exactly like `FloatingActionButton::build`: same interaction-pair
         // spec rule, same backchannel. This used to take `for_state`'s instantaneous value, so
@@ -1177,7 +1471,11 @@ impl ExtendedFloatingActionButton {
                     if expanded.get() { 1.0 } else { 0.0 },
                     fab_size_spec(),
                 );
-                let policy = ExtendedFabLayoutPolicy { progress: progress.clone(), direction };
+                let policy = ExtendedFabLayoutPolicy {
+                    progress: progress.clone(),
+                    direction,
+                    metrics,
+                };
                 match ctx.start_restartable_group(key, modifier, policy) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
@@ -1193,8 +1491,10 @@ impl ExtendedFloatingActionButton {
                         });
                         wrap_fab_slot_with(ctx, text_alpha, |ctx| {
                             WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
-                                    // The 12 dp icon-label gap (ExtendedFabEndIconPadding).
+                                crate::components::text::ProvideTextStyle(label_style.clone(), ctx, |ctx| {
+                                    // The tier's icon-label gap, bled into the text slot so the
+                                    // gap moves with the padding. The baseline's is 12 dp
+                                    // (`ExtendedFabEndIconPadding`).
                                     text(ctx);
                                 });
                             });
@@ -1203,12 +1503,12 @@ impl ExtendedFloatingActionButton {
                 }
             }
             ExtendedFabContent::Row(content) => {
-                match ctx.start_restartable_group(key, modifier, ExtendedFabContentPolicy) {
+                match ctx.start_restartable_group(key, modifier, ExtendedFabContentPolicy { metrics }) {
                     GroupStatus::Skip => {}
                     GroupStatus::Enter => {
                         wrap_fab_slot(ctx, |ctx| {
                             WiniaTheme::with_content_color(content_color, ctx, |ctx| {
-                                crate::components::text::ProvideTextStyle(WiniaTheme::typography().label_large.clone(), ctx, |ctx| {
+                                crate::components::text::ProvideTextStyle(label_style.clone(), ctx, |ctx| {
                                     content(ctx);
                                 });
                             });
@@ -1244,11 +1544,14 @@ fn wrap_fab_slot_with(
     ctx.end_restartable_group();
 }
 
-/// The content-only form's layout (`material3/FloatingActionButton.kt:312-340`): one centred row
-/// inside `sizeIn(minWidth = 80).padding(horizontal = 20)`, the container at least 56 dp tall.
-/// There is no progress — this form does not collapse.
+/// The content-only form's layout (`material3/FloatingActionButton.kt:611-618` for the
+/// un-suffixed form, `:409-420` for a sized one): one centred row inside
+/// `sizeIn(minWidth).padding(start, end)`, the container at least `height` tall. There is no
+/// progress — this form does not collapse.
 #[derive(Debug)]
-struct ExtendedFabContentPolicy;
+struct ExtendedFabContentPolicy {
+    metrics: ExtendedFabMetrics,
+}
 
 impl MeasurePolicy for ExtendedFabContentPolicy {
     fn measure(
@@ -1260,11 +1563,11 @@ impl MeasurePolicy for ExtendedFabContentPolicy {
     ) -> (Size, Vec<Placement>) {
         let loose = constraints.loosen();
         let (content_size, _) = measure_node(nodes, policies, children[0], loose);
-        // The 80 dp floor is the OUTER width; the 20 dp padding sits inside it, which is why the
-        // row's content is centred in the container rather than offset by the padding.
-        let width =
-            (content_size.width + 2.0 * EXT_TEXT_PADDING).max(EXTENDED_FAB_MIN_EXPANDED_WIDTH);
-        let height = content_size.height.max(EXTENDED_FAB_HEIGHT);
+        // The floor is the OUTER width; the padding sits inside it, which is why the row's
+        // content is centred in the container rather than offset by the padding.
+        let width = (content_size.width + self.metrics.row_start_padding + self.metrics.row_end_padding)
+            .max(self.metrics.row_min_width);
+        let height = content_size.height.max(self.metrics.height);
         let position = Offset::new(
             (width - content_size.width) / 2.0,
             (height - content_size.height) / 2.0,
@@ -1286,10 +1589,15 @@ impl MeasurePolicy for ExtendedFabContentPolicy {
 /// Extended FAB 布局：宽度在收起（56×56 仅图标居中）与展开
 /// （[16 | icon | 12 | text | 20]，min 宽 80）之间按进度插值；
 /// 文本透明度同步淡入淡出。measure 期读进度注册 layout_deps。
+///
+/// The paddings and the collapsed width come from `metrics`, so a named size tier moves all of
+/// them together: `[start | icon | gap | text | end]`, collapsing to `collapsed_width`
+/// (upstream's `lerp(minWidth, expandedWidth, progress)`).
 #[derive(Debug)]
 struct ExtendedFabLayoutPolicy {
     progress: State<f32>,
     direction: LayoutDirection,
+    metrics: ExtendedFabMetrics,
 }
 
 /// The extended FAB's expand/collapse progress runs on M3's `FastSpatial` token
@@ -1314,28 +1622,29 @@ impl MeasurePolicy for ExtendedFabLayoutPolicy {
         let (icon_size, _) = measure_node(nodes, policies, children[0], loose);
         let (text_size, _) = measure_node(nodes, policies, children[1], loose);
 
-        // 收起：56×56 仅图标居中（FabBaselineTokens.ContainerWidth）；
-        // 展开：16 + icon + 12 + text + 20，且不小于 min 宽 80
-        let collapsed_w = EXTENDED_FAB_COLLAPSED_WIDTH;
-        let expanded_w = (EXT_START_ICON_PADDING
+        // Collapsed: the tier's square (or the baseline's 56), icon centred.
+        // Expanded: start + icon + gap + text + end, flored at `min_expanded_width`.
+        let m = self.metrics;
+        let collapsed_w = m.collapsed_width;
+        let expanded_w = (m.start_padding
             + icon_size.width
-            + EXT_END_ICON_PADDING
+            + m.icon_label_space
             + text_size.width
-            + EXT_TEXT_PADDING)
-            .max(EXTENDED_FAB_MIN_EXPANDED_WIDTH);
+            + m.end_padding)
+            .max(m.min_expanded_width);
         let width = collapsed_w + (expanded_w - collapsed_w) * p;
-        let height = EXTENDED_FAB_HEIGHT.max(icon_size.height).max(text_size.height);
+        let height = m.height.max(icon_size.height).max(text_size.height);
 
-        // icon x: centered -> start padding 16; RTL mirrors to right edge
+        // icon x: centered -> start padding; RTL mirrors to the right edge
         let icon_x_collapsed = (width - icon_size.width) / 2.0;
         let (icon_x_expanded, text_x_expanded) = if self.direction == LayoutDirection::Rtl {
-            let ix = width - EXT_START_ICON_PADDING - icon_size.width;
-            let tx = ix - EXT_END_ICON_PADDING - text_size.width;
+            let ix = width - m.start_padding - icon_size.width;
+            let tx = ix - m.icon_label_space - text_size.width;
             (ix, tx)
         } else {
             (
-                EXT_START_ICON_PADDING,
-                EXT_START_ICON_PADDING + icon_size.width + EXT_END_ICON_PADDING,
+                m.start_padding,
+                m.start_padding + icon_size.width + m.icon_label_space,
             )
         };
         let icon_x = icon_x_collapsed + (icon_x_expanded - icon_x_collapsed) * p;

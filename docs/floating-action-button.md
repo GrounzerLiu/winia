@@ -104,13 +104,46 @@ ExtendedFloatingActionButton::new(
 | 容器/内容色 | PrimaryContainer / OnPrimaryContainer | theme 直取 |
 | 文本样式 | LabelLarge | theme.typography().label_large |
 
+### 尺寸变体：`ExtendedFabSize`
+
+对应上游三个独立 composable：`SmallExtendedFloatingActionButton`、`MediumExtendedFloatingActionButton`、
+`LargeExtendedFloatingActionButton`（`FloatingActionButton.kt:396/461/526`，icon+text 重载在 `:659/726/793`）。
+它们不是缩放关系——**整套度量一起换**，所以 winia 也只有一个入口：
+
+```rust
+ExtendedFloatingActionButton::new(text, icon, expanded)
+    .size(ExtendedFabSize::Medium)
+    .build(ctx);
+```
+
+| 项 | Small | Medium | Large | 来源 |
+|---|---|---|---|---|
+| ContainerHeight（=收起宽） | 56 | 80 | 96 | `*ExtendedFabTokens.ContainerHeight` |
+| Leading/TrailingSpace | 16 | 26 | 28 | `*ExtendedFabTokens` |
+| IconLabelSpace | 8 | **12** | **16** | token 写 8/16/20，上游覆盖了后两个（源码自己的 TODO 承认 token 有误） |
+| 形状 | CornerLarge 16 | LargeIncreased 20 | CornerExtraLarge 28 | `FloatingActionButtonDefaults.*ExtendedFabShape`；Medium 的 token 行在上游被注释掉 |
+| IconSize | 24 | 28 | 32 | `*ExtendedFabTokens.IconSize`（组件不强制，交给调用方的 `Icon::size`） |
+| 文本样式 | TitleMedium | TitleLarge | HeadlineSmall | `*ExtendedFabTextStyle` |
+
+收起宽 = 该档的 `ContainerHeight`：上游的 `*ExtendedFabMinimumWidth` 就是它，所以带尺寸的收起态是正方形。
+
+**不命名尺寸时走的是另一套**：上游无后缀的 `ExtendedFloatingActionButton` 是独立 composable，
+用的是 `ExtendedFabPrimaryTokens`（高 56、CornerLarge 16）+ 四个私有常量（start 16 / 图标-文本 12 /
+end 20 / 最小宽 80）。它和 `Small` 高度相同但 padding 与文本样式都不同，所以 `size()` 不设默认值。
+
+**一处已知偏差**：上游无后缀那个形态收起时宽 = `ExtendedFabMinimumWidth` = **80**，
+winia 收起为 **56**（= `FabBaselineTokens.ContainerWidth`，普通 FAB 的宽度）——这是宽轨 header 收起时
+要的那个正方形外观，属有意为之，不带尺寸的形态保持这个行为。
+
 ### 动画语义（对齐 androidx）
 
 - progress p = animate_float_as_state(expanded, M3's `FastSpatial` token = spring(0.9, 1400))
-- 宽度 = lerp(56, max(80, 16+icon+12+text+20), p)
-- 图标 x：从居中滑至 start padding 16；文本透明度 = p（FastEffects 淡入淡出）、
+- 宽度 = lerp(收起宽, max(min宽, start+icon+gap+text+end), p)——收起宽与各项 padding 取自当前度量集
+- 图标 x：从居中滑至 start padding；文本透明度 = p（FastEffects 淡入淡出）、
   位置从居中滑至图标右侧
 - measure 期读进度注册 layout_deps——动画帧只重测不重组
+- 仅含内容的 Row 形态（`content(...)`）也随尺寸变：无后缀档两侧各 20、最小宽 80；
+  带尺寸档两侧取该档的 Leading/TrailingSpace、最小宽取 ContainerHeight
 
 ### 典型用法：宽轨 header
 
