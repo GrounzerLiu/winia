@@ -43,17 +43,20 @@ fn caption(ctx: &mut ComposeCtx, text: &str) {
 }
 
 /// One item of a group: a filled button painting whatever shape its position gives it.
-/// One item of a group: a filled button painting whatever shape its position gives it, and
-/// reporting its presses through the source the group hands it — which is what makes it grow while
-/// pressed and squeeze its neighbours, exactly as every item upstream does.
-fn item(
+/// One item of a group: a button painting whatever shape its position gives it, and reporting its
+/// presses through the source the group hands it — which is what makes it grow while pressed and
+/// squeeze its neighbours. Upstream attaches that to EVERY item its own constructors build
+/// (`clickableItem` and `toggleableItem`, `ButtonGroup.kt:1075` and `:1146`), and so does this:
+/// the STYLE is not part of the rule, which is why the outlined section below grows too.
+fn styled_item(
     label: &'static str,
     shape: Shape,
+    style: ButtonStyle,
     on_click: impl Fn() + Send + Sync + 'static,
 ) -> impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static {
     move |ctx, source| {
         Button::new()
-            .style(ButtonStyle::Filled)
+            .style(style)
             .shape(shape)
             .interaction_source(source)
             .on_click(on_click)
@@ -71,6 +74,14 @@ fn item(
                     .build(ctx);
             });
     }
+}
+
+fn item(
+    label: &'static str,
+    shape: Shape,
+    on_click: impl Fn() + Send + Sync + 'static,
+) -> impl FnOnce(&mut ComposeCtx, MutableInteractionSource) + 'static {
+    styled_item(label, shape, ButtonStyle::Filled, on_click)
 }
 
 #[composable]
@@ -249,6 +260,35 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 ctx,
                 "An item can be anything — the group only lays them out and spaces them, which is \
                  upstream's customItem.",
+            );
+
+            section_title(ctx, "7. Outlined items grow too — the growth belongs to the ITEM");
+            ButtonGroup::connected()
+                .item(styled_item(
+                    "Cut",
+                    ButtonGroupDefaults::item_shapes(0, 3, direction).shape,
+                    ButtonStyle::Outlined,
+                    { clone!(plain); move || plain.set(1) },
+                ))
+                .item(styled_item(
+                    "Copy",
+                    ButtonGroupDefaults::item_shapes(1, 3, direction).shape,
+                    ButtonStyle::Outlined,
+                    { clone!(plain); move || plain.set(2) },
+                ))
+                .item(styled_item(
+                    "Paste",
+                    ButtonGroupDefaults::item_shapes(2, 3, direction).shape,
+                    ButtonStyle::Outlined,
+                    { clone!(plain); move || plain.set(3) },
+                ))
+                .build(ctx);
+            caption(
+                ctx,
+                "The press growth is not a property of the group or of a style — it belongs to the \
+                 ITEM, which is why upstream's two item constructors attach it to every item they \
+                 build and its `customItem` does not. An item that uses the source the group hands \
+                 it grows; one that ignores it does not, whatever style it is.",
             );
 
             Spacer::vertical(24.0).build(ctx);
