@@ -102,8 +102,9 @@ So it is a circle, not a pill, and the dots are stacked vertically. The demo bui
 `IconButton` + `IconButtonStyle::Filled` (whose Round family is `Shape::Circle`) and the
 `more_vert` path.
 
-Upstream wraps it in a `TooltipBox` reading "More options"; winia has no tooltip, so that part
-is not reproduced.
+Upstream puts it in a `TooltipBox` reading `Strings.ButtonGroupMoreOptions` ("More options"),
+anchored above it. winia's `Tooltip` is the same thing with the same defaults — hover-triggered,
+`TopCenter`, 8 dp of offset — so the demo wraps the indicator in one.
 
 
 `ButtonGroup::overflow_indicator(|ctx, menu_state| ...)` is upstream's required

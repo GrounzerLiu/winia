@@ -175,6 +175,7 @@ pub mod prelude {
     pub use crate::selection::ToggleableState;
     pub use crate::semantics::{SemanticsConfig, SemanticsRole, SemanticsState};
     pub use crate::components::snackbar::{Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState};
+    pub use crate::components::Tooltip;
     pub use crate::components::bottom_sheet::ModalBottomSheet;
     pub use crate::components::split_button::{
         LeadingButton, SplitButtonDefaults, SplitButtonLayout, SplitButtonShapes, TrailingButton,
