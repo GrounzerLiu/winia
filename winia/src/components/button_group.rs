@@ -580,8 +580,19 @@ impl MeasurePolicy for ButtonGroupPolicy {
         // The natural size is kept as well as the width, because a parked item needs a size that
         // is NOT zero — see the placement below.
         let mut natural = vec![Size::new(0.0, self.height); items];
+        // How narrow each item can actually get, measured by asking it for zero width: a button
+        // floors at its 48 dp touch target (`minimum_interactive_component_size`), a text item at
+        // its content. The press growth may only take the room a neighbour has SPARE.
+        let mut floors = vec![0.0f32; items];
         let mut fixed = 0.0f32;
         for i in 0..items {
+            let (floor_size, _) = measure_node(
+                nodes,
+                policies,
+                children[i],
+                Constraints::new(0.0, 0.0, 0.0, constraints.max_height),
+            );
+            floors[i] = floor_size.width;
             if weight_of(i) > 0.0 {
                 continue;
             }
@@ -657,18 +668,23 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 } else {
                     value * (BUTTON_GROUP_EXPANDED_RATIO * widths[index]).min(limit(index - 1))
                 };
+                // A neighbour can only give up what it has SPARE. Without this the pressed item
+                // grew by what it HOPED to take while a floored neighbour stayed exactly where it
+                // was, and the row grew with it: an icon-only group overflowed its own width on
+                // every press and everything to the right of the pressed item moved.
+                let spare = |n: usize| (widths[n] - floors[n]).max(0.0);
                 let actual_growth = if index > 0 && index + 1 < visible {
-                    let left = target_growth.min(widths[index - 1]);
-                    let right = target_growth.min(widths[index + 1]);
+                    let left = target_growth.min(spare(index - 1));
+                    let right = target_growth.min(spare(index + 1));
                     widths[index - 1] -= left;
                     widths[index + 1] -= right;
                     left + right
                 } else if index == 0 {
-                    let right = target_growth.min(widths[1]);
+                    let right = target_growth.min(spare(1));
                     widths[1] -= right;
                     right
                 } else {
-                    let left = target_growth.min(widths[index - 1]);
+                    let left = target_growth.min(spare(index - 1));
                     widths[index - 1] -= left;
                     left
                 };
@@ -1158,6 +1174,72 @@ mod tests {
         assert!(
             captured[captured.len() - 1].state(true).pressed,
             "the later build's source must be the same one, not a fresh one"
+        );
+    }
+
+    /// The press growth may only take the room a neighbour has SPARE — what this pins is the
+    /// case where there is none.
+    ///
+    /// A button floors at its 48 dp touch target (`minimum_interactive_component_size`), so an
+    /// icon-only group's items have nothing to give. The growth used to add the room the pressed
+    /// item HOPED to take even though the neighbour never shrank, and the row grew by that much:
+    /// the demo's five icon buttons overflowed their own width on every press and everything to
+    /// the right of the pressed one moved.
+    #[test]
+    fn a_neighbour_with_no_spare_room_blocks_the_growth() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                ButtonGroup::new()
+                    .add(
+                        ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                            .press_source(pressed.clone()),
+                    )
+                    // Floored at 48 by the SAME modifier a real button uses, so it cannot shrink
+                    // and has no spare room to give.
+                    .item(|ctx, _source| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new().minimum_interactive_component_size());
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let widths = |composer: &crate::runtime::composer::Composer| -> (f32, f32, f32) {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let children = nodes[root].children.clone();
+            (
+                nodes[root].measured_size.width,
+                nodes[children[0]].measured_size.width,
+                nodes[children[1]].measured_size.width,
+            )
+        };
+
+        build(&mut composer);
+        assert_eq!(widths(&composer), (160.0, 100.0, 48.0), "at rest");
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+
+        assert_eq!(
+            widths(&composer),
+            (160.0, 100.0, 48.0),
+            "the pressed item must not grow into room that is not there, and the row must not "
         );
     }
 

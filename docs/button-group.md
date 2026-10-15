@@ -78,6 +78,16 @@ neighbours give up the room — the row's total width does not move.
 | first | `value * min(expandedRatio * width, limit(right))`, taken off the right |
 | last | `value * min(expandedRatio * width, limit(left))`, taken off the left |
 
+AND IT ONLY TAKES THE ROOM THAT IS ACTUALLY THERE. A neighbour gives up at most
+`its width - the width it reports when asked for zero`, measured once per item before the
+growth pass. A button floors at its 48 dp touch target (`minimum_interactive_component_size`),
+an icon-only item therefore has NO spare room, and the pressed item simply does not grow. This
+one is a deliberate deviation: upstream subtracts the amount it intends to take without
+checking that the child could shrink, so a floored neighbour stays put while the pressed item
+still adds the difference and the ROW GROWS past its own width — every item to the right of the
+pressed one moves. Measured on the demo's five-icon row: with the cap the row stays 288 and
+nothing moves; without it the row goes to 295.
+
 `limit` is the neighbour's `compressionLimit` — the most it will let a pressed sibling take off
 it, which upstream defaults to the item's END content padding
 (`ButtonGroup.kt:1044-1055`; `ButtonDefaults.ContentPadding`'s is 24 dp).
