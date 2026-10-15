@@ -51,7 +51,17 @@ impl Default for TextAlign { fn default() -> Self { TextAlign::Left } }
 
 /// 文本溢出处理
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextOverflow { Clip, Ellipsis }
+pub enum TextOverflow {
+    /// Cut off at the node's own box.
+    Clip,
+    /// Cut off, with an ellipsis.
+    Ellipsis,
+    /// NOT cut off: the glyphs are laid out at their intrinsic width and painted past the node's
+    /// box (an ancestor that clips, such as a Button's shape, still clips them). This is Compose's
+    /// `TextOverflow.Visible`, and it is what material3's button-group item uses for its label
+    /// (`ButtonGroup.kt:1118-1124`) so that a press narrowing an item cannot cut the word it shows.
+    Visible,
+}
 impl Default for TextOverflow { fn default() -> Self { TextOverflow::Clip } }
 
 /// 文本样式——对标 Compose TextStyle

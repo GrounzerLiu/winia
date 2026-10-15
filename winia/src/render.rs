@@ -1399,11 +1399,27 @@ fn render_pass1(
     if let Some((content, font_size, color, max_lines, align, overflow, font_weight, font_style, soft_wrap, letter_spacing, line_height)) = text {
         // 优先用测量阶段缓存的 Paragraph（避免重建）
         if let Some(para) = node.cached_paragraph.borrow_mut().as_mut() {
-            para.layout(content_w);
+            // Only re-lay it out when the text WRAPS. A `soft_wrap(false)` paragraph was built at
+            // its intrinsic width (`build_plain_paragraph`), and laying it out again at the node's
+            // content width truncates it — which is what cut a button-group label to `Sta` while a
+            // press narrowed its item, and exactly what `TextOverflow::Visible` exists to prevent.
+            if soft_wrap {
+                para.layout(content_w);
+            }
+            // Slack is how far the drawn paragraph can move inside its box. A WRAPPED paragraph
+            // is clamped to the box, so a negative slack would push it out of it. An unwrapped one
+            // was laid out at its intrinsic width and can be WIDER than the box — then centring or
+            // right-aligning has to shift it the other way rather than pin it to the left edge,
+            // which is what keeps a button-group label centred while a press narrows its item.
+            let slack = if soft_wrap {
+                (content_w - para.max_intrinsic_width()).max(0.0)
+            } else {
+                content_w - para.max_intrinsic_width()
+            };
             let x_off = match align {
                 crate::text::TextAlign::Left | crate::text::TextAlign::Justify => content_x,
-                crate::text::TextAlign::Center => content_x + (content_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                crate::text::TextAlign::Right => content_x + (content_w - para.max_intrinsic_width()).max(0.0),
+                crate::text::TextAlign::Center => content_x + slack / 2.0,
+                crate::text::TextAlign::Right => content_x + slack,
             };
             // 选中高亮
             if let Some(range) = node.registrar.borrow().as_ref().cloned().and_then(|reg| reg.selected_range(node.slot_key)) {
@@ -2471,7 +2487,7 @@ fn draw_text_with_selection(
         content, font_size, color, font_weight, font_style,
         max_lines, align, overflow, soft_wrap, letter_spacing, line_height, w,
     );
-    draw_text(canvas, &para, x, y, w, align);
+    draw_text(canvas, &para, x, y, w, align, soft_wrap);
 }
 
 fn draw_text(
@@ -2481,12 +2497,19 @@ fn draw_text(
     y: f32,
     max_width: f32,
     align: crate::text::TextAlign,
+    soft_wrap: bool,
 ) {
-    // 计算 x 偏移以支持 Center/Right/Justify 对齐
+    // 计算 x 偏移以支持 Center/Right/Justify 对齐——`soft_wrap(false)` 的段落按固有宽度排版，
+    // 可能比盒子宽，此时居中/右对齐要往反方向位移（与上面缓存路径同一规则）
+    let slack = if soft_wrap {
+        (max_width - para.max_intrinsic_width()).max(0.0)
+    } else {
+        max_width - para.max_intrinsic_width()
+    };
     let x_offset = match align {
         crate::text::TextAlign::Left | crate::text::TextAlign::Justify => x,
-        crate::text::TextAlign::Center => x + (max_width - para.max_intrinsic_width()).max(0.0) / 2.0,
-        crate::text::TextAlign::Right => x + (max_width - para.max_intrinsic_width()).max(0.0),
+        crate::text::TextAlign::Center => x + slack / 2.0,
+        crate::text::TextAlign::Right => x + slack,
     };
     para.paint(canvas, x_offset, y);
 }

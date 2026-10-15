@@ -66,6 +66,8 @@ fn item(
                 Text::new(label)
                     .max_lines(1)
                     .soft_wrap(false)
+                    .overflow(TextOverflow::Visible)
+                    .align(TextAlign::Center)
                     .build(ctx);
             });
     }

@@ -140,9 +140,12 @@ taller than the 40 dp the group lays out, and because a pressed item narrows its
 wrapping label would reflow in the middle of a press. A caller composing its own item sets
 `max_lines(1)` and `soft_wrap(false)` on its label; the demo's items do.
 
-winia has no `TextOverflow::Visible` (only `Clip` and `Ellipsis`), so a label wider than a
-narrow item is clipped rather than drawn past the edge as material3 does. Recorded as a gap
-rather than papered over.
+The demo's items also set `overflow(TextOverflow::Visible)` and `align(TextAlign::Center)`, which
+is the second half of what material3 asks for: an item that a press has narrowed is narrower than
+its own label, and the label must neither be cut nor jump off-centre while that happens.
+`TextOverflow::Visible` is new (`winia/src/text/style.rs`): the paragraph is laid out at its
+intrinsic width and the paint path no longer re-lays it out at the node's width, which is what used
+to cut it, and the centring offset is allowed to go negative so an overflowing label still centres.
 
 ## What is still open
 
