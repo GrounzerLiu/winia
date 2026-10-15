@@ -31,6 +31,7 @@ use crate::composable;
 use crate::graphics::Shape;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::layout::{Constraints, LayoutDirection};
+use crate::interaction::MutableInteractionSource;
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::unit::{Offset, Size};
@@ -48,6 +49,13 @@ pub const BUTTON_GROUP_EXPANDED_RATIO: f32 = 0.15;
 pub const CONNECTED_INNER_CORNER_SIZE: f32 = 8.0;
 /// `ConnectedButtonGroupSmallTokens.PressedInnerCornerCornerSize` (`CornerValueExtraSmall`).
 pub const CONNECTED_PRESSED_INNER_CORNER_SIZE: f32 = 4.0;
+
+/// How far a neighbour will let a pressed item compress it — upstream's `compressionLimit`,
+/// which `animateWidth(source)` resolves to the item's END content padding
+/// (`ButtonGroup.kt:1044-1055`) and which the item constructors pass explicitly. For a default
+/// material3 button that is `ButtonDefaults.ContentPadding`'s 24 dp, which is winia's baseline
+/// button padding too.
+pub const BUTTON_GROUP_COMPRESSION_LIMIT: f32 = 24.0;
 
 /// The three shapes a button-group item morphs between — material3's `ToggleButtonShapes`, which is
 /// also what `ButtonGroupDefaults.connected*ButtonShapes` build.
@@ -145,6 +153,48 @@ impl ButtonGroupDefaults {
     }
 }
 
+/// One item of a group. Upstream builds the same thing from `customItem` plus `Modifier.weight`
+/// and `Modifier.animateWidth(interactionSource)` inside the scope; winia has no parent data for a
+/// modifier to carry any of that, so an item is assembled before it is added.
+pub struct ButtonGroupItem {
+    weight: f32,
+    press: Option<MutableInteractionSource>,
+    compression_limit: f32,
+    item: Box<dyn FnOnce(&mut ComposeCtx)>,
+}
+
+impl ButtonGroupItem {
+    pub fn new(item: impl FnOnce(&mut ComposeCtx) + 'static) -> Self {
+        Self {
+            weight: 0.0,
+            press: None,
+            compression_limit: BUTTON_GROUP_COMPRESSION_LIMIT,
+            item: Box::new(item),
+        }
+    }
+
+    /// Take a proportional share of the space left over — `Modifier.weight`.
+    pub fn weight(mut self, weight: f32) -> Self {
+        self.weight = weight.max(0.0);
+        self
+    }
+
+    /// Opt this item into the press growth: `Modifier.animateWidth(interactionSource)`. The group
+    /// watches the source, animates the progress on its own `FastSpatial` spring and grows the item
+    /// by squeezing its neighbours.
+    pub fn press_source(mut self, source: MutableInteractionSource) -> Self {
+        self.press = Some(source);
+        self
+    }
+
+    /// The most this item will let a pressed NEIGHBOUR take off it — upstream's `compressionLimit`.
+    /// Defaults to `BUTTON_GROUP_COMPRESSION_LIMIT`.
+    pub fn compression_limit(mut self, limit: f32) -> Self {
+        self.compression_limit = limit.max(0.0);
+        self
+    }
+}
+
 /// The row: items side by side, spaced by the group's token, all `BUTTON_GROUP_HEIGHT` tall.
 ///
 /// The caller builds the items and hands each one the shape it should paint
@@ -153,10 +203,7 @@ impl ButtonGroupDefaults {
 pub struct ButtonGroup {
     connected: bool,
     spacing: Option<f32>,
-    /// `(weight, item)`. A weight of 0 means take your natural width — upstream expresses the
-    /// same thing with `Modifier.weight`, which winia has no parent data for, so it is a builder
-    /// argument here.
-    children: Vec<(f32, Box<dyn FnOnce(&mut ComposeCtx)>)>,
+    children: Vec<ButtonGroupItem>,
     modifier: Modifier,
 }
 
@@ -196,7 +243,7 @@ impl ButtonGroup {
     }
 
     pub fn item(mut self, item: impl FnOnce(&mut ComposeCtx) + 'static) -> Self {
-        self.children.push((0.0, Box::new(item)));
+        self.children.push(ButtonGroupItem::new(item));
         self
     }
 
@@ -205,11 +252,16 @@ impl ButtonGroup {
     /// (`ButtonGroup.kt:826`) and divides the leftover by the total weight in its measure policy
     /// (`:610-650`) — that branch is what this reproduces: leftover / totalWeight * weight.
     pub fn weighted_item(
-        mut self,
+        self,
         weight: f32,
         item: impl FnOnce(&mut ComposeCtx) + 'static,
     ) -> Self {
-        self.children.push((weight.max(0.0), Box::new(item)));
+        self.add(ButtonGroupItem::new(item).weight(weight))
+    }
+
+    /// The general form: an item assembled with `ButtonGroupItem`.
+    pub fn add(mut self, item: ButtonGroupItem) -> Self {
+        self.children.push(item);
         self
     }
 
@@ -225,15 +277,31 @@ impl ButtonGroup {
         ctx.changed(&spacing);
         let height = BUTTON_GROUP_HEIGHT;
         let key = ctx.next_key();
-        let weights: Vec<f32> = self.children.iter().map(|(w, _)| *w).collect();
-        let policy = ButtonGroupPolicy { spacing, height, weights };
+        let weights: Vec<f32> = self.children.iter().map(|c| c.weight).collect();
+        let compression: Vec<f32> = self.children.iter().map(|c| c.compression_limit).collect();
+        // The press progress, one per item — `FastSpatial`, the group's own spring upstream
+        // (`ButtonGroup.kt:143-144`). An item with no press source stays at zero, which is what
+        // makes `animateWidth` opt-in.
+        let mut progress = Vec::with_capacity(self.children.len());
+        for child in &self.children {
+            let target = child
+                .press
+                .as_ref()
+                .map(|src| if src.state(true).pressed { 1.0 } else { 0.0 })
+                .unwrap_or(0.0);
+            progress.push(ctx.animate_float_as_state(
+                target,
+                crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
+            ));
+        }
+        let policy = ButtonGroupPolicy { spacing, height, weights, progress, compression };
         let modifier = self.modifier.height(height);
         let mut children = self.children;
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
-                for (_, child) in children.drain(..) {
-                    child(ctx);
+                for child in children.drain(..) {
+                    (child.item)(ctx);
                 }
             }
         }
@@ -261,6 +329,11 @@ struct ButtonGroupPolicy {
     height: f32,
     /// One entry per child; 0 means the item takes its natural width.
     weights: Vec<f32>,
+    /// One per child: the press progress an `interactive` item animates on. Read during MEASURE,
+    /// which registers a layout dependency, so an animation frame re-measures without recomposing.
+    progress: Vec<crate::runtime::state::State<f32>>,
+    /// One per child: how far it will let a pressed neighbour compress it.
+    compression: Vec<f32>,
 }
 
 impl MeasurePolicy for ButtonGroupPolicy {
@@ -308,7 +381,48 @@ impl MeasurePolicy for ButtonGroupPolicy {
             }
         }
 
-        // Pass 3: settle at those widths and place, left to right.
+        // Pass 3: the press growth — upstream's loop at `ButtonGroup.kt:729-770`. A pressed item
+        // grows by `expandedRatio * its own width`, halved for a middle item, and takes that much
+        // OFF its neighbour(s); the neighbour's `compressionLimit` caps how much it gives up, and
+        // its own width caps it again. The deltas are not rounded here — upstream rounds to
+        // integer pixels because it lays out in px, winia measures in dp.
+        if n > 1 {
+            for index in 0..n {
+                let value = self.progress.get(index).map(|p| p.get()).unwrap_or(0.0);
+                if value <= 0.0 {
+                    continue;
+                }
+                let limit = |i: usize| self.compression.get(i).copied().unwrap_or(0.0);
+                let target_growth = if index > 0 && index + 1 < n {
+                    value
+                        * (BUTTON_GROUP_EXPANDED_RATIO * widths[index] / 2.0)
+                            .min(limit(index - 1))
+                            .min(limit(index + 1))
+                } else if index == 0 {
+                    value * (BUTTON_GROUP_EXPANDED_RATIO * widths[index]).min(limit(1))
+                } else {
+                    value * (BUTTON_GROUP_EXPANDED_RATIO * widths[index]).min(limit(index - 1))
+                };
+                let actual_growth = if index > 0 && index + 1 < n {
+                    let left = target_growth.min(widths[index - 1]);
+                    let right = target_growth.min(widths[index + 1]);
+                    widths[index - 1] -= left;
+                    widths[index + 1] -= right;
+                    left + right
+                } else if index == 0 {
+                    let right = target_growth.min(widths[1]);
+                    widths[1] -= right;
+                    right
+                } else {
+                    let left = target_growth.min(widths[index - 1]);
+                    widths[index - 1] -= left;
+                    left
+                };
+                widths[index] += actual_growth;
+            }
+        }
+
+        // Pass 4: settle at those widths and place, left to right.
         let mut placements = Vec::with_capacity(n);
         let mut x = 0.0f32;
         let mut used_height = self.height;
@@ -520,6 +634,68 @@ mod tests {
             nodes[children[1]].position.x,
             nodes[children[1]].measured_size.width,
         )
+    }
+
+    /// The press growth — upstream's `Modifier.animateWidth` and its loop at
+    /// `ButtonGroup.kt:729-770`. A middle item grows by `expandedRatio * width / 2` and takes
+    /// that much OFF BOTH neighbours, so the row's total width does not move; the neighbours'
+    /// `compressionLimit` (24 by default) is what caps it.
+    #[test]
+    fn a_pressed_item_grows_by_squeezing_its_neighbours() {
+        // `update_animations` drives the process-wide table, so this takes the same lock the
+        // other animation tests hold.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let middle = src.clone();
+            composer.compose(move |ctx| {
+                ButtonGroup::new()
+                    .item(|ctx| leaf(ctx, 100.0, 40.0))
+                    .add(ButtonGroupItem::new(|ctx| leaf(ctx, 100.0, 40.0)).press_source(middle))
+                    .item(|ctx| leaf(ctx, 100.0, 40.0))
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        let widths = |composer: &crate::runtime::composer::Composer| -> (f32, f32, f32) {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let children = nodes[root].children.clone();
+            (
+                nodes[children[0]].measured_size.width,
+                nodes[children[1]].measured_size.width,
+                nodes[children[2]].measured_size.width,
+            )
+        };
+
+        build(&mut composer);
+        assert_eq!(widths(&composer), (100.0, 100.0, 100.0), "at rest every item is natural");
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let (left, middle, right) = widths(&composer);
+        // `expandedRatio * 100 / 2` = 7.5, well under the 24 dp cap, taken off both neighbours.
+        assert!(
+            (middle - 115.0).abs() < 0.5,
+            "the pressed middle item grows by 2 x 7.5, got {middle}"
+        );
+        assert!((left - 92.5).abs() < 0.5, "and its left neighbour gives up 7.5, got {left}");
+        assert!((right - 92.5).abs() < 0.5, "so does its right neighbour, got {right}");
+        assert!(
+            (left + middle + right - 300.0).abs() < 0.5,
+            "the row's total width must not move: it is a redistribution"
+        );
     }
 
     /// The spacing each form defaults to, and the override.

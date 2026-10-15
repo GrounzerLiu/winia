@@ -44,8 +44,8 @@ precedence: pressed beats checked beats resting.
 ## What is implemented, and what is not
 
 Implemented: the constants above, the connected shape set (including the RTL mirror and the checked
-stadium), `item_shapes`, weighted items, and `ButtonGroup` — a row that spaces its items by the
-token for the form it is in and is the token's height.
+stadium), `item_shapes`, weighted items, the press growth, and `ButtonGroup` — a row that spaces
+its items by the token for the form it is in and is the token's height.
 
 ## Weighted items
 
@@ -63,22 +63,38 @@ each weighted item = remaining / totalWeight * its weight
 A weighted item is measured at a FIXED width (min = max), which is what makes it fill its share
 rather than shrink to its content.
 
+## The press growth
+
+`ButtonGroupItem::press_source(interaction_source)` is upstream's
+`Modifier.animateWidth(interactionSource)`: the item declares the source it is pressed through, the
+group animates the progress on its own `FastSpatial` spring, and the pressed item GROWS while its
+neighbours give up the room — the row's total width does not move.
+
+`ButtonGroupMeasurePolicy`'s loop (`ButtonGroup.kt:729-770`) is what this reproduces:
+
+| where the pressed item is | how much it grows |
+|---|---|
+| middle | `value * min(expandedRatio * width / 2, limit(left), limit(right))`, taken off BOTH |
+| first | `value * min(expandedRatio * width, limit(right))`, taken off the right |
+| last | `value * min(expandedRatio * width, limit(left))`, taken off the left |
+
+`limit` is the neighbour's `compressionLimit` — the most it will let a pressed sibling take off
+it, which upstream defaults to the item's END content padding
+(`ButtonGroup.kt:1044-1055`; `ButtonDefaults.ContentPadding`'s is 24 dp).
+`ButtonGroupItem::compression_limit(f32)` overrides it.
+
+The progress is a `State<f32>` read during MEASURE, so an animation frame re-measures without
+recomposing — the same route the navigation rail's width animation takes.
+
 ## What is still open
 
 - **The overflow indicator.** Upstream takes a required `overflowIndicator` slot and lays out
   TWO content sets — the items and the indicator — with a `ButtonGroupOverflowState` deciding
   how many items fit; the rest move into a `DropdownMenu`. winia has no multi-content layout yet,
   so the row never overflows.
-- **The pressed-width expansion.** `Modifier.animateWidth(interactionSource)` grows the pressed
-  item and squeezes its neighbours, on the group's own `FastSpatial` animatable. The rule is
-  known — a middle item grows by `value * min(expandedRatio * width / 2, compressionLimit of each
-  neighbour)` and takes that much off both, an end item by `value * min(expandedRatio * width,
-  compressionLimit of its one neighbour)` (`ButtonGroup.kt:729-770`) — but the compression limit
-  comes from parent data that winia has no equivalent of, so it needs an API decision first. The
-  ratio constant is here; the behaviour is not.
 - **The item constructors.** Upstream's scope offers `clickableItem` / `toggleableItem` /
-  `customItem`; winia takes plain children and leaves the button to the caller, so an item is a
-  `Button` / `IconToggleButton` that the caller gives the right shape.
+  `customItem`; winia takes `ButtonGroupItem`s and leaves the button to the caller, so an item is
+  a `Button` / `IconToggleButton` that the caller gives the right shape.
 - **The distribution of the row's leftover space when nothing is weighted.** Upstream arranges
   through `Arrangement.Horizontal` (`Arrangement.spacedBy(12)` by default), which also decides
   what happens to space no item claims; winia lays the items out from the start edge.
