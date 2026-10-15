@@ -3139,9 +3139,31 @@ fn handle_pointer_move(
                         //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
                         let node_w = nodes[innermost].content_box().width;
                         let align = nodes[innermost].modifier.align().unwrap_or(crate::text::TextAlign::Left);
+                        // The slack rule has to be the PAINT paths' rule, not a copy of the old
+                        // one: a WRAPPED paragraph was laid out inside its box, so a negative
+                        // slack would push it out of it — but an UNWRAPPED one
+                        // (`soft_wrap(false)`, laid out at its intrinsic width) can be WIDER than
+                        // the box, and then centring or right-aligning has to shift it the other
+                        // way. With the clamped form here, a selection on an overflowing label
+                        // was skewed by half the overflow (`render.rs` uses the conditional one
+                        // at both of its sites).
+                        let soft_wrap = nodes[innermost]
+                            .modifier
+                            .elements()
+                            .iter()
+                            .find_map(|el| match el {
+                                crate::modifier::ModifierElement::TextContent { soft_wrap, .. } => Some(*soft_wrap),
+                                _ => None,
+                            })
+                            .unwrap_or(true);
+                        let slack = if soft_wrap {
+                            (node_w - para.max_intrinsic_width()).max(0.0)
+                        } else {
+                            node_w - para.max_intrinsic_width()
+                        };
                         let x_off = match align {
-                            crate::text::TextAlign::Center => abs_x + (node_w - para.max_intrinsic_width()).max(0.0) / 2.0,
-                            crate::text::TextAlign::Right => abs_x + (node_w - para.max_intrinsic_width()).max(0.0),
+                            crate::text::TextAlign::Center => abs_x + slack / 2.0,
+                            crate::text::TextAlign::Right => abs_x + slack,
                             _ => abs_x,
                         };
                         // 段落局部坐标：扣节点 padding（与渲染侧 content 区一致——

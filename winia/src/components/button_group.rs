@@ -432,8 +432,15 @@ impl ButtonGroup {
         let modifier = self.modifier.height(height);
         let mut children = self.children;
         // The menu rows are taken out before the items are composed: an item's button content is
-        // `FnOnce`, so it cannot be composed twice.
-        let mut menus: Vec<_> = children.iter_mut().filter_map(|c| c.menu.take()).collect();
+        // `FnOnce`, so it cannot be composed twice. The vector is INDEX-PAIRED with the items —
+        // `None` where an item declared no menu — because the hidden list is chosen by ITEM
+        // INDEX below. Compacting it here mapped an item index onto a shorter list and showed
+        // the wrong rows: three items with only the last one given a menu opened an EMPTY menu,
+        // and with only the first one given a menu it listed the item that was on screen.
+        // Upstream has no such compression — it walks the item list itself
+        // (`for (i in overflowState.visibleItemCount until overflowState.totalItemCount)
+        // `scope.items[i].MenuContent(menuState)`, `ButtonGroup.kt:157-161`).
+        let mut menus: Vec<Option<_>> = children.iter_mut().map(|c| c.menu.take()).collect();
         let overflow = self.overflow;
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
@@ -464,7 +471,9 @@ impl ButtonGroup {
                 }
                 if has_indicator {
                     let shown = visible.peek();
-                    let hidden: Vec<_> = menus.drain(shown.min(menus.len())..).collect();
+                    // The rows of the items that did NOT fit, picked by item index — see
+                    // `hidden_rows`.
+                    let hidden = hidden_rows(&mut menus, shown);
                     if !hidden.is_empty() {
                         let state_for_dismiss = menu_state.clone();
                         let state_for_rows = menu_state.clone();
@@ -495,6 +504,24 @@ impl Default for ButtonGroup {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The menu rows belonging to the items that did NOT fit, chosen by ITEM INDEX.
+///
+/// `rows` is INDEX-PAIRED with the items (`None` where an item declared no menu), which is the
+/// whole point: the cut is an item count, so the list it indexes must be the item list. Building
+/// it with `filter_map` — collecting only the items that HAVE a menu — silently mapped an item
+/// index onto a shorter list: of three items with only the LAST one given a menu the menu came
+/// out EMPTY (that item was unreachable), and with only the FIRST one given a menu it listed the
+/// item that was on screen. Upstream keeps the two together by construction —
+/// `for (i in overflowState.visibleItemCount until overflowState.totalItemCount)
+/// `scope.items[i].MenuContent(menuState)` (`ButtonGroup.kt:157-161`).
+fn hidden_rows<T>(rows: &mut [Option<T>], shown: usize) -> Vec<T> {
+    rows.iter_mut()
+        .enumerate()
+        .filter(|(index, _)| *index >= shown)
+        .filter_map(|(_, row)| row.take())
+        .collect()
 }
 
 /// Wraps one item in its own group node, so the group can hang a render-time layer on it.
@@ -582,17 +609,21 @@ impl MeasurePolicy for ButtonGroupPolicy {
         let mut natural = vec![Size::new(0.0, self.height); items];
         let mut fixed = 0.0f32;
         for i in 0..items {
-            if weight_of(i) > 0.0 {
-                continue;
-            }
             let (size, _) = measure_node(
                 nodes,
                 policies,
                 children[i],
                 Constraints::new(0.0, budget, 0.0, constraints.max_height),
             );
-            widths[i] = size.width;
+            // EVERY item keeps its natural size, weighted ones included: a hidden item is parked
+            // at that size, and leaving a weighted one at the `0 x height` it was initialised
+            // with is the zero-width placement this policy's own note below forbids (see
+            // `parked_x`) — and the shape `20692cb` removed for the unweighted case.
             natural[i] = size;
+            if weight_of(i) > 0.0 {
+                continue;
+            }
+            widths[i] = size.width;
             fixed += size.width;
         }
 
@@ -1057,6 +1088,72 @@ mod tests {
         );
     }
 
+
+    /// The menu's rows are picked by ITEM index out of a list that is INDEX-PAIRED with the
+    /// items — the bug this pins.
+    ///
+    /// The rows used to be collected with `filter_map`, which COMPACTED them, so a cut taken at
+    /// an item count indexed a SHORTER list: with only the LAST of three items given a menu the
+    /// menu came out EMPTY and that item was unreachable, and with only the FIRST one given a
+    /// menu it listed the item that WAS on screen.
+    ///
+    /// A unit test rather than an end-to-end one on purpose: a `State` write during composition
+    /// is DEFERRED, so opening the menu the way a click does (flip the state, recompose) cannot
+    /// be reproduced inside one composition, and a second composition of an unchanged group
+    /// Skips. This pins the rule itself; the demo is the end-to-end case.
+    #[test]
+    fn the_menus_rows_are_picked_by_item_index() {
+        // Only the THIRD item declared a menu, and the third is the one that did not fit.
+        let mut rows = [None, None, Some("third")];
+        assert_eq!(hidden_rows(&mut rows, 2), vec!["third"]);
+
+        // Only the FIRST item declared a menu, and the first two fit: there is nothing hidden,
+        // so the menu gets no row. The compacted form handed it the on-screen item instead.
+        let mut rows = [Some("first"), None, None];
+        assert!(
+            hidden_rows(&mut rows, 2).is_empty(),
+            "no item is hidden, so the menu has no row"
+        );
+        assert_eq!(
+            hidden_rows(&mut rows, 0),
+            vec!["first"],
+            "and the same row IS the hidden one once nothing is visible"
+        );
+
+        // Every hidden item's row comes out, in item order, and each is taken once.
+        let mut rows = [None, Some("b"), Some("c")];
+        assert_eq!(hidden_rows(&mut rows, 1), vec!["b", "c"]);
+        assert!(hidden_rows(&mut rows, 1).is_empty(), "the rows are consumed");
+    }
+
+    /// A parked item keeps a REAL size even when it is a WEIGHTED one.
+    ///
+    /// `natural` is what a parked item is placed at, and the pass that fills it used to skip
+    /// weighted items — so one that did not fit was parked at the `0 x height` it was
+    /// initialised with, the zero-width placement this policy's own note forbids (a later
+    /// measure folds a clean node and reads that zero back).
+    #[test]
+    fn a_parked_weighted_item_keeps_a_size() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            ButtonGroup::new()
+                .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                .weighted_item(1.0, |ctx, _source| leaf(ctx, 60.0, 40.0))
+                .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
+                .build(ctx);
+        });
+        // 100 dp cannot hold the first item, so NOTHING fits and both items are parked.
+        composer.layout(Constraints::new(0.0, 100.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        assert!(nodes[children[1]].position.x > 100.0, "the weighted item is parked outside");
+        assert!(
+            nodes[children[1]].measured_size.width > 0.0,
+            "a parked item keeps its natural size, weighted or not, got {}",
+            nodes[children[1]].measured_size.width
+        );
+    }
 
     /// The FLICKER guard: with no indicator the laid-out item count must not depend on the
     /// available width, swept one dp at a time.
