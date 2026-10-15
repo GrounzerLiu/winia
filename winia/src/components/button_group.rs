@@ -749,7 +749,17 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 children[i],
                 Constraints::new(widths[i], widths[i], 0.0, constraints.max_height),
             );
-            placements.push(Placement { size, position: Offset::new(x, 0.0) });
+            // The node is the SLOT's width, not the width the child reported back. A button
+            // floors at its 48 dp touch target, so a squeezed neighbour answers 48 for a 41 dp
+            // slot — and a node wider than its slot is painted with the minimum-interactive
+            // inset centred inside it, which makes the item shrink about its CENTRE: its leading
+            // edge drifts away from the item before it and a gap opens up. Placing it at the slot
+            // width instead keeps the leading edge where the slot put it and shrinks the item
+            // from the trailing edge, which is what the row is supposed to look like.
+            placements.push(Placement {
+                size: Size::new(widths[i], size.height),
+                position: Offset::new(x, 0.0),
+            });
             used_height = used_height.max(size.height);
             // Advance by the SLOT, not by what the child reported. A child may come back WIDER
             // than its slot — a button floors at its 48 dp touch target and cannot shrink past
@@ -1282,11 +1292,14 @@ mod tests {
     /// THE ROW'S WIDTH IS THE SUM OF ITS SLOTS, never of what the children reported.
     ///
     /// A button floors at its 48 dp touch target (`minimum_interactive_component_size`), so a
-    /// neighbour that a press has squeezed reports back 48 anyway. Taking the layout's advance
-    /// from that reported size made the row GROW on every press — the demo's five icon buttons
-    /// overflowed their own width and everything to the right of the pressed item moved. Upstream
-    /// never does this: its positions come from `widths[]` and its layout size from `mainSpace` /
-    /// `mainAxisLayoutSize` (`ButtonGroup.kt:688`, `:783`).
+    /// neighbour that a press has squeezed REPORTS 48 for a narrower slot. Neither the row's
+    /// width nor the node's may come from that number: taking the advance from it made the row
+    /// GROW on every press — the demo's five icon buttons overflowed their own width and
+    /// everything to the right of the pressed item moved — and leaving the node at the reported
+    /// width made the squeezed item shrink about its CENTRE, so its leading edge drifted away
+    /// from the item before it and opened a gap. Upstream never reads either: its positions come
+    /// from `widths[]` and its layout size from `mainSpace` / `mainAxisLayoutSize`
+    /// (`ButtonGroup.kt:688`, `:783`).
     #[test]
     fn the_row_keeps_its_width_when_a_squeezed_child_cannot_shrink() {
         let _guard = crate::animation::tests::TEST_SERIAL
@@ -1338,14 +1351,15 @@ mod tests {
             build(&mut composer);
         }
 
-        // The floored neighbour reports 48 whatever slot it is given, and the pressed item still
-        // grows into the slot the growth pass gave it — but the ROW is the sum of the slots, so it
-        // does not move: 160 + 15 of growth and 15 of squeeze.
+        // The floored neighbour reports 48 whatever slot it is given — but its NODE is the slot it
+        // was given (33 = 48 - 15), so it shrinks from its trailing edge rather than about its
+        // centre, and the pressed item grows into the 115 it was given. The ROW is the sum of the
+        // slots, so it does not move at all.
         assert_eq!(
             widths(&composer),
-            (160.0, 115.0, 48.0),
-            "the pressed item grows into its slot, the FLOORED neighbour keeps its 48, and the row \
-             stays the width it started at"
+            (160.0, 115.0, 33.0),
+            "the pressed item grows into its slot, the squeezed neighbour is the slot it was \
+             given (not the 48 it reports), and the row stays the width it started at"
         );
     }
 
