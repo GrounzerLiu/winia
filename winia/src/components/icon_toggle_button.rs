@@ -8,7 +8,9 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::components::button::ButtonBorder;
-use crate::components::icon_button::{IconButtonDefaults, IconButtonSize, IconButtonStyle};
+use crate::components::icon_button::{
+    IconButtonDefaults, IconButtonShape, IconButtonSize, IconButtonStyle,
+};
 use crate::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
@@ -315,22 +317,35 @@ impl IconToggleButton {
         // outgoing glyph fades out in the old colour while the incoming one arrives in the new one. The
         // container still animates, so the surface moves smoothly underneath either way.
 
-        // The press morph, spelled as `IconButton` spells it: with no explicit shape the container is the
-        // size's Round one, so the resting radius is half the container, and a press interpolates it down to
-        // that size's `PressedContainerShape`. `Shape::Circle` carries no radius to interpolate, hence the
-        // arithmetic; an explicit shape is pinned and skips the morph entirely.
+        // The THREE shapes a toggle morphs between, in upstream's precedence: PRESSED beats CHECKED
+        // beats resting (`shapeByInteraction`, `material3/IconButton.kt:1622-1638`). Upstream's
+        // default toggle is (`IconButtonDefaults.kt:1046-1055`):
+        //
+        //     shape        = SmallIconButtonTokens.ContainerShapeRound         (CornerFull)
+        //     pressedShape = SmallIconButtonTokens.PressedContainerShape       (CornerSmall)
+        //     checkedShape = SmallIconButtonTokens.SelectedContainerShapeRound (CornerMedium)
+        //
+        // so it rests as a circle, flattens while pressed, and becomes this size's rounded rectangle
+        // while CHECKED. winia had only the first two — the `SelectedContainerShape*` tokens went
+        // unused and a checked toggle kept its resting circle.
+        //
+        // `Shape::Circle` carries no radius to interpolate, hence the arithmetic. An explicit shape is
+        // pinned and skips the morph entirely, which is upstream's `isStatic` early-out.
         let shape = match self.shape {
             Some(explicit) => explicit,
             None => {
                 let round = size / 2.0;
-                let morph = ctx.animate_float_as_state(
-                    if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Spring(
-                        crate::animation::SpringSpec::spatial_fast(),
-                    ),
-                );
-                let pressed = self.size_variant.pressed_container_radius();
-                Shape::rounded(round + (pressed - round) * morph.get())
+                let target = if interaction.state(self.enabled).pressed {
+                    self.size_variant.pressed_container_radius()
+                } else if self.checked {
+                    self.size_variant
+                        .selected_container_radius(IconButtonShape::Round, round)
+                } else {
+                    round
+                };
+                let radius =
+                    ctx.animate_float_as_state(target, crate::components::icon_button::shape_morph_spec());
+                Shape::rounded(radius.get())
             }
         };
 
@@ -984,5 +999,88 @@ mod tests {
             assert!(clicked, "存在 Clickable");
             assert_eq!(received.load(Ordering::Relaxed), expect, "回调收到 !checked");
         }
+    }
+
+    /// A CHECKED toggle is not the resting circle. Upstream's default toggle shapes are
+    /// (`IconButtonDefaults.kt:1046-1055`)
+    ///
+    ///     shape        = SmallIconButtonTokens.ContainerShapeRound         (CornerFull)
+    ///     pressedShape = SmallIconButtonTokens.PressedContainerShape       (CornerSmall)
+    ///     checkedShape = SmallIconButtonTokens.SelectedContainerShapeRound (CornerMedium)
+    ///
+    /// and `shapeByInteraction` picks PRESSED > CHECKED > resting (`IconButton.kt:1622-1638`). The
+    /// `SelectedContainerShape*` tokens went unused here, so a checked toggle kept its resting
+    /// circle; deleting the checked branch fails this test.
+    #[test]
+    fn a_checked_toggle_morphs_to_the_selected_container_shape() {
+        // `update_animations` drives the process-wide table, so this holds the same lock the other
+        // animation tests take.
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(false);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let on = checked.get();
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::new(on)
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                .build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+        let radius = |composer: &crate::runtime::composer::Composer| -> f32 {
+            let painted = composer.arena_nodes().iter().find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                    _ => None,
+                })
+            });
+            match painted {
+                Some(Shape::RoundedRect { corner_radius }) => corner_radius,
+                other => panic!("the container should be a rounded rect, got {other:?}"),
+            }
+        };
+
+        build(&mut composer);
+        assert_eq!(
+            radius(&composer),
+            20.0,
+            "unchecked, Small's container is CornerFull over its 40 dp box"
+        );
+
+        checked.set(true);
+        build(&mut composer);
+        // The morph must be REGISTERED, and the corners must not have switched yet — the same shape
+        // the press test above takes, and the reason its `build` sits before this loop: with
+        // nothing animating, `update_animations` returns false on the first call and the loop would
+        // exit before the build that starts the morph ever ran.
+        assert!(
+            crate::animation::is_animating(),
+            "switching checked registers the shape morph"
+        );
+        assert_ne!(
+            radius(&composer),
+            12.0,
+            "the checked shape arrives over time instead of switching"
+        );
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        assert!(
+            (radius(&composer) - 12.0).abs() < 0.5,
+            "checked, it arrives at Small's SelectedContainerShapeRound (CornerMedium = 12), got {}",
+            radius(&composer)
+        );
     }
 }

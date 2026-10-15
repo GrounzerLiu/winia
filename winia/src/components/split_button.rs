@@ -20,13 +20,17 @@
 //!   (`SplitButtonShapes { shape, pressedShape, checkedShape }`, the leading button's checked shape
 //!   being `null` while the trailing button's is `CircleShape`).
 //!
-//! Two deliberate deviations, both recorded in `docs/split-button.md`:
+//! One deliberate deviation, recorded in `docs/split-button.md`:
 //! - Compose picks the shape from `pressed` and `checked` only (`shapeByInteraction`); the M3 spec
 //!   page also lists hovered and focused as shape-changing states, and the tokens carry a
 //!   `InnerHoveredCornerCornerSize`. winia follows the CODE, like every other component here.
-//! - The morph is animated with a 180 ms tween of winia's own instead of the motion scheme's
-//!   `DefaultEffects` spring: that spec's numbers are not in the extracted sources (`MotionScheme
-//!   KeyTokens.kt` lists the keys only), so no value is invented.
+//!
+//! The morph used to run on a 180 ms tween of winia's own, because the motion token's numbers were
+//! not in the extracted sources — `MotionSchemeKeyTokens.kt` lists the keys only. They ARE in
+//! `tokens/ExpressiveMotionTokens.kt` (`SpringDefaultEffectsDamping = 1.0`,
+//! `SpringDefaultEffectsStiffness = 1600.0`), and the theme's `default_effects` already holds
+//! exactly that in BOTH schemes, so the morph now runs on upstream's own
+//! `MotionSchemeKeyTokens.DefaultEffects` (`SplitButton.kt:695`, `:775`, `:887`).
 
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
@@ -940,11 +944,13 @@ pub(crate) fn optical_shift_of(radii: (f32, f32, f32, f32), rtl: bool, gap_paddi
 /// (`MotionSchemeKeyTokens.DefaultEffects`), whose numbers are not in the extracted sources — so the
 /// duration and curve here are winia's, like the segmented button's check-mark motion. Recorded in
 /// `docs/split-button.md`.
+/// The spec every corner morph runs on: `MotionSchemeKeyTokens.DefaultEffects`
+/// (`SplitButton.kt:695`, `:775`, `:887`, applied through `shapeByInteraction` at
+/// `:1316-1334`) — damping 1.0, stiffness 1600, i.e. critically damped, so the corners settle
+/// without overshoot. This was a 180 ms `EaseOutCubic` tween of winia's own until the token's
+/// numbers turned up in `tokens/ExpressiveMotionTokens.kt`.
 fn shape_morph_spec() -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
-        std::time::Duration::from_millis(180),
-        crate::animation::interpolator::EaseOutCubic::new(),
-    ))
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
 
 #[cfg(test)]
@@ -1954,4 +1960,24 @@ mod tests {
         );
     }
 
+    /// Every corner morph runs on `MotionSchemeKeyTokens.DefaultEffects` (`SplitButton.kt:695`,
+    /// `:775`, `:887`, applied through `shapeByInteraction` at `:1316-1334`) — damping 1.0, so
+    /// the corners settle without overshoot. This used to be a 180 ms `EaseOutCubic` tween of
+    /// winia's own, kept only because the token's numbers were missing from the extracted sources;
+    /// they are in `tokens/ExpressiveMotionTokens.kt`.
+    #[test]
+    fn the_shape_morph_runs_on_default_effects() {
+        match shape_morph_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+                assert_eq!(
+                    (spec.damping_ratio, spec.stiffness),
+                    (1.0, 1600.0),
+                    "DefaultEffects is damping 1.0 / stiffness 1600 \
+                     (tokens/ExpressiveMotionTokens.kt)"
+                );
+            }
+            other => panic!("the shape morph must be a spring, got {other:?}"),
+        }
+    }
 }

@@ -136,6 +136,40 @@ impl IconButtonSize {
             IconButtonSize::Large | IconButtonSize::XLarge => 16.0,
         }
     }
+
+    /// `SelectedContainerShapeRound` / `SelectedContainerShapeSquare` — the shape a TOGGLE's
+    /// container takes while CHECKED.
+    ///
+    /// This is the M3 Expressive swap and it INVERTS the family. The tokens say so directly: every
+    /// size has `ContainerShapeRound = CornerFull` and `SelectedContainerShapeRound` = this size's
+    /// rounded rectangle (CornerMedium 12 for XS/S, CornerLarge 16 for M, CornerExtraLarge 28 for
+    /// L/XL), while `ContainerShapeSquare` is that same rectangle and `SelectedContainerShapeSquare`
+    /// is `CornerFull`. So a round toggle rests as a circle and becomes a rounded rectangle when
+    /// selected, and a square one does the opposite.
+    pub fn selected_container_shape(self, family: IconButtonShape) -> Shape {
+        match family {
+            IconButtonShape::Round => match self {
+                IconButtonSize::XSmall | IconButtonSize::Small => Shape::rounded(12.0),
+                IconButtonSize::Medium => Shape::rounded(16.0),
+                IconButtonSize::Large | IconButtonSize::XLarge => Shape::rounded(28.0),
+            },
+            IconButtonShape::Square => Shape::Circle,
+        }
+    }
+
+    /// The corner radius `selected_container_shape` paints, as a number — with `CornerFull`
+    /// expressed through `round`, half the container's shorter side, exactly as
+    /// `container_radius` does.
+    pub fn selected_container_radius(self, family: IconButtonShape, round: f32) -> f32 {
+        match family {
+            IconButtonShape::Round => match self {
+                IconButtonSize::XSmall | IconButtonSize::Small => 12.0,
+                IconButtonSize::Medium => 16.0,
+                IconButtonSize::Large | IconButtonSize::XLarge => 28.0,
+            },
+            IconButtonShape::Square => round,
+        }
+    }
 }
 
 /// Which of a size's two container shapes to use — `ContainerShapeRound` or `ContainerShapeSquare`.
@@ -472,11 +506,14 @@ impl IconButton {
                 // The paint is inset back to the token container (see `inset` below), so CornerFull is
                 // half of that — not half the 48 dp touch target the node is measured at.
                 let round = width.min(height) / 2.0;
+                // The spec is `MotionSchemeKeyTokens.DefaultEffects`, NOT a spatial spring:
+                // upstream's `shapeForInteraction` says the choice is intentional "to prevent any
+                // bounce in this component" (`material3/IconButton.kt:1558-1568`, and the same note
+                // at `:1576-1586` for the toggle). A spatial spring overshoots by design — at the
+                // expressive scheme's `fast_spatial` (damping 0.6) visibly.
                 let morph = ctx.animate_float_as_state(
                     if interaction.state(self.enabled).pressed { 1.0 } else { 0.0 },
-                    crate::animation::AnimationSpec::Spring(
-                        crate::animation::SpringSpec::spatial_fast(),
-                    ),
+                    shape_morph_spec(),
                 );
                 let rest = self.size_variant.container_radius(self.shape_family, round);
                 let pressed = self.size_variant.pressed_container_radius();
@@ -567,6 +604,18 @@ impl IconButton {
     pub fn get_size(&self) -> IconButtonSize {
         self.size_variant
     }
+}
+
+/// The spec a container's SHAPE morph runs on: `MotionSchemeKeyTokens.DefaultEffects`.
+///
+/// Upstream picks it deliberately rather than a spatial spring — "TODO Load the motionScheme tokens
+/// from the component tokens file / MotionSchemeKeyTokens.DefaultEffects is intentional here to
+/// prevent any bounce in this component" (`material3/IconButton.kt:1558-1568` for `IconButton`,
+/// the same note at `:1576-1586` for `IconToggleButton`). A spatial spring overshoots by design,
+/// and at the expressive scheme's `fast_spatial` (damping 0.6, stiffness 800) that overshoot is
+/// large. `IconToggleButton` shares this function because upstream uses the same token for both.
+pub(crate) fn shape_morph_spec() -> crate::animation::AnimationSpec {
+    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default())
 }
 
 #[cfg(test)]
@@ -980,6 +1029,55 @@ mod tests {
                     "禁用 IconButton 不应有波纹/可聚焦元素: {el:?}"
                 );
             }
+        }
+    }
+
+    /// The `SelectedContainerShape*` table, size by size. Every size has
+    /// `ContainerShapeRound = CornerFull` and a rounded `SelectedContainerShapeRound` —
+    /// CornerMedium (12) for XS/S, CornerLarge (16) for M, CornerExtraLarge (28) for L/XL — while
+    /// the SQUARE pair is the reverse: `ContainerShapeSquare` is that rectangle and
+    /// `SelectedContainerShapeSquare` is `CornerFull`. A toggle therefore INVERTS its family when
+    /// it becomes checked.
+    #[test]
+    fn the_selected_container_shapes_are_the_tokens() {
+        for (size, selected_round) in [
+            (IconButtonSize::XSmall, 12.0),
+            (IconButtonSize::Small, 12.0),
+            (IconButtonSize::Medium, 16.0),
+            (IconButtonSize::Large, 28.0),
+            (IconButtonSize::XLarge, 28.0),
+        ] {
+            assert_eq!(
+                size.selected_container_radius(IconButtonShape::Round, 99.0),
+                selected_round,
+                "{size:?}'s SelectedContainerShapeRound"
+            );
+            assert_eq!(
+                size.selected_container_radius(IconButtonShape::Square, 99.0),
+                99.0,
+                "{size:?}'s SelectedContainerShapeSquare is CornerFull, i.e. the round radius"
+            );
+        }
+    }
+
+    /// The shape morph runs on `MotionSchemeKeyTokens.DefaultEffects`, which upstream comments is
+    /// "intentional here to prevent any bounce in this component" (`IconButton.kt:1558-1568`). A
+    /// spatial spring overshoots by design, and at the expressive scheme's `fast_spatial`
+    /// (damping 0.6, stiffness 800) that overshoot is large — this test is what stops the morph
+    /// drifting back onto one.
+    #[test]
+    fn the_shape_morph_runs_on_default_effects() {
+        match shape_morph_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec, crate::animation::SpringSpec::effects_default());
+                assert_eq!(
+                    (spec.damping_ratio, spec.stiffness),
+                    (1.0, 1600.0),
+                    "DefaultEffects is damping 1.0 / stiffness 1600 \
+                     (tokens/ExpressiveMotionTokens.kt), so it cannot overshoot"
+                );
+            }
+            other => panic!("the shape morph must be a spring, got {other:?}"),
         }
     }
 }

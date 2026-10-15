@@ -149,6 +149,28 @@ Tracks material3's `IconToggleButton` family (`winia/src/components/icon_toggle_
 - The content colour propagates exactly as IconButton's does, checked state included.
 - Differences: the disabled container is OnSurface at 10%, the disabled content
   OnSurface at 38%.
+- **A toggle morphs between THREE shapes, and the third one INVERTS the family.**
+  Upstream's `IconToggleButtonShapes` is `(shape, pressedShape, checkedShape)` and
+  `shapeByInteraction` picks pressed > checked > resting
+  (`material3/IconButton.kt:1622-1638`). The default trio is
+
+  | | token | value |
+  | --- | --- | --- |
+  | resting | `ContainerShapeRound` | `CornerFull` (circle) |
+  | pressed | `PressedContainerShape` | `CornerSmall` 8 (XS/S) / `CornerMedium` 12 (M) / `CornerLarge` 16 (L/XL) |
+  | checked | `SelectedContainerShapeRound` | `CornerMedium` 12 (XS/S) / `CornerLarge` 16 (M) / `CornerExtraLarge` 28 (L/XL) |
+
+  So a default toggle rests as a circle, flattens while pressed, and becomes a rounded
+  rectangle while CHECKED — and for the square family (`ContainerShapeSquare`) the
+  checked token is `CornerFull` instead, i.e. it becomes a circle. The family is
+  inverted on selection, which is the M3 Expressive behaviour.
+  `IconButtonSize::selected_container_shape` / `selected_container_radius` are those
+  tokens. Pinning an explicit `.shape()` skips the morph entirely (upstream's
+  `isStatic` early-out).
+- The morph runs on **`MotionSchemeKeyTokens.DefaultEffects`**, not a spatial spring:
+  upstream comments the choice as intentional "to prevent any bounce in this component"
+  (`IconButton.kt:1558-1568` for `IconButton`, the same note at `:1576-1586` for the
+  toggle). `icon_button::shape_morph_spec()` is that spring, shared by both components.
 - The **container and content colours fade** when `checked` changes
   (`SpringSpec::effects_default`, M3's `DefaultEffects`); enabled/disabled snaps
   instead, per Compose's rule that there is no animation between those two states.

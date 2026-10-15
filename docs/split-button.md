@@ -72,8 +72,9 @@ Both the morph and the offset are driven by the app's animation frames, but they
 routes, and the route decides whether the value is read once or every frame:
 
 - The SHAPE is rebuilt in composition from the animated radius, so the ordinary recompose each tick
-  brings is enough. Measured with the morph stretched to 2000 ms (a pixel read costs about 120 ms, more
-  than the real 180 ms morph): the trailing half's painted top-row insets read `(1, 12)` at rest, `(1, 3)`
+  brings is enough. Measured with the morph stretched to 2000 ms (a pixel read costs about 120 ms — more
+  than the morph took then, a 180 ms tween, and more than the `DefaultEffects` spring that replaced it):
+  the trailing half's painted top-row insets read `(1, 12)` at rest, `(1, 3)`
   on the frame after the tap, then `(3, 3)` as it settles — the intermediate values are visible, so the
   shape travels toward the checked one instead of snapping to it.
 - The OFFSET is a LAYOUT input, and an animated layout value has to be handed over as
@@ -107,9 +108,13 @@ matched on `Shape` exhaustively and now handle the new variant.
 - **Hover and focus do not morph the shape.** The spec page lists hovered/focused/pressed as
   shape-changing states and the tokens carry `InnerHoveredCornerCornerSize`, but material3's
   `shapeByInteraction` reads `pressed` and `checked` only. winia follows the code, as elsewhere.
-- **The morph's timing is ours.** material3 animates it with the motion scheme's `DefaultEffects` spring;
-  `MotionSchemeKeyTokens.kt` in the extraction lists the key without a value, so no number is invented —
-  winia uses a 180 ms tween (the same house value the button's elevation animation uses).
+- ~~**The morph's timing is ours.**~~ **Closed.** material3 animates the morph with the motion scheme's
+  `DefaultEffects` spring (`SplitButton.kt:695`, `:775`, `:887`, applied through `shapeByInteraction` at
+  `:1316-1334`). winia used a 180 ms tween only because `MotionSchemeKeyTokens.kt` lists the key without a
+  value — the numbers are in `tokens/ExpressiveMotionTokens.kt` (`SpringDefaultEffectsDamping = 1.0`,
+  `SpringDefaultEffectsStiffness = 1600.0`) and the theme's `default_effects` already holds exactly that in
+  both schemes, so `shape_morph_spec()` now returns that spring. `the_shape_morph_runs_on_default_effects`
+  pins it.
 - **No minimum interactive size.** material3 wraps the layout in `Modifier.minimumInteractiveComponentSize()`
   and provides `0.dp` for the two buttons, because the buttons' own minimum would double up. winia has no
   touch-target concept, so nothing is implemented and nothing is faked.
@@ -215,5 +220,6 @@ a live UI test that reads the trailing icon's offset out of the debug tree after
 further input. Its numbers are the measurement quoted above, and turning the layout value back into a
 static number makes it fail at `-2 dp` again — the same test, so the fix is what it measures. In that
 same round the morph's own frames were measured with the shape's duration stretched to 2000 ms, because a
-single painted-pixel read costs about 120 ms and the real morph is 180 ms: the insets travel through
+single painted-pixel read costs about 120 ms and the morph was 180 ms then (`DefaultEffects` now): the
+insets travel through
 intermediate values, which a snap could not produce.
