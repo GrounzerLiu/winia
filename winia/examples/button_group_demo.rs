@@ -58,7 +58,15 @@ fn item(
             .interaction_source(source)
             .on_click(on_click)
             .build(ctx, |ctx| {
-                Text::new(label).build(ctx);
+                // ONE line, never wrapped — upstream's item does the same
+                // (`ButtonGroup.kt:1118-1124`: `maxLines = 1, softWrap = false`). A wrapped label
+                // makes the item taller than the 40 dp the group lays out, and while an item is
+                // pressed its neighbours narrow, so a wrapping label would reflow mid-press.
+                // `Button` does not force this, in material3 or here — it is the ITEM's rule.
+                Text::new(label)
+                    .max_lines(1)
+                    .soft_wrap(false)
+                    .build(ctx);
             });
     }
 }

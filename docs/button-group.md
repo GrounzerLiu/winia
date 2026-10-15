@@ -126,6 +126,24 @@ has the same one-pass lag in `ButtonGroupOverflowState`.
 `menuContent`, and deliberately `Fn` rather than `FnOnce` because a menu is an overlay that
 recomposes every frame it is up.
 
+## The label is single-line, and that is the ITEM's rule
+
+An item's label must not wrap. Upstream's `ClickableButtonGroupItem` says so explicitly
+(`ButtonGroup.kt:1118-1124`):
+
+```kotlin
+Text(text = label, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
+```
+
+`Button` does NOT force it — not in material3 and not here. A wrapped label makes the item
+taller than the 40 dp the group lays out, and because a pressed item narrows its neighbours, a
+wrapping label would reflow in the middle of a press. A caller composing its own item sets
+`max_lines(1)` and `soft_wrap(false)` on its label; the demo's items do.
+
+winia has no `TextOverflow::Visible` (only `Clip` and `Ellipsis`), so a label wider than a
+narrow item is clipped rather than drawn past the edge as material3 does. Recorded as a gap
+rather than papered over.
+
 ## What is still open
 
 - **The item constructors.** Upstream's scope offers `clickableItem` / `toggleableItem` /

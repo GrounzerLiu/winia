@@ -381,12 +381,22 @@ impl ButtonGroup {
         // source) but the progress this reads goes back to 0 and the item never grows. Upstream
         // remembers its per-item source for the same reason
         // (`ButtonGroup.kt:1085`: `remember { MutableInteractionSource() }`).
-        let mut sources: Vec<MutableInteractionSource> = ctx.remember(Vec::new).get();
+        // A BACKCHANNEL, not `remember`: `remember(..).get()` hands back a CLONE, so pushing into
+        // it grows nothing that survives the build — every recomposition then pushed a fresh batch
+        // and the button got a different source each time, which resets its press state on the spot
+        // (no state layer, no ripple) and leaves the group reading `pressed = false` for ever.
+        // The backchannel is the write-only handle that persists the grown list without asking for
+        // a recomposition.
+        let store: Backchannel<Vec<MutableInteractionSource>> =
+            ctx.remember_backchannel(Vec::new);
         let wanted = self.children.len();
-        while sources.len() < wanted {
-            sources.push(MutableInteractionSource::new());
+        let mut sources = store.peek();
+        if sources.len() < wanted {
+            while sources.len() < wanted {
+                sources.push(MutableInteractionSource::new());
+            }
+            store.set(sources.clone());
         }
-        sources.truncate(wanted);
         // An item that brought its own source keeps it.
         for (index, child) in self.children.iter().enumerate() {
             if let Some(own) = &child.press {
@@ -1093,6 +1103,53 @@ mod tests {
         for (i, &child) in children.iter().enumerate() {
             assert_eq!(nodes[child].measured_size.width, 100.0, "item {i} is still laid out");
         }
+    }
+
+    /// THE REGRESSION GUARD for the source identity: the source an item is handed must be the
+    /// SAME one after a recomposition.
+    ///
+    /// It was not. The list of sources was grown from `remember(..).get()`, which hands back a
+    /// clone — so pushing into it stored nothing, and every build created a fresh batch. The
+    /// button got a different source each recomposition, which reset its press state on the spot:
+    /// no state layer, no ripple, and a group that read `pressed = false` for ever. Pressing the
+    /// source from the first build must be visible through the last one.
+    #[test]
+    fn the_source_an_item_gets_is_the_same_after_a_recomposition() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<MutableInteractionSource>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut composer = crate::runtime::composer::Composer::new();
+        // The spacing is alternated so the group's own slot is DIRTY on the second pass and it
+        // re-enters: a clean slot skips its closure, and the item would never be handed anything
+        // twice to compare.
+        let mut build = |composer: &mut crate::runtime::composer::Composer, spacing: f32| {
+            let seen = seen.clone();
+            composer.compose(move |ctx| {
+                ButtonGroup::new()
+                    .spacing(spacing)
+                    .item(move |ctx, source| {
+                        seen.lock().unwrap().push(source);
+                        leaf(ctx, 100.0, 40.0);
+                    })
+                    .item(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        build(&mut composer, 12.0);
+        build(&mut composer, 13.0);
+
+        let captured = seen.lock().unwrap().clone();
+        assert!(
+            captured.len() >= 2,
+            "the item composed twice, so it was handed a source twice — got {}",
+            captured.len()
+        );
+        captured[0].emit_press();
+        assert!(
+            captured[captured.len() - 1].state(true).pressed,
+            "the later build's source must be the same one, not a fresh one"
+        );
     }
 
     /// The spacing each form defaults to, and the override.
