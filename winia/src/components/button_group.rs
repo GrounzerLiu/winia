@@ -32,6 +32,7 @@ use crate::graphics::Shape;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::layout::{Constraints, LayoutDirection};
 use crate::interaction::MutableInteractionSource;
+use crate::runtime::state::Backchannel;
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::unit::{Offset, Size};
@@ -153,6 +154,41 @@ impl ButtonGroupDefaults {
     }
 }
 
+/// material3's `ButtonGroupMenuState`: what the overflow indicator opens and dismisses.
+#[derive(Clone)]
+pub struct ButtonGroupMenuState {
+    is_showing: crate::runtime::state::State<bool>,
+}
+
+impl ButtonGroupMenuState {
+    pub fn new() -> Self {
+        Self { is_showing: crate::runtime::state::State::new(false) }
+    }
+
+    pub fn is_showing(&self) -> bool {
+        self.is_showing.get()
+    }
+
+    pub fn show(&self) {
+        self.is_showing.set(true);
+    }
+
+    pub fn dismiss(&self) {
+        self.is_showing.set(false);
+    }
+
+    /// The handle `DropdownMenu::new` wants.
+    pub fn expanded_state(&self) -> crate::runtime::state::State<bool> {
+        self.is_showing.clone()
+    }
+}
+
+impl Default for ButtonGroupMenuState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One item of a group. Upstream builds the same thing from `customItem` plus `Modifier.weight`
 /// and `Modifier.animateWidth(interactionSource)` inside the scope; winia has no parent data for a
 /// modifier to carry any of that, so an item is assembled before it is added.
@@ -161,6 +197,13 @@ pub struct ButtonGroupItem {
     press: Option<MutableInteractionSource>,
     compression_limit: f32,
     item: Box<dyn FnOnce(&mut ComposeCtx)>,
+    /// The row this item shows in the overflow menu when it does not fit. Upstream's
+    /// `customItem` takes a `menuContent` alongside the button content for the same reason: only
+    /// the caller knows what the item should look like as a menu row.
+    ///
+    /// `Fn`, not `FnOnce`: the menu is an overlay and composes its content again on every frame it
+    /// is up, exactly as `ModalWideNavigationRail`'s content does.
+    menu: Option<Box<dyn Fn(&mut ComposeCtx, ButtonGroupMenuState)>>,
 }
 
 impl ButtonGroupItem {
@@ -170,7 +213,18 @@ impl ButtonGroupItem {
             press: None,
             compression_limit: BUTTON_GROUP_COMPRESSION_LIMIT,
             item: Box::new(item),
+            menu: None,
         }
+    }
+
+    /// What this item looks like in the overflow menu. Without one it simply does not appear in
+    /// the menu, which is the honest thing: winia's items carry no label of their own.
+    pub fn menu(
+        mut self,
+        menu: impl Fn(&mut ComposeCtx, ButtonGroupMenuState) + 'static,
+    ) -> Self {
+        self.menu = Some(Box::new(menu));
+        self
     }
 
     /// Take a proportional share of the space left over — `Modifier.weight`.
@@ -204,12 +258,22 @@ pub struct ButtonGroup {
     connected: bool,
     spacing: Option<f32>,
     children: Vec<ButtonGroupItem>,
+    /// The indicator that opens the overflow menu — upstream's required `overflowIndicator` slot.
+    /// Composed as the group's LAST child, so the policy can measure it before deciding how many
+    /// items fit; without one the row never overflows.
+    overflow: Option<Box<dyn FnOnce(&mut ComposeCtx, ButtonGroupMenuState)>>,
     modifier: Modifier,
 }
 
 impl ButtonGroup {
     pub fn new() -> Self {
-        Self { connected: false, spacing: None, children: Vec::new(), modifier: Modifier::new() }
+        Self {
+            connected: false,
+            spacing: None,
+            children: Vec::new(),
+            overflow: None,
+            modifier: Modifier::new(),
+        }
     }
 
     /// The connected form: `ConnectedButtonGroupSmallTokens.BetweenSpace` (2 dp) between items, and
@@ -265,6 +329,16 @@ impl ButtonGroup {
         self
     }
 
+    /// The overflow indicator, laid out after the items that fit. Upstream requires this slot;
+    /// winia makes it optional, and a group without one simply never overflows.
+    pub fn overflow_indicator(
+        mut self,
+        indicator: impl FnOnce(&mut ComposeCtx, ButtonGroupMenuState) + 'static,
+    ) -> Self {
+        self.overflow = Some(Box::new(indicator));
+        self
+    }
+
     pub fn modifier(mut self, modifier: Modifier) -> Self {
         self.modifier = self.modifier.then(modifier);
         self
@@ -294,14 +368,61 @@ impl ButtonGroup {
                 crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
             ));
         }
-        let policy = ButtonGroupPolicy { spacing, height, weights, progress, compression };
+        // Which items fit is decided during MEASURE, so the count comes back through a
+        // backchannel — a write-only handle, exactly what the measure/layout write-back path is
+        // for. The menu is composed from it on the next composition, which is also when the
+        // indicator's click has just shown it.
+        let visible: Backchannel<usize> = ctx.remember_backchannel(|| usize::MAX);
+        let menu_state: ButtonGroupMenuState = ctx.remember(ButtonGroupMenuState::new).get();
+        let item_count = self.children.len();
+        let has_indicator = self.overflow.is_some();
+        let policy = ButtonGroupPolicy {
+            spacing,
+            height,
+            weights,
+            progress,
+            compression,
+            item_count,
+            has_indicator,
+            visible: visible.clone(),
+        };
         let modifier = self.modifier.height(height);
         let mut children = self.children;
+        // The menu rows are taken out before the items are composed: an item's button content is
+        // `FnOnce`, so it cannot be composed twice.
+        let mut menus: Vec<_> = children.iter_mut().filter_map(|c| c.menu.take()).collect();
+        let overflow = self.overflow;
         match ctx.start_restartable_group(key, modifier, policy) {
             GroupStatus::Skip => {}
             GroupStatus::Enter => {
                 for child in children.drain(..) {
                     (child.item)(ctx);
+                }
+                if let Some(indicator) = overflow {
+                    indicator(ctx, menu_state.clone());
+                }
+                if has_indicator {
+                    let shown = visible.peek();
+                    let hidden: Vec<_> = menus.drain(shown.min(menus.len())..).collect();
+                    if !hidden.is_empty() {
+                        let state_for_dismiss = menu_state.clone();
+                        let state_for_rows = menu_state.clone();
+                        // The anchor is an EMPTY node the policy places where the indicator sits,
+                        // so the menu drops from the indicator rather than the row's start —
+                        // `DropdownMenu::build` anchors to whatever its anchor closure composed
+                        // and its group is just another child of this policy.
+                        crate::components::dropdown_menu::DropdownMenu::new(menu_state.expanded_state())
+                            .on_dismiss_request(move || state_for_dismiss.dismiss())
+                            .build(
+                                ctx,
+                                |_ctx| {},
+                                move |ctx| {
+                                    for row in &hidden {
+                                        row(ctx, state_for_rows.clone());
+                                    }
+                                },
+                            );
+                    }
                 }
             }
         }
@@ -334,6 +455,11 @@ struct ButtonGroupPolicy {
     progress: Vec<crate::runtime::state::State<f32>>,
     /// One per child: how far it will let a pressed neighbour compress it.
     compression: Vec<f32>,
+    /// How many children are ITEMS. The indicator, when there is one, is the last child.
+    item_count: usize,
+    has_indicator: bool,
+    /// Written during measure: how many items fit. `usize::MAX` until the first measurement.
+    visible: Backchannel<usize>,
 }
 
 impl MeasurePolicy for ButtonGroupPolicy {
@@ -346,16 +472,38 @@ impl MeasurePolicy for ButtonGroupPolicy {
     ) -> (Size, Vec<Placement>) {
         let max_w = constraints.max_width;
         let n = children.len();
-        let gaps = if n > 1 { self.spacing * (n as f32 - 1.0) } else { 0.0 };
+        // The items are the first `item_count` children; an indicator, when present, is the last.
+        let items = self.item_count.min(n);
+        let indicator_index = if self.has_indicator && n > items { Some(items) } else { None };
         let weight_of = |i: usize| self.weights.get(i).copied().unwrap_or(0.0);
-        let total_weight: f32 = (0..n).map(weight_of).sum();
+
+        // The indicator is measured FIRST, because it is what leaves room for the items —
+        // upstream measures the overflow content before fitting a single item
+        // (`ButtonGroup.kt:695-700`).
+        let mut indicator = Size::new(0.0, 0.0);
+        if let Some(idx) = indicator_index {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                children[idx],
+                Constraints::new(0.0, max_w, 0.0, constraints.max_height),
+            );
+            indicator = size;
+        }
+        let budget = if indicator_index.is_some() {
+            (max_w - indicator.width - self.spacing).max(0.0)
+        } else {
+            max_w
+        };
+        let gaps = if items > 1 { self.spacing * (items as f32 - 1.0) } else { 0.0 };
+        let total_weight: f32 = (0..items).map(weight_of).sum();
 
         // Pass 1: the unweighted items at their natural width. That is what the leftover is
         // measured against, and it is the width they are finally laid out at too (upstream probes
         // with `maxIntrinsicWidth` as well).
-        let mut widths = vec![0.0f32; n];
+        let mut widths = vec![0.0f32; items];
         let mut fixed = 0.0f32;
-        for i in 0..n {
+        for i in 0..items {
             if weight_of(i) > 0.0 {
                 continue;
             }
@@ -363,7 +511,7 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 nodes,
                 policies,
                 children[i],
-                Constraints::new(0.0, max_w, 0.0, constraints.max_height),
+                Constraints::new(0.0, budget, 0.0, constraints.max_height),
             );
             widths[i] = size.width;
             fixed += size.width;
@@ -371,9 +519,9 @@ impl MeasurePolicy for ButtonGroupPolicy {
 
         // Pass 2: the weighted items share what is left, proportionally.
         if total_weight > 0.0 {
-            let remaining = (max_w - fixed - gaps).max(0.0);
+            let remaining = (budget - fixed - gaps).max(0.0);
             let unit = remaining / total_weight;
-            for i in 0..n {
+            for i in 0..items {
                 let w = weight_of(i);
                 if w > 0.0 {
                     widths[i] = unit * w;
@@ -381,19 +529,34 @@ impl MeasurePolicy for ButtonGroupPolicy {
             }
         }
 
+        // How many of them the budget actually holds — upstream's greedy loop
+        // (`ButtonGroup.kt:700-711`). It is decided in MEASURE, so it goes back through the
+        // backchannel for the menu to read on the next composition.
+        let mut remaining = budget;
+        let mut visible = 0usize;
+        for i in 0..items {
+            if widths[i] <= remaining {
+                remaining -= widths[i] + self.spacing;
+                visible += 1;
+            } else {
+                break;
+            }
+        }
+        self.visible.set(if indicator_index.is_some() { visible } else { items });
+
         // Pass 3: the press growth — upstream's loop at `ButtonGroup.kt:729-770`. A pressed item
         // grows by `expandedRatio * its own width`, halved for a middle item, and takes that much
         // OFF its neighbour(s); the neighbour's `compressionLimit` caps how much it gives up, and
         // its own width caps it again. The deltas are not rounded here — upstream rounds to
         // integer pixels because it lays out in px, winia measures in dp.
-        if n > 1 {
-            for index in 0..n {
+        if visible > 1 {
+            for index in 0..visible {
                 let value = self.progress.get(index).map(|p| p.get()).unwrap_or(0.0);
                 if value <= 0.0 {
                     continue;
                 }
                 let limit = |i: usize| self.compression.get(i).copied().unwrap_or(0.0);
-                let target_growth = if index > 0 && index + 1 < n {
+                let target_growth = if index > 0 && index + 1 < visible {
                     value
                         * (BUTTON_GROUP_EXPANDED_RATIO * widths[index] / 2.0)
                             .min(limit(index - 1))
@@ -403,7 +566,7 @@ impl MeasurePolicy for ButtonGroupPolicy {
                 } else {
                     value * (BUTTON_GROUP_EXPANDED_RATIO * widths[index]).min(limit(index - 1))
                 };
-                let actual_growth = if index > 0 && index + 1 < n {
+                let actual_growth = if index > 0 && index + 1 < visible {
                     let left = target_growth.min(widths[index - 1]);
                     let right = target_growth.min(widths[index + 1]);
                     widths[index - 1] -= left;
@@ -422,11 +585,20 @@ impl MeasurePolicy for ButtonGroupPolicy {
             }
         }
 
-        // Pass 4: settle at those widths and place, left to right.
+        // Pass 4: settle at those widths and place, left to right. The items that did NOT fit are
+        // measured at nothing and placed at the origin — they are in the menu instead, and the
+        // policy still owes `place` one entry per child.
         let mut placements = Vec::with_capacity(n);
         let mut x = 0.0f32;
         let mut used_height = self.height;
-        for i in 0..n {
+        for i in 0..items {
+            if i >= visible {
+                placements.push(Placement {
+                    size: Size::new(0.0, 0.0),
+                    position: Offset::new(0.0, 0.0),
+                });
+                continue;
+            }
             let (size, _) = measure_node(
                 nodes,
                 policies,
@@ -436,9 +608,32 @@ impl MeasurePolicy for ButtonGroupPolicy {
             placements.push(Placement { size, position: Offset::new(x, 0.0) });
             used_height = used_height.max(size.height);
             x += size.width;
-            if i + 1 < n {
+            // Between items only — a trailing gap would widen the row by one spacing.
+            if i + 1 < visible {
                 x += self.spacing;
             }
+        }
+        // The indicator follows the last item that fit, one spacing after it.
+        if indicator_index.is_some() && visible > 0 {
+            x += self.spacing;
+        }
+        let indicator_x = x;
+        if indicator_index.is_some() {
+            placements.push(Placement {
+                size: indicator,
+                position: Offset::new(x, 0.0),
+            });
+            used_height = used_height.max(indicator.height);
+            x += indicator.width;
+        }
+        // Anything past the items and the indicator is the overflow menu's ANCHOR (see `build`).
+        // It paints nothing and takes no room; it only has to sit where the indicator does so the
+        // menu drops from it.
+        while placements.len() < n {
+            placements.push(Placement {
+                size: Size::new(0.0, 0.0),
+                position: Offset::new(indicator_x, 0.0),
+            });
         }
         (Size::new(x.min(max_w), used_height), placements)
     }
@@ -696,6 +891,67 @@ mod tests {
             (left + middle + right - 300.0).abs() < 0.5,
             "the row's total width must not move: it is a redistribution"
         );
+    }
+
+    /// The overflow: the indicator is measured first and the items fill what is left of the row,
+    /// greedily, from the start — upstream's loop at `ButtonGroup.kt:695-711`. Three 100 dp items
+    /// and a 40 dp indicator in a 340 dp row leave `340 - 40 - 12 = 288` for the items, which
+    /// holds two of them (100, then 100 out of the 176 left) and not the third.
+    #[test]
+    fn the_overflow_fits_as_many_items_as_the_indicator_leaves_room_for() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            ButtonGroup::new()
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 340.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        assert_eq!(children.len(), 4, "three items and the indicator");
+
+        assert_eq!(nodes[children[0]].position.x, 0.0);
+        assert_eq!(nodes[children[0]].measured_size.width, 100.0);
+        assert_eq!(nodes[children[1]].position.x, 112.0, "the second item follows the first + 12");
+        assert_eq!(
+            nodes[children[2]].measured_size.width, 0.0,
+            "the third one did not fit, so it takes no room — it is in the menu"
+        );
+        assert_eq!(
+            nodes[children[3]].position.x, 224.0,
+            "and the indicator sits right after the last item that did fit"
+        );
+        assert_eq!(nodes[children[3]].measured_size.width, 40.0);
+        assert_eq!(
+            nodes[root].measured_size.width, 264.0,
+            "the row is the two items, their gaps and the indicator"
+        );
+    }
+
+    /// Without an indicator the row never overflows: all three items are laid out even though they
+    /// are wider than the box, which is what a plain Row does too.
+    #[test]
+    fn without_an_indicator_nothing_overflows() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            ButtonGroup::new()
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .item(|ctx| leaf(ctx, 100.0, 40.0))
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 340.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let children = nodes[root].children.clone();
+        assert_eq!(children.len(), 3);
+        for (i, &child) in children.iter().enumerate() {
+            assert_eq!(nodes[child].measured_size.width, 100.0, "item {i} is still laid out");
+        }
     }
 
     /// The spacing each form defaults to, and the override.

@@ -86,15 +86,42 @@ it, which upstream defaults to the item's END content padding
 The progress is a `State<f32>` read during MEASURE, so an animation frame re-measures without
 recomposing — the same route the navigation rail's width animation takes.
 
+## The overflow
+
+`ButtonGroup::overflow_indicator(|ctx, menu_state| ...)` is upstream's required
+`overflowIndicator` slot, except winia makes it optional: a group without one simply never
+overflows.
+
+The layout reproduces upstream's (`ButtonGroup.kt:695-711`):
+
+1. The indicator is measured FIRST, because it is what leaves room for the items.
+2. The items fill what is left greedily, from the start, until one does not fit.
+3. The ones that did not fit are measured at nothing and placed at the origin — they are in the
+   menu instead — and the indicator is placed one spacing after the last item that did fit.
+
+Upstream expresses the two content sets as a `MultiContentMeasurePolicy`. winia has no
+multi-content layout, so the indicator is the group's LAST child and the policy knows how many
+children are items. The menu's own anchor is a further child the policy places where the indicator
+sits, so the menu drops from the indicator rather than from the start of the row.
+
+How many items fit is decided in MEASURE, so the count comes back through a `Backchannel` — the
+write-only handle the measure/layout write-back path exists for — and the menu is composed from
+it on the next composition, which is also when the indicator's click has just shown it. Upstream
+has the same one-pass lag in `ButtonGroupOverflowState`.
+
+`ButtonGroupMenuState` is `show` / `dismiss` / `is_showing` / `expanded_state`, and
+`ButtonGroupItem::menu(...)` is the row an item shows when it does not fit — upstream's
+`menuContent`, and deliberately `Fn` rather than `FnOnce` because a menu is an overlay that
+recomposes every frame it is up.
+
 ## What is still open
 
-- **The overflow indicator.** Upstream takes a required `overflowIndicator` slot and lays out
-  TWO content sets — the items and the indicator — with a `ButtonGroupOverflowState` deciding
-  how many items fit; the rest move into a `DropdownMenu`. winia has no multi-content layout yet,
-  so the row never overflows.
 - **The item constructors.** Upstream's scope offers `clickableItem` / `toggleableItem` /
   `customItem`; winia takes `ButtonGroupItem`s and leaves the button to the caller, so an item is
   a `Button` / `IconToggleButton` that the caller gives the right shape.
 - **The distribution of the row's leftover space when nothing is weighted.** Upstream arranges
   through `Arrangement.Horizontal` (`Arrangement.spacedBy(12)` by default), which also decides
   what happens to space no item claims; winia lays the items out from the start edge.
+- **The menu items' styling.** Upstream's `OverflowIndicator` is a `FilledIconButton` and the menu
+  rows are material3 `DropdownMenuItem`s; winia leaves the indicator to the caller and renders
+  whatever the caller's `menu(...)` closure composes.
