@@ -103,9 +103,8 @@ So it is a circle, not a pill, and the dots are stacked vertically. The demo bui
 `more_vert` path.
 
 Upstream puts it in a `TooltipBox` reading `Strings.ButtonGroupMoreOptions` ("More options"),
-anchored above it. winia's `Tooltip` is the same thing on paper — hover-triggered, `TopCenter`,
-8 dp of offset — but it is currently BUGGY, so the demo does NOT wrap the indicator in one. The
-gap is recorded rather than filled with a broken tooltip; put it back when `Tooltip` is fixed.
+anchored above it. winia's `Tooltip` is the same thing with the same defaults — hover-triggered,
+`TopCenter`, 8 dp of offset — so the demo wraps the indicator in one.
 
 
 `ButtonGroup::overflow_indicator(|ctx, menu_state| ...)` is upstream's required

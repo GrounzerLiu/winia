@@ -208,24 +208,24 @@ fn button_group_demo(ctx: &mut ComposeCtx) {
                 // pill, and a vertical ellipsis, not a horizontal one.
                 // Upstream's default indicator is a `FilledIconButton` with `Icons.Filled.MoreVert`
                 // and a click that TOGGLES the menu (`ButtonGroup.kt:296-336`) — a circle, not a
-                // pill, and a vertical ellipsis, not a horizontal one.
-                //
-                // TODO: upstream also wraps it in a `TooltipBox` reading "More options". winia's
-                // `Tooltip` is written but buggy, so the wrapper is left off until that is fixed —
-                // a tooltip on a drop-down indicator is not worth shipping a broken one for.
+                // pill, and a vertical ellipsis, not a horizontal one. It also sits in a
+                // `TooltipBox` reading `Strings.ButtonGroupMoreOptions`, which is `Tooltip` here
+                // (hover-triggered, anchored above, 8 dp away — the same defaults).
                 .overflow_indicator(|ctx, state| {
-                    IconButton::new()
-                        .style(IconButtonStyle::Filled)
-                        .on_click(move || {
-                            if state.is_showing() {
-                                state.dismiss();
-                            } else {
-                                state.show();
-                            }
-                        })
-                        .build(ctx, |ctx| {
-                            Icon::svg_path(MORE_VERT_PATH).size(24.0).build(ctx);
-                        });
+                    Tooltip::new("More options").build(ctx, |ctx| {
+                        IconButton::new()
+                            .style(IconButtonStyle::Filled)
+                            .on_click(move || {
+                                if state.is_showing() {
+                                    state.dismiss();
+                                } else {
+                                    state.show();
+                                }
+                            })
+                            .build(ctx, |ctx| {
+                                Icon::svg_path(MORE_VERT_PATH).size(24.0).build(ctx);
+                            });
+                    });
                 })
                 .build(ctx);
             caption(
