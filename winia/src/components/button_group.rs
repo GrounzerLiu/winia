@@ -365,6 +365,17 @@ impl ButtonGroup {
         ctx.changed(&self.connected);
         let spacing = self.resolved_spacing();
         ctx.changed(&spacing);
+        // The two POLICY inputs that are not `connected`/`spacing` either. The Skip contract is a
+        // whitelist — an undeclared parameter is not compared, so a Clean slot skips past it and
+        // the new value silently never executes (`docs/state-handles.md`). The children list and
+        // the indicator are the ones a caller actually changes: a group that grows an item or
+        // gains an indicator must re-execute, and the weights ride on the children.
+        //
+        // Latent until now: winia's dirty marking reaches the scope and its DIRECT children
+        // (`composer.rs`), which saves a group that is a direct child of the scope that read the
+        // changed value. It stops saving one that sits a level below it.
+        ctx.changed(&self.children.len());
+        ctx.changed(&self.overflow.is_some());
         let height = BUTTON_GROUP_HEIGHT;
         let key = ctx.next_key();
         let weights: Vec<f32> = self.children.iter().map(|c| c.weight).collect();
