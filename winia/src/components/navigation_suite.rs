@@ -1490,14 +1490,7 @@ mod tests {
         assert!(y < 200.0, "above the rail's items, y={y}");
     }
 
-    /// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
-    /// with the default `Alignment::End` (`NavigationSuiteScaffoldLayout` `:456-470`).
-    #[test]
-    /// The action must never steal clicks from what sits beside it. It used to: the insets were PADDING,
-    /// padding grows the node, and hit testing walks node rects (`content_box()` is `measured_size`) — so
-    /// the container reached down over the bar and the part of the last item to its right went dead
-    /// (reported on the demo, `Profile`). The insets are an offset now, and this is the guard.
-    #[test]
+
     /// RTL: the action is inset from the LOGICAL end, which is the LEFT edge when the layout runs
     /// right-to-left. The alignment mirrors itself, `absolute_offset` does not, so the sign is flipped by
     /// hand — without that it was pushed 16dp off the left edge instead of inset from it.
@@ -1543,6 +1536,11 @@ mod tests {
             "16dp in from the LEFT edge under RTL, got {x}"
         );
     }
+    /// The action must never steal clicks from what sits beside it. It used to: the insets were PADDING,
+    /// padding grows the node, and hit testing walks node rects (`content_box()` is `measured_size`) — so
+    /// the container reached down over the bar and the part of the last item to its right went dead
+    /// (reported on the demo, `Profile`). The insets are an offset now, and this is the guard.
+    #[test]
     fn the_primary_action_does_not_swallow_the_item_beside_it() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(500.0, 700.0);
@@ -1578,6 +1576,9 @@ mod tests {
             "a click beside the action reaches what is there, not the action"
         );
     }
+    /// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
+    /// with the default `Alignment::End` (`NavigationSuiteScaffoldLayout` `:456-470`).
+    #[test]
     fn the_primary_action_floats_above_the_bar() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(500.0, 700.0);
@@ -1614,31 +1615,7 @@ mod tests {
         );
     }
 
-    /// `NavigationSuiteDefaults::colors()` delegates to each shape's own component default, which is what
-    /// upstream's `colors()` does — and those defaults are NOT all the same value.
-    /// The two legacy types that had NO coverage at all.
-    ///
-    /// `NavigationBar` is the short bar with the icon ABOVE the label (the only visible difference from
-    /// `ShortNavigationBarMedium`, whose icon sits to the left), and `NavigationDrawer` is a permanent
-    /// drawer sheet: a 240..360dp column at the leading edge whose rows are the drawer's own items.
-    #[test]
-    /// The RAIL layout under RTL — the half the earlier RTL bug's class had not been checked on. The Row
-    /// mirrors, so the rail docks on the RIGHT, and the primary action keeps its inset inside it.
-    ///
-    /// Measured in the demo first (921x544): LTR rail at x=0 with the action at 20; RTL rail at 825
-    /// (= 921 - 96) with the action at 845, i.e. the same 20dp.
-    #[test]
-    /// `vertical_arrangement` reaches the rail: `End` pushes the header + items to the bottom of the
-    /// rail, `Start` (the default, upstream's `Top`) leaves them at `TopSpace`. Only a rail with SLACK
-    /// can tell them apart, which is why the suite's rail fills the window's height.
-    #[test]
-    /// `NavigationSuiteScaffoldLayout` places three slots by shape, with upstream's numbers.
-    ///
-    /// A BAR layout gives the content the height the navigation leaves, pins the navigation to the bottom
-    /// and floats the action 16dp above it at the caller's alignment. A RAIL layout puts the navigation at
-    /// the start and the content beside it, and PARKS the action off-view — a vertical shape keeps it in
-    /// its own header, which is what upstream's rail branch means by never placing it.
-    #[test]
+
     /// `NavigationSuite` renders the ONE shape it is given, with no scaffold around it, through the same
     /// helpers the scaffold's shape host uses: a bar type gives the 80dp bar, a rail type the 96dp
     /// collapsed rail, and the classic type the 80dp classic rail.
@@ -1676,7 +1653,14 @@ mod tests {
         assert!((classic.0 - 80.0).abs() < 0.5, "the classic rail is 80dp wide, got {classic:?}");
     }
 
-    fn the_scaffold_layout_places_the_three_slots() {
+        /// `NavigationSuiteScaffoldLayout` places three slots by shape, with upstream's numbers.
+    ///
+    /// A BAR layout gives the content the height the navigation leaves, pins the navigation to the bottom
+    /// and floats the action 16dp above it at the caller's alignment. A RAIL layout puts the navigation at
+    /// the start and the content beside it, and PARKS the action off-view — a vertical shape keeps it in
+    /// its own header, which is what upstream's rail branch means by never placing it.
+    #[test]
+fn the_scaffold_layout_places_the_three_slots() {
         let probe = |t: NavigationSuiteType| -> Vec<(f32, f32, f32, f32)> {
             let mut composer = Composer::new();
             composer.compose(|ctx| {
@@ -1739,7 +1723,11 @@ mod tests {
         );
     }
 
-    fn the_vertical_arrangement_moves_the_rails_items() {
+        /// `vertical_arrangement` reaches the rail: `End` pushes the header + items to the bottom of the
+    /// rail, `Start` (the default, upstream's `Top`) leaves them at `TopSpace`. Only a rail with SLACK
+    /// can tell them apart, which is why the suite's rail fills the window's height.
+    #[test]
+fn the_vertical_arrangement_moves_the_rails_items() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let first_item_y = |arrangement: Arrangement| -> f32 {
@@ -1782,7 +1770,13 @@ mod tests {
         );
     }
 
-    fn the_rail_layout_docks_on_the_right_under_rtl() {
+        /// The RAIL layout under RTL — the half the earlier RTL bug's class had not been checked on. The Row
+    /// mirrors, so the rail docks on the RIGHT, and the primary action keeps its inset inside it.
+    ///
+    /// Measured in the demo first (921x544): LTR rail at x=0 with the action at 20; RTL rail at 825
+    /// (= 921 - 96) with the action at 845, i.e. the same 20dp.
+    #[test]
+fn the_rail_layout_docks_on_the_right_under_rtl() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let mut composer = Composer::new();
@@ -1836,7 +1830,13 @@ mod tests {
         );
     }
 
-    fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
+        /// The two legacy types that had NO coverage at all.
+    ///
+    /// `NavigationBar` is the short bar with the icon ABOVE the label (the only visible difference from
+    /// `ShortNavigationBarMedium`, whose icon sits to the left), and `NavigationDrawer` is a permanent
+    /// drawer sheet: a 240..360dp column at the leading edge whose rows are the drawer's own items.
+    #[test]
+fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         // (the first 24x24 icon, the first text, a 56-tall row that spans >=200, the widest 80-tall box)
