@@ -1156,7 +1156,78 @@ mod tests {
 
     /// `NavigationSuiteDefaults::colors()` delegates to each shape's own component default, which is what
     /// upstream's `colors()` does — and those defaults are NOT all the same value.
+    /// The two legacy types that had NO coverage at all.
+    ///
+    /// `NavigationBar` is the short bar with the icon ABOVE the label (the only visible difference from
+    /// `ShortNavigationBarMedium`, whose icon sits to the left), and `NavigationDrawer` is a permanent
+    /// drawer sheet: a 240..360dp column at the leading edge whose rows are the drawer's own items.
     #[test]
+    fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        // (the first 24x24 icon, the first text, a 56-tall row that spans >=200, the widest 80-tall box)
+        type Seen = (Option<(f32, f32)>, Option<(f32, f32)>, Option<(f32, f32)>, Option<f32>);
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            y: f32,
+            out: &mut Seen,
+        ) {
+            let n = &nodes[idx];
+            let (ax, ay) = (x + n.position.x, y + n.position.y);
+            let s = n.measured_size;
+            let has_text = n.modifier.elements().iter().any(|el| {
+                matches!(el, crate::modifier::ModifierElement::TextContent { .. })
+            });
+            if out.0.is_none() && s.width == 24.0 && s.height == 24.0 {
+                out.0 = Some((ax, ay));
+            }
+            if out.1.is_none() && has_text {
+                out.1 = Some((ax, ay));
+            }
+            if out.2.is_none() && s.height == 56.0 && s.width >= 200.0 {
+                out.2 = Some((ax, ay));
+            }
+            if s.height == 80.0 && s.width > 900.0 {
+                out.3 = Some(s.width);
+            }
+            for &child in &n.children {
+                walk(nodes, child, ax, ay, out);
+            }
+        }
+        let probe = |t: NavigationSuiteType| -> Seen {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| scaffold().layout_type(t).build(ctx));
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut out: Seen = (None, None, None, None);
+            walk(nodes, root, 0.0, 0.0, &mut out);
+            out
+        };
+
+        let (icon, label, _, bar_width) = probe(NavigationSuiteType::NavigationBar);
+        let icon = icon.expect("the legacy bar draws its icons");
+        let label = label.expect("and its labels");
+        assert!(
+            icon.1 < label.1,
+            "the icon is ABOVE the label (the Top position), icon y={} label y={}",
+            icon.1,
+            label.1
+        );
+        assert!(
+            bar_width.is_some_and(|w| w > 900.0),
+            "and the classic bar spans the window, got {bar_width:?}"
+        );
+
+        let (_, label, row, bar) = probe(NavigationSuiteType::NavigationDrawer);
+        let row = row.expect("the drawer renders its own item rows");
+        assert!(row.0 < 360.0, "in a leading-edge column, x={}", row.0);
+        assert!(label.is_some(), "and those rows carry labels");
+        assert!(bar.is_none(), "and there is no 80dp bar in this shape");
+    }
+
     /// The legacy types render the CLASSIC components, not the short bar / wide rail: `NavigationRail`
     /// is the 80dp classic rail and takes the primary action as its header, as upstream's own mapping
     /// does (`NavigationSuite.kt:632-658`).
@@ -1205,6 +1276,9 @@ mod tests {
         assert!(x < 80.0, "inside the rail, x={x}");
     }
 
+    /// `NavigationSuiteDefaults::colors()` delegates to each shape's own component default, which is
+    /// what upstream's `colors()` does — and those defaults are NOT all the same value.
+    #[test]
     fn the_suite_colors_default_to_each_shapes_own_component_default() {
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let c = NavigationSuiteDefaults::colors(&theme);
