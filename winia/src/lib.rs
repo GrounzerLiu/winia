@@ -143,6 +143,7 @@ pub mod prelude {
         SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
         ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold,
         NavigationSuiteType, NavigationSuiteScaffoldState, NavigationSuiteScaffoldValue,
+        NavigationSuiteColors, NavigationSuiteDefaults, NavigationSuiteItemColors,
         remember_navigation_suite_scaffold_state,
         NavigationRail, NavigationRailItem, NavigationRailItemColors, WideNavigationRail,
         ModalWideNavigationRail, modal_rail_expanded_shape,

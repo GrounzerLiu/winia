@@ -150,6 +150,7 @@ pub use short_navigation_bar::{
     ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement,
 };
 pub use navigation_suite::{
+    NavigationSuiteColors, NavigationSuiteDefaults, NavigationSuiteItemColors,
     NavigationSuiteScaffold, NavigationSuiteScaffoldState, NavigationSuiteScaffoldValue,
     NavigationSuiteType, NavigationSuiteItems,
     remember_navigation_suite_scaffold_state,

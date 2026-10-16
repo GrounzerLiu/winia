@@ -51,8 +51,76 @@ use crate::theme::WiniaTheme;
 use crate::layout::components::{Column, Row, Stack};
 use crate::layout::Alignment;
 use crate::components::navigation_bar::NAVIGATION_BAR_HEIGHT;
-use crate::components::navigation_rail::{WideNavigationRail, WideNavigationRailItem, WideNavigationRailState};
+use crate::components::navigation_rail::{
+    NavigationRail, NavigationRailItem, WideNavigationRail, WideNavigationRailItem,
+    WideNavigationRailState,
+};
+use crate::components::navigation_drawer::{DrawerSheet, NavigationDrawerItem};
 use std::sync::Arc;
+
+/// `NavigationSuiteColors`: the container/content pair each shape draws with (`NavigationSuiteDefaults
+/// .colors()`).
+///
+/// Upstream carries a whole `WideNavigationRailColors` for the rail; winia's rail takes its container
+/// and its ITEMS' colours separately, so the items live in [`NavigationSuiteItemColors`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NavigationSuiteColors {
+    pub short_navigation_bar_container: Color,
+    pub short_navigation_bar_content: Color,
+    pub wide_navigation_rail_container: Color,
+    /// The legacy `NavigationBar` / `NavigationRail` / `NavigationDrawer` shapes.
+    pub navigation_bar_container: Color,
+    pub navigation_bar_content: Color,
+    pub navigation_rail_container: Color,
+    pub navigation_rail_content: Color,
+    pub navigation_drawer_container: Color,
+    pub navigation_drawer_content: Color,
+}
+
+/// `NavigationSuiteItemColors`: the per-shape item colour sets, passed straight through to the items
+/// the suite builds (`ShortNavigationBarItem` / `WideNavigationRailItem`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NavigationSuiteItemColors {
+    pub short_navigation_bar: crate::components::navigation_bar::NavigationBarItemColors,
+    pub wide_navigation_rail: crate::components::navigation_rail::NavigationRailItemColors,
+}
+
+/// `NavigationSuiteDefaults`.
+pub struct NavigationSuiteDefaults;
+
+impl NavigationSuiteDefaults {
+    /// `NavigationSuiteDefaults.colors()`.
+    pub fn colors(theme: &crate::theme::ThemeColors) -> NavigationSuiteColors {
+        NavigationSuiteColors {
+            // `ShortNavigationBarDefaults.containerColor` / `.contentColor`.
+            short_navigation_bar_container: theme.surface_container,
+            short_navigation_bar_content: theme.on_surface,
+            // `WideNavigationRailDefaults.colors()`.
+            wide_navigation_rail_container: theme.surface,
+            // `NavigationBarDefaults.containerColor` / `contentColorFor(..)`.
+            navigation_bar_container: theme.surface_container,
+            navigation_bar_content: theme.on_surface,
+            // `NavigationRailDefaults.ContainerColor` / `contentColorFor(..)`.
+            navigation_rail_container: theme.surface,
+            navigation_rail_content: theme.on_surface,
+            // `DrawerDefaults.containerColor` (= the standard container).
+            navigation_drawer_container: theme.surface,
+            navigation_drawer_content: theme.on_surface,
+        }
+    }
+
+    /// `NavigationSuiteDefaults.itemColors()`.
+    pub fn item_colors(theme: &crate::theme::ThemeColors) -> NavigationSuiteItemColors {
+        NavigationSuiteItemColors {
+            short_navigation_bar: crate::components::navigation_bar::NavigationBarItemColors::from_theme(
+                theme,
+            ),
+            wide_navigation_rail: crate::components::navigation_rail::NavigationRailItemColors::from_theme(
+                theme,
+            ),
+        }
+    }
+}
 
 /// 导航套件形态（对齐 androidx NavigationSuiteType 的 Expressive 子集）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +135,16 @@ pub enum NavigationSuiteType {
     WideNavigationRailExpanded,
     /// 不渲染导航
     None,
+    /// The legacy `NavigationBar` shape: the classic bottom bar (`NavigationSuiteType.NavigationBar`).
+    /// Upstream advises against it ("use ShortNavigationBarCompact instead") and renders it as the
+    /// short bar in the classic bar's colours (`NavigationSuite.kt:620-631`); so does this.
+    NavigationBar,
+    /// The legacy `NavigationRail` shape: the classic rail, with the primary action as its header
+    /// (`NavigationSuite.kt:632-658`).
+    NavigationRail,
+    /// The legacy `NavigationDrawer` shape: a permanent drawer sheet, with the primary action on top
+    /// (`NavigationSuite.kt:659-683`).
+    NavigationDrawer,
 }
 
 /// The default shape, upstream's rule (`NavigationSuiteScaffoldDefaults.navigationSuiteType`):
@@ -221,6 +299,10 @@ pub struct NavigationSuiteScaffold {
     layout_type: Option<NavigationSuiteType>,
     /// `state`: hide/show the whole suite (upstream `NavigationSuiteScaffoldState`).
     state: Option<NavigationSuiteScaffoldState>,
+    /// `navigationSuiteColors`: the per-shape container/content pairs.
+    navigation_suite_colors: Option<NavigationSuiteColors>,
+    /// `contentColor`: what the app content is drawn in.
+    content_color: Option<Color>,
     container_color: Option<Color>,
     /// `primaryActionContent`: a FAB floated above the bar, or `None`.
     primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -259,6 +341,8 @@ impl NavigationSuiteScaffold {
             content: Box::new(content),
             layout_type: None,
             state: None,
+            navigation_suite_colors: None,
+            content_color: None,
             container_color: None,
             primary_action: None,
             primary_action_alignment: Alignment::End,
@@ -303,6 +387,18 @@ impl NavigationSuiteScaffold {
         self
     }
 
+    /// `navigationSuiteColors`: override the per-shape container/content pairs.
+    pub fn navigation_suite_colors(mut self, colors: NavigationSuiteColors) -> Self {
+        self.navigation_suite_colors = Some(colors);
+        self
+    }
+
+    /// `contentColor`: the app content's colour (`onBackground` by default).
+    pub fn content_color(mut self, color: Color) -> Self {
+        self.content_color = Some(color);
+        self
+    }
+
     /// 导航容器底色（content 区背景 = theme.background）
     pub fn container_color(mut self, c: Color) -> Self {
         self.container_color = Some(c);
@@ -331,14 +427,25 @@ impl NavigationSuiteScaffold {
         ctx.changed(&self.layout_type);
         ctx.changed(&self.transition);
         ctx.changed(&self.primary_action_alignment);
+        ctx.changed(&self.navigation_suite_colors);
+        ctx.changed(&self.content_color);
         let theme = WiniaTheme::colors();
         // Each shape keeps ITS OWN default container, which is what upstream's
         // `NavigationSuiteDefaults.colors()` does by delegating to `ShortNavigationBarDefaults` for the
         // bar and to `WideNavigationRailDefaults` for the rail. Those two defaults differ:
         // `surface_container` for the bar (`short_navigation_bar.rs`) and `surface` for the wide rail
         // (`navigation_rail.rs`). Passing one value to both painted the rail a shade too light.
-        let bar_container = self.container_color.unwrap_or(theme.surface_container);
-        let rail_container = self.container_color.unwrap_or(theme.surface);
+        // `container_color(..)` is winia's single override and wins over both; otherwise each shape takes
+        // its own entry from `NavigationSuiteColors` (`NavigationSuiteDefaults.colors()`).
+        let suite_colors = self
+            .navigation_suite_colors
+            .unwrap_or_else(|| NavigationSuiteDefaults::colors(&theme));
+        let item_colors = NavigationSuiteDefaults::item_colors(&theme);
+        let bar_item_colors = item_colors.short_navigation_bar;
+        let rail_item_colors = item_colors.wide_navigation_rail;
+        let content_color = self.content_color.unwrap_or(theme.on_background);
+        let bar_container = self.container_color.unwrap_or(suite_colors.short_navigation_bar_container);
+        let rail_container = self.container_color.unwrap_or(suite_colors.wide_navigation_rail_container);
         // HIDDEN keeps the SHAPE and only animates the navigation away — upstream's model, where
         // `animationProgress` goes to 0 and the layout type never changes (`NavigationSuiteScaffold
         // Layout`, `:411-475`). The content takes the freed space and the primary action rides the
@@ -475,21 +582,97 @@ impl NavigationSuiteScaffold {
             .background(theme.background, crate::graphics::Shape::Rectangle);
 
         match suite_type {
+            // The legacy shapes: the classic components, with the primary action where upstream puts it
+            // (`NavigationSuite.kt:632-683`). No morph: upstream switches these with a plain `when`, and
+            // the classic rail and drawer carry their own animation.
+            NavigationSuiteType::NavigationRail => {
+                let mut rail = NavigationRail::new(move |ctx| {
+                    for item in items_for_shape.clone() {
+                        let icon = item.icon.clone();
+                        let mut b = NavigationRailItem::new(item.selected, move |ctx| icon(ctx))
+                            .colors(rail_item_colors)
+                            .on_click(move || {
+                                if let Some(cb) = item.on_click.as_ref() {
+                                    cb()
+                                }
+                            });
+                        if let Some(label) = item.label.clone() {
+                            b = b.label(move |ctx| label(ctx));
+                        }
+                        b.build(ctx);
+                    }
+                })
+                .container_color(suite_colors.navigation_rail_container);
+                if let Some(primary_action) = primary_action {
+                    rail = rail.header(primary_action);
+                }
+                Row::new()
+                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .build(ctx, |ctx| {
+                        rail.build(ctx);
+                        WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
+                    });
+            }
+            NavigationSuiteType::NavigationDrawer => {
+                let sheet = DrawerSheet::permanent(move |ctx| {
+                    if let Some(primary_action) = primary_action {
+                        primary_action(ctx);
+                    }
+                    for item in items_for_shape.clone() {
+                        let icon = item.icon.clone();
+                        let label = item.label.clone().unwrap_or_else(|| {
+                            Arc::new(|ctx: &mut ComposeCtx| {
+                                crate::components::Text::new("").build(ctx);
+                            })
+                        });
+                        NavigationDrawerItem::new(move |ctx| label(ctx), item.selected)
+                            .icon(move |ctx| icon(ctx))
+                            .on_click(move || {
+                                if let Some(cb) = item.on_click.as_ref() {
+                                    cb()
+                                }
+                            })
+                            .build(ctx);
+                    }
+                })
+                .container_color(suite_colors.navigation_drawer_container);
+                Row::new()
+                    .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .build(ctx, |ctx| {
+                        sheet.build(ctx);
+                        WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
+                    });
+            }
             NavigationSuiteType::None => {
                 let k = ctx.next_key();
                 match ctx.start_restartable_group(k, content_modifier, crate::layout::BoxLayout::new()) {
                     GroupStatus::Skip => {}
-                    GroupStatus::Enter => content(ctx),
+                    GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
                 }
                 ctx.end_restartable_group();
             }
             // 底栏形态：Column { content(weight 1), bar }
-            NavigationSuiteType::ShortNavigationBarCompact | NavigationSuiteType::ShortNavigationBarMedium => {
-                let (arrangement, icon_position) = match suite_type {
-                    NavigationSuiteType::ShortNavigationBarCompact => {
-                        (ShortNavigationBarArrangement::EqualWeight, NavigationItemIconPosition::Top)
-                    }
-                    _ => (ShortNavigationBarArrangement::Centered, NavigationItemIconPosition::Start),
+            NavigationSuiteType::ShortNavigationBarCompact
+            | NavigationSuiteType::ShortNavigationBarMedium
+            | NavigationSuiteType::NavigationBar => {
+                let (arrangement, icon_position, bar_container) = match suite_type {
+                    NavigationSuiteType::ShortNavigationBarCompact => (
+                        ShortNavigationBarArrangement::EqualWeight,
+                        NavigationItemIconPosition::Top,
+                        bar_container,
+                    ),
+                    // The legacy bar is the short bar in the classic bar's colours, with the icon above
+                    // the label — upstream's own mapping (`NavigationSuite.kt:620-631`).
+                    NavigationSuiteType::NavigationBar => (
+                        ShortNavigationBarArrangement::EqualWeight,
+                        NavigationItemIconPosition::Top,
+                        suite_colors.navigation_bar_container,
+                    ),
+                    _ => (
+                        ShortNavigationBarArrangement::Centered,
+                        NavigationItemIconPosition::Start,
+                        bar_container,
+                    ),
                 };
                 // A Stack even without a primary action: it is what floats one above the bar.
                 Stack::new()
@@ -508,7 +691,7 @@ impl NavigationSuiteScaffold {
                         let k = ctx.next_key();
                         match ctx.start_restartable_group(k, content_modifier.layout_weight(1.0), crate::layout::BoxLayout::new()) {
                             GroupStatus::Skip => {}
-                            GroupStatus::Enter => content(ctx),
+                            GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
                         }
                         ctx.end_restartable_group();
                         let mk = ctx.next_key();
@@ -526,7 +709,7 @@ impl NavigationSuiteScaffold {
                             GroupStatus::Enter => {
                                 ShortNavigationBar::new(move |ctx| {
                                     for item in items_for_shape.clone() {
-                                        render_bar_item(ctx, item, icon_position);
+                                        render_bar_item(ctx, item, icon_position, bar_item_colors);
                                     }
                                 })
                                 .arrangement(arrangement)
@@ -609,6 +792,7 @@ impl NavigationSuiteScaffold {
                                             move |ctx| icon(ctx),
                                             move |ctx| label(ctx),
                                         )
+                                        .colors(rail_item_colors)
                                         .progress(rail_item_progress.clone())
                                         .on_click(move || {
                                             if let Some(cb) = item.on_click.as_ref() {
@@ -633,7 +817,7 @@ impl NavigationSuiteScaffold {
                         let k = ctx.next_key();
                         match ctx.start_restartable_group(k, content_modifier, crate::layout::BoxLayout::new()) {
                             GroupStatus::Skip => {}
-                            GroupStatus::Enter => content(ctx),
+                            GroupStatus::Enter => WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx)),
                         }
                         ctx.end_restartable_group();
                     });
@@ -646,8 +830,13 @@ impl NavigationSuiteScaffold {
 /// 容器宽度动画由 WideNavigationRail 内部进度承担）
 fn form_kind(t: NavigationSuiteType) -> u8 {
     match t {
-        NavigationSuiteType::ShortNavigationBarCompact | NavigationSuiteType::ShortNavigationBarMedium => 0,
-        NavigationSuiteType::WideNavigationRailCollapsed | NavigationSuiteType::WideNavigationRailExpanded => 1,
+        NavigationSuiteType::ShortNavigationBarCompact
+        | NavigationSuiteType::ShortNavigationBarMedium
+        | NavigationSuiteType::NavigationBar => 0,
+        NavigationSuiteType::WideNavigationRailCollapsed
+        | NavigationSuiteType::WideNavigationRailExpanded
+        | NavigationSuiteType::NavigationRail
+        | NavigationSuiteType::NavigationDrawer => 1,
         NavigationSuiteType::None => 2,
     }
 }
@@ -705,12 +894,14 @@ fn render_bar_item(
     ctx: &mut ComposeCtx,
     item: NavigationSuiteItem,
     icon_position: NavigationItemIconPosition,
+    colors: crate::components::navigation_bar::NavigationBarItemColors,
 ) {
     // The payloads are `Arc<dyn Fn>` (each composing that item's movable handle) while the item
     // component takes them by value once, so they are handed over as closures that call through.
     let icon = item.icon.clone();
     let mut b = ShortNavigationBarItem::new(item.selected, move |ctx| icon(ctx))
         .icon_position(icon_position)
+        .colors(colors)
         .on_click(move || {
             if let Some(cb) = item.on_click.as_ref() {
                 cb()
@@ -856,6 +1047,80 @@ mod tests {
         assert!(
             (abs_y - (700.0 - 56.0 - 16.0 - 80.0)).abs() < 0.01,
             "16dp above the 80dp bar, y={abs_y}"
+        );
+    }
+
+    /// `NavigationSuiteDefaults::colors()` delegates to each shape's own component default, which is what
+    /// upstream's `colors()` does — and those defaults are NOT all the same value.
+    #[test]
+    /// The legacy types render the CLASSIC components, not the short bar / wide rail: `NavigationRail`
+    /// is the 80dp classic rail and takes the primary action as its header, as upstream's own mapping
+    /// does (`NavigationSuite.kt:632-658`).
+    #[test]
+    fn the_legacy_navigation_rail_uses_the_classic_component() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            scaffold()
+                .layout_type(NavigationSuiteType::NavigationRail)
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                    ctx.end_node();
+                })
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let rail = &nodes[nodes[root].children[0]];
+        assert!(
+            (rail.measured_size.width - 80.0).abs() < 0.5,
+            "the classic rail is 80dp wide (the wide one is 96), got {}",
+            rail.measured_size.width
+        );
+        let mut action_x: Option<f32> = None;
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            out: &mut Option<f32>,
+        ) {
+            let n = &nodes[idx];
+            let ax = x + n.position.x;
+            if n.measured_size.width == 56.0 && n.measured_size.height == 56.0 {
+                *out = Some(ax);
+            }
+            for &child in &n.children {
+                walk(nodes, child, ax, out);
+            }
+        }
+        walk(nodes, root, 0.0, &mut action_x);
+        let x = action_x.expect("the classic rail carries the primary action as its header");
+        assert!(x < 80.0, "inside the rail, x={x}");
+    }
+
+    fn the_suite_colors_default_to_each_shapes_own_component_default() {
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let c = NavigationSuiteDefaults::colors(&theme);
+        assert_eq!(
+            c.short_navigation_bar_container,
+            theme.surface_container,
+            "ShortNavigationBarDefaults.containerColor"
+        );
+        assert_eq!(
+            c.wide_navigation_rail_container,
+            theme.surface,
+            "WideNavigationRailDefaults.colors()"
+        );
+        assert_eq!(c.short_navigation_bar_content, theme.on_surface);
+        assert_eq!(c.navigation_drawer_container, theme.surface, "the standard container");
+        let items = NavigationSuiteDefaults::item_colors(&theme);
+        assert_eq!(
+            items.short_navigation_bar,
+            crate::components::navigation_bar::NavigationBarItemColors::from_theme(&theme),
+            "the item colours are the bar's own"
         );
     }
 
