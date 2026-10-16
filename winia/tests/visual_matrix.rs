@@ -19,7 +19,7 @@ const WIDTH: i32 = 520;
 // the last components were laid out past the bottom edge, and `size()` coerces into the
 // incoming constraints (Compose's `SizeNode`), so the disabled FAB measured 56 x 0.
 const HEIGHT: i32 = 1200;
-const SEED: u32 = 0xff6750a4;
+const SEED: u32 = 0x6750a4;
 
 fn raster_surface() -> skia_safe::Surface {
     skia_safe::surfaces::raster_n32_premul((WIDTH, HEIGHT)).expect("raster surface")
@@ -63,9 +63,13 @@ fn find_tag(nodes: &[winia::layout::node::LayoutNode], idx: usize, tag: &str) ->
 fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: TopAppBarColors) -> skia_safe::Surface {
     let scroll = ScrollState::new();
     scroll.offset.set(offset);
+    // The flexible variants have their OWN expanded heights, and they depend on whether a subtitle
+    // is present — this probe composes none, so the shorter pair applies.
     let expanded = match variant {
         TopAppBarVariant::Medium => winia::components::TOP_APP_BAR_MEDIUM_HEIGHT,
         TopAppBarVariant::Large => winia::components::TOP_APP_BAR_LARGE_HEIGHT,
+        TopAppBarVariant::MediumFlexible => winia::components::TOP_APP_BAR_MEDIUM_FLEXIBLE_HEIGHT,
+        TopAppBarVariant::LargeFlexible => winia::components::TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT,
         _ => winia::components::TOP_APP_BAR_HEIGHT,
     };
     let mut composer = Composer::new();
@@ -76,6 +80,10 @@ fn render_scroll_color_probe(variant: TopAppBarVariant, offset: f32, colors: Top
             TopAppBarVariant::CenterAligned => TopAppBar::center_aligned(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
             TopAppBarVariant::Medium => TopAppBar::medium(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
             TopAppBarVariant::Large => TopAppBar::large(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            // `0328d45` added these two and this match was never updated, so the whole target
+            // stopped compiling — which is why these painting tests have not run since.
+            TopAppBarVariant::MediumFlexible => TopAppBar::medium_flexible(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
+            TopAppBarVariant::LargeFlexible => TopAppBar::large_flexible(|_ctx| {}).scroll_behavior(behavior).colors(colors).modifier(Modifier::new().test_tag("color-probe")).build(ctx),
         }
     }));
     composer.layout(Constraints::new(0.0, 320.0, 0.0, 180.0));

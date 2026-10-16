@@ -25,7 +25,7 @@ const INBOX_PATH: &str = "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.
 const SEND_PATH: &str = "M4.01 6.03l7.51 3.22-7.52-1 .01-2.22m7.5 8.72L4 17.97v-2.22l7.51-1M2.01 3L2 10l15 2-15 2 .01 7L23 12 2.01 3z";
 /// Material Icons outlined `favorite_border` (the spec's Favorites).
 const FAVORITE_PATH: &str = "M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z";
-/// Material Icons outlined `delete`.
+/// Material Icons outlined `delete` (the outlined theme's name for `delete_outline`).
 const DELETE_PATH: &str = "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM8 9h8v10H8V9zm7.5-5l-1-1h-5l-1 1H5v2h14V4h-3.5z";
 /// Material Icons outlined `label`.
 const LABEL_PATH: &str = "M17.63 5.84C17.27 5.33 16.67 5 16 5L5 5.01C3.9 5.01 3 5.9 3 7v10c0 1.1.9 1.99 2 1.99L16 19c.67 0 1.27-.33 1.63-.84L22 12l-4.37-6.16zM16 17H5V7h11l3.55 5L16 17z";
@@ -71,9 +71,9 @@ impl Page {
     }
     fn body(self) -> &'static str {
         match self {
-            Page::Inbox => "24 conversations. Drag the drawer back to its edge to close it \
-                            (the scrim also closes it in the modal variant), or switch the \
-                            drawer with the three buttons above.",
+            Page::Inbox => "24 conversations. Drag the drawer back to its edge to close it, or \
+                            click the scrim (modal only). The three buttons switch the drawer \
+                            kind: close this sheet first, since the scrim covers them.",
             Page::Outbox => "Messages you have sent.",
             Page::Favorites => "Nothing favourited yet.",
             Page::Trash => "Deleted messages are kept for 30 days.",
@@ -184,7 +184,10 @@ fn sheet_body(ctx: &mut ComposeCtx, page: State<Page>, drawer: DrawerState) {
         .spacing(4.0)
         .build(ctx, |ctx| {
             Row::new()
-                .modifier(Modifier::new().fill_max_width().padding_sides(28.0, 12.0, 24.0, 12.0))
+                // 16dp here, inside the sheet's own 12dp content padding, puts the header on the
+                // same 28dp the item ICONS start at — which is what the M3 reference does (measured on
+                // its own image: `Mail` 1160, the icons 1162, `Labels` 1160, all one left edge).
+                .modifier(Modifier::new().fill_max_width().padding_sides(16.0, 12.0, 24.0, 12.0))
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
                     Text::new("Mail").font_size(22.0).build(ctx);
@@ -195,9 +198,10 @@ fn sheet_body(ctx: &mut ComposeCtx, page: State<Page>, drawer: DrawerState) {
             Divider::horizontal()
                 .modifier(Modifier::new().padding_sides(28.0, 4.0, 28.0, 4.0))
                 .build(ctx);
-            // A section header lines up with the item ICONS, not with their labels.
+            // A section header lines up with the item ICONS' leading edge (28dp), not with their
+            // labels — 16dp here plus the sheet's 12dp content padding.
             Text::new("Labels")
-                .modifier(Modifier::new().padding_sides(28.0, 8.0, 24.0, 8.0))
+                .modifier(Modifier::new().padding_sides(16.0, 8.0, 24.0, 8.0))
                 .font_size(14.0)
                 .build(ctx);
             destination(ctx, Page::Label, page.clone(), drawer.clone());

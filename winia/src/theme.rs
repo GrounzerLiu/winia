@@ -211,6 +211,18 @@ impl ThemeColors {
 
 /// 0.5's colour type is `Rgb`; the `Argb` it replaced also carried the alpha, and an M3 scheme colour
 /// is opaque — upstream composes the same value in `Rgb::as_argb_u32` (`0xFF000000 | rgb`).
+///
+/// The 0.4.2 -> 0.5.0 bump also MOVES four slots of every generated LIGHT scheme, and nothing else:
+/// the four `on_*_container` roles go from a very dark tone (~10) to a medium one (~30), so text and
+/// icons drawn ON a container are lighter than they were. For the default seed:
+/// `on_primary_container 201047 -> 4d3d75`, `on_secondary_container 1e192b -> 4a4458`,
+/// `on_tertiary_container 31101d -> 633b48`, `on_error_container 410002 -> 93000a`. The other 45
+/// light slots and all 49 dark ones are byte-identical (measured by dumping the 49 slots of both
+/// schemes for the same seed; the method is in the commit that made this change).
+///
+/// Worth knowing when one of these shifts again: NOTHING in this crate pins a palette. The pixel
+/// tests in `tests/visual_matrix.rs` derive their expectations from this same theme, so a palette
+/// move shifts both sides and they stay green.
 fn rgb(a: Rgb) -> Color {
     Color::from_argb(255, a.red, a.green, a.blue)
 }

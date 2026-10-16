@@ -111,7 +111,7 @@ resize landed mid-gesture and left a mid-tween resize parked at the tween's stal
 Pinned by `a_drag_survives_the_next_compose`, `a_resize_mid_drag_does_not_cancel_the_gesture`
 and `a_resize_mid_settle_is_repaired_once_the_tween_finishes`.
 
-The sheet is `min(maximum_drawer_width, window)` wide — **logical** px. This framework's
+The sheet's own width is `sizeIn(MinimumDrawerWidth 240, ContainerWidth 360)` clamped by the window, and a drawer may narrow it further — **logical** px. This framework's
 convention is `1dp == 1 logical px` (see `Dimension::Dp`), so the dp tokens are used as-is
 and `Dp::to_px` (a *physical* value) must not be applied when sizing against the window's
 logical width. Pinned by `the_sheet_width_is_logical_not_physical`, which caught exactly
@@ -197,11 +197,11 @@ in either implementation.
 - **The item height is fixed (56dp)** where androidx uses `heightIn(min = ActiveIndicatorHeight)`,
   so a two-line label or an oversized badge is squeezed rather than growing the row.
 - **The sheet applies the 12dp horizontal content padding itself.** androidx exposes it as
-  `DrawerDefaults.ItemPadding` and leaves applying it to the caller; winia's default keeps a
+  `NavigationDrawerItemDefaults.ItemPadding` and leaves applying it to the caller; winia's default keeps a
   bare `NavigationDrawerItem` sized to `ActiveIndicatorWidth` (336dp) without the caller
   having to know the token. `ModalDrawerSheet::content_padding(false)` opts out.
-- **`DismissibleNavigationDrawer` / `PermanentNavigationDrawer` are not implemented** — only
-  the modal form, `ModalDrawerSheet` and `NavigationDrawerItem`.
+- **`DrawerPredictiveBackHandler` and the predictive-back scale modifiers are not implemented** —
+  they are Android gesture-back specific.
 - **The indicator colour animation is a winia addition**: a 150 ms `EaseOutCubic` tween. M3's
   `NavigationDrawer.kt` contains no `animateColorAsState`, so there is no upstream spec to match — the
   engine could run it on M3's `DefaultEffects` spring (`SpringSpec::effects_default()`) if a spring is

@@ -34,8 +34,9 @@
 //!   `DrawerState::close()` — e.g. from a hamburger button.
 //! - **No suspending API.** `open`/`close` push a tween onto the offset state
 //!   (Compose suspends); the animation is the shared settled-anchor tween.
-//! - **`DismissibleNavigationDrawer` / `PermanentNavigationDrawer`** are not
-//!   implemented yet — only the modal form and its sheet.
+//! - **All three drawers are here**: [`ModalNavigationDrawer`] (scrim over the content),
+//!   [`DismissibleNavigationDrawer`] (pushes the content, no scrim) and
+//!   [`PermanentNavigationDrawer`] (no state at all; `Row { sheet, content }`).
 //! - The scrim keeps winia's modal-scrim alpha (110/255, the same one
 //!   `open_overlay` draws for modals) instead of re-deriving Compose's
 //!   `ScrimTokens` value; override it per drawer with
@@ -65,7 +66,9 @@ pub const DRAWER_MIN_WIDTH: f32 = 240.0;
 pub const DRAWER_CORNER_RADIUS: f32 = 16.0;
 /// `NavigationDrawerTokens.ActiveIndicatorHeight` — the drawer item's height (56dp).
 pub const DRAWER_ITEM_HEIGHT: f32 = 56.0;
-/// `NavigationDrawerTokens.IconSize` (24dp).
+/// `NavigationDrawerTokens.IconSize` (24dp) — the token a CALLER sizes a drawer item's icon with.
+/// The item itself does not apply it: upstream only provides the content colour, and `Icon` already
+/// falls back to 24, so an item can carry a larger icon.
 pub const DRAWER_ITEM_ICON_SIZE: f32 = 24.0;
 /// Horizontal padding the sheet applies to its content (12dp each side), which is
 /// what makes `NavigationDrawerItem` span `ActiveIndicatorWidth` = 336dp.
@@ -1908,21 +1911,65 @@ mod tests {
         );
     }
 
-    /// The badge follows the LABEL color, and a caller can give it its own — upstream's
-    /// `colors()` has `selectedBadgeColor` / `unselectedBadgeColor` defaulting to the text colors
-    /// (`NavigationDrawer.kt:1218-1219`), which winia used to hard-wire to the ICON color.
+    /// The badge's DEFAULT is the label colour — upstream's `colors()` has `selectedBadgeColor` /
+    /// `unselectedBadgeColor` defaulting to the text colours (`NavigationDrawer.kt:1218-1219`), while
+    /// winia used to hard-wire the ICON colour. The default is a struct question; that the item PAINTS
+    /// it is the test below.
     #[test]
-    fn the_badge_color_follows_the_label_and_can_be_overridden() {
+    fn the_default_badge_color_is_the_label_color() {
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let colors = NavigationDrawerItemDefaults::colors(&theme);
         assert_eq!(colors.badge(true), colors.text(true), "selected: the label color");
         assert_eq!(colors.badge(false), colors.text(false), "unselected: the label color");
-        let custom = NavigationDrawerItemColors {
-            selected_badge: Color::from_argb(255, 1, 2, 3),
-            ..colors
+    }
+
+    /// The badge is painted in its OWN colour, not the icon's.
+    ///
+    /// This reads the colour THE RENDERER WILL PAINT (`ModifierElement::TextContent.color`), not the
+    /// colour struct: comparing structs passed even while `build` painted the badge with
+    /// `colors.icon(selected)` — which is the exact bug this replaced, since the two defaults agree.
+    /// So the assertion overrides ONE of the two colours and looks at the pixels' source.
+    #[test]
+    fn the_badge_is_painted_in_the_badge_color() {
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let badge_color = Color::from_argb(255, 1, 2, 3);
+        let mut colors = NavigationDrawerItemDefaults::colors(&theme);
+        colors.selected_badge = badge_color;
+        let mut c = comp();
+        c.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme, ctx, |ctx| {
+                NavigationDrawerItem::text_label("Inbox", true)
+                    .colors(colors)
+                    .badge(|ctx| {
+                        crate::components::Text::new("7").build(ctx);
+                    })
+                    .build(ctx);
+            });
+        });
+        c.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let nodes = c.arena_nodes();
+        let painted = |want: &str| -> Option<Color> {
+            nodes.iter().find_map(|n| {
+                n.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::TextContent { content, color, .. }
+                        if content.as_str() == want =>
+                    {
+                        Some(*color)
+                    }
+                    _ => None,
+                })
+            })
         };
-        assert_eq!(custom.badge(true), Color::from_argb(255, 1, 2, 3));
-        assert_eq!(custom.badge(false), colors.text(false), "only the one was overridden");
+        assert_eq!(
+            painted("7"),
+            Some(badge_color),
+            "the badge slot paints the BADGE colour"
+        );
+        assert_eq!(
+            painted("Inbox"),
+            Some(colors.text(true)),
+            "and the label still paints its own"
+        );
     }
 
     /// A DISMISSIBLE drawer pushes the content instead of covering it: upstream places the content at

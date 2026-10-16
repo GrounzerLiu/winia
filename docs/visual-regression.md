@@ -23,7 +23,7 @@ Winia 的视觉回归矩阵位于 `winia/tests/visual_matrix.rs`，使用 CPU Sk
 
 仓库当前没有跨平台字体、Skia 后端和图像基线管理设施。字体抗锯齿、平台字体、阴影和动画会使逐像素 golden 在不同环境中不稳定。因此矩阵采用语义级断言：
 
-- 固定 seed `0xff6750A4`。
+- 固定 seed `0x6750A4`。
 - 显式使用 `with_theme_typography_and_direction`，不使用依赖操作系统的 `WiniaTheme::auto`。
 - 固定 viewport `520 × 420` 和布局约束。
 - 不把 ripple、动画阴影或抗锯齿边缘作为单帧颜色基线。
