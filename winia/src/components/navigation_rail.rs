@@ -1852,10 +1852,11 @@ impl ModalWideNavigationRail {
 // ── WideNavigationRail（M3 Expressive 宽轨）──
 //
 // 对齐 androidx-main WideNavigationRail.kt 的核心行为：
-// - 容器宽 Collapsed 96dp ↔ 展开动画过渡：展开后的宽度 = max(内容自然宽, 220)
-//   .min(360).min(可用宽)，即 **220 是默认值、360 只是上限**——只有内容确实更宽
-//   才超过 220（androidx 把 ExpandedRailMinWidth 当默认、ExpandedRailMaxWidth 当
-//   上限，再由约束落定；此前这里写的是 min(可用宽, 360)，已按上游更正）
+// - Container width Collapsed 96dp ↔ expanded animates: the expanded width =
+//   max(natural content width, 220).min(360).min(available width), i.e. **220 is the default and
+//   360 is only the ceiling** — only genuinely wider content goes past 220 (androidx treats
+//   ExpandedRailMinWidth as the default and ExpandedRailMaxWidth as the ceiling, then lets the
+//   constraints settle it; this used to say min(available width, 360), now corrected to upstream)
 // - item 图标位置随展开态 Top(收起)↔Start(展开) 变形
 // - label 必选且恒显示；item 横向 padding 20dp、容器顶部 padding 44dp
 //
@@ -2031,11 +2032,14 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
 
         // 子项垂直堆叠。水平位置：
         // - item：x=0（收起 item 宽=rail 宽；展开 item 填满轨宽——居中恒等）
-        // - header（androidx 放 x=0、对齐由内容自理；M3 视觉为收起居中 ↔
-        //   展开靠前导）：x = lerp(居中, WIDE_INDICATOR_H_PADDING, p)，即展开后 header 的
-        //   前导内缩是 16，于是 FAB 图标落在 16+16 = 32；而 item 展开后的胶囊前导是 20
-        //   (`WNRItemHorizontalPadding`)、图标在 36——**两者差 4**。这里原先写“与 item 图标同 x”，
-        //   那是 6d1b560 之前 item 前导还是 16 时的说法；现在只是把事实写清楚，未改数值。
+        // - header (androidx puts it at x=0 and leaves the alignment to the content; the M3
+        //   visual is centred when collapsed ↔ leading-edge aligned when expanded):
+        //   x = lerp(centred, WIDE_INDICATOR_H_PADDING, p), i.e. expanded the header's leading
+        //   inset is 16, so the FAB icon lands at 16+16 = 32; the item's expanded pill, though,
+        //   has a leading edge of 20 (`WNRItemHorizontalPadding`) and its icon sits at 36 —
+        //   **a 4 dp difference**. This used to say "same x as the item icon", which was the
+        //   pre-6d1b560 claim from when the item's leading edge was still 16; this only states
+        //   the fact, no number moved.
         let mut y = WIDE_RAIL_TOP_PADDING;
         let mut placements = Vec::with_capacity(children.len());
         for (index, &child) in children.iter().enumerate() {
@@ -2352,10 +2356,10 @@ impl WideNavigationRailItem {
 /// 端点数学：
 /// - Top(p=0)：同基础 rail item 有标签路径——胶囊 56×32 在图标后方，
 ///   图标/标签垂直堆叠居中
-/// - Start(p=1)：横向 item——胶囊包裹 [icon + gap(8) + label] 整组，
-///   高 = max(iconH,labelH)+2×16 = 56（`WIDE_START_INDICATOR_V_PADDING`），胶囊 x = 20
-///   (`WNRItemHorizontalPadding`)、图标 x = 20+16 = 36、label x = 36+24+8 = 68。
-///   （这里原先写 gap 4 / 高 40 / 缩进 16，是 6d1b560 之前的数字。）
+/// - Start(p=1): the horizontal item — the pill wraps the whole [icon + gap(8) + label] group,
+///   height = max(iconH,labelH)+2×16 = 56 (`WIDE_START_INDICATOR_V_PADDING`), pill x = 20
+///   (`WNRItemHorizontalPadding`), icon x = 20+16 = 36, label x = 36+24+8 = 68.
+///   (this used to say gap 4 / height 40 / inset 16, which are the pre-6d1b560 numbers.)
 ///
 /// 子节点顺序 [indicator, icon, label, ripple]。
 #[derive(Debug)]

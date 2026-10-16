@@ -152,23 +152,26 @@ ModalWideNavigationRail::new(state.clone(), |ctx| { /* items */ })
       width = widthFullRange 向着 360 收窄
   ```
 
-  即：**默认展开就是 220**，只有内容（item 内容 + `WNRItemHorizontalPadding`×**2**
-  ——item 自己两侧各留 20，代码里就是 `size.width + WIDE_RAIL_ITEM_H_PADDING * 2.0`，
-  或 header 自身宽度）比 220 宽时才往上长，360 封顶，且不超过窗口宽。
+  That is: **the default expanded width is 220**; only when the content (item content +
+  `WNRItemHorizontalPadding`×**2** — the item itself keeps 20 on both sides, which in code is
+  `size.width + WIDE_RAIL_ITEM_H_PADDING * 2.0` — or the header's own width) is wider than 220
+  does it grow, with 360 as the ceiling and never wider than the window.
   上游自己的测试钉死了两端：`rail_expanded_size`（三个 item）断言
   `ContainerWidthMinimum`，`rail_expanded_maxSize`（400dp header spacer）断言
   `ContainerWidthMaximum`。winia 对应
   `wide_rail_width_endpoints_match_tokens` +
   `wide_rail_expands_past_the_minimum_for_a_wide_header`。
-- item 几何在 Top/Start 两套端点间按进度线性插值：指示器从 56×32（图标后）
-  过渡到包裹 [icon+gap(8)+label] 的横向大胶囊（高 = max(iconH,labelH)+2×16 = 56）；
-  胶囊 x=20、图标 x=36、label x=68，随进度滑移。这里原先写 gap4 / 高 +16 / 缩进 16，
-  是 6d1b560 之前的数字。
+- The item geometry is linearly interpolated by progress between the Top and Start endpoints:
+  the indicator goes from 56×32 (behind the icon) to the large horizontal pill wrapping
+  [icon+gap(8)+label] (height = max(iconH,labelH)+2×16 = 56); the pill x=20, the icon x=36, the
+  label x=68, sliding with progress. This used to say gap4 / height +16 / inset 16, which are the
+  pre-6d1b560 numbers.
 - **简化注明**：androidx 用动态 PaddingValues + 分段 label 公式（p>0.5 切换 x
   公式并淡出标签）；本实现为连续 lerp，端点视觉一致。
-- 容器顶部 padding 44dp（TopSpace）；展开态 item 填满轨宽（全宽命中目标），
-  内容起始对齐：胶囊前导 20（`WNRItemHorizontalPadding`）、图标再进 16
-  （`FullWidthLeadingSpace`）= 36，label 到 68。
+- The container's top padding is 44dp (TopSpace); expanded, an item fills the rail width (a
+  full-width hit target), and its content starts aligned: the pill leads at 20
+  (`WNRItemHorizontalPadding`), the icon a further 16 (`FullWidthLeadingSpace`) = 36, and the
+  label at 68.
 - item 同样拥抱内容、最小宽 96（CollapsedTokens.ContainerWidth）。
 - **宽轨 item 的纵向节奏随展开变化**，两端各是一组不同的 token：
 

@@ -117,13 +117,13 @@ material-symbols-sharp    = []   # Sharp（~8.6MB）
   `LocalContentColor`）——IconButton 用 `with_content_color` 包裹内容，
   `Icon` 的 `Tint::Auto` 会取容器提供的内容色（如 Filled 里图标自动
   on_primary）。
-- **尺寸变体**：`IconButtonSize`（XSmall 32 / Small 40 / Medium 56 /
-  Large 96 / XLarge 136，`.size(...)` 设置；`icon_size()` 给建议图标
-  尺寸 20/24/24/32/40、`outline_width()` 给 Outlined 边框宽 1/1/1/2/3）。
-  每个档位的容器就是 token 的 `ContainerHeight`（Small 是 **40**，等于
-  `SmallIconButtonTokens.ContainerHeight`）；48dp 的触摸目标是**另一层**
-  （`minimum_interactive_component_size`），两者已分开——这里原先写 Small 48，
-  是把二者合并的旧行为。
+- **Size variants**: `IconButtonSize` (XSmall 32 / Small 40 / Medium 56 /
+  Large 96 / XLarge 136, set with `.size(...)`; `icon_size()` gives the suggested icon
+  sizes 20/24/24/32/40, `outline_width()` gives the Outlined border width 1/1/1/2/3).
+  Each step's container is the token's `ContainerHeight` (Small is **40**, equal to
+  `SmallIconButtonTokens.ContainerHeight`); the 48dp touch target is **another layer**
+  (`minimum_interactive_component_size`), the two are now separate — this used to say Small 48,
+  which was the old behaviour that merged the two.
 - 差异：内容色默认取主题 on_surface（Compose 默认 LocalContentColor）；
   disabled 容器 = OnSurface 10%、disabled 内容 = OnSurface 38%（M3 token）；
   hover/press 视觉反馈由波纹指示提供（M3 的状态层同样属于 indication，
