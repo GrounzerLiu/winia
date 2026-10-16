@@ -267,13 +267,14 @@ impl NavigationSuiteScaffold {
     }
 
     /// 覆盖自动推算（对齐 androidx layoutType 参数）
-    /// The FAB slot (`primaryActionContent`): floated above the navigation, 16dp clear of it.
+    /// The FAB slot (`primaryActionContent`). WHERE it goes depends on the shape, which is upstream's
+    /// rule (`NavigationSuite.kt:183-187`): "inside vertical navigation components as part of their
+    /// header, and above horizontal navigation components".
     ///
-    /// Upstream only PLACES it in the bar layout — its rail branch measures the slot and never
-    /// places it, so a wide window shows no primary action at all (`NavigationDrawer.kt`-style
-    /// oversight in `NavigationSuiteScaffoldLayout`, `:440-475` against `:476-490`). This mirrors
-    /// that instead of inventing a rail position; a rail layout that wants a FAB should put it in
-    /// the rail's own header.
+    /// - a RAIL layout passes it as the rail's `header` (`NavigationSuite`, `:612-620`) — the same
+    ///   slot the rail demos put their FAB in;
+    /// - a BAR layout floats it 16dp above the bar, at `primary_action_alignment` (default `End`, 16dp
+    ///   in from that edge).
     pub fn primary_action(
         mut self,
         content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
@@ -582,7 +583,7 @@ impl NavigationSuiteScaffold {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 let items = items_for_shape.clone();
-                                WideNavigationRail::new(rail_state, move |ctx| {
+                                let mut rail = WideNavigationRail::new(rail_state, move |ctx| {
                                     for item in items {
                                         let icon = item.icon.clone();
                                         let label = item
@@ -605,8 +606,15 @@ impl NavigationSuiteScaffold {
                                         b.build(ctx);
                                     }
                                 })
-                                .container_color(rail_container)
-                                .build(ctx);
+                                .container_color(rail_container);
+                                // Upstream's contract for a VERTICAL shape: the primary action goes in
+                                // as the component's header (`NavigationSuite.kt:183-187`, `:612-620`) —
+                                // the same slot the rail demos put their FAB in. Leaving it out is why
+                                // a wide window showed no FAB at all.
+                                if let Some(primary_action) = primary_action {
+                                    rail = rail.header(primary_action);
+                                }
+                                rail.build(ctx);
                             }
                         }
                         ctx.end_restartable_group();
@@ -756,7 +764,51 @@ mod tests {
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
     }
 
-/// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
+    /// The primary action follows the SHAPE. Upstream's contract is "inside vertical navigation
+    /// components as part of their header, and above horizontal navigation components"
+    /// (`NavigationSuite.kt:183-187`), so a rail layout passes it as the rail's `header` and a bar
+    /// layout floats it over the bar. Bar-only was wrong, and it is why a wide window showed no FAB.
+    #[test]
+    fn the_primary_action_becomes_the_rails_header() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            scaffold()
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                    ctx.end_node();
+                })
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut found: Option<(f32, f32)> = None;
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            y: f32,
+            out: &mut Option<(f32, f32)>,
+        ) {
+            let n = &nodes[idx];
+            let (ax, ay) = (x + n.position.x, y + n.position.y);
+            if n.measured_size.width == 56.0 && n.measured_size.height == 56.0 {
+                *out = Some((ax, ay));
+            }
+            for &child in &n.children {
+                walk(nodes, child, ax, ay, out);
+            }
+        }
+        walk(nodes, root, 0.0, 0.0, &mut found);
+        let (x, y) = found.expect("the rail layout carries the primary action in its header");
+        assert!(x >= 0.0 && x <= 96.0, "inside the 96dp rail, x={x}");
+        assert!(y < 200.0, "above the rail's items, y={y}");
+    }
+
+    /// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
     /// with the default `Alignment::End` (`NavigationSuiteScaffoldLayout` `:456-470`).
     #[test]
     fn the_primary_action_floats_above_the_bar() {
