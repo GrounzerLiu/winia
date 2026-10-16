@@ -40,7 +40,7 @@ use crate::runtime::state::State;
 use crate::layout::constraints::Constraints;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset, Size};
-use crate::layout::{Alignment, BoxLayout};
+use crate::layout::{Alignment, Arrangement, BoxLayout};
 use crate::layout::components::Column;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
@@ -1704,6 +1704,8 @@ impl ModalWideNavigationRail {
                 progress: ctx.animate_float_as_state(0.0, rail_container_spec()),
                 has_header: header.is_some(),
                 rtl,
+                // Pinned collapsed in the modal body; the arrangement is the caller's rail's.
+                arrangement: Arrangement::Start,
             };
             let content = content.clone();
             let header = header.clone();
@@ -1816,6 +1818,9 @@ impl ModalWideNavigationRail {
                     progress,
                     has_header,
                     rtl,
+                    // The modal body's in-flow rail is always the collapsed one; the caller's
+                    // arrangement belongs to the rail the panel was opened from.
+                    arrangement: Arrangement::Start,
                 };
                 match ctx.start_restartable_group(key, panel, policy) {
                     GroupStatus::Skip => {}
@@ -1962,6 +1967,8 @@ struct WideNavigationRailLayoutPolicy {
     /// time: placement runs after composition, where the direction local is gone. Only the header is
     /// mirrored — an item sits at `(width - w) / 2`, which is symmetric and so unchanged by mirroring.
     rtl: bool,
+    /// Where the stack sits vertically (`Start` / `Center` / `End`).
+    arrangement: Arrangement,
 }
 
 impl MeasurePolicy for WideNavigationRailLayoutPolicy {
@@ -2040,7 +2047,33 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         //   **a 4 dp difference**. This used to say "same x as the item icon", which was the
         //   pre-6d1b560 claim from when the item's leading edge was still 16; this only states
         //   the fact, no number moved.
-        let mut y = WIDE_RAIL_TOP_PADDING;
+        // Where the stack starts. `Arrangement::Start` is upstream's `Top`; `Center` and `End` need the
+        // content's total height BEFORE the first child is placed, so this measures each child once more
+        // — the same arithmetic the loop below uses (settled width, then the header's 40 or the item gap).
+        // A rail that hugs its content has no slack, so the arrangement is then a no-op, as upstream's is.
+        let mut content_h = 0.0f32;
+        for (index, &child) in children.iter().enumerate() {
+            let (size, _) = measure_node(
+                nodes,
+                policies,
+                child,
+                Constraints::new(0.0, width, 0.0, c.max_height),
+            );
+            content_h += size.height;
+            content_h += if index == 0 && self.has_header {
+                WIDE_RAIL_HEADER_PADDING
+            } else {
+                RAIL_VERTICAL_PADDING + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p
+            };
+        }
+        let slack =
+            (c.max_height - RAIL_VERTICAL_PADDING - WIDE_RAIL_TOP_PADDING - content_h).max(0.0);
+        let arranged = match self.arrangement {
+            Arrangement::Center => slack / 2.0,
+            Arrangement::End => slack,
+            _ => 0.0,
+        };
+        let mut y = WIDE_RAIL_TOP_PADDING + arranged;
         let mut placements = Vec::with_capacity(children.len());
         for (index, &child) in children.iter().enumerate() {
             let (size, _) = measure_node(
@@ -2105,6 +2138,11 @@ pub struct WideNavigationRail {
     /// Container shape. `Shape::Rectangle` unless overridden — the modal form passes the modal container
     /// shape (`NavigationRailExpandedTokens.ModalContainerShape`, CornerLarge) through this.
     container_shape: Shape,
+    /// `arrangement`: where the header + items sit vertically in the rail. Upstream's
+    /// `Arrangement.Vertical` (`WideNavigationRail.kt`), which only offers Top / Center / Bottom —
+    /// in winia's shared enum that is `Start` / `Center` / `End`, and the space-distributing variants
+    /// behave like `Start` (the rail's items are a fixed stack, not a set to spread).
+    arrangement: Arrangement,
     modifier: Modifier,
 }
 
@@ -2119,6 +2157,7 @@ impl WideNavigationRail {
             header: None,
             container_color: None,
             container_shape: Shape::Rectangle,
+            arrangement: Arrangement::Start,
             modifier: Modifier::new(),
         }
     }
@@ -2131,6 +2170,13 @@ impl WideNavigationRail {
     /// Override the container shape (default `Shape::Rectangle` = `ContainerShape`/`CornerNone`).
     pub fn shape(mut self, shape: Shape) -> Self {
         self.container_shape = shape;
+        self
+    }
+
+    /// `arrangement`: where the header and items sit vertically (default `Arrangement::Start` =
+    /// upstream's `Arrangement.Top`).
+    pub fn arrangement(mut self, arrangement: Arrangement) -> Self {
+        self.arrangement = arrangement;
         self
     }
 
@@ -2148,6 +2194,7 @@ impl WideNavigationRail {
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.container_color);
         ctx.changed(&self.container_shape);
+        ctx.changed(&self.arrangement);
         ctx.changed(&self.state.is_expanded());
         let theme = WiniaTheme::colors();
         let container = self.container_color.unwrap_or(theme.surface);
@@ -2163,6 +2210,7 @@ impl WideNavigationRail {
             progress,
             has_header: self.header.is_some(),
             rtl,
+            arrangement: self.arrangement,
         };
         let header = self.header;
         let content = self.content;

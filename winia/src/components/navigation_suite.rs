@@ -38,7 +38,7 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::movable::MovableContent;
 use crate::runtime::state::State;
-use crate::layout::{Constraints, LayoutDirection, MeasurePolicy};
+use crate::layout::{Arrangement, Constraints, LayoutDirection, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement};
 use crate::unit::{Offset, Size};
 use crate::layout::SizeValue;
@@ -107,6 +107,12 @@ impl NavigationSuiteDefaults {
             navigation_drawer_container: theme.surface,
             navigation_drawer_content: theme.on_surface,
         }
+    }
+
+    /// `NavigationSuiteDefaults.verticalArrangement`: where the rail's items sit (upstream's
+    /// `Arrangement.Top`; winia's shared enum spells it `Start`).
+    pub fn vertical_arrangement() -> Arrangement {
+        Arrangement::Start
     }
 
     /// `NavigationSuiteDefaults.itemColors()`.
@@ -303,6 +309,8 @@ pub struct NavigationSuiteScaffold {
     navigation_suite_colors: Option<NavigationSuiteColors>,
     /// `contentColor`: what the app content is drawn in.
     content_color: Option<Color>,
+    /// `navigationItemVerticalArrangement`: where the rail's items sit.
+    vertical_arrangement: Arrangement,
     container_color: Option<Color>,
     /// `primaryActionContent`: a FAB floated above the bar, or `None`.
     primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -343,6 +351,7 @@ impl NavigationSuiteScaffold {
             state: None,
             navigation_suite_colors: None,
             content_color: None,
+            vertical_arrangement: NavigationSuiteDefaults::vertical_arrangement(),
             container_color: None,
             primary_action: None,
             primary_action_alignment: Alignment::End,
@@ -393,6 +402,13 @@ impl NavigationSuiteScaffold {
         self
     }
 
+    /// `navigationItemVerticalArrangement`: where the rail's header and items sit vertically
+    /// (`NavigationSuiteDefaults::vertical_arrangement()`, upstream's `Arrangement.Top`).
+    pub fn vertical_arrangement(mut self, arrangement: Arrangement) -> Self {
+        self.vertical_arrangement = arrangement;
+        self
+    }
+
     /// `contentColor`: the app content's colour (`onBackground` by default).
     pub fn content_color(mut self, color: Color) -> Self {
         self.content_color = Some(color);
@@ -429,6 +445,7 @@ impl NavigationSuiteScaffold {
         ctx.changed(&self.primary_action_alignment);
         ctx.changed(&self.navigation_suite_colors);
         ctx.changed(&self.content_color);
+        ctx.changed(&self.vertical_arrangement);
         let theme = WiniaTheme::colors();
         let direction = self
             .modifier
@@ -462,6 +479,7 @@ impl NavigationSuiteScaffold {
         let content = self.content;
         let primary_action = self.primary_action;
         let primary_action_alignment = self.primary_action_alignment;
+        let vertical_arrangement = self.vertical_arrangement;
 
         // Optional winia-only morph: collapse the current container, swap the one active shape, then
         // expand. The branches never overlap. Compose's shape switch uses movableContentOf plus a
@@ -615,6 +633,16 @@ impl NavigationSuiteScaffold {
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
+                        // The classic rail takes no arrangement, so upstream spaces it by hand
+                        // (`NavigationSuite.kt:640-657`): a leading spacer to push the items down.
+                        if matches!(
+                            vertical_arrangement,
+                            Arrangement::Center | Arrangement::End
+                        ) {
+                            crate::layout::Spacer::vertical(0.0)
+                                .modifier(Modifier::new().layout_weight(1.0))
+                                .build(ctx);
+                        }
                         rail.build(ctx);
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
@@ -645,6 +673,17 @@ impl NavigationSuiteScaffold {
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
+                        // Same hand-spacing as the legacy rail, and the same reason — upstream puts the
+                        // action first and then a leading spacer for Center/Bottom
+                        // (`NavigationSuite.kt:659-683`).
+                        if matches!(
+                            vertical_arrangement,
+                            Arrangement::Center | Arrangement::End
+                        ) {
+                            crate::layout::Spacer::vertical(0.0)
+                                .modifier(Modifier::new().layout_weight(1.0))
+                                .build(ctx);
+                        }
                         sheet.build(ctx);
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
@@ -821,6 +860,7 @@ impl NavigationSuiteScaffold {
                                         b.build(ctx);
                                     }
                                 })
+                                .arrangement(vertical_arrangement)
                                 .container_color(rail_container);
                                 // Upstream's contract for a VERTICAL shape: the primary action goes in
                                 // as the component's header (`NavigationSuite.kt:183-187`, `:612-620`) —
@@ -1168,6 +1208,53 @@ mod tests {
     /// Measured in the demo first (921x544): LTR rail at x=0 with the action at 20; RTL rail at 825
     /// (= 921 - 96) with the action at 845, i.e. the same 20dp.
     #[test]
+    /// `vertical_arrangement` reaches the rail: `End` pushes the header + items to the bottom of the
+    /// rail, `Start` (the default, upstream's `Top`) leaves them at `TopSpace`. Only a rail with SLACK
+    /// can tell them apart, which is why the suite's rail fills the window's height.
+    #[test]
+    fn the_vertical_arrangement_moves_the_rails_items() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let first_item_y = |arrangement: Arrangement| -> f32 {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                scaffold()
+                    .layout_type(NavigationSuiteType::WideNavigationRailCollapsed)
+                    .vertical_arrangement(arrangement)
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut y: Option<f32> = None;
+            fn walk(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                x: f32,
+                cy: f32,
+                out: &mut Option<f32>,
+            ) {
+                let n = &nodes[idx];
+                let (ax, ay) = (x + n.position.x, cy + n.position.y);
+                let s = n.measured_size;
+                if out.is_none() && ax < 96.0 && s.width > 40.0 && s.height == 64.0 {
+                    *out = Some(ay);
+                }
+                for &child in &n.children {
+                    walk(nodes, child, ax, ay, out);
+                }
+            }
+            walk(nodes, root, 0.0, 0.0, &mut y);
+            y.expect("the rail's first item is laid out")
+        };
+        let start = first_item_y(Arrangement::Start);
+        let end = first_item_y(Arrangement::End);
+        assert!(
+            end > start + 100.0,
+            "End pushes the stack to the bottom: start {start}, end {end}"
+        );
+    }
+
     fn the_rail_layout_docks_on_the_right_under_rtl() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
