@@ -394,11 +394,6 @@ pub struct LayoutNode {
     /// then took twice the difference off the painted box, so a squeezed item drifted away from its
     /// leading edge and shrank past what the layout had asked for.
     pub minimum_interactive_content: Option<(f32, f32)>,
-    /// Where that content sits inside the node box, as `(left, top)`. `None` means CENTRED, which
-    /// is what the modifier does; a parent that forces the node narrower can pin the content to
-    /// one edge instead — a ButtonGroup squeezing an item does, so the item keeps the edge facing
-    /// away from the press and gives up width on the other one.
-    pub minimum_interactive_offset: Option<(f32, f32)>,
     /// The box to PAINT instead of deriving one from the content, as `(left, top, w, h)` inside the
     /// node. A parent that forces the node's width sets this — a ButtonGroup does, so a squeezed
     /// item paints narrower and a pressed one wider. It is kept apart from
@@ -617,7 +612,6 @@ impl LayoutNode {
         // `minimum_interactive_size`, exactly like `measured_size`, and a stale one would inset the paint of
         // a node that has not measured yet this frame.
         self.minimum_interactive_content = from.minimum_interactive_content;
-        self.minimum_interactive_offset = from.minimum_interactive_offset;
         self.minimum_interactive_painted = from.minimum_interactive_painted;
         self.content_shift = from.content_shift;
         self.dirty = false;
@@ -644,7 +638,6 @@ impl LayoutNode {
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
             minimum_interactive_content: None,
-            minimum_interactive_offset: None,
             minimum_interactive_painted: None,
             content_shift: None,
             content_box_override: None,
@@ -734,7 +727,6 @@ impl Default for LayoutNode {
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
             minimum_interactive_content: None,
-            minimum_interactive_offset: None,
             minimum_interactive_painted: None,
             content_shift: None,
             content_box_override: None,
@@ -3116,7 +3108,6 @@ fn measure_node_inner(
     // that was never grown (a 40 dp container drawn at 32). The write further down only happens while the
     // element is in force, so clearing here is what makes its absence meaningful.
     nodes[idx].minimum_interactive_content = None;
-    nodes[idx].minimum_interactive_offset = None;
     nodes[idx].minimum_interactive_painted = None;
     nodes[idx].content_shift = None;
 
@@ -3746,10 +3737,11 @@ fn measure_node_inner(
                 .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
             if let Some((content_w, content_h)) = declared {
                 nodes[idx].minimum_interactive_content = Some((content_w, content_h));
-                nodes[idx].minimum_interactive_offset = None;
             }
-    nodes[idx].minimum_interactive_painted = None;
-    nodes[idx].content_shift = None;
+            // `minimum_interactive_painted` and `content_shift` are NOT cleared here: the clear at
+            // the top of this measurement covers them, and it has to run for a node that carries no
+            // minimum-interactive element at all. Clearing a second time here only read as if this
+            // block owned it.
             {
                 let cx = (width - content.width) / 2.0;
                 let cy = (height - content.height) / 2.0;

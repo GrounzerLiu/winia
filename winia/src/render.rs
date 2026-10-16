@@ -861,11 +861,9 @@ fn render_pass1(
     } else {
         match node.minimum_interactive_content {
             Some((content_w, content_h)) => {
-                // CENTRED by default — that is what the modifier does with its content. A parent
-                // may have pinned it to an edge instead (`offset`).
-                let (left, top) = node
-                    .minimum_interactive_offset
-                    .unwrap_or(((w - content_w) / 2.0, (h - content_h) / 2.0));
+                // CENTRED — that is what the modifier does with its content. A parent that wants it
+                // somewhere else says so through `minimum_interactive_painted` above.
+                let (left, top) = ((w - content_w) / 2.0, (h - content_h) / 2.0);
                 Rect::new(x + left, y + top, x + left + content_w, y + top + content_h)
             }
             None => Rect::new(x, y, x + w, y + h),
@@ -1370,18 +1368,24 @@ fn render_pass1(
         clipped = true;
     } else if let Some(ref shape) = clip_shape {
         canvas.save();
+        // Clipped at `paint_rect`, like the background, the border, the ripple, the focus ring and the
+        // graphics layer: what the clip belongs to is the container a component declares inside its
+        // touch target, not the target itself. Compose gets there by nesting
+        // (`InteractiveComponentSize.kt:125-133` wraps an inner `.size(40)`), so a clip inside that
+        // inner node is the 40 dp box; here the target IS the node, so `rect` clipped the 48 dp box
+        // and a squeezed item — whose container the row steers inside it — was clipped loosely.
         match shape {
-            crate::graphics::Shape::Rectangle => { canvas.clip_rect(rect, None, Some(false)); }
+            crate::graphics::Shape::Rectangle => { canvas.clip_rect(paint_rect, None, Some(false)); }
             crate::graphics::Shape::RoundedRect { corner_radius } => {
-                canvas.clip_rrect(RRect::new_rect_xy(rect, *corner_radius, *corner_radius), None, Some(false));
+                canvas.clip_rrect(RRect::new_rect_xy(paint_rect, *corner_radius, *corner_radius), None, Some(false));
             }
             crate::graphics::Shape::PillToRounded { corner_radius, t } => {
-                let percent = rect.width().min(rect.height()) / 2.0;
+                let percent = paint_rect.width().min(paint_rect.height()) / 2.0;
                 let r = percent + (*corner_radius - percent) * *t;
-                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
+                canvas.clip_rrect(RRect::new_rect_xy(paint_rect, r, r), None, Some(false));
             }
             crate::graphics::Shape::TopRoundedRect { radius } => {
-                let rr = RRect::new_rect_radii(rect, &[
+                let rr = RRect::new_rect_radii(paint_rect, &[
                     skia_safe::Vector::new(*radius, *radius),
                     skia_safe::Vector::new(*radius, *radius),
                     skia_safe::Vector::new(0.0, 0.0),
@@ -1390,27 +1394,27 @@ fn render_pass1(
                 canvas.clip_rrect(rr, None, Some(false));
             }
             crate::graphics::Shape::RightRoundedRect { radius } => {
-                canvas.clip_rrect(rrect_right_rounded(rect, *radius), None, Some(false));
+                canvas.clip_rrect(rrect_right_rounded(paint_rect, *radius), None, Some(false));
             }
             crate::graphics::Shape::LeftRoundedRect { radius } => {
-                canvas.clip_rrect(rrect_left_rounded(rect, *radius), None, Some(false));
+                canvas.clip_rrect(rrect_left_rounded(paint_rect, *radius), None, Some(false));
             }
             crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
                 canvas.clip_rrect(
-                    rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left),
+                    rrect_corners(paint_rect, *top_left, *top_right, *bottom_right, *bottom_left),
                     None,
                     Some(false),
                 );
             }
             crate::graphics::Shape::Pill => {
-                let r = rect.width().min(rect.height()) / 2.0;
-                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
+                let r = paint_rect.width().min(paint_rect.height()) / 2.0;
+                canvas.clip_rrect(RRect::new_rect_xy(paint_rect, r, r), None, Some(false));
             }
             crate::graphics::Shape::Circle => {
                 // Circle == Pill (see the fill path): percent-50 corners against
                 // the box, not an ellipse.
-                let r = rect.width().min(rect.height()) / 2.0;
-                canvas.clip_rrect(RRect::new_rect_xy(rect, r, r), None, Some(false));
+                let r = paint_rect.width().min(paint_rect.height()) / 2.0;
+                canvas.clip_rrect(RRect::new_rect_xy(paint_rect, r, r), None, Some(false));
             }
         }
         clipped = true;

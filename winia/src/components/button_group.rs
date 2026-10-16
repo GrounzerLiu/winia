@@ -576,16 +576,16 @@ struct ButtonGroupPolicy {
     /// One entry per child; 0 means the item takes its natural width.
     weights: Vec<f32>,
     /// One per child: the press progress an `interactive` item animates on. Read during MEASURE,
-    /// which registers a layout dependency, so an animation frame re-measures without recomposing.
+    /// which registers a layout dependency, so an animation frame re-measures without recomposing —
+    /// and read again in `place`, NEVER captured at composition: a press re-measures without
+    /// recomposing, so a compose-time snapshot always says nothing is pressed.
     progress: Vec<crate::runtime::state::State<f32>>,
     /// One per child: how far it will let a pressed neighbour compress it.
     compression: Vec<f32>,
     /// How many children are ITEMS. The indicator, when there is one, is the last child.
     item_count: usize,
-    /// One per child: the press progress (see `progress`). The growth reads it here in `place`
-    /// to decide which edge a squeezed item keeps — it must NOT be captured at compose time, or
-    /// it is stale: a press re-MEASURES without recomposing, so a compose-time snapshot still
-    /// says nothing is pressed.
+    /// Whether the row has an OVERFLOW indicator — the extra child after the items. Known at
+    /// composition, and it is what decides whether the items are wrapped (`wrap_item`).
     has_indicator: bool,
     /// Written during measure: how many items fit. `usize::MAX` until the first measurement.
     visible: Backchannel<usize>,
@@ -828,7 +828,6 @@ impl MeasurePolicy for ButtonGroupPolicy {
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &child) in children.iter().enumerate() {
-            let reported = nodes[child].measured_size.width;
             let slot = placements[i].size.width;
 
             // What the item PAINTS. The container follows the SLOT while keeping the inset the
@@ -841,70 +840,92 @@ impl MeasurePolicy for ButtonGroupPolicy {
             // The inset comes from the TOUCH TARGET the modifier declares, never from
             // `reported - cw`: the reported box follows the slot, so deriving it there made the
             // inset grow with the slot and cancelled the very widening it was meant to show.
-            let declared = nodes[child].minimum_interactive_content;
-            if let Some((cw, ch)) = declared {
-                let inset = nodes[child]
+            //
+            // The node that OWNS the container is the item's own node — or, when the row wrapped
+            // the item because there is an overflow indicator (`wrap_item`), the single node INSIDE
+            // that wrapper. Reading the wrapper itself published nothing (its modifier carries only
+            // the render-time alpha layer, no size), so every container inside such a row skipped
+            // this whole block and kept its own un-squeezed box.
+            let host = paint_host(nodes, child);
+            if let Some((cw, ch)) = nodes[host].minimum_interactive_content {
+                let reported = nodes[host].measured_size.width;
+                // Where that node sits inside the row's slot. Zero for a direct child — the painted
+                // box is then already in its own coordinates — and whatever the wrapper's own layout
+                // placed it at otherwise (`Alignment::Start` puts it at the slot's start).
+                let local = if host == child { 0.0 } else { nodes[host].position.x };
+                let inset = nodes[host]
                     .modifier
                     .get_minimum_interactive_size()
                     .map(|size| ((size - cw) / 2.0).max(0.0))
                     .unwrap_or(0.0);
                 let painted_w = (slot - inset * 2.0).max(0.0);
-                // Anchored to the edge the item KEEPS: the trailing neighbour of a press holds its
-                // trailing edge, the leading one holds its leading edge, and the pressed item itself
-                // stays centred and grows both ways.
-                let down = |index: usize| {
-                    self.progress
-                        .get(index)
-                        .map(|p| p.get() > 0.5)
-                        .unwrap_or(false)
-                };
-                let keep_leading = i + 1 < self.item_count && down(i + 1);
-                let keep_trailing = i > 0 && down(i - 1);
-                let content_x = if keep_leading {
-                    inset
-                } else if keep_trailing {
-                    (slot - painted_w - inset).max(0.0)
-                } else {
-                    (slot - painted_w) / 2.0
-                };
-                let top = nodes[child]
-                    .minimum_interactive_offset
-                    .map(|(_, t)| t)
-                    .unwrap_or_else(|| (nodes[child].measured_size.height - ch) / 2.0);
-                nodes[child].minimum_interactive_painted = Some((content_x, top, painted_w, ch));
+                // Always `inset` in from the slot's start, because `painted_w` above is the slot
+                // minus that same inset on BOTH sides. A branch used to sit here that picked the edge
+                // to hold from `self.progress` (leading neighbour keeps its leading edge, trailing one
+                // its trailing edge) — but `slot - painted_w - inset`, `(slot - painted_w) / 2` and
+                // `inset` are all the SAME number, so it was dead, and it read as if the anchoring
+                // happened here. It does not: the outer edge stays put because of the SLOT GEOMETRY
+                // (the measure pass takes a press's room off the neighbour's INNER side, so the outer
+                // slot edge never moves).
+                let content_x = inset;
+                let top = (nodes[host].measured_size.height - ch) / 2.0;
+                nodes[host].minimum_interactive_painted = Some((content_x - local, top, painted_w, ch));
 
                 // The content inside the node. The modifier placed it against the box the child
                 // MEASURED (its touch target), so it has to follow the container this frame paints:
                 // a squeezed item's glyph would otherwise sit off the middle of its container.
-                let glyph_w = nodes[child]
+                let glyph_w = nodes[host]
                     .children
                     .first()
                     .map(|&c| nodes[c].measured_size.width)
                     .unwrap_or(0.0);
                 let current = (reported - glyph_w) / 2.0;
-                let desired = content_x + (painted_w - glyph_w) / 2.0;
+                let desired = nodes[host]
+                    .minimum_interactive_painted
+                    .map(|(left, _, w, _)| left + (w - glyph_w) / 2.0)
+                    .unwrap_or(current);
                 let shift = current - desired;
                 // Apply the DIFFERENCE from what is already applied: `place` runs every frame, but a
                 // node whose constraints did not change is served from the fold cache and its
                 // children are not re-placed, so an unconditional `-=` would apply again and again
                 // and walk the content out of the box (measured: a glyph at 14 ended up at -3).
-                let applied = nodes[child].content_shift.unwrap_or(0.0);
+                let applied = nodes[host].content_shift.unwrap_or(0.0);
                 let delta = shift - applied;
                 if delta.abs() > 0.01 {
-                    let kids = nodes[child].children.clone();
+                    let kids = nodes[host].children.clone();
                     for c in kids {
                         nodes[c].position.x -= delta;
                     }
-                    if let Some((cx, cy, cw2, ch2)) = nodes[child].content_box_override {
-                        nodes[child].content_box_override = Some((cx - delta, cy, cw2, ch2));
+                    if let Some((cx, cy, cw2, ch2)) = nodes[host].content_box_override {
+                        nodes[host].content_box_override = Some((cx - delta, cy, cw2, ch2));
                     }
                 }
-                nodes[child].content_shift = Some(shift);
+                nodes[host].content_shift = Some(shift);
             }
             nodes[child].position = placements[i].position;
             nodes[child].measured_size = placements[i].size;
         }
     }
+}
+
+/// The node that paints a container of its own inside the row's slot.
+///
+/// Normally that is the item's own node. When the row has an overflow indicator it wraps every item
+/// in a layer (`wrap_item`), so the node it sees is that wrapper — which carries no size and
+/// therefore publishes no declared box. The item inside it is the one with the container, and it is
+/// the node the painted box has to be written on.
+fn paint_host(nodes: &[LayoutNode], child: usize) -> usize {
+    if nodes[child].minimum_interactive_content.is_some() {
+        return child;
+    }
+    let kids = &nodes[child].children;
+    if kids.len() == 1 {
+        let inner = kids[0];
+        if nodes[inner].minimum_interactive_content.is_some() {
+            return inner;
+        }
+    }
+    child
 }
 
 #[cfg(test)]
@@ -1537,7 +1558,7 @@ mod tests {
     /// content off centre: measured in the demo, the heart inside a squeezed icon item sat 2.0 px
     /// right of its container. `place` shifts the subtree by half the difference.
     #[test]
-    fn a_squeezed_items_content_stays_centred() {
+    fn a_squeezed_items_content_follows_its_container_to_the_trailing_edge() {
         let _guard = crate::animation::tests::TEST_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1616,5 +1637,214 @@ mod tests {
         // towards the trailing edge instead of staying put — centring would have moved BOTH edges.
         //   slot 33, inset 4, container 25 wide at x = 33 - 25 - 4 = 4, glyph centred in it.
         assert_eq!(glyph_x, 4.5, "the content follows the container towards the trailing edge");
-    }}
+    }
+    /// The painted box follows a press: the pressed item's container widens BOTH ways, and each
+    /// neighbour keeps its OUTER edge and gives up width on the side that faces the press.
+    ///
+    /// This is the half a test of `measured_size` cannot see. The row's SLOTS were already right when
+    /// the demo still showed nothing moving — the container is a separate box (`paint_rect` reads
+    /// `minimum_interactive_painted`), so the previous test of the slots stayed green through it.
+    #[test]
+    fn a_press_widens_the_painted_box_and_holds_the_outer_edges() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(
+                    crate::theme::ThemeColors::light_from_seed(0x6750A4),
+                    ctx,
+                    |ctx| {
+                        ButtonGroup::new()
+                            .item(|ctx, source| {
+                                crate::components::icon_button::IconButton::new()
+                                    .interaction_source(source)
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        crate::components::icon::Icon::svg_path("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
+                                            .size(24.0)
+                                            .build(ctx);
+                                    });
+                            })
+                            .add(
+                                ButtonGroupItem::new(|ctx, source| {
+                                    crate::components::icon_button::IconButton::new()
+                                        .interaction_source(source)
+                                        .on_click(|| {})
+                                        .build(ctx, |ctx| {
+                                            crate::components::icon::Icon::svg_path("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
+                                                .size(24.0)
+                                                .build(ctx);
+                                        });
+                                })
+                                .press_source(pressed.clone()),
+                            )
+                            .item(|ctx, source| {
+                                crate::components::icon_button::IconButton::new()
+                                    .interaction_source(source)
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        crate::components::icon::Icon::svg_path("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
+                                            .size(24.0)
+                                            .build(ctx);
+                                    });
+                            })
+                            .build(ctx);
+                    },
+                );
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        // (left, right) of every item's painted container, in the row's own coordinates — the node's
+        // own position plus the box the row wrote on it.
+        let boxes = |composer: &crate::runtime::composer::Composer| -> Vec<(f32, f32)> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[root]
+                .children
+                .iter()
+                .map(|&c| {
+                    let (left, _, w, _) = nodes[c]
+                        .minimum_interactive_painted
+                        .expect("an IconButton item publishes its painted box");
+                    (nodes[c].position.x + left, nodes[c].position.x + left + w)
+                })
+                .collect()
+        };
+
+        build(&mut composer);
+        let rest = boxes(&composer);
+        assert_eq!(rest.len(), 3, "three items");
+        for (l, r) in &rest {
+            assert!(
+                (r - l - 40.0).abs() < 0.01,
+                "at rest each container is the declared 40 dp square, got {}",
+                r - l
+            );
+        }
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let held = boxes(&composer);
+        assert!(
+            (held[0].0 - rest[0].0).abs() < 0.01,
+            "the leading neighbour keeps its leading edge: {} -> {}",
+            rest[0].0,
+            held[0].0
+        );
+        assert!(
+            held[0].1 < rest[0].1 - 1.0,
+            "and gives up width on the trailing side: {} -> {}",
+            rest[0].1,
+            held[0].1
+        );
+        assert!(
+            held[1].0 < rest[1].0 - 1.0 && held[1].1 > rest[1].1 + 1.0,
+            "the pressed item grows BOTH ways: {:?} -> {:?}",
+            rest[1],
+            held[1]
+        );
+        assert!(
+            (held[2].1 - rest[2].1).abs() < 0.01,
+            "the trailing neighbour keeps its trailing edge: {} -> {}",
+            rest[2].1,
+            held[2].1
+        );
+        assert!(
+            held[2].0 > rest[2].0 + 1.0,
+            "and gives up width on the leading side: {} -> {}",
+            rest[2].0,
+            held[2].0
+        );
+    }
+
+    /// A group WITH an overflow indicator wraps every item in a layer (`wrap_item`), so the node the
+    /// row sees is that WRAPPER — which carries no size, publishes no declared box, and therefore made
+    /// the whole painted-box step a no-op. The item inside then kept its own un-squeezed container and
+    /// ran over its neighbour's slot. The steering has to reach through the wrapper to the node that
+    /// owns the container.
+    #[test]
+    fn an_icon_item_in_an_overflow_group_is_steered_through_the_wrapper() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(
+                    crate::theme::ThemeColors::light_from_seed(0x6750A4),
+                    ctx,
+                    |ctx| {
+                        ButtonGroup::new()
+                            .add(
+                                ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                                    .press_source(pressed.clone()),
+                            )
+                            .item(|ctx, source| {
+                                crate::components::icon_button::IconButton::new()
+                                    .interaction_source(source)
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        crate::components::icon::Icon::svg_path("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
+                                            .size(24.0)
+                                            .build(ctx);
+                                    });
+                            })
+                            .overflow_indicator(|ctx, _state| leaf(ctx, 40.0, 40.0))
+                            .build(ctx);
+                    },
+                );
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        // (the wrapper the row sees, the item inside it, that item's painted box)
+        let wrapped = |composer: &crate::runtime::composer::Composer| -> Option<(f32, f32, f32)> {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let wrapper = nodes[root].children[1];
+            let inner = *nodes[wrapper].children.first()?;
+            assert_ne!(wrapper, inner, "the row wrapped the item, so these are two nodes");
+            let (left, _, w, h) = nodes[inner].minimum_interactive_painted?;
+            Some((left, w, h))
+        };
+
+        build(&mut composer);
+        let (left, w, h) = wrapped(&composer).expect("the wrapped item is steered too");
+        assert_eq!(
+            (left, w, h),
+            (4.0, 40.0, 40.0),
+            "at rest: the declared square, inset 4 inside its slot"
+        );
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let (left, w, _) = wrapped(&composer).expect("still steered after the press");
+        assert!(
+            (w - 25.0).abs() < 0.5,
+            "the squeezed container narrows with its slot, got {w}"
+        );
+        assert_eq!(left, 4.0, "and it holds its trailing edge: the press is on its leading side");
+    }
+}
 
