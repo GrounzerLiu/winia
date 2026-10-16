@@ -146,18 +146,26 @@ fn sheet_body(ctx: &mut ComposeCtx, page: State<Page>, drawer: DrawerState) {
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
                     Text::new("Mail").font_size(22.0).build(ctx);
-                    Badge::new()
-                        .content(|ctx| {
-                            Text::new("3").font_size(11.0).build(ctx);
-                        })
-                        .build(ctx);
                 });
             for item in Page::all() {
                 let selected = page.get() == item;
-                NavigationDrawerItem::text_label(item.title(), selected)
+                let mut item_builder = NavigationDrawerItem::text_label(item.title(), selected)
                     .icon(move |ctx| {
                         Icon::svg_path(item.icon()).size(24.0).build(ctx);
-                    })
+                    });
+                if item == Page::Inbox {
+                    // The count belongs HERE, not on the sheet header: M3 puts a badge on a
+                    // DESTINATION, and the item's badge slot is laid out at the END of the row,
+                    // after the label has taken the slack (upstream `NavigationDrawer.kt:1156-1160`).
+                    item_builder = item_builder.badge(|ctx| {
+                        Badge::new()
+                            .content(|ctx| {
+                                Text::new("3").font_size(11.0).build(ctx);
+                            })
+                            .build(ctx);
+                    });
+                }
+                item_builder
                     .on_click({
                         clone!(page, drawer);
                         move || {
