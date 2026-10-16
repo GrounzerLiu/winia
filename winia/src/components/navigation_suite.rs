@@ -614,22 +614,13 @@ impl NavigationSuiteScaffold {
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
-                        // The classic rail takes no arrangement, so upstream spaces it by hand
-                        // (`NavigationSuite.kt:640-657`): a leading spacer to push the items down.
-                        if matches!(
-                            vertical_arrangement,
-                            Arrangement::Center | Arrangement::End
-                        ) {
-                            crate::layout::Spacer::vertical(0.0)
-                                .modifier(Modifier::new().layout_weight(1.0))
-                                .build(ctx);
-                        }
                         build_classic_rail_shape(
                             ctx,
                             items_for_shape.clone(),
                             suite_colors.navigation_rail_container,
                             rail_item_colors,
                             primary_action,
+                            vertical_arrangement,
                         );
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
@@ -638,22 +629,12 @@ impl NavigationSuiteScaffold {
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
-                        // Same hand-spacing as the legacy rail, and the same reason — upstream puts the
-                        // action first and then a leading spacer for Center/Bottom
-                        // (`NavigationSuite.kt:659-683`).
-                        if matches!(
-                            vertical_arrangement,
-                            Arrangement::Center | Arrangement::End
-                        ) {
-                            crate::layout::Spacer::vertical(0.0)
-                                .modifier(Modifier::new().layout_weight(1.0))
-                                .build(ctx);
-                        }
                         build_drawer_shape(
                             ctx,
                             items_for_shape.clone(),
                             suite_colors.navigation_drawer_container,
                             primary_action,
+                            vertical_arrangement,
                         );
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
@@ -903,8 +884,18 @@ fn build_classic_rail_shape(
     container: Color,
     item_colors: crate::components::navigation_rail::NavigationRailItemColors,
     header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    arrangement: Arrangement,
 ) {
     let mut rail = NavigationRail::new(move |ctx| {
+        // Upstream spaces the classic rail BY HAND, inside the rail's own column
+        // (`NavigationSuite.kt:640-657`): a leading spacer for Center/Bottom and a trailing one for
+        // Center alone. The column is vertical, so the weighted spacer really does take height — the
+        // first version of this put it in the scaffold's ROW, where the weight is a WIDTH.
+        if matches!(arrangement, Arrangement::Center | Arrangement::End) {
+            crate::layout::Spacer::vertical(0.0)
+                .modifier(Modifier::new().layout_weight(1.0))
+                .build(ctx);
+        }
         for item in items {
             let icon = item.icon.clone();
             let mut b = NavigationRailItem::new(item.selected, move |ctx| icon(ctx))
@@ -918,6 +909,11 @@ fn build_classic_rail_shape(
                 b = b.label(move |ctx| label(ctx));
             }
             b.build(ctx);
+        }
+        if matches!(arrangement, Arrangement::Center) {
+            crate::layout::Spacer::vertical(0.0)
+                .modifier(Modifier::new().layout_weight(1.0))
+                .build(ctx);
         }
     })
     .container_color(container);
@@ -933,10 +929,17 @@ fn build_drawer_shape(
     items: Vec<NavigationSuiteItem>,
     container: Color,
     header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    arrangement: Arrangement,
 ) {
     DrawerSheet::permanent(move |ctx| {
         if let Some(header) = header {
             header(ctx);
+        }
+        // Same hand-spacing, same reason as the classic rail (`NavigationSuite.kt:659-683`).
+        if matches!(arrangement, Arrangement::Center | Arrangement::End) {
+            crate::layout::Spacer::vertical(0.0)
+                .modifier(Modifier::new().layout_weight(1.0))
+                .build(ctx);
         }
         for item in items {
             let icon = item.icon.clone();
@@ -952,6 +955,11 @@ fn build_drawer_shape(
                         cb()
                     }
                 })
+                .build(ctx);
+        }
+        if matches!(arrangement, Arrangement::Center) {
+            crate::layout::Spacer::vertical(0.0)
+                .modifier(Modifier::new().layout_weight(1.0))
                 .build(ctx);
         }
     })
@@ -1124,9 +1132,17 @@ impl NavigationSuiteScaffoldLayout {
         let navigation_suite = self.navigation_suite;
         let content = self.content;
         let primary_action = self.primary_action;
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or_else(crate::layout::direction::current);
+        let rtl = direction == LayoutDirection::Rtl;
+        ctx.changed(&direction);
+        ctx.changed(&self.content_color);
         let policy = SuiteScaffoldLayoutPolicy {
             layout_type: self.layout_type,
             alignment: self.primary_action_alignment,
+            rtl,
         };
         let key = ctx.next_key();
         let modifier = Modifier::new().fill_max_size().then(self.modifier);
@@ -1155,6 +1171,9 @@ impl NavigationSuiteScaffoldLayout {
 struct SuiteScaffoldLayoutPolicy {
     layout_type: NavigationSuiteType,
     alignment: Alignment,
+    /// The placement mirrors: `Start` is the leading edge, which is the RIGHT one under RTL. Captured
+    /// at compose time because placement runs after composition, where the direction local is gone.
+    rtl: bool,
 }
 
 impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
@@ -1191,9 +1210,9 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
             Constraints::new(0.0, c.max_width, 0.0, c.max_height),
         );
         let placements = if is_bar {
-            let action_x = match self.alignment {
-                Alignment::Start => PRIMARY_ACTION_PADDING,
-                Alignment::Center => (c.max_width - action.width) / 2.0,
+            let action_x = match (self.alignment, self.rtl) {
+                (Alignment::Center, _) => (c.max_width - action.width) / 2.0,
+                (Alignment::Start, false) | (Alignment::End, true) => PRIMARY_ACTION_PADDING,
                 _ => c.max_width - action.width - PRIMARY_ACTION_PADDING,
             };
             vec![
@@ -1208,18 +1227,20 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
                 Placement { size: content, position: Offset::new(0.0, 0.0) },
             ]
         } else {
+            let (nav_x, content_x) = if self.rtl {
+                (c.max_width - nav.width, 0.0)
+            } else {
+                (0.0, nav.width)
+            };
             vec![
-                Placement { size: nav, position: Offset::new(0.0, 0.0) },
+                Placement { size: nav, position: Offset::new(nav_x, 0.0) },
                 // A vertical shape keeps its action in its own header, so this slot is parked off-view
                 // rather than placed (upstream's rail branch does not place it at all).
                 Placement {
                     size: action,
                     position: Offset::new(c.max_width + 1000.0, 0.0),
                 },
-                Placement {
-                    size: content,
-                    position: Offset::new(nav.width, 0.0),
-                },
+                Placement { size: content, position: Offset::new(content_x, 0.0) },
             ]
         };
         (Size::new(c.max_width, c.max_height), placements)
@@ -1379,12 +1400,14 @@ impl NavigationSuite {
                 container.unwrap_or(colors.navigation_rail_container),
                 item_colors.wide_navigation_rail,
                 action,
+                arrangement,
             ),
             NavigationSuiteType::NavigationDrawer => build_drawer_shape(
                 ctx,
                 items,
                 container.unwrap_or(colors.navigation_drawer_container),
                 action,
+                arrangement,
             ),
             NavigationSuiteType::None => {}
         }
@@ -1948,6 +1971,62 @@ fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
         walk(nodes, root, 0.0, &mut action_x);
         let x = action_x.expect("the classic rail carries the primary action as its header");
         assert!(x < 80.0, "inside the rail, x={x}");
+    }
+
+    /// `NavigationSuiteScaffoldLayout` mirrors with the layout, as upstream's `placeRelative` does: a RAIL
+    /// layout docks the navigation on the RIGHT under RTL with the content beside it, and a BAR layout
+    /// insets the action from the LOGICAL end, i.e. the left edge.
+    #[test]
+    fn the_scaffold_layout_mirrors_under_rtl() {
+        let probe = |t: NavigationSuiteType| -> Vec<(f32, f32)> {
+            let mut composer = Composer::new();
+            crate::layout::direction::provides(LayoutDirection::Rtl, || {
+                composer.compose(|ctx| {
+                    NavigationSuiteScaffoldLayout::new(
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                            ctx.end_node();
+                        },
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().fill_max_size());
+                            ctx.end_node();
+                        },
+                    )
+                    .layout_type(t)
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+                });
+                composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            });
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[root]
+                .children
+                .iter()
+                .map(|&c| (nodes[c].position.x, nodes[c].position.y))
+                .collect()
+        };
+
+        let rail = probe(NavigationSuiteType::WideNavigationRailCollapsed);
+        assert!(
+            (rail[0].0 - (500.0 - 96.0)).abs() < 1.0,
+            "the rail docks on the RIGHT under RTL, got {}",
+            rail[0].0
+        );
+        assert!(rail[2].0 < 1.0, "and the content starts at the left, got {}", rail[2].0);
+
+        let bar = probe(NavigationSuiteType::ShortNavigationBarCompact);
+        assert!(
+            (bar[1].0 - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            "the action is inset from the logical (left) edge, got {}",
+            bar[1].0
+        );
     }
 
     /// `NavigationSuiteDefaults::colors()` delegates to each shape's own component default, which is
