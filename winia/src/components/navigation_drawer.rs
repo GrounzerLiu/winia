@@ -310,7 +310,30 @@ impl DrawerDefaults {
             unselected_container: Color::TRANSPARENT,
             unselected_icon: theme.on_surface_variant,
             unselected_text: theme.on_surface_variant,
+            selected_badge: theme.on_secondary_container,
+            unselected_badge: theme.on_surface_variant,
         }
+    }
+}
+
+/// Item defaults (Compose `NavigationDrawerItemDefaults`).
+///
+/// Upstream's `colors()` takes all eight colors as OPTIONAL parameters. Every field of
+/// [`NavigationDrawerItemColors`] is public here, so an override is written as a struct field and
+/// this object only has to name the defaults — which is also why it carries no eight-argument
+/// builder of its own.
+pub struct NavigationDrawerItemDefaults;
+
+impl NavigationDrawerItemDefaults {
+    /// `ItemPadding`: the horizontal padding a drawer puts around its items, which is what makes an
+    /// item span `ActiveIndicatorWidth` (336dp) inside the 360dp container.
+    pub const ITEM_PADDING: f32 = DRAWER_SHEET_HORIZONTAL_PADDING;
+
+    /// `NavigationDrawerItemDefaults.colors()` — `ActiveIndicatorColor` / `ActiveIconColor` /
+    /// `ActiveLabelTextColor` and their inactive counterparts, with both badge colors following the
+    /// LABEL colors as upstream's own defaults do.
+    pub fn colors(theme: &crate::theme::ThemeColors) -> NavigationDrawerItemColors {
+        DrawerDefaults::item_colors(theme)
     }
 }
 
@@ -336,6 +359,11 @@ pub struct NavigationDrawerItemColors {
     pub unselected_icon: Color,
     /// Label color while unselected (`OnSurfaceVariant`).
     pub unselected_text: Color,
+    /// Badge color while selected — `badgeColor(selected)`, which upstream defaults to
+    /// `selectedTextColor` (`NavigationDrawer.kt:1218-1219`).
+    pub selected_badge: Color,
+    /// Badge color while unselected (`unselectedTextColor` by default).
+    pub unselected_badge: Color,
 }
 
 impl NavigationDrawerItemColors {
@@ -347,6 +375,12 @@ impl NavigationDrawerItemColors {
     }
     pub fn text(&self, selected: bool) -> Color {
         if selected { self.selected_text } else { self.unselected_text }
+    }
+    /// The badge's color. It defaults to the LABEL's, not the icon's: they agree at the token
+    /// defaults (`OnSecondaryContainer` / `OnSurfaceVariant` for both), so this only shows when a
+    /// caller overrides one of the two.
+    pub fn badge(&self, selected: bool) -> Color {
+        if selected { self.selected_badge } else { self.unselected_badge }
     }
 }
 
@@ -469,6 +503,16 @@ impl NavigationDrawerItem {
                 .clickable_with_source(&interaction, move || cb())
                 .ripple_with_shape(&interaction, ripple_color, true, shape);
         }
+        // Accessibility: upstream declares `role = Role.Tab` on the row (`NavigationDrawer.kt:1137`)
+        // and carries the selection the way its `Surface(selected = …)` does. winia's accessibility
+        // layer maps `SemanticsRole::Tab` to a UIA tab item, so without this a drawer reads as a
+        // pile of unnamed buttons.
+        modifier = modifier.semantics(
+            crate::semantics::SemanticsConfig::new()
+                .role(crate::semantics::SemanticsRole::Tab)
+                .merge_descendants(true)
+                .state(crate::semantics::SemanticsState::new().selected(selected)),
+        );
 
         let icon = self.icon;
         let label = self.label;
@@ -492,13 +536,12 @@ impl NavigationDrawerItem {
                     .spacing(DRAWER_ITEM_SLOT_GAP)
                     .build(ctx, |ctx| {
                         if let Some(icon) = icon {
+                            // The icon is composed at ITS OWN size, as upstream does — the slot only
+                            // provides the content color, and `Icon` already falls back to 24 when the
+                            // caller set no size. Wrapping it in a fixed 24 box squashed anything
+                            // larger.
                             WiniaTheme::with_content_color(icon_color, ctx, |ctx| {
-                                Stack::new()
-                                    .modifier(Modifier::new().size(
-                                        DRAWER_ITEM_ICON_SIZE,
-                                        DRAWER_ITEM_ICON_SIZE,
-                                    ))
-                                    .build(ctx, |ctx| { icon(ctx); });
+                                icon(ctx);
                             });
                         }
                         // Label takes the slack between the icon and the badge.
@@ -512,7 +555,7 @@ impl NavigationDrawerItem {
                             });
                         if has_badge {
                             if let Some(badge) = badge {
-                                WiniaTheme::with_content_color(icon_color, ctx, |ctx| {
+                                WiniaTheme::with_content_color(colors.badge(selected), ctx, |ctx| {
                                     badge(ctx);
                                 });
                             }
@@ -533,7 +576,44 @@ impl NavigationDrawerItem {
 /// Nest it in [`ModalNavigationDrawer`]'s drawer slot. Compose's `ModalDrawerElevation`
 /// is `ElevationTokens.Level0`, so the default draws no shadow; set
 /// [`Self::elevation`] to add one.
-pub struct ModalDrawerSheet {
+/// Which drawer the sheet belongs to. The three differ ONLY in the container color their
+/// defaults resolve to (`ModalContainerColor` = `SurfaceContainerLow` against
+/// `StandardContainerColor` = `Surface`, `NavigationDrawerTokens.kt`); the shape, the elevation
+/// default (`Level0`) and the padding are the same for all three, which is why this is one type
+/// with three constructors rather than three near-identical structs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DrawerSheetKind {
+    /// `ModalDrawerSheet`. Container `SurfaceContainerLow`; the modal drawer paints a scrim over
+    /// the content behind it.
+    Modal,
+    /// `DismissibleDrawerSheet` / `PermanentDrawerSheet`. Container `Surface`; nothing obscures the
+    /// content, which is pushed aside instead.
+    Standard,
+}
+
+impl DrawerSheetKind {
+    /// The container color this kind resolves to when the caller gave none.
+    pub(crate) fn container_color(self, theme: &crate::theme::ThemeColors) -> Color {
+        match self {
+            DrawerSheetKind::Modal => DrawerDefaults::modal_container_color(theme),
+            // `StandardContainerColor` = `Surface` (`NavigationDrawerTokens.kt`).
+            DrawerSheetKind::Standard => theme.surface,
+        }
+    }
+
+    /// The shape this kind resolves to when the caller gave none. Only the MODAL sheet rounds its
+    /// end corners (`DrawerDefaults.shape`); upstream's dismissible and permanent sheets both
+    /// default to `RectangleShape` (`NavigationDrawer.kt:736`, `:821`).
+    pub(crate) fn shape(self, direction: LayoutDirection) -> Shape {
+        match self {
+            DrawerSheetKind::Modal => DrawerDefaults::shape(direction),
+            DrawerSheetKind::Standard => Shape::Rectangle,
+        }
+    }
+}
+
+pub struct DrawerSheet {
+    kind: DrawerSheetKind,
     modifier: Modifier,
     shape: Option<Shape>,
     container_color: Option<Color>,
@@ -543,9 +623,28 @@ pub struct ModalDrawerSheet {
     content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
 }
 
-impl ModalDrawerSheet {
+impl DrawerSheet {
+    /// The MODAL sheet (`ModalDrawerSheet`).
     pub fn new(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::of_kind(DrawerSheetKind::Modal, content)
+    }
+
+    /// `DismissibleDrawerSheet`.
+    pub fn dismissible(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::of_kind(DrawerSheetKind::Standard, content)
+    }
+
+    /// `PermanentDrawerSheet`.
+    pub fn permanent(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self::of_kind(DrawerSheetKind::Standard, content)
+    }
+
+    fn of_kind(
+        kind: DrawerSheetKind,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
         Self {
+            kind,
             modifier: Modifier::new(),
             shape: None,
             container_color: None,
@@ -603,23 +702,32 @@ impl ModalDrawerSheet {
         ctx.changed(&self.container_color);
         ctx.changed(&self.content_color);
         ctx.changed(&self.elevation);
+        ctx.changed(&self.kind);
         ctx.changed(&self.content_padding);
-        let shape = self.shape.unwrap_or_else(|| DrawerDefaults::shape(direction));
-        let container = self.container_color.unwrap_or_else(|| DrawerDefaults::modal_container_color(&theme));
+        let shape = self.shape.unwrap_or_else(|| self.kind.shape(direction));
+        let container = self.container_color.unwrap_or_else(|| self.kind.container_color(&theme));
         let content_color = self.content_color.unwrap_or(theme.on_surface);
         let elevation = self.elevation;
         let padding = self.content_padding;
         let content = self.content;
         // Shadow sits OUTSIDE the clip (it must be able to paint past the rounded
         // corner), then the surface fills and clips its children.
-        // androidx's `DrawerSheet` applies `sizeIn(minWidth = MinimumDrawerWidth, maxWidth =
-        // maxWidth)`: the drawer's own width is a FLOOR, not just a floor on the maximum, so
-        // a drawer whose content is narrow is still 240dp wide rather than collapsing to its
-        // padding. (The maximum is the drawer's business — it positions the sheet — so only
-        // the minimum is applied here; an over-wide minimum is clamped by the constraints.)
+        // `DrawerSheet` applies `sizeIn(minWidth = MinimumDrawerWidth, maxWidth =
+        // NavigationDrawerTokens.ContainerWidth)` (androidx `NavigationDrawer.kt:854`, `:866`) —
+        // BOTH bounds, on the sheet itself: a narrow-content sheet is still 240dp wide, and one
+        // whose content wants more stops at 360dp. The drawer that hosts it may narrow it further
+        // (the modal and dismissible ones give it the token clipped to the window).
         let mut modifier = Modifier::new()
             .fill_max_height()
             .min_width(DRAWER_MIN_WIDTH)
+            .max_width(DRAWER_MAX_WIDTH)
+            // `paneTitle = navigationMenu` upstream (`NavigationDrawer.kt:832`). winia's semantics
+            // has no paneTitle property of its own, so the pane is named with a content description
+            // — the closest thing the accessibility layer publishes. Declared BEFORE the caller's
+            // modifier so a caller's own description merges over it.
+            .semantics(
+                crate::semantics::SemanticsConfig::new().content_description("Navigation menu"),
+            )
             .shadow(elevation, shape, false, Color::from_argb(40, 0, 0, 0))
             .background(container, shape)
             .clip(shape);
@@ -637,6 +745,16 @@ impl ModalDrawerSheet {
         });
     }
 }
+
+/// Compose spells the modal sheet as its own type; it is the same sheet here, built with
+/// [`DrawerSheet::new`].
+pub type ModalDrawerSheet = DrawerSheet;
+/// Built with [`DrawerSheet::dismissible`] — `DismissibleDrawerSheet::new` would give the MODAL
+/// container color, which is why the constructor is named after the variant.
+pub type DismissibleDrawerSheet = DrawerSheet;
+/// Built with [`DrawerSheet::permanent`]. See [`DismissibleDrawerSheet`] for why `new` is not the
+/// constructor to reach for.
+pub type PermanentDrawerSheet = DrawerSheet;
 
 // ═══════════════ ModalNavigationDrawer ═══════════════
 
@@ -788,6 +906,253 @@ impl ModalNavigationDrawer {
                         .build(ctx, drawer_content);
                 }
             });
+    }
+}
+
+// ═══════════════ DismissibleNavigationDrawer ═══════════════
+
+/// Dismissible navigation drawer (Compose `DismissibleNavigationDrawer`).
+///
+/// Same state, anchors and gestures as [`ModalNavigationDrawer`]; what differs is where the content
+/// goes. There is NO scrim, and the content is PUSHED rather than covered: upstream measures both
+/// children and places the content at `sheetWidth + drawerState.requireOffset()`, mirrored under RTL
+/// by `placeRelative` (`NavigationDrawer.kt:570-590`), so a closed drawer costs the content nothing
+/// and an open one costs it exactly the sheet's width.
+///
+/// Pair it with [`DrawerSheet::dismissible`] — the standard container is `Surface` and the standard
+/// shape is a RECTANGLE (`NavigationDrawer.kt:736`), unlike the modal sheet's rounded end corners.
+pub struct DismissibleNavigationDrawer {
+    content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    drawer_content: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    drawer_state: Option<DrawerState>,
+    gestures_enabled: bool,
+    maximum_drawer_width: Dp,
+    minimum_drawer_width: Dp,
+    modifier: Modifier,
+}
+
+impl DismissibleNavigationDrawer {
+    /// `content` is the app shell the drawer pushes aside.
+    pub fn new(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self {
+            content: Box::new(content),
+            drawer_content: None,
+            drawer_state: None,
+            gestures_enabled: true,
+            maximum_drawer_width: DrawerDefaults::MAXIMUM_DRAWER_WIDTH,
+            minimum_drawer_width: DrawerDefaults::MINIMUM_DRAWER_WIDTH,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The drawer's own content — typically [`DrawerSheet::dismissible`].
+    pub fn drawer_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.drawer_content = Some(Box::new(content));
+        self
+    }
+
+    /// Externally owned state (default: remembered internally, parked closed).
+    pub fn drawer_state(mut self, state: DrawerState) -> Self {
+        self.drawer_state = Some(state);
+        self
+    }
+
+    /// Whether a horizontal drag moves the drawer (default true).
+    pub fn gestures_enabled(mut self, enabled: bool) -> Self {
+        self.gestures_enabled = enabled;
+        self
+    }
+
+    /// `MaximumDrawerWidth` (default 360dp).
+    pub fn maximum_drawer_width(mut self, width: Dp) -> Self {
+        self.maximum_drawer_width = width;
+        self
+    }
+
+    /// `MinimumDrawerWidth` (default 240dp).
+    pub fn minimum_drawer_width(mut self, width: Dp) -> Self {
+        self.minimum_drawer_width = width;
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or(crate::layout::direction::current());
+        let rtl = direction == LayoutDirection::Rtl;
+        ctx.changed(&direction);
+        ctx.changed(&self.gestures_enabled);
+        ctx.changed(&self.maximum_drawer_width);
+        ctx.changed(&self.minimum_drawer_width);
+
+        let holder = ctx.remember(|| DrawerState::new(DrawerValue::Closed));
+        let state = match self.drawer_state {
+            Some(s) => s,
+            None => holder.get(),
+        };
+        let window_w = crate::layout::window_size().0;
+        let sheet_w = resolve_sheet_width(
+            self.maximum_drawer_width.0,
+            self.minimum_drawer_width.0,
+            window_w,
+        );
+        state.update_anchors(sheet_w, rtl);
+
+        let content = self.content;
+        let drawer_content = self.drawer_content;
+        let mut host = Modifier::new().fill_max_size();
+        if self.gestures_enabled {
+            let drag_state = state.clone();
+            let end_state = state.clone();
+            host = host
+                .on_drag(move |_pos, (dx, _dy)| drag_state.drag_delta(dx))
+                .on_drag_end(move || {
+                    let v = end_state.last_velocity();
+                    end_state.settle_with_velocity(v);
+                });
+        }
+        let host = host.then(self.modifier);
+
+        let key = ctx.next_key();
+        let policy = DismissibleDrawerPolicy {
+            offset: state.offset_state(),
+            sheet_width: sheet_w,
+            rtl,
+        };
+        match ctx.start_restartable_group(key, host, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                let sheet_modifier = Modifier::new().width(sheet_w).fill_max_height();
+                match drawer_content {
+                    Some(drawer_content) => {
+                        Stack::new().modifier(sheet_modifier).build(ctx, drawer_content)
+                    }
+                    // The policy reads `children[0]` as the sheet, so the slot stays even when the
+                    // caller gave none — it is simply never seen.
+                    None => Stack::new().modifier(sheet_modifier).build(ctx, |_| {}),
+                }
+                Stack::new()
+                    .modifier(Modifier::new().fill_max_size())
+                    .build(ctx, content);
+            }
+        }
+        ctx.end_restartable_group();
+    }
+}
+
+/// Places a dismissible drawer's two children: the sheet at the drag offset, the content PUSHED by
+/// `sheet_width + offset` (negative under RTL, where `placeRelative` mirrors it and the sheet docks
+/// on the right).
+#[derive(Debug)]
+struct DismissibleDrawerPolicy {
+    offset: State<f32>,
+    sheet_width: f32,
+    rtl: bool,
+}
+
+impl crate::layout::node::MeasurePolicy for DismissibleDrawerPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn crate::layout::node::MeasurePolicy>],
+        children: &[usize],
+        constraints: crate::layout::Constraints,
+    ) -> (crate::unit::Size, Vec<crate::layout::node::Placement>) {
+        let sheet = crate::layout::node::measure_node(nodes, policies, children[0], constraints);
+        let content = crate::layout::node::measure_node(nodes, policies, children[1], constraints);
+        // `get()` during measure: the placement depends on the drag offset, so this slot has to be
+        // re-measured while the drawer moves. The modal drawer reads the same state through a dynamic
+        // offset for the same reason.
+        let offset = self.offset.get();
+        let pushed = self.sheet_width + offset;
+        let content_x = if self.rtl { -pushed } else { pushed };
+        (
+            content.0,
+            vec![
+                crate::layout::node::Placement {
+                    position: crate::unit::Offset::new(offset, 0.0),
+                    size: sheet.0,
+                },
+                crate::layout::node::Placement {
+                    position: crate::unit::Offset::new(content_x, 0.0),
+                    size: content.0,
+                },
+            ],
+        )
+    }
+
+    fn place(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        children: &[usize],
+        placements: &[crate::layout::node::Placement],
+    ) {
+        for (i, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[i].position;
+            nodes[child].measured_size = placements[i].size;
+        }
+    }
+}
+
+// ═══════════════ PermanentNavigationDrawer ═══════════════
+
+/// Permanent navigation drawer (Compose `PermanentNavigationDrawer`).
+///
+/// No state and no gestures: the sheet is ALWAYS on screen and the content takes what is left, so
+/// upstream composes it as a plain `Row(modifier.fillMaxSize()) { drawerContent(); Box { content() } }`
+/// (`NavigationDrawer.kt:618-623`). Reach for it on a wide layout that keeps destinations visible.
+///
+/// Pair it with [`DrawerSheet::permanent`] (standard container, square).
+pub struct PermanentNavigationDrawer {
+    content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    drawer_content: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    modifier: Modifier,
+}
+
+impl PermanentNavigationDrawer {
+    pub fn new(content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static) -> Self {
+        Self {
+            content: Box::new(content),
+            drawer_content: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The drawer's own content — typically [`DrawerSheet::permanent`].
+    pub fn drawer_content(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.drawer_content = Some(Box::new(content));
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        let content = self.content;
+        let drawer_content = self.drawer_content;
+        let modifier = self.modifier.then(Modifier::new().fill_max_size());
+        Row::new().modifier(modifier).build(ctx, |ctx| {
+            if let Some(drawer_content) = drawer_content {
+                drawer_content(ctx);
+            }
+            Stack::new().build(ctx, content);
+        });
     }
 }
 
@@ -1483,5 +1848,174 @@ mod tests {
         });
         c.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 600.0));
         assert_eq!(sheet_x(&c), 440.0, "open in RTL: flush with the right edge");
+    }
+
+    /// Walks to a tagged node and answers its ABSOLUTE x (accumulating the parent chain, which is
+    /// what `sheet_x_and_width` does for the sheet alone).
+    fn x_of(c: &Composer, tag: &str) -> Option<f32> {
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            tag: &str,
+        ) -> Option<f32> {
+            let node = &nodes[idx];
+            let abs_x = x + node.position.x;
+            if node.modifier.get_test_tag() == Some(tag) {
+                return Some(abs_x);
+            }
+            node.children
+                .iter()
+                .find_map(|&child| walk(nodes, child, abs_x, tag))
+        }
+        let root = c.layout_root_idx()?;
+        walk(c.arena_nodes(), root, 0.0, tag)
+    }
+
+    const PAGE_TAG: &str = "drawer-page";
+
+    /// The three sheets differ ONLY in the defaults their kind resolves: `ModalContainerColor`
+    /// (`SurfaceContainerLow`) with the rounded `ContainerShape`, against `StandardContainerColor`
+    /// (`Surface`) with a RECTANGLE for both standard sheets (`NavigationDrawer.kt:646-650`,
+    /// `:736-737`, `:821-822`).
+    #[test]
+    fn the_sheet_kind_resolves_the_upstream_defaults() {
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        assert_eq!(
+            DrawerSheetKind::Modal.container_color(&theme),
+            theme.surface_container_low,
+            "ModalContainerColor"
+        );
+        assert_eq!(
+            DrawerSheetKind::Standard.container_color(&theme),
+            theme.surface,
+            "StandardContainerColor"
+        );
+        assert_eq!(
+            DrawerSheetKind::Modal.shape(LayoutDirection::Ltr),
+            Shape::RightRoundedRect { radius: DRAWER_CORNER_RADIUS },
+            "ContainerShape = CornerLargeEnd"
+        );
+        assert_eq!(
+            DrawerSheetKind::Standard.shape(LayoutDirection::Ltr),
+            Shape::Rectangle,
+            "drawerShape = RectangleShape for BOTH standard sheets"
+        );
+        assert_eq!(
+            NavigationDrawerItemDefaults::ITEM_PADDING,
+            DRAWER_SHEET_HORIZONTAL_PADDING,
+            "ItemPadding = 12dp"
+        );
+    }
+
+    /// The badge follows the LABEL color, and a caller can give it its own — upstream's
+    /// `colors()` has `selectedBadgeColor` / `unselectedBadgeColor` defaulting to the text colors
+    /// (`NavigationDrawer.kt:1218-1219`), which winia used to hard-wire to the ICON color.
+    #[test]
+    fn the_badge_color_follows_the_label_and_can_be_overridden() {
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let colors = NavigationDrawerItemDefaults::colors(&theme);
+        assert_eq!(colors.badge(true), colors.text(true), "selected: the label color");
+        assert_eq!(colors.badge(false), colors.text(false), "unselected: the label color");
+        let custom = NavigationDrawerItemColors {
+            selected_badge: Color::from_argb(255, 1, 2, 3),
+            ..colors
+        };
+        assert_eq!(custom.badge(true), Color::from_argb(255, 1, 2, 3));
+        assert_eq!(custom.badge(false), colors.text(false), "only the one was overridden");
+    }
+
+    /// A DISMISSIBLE drawer pushes the content instead of covering it: upstream places the content at
+    /// `sheetWidth + offset` and the sheet at `offset` (`NavigationDrawer.kt:578-587`), so an open
+    /// drawer costs the content exactly the sheet's width and a closed one costs it nothing.
+    #[test]
+    fn a_dismissible_drawer_pushes_its_content_instead_of_covering_it() {
+        let state = DrawerState::new(DrawerValue::Closed);
+        let mut c = comp();
+        let mut drive = |c: &mut Composer| {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(800.0, 600.0);
+                DismissibleNavigationDrawer::new(|ctx| {
+                    crate::components::Text::new("page")
+                        .modifier(Modifier::new().test_tag(PAGE_TAG))
+                        .build(ctx);
+                })
+                .drawer_state(st.clone())
+                .drawer_content(|ctx| {
+                    DrawerSheet::dismissible(|_| {})
+                        .modifier(Modifier::new().test_tag(SHEET_TAG))
+                        .build(ctx);
+                })
+                .build(ctx);
+            });
+            c.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 600.0));
+        };
+        drive(&mut c);
+        assert_eq!(x_of(&c, SHEET_TAG), Some(-360.0), "closed: the sheet is off the leading edge");
+        assert_eq!(x_of(&c, PAGE_TAG), Some(0.0), "and the content is NOT pushed");
+
+        state.snap_to(DrawerValue::Open);
+        drive(&mut c);
+        assert_eq!(x_of(&c, SHEET_TAG), Some(0.0), "open: the sheet is flush with the edge");
+        assert_eq!(
+            x_of(&c, PAGE_TAG),
+            Some(360.0),
+            "and the content is pushed out by exactly the sheet's width, not covered"
+        );
+    }
+
+    /// A PERMANENT drawer has no state at all: the sheet is always on screen and the content follows
+    /// it (`Row { drawerContent(); Box { content() } }`, `NavigationDrawer.kt:618-623`).
+    #[test]
+    fn a_permanent_drawer_keeps_the_sheet_beside_the_content() {
+        let mut c = comp();
+        c.compose(|ctx| {
+            crate::layout::adaptive::set_window_size(800.0, 600.0);
+            PermanentNavigationDrawer::new(|ctx| {
+                crate::components::Text::new("page")
+                    .modifier(Modifier::new().test_tag(PAGE_TAG))
+                    .build(ctx);
+            })
+            .drawer_content(|ctx| {
+                DrawerSheet::permanent(|_| {})
+                    .modifier(Modifier::new().test_tag(SHEET_TAG))
+                    .build(ctx);
+            })
+            .build(ctx);
+        });
+        c.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 600.0));
+        let (sheet_x, sheet_w) = sheet_x_and_width(&c);
+        assert_eq!(sheet_x, 0.0, "the sheet is docked at the leading edge");
+        assert!(
+            (sheet_w - 240.0).abs() < 0.5,
+            "and sits at MinimumDrawerWidth: the sheet sizes to its content, clamped to [240, 360] \
+             (NavigationDrawer.kt:866), and this one's content is empty, got {sheet_w}"
+        );
+        assert!(x_of(&c, PAGE_TAG).unwrap_or(-1.0) >= sheet_w, "the content starts after it");
+    }
+
+    /// The sheet's own clamp is TWO-sided: `sizeIn(240, ContainerWidth)` on the sheet
+    /// (`NavigationDrawer.kt:854`, `:866`). winia used to apply only the minimum, so a sheet whose
+    /// content wanted more than 360dp simply grew — nothing else in the permanent path bounds it.
+    #[test]
+    fn the_sheet_stops_at_the_container_width_token() {
+        let mut c = comp();
+        c.compose(|ctx| {
+            crate::layout::adaptive::set_window_size(900.0, 600.0);
+            DrawerSheet::permanent(|ctx| {
+                crate::components::Text::new("x".repeat(200))
+                    .modifier(Modifier::new().test_tag(PAGE_TAG))
+                    .build(ctx);
+            })
+            .modifier(Modifier::new().test_tag(SHEET_TAG))
+            .build(ctx);
+        });
+        c.layout(crate::layout::Constraints::new(0.0, 900.0, 0.0, 600.0));
+        let (_x, w) = sheet_x_and_width(&c);
+        assert!(
+            (w - 360.0).abs() < 0.5,
+            "a wide sheet stops at ContainerWidth = 360, got {w}"
+        );
     }
 }

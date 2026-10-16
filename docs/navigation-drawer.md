@@ -1,6 +1,7 @@
 # Navigation drawer
 
-M3 `ModalNavigationDrawer` parity: `winia/src/components/navigation_drawer.rs`.
+The M3 navigation drawer family — `ModalNavigationDrawer`, `DismissibleNavigationDrawer` and
+`PermanentNavigationDrawer` — in `winia/src/components/navigation_drawer.rs`.
 Demo: `cargo run -p winia --example navigation_drawer_demo`.
 
 ## API
@@ -32,6 +33,49 @@ ModalNavigationDrawer::new(|ctx| { /* the app shell */ })
 | `progress()` / `peek_progress()` | `calculateFraction` | 0 parked closed, 1 parked open; the `peek` form registers no dependency (render-time reads) |
 | `drag_delta(dx)` / `settle_with_velocity(v)` | `anchoredDraggable` | wire these to `Modifier::on_drag` / `on_drag_end` |
 | `set_confirm_value_change(f)` | `confirmStateChange` | `false` vetoes the gesture and rolls back to the parked value |
+
+## The three drawers
+
+| upstream | winia | what differs |
+|---|---|---|
+| `ModalNavigationDrawer` | same name | slides over the page behind a SCRIM, which also catches the click that closes it |
+| `DismissibleNavigationDrawer` | same name | no scrim, and the page is PUSHED by the sheet instead of being covered |
+| `PermanentNavigationDrawer` | same name | no state and no gestures at all: a `Row { sheet; page }`, the sheet always on screen |
+
+```rust
+// The dismissible one (state, anchors and gestures are the modal one's):
+DismissibleNavigationDrawer::new(|ctx| { /* the page */ })
+    .drawer_state(drawer.clone())
+    .drawer_content(|ctx| { DrawerSheet::dismissible(|ctx| { /* items */ }).build(ctx); })
+    .build(ctx);
+
+// The permanent one — no state to build:
+PermanentNavigationDrawer::new(|ctx| { /* the page */ })
+    .drawer_content(|ctx| { DrawerSheet::permanent(|ctx| { /* items */ }).build(ctx); })
+    .build(ctx);
+```
+
+The dismissible placement is upstream's, line for line (`NavigationDrawer.kt:578-587`): the sheet is
+placed at the drag offset and the page at `sheetWidth + offset`, mirrored under RTL, so an open
+drawer costs the page exactly the sheet's width and a closed one costs it nothing.
+
+### The sheet
+
+One type, three constructors — the sheets differ ONLY in the defaults their kind resolves
+(`NavigationDrawer.kt:646`, `:736`, `:821`):
+
+| constructor | container color | shape |
+|---|---|---|
+| `DrawerSheet::new` (`ModalDrawerSheet`) | `ModalContainerColor` = `SurfaceContainerLow` | `DrawerDefaults.shape` = `CornerLargeEnd` |
+| `DrawerSheet::dismissible` | `StandardContainerColor` = `Surface` | `Rectangle` |
+| `DrawerSheet::permanent` | `StandardContainerColor` = `Surface` | `Rectangle` |
+
+`DrawerSheet` also carries upstream's TWO-sided clamp, `sizeIn(minWidth = MinimumDrawerWidth 240,
+maxWidth = NavigationDrawerTokens.ContainerWidth 360)` on the sheet itself (`:854`, `:866`) — a
+narrow-content sheet is still 240 wide and a wide one stops at 360. Upstream spells the three as
+separate composables; the type aliases `ModalDrawerSheet` / `DismissibleDrawerSheet` /
+`PermanentDrawerSheet` are here so those names resolve, but the CONSTRUCTOR is what picks the
+defaults, which is why `DismissibleDrawerSheet::new` is not the one to call.
 
 ## Anchors, placement and direction
 
@@ -164,6 +208,29 @@ in either implementation.
   wanted.
 - `NavigationDrawerItem` has no `enabled` parameter, matching Compose (which has none
   either) — gate the callback on the caller's side if a row must be inert.
+
+## The item
+
+`NavigationDrawerItem` is `heightIn(ActiveIndicatorHeight 56)` — a floor, not a fixed height, so a
+two-line label grows the row — with `start 16 / end 24` padding, a 12dp gap before the label and
+before the badge, and the `CornerFull` pill as the indicator.
+
+- **Colors.** `NavigationDrawerItemDefaults::colors(theme)` (the same values `DrawerDefaults::
+  item_colors` returns). `NavigationDrawerItemColors` has all EIGHT of upstream's colors, and every
+  field is public, so `colors()` needs no eight-argument builder here. The two BADGE colors default
+  to the LABEL colors, as upstream's `colors()` does (`NavigationDrawer.kt:1218-1219`); winia used to
+  paint the badge in the ICON color, which only differed once a caller overrode one of the two.
+- **The icon is the caller's size.** Upstream provides the icon's content color and nothing else, and
+  `Icon` already falls back to 24 when no size is set — winia wrapped it in a fixed 24×24 box, which
+  squashed anything larger.
+- **Accessibility.** The row declares `role = Tab` and its selection, which upstream does with
+  `role = Role.Tab` on a `Surface(selected = …)` (`:1137`), and the sheet names itself — upstream's
+  `paneTitle = navigationMenu` (`:832`) is a content description here, since winia's semantics has no
+  paneTitle of its own.
+
+`NavigationDrawerItemDefaults::ITEM_PADDING` is the 12dp horizontal padding a drawer puts around its
+items (upstream's `ItemPadding`), the thing that makes an item span `ActiveIndicatorWidth` 336dp
+inside the 360dp container.
 
 ## Tests
 

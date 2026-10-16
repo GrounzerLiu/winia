@@ -175,8 +175,10 @@ pub use alert_dialog::{
     DIALOG_TITLE_PADDING_BOTTOM,
 };
 pub use navigation_drawer::{
-    DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
-    NavigationDrawerItem, NavigationDrawerItemColors,
+    DismissibleDrawerSheet, DismissibleNavigationDrawer, DrawerDefaults, DrawerSheet,
+    DrawerSheetKind, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
+    NavigationDrawerItem, NavigationDrawerItemColors, NavigationDrawerItemDefaults,
+    PermanentDrawerSheet, PermanentNavigationDrawer,
     DRAWER_CORNER_RADIUS, DRAWER_ITEM_END_PADDING, DRAWER_ITEM_HEIGHT, DRAWER_ITEM_ICON_SIZE,
     DRAWER_ITEM_SLOT_GAP, DRAWER_ITEM_START_PADDING, DRAWER_MAX_WIDTH, DRAWER_MIN_WIDTH,
     DRAWER_SHEET_HORIZONTAL_PADDING,
