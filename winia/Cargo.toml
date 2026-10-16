@@ -43,7 +43,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 futures-util = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = "0.30"
-material-colors = "0.4"
+material-colors = "0.5"
 dark-light = "3.0"
 unicode-segmentation = "1.12"
 arboard = "3"

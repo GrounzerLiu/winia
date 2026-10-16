@@ -13,7 +13,7 @@ use crate::layout::LayoutDirection;
 use crate::graphics::Color;
 use crate::text::{FontWeight, TextStyle};
 use crate::unit::{Sp, TextUnit};
-use material_colors::color::Argb;
+use material_colors::color::Rgb;
 use material_colors::theme::ThemeBuilder;
 use std::sync::LazyLock;
 
@@ -135,82 +135,84 @@ impl ThemeColors {
 
     fn from_scheme(s: &material_colors::scheme::Scheme) -> Self {
         Self {
-            primary:              argb(s.primary),
-            on_primary:           argb(s.on_primary),
-            primary_container:    argb(s.primary_container),
-            on_primary_container: argb(s.on_primary_container),
-            inverse_primary:      argb(s.inverse_primary),
-            primary_fixed:        argb(s.primary_fixed),
-            primary_fixed_dim:    argb(s.primary_fixed_dim),
-            on_primary_fixed:     argb(s.on_primary_fixed),
-            on_primary_fixed_variant: argb(s.on_primary_fixed_variant),
+            primary:              rgb(s.primary),
+            on_primary:           rgb(s.on_primary),
+            primary_container:    rgb(s.primary_container),
+            on_primary_container: rgb(s.on_primary_container),
+            inverse_primary:      rgb(s.inverse_primary),
+            primary_fixed:        rgb(s.primary_fixed),
+            primary_fixed_dim:    rgb(s.primary_fixed_dim),
+            on_primary_fixed:     rgb(s.on_primary_fixed),
+            on_primary_fixed_variant: rgb(s.on_primary_fixed_variant),
 
-            secondary:              argb(s.secondary),
-            on_secondary:           argb(s.on_secondary),
-            secondary_container:    argb(s.secondary_container),
-            on_secondary_container: argb(s.on_secondary_container),
-            secondary_fixed:        argb(s.secondary_fixed),
-            secondary_fixed_dim:    argb(s.secondary_fixed_dim),
-            on_secondary_fixed:     argb(s.on_secondary_fixed),
-            on_secondary_fixed_variant: argb(s.on_secondary_fixed_variant),
+            secondary:              rgb(s.secondary),
+            on_secondary:           rgb(s.on_secondary),
+            secondary_container:    rgb(s.secondary_container),
+            on_secondary_container: rgb(s.on_secondary_container),
+            secondary_fixed:        rgb(s.secondary_fixed),
+            secondary_fixed_dim:    rgb(s.secondary_fixed_dim),
+            on_secondary_fixed:     rgb(s.on_secondary_fixed),
+            on_secondary_fixed_variant: rgb(s.on_secondary_fixed_variant),
 
-            tertiary:              argb(s.tertiary),
-            on_tertiary:           argb(s.on_tertiary),
-            tertiary_container:    argb(s.tertiary_container),
-            on_tertiary_container: argb(s.on_tertiary_container),
-            tertiary_fixed:        argb(s.tertiary_fixed),
-            tertiary_fixed_dim:    argb(s.tertiary_fixed_dim),
-            on_tertiary_fixed:     argb(s.on_tertiary_fixed),
-            on_tertiary_fixed_variant: argb(s.on_tertiary_fixed_variant),
+            tertiary:              rgb(s.tertiary),
+            on_tertiary:           rgb(s.on_tertiary),
+            tertiary_container:    rgb(s.tertiary_container),
+            on_tertiary_container: rgb(s.on_tertiary_container),
+            tertiary_fixed:        rgb(s.tertiary_fixed),
+            tertiary_fixed_dim:    rgb(s.tertiary_fixed_dim),
+            on_tertiary_fixed:     rgb(s.on_tertiary_fixed),
+            on_tertiary_fixed_variant: rgb(s.on_tertiary_fixed_variant),
 
-            error:              argb(s.error),
-            on_error:           argb(s.on_error),
-            error_container:    argb(s.error_container),
-            on_error_container: argb(s.on_error_container),
+            error:              rgb(s.error),
+            on_error:           rgb(s.on_error),
+            error_container:    rgb(s.error_container),
+            on_error_container: rgb(s.on_error_container),
 
-            surface_dim:               argb(s.surface_dim),
-            surface:                   argb(s.surface),
-            surface_tint:              argb(s.surface_tint),
-            surface_bright:            argb(s.surface_bright),
-            surface_container_lowest:  argb(s.surface_container_lowest),
-            surface_container_low:     argb(s.surface_container_low),
-            surface_container:         argb(s.surface_container),
-            surface_container_high:    argb(s.surface_container_high),
-            surface_container_highest: argb(s.surface_container_highest),
-            surface_variant:           argb(s.surface_variant),
+            surface_dim:               rgb(s.surface_dim),
+            surface:                   rgb(s.surface),
+            surface_tint:              rgb(s.surface_tint),
+            surface_bright:            rgb(s.surface_bright),
+            surface_container_lowest:  rgb(s.surface_container_lowest),
+            surface_container_low:     rgb(s.surface_container_low),
+            surface_container:         rgb(s.surface_container),
+            surface_container_high:    rgb(s.surface_container_high),
+            surface_container_highest: rgb(s.surface_container_highest),
+            surface_variant:           rgb(s.surface_variant),
 
-            on_surface:         argb(s.on_surface),
-            on_surface_variant: argb(s.on_surface_variant),
+            on_surface:         rgb(s.on_surface),
+            on_surface_variant: rgb(s.on_surface_variant),
 
-            outline:         argb(s.outline),
-            outline_variant: argb(s.outline_variant),
+            outline:         rgb(s.outline),
+            outline_variant: rgb(s.outline_variant),
 
-            inverse_surface:    argb(s.inverse_surface),
-            inverse_on_surface: argb(s.inverse_on_surface),
+            inverse_surface:    rgb(s.inverse_surface),
+            inverse_on_surface: rgb(s.inverse_on_surface),
 
-            background:    argb(s.background),
-            on_background: argb(s.on_background),
-            shadow:        argb(s.shadow),
-            scrim:         argb(s.scrim),
+            background:    rgb(s.background),
+            on_background: rgb(s.on_background),
+            shadow:        rgb(s.shadow),
+            scrim:         rgb(s.scrim),
         }
     }
 
     pub fn light_from_seed(seed: u32) -> Self {
-        let theme = ThemeBuilder::with_source(Argb::from_u32(seed)).build();
+        let theme = ThemeBuilder::with_source(Rgb::from_u32(seed)).build();
         Self::from_scheme(&theme.schemes.light)
     }
 
     pub fn dark_from_seed(seed: u32) -> Self {
-        let theme = ThemeBuilder::with_source(Argb::from_u32(seed)).build();
+        let theme = ThemeBuilder::with_source(Rgb::from_u32(seed)).build();
         Self::from_scheme(&theme.schemes.dark)
     }
 
-    pub fn default_light() -> Self { Self::light_from_seed(0xff6750A4) }
-    pub fn default_dark() -> Self  { Self::dark_from_seed(0xff6750A4) }
+    pub fn default_light() -> Self { Self::light_from_seed(0x6750A4) }
+    pub fn default_dark() -> Self  { Self::dark_from_seed(0x6750A4) }
 }
 
-fn argb(a: material_colors::color::Argb) -> Color {
-    Color::from_argb(a.alpha, a.red, a.green, a.blue)
+/// 0.5's colour type is `Rgb`; the `Argb` it replaced also carried the alpha, and an M3 scheme colour
+/// is opaque — upstream composes the same value in `Rgb::as_argb_u32` (`0xFF000000 | rgb`).
+fn rgb(a: Rgb) -> Color {
+    Color::from_argb(255, a.red, a.green, a.blue)
 }
 
 // ═══════════════════════════════════════════════════════════
