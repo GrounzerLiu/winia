@@ -190,7 +190,16 @@ fn sheet_body(ctx: &mut ComposeCtx, page: State<Page>, drawer: DrawerState) {
                 .modifier(Modifier::new().fill_max_width().padding_sides(16.0, 12.0, 24.0, 12.0))
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
-                    Text::new("Mail").font_size(22.0).build(ctx);
+                    // The HEADLINE is app-drawn — `NavigationDrawer.kt` never mentions a headline, the
+                    // component has no slot for it. What the spec fixes is its style, and the tokens name
+                    // it: `HeadlineFont = TypographyKeyTokens.TitleSmall` and `HeadlineColor =
+                    // OnSurfaceVariant` (`NavigationDrawerTokens.kt`). That is M3 TitleSmall = 14sp with a
+                    // 20sp line height, which is what the spec page's "headline size 14pt / line height
+                    // 20pt" is. winia's `typography().title_small` is exactly `style(14.0, 20.0, ..)`.
+                    Text::new("Mail")
+                        .style(WiniaTheme::typography().title_small)
+                        .color(WiniaTheme::colors().on_surface_variant)
+                        .build(ctx);
                 });
             for item in Page::primary() {
                 destination(ctx, item, page.clone(), drawer.clone());
@@ -200,9 +209,12 @@ fn sheet_body(ctx: &mut ComposeCtx, page: State<Page>, drawer: DrawerState) {
                 .build(ctx);
             // A section header lines up with the item ICONS' leading edge (28dp), not with their
             // labels — 16dp here plus the sheet's 12dp content padding.
+            // M3 has no section-header token; this reuses the headline's style, which is what the
+            // reference draws.
             Text::new("Labels")
                 .modifier(Modifier::new().padding_sides(16.0, 8.0, 24.0, 8.0))
-                .font_size(14.0)
+                .style(WiniaTheme::typography().title_small)
+                .color(WiniaTheme::colors().on_surface_variant)
                 .build(ctx);
             destination(ctx, Page::Label, page.clone(), drawer.clone());
         });
