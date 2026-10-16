@@ -12,12 +12,13 @@
 //! - `WideNavigationRailExpanded`：宽窗（宽 Expanded）——展开宽轨
 //! - `None`：不渲染导航
 //!
-//! 默认推算（[`navigation_suite_type`]，M3 规范的桌面近似）：矮窗优先底栏
-//! （横排 item），其次按宽度 Expanded→展开轨 / Medium→收起轨 / Compact→底栏。
-//! 窗口 resize 由 app 层触发重组，形态实时切换。
+//! 默认推算（[`navigation_suite_type`]）：窄窗→Compact 底栏；否则矮窗→Medium
+//! 底栏；否则→**收起**宽轨（上游从不默认展开——展开是 rail 自己的状态，或显式
+//! `.layout_type(WideNavigationRailExpanded)`）。窗口 resize 由 app 层触发重组，形态实时切换。
 //!
-//! `primaryActionContent`（androidx 的 FAB 槽）暂未实现——FAB 请放入
-//! WideNavigationRail 的 header（套件内建 rail 暂无 header 槽，后续版本补）。
+//! `primaryActionContent`（FAB 槽）已实现：`.primary_action(..)` 浮在底栏上方 16dp，
+//! 默认靠结束边 16dp，可用 `.primary_action_alignment(..)` 改。**上游只在底栏形态放置它**
+//! （rail 分支只测量不摆放），这里照做——rail 形态要 FAB 请放进 rail 自己的 header。
 //!
 //! Each positional item's icon and label use separate movable handles. Their remembered values and
 //! node identities survive bar/rail switches, and their own State reads still invalidate the current
@@ -46,7 +47,9 @@ use crate::layout::adaptive::{window_height_size_class, window_width_size_class,
 use crate::components::navigation_bar::NavigationItemIconPosition;
 use crate::components::short_navigation_bar::{ShortNavigationBar, ShortNavigationBarArrangement, ShortNavigationBarItem};
 use crate::theme::WiniaTheme;
-use crate::layout::components::{Column, Row};
+use crate::layout::components::{Column, Row, Stack};
+use crate::layout::Alignment;
+use crate::components::navigation_bar::NAVIGATION_BAR_HEIGHT;
 use crate::components::navigation_rail::{WideNavigationRail, WideNavigationRailItem, WideNavigationRailState};
 use std::sync::Arc;
 
@@ -65,17 +68,29 @@ pub enum NavigationSuiteType {
     None,
 }
 
-/// 默认形态推算（M3 规范桌面近似）：矮窗 → 横排底栏；宽 Expanded → 展开轨；
-/// 宽 Medium → 收起轨；其余 → 竖排底栏
+/// The default shape, upstream's rule (`NavigationSuiteScaffoldDefaults.navigationSuiteType`):
+///
+/// ```text
+/// width Compact                        -> ShortNavigationBarCompact
+/// else tabletop || height Compact      -> ShortNavigationBarMedium
+/// else                                 -> WideNavigationRailCollapsed
+/// ```
+///
+/// The order matters: a window that is BOTH narrow and short takes the COMPACT bar, because the
+/// width test comes first. And the last branch is the COLLAPSED rail — upstream never returns
+/// `WideNavigationRailExpanded` here. Expanding is the rail's own business (its state, driven by the
+/// caller's menu button) or an explicit `layout_type(WideNavigationRailExpanded)`.
+///
+/// The tabletop posture of the first `else if` is a foldable's half-open state; winia has no posture
+/// concept, so only the height class is tested.
 pub fn navigation_suite_type() -> NavigationSuiteType {
+    if window_width_size_class() == WidthSizeClass::Compact {
+        return NavigationSuiteType::ShortNavigationBarCompact;
+    }
     if window_height_size_class() == HeightSizeClass::Compact {
         return NavigationSuiteType::ShortNavigationBarMedium;
     }
-    match window_width_size_class() {
-        WidthSizeClass::Expanded => NavigationSuiteType::WideNavigationRailExpanded,
-        WidthSizeClass::Medium => NavigationSuiteType::WideNavigationRailCollapsed,
-        WidthSizeClass::Compact => NavigationSuiteType::ShortNavigationBarCompact,
-    }
+    NavigationSuiteType::WideNavigationRailCollapsed
 }
 
 /// 套件 item 数据（形态无关——由 scaffold 按当前形态渲染成
@@ -137,6 +152,10 @@ pub struct NavigationSuiteScaffold {
     /// None = 按窗口尺寸自动推算
     layout_type: Option<NavigationSuiteType>,
     container_color: Option<Color>,
+    /// `primaryActionContent`: a FAB floated above the bar, or `None`.
+    primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    /// `primaryActionContentHorizontalAlignment` (default `Alignment::End`).
+    primary_action_alignment: Alignment,
     /// 形态切换过渡（收拢→换形→展开）；默认开启
     transition: bool,
     modifier: Modifier,
@@ -170,12 +189,36 @@ impl NavigationSuiteScaffold {
             content: Box::new(content),
             layout_type: None,
             container_color: None,
+            primary_action: None,
+            primary_action_alignment: Alignment::End,
             transition: true,
             modifier: Modifier::new(),
         }
     }
 
     /// 覆盖自动推算（对齐 androidx layoutType 参数）
+    /// The FAB slot (`primaryActionContent`): floated above the navigation, 16dp clear of it.
+    ///
+    /// Upstream only PLACES it in the bar layout — its rail branch measures the slot and never
+    /// places it, so a wide window shows no primary action at all (`NavigationDrawer.kt`-style
+    /// oversight in `NavigationSuiteScaffoldLayout`, `:440-475` against `:476-490`). This mirrors
+    /// that instead of inventing a rail position; a rail layout that wants a FAB should put it in
+    /// the rail's own header.
+    pub fn primary_action(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.primary_action = Some(Box::new(content));
+        self
+    }
+
+    /// Where the primary action sits horizontally (`Start` / `Center` / `End`), 16dp from the edge
+    /// for the two edge alignments.
+    pub fn primary_action_alignment(mut self, alignment: Alignment) -> Self {
+        self.primary_action_alignment = alignment;
+        self
+    }
+
     pub fn layout_type(mut self, layout_type: NavigationSuiteType) -> Self {
         self.layout_type = Some(layout_type);
         self
@@ -208,10 +251,19 @@ impl NavigationSuiteScaffold {
     pub fn build(self, ctx: &mut ComposeCtx) {
         ctx.changed(&self.layout_type);
         ctx.changed(&self.transition);
+        ctx.changed(&self.primary_action_alignment);
         let theme = WiniaTheme::colors();
-        let container = self.container_color.unwrap_or(theme.surface_container);
+        // Each shape keeps ITS OWN default container, which is what upstream's
+        // `NavigationSuiteDefaults.colors()` does by delegating to `ShortNavigationBarDefaults` for the
+        // bar and to `WideNavigationRailDefaults` for the rail. Those two defaults differ:
+        // `surface_container` for the bar (`short_navigation_bar.rs`) and `surface` for the wide rail
+        // (`navigation_rail.rs`). Passing one value to both painted the rail a shade too light.
+        let bar_container = self.container_color.unwrap_or(theme.surface_container);
+        let rail_container = self.container_color.unwrap_or(theme.surface);
         let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
         let content = self.content;
+        let primary_action = self.primary_action;
+        let primary_action_alignment = self.primary_action_alignment;
 
         // Optional winia-only morph: collapse the current container, swap the one active shape, then
         // expand. The branches never overlap. Compose's shape switch uses movableContentOf plus a
@@ -349,8 +401,12 @@ impl NavigationSuiteScaffold {
                     }
                     _ => (ShortNavigationBarArrangement::Centered, NavigationItemIconPosition::Start),
                 };
-                Column::new()
+                // A Stack even without a primary action: it is what floats one above the bar.
+                Stack::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    .build(ctx, |ctx| {
+                Column::new()
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
                     .build(ctx, |ctx| {
                         let k = ctx.next_key();
                         match ctx.start_restartable_group(k, content_modifier.layout_weight(1.0), crate::layout::BoxLayout::new()) {
@@ -377,11 +433,28 @@ impl NavigationSuiteScaffold {
                                     }
                                 })
                                 .arrangement(arrangement)
-                                .container_color(container)
+                                .container_color(bar_container)
                                 .build(ctx);
                             }
                         }
                         ctx.end_restartable_group();
+                    });
+                // `primaryActionContent`: `NavigationSuiteScaffoldLayout` places it at
+                // `layoutHeight - h - PrimaryActionContentPadding(16) - navigationHeight`, with the
+                // horizontal alignment picking the x (`:440-470`).
+                if let Some(primary_action) = primary_action {
+                    let fk = ctx.next_key();
+                    let policy = PrimaryActionPolicy {
+                        alignment: primary_action_alignment,
+                        padding: PRIMARY_ACTION_PADDING,
+                        bottom_inset: NAVIGATION_BAR_HEIGHT,
+                    };
+                    match ctx.start_restartable_group(fk, Modifier::new(), policy) {
+                        GroupStatus::Skip => {}
+                        GroupStatus::Enter => primary_action(ctx),
+                    }
+                    ctx.end_restartable_group();
+                }
                     });
             }
             // 宽轨形态：Row { rail, content(fill) }
@@ -435,7 +508,7 @@ impl NavigationSuiteScaffold {
                                         b.build(ctx);
                                     }
                                 })
-                                .container_color(container)
+                                .container_color(rail_container)
                                 .build(ctx);
                             }
                         }
@@ -459,6 +532,56 @@ fn form_kind(t: NavigationSuiteType) -> u8 {
         NavigationSuiteType::ShortNavigationBarCompact | NavigationSuiteType::ShortNavigationBarMedium => 0,
         NavigationSuiteType::WideNavigationRailCollapsed | NavigationSuiteType::WideNavigationRailExpanded => 1,
         NavigationSuiteType::None => 2,
+    }
+}
+
+/// `PrimaryActionContentPadding` (`NavigationSuiteScaffoldLayout.kt:1591`).
+const PRIMARY_ACTION_PADDING: f32 = 16.0;
+
+/// Places the floating primary action: 16dp clear of the navigation, at the caller's horizontal
+/// alignment. It reports the full box so the alignment math has the same origin the layout uses.
+#[derive(Debug)]
+struct PrimaryActionPolicy {
+    alignment: Alignment,
+    padding: f32,
+    bottom_inset: f32,
+}
+
+impl MeasurePolicy for PrimaryActionPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        c: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let Some(&child) = children.first() else {
+            return (Size::new(c.max_width, c.max_height), Vec::new());
+        };
+        let loose = Constraints::new(0.0, c.max_width, 0.0, c.max_height);
+        let (size, _) = measure_node(nodes, policies, child, loose);
+        let x = match self.alignment {
+            Alignment::Start => self.padding,
+            Alignment::Center => (c.max_width - size.width) / 2.0,
+            _ => c.max_width - size.width - self.padding,
+        };
+        let y = c.max_height - size.height - self.padding - self.bottom_inset;
+        (
+            Size::new(c.max_width, c.max_height),
+            vec![Placement { size, position: Offset::new(x, y) }],
+        )
+    }
+
+    fn place(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        children: &[usize],
+        placements: &[Placement],
+    ) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
     }
 }
 
@@ -570,11 +693,54 @@ mod tests {
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
         crate::layout::adaptive::set_window_size(700.0, 700.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
+        // Expanded width still gets the COLLAPSED rail: upstream's rule never returns the expanded
+        // one — expanding is the rail's own state, or an explicit `layout_type(..)`.
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
-        assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailExpanded);
-        // 矮窗优先横排底栏
+        assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
+        // A short window gets the horizontal bar ...
         crate::layout::adaptive::set_window_size(1000.0, 400.0);
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarMedium);
+        // ... but the WIDTH test comes first: a window that is both narrow and short is Compact.
+        crate::layout::adaptive::set_window_size(500.0, 400.0);
+        assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
+    }
+
+/// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
+    /// with the default `Alignment::End` (`NavigationSuiteScaffoldLayout` `:456-470`).
+    #[test]
+    fn the_primary_action_floats_above_the_bar() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            scaffold()
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                    ctx.end_node();
+                })
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        // The Stack's children are [the Column, the action's group]; the group fills the box and
+        // PLACES the payload, so the position under test is its child's.
+        let children = &nodes[root].children;
+        assert_eq!(children.len(), 2, "the stack holds the bar layout and the action");
+        let group = &nodes[children[1]];
+        let fab = &nodes[group.children[0]];
+        assert_eq!(fab.measured_size.width, 56.0);
+        assert!(
+            (fab.position.x - (500.0 - 56.0 - 16.0)).abs() < 0.01,
+            "16dp in from the trailing edge, x={}",
+            fab.position.x
+        );
+        assert!(
+            (fab.position.y - (700.0 - 56.0 - 16.0 - 80.0)).abs() < 0.01,
+            "16dp above the 80dp bar, y={}",
+            fab.position.y
+        );
     }
 
     /// 窄窗 → 底栏形态：Column 根，bar 在底部（高 80、贴底）
@@ -587,15 +753,16 @@ mod tests {
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
-        // Column 根：最后子项 = bar（高 80、y = 700-80 = 620）
-        let bar = &nodes[*nodes[root].children.last().unwrap()];
+        // Stack 根（primary action 的宿主）→ Column → 最后子项 = bar（高 80、y = 700-80 = 620）
+        let column = &nodes[*nodes[root].children.last().unwrap()];
+        let bar = &nodes[*column.children.last().unwrap()];
         assert_eq!(bar.measured_size.height, 80.0);
         assert!((bar.position.y - 620.0).abs() < 0.01, "bar 贴底 y={}", bar.position.y);
     }
 
-    /// 宽窗 → 展开宽轨形态：Row 根，rail 在前（宽 220），内容填余下
+    /// 宽窗 → **收起**宽轨（上游默认从不展开）：Row 根，rail 在前（宽 96），内容填余下
     #[test]
-    fn wide_window_renders_expanded_rail() {
+    fn wide_window_renders_a_collapsed_rail() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let mut composer = Composer::new();
@@ -607,8 +774,8 @@ mod tests {
         // Row 根：首子 = rail（宽 220），末子 = content（填余下 780）
         let rail = &nodes[children[0]];
         let content = &nodes[children[children.len() - 1]];
-        assert_eq!(rail.measured_size.width, 220.0, "展开轨宽 220");
-        assert!((content.measured_size.width - 780.0).abs() < 0.01,
+        assert_eq!(rail.measured_size.width, 96.0, "收起轨宽 96");
+        assert!((content.measured_size.width - 904.0).abs() < 0.01,
             "内容填余下 width={}", content.measured_size.width);
     }
 
@@ -634,7 +801,7 @@ mod tests {
         crate::layout::adaptive::set_window_size_state(size.clone());
         assert_eq!(navigation_suite_type(), NavigationSuiteType::ShortNavigationBarCompact);
         size.set((1000.0, 700.0));
-        assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailExpanded);
+        assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
         size.set((700.0, 700.0));
         assert_eq!(navigation_suite_type(), NavigationSuiteType::WideNavigationRailCollapsed);
         crate::layout::adaptive::reset_window_size_state();
@@ -748,7 +915,8 @@ mod tests {
             build(&mut composer, NavigationSuiteType::ShortNavigationBarCompact);
             let root = composer.layout_root_idx().unwrap();
             let nodes = composer.arena_nodes();
-            let bar = &nodes[*nodes[root].children.last().unwrap()];
+            let column = &nodes[*nodes[root].children.last().unwrap()];
+            let bar = &nodes[*column.children.last().unwrap()];
             if bar.measured_size.height == 80.0 && nodes[root].children.len() >= 1 {
                 // bar 完整出现（高 80 贴底）→ 过渡完成
                 saw_bar = true;
