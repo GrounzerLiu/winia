@@ -41,6 +41,7 @@ use crate::runtime::state::State;
 use crate::layout::{Constraints, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement};
 use crate::unit::{Offset, Size};
+use crate::layout::SizeValue;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::layout::adaptive::{window_height_size_class, window_width_size_class, HeightSizeClass, WidthSizeClass};
@@ -266,7 +267,6 @@ impl NavigationSuiteScaffold {
         }
     }
 
-    /// 覆盖自动推算（对齐 androidx layoutType 参数）
     /// The FAB slot (`primaryActionContent`). WHERE it goes depends on the shape, which is upstream's
     /// rule (`NavigationSuite.kt:183-187`): "inside vertical navigation components as part of their
     /// header, and above horizontal navigation components".
@@ -297,6 +297,7 @@ impl NavigationSuiteScaffold {
         self
     }
 
+    /// 覆盖自动推算（对齐 androidx layoutType 参数）
     pub fn layout_type(mut self, layout_type: NavigationSuiteType) -> Self {
         self.layout_type = Some(layout_type);
         self
@@ -338,14 +339,12 @@ impl NavigationSuiteScaffold {
         // (`navigation_rail.rs`). Passing one value to both painted the rail a shade too light.
         let bar_container = self.container_color.unwrap_or(theme.surface_container);
         let rail_container = self.container_color.unwrap_or(theme.surface);
-        // A HIDDEN suite is the `None` shape as far as this build is concerned: the collapse/swap/expand
-        // morph then animates it away exactly as a shape change would, and the content gets the box.
+        // HIDDEN keeps the SHAPE and only animates the navigation away — upstream's model, where
+        // `animationProgress` goes to 0 and the layout type never changes (`NavigationSuiteScaffold
+        // Layout`, `:411-475`). The content takes the freed space and the primary action rides the
+        // same animation: in a bar layout it ends up 16dp from the bottom edge rather than vanishing.
         let hidden = self.state.as_ref().map(|s| !s.is_visible()).unwrap_or(false);
-        let target_type = if hidden {
-            NavigationSuiteType::None
-        } else {
-            self.layout_type.unwrap_or_else(navigation_suite_type)
-        };
+        let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
         ctx.changed(&hidden);
         let content = self.content;
         let primary_action = self.primary_action;
@@ -362,7 +361,9 @@ impl NavigationSuiteScaffold {
 
         let cur = current.get();
         let ph = phase.get();
-        if self.transition && form_kind(cur) != form_kind(target_type) {
+        if hidden {
+            // Nothing to swap: the progress below is what hides the navigation.
+        } else if self.transition && form_kind(cur) != form_kind(target_type) {
             // 异形切换（bar↔rail）——morph 过渡
             next.set(Some(target_type));
             if ph == SuitePhase::Idle {
@@ -383,7 +384,7 @@ impl NavigationSuiteScaffold {
         // 检测帧 target 仍为 1.0（peek==target 不推送动画）→ is_animating=false
         // → 自驱帧链断裂，morph 冻结到下一个外部事件才走一帧（表现为卡顿）
         let progress = ctx.animate_float_as_state(
-            if phase.get() == SuitePhase::Collapsing { 0.0 } else { 1.0 },
+            if hidden || phase.get() == SuitePhase::Collapsing { 0.0 } else { 1.0 },
             crate::animation::AnimationSpec::Tween(crate::animation::TweenSpec::new(
                 std::time::Duration::from_millis(220),
                 crate::animation::interpolator::Linear::new(),
@@ -392,7 +393,7 @@ impl NavigationSuiteScaffold {
         let scale = progress.get().max(0.0).min(1.0);
 
         // 收拢完成：换形态 + 展开（set 通知 → 下帧以新形态渲染）
-        if ph == SuitePhase::Collapsing && scale <= 0.01 {
+        if !hidden && ph == SuitePhase::Collapsing && scale <= 0.01 {
             if let Some(t) = next.peek() {
                 current.set(t);
             }
@@ -544,13 +545,24 @@ impl NavigationSuiteScaffold {
                     // every click in the layout (measured: the bar's items and the content's button
                     // both stopped responding). With the insets as padding the node's content box is
                     // exactly the action's own rect, and clicking it still works.
+                    let anim = progress.clone();
                     Stack::new()
-                        .modifier(Modifier::new().padding_sides(
-                            0.0,
-                            0.0,
-                            PRIMARY_ACTION_PADDING,
-                            NAVIGATION_BAR_HEIGHT + PRIMARY_ACTION_PADDING,
-                        ))
+                        .modifier(
+                            Modifier::new()
+                                .padding_sides(
+                                    0.0,
+                                    0.0,
+                                    PRIMARY_ACTION_PADDING,
+                                    NAVIGATION_BAR_HEIGHT + PRIMARY_ACTION_PADDING,
+                                )
+                                // The action RIDES the navigation's animation — upstream places it at
+                                // `layoutHeight - h - 16 - navigationHeight * animationProgress`
+                                // (`:461-468`), so as the bar slides away it comes down to 16dp from the
+                                // bottom edge and goes back up with the bar.
+                                .absolute_offset_y(SizeValue::Dynamic(Arc::new(move || {
+                                    NAVIGATION_BAR_HEIGHT * (1.0 - anim.get().clamp(0.0, 1.0))
+                                }))),
+                        )
                         .build(ctx, primary_action);
                 }
                     });
@@ -847,41 +859,110 @@ mod tests {
         );
     }
 
-/// `NavigationSuiteScaffoldState` hides the whole suite (the content takes the box) and shows it
-    /// again, and a `confirm` hook can veto.
+    /// `NavigationSuiteScaffoldState` animates the navigation away and back, and the PRIMARY ACTION
+    /// rides that animation: upstream places it at
+    /// `layoutHeight - h - 16 - navigationHeight * animationProgress` (`:461-468`), so hiding a bar
+    /// layout leaves it floating 16dp above the bottom edge instead of removing it with the bar.
     #[test]
-    fn the_state_hides_and_shows_the_suite() {
+    fn the_state_hides_the_suite_and_the_action_rides_the_animation() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(500.0, 700.0);
         let state = NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible);
         let mut composer = Composer::new();
-        let mut build = |c: &mut Composer| {
+        let mut build = |c: &mut Composer, settle: bool| {
             let st = state.clone();
             c.compose(move |ctx| {
-                scaffold().state(st.clone()).transition(false).build(ctx);
+                scaffold()
+                    .state(st.clone())
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
             });
             c.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
-        };
-        // The bar is the widest 80-tall node; nothing else in this tree is that shape.
-        let has_bar = |c: &Composer| -> bool {
-            fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> bool {
-                let n = &nodes[idx];
-                if n.measured_size.height == 80.0 && n.measured_size.width > 300.0 {
-                    return true;
+            if settle {
+                for _ in 0..400 {
+                    if !crate::animation::update_animations() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    let st = state.clone();
+                    c.compose(move |ctx| {
+                        scaffold()
+                            .state(st.clone())
+                            .primary_action(|ctx| {
+                                let k = ctx.next_key();
+                                ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                                ctx.end_node();
+                            })
+                            .build(ctx);
+                    });
+                    c.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
                 }
-                n.children.iter().any(|&child| walk(nodes, child))
+            }
+        };
+        // (the bar CONTAINER's height, the action's y). The bar itself keeps its 80dp measured size —
+        // the morph container around it is what scales, and that is what the eye sees.
+        let probe = |c: &Composer| -> (f32, Option<f32>) {
+            let mut bar_h = -1.0f32;
+            let mut action_y: Option<f32> = None;
+            fn walk(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                y: f32,
+                parent_h: f32,
+                bar_h: &mut f32,
+                action: &mut Option<f32>,
+            ) {
+                let n = &nodes[idx];
+                let ay = y + n.position.y;
+                if n.measured_size.height == 80.0 && n.measured_size.width > 300.0 {
+                    *bar_h = parent_h;
+                }
+                if n.measured_size.width == 56.0 && n.measured_size.height == 56.0 {
+                    *action = Some(ay);
+                }
+                for &child in &n.children {
+                    walk(nodes, child, ay, n.measured_size.height, bar_h, action);
+                }
             }
             let root = c.layout_root_idx().unwrap();
-            walk(c.arena_nodes(), root)
+            walk(c.arena_nodes(), root, 0.0, -1.0, &mut bar_h, &mut action_y);
+            (bar_h, action_y)
         };
-        build(&mut composer);
-        assert!(has_bar(&composer), "visible: the bar is laid out");
+        build(&mut composer, false);
+        assert_eq!(probe(&composer).0, 80.0, "visible: the bar's container is full height");
+        assert_eq!(probe(&composer).1, Some(548.0), "action 16dp above the 80dp bar");
+
         state.hide();
-        build(&mut composer);
-        assert!(!has_bar(&composer), "hidden: the suite is gone");
+        build(&mut composer, true);
+        // The tween settles within its threshold, so the container keeps a sliver rather than an exact
+        // zero — the tolerance is the engine's, not the layout's.
+        assert!(
+            probe(&composer).0 < 4.0,
+            "hidden: the bar's container has animated away, got {}",
+            probe(&composer).0
+        );
+        let y = probe(&composer).1.expect("the action is still there when the suite is hidden");
+        assert!(
+            (y - 628.0).abs() < 4.0,
+            "and it came down with the bar: 16dp from the bottom edge, got {y}"
+        );
+
         state.show();
-        build(&mut composer);
-        assert!(has_bar(&composer), "shown again");
+        build(&mut composer, true);
+        assert!(
+            probe(&composer).0 > 76.0,
+            "shown again, got {}",
+            probe(&composer).0
+        );
+        let y = probe(&composer).1.expect("the action is still there");
+        assert!((y - 548.0).abs() < 4.0, "and it went back up with the bar, got {y}");
     }
 
     /// `confirmValueChange`: a vetoed request changes nothing (upstream's hook, same contract).
