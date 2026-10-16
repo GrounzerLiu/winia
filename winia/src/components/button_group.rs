@@ -928,6 +928,84 @@ mod tests {
         ctx.end_node();
     }
 
+    /// A squeezed icon button still paints its DECLARED square, not the box it was forced into.
+    ///
+    /// The renderer sizes the painted container from `minimum_interactive_content`, and that field
+    /// has to be the size the component declared (`size(40, 40)` for an IconButton) rather than the
+    /// MEASURED box: a ButtonGroup forces the node to the slot, so reading the measurement back
+    /// painted the icon button as an oval — measured in the demo at 47.33 x 39.33 where the circle
+    /// is 40 x 40.
+    #[test]
+    fn a_squeezed_icon_button_paints_its_declared_square() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let pressed = src.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(
+                    crate::theme::ThemeColors::light_from_seed(0x6750A4),
+                    ctx,
+                    |ctx| {
+                        ButtonGroup::new()
+                            .add(
+                                ButtonGroupItem::new(|ctx, _source| leaf(ctx, 100.0, 40.0))
+                                    .press_source(pressed.clone()),
+                            )
+                            .item(|ctx, source| {
+                                crate::components::icon_button::IconButton::new()
+                                    .interaction_source(source)
+                                    .on_click(|| {})
+                                    .build(ctx, |ctx| {
+                                        crate::components::icon::Icon::svg_path(
+                                            "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+                                        )
+                                        .size(24.0)
+                                        .build(ctx);
+                                    });
+                            })
+                            .build(ctx);
+                    },
+                );
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        // (the item's node width, the content size the renderer will paint)
+        let painted = |composer: &crate::runtime::composer::Composer| -> (f32, f32, f32) {
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let item = nodes[root].children[1];
+            let (cw, ch) = nodes[item]
+                .minimum_interactive_content
+                .expect("an IconButton publishes its declared content size");
+            (nodes[item].measured_size.width, cw, ch)
+        };
+        build(&mut composer);
+        let (node_w, cw, ch) = painted(&composer);
+        assert_eq!((node_w, cw, ch), (48.0, 40.0, 40.0), "at rest");
+
+        source.emit_press();
+        build(&mut composer);
+        for _ in 0..600 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+        }
+        let (node_w, cw, ch) = painted(&composer);
+        assert!(node_w < 48.0, "the press squeezed the node, got {node_w}");
+        assert_eq!(
+            (cw, ch),
+            (40.0, 40.0),
+            "the painted container is still the declared 40 x 40 square — reading the measured box \
+             back made it an oval"
+        );
+    }
+
     /// The row's geometry, measured on a real composition: the items sit at the group's spacing
     /// and the box is the token's height. This is the whole of what `ButtonGroupPolicy` claims to
     /// do — an item's own width is its own business.

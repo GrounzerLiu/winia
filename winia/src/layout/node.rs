@@ -3698,7 +3698,20 @@ fn measure_node_inner(
             // The paint reads THIS field, not the lines just above: a container merges its children's
             // alignment lines (see the field's comment), so an ancestor reading the line would inset its
             // own background. Only the node the modifier belongs to ever sets this.
-            nodes[idx].minimum_interactive_content = Some((content.width, content.height));
+            //
+            // The CONTENT's own size, which is what the component declared — NOT `content`, which is
+            // the MEASURED box and a parent may have forced it wider or narrower (a ButtonGroup
+            // squeezing an item forces the node, and then `content` is the forced size, which painted
+            // an icon button as a 48 x 40 OVAL). The declared size is the inner container: read the
+            // chain's own `size(...)` when it is fixed, and fall back to the measured box when it is
+            // not (a text-sized button has no fixed size and is not what this insets for).
+            // `fixed_size` already returns only the `Static` pair, so both axes are real numbers.
+            let declared = nodes[idx]
+                .modifier
+                .fixed_size()
+                .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
+            let (content_w, content_h) = declared.unwrap_or((content.width, content.height));
+            nodes[idx].minimum_interactive_content = Some((content_w, content_h));
             {
                 let cx = (width - content.width) / 2.0;
                 let cy = (height - content.height) / 2.0;
