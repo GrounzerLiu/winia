@@ -416,12 +416,19 @@ impl ButtonGroup {
         }
         let mut progress = Vec::with_capacity(sources.len());
         for source in &sources {
-            let target = if source.state(true).pressed { 1.0 } else { 0.0 };
+            let down = source.state(true).pressed;
+            let target = if down { 1.0 } else { 0.0 };
             progress.push(ctx.animate_float_as_state(
                 target,
                 crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
             ));
         }
+        // Which EDGE a squeezed item's content is pinned to. Only a pressed item takes room from
+        // its neighbours, and each neighbour gives it up on the side that faces the press: the one
+        // BEFORE it keeps its leading edge, the one AFTER keeps its trailing edge. Without this the
+        // content is centred in the narrowed slot, so both edges move — the first item's left edge
+        // slid left and the third item's right edge slid right while the second was held.
+
         // Which items fit is decided during MEASURE, so the count comes back through a
         // backchannel — a write-only handle, exactly what the measure/layout write-back path is
         // for. The menu is composed from it on the next composition, which is also when the
@@ -542,7 +549,12 @@ fn wrap_item(
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let key = ctx.next_key();
-    match ctx.start_restartable_group(key, modifier, crate::layout::box_layout::BoxLayout::new()) {
+    // `propagate_min_constraints`: the row measures this wrapper at the SLOT width, and the item
+    // inside has to see that as a minimum or it keeps its natural width — a text item whose slot
+    // the press widened stayed painted at its old width (measured in section 4: node 75 -> 86, the
+    // container did not move). Compose's Box does the same when asked to.
+    let policy = crate::layout::box_layout::BoxLayout::new().propagate_min_constraints(true);
+    match ctx.start_restartable_group(key, modifier, policy) {
         GroupStatus::Skip => {}
         GroupStatus::Enter => content(ctx),
     }
@@ -570,6 +582,10 @@ struct ButtonGroupPolicy {
     compression: Vec<f32>,
     /// How many children are ITEMS. The indicator, when there is one, is the last child.
     item_count: usize,
+    /// One per child: the press progress (see `progress`). The growth reads it here in `place`
+    /// to decide which edge a squeezed item keeps — it must NOT be captured at compose time, or
+    /// it is stale: a press re-MEASURES without recomposing, so a compose-time snapshot still
+    /// says nothing is pressed.
     has_indicator: bool,
     /// Written during measure: how many items fit. `usize::MAX` until the first measurement.
     visible: Backchannel<usize>,
@@ -812,22 +828,78 @@ impl MeasurePolicy for ButtonGroupPolicy {
 
     fn place(&self, nodes: &mut Vec<LayoutNode>, children: &[usize], placements: &[Placement]) {
         for (i, &child) in children.iter().enumerate() {
-            // The node is the SLOT's width (see the measure pass), which for a squeezed item is
-            // narrower than what the child measured — a button floors at its 48 dp touch target and
-            // its content was centred in THAT box. Recentre the subtree by half the difference, so
-            // the icon stays in the middle of the container the row actually paints; without it the
-            // glyph drifted by `(reported - slot) / 2` and sat off-centre in a squeezed item.
             let reported = nodes[child].measured_size.width;
             let slot = placements[i].size.width;
-            if (reported - slot).abs() > 0.01 {
-                let shift = (reported - slot) / 2.0;
-                let kids = nodes[child].children.clone();
-                for c in kids {
-                    nodes[c].position.x -= shift;
+
+            // What the item PAINTS. The container follows the SLOT while keeping the inset the
+            // component has at rest — at rest the node IS its touch target and the container sits
+            // `inset` in from each edge — so a pressed item really widens and a squeezed one really
+            // narrows. The slot geometry does the rest for free: a press takes its room from the
+            // neighbour's INNER side, so the neighbour's outer slot edge never moves and neither
+            // does the outer edge of the container painted inside it.
+            //
+            // The inset comes from the TOUCH TARGET the modifier declares, never from
+            // `reported - cw`: the reported box follows the slot, so deriving it there made the
+            // inset grow with the slot and cancelled the very widening it was meant to show.
+            let declared = nodes[child].minimum_interactive_content;
+            if let Some((cw, ch)) = declared {
+                let inset = nodes[child]
+                    .modifier
+                    .get_minimum_interactive_size()
+                    .map(|size| ((size - cw) / 2.0).max(0.0))
+                    .unwrap_or(0.0);
+                let painted_w = (slot - inset * 2.0).max(0.0);
+                // Anchored to the edge the item KEEPS: the trailing neighbour of a press holds its
+                // trailing edge, the leading one holds its leading edge, and the pressed item itself
+                // stays centred and grows both ways.
+                let down = |index: usize| {
+                    self.progress
+                        .get(index)
+                        .map(|p| p.get() > 0.5)
+                        .unwrap_or(false)
+                };
+                let keep_leading = i + 1 < self.item_count && down(i + 1);
+                let keep_trailing = i > 0 && down(i - 1);
+                let content_x = if keep_leading {
+                    inset
+                } else if keep_trailing {
+                    (slot - painted_w - inset).max(0.0)
+                } else {
+                    (slot - painted_w) / 2.0
+                };
+                let top = nodes[child]
+                    .minimum_interactive_offset
+                    .map(|(_, t)| t)
+                    .unwrap_or_else(|| (nodes[child].measured_size.height - ch) / 2.0);
+                nodes[child].minimum_interactive_painted = Some((content_x, top, painted_w, ch));
+
+                // The content inside the node. The modifier placed it against the box the child
+                // MEASURED (its touch target), so it has to follow the container this frame paints:
+                // a squeezed item's glyph would otherwise sit off the middle of its container.
+                let glyph_w = nodes[child]
+                    .children
+                    .first()
+                    .map(|&c| nodes[c].measured_size.width)
+                    .unwrap_or(0.0);
+                let current = (reported - glyph_w) / 2.0;
+                let desired = content_x + (painted_w - glyph_w) / 2.0;
+                let shift = current - desired;
+                // Apply the DIFFERENCE from what is already applied: `place` runs every frame, but a
+                // node whose constraints did not change is served from the fold cache and its
+                // children are not re-placed, so an unconditional `-=` would apply again and again
+                // and walk the content out of the box (measured: a glyph at 14 ended up at -3).
+                let applied = nodes[child].content_shift.unwrap_or(0.0);
+                let delta = shift - applied;
+                if delta.abs() > 0.01 {
+                    let kids = nodes[child].children.clone();
+                    for c in kids {
+                        nodes[c].position.x -= delta;
+                    }
+                    if let Some((cx, cy, cw2, ch2)) = nodes[child].content_box_override {
+                        nodes[child].content_box_override = Some((cx - delta, cy, cw2, ch2));
+                    }
                 }
-                if let Some((cx, cy, cw, ch)) = nodes[child].content_box_override {
-                    nodes[child].content_box_override = Some((cx - shift, cy, cw, ch));
-                }
+                nodes[child].content_shift = Some(shift);
             }
             nodes[child].position = placements[i].position;
             nodes[child].measured_size = placements[i].size;
@@ -1505,20 +1577,28 @@ mod tests {
             });
             composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
-        // (the item's width, its content's centre inside the item's own box). The content is the
-        // node's child: the minimum-interactive modifier centres it by moving it.
-        let geometry = |composer: &crate::runtime::composer::Composer| -> (f32, f32) {
+        // (the item's width, where its content sits inside the item's own box). The content is the
+        // node's child: the minimum-interactive modifier places it, and the row re-anchors it when
+        // it squeezes the slot.
+        let geometry = |composer: &crate::runtime::composer::Composer| -> (f32, f32, f32) {
             let root = composer.layout_root_idx().unwrap();
             let nodes = composer.arena_nodes();
             let item = nodes[root].children[1];
             let glyph = nodes[item].children[0];
-            let centre = nodes[glyph].position.x + nodes[glyph].measured_size.width / 2.0;
-            (nodes[item].measured_size.width, centre)
+            (
+                nodes[item].measured_size.width,
+                nodes[glyph].position.x,
+                nodes[glyph].measured_size.width,
+            )
         };
         build(&mut composer);
-        let (slot, centre) = geometry(&composer);
+        let (slot, glyph_x, glyph_w) = geometry(&composer);
         assert_eq!(slot, 48.0, "at rest the item is its touch target");
-        assert_eq!(centre, slot / 2.0, "and its content is centred in it");
+        assert_eq!(
+            glyph_x + glyph_w / 2.0,
+            slot / 2.0,
+            "and its content is centred in it"
+        );
 
         source.emit_press();
         build(&mut composer);
@@ -1529,12 +1609,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(2));
             build(&mut composer);
         }
-        let (slot, centre) = geometry(&composer);
+        let (slot, glyph_x, glyph_w) = geometry(&composer);
         assert!(slot < 48.0, "the press squeezed it, got {slot}");
-        assert_eq!(
-            centre,
-            slot / 2.0,
-            "the content stays centred in the squeezed box (it used to sit (48 - slot) / 2 right)"
-        );
+        // The item AFTER the pressed one is its TRAILING neighbour, so it holds its trailing edge
+        // and gives up width on the leading side: the container (and the glyph inside it) moves
+        // towards the trailing edge instead of staying put — centring would have moved BOTH edges.
+        //   slot 33, inset 4, container 25 wide at x = 33 - 25 - 4 = 4, glyph centred in it.
+        assert_eq!(glyph_x, 4.5, "the content follows the container towards the trailing edge");
     }}
 

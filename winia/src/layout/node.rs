@@ -394,6 +394,23 @@ pub struct LayoutNode {
     /// then took twice the difference off the painted box, so a squeezed item drifted away from its
     /// leading edge and shrank past what the layout had asked for.
     pub minimum_interactive_content: Option<(f32, f32)>,
+    /// Where that content sits inside the node box, as `(left, top)`. `None` means CENTRED, which
+    /// is what the modifier does; a parent that forces the node narrower can pin the content to
+    /// one edge instead — a ButtonGroup squeezing an item does, so the item keeps the edge facing
+    /// away from the press and gives up width on the other one.
+    pub minimum_interactive_offset: Option<(f32, f32)>,
+    /// The box to PAINT instead of deriving one from the content, as `(left, top, w, h)` inside the
+    /// node. A parent that forces the node's width sets this — a ButtonGroup does, so a squeezed
+    /// item paints narrower and a pressed one wider. It is kept apart from
+    /// `minimum_interactive_content` on purpose: that one is the size the component DECLARED, and
+    /// overwriting it with the painted width made each frame derive the inset from the last frame's
+    /// paint (the two fed back into each other).
+    pub minimum_interactive_painted: Option<(f32, f32, f32, f32)>,
+    /// How far this node's children have ALREADY been shifted by the row that squeezed it. The
+    /// shift has to be idempotent: `place` runs every frame, but a node whose constraints did not
+    /// change is served from the fold cache and its children are NOT re-placed — so a plain
+    /// `position -= shift` applies again and again and walks the content off the box.
+    pub content_shift: Option<f32>,
     /// Where a LEAF's own content sits inside its box when a modifier moved it — the measured
     /// `(x, y, content width, content height)`, or `None` for the ordinary case.
     ///
@@ -600,6 +617,9 @@ impl LayoutNode {
         // `minimum_interactive_size`, exactly like `measured_size`, and a stale one would inset the paint of
         // a node that has not measured yet this frame.
         self.minimum_interactive_content = from.minimum_interactive_content;
+        self.minimum_interactive_offset = from.minimum_interactive_offset;
+        self.minimum_interactive_painted = from.minimum_interactive_painted;
+        self.content_shift = from.content_shift;
         self.dirty = false;
     }
 }
@@ -624,6 +644,9 @@ impl LayoutNode {
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
             minimum_interactive_content: None,
+            minimum_interactive_offset: None,
+            minimum_interactive_painted: None,
+            content_shift: None,
             content_box_override: None,
             children: Vec::new(),
             measure_policy,
@@ -711,6 +734,9 @@ impl Default for LayoutNode {
             position: Offset::ZERO,
             alignment_lines: Vec::new(),
             minimum_interactive_content: None,
+            minimum_interactive_offset: None,
+            minimum_interactive_painted: None,
+            content_shift: None,
             content_box_override: None,
             has_image_content: false,
             children: Vec::new(),
@@ -3090,6 +3116,9 @@ fn measure_node_inner(
     // that was never grown (a 40 dp container drawn at 32). The write further down only happens while the
     // element is in force, so clearing here is what makes its absence meaningful.
     nodes[idx].minimum_interactive_content = None;
+    nodes[idx].minimum_interactive_offset = None;
+    nodes[idx].minimum_interactive_painted = None;
+    nodes[idx].content_shift = None;
 
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
@@ -3705,13 +3734,22 @@ fn measure_node_inner(
             // an icon button as a 48 x 40 OVAL). The declared size is the inner container: read the
             // chain's own `size(...)` when it is fixed, and fall back to the measured box when it is
             // not (a text-sized button has no fixed size and is not what this insets for).
-            // `fixed_size` already returns only the `Static` pair, so both axes are real numbers.
+            // Only a component with a DECLARED fixed size paints a box of its own inside the touch
+            // target — an IconButton declares `size(40, 40)` and the 48 dp target is padding around
+            // it. A component without one (a text Button) has no box to inset: its container IS the
+            // node, so publishing a content box here would paint it without its padding and, worse,
+            // freeze it: the row can widen the node, and a box derived from the content would not
+            // follow (measured: section 4's first item grew 75 -> 86 and its container did not move).
             let declared = nodes[idx]
                 .modifier
                 .fixed_size()
                 .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
-            let (content_w, content_h) = declared.unwrap_or((content.width, content.height));
-            nodes[idx].minimum_interactive_content = Some((content_w, content_h));
+            if let Some((content_w, content_h)) = declared {
+                nodes[idx].minimum_interactive_content = Some((content_w, content_h));
+                nodes[idx].minimum_interactive_offset = None;
+            }
+    nodes[idx].minimum_interactive_painted = None;
+    nodes[idx].content_shift = None;
             {
                 let cx = (width - content.width) / 2.0;
                 let cy = (height - content.height) / 2.0;

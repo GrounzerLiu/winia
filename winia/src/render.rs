@@ -855,14 +855,21 @@ fn render_pass1(
     // difference off BOTH sides, so a parent that forced the node narrower than the target (a
     // ButtonGroup squeezing an item) got a box narrower than the layout asked for, offset from the
     // slot it was placed in.
-    let paint_rect = match node.minimum_interactive_content {
-        Some((content_w, content_h)) => Rect::new(
-            x + (w - content_w) / 2.0,
-            y + (h - content_h) / 2.0,
-            x + (w + content_w) / 2.0,
-            y + (h + content_h) / 2.0,
-        ),
-        None => Rect::new(x, y, x + w, y + h),
+    let paint_rect = if let Some((left, top, pw, ph)) = node.minimum_interactive_painted {
+        // A parent forced the node and said exactly what to paint (a squeezed ButtonGroup item).
+        Rect::new(x + left, y + top, x + left + pw, y + top + ph)
+    } else {
+        match node.minimum_interactive_content {
+            Some((content_w, content_h)) => {
+                // CENTRED by default — that is what the modifier does with its content. A parent
+                // may have pinned it to an edge instead (`offset`).
+                let (left, top) = node
+                    .minimum_interactive_offset
+                    .unwrap_or(((w - content_w) / 2.0, (h - content_h) / 2.0));
+                Rect::new(x + left, y + top, x + left + content_w, y + top + content_h)
+            }
+            None => Rect::new(x, y, x + w, y + h),
+        }
     };
 
     // Shared-element flight visuals (Tier 0): outermost morph — pure
