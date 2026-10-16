@@ -1162,6 +1162,66 @@ mod tests {
     /// `ShortNavigationBarMedium`, whose icon sits to the left), and `NavigationDrawer` is a permanent
     /// drawer sheet: a 240..360dp column at the leading edge whose rows are the drawer's own items.
     #[test]
+    /// The RAIL layout under RTL — the half the earlier RTL bug's class had not been checked on. The Row
+    /// mirrors, so the rail docks on the RIGHT, and the primary action keeps its inset inside it.
+    ///
+    /// Measured in the demo first (921x544): LTR rail at x=0 with the action at 20; RTL rail at 825
+    /// (= 921 - 96) with the action at 845, i.e. the same 20dp.
+    #[test]
+    fn the_rail_layout_docks_on_the_right_under_rtl() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let mut composer = Composer::new();
+        crate::layout::direction::provides(LayoutDirection::Rtl, || {
+            composer.compose(|ctx| {
+                scaffold()
+                    .layout_type(NavigationSuiteType::WideNavigationRailCollapsed)
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut rail_x: Option<f32> = None;
+        let mut action_x: Option<f32> = None;
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            rail: &mut Option<f32>,
+            action: &mut Option<f32>,
+        ) {
+            let n = &nodes[idx];
+            let ax = x + n.position.x;
+            let s = n.measured_size;
+            if rail.is_none() && s.width == 96.0 && s.height > 300.0 {
+                *rail = Some(ax);
+            }
+            if action.is_none() && s.width == 56.0 && s.height == 56.0 {
+                *action = Some(ax);
+            }
+            for &child in &n.children {
+                walk(nodes, child, ax, rail, action);
+            }
+        }
+        walk(nodes, root, 0.0, &mut rail_x, &mut action_x);
+        let rail = rail_x.expect("the rail is laid out");
+        assert!(
+            (rail - (1000.0 - 96.0)).abs() < 1.0,
+            "the rail docks on the RIGHT edge under RTL, got {rail}"
+        );
+        let action = action_x.expect("the action is composed");
+        assert!(
+            (action - (rail + 20.0)).abs() < 1.0,
+            "and the action keeps its 20dp inset inside it, rail={rail} action={action}"
+        );
+    }
+
     fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
