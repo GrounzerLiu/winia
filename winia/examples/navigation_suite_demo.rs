@@ -26,6 +26,7 @@ const DESTINATIONS: [(&str, &str); 4] = [
 #[composable]
 fn navigation_suite_demo(ctx: &mut ComposeCtx) {
     let selected = ctx.remember(|| 0usize);
+    let suite_state = remember_navigation_suite_scaffold_state(ctx);
     let (w, h) = window_size();
     NavigationSuiteScaffold::new(
         {
@@ -46,6 +47,7 @@ fn navigation_suite_demo(ctx: &mut ComposeCtx) {
             }
         },
         {
+            let suite_state = suite_state.clone();
             clone!(selected);
             move |ctx| {
             Column::new()
@@ -53,10 +55,24 @@ fn navigation_suite_demo(ctx: &mut ComposeCtx) {
                 .build(ctx, |ctx| {
                     Text::new(format!("当前：{}", DESTINATIONS[selected.get()].0)).build(ctx);
                     Text::new(format!("窗口 {w}x{h}")).build(ctx);
+                    // `NavigationSuiteScaffoldState`: the whole suite slides away and the content
+                    // takes the box (upstream animates the same way).
+                    let visible = suite_state.is_visible();
+                    Button::filled()
+                        .on_click({
+                            clone!(suite_state);
+                            move || {
+                                if suite_state.is_visible() { suite_state.hide() } else { suite_state.show() }
+                            }
+                        })
+                        .build(ctx, |ctx| {
+                            Text::new(if visible { "Hide navigation" } else { "Show navigation" }).build(ctx);
+                        });
                 });
         }
         },
     )
+    .state(suite_state)
     // The FAB slot: upstream places it only in the BAR layout, 16dp above it (`:456-470`).
     .primary_action(|ctx| {
         FloatingActionButton::new()

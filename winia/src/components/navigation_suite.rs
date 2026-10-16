@@ -145,12 +145,81 @@ impl NavigationSuiteItems {
     }
 }
 
+/// `NavigationSuiteScaffoldValue`: whether the suite is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationSuiteScaffoldValue {
+    /// The navigation is laid out.
+    Visible,
+    /// It is animated away and the content takes the whole box.
+    Hidden,
+}
+
+/// `NavigationSuiteScaffoldState`: show/hide, with upstream's confirm hook.
+///
+/// Upstream's `rememberNavigationSuiteScaffoldState` also runs `confirmValueChange` before it commits,
+/// so a caller can veto ("do not hide while a form is dirty"). Same here: `show`/`hide` ask first and
+/// do nothing when the answer is no.
+#[derive(Clone)]
+pub struct NavigationSuiteScaffoldState {
+    value: State<NavigationSuiteScaffoldValue>,
+    confirm: Arc<dyn Fn(NavigationSuiteScaffoldValue) -> bool + Send + Sync>,
+}
+
+impl NavigationSuiteScaffoldState {
+    /// `rememberNavigationSuiteScaffoldState(initialValue)`, with `confirmValueChange = { true }`.
+    pub fn new(initial: NavigationSuiteScaffoldValue) -> Self {
+        Self::with_confirm(initial, |_| true)
+    }
+
+    /// The same, with a veto.
+    pub fn with_confirm(
+        initial: NavigationSuiteScaffoldValue,
+        confirm: impl Fn(NavigationSuiteScaffoldValue) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self { value: State::new(initial), confirm: Arc::new(confirm) }
+    }
+
+    pub fn current_value(&self) -> NavigationSuiteScaffoldValue {
+        self.value.get()
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.value.get() == NavigationSuiteScaffoldValue::Visible
+    }
+
+    /// Ask to move to `target`; a vetoed request leaves everything as it was.
+    pub fn set(&self, target: NavigationSuiteScaffoldValue) {
+        if (self.confirm)(target) {
+            self.value.set(target);
+        }
+    }
+
+    pub fn show(&self) {
+        self.set(NavigationSuiteScaffoldValue::Visible);
+    }
+
+    pub fn hide(&self) {
+        self.set(NavigationSuiteScaffoldValue::Hidden);
+    }
+}
+
+/// `rememberNavigationSuiteScaffoldState()`.
+#[composable]
+pub fn remember_navigation_suite_scaffold_state(
+    ctx: &mut ComposeCtx,
+) -> NavigationSuiteScaffoldState {
+    ctx.remember(|| NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible))
+        .get()
+}
+
 /// 自适应导航套件脚手架：items + content，按窗口尺寸类选择导航形态。
 pub struct NavigationSuiteScaffold {
     items: Vec<NavigationSuiteItem>,
     content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
     /// None = 按窗口尺寸自动推算
     layout_type: Option<NavigationSuiteType>,
+    /// `state`: hide/show the whole suite (upstream `NavigationSuiteScaffoldState`).
+    state: Option<NavigationSuiteScaffoldState>,
     container_color: Option<Color>,
     /// `primaryActionContent`: a FAB floated above the bar, or `None`.
     primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
@@ -188,6 +257,7 @@ impl NavigationSuiteScaffold {
             items: collector.0,
             content: Box::new(content),
             layout_type: None,
+            state: None,
             container_color: None,
             primary_action: None,
             primary_action_alignment: Alignment::End,
@@ -216,6 +286,13 @@ impl NavigationSuiteScaffold {
     /// for the two edge alignments.
     pub fn primary_action_alignment(mut self, alignment: Alignment) -> Self {
         self.primary_action_alignment = alignment;
+        self
+    }
+
+    /// `state`: an explicit show/hide state. `NavigationSuiteScaffoldState::Hidden` animates the
+    /// suite away through the same collapse the shape switch uses, and the content takes the box.
+    pub fn state(mut self, state: NavigationSuiteScaffoldState) -> Self {
+        self.state = Some(state);
         self
     }
 
@@ -260,7 +337,15 @@ impl NavigationSuiteScaffold {
         // (`navigation_rail.rs`). Passing one value to both painted the rail a shade too light.
         let bar_container = self.container_color.unwrap_or(theme.surface_container);
         let rail_container = self.container_color.unwrap_or(theme.surface);
-        let target_type = self.layout_type.unwrap_or_else(navigation_suite_type);
+        // A HIDDEN suite is the `None` shape as far as this build is concerned: the collapse/swap/expand
+        // morph then animates it away exactly as a shape change would, and the content gets the box.
+        let hidden = self.state.as_ref().map(|s| !s.is_visible()).unwrap_or(false);
+        let target_type = if hidden {
+            NavigationSuiteType::None
+        } else {
+            self.layout_type.unwrap_or_else(navigation_suite_type)
+        };
+        ctx.changed(&hidden);
         let content = self.content;
         let primary_action = self.primary_action;
         let primary_action_alignment = self.primary_action_alignment;
@@ -376,7 +461,10 @@ impl NavigationSuiteScaffold {
             })
             .collect();
 
-        let suite_type = cur;
+        // Without the morph there is nothing to animate through, so render the target at once:
+        // reading `cur` here left `transition(false)` a frame behind (the backchannel write below
+        // only reaches the next build).
+        let suite_type = if self.transition { cur } else { target_type };
 
         // 内容区背景（对标 scaffold containerColor = background）
         let content_modifier = Modifier::new()
@@ -404,6 +492,13 @@ impl NavigationSuiteScaffold {
                 // A Stack even without a primary action: it is what floats one above the bar.
                 Stack::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
+                    // A child that does not fill lands at the END, which is where the primary action
+                    // goes; the Column below fills, so the alignment does not move it.
+                    .alignment(match primary_action_alignment {
+                        Alignment::Start => Alignment::Start,
+                        Alignment::Center => Alignment::Center,
+                        _ => Alignment::End,
+                    })
                     .build(ctx, |ctx| {
                 Column::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
@@ -443,17 +538,19 @@ impl NavigationSuiteScaffold {
                 // `layoutHeight - h - PrimaryActionContentPadding(16) - navigationHeight`, with the
                 // horizontal alignment picking the x (`:440-470`).
                 if let Some(primary_action) = primary_action {
-                    let fk = ctx.next_key();
-                    let policy = PrimaryActionPolicy {
-                        alignment: primary_action_alignment,
-                        padding: PRIMARY_ACTION_PADDING,
-                        bottom_inset: NAVIGATION_BAR_HEIGHT,
-                    };
-                    match ctx.start_restartable_group(fk, Modifier::new(), policy) {
-                        GroupStatus::Skip => {}
-                        GroupStatus::Enter => primary_action(ctx),
-                    }
-                    ctx.end_restartable_group();
+                    // The insets are PADDING, not a policy that reports the whole box: the hit test
+                    // tests a node's CONTENT box, so a full-box layer above the content swallowed
+                    // every click in the layout (measured: the bar's items and the content's button
+                    // both stopped responding). With the insets as padding the node's content box is
+                    // exactly the action's own rect, and clicking it still works.
+                    Stack::new()
+                        .modifier(Modifier::new().padding_sides(
+                            0.0,
+                            0.0,
+                            PRIMARY_ACTION_PADDING,
+                            NAVIGATION_BAR_HEIGHT + PRIMARY_ACTION_PADDING,
+                        ))
+                        .build(ctx, primary_action);
                 }
                     });
             }
@@ -538,52 +635,6 @@ fn form_kind(t: NavigationSuiteType) -> u8 {
 /// `PrimaryActionContentPadding` (`NavigationSuiteScaffoldLayout.kt:1591`).
 const PRIMARY_ACTION_PADDING: f32 = 16.0;
 
-/// Places the floating primary action: 16dp clear of the navigation, at the caller's horizontal
-/// alignment. It reports the full box so the alignment math has the same origin the layout uses.
-#[derive(Debug)]
-struct PrimaryActionPolicy {
-    alignment: Alignment,
-    padding: f32,
-    bottom_inset: f32,
-}
-
-impl MeasurePolicy for PrimaryActionPolicy {
-    fn measure(
-        &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        policies: &[Box<dyn MeasurePolicy>],
-        children: &[usize],
-        c: Constraints,
-    ) -> (Size, Vec<Placement>) {
-        let Some(&child) = children.first() else {
-            return (Size::new(c.max_width, c.max_height), Vec::new());
-        };
-        let loose = Constraints::new(0.0, c.max_width, 0.0, c.max_height);
-        let (size, _) = measure_node(nodes, policies, child, loose);
-        let x = match self.alignment {
-            Alignment::Start => self.padding,
-            Alignment::Center => (c.max_width - size.width) / 2.0,
-            _ => c.max_width - size.width - self.padding,
-        };
-        let y = c.max_height - size.height - self.padding - self.bottom_inset;
-        (
-            Size::new(c.max_width, c.max_height),
-            vec![Placement { size, position: Offset::new(x, y) }],
-        )
-    }
-
-    fn place(
-        &self,
-        nodes: &mut Vec<crate::layout::node::LayoutNode>,
-        children: &[usize],
-        placements: &[Placement],
-    ) {
-        for (index, &child) in children.iter().enumerate() {
-            nodes[child].position = placements[index].position;
-            nodes[child].measured_size = placements[index].size;
-        }
-    }
-}
 
 /// morph 容器：子项按全尺寸松约束测量、原点放置，容器报告按 progress 缩放
 /// 的尺寸——溢出内容由节点 clip 裁剪。progress 读取注册 layout_deps——
@@ -724,23 +775,73 @@ mod tests {
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
-        // The Stack's children are [the Column, the action's group]; the group fills the box and
-        // PLACES the payload, so the position under test is its child's.
+        // The Stack's children are [the Column, the action's padded container]; the container is
+        // END-aligned and carries the insets, so the payload's ABSOLUTE position is the two
+        // positions added up.
         let children = &nodes[root].children;
         assert_eq!(children.len(), 2, "the stack holds the bar layout and the action");
-        let group = &nodes[children[1]];
-        let fab = &nodes[group.children[0]];
+        let container = &nodes[children[1]];
+        let fab = &nodes[container.children[0]];
         assert_eq!(fab.measured_size.width, 56.0);
+        let abs_x = container.position.x + fab.position.x;
+        let abs_y = container.position.y + fab.position.y;
         assert!(
-            (fab.position.x - (500.0 - 56.0 - 16.0)).abs() < 0.01,
-            "16dp in from the trailing edge, x={}",
-            fab.position.x
+            (abs_x - (500.0 - 56.0 - 16.0)).abs() < 0.01,
+            "16dp in from the trailing edge, x={abs_x}"
         );
         assert!(
-            (fab.position.y - (700.0 - 56.0 - 16.0 - 80.0)).abs() < 0.01,
-            "16dp above the 80dp bar, y={}",
-            fab.position.y
+            (abs_y - (700.0 - 56.0 - 16.0 - 80.0)).abs() < 0.01,
+            "16dp above the 80dp bar, y={abs_y}"
         );
+    }
+
+/// `NavigationSuiteScaffoldState` hides the whole suite (the content takes the box) and shows it
+    /// again, and a `confirm` hook can veto.
+    #[test]
+    fn the_state_hides_and_shows_the_suite() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
+        let state = NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible);
+        let mut composer = Composer::new();
+        let mut build = |c: &mut Composer| {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                scaffold().state(st.clone()).transition(false).build(ctx);
+            });
+            c.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+        };
+        // The bar is the widest 80-tall node; nothing else in this tree is that shape.
+        let has_bar = |c: &Composer| -> bool {
+            fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> bool {
+                let n = &nodes[idx];
+                if n.measured_size.height == 80.0 && n.measured_size.width > 300.0 {
+                    return true;
+                }
+                n.children.iter().any(|&child| walk(nodes, child))
+            }
+            let root = c.layout_root_idx().unwrap();
+            walk(c.arena_nodes(), root)
+        };
+        build(&mut composer);
+        assert!(has_bar(&composer), "visible: the bar is laid out");
+        state.hide();
+        build(&mut composer);
+        assert!(!has_bar(&composer), "hidden: the suite is gone");
+        state.show();
+        build(&mut composer);
+        assert!(has_bar(&composer), "shown again");
+    }
+
+    /// `confirmValueChange`: a vetoed request changes nothing (upstream's hook, same contract).
+    #[test]
+    fn a_veto_keeps_the_suite_visible() {
+        let vetoing = NavigationSuiteScaffoldState::with_confirm(
+            NavigationSuiteScaffoldValue::Visible,
+            |target| target == NavigationSuiteScaffoldValue::Visible,
+        );
+        vetoing.hide();
+        assert!(vetoing.is_visible(), "the veto held");
+        assert_eq!(vetoing.current_value(), NavigationSuiteScaffoldValue::Visible);
     }
 
     /// 窄窗 → 底栏形态：Column 根，bar 在底部（高 80、贴底）

@@ -150,7 +150,9 @@ pub use short_navigation_bar::{
     ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement,
 };
 pub use navigation_suite::{
-    NavigationSuiteScaffold, NavigationSuiteType, NavigationSuiteItems,
+    NavigationSuiteScaffold, NavigationSuiteScaffoldState, NavigationSuiteScaffoldValue,
+    NavigationSuiteType, NavigationSuiteItems,
+    remember_navigation_suite_scaffold_state,
 };
 pub use tab_row::{
     Tab, TabRow, TabRowDefaults, TabPosition,
