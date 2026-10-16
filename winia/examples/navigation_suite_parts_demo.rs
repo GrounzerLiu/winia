@@ -5,8 +5,9 @@
 //!    navigation has to live inside your own layout.
 //! 2. `NavigationSuiteScaffoldLayout`: the placement. Bring your own navigation and your own content and
 //!    still get the scaffold's geometry — the navigation pinned to the bottom, the content above it, and
-//!    the FAB slot 16dp over the navigation. (For a RAIL shape the action belongs to the navigation
-//!    itself, so the layout parks it off-view; that is upstream's rule, not an omission.)
+//!    the FAB slot 16dp over the navigation. This example builds the BAR case; for a RAIL shape
+//!    upstream never places the action at all (it belongs to the navigation there), and winia parks
+//!    that slot off-view instead of dropping it.
 //!
 //! Run: cargo run -p winia --example navigation_suite_parts_demo
 

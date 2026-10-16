@@ -2640,7 +2640,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// The cross-fade wrapper must not change the glyph's colour: it only adds a per-generation alpha
     /// layer, and a resting generation sits at alpha 1. Painting the same button with and without
     /// `Crossfade` and comparing the glyph's centre pixel is what catches a colour the layer machinery
@@ -2694,6 +2693,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn tf_aux_text_paints() {
         // label/支持文本绘制路径：build_plain_paragraph + layout + paint
         let mut surface = skia_safe::surfaces::raster_n32_premul((200, 40)).unwrap();

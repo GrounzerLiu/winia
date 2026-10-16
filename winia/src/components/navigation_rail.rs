@@ -2051,31 +2051,42 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         // content's total height BEFORE the first child is placed, so this measures each child once more
         // — the same arithmetic the loop below uses (settled width, then the header's 40 or the item gap).
         // A rail that hugs its content has no slack, so the arrangement is then a no-op, as upstream's is.
-        let mut content_h = 0.0f32;
+        // The slack is what the ITEMS may spread into, so the header's own height and padding are not
+        // part of it (upstream keeps the header at the top and arranges the items). An unbounded height is
+        // no slack at all — INFINITY here would put every placement at INFINITY and break hit testing.
+        let mut items_h = 0.0f32;
         for (index, &child) in children.iter().enumerate() {
+            if index == 0 && self.has_header {
+                continue;
+            }
             let (size, _) = measure_node(
                 nodes,
                 policies,
                 child,
                 Constraints::new(0.0, width, 0.0, c.max_height),
             );
-            content_h += size.height;
-            content_h += if index == 0 && self.has_header {
-                WIDE_RAIL_HEADER_PADDING
-            } else {
-                RAIL_VERTICAL_PADDING + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p
-            };
+            items_h += size.height + RAIL_VERTICAL_PADDING
+                + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p;
         }
-        let slack =
-            (c.max_height - RAIL_VERTICAL_PADDING - WIDE_RAIL_TOP_PADDING - content_h).max(0.0);
+        let bounded = c.max_height.is_finite();
+        let slack = if bounded {
+            (c.max_height - RAIL_VERTICAL_PADDING - WIDE_RAIL_TOP_PADDING - items_h).max(0.0)
+        } else {
+            0.0
+        };
         let arranged = match self.arrangement {
             Arrangement::Center => slack / 2.0,
             Arrangement::End => slack,
             _ => 0.0,
         };
-        let mut y = WIDE_RAIL_TOP_PADDING + arranged;
+        let mut y = WIDE_RAIL_TOP_PADDING;
+        let first_item = usize::from(self.has_header);
         let mut placements = Vec::with_capacity(children.len());
         for (index, &child) in children.iter().enumerate() {
+            // The header keeps the top; the arrangement moves the ITEMS under it.
+            if index == first_item {
+                y += arranged;
+            }
             let (size, _) = measure_node(
                 nodes,
                 policies,

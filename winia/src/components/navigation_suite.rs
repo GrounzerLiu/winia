@@ -735,9 +735,12 @@ impl NavigationSuiteScaffold {
                     // that is what the modifier documents. So the inset's sign follows the mirrored
                     // side, not the caller's word: without the flip an RTL `End` action was pushed
                     // another 16dp off the left edge instead of being inset from it.
+                    // `Stretch` is not a horizontal placement for a floating child, so it takes the
+                    // trailing edge like `End` rather than falling through to a sign nobody chose.
                     let x = match (primary_action_alignment, rtl) {
                         (Alignment::Center, _) => 0.0,
                         (Alignment::Start, false) | (Alignment::End, true) => PRIMARY_ACTION_PADDING,
+                        (Alignment::End, false) | (Alignment::Start, true) => -PRIMARY_ACTION_PADDING,
                         _ => -PRIMARY_ACTION_PADDING,
                     };
                     Stack::new()
@@ -875,7 +878,6 @@ impl MeasurePolicy for SuiteMorphPolicy {
     }
 }
 
-#[composable]
 /// The classic `NavigationRail` (the legacy `NavigationRail` shape). It takes no arrangement — the caller
 /// spaces it, as upstream does — and its action is its header, like the wide rail's.
 fn build_classic_rail_shape(
@@ -1027,6 +1029,7 @@ fn build_bar_shape(
     .build(ctx);
 }
 
+#[composable]
 fn render_bar_item(
     ctx: &mut ComposeCtx,
     item: NavigationSuiteItem,
@@ -1618,7 +1621,7 @@ mod tests {
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
         let root = composer.layout_root_idx().unwrap();
         let nodes = composer.arena_nodes();
-        // The Stack's children are [the Column, the action's padded container]; the container is
+        // The Stack's children are [the Column, the action's offset container]; the container is
         // END-aligned and carries the insets, so the payload's ABSOLUTE position is the two
         // positions added up.
         let children = &nodes[root].children;
@@ -2026,6 +2029,64 @@ fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
             (bar[1].0 - PRIMARY_ACTION_PADDING).abs() < 0.5,
             "the action is inset from the logical (left) edge, got {}",
             bar[1].0
+        );
+    }
+
+    /// The layout entry honours the caller's ALIGNMENT, in both directions: an `End` action is inset from
+    /// the trailing edge, a `Start` one from the leading edge, and each mirrors under RTL.
+    #[test]
+    fn the_scaffold_layout_honours_the_action_alignment() {
+        let probe = |alignment: Alignment, rtl: bool| -> f32 {
+            let mut composer = Composer::new();
+            let mut run = || {
+                composer.compose(|ctx| {
+                    NavigationSuiteScaffoldLayout::new(
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                            ctx.end_node();
+                        },
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().fill_max_size());
+                            ctx.end_node();
+                        },
+                    )
+                    .layout_type(NavigationSuiteType::ShortNavigationBarCompact)
+                    .primary_action_alignment(alignment)
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+                });
+                composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            };
+            if rtl {
+                crate::layout::direction::provides(LayoutDirection::Rtl, run);
+            } else {
+                run();
+            }
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[nodes[root].children[1]].position.x
+        };
+        assert!(
+            (probe(Alignment::End, false) - (500.0 - 56.0 - PRIMARY_ACTION_PADDING)).abs() < 0.5,
+            "End/LTR is inset from the right"
+        );
+        assert!(
+            (probe(Alignment::Start, false) - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            "Start/LTR is inset from the left"
+        );
+        assert!(
+            (probe(Alignment::End, true) - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            "End/RTL is inset from the logical (left) edge"
+        );
+        assert!(
+            (probe(Alignment::Start, true) - (500.0 - 56.0 - PRIMARY_ACTION_PADDING)).abs() < 0.5,
+            "Start/RTL is inset from the logical (right) edge"
         );
     }
 
