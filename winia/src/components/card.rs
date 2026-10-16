@@ -508,7 +508,14 @@ impl Card {
                 Modifier::new()
                     .minimum_interactive_component_size()
                     .border(0.0, crate::graphics::Color::from_argb(0, 0, 0, 0), shape),
-                crate::layout::BoxLayout::new().alignment(crate::layout::Alignment::Center),
+                // `propagate_min_constraints`: the same reason the Button's wrapper sets it — a
+                // parent that FORCES a width on the card gets a card that width. Without it the
+                // wrapper reports the forced size while the surface inside it keeps hugging its own
+                // content (a BoxLayout loosens its children otherwise), so the ring, the ripple and
+                // the surface no longer agree on how wide the card is.
+                crate::layout::BoxLayout::new()
+                    .alignment(crate::layout::Alignment::Center)
+                    .propagate_min_constraints(true),
                 |ctx| {
                     build_card(ctx);
                     // The wrapper is the focus node, so the ring's colour has to reach it too.

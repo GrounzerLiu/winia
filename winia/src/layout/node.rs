@@ -3731,10 +3731,27 @@ fn measure_node_inner(
             // node, so publishing a content box here would paint it without its padding and, worse,
             // freeze it: the row can widen the node, and a box derived from the content would not
             // follow (measured: section 4's first item grew 75 -> 86 and its container did not move).
+            // Only a FULLY declared pair is a box this can paint: `Modifier::width()`/`height()`
+            // fill the other axis with `Dimension::Auto`, `fixed_size()` matches any static pair,
+            // and `to_logical_px()` answers 0.0 for `Auto` (and for `Fill`) — which would publish a
+            // content box with a zero side, and a zero-height `paint_rect` paints nothing.
             let declared = nodes[idx]
                 .modifier
                 .fixed_size()
-                .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
+                .and_then(|(w, h)| {
+                    let real =
+                        |d: crate::layout::Dimension| {
+                            !matches!(
+                                d,
+                                crate::layout::Dimension::Auto | crate::layout::Dimension::Fill
+                            )
+                        };
+                    if real(w) && real(h) {
+                        Some((w.to_logical_px(), h.to_logical_px()))
+                    } else {
+                        None
+                    }
+                });
             if let Some((content_w, content_h)) = declared {
                 nodes[idx].minimum_interactive_content = Some((content_w, content_h));
             }
@@ -4852,6 +4869,38 @@ mod intrinsic_tests {
         assert_eq!(
             size.width, 300.0,
             "the incoming maximum wins on the filled axis"
+        );
+    }
+    /// A SINGLE-AXIS size must not publish a minimum-interactive content box.
+    ///
+    /// `Modifier::width()` fills the other axis with `Dimension::Auto`, `fixed_size()` matches any
+    /// static pair, and `Dimension::auto.to_logical_px()` answers 0.0 — so reading the pair straight
+    /// through published `(w, 0.0)`, and the renderer then built a zero-HEIGHT box: the node painted
+    /// nothing at all. Only a fully declared pair is a box to paint.
+    #[test]
+    fn a_single_axis_size_publishes_no_minimum_interactive_content() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(|ctx| {
+            let key = ctx.next_key();
+            ctx.start_leaf(
+                key,
+                Modifier::new()
+                    .minimum_interactive_component_size()
+                    .width(200.0),
+            );
+            ctx.end_node();
+        });
+        composer.layout(Constraints::new(0.0, 400.0, 0.0, 400.0));
+        let root = composer.layout_root_idx().expect("a root");
+        let nodes = composer.arena_nodes();
+        assert_eq!(nodes[root].measured_size.width, 200.0);
+        assert_eq!(
+            nodes[root].measured_size.height, 48.0,
+            "the touch target still floors the axis the caller did not declare"
+        );
+        assert!(
+            nodes[root].minimum_interactive_content.is_none(),
+            "a half-declared pair is not a box to paint"
         );
     }
 }
