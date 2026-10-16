@@ -38,7 +38,7 @@ use crate::composable;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::runtime::movable::MovableContent;
 use crate::runtime::state::State;
-use crate::layout::{Constraints, MeasurePolicy};
+use crate::layout::{Constraints, LayoutDirection, MeasurePolicy};
 use crate::layout::node::{measure_node, Placement};
 use crate::unit::{Offset, Size};
 use crate::layout::SizeValue;
@@ -430,6 +430,12 @@ impl NavigationSuiteScaffold {
         ctx.changed(&self.navigation_suite_colors);
         ctx.changed(&self.content_color);
         let theme = WiniaTheme::colors();
+        let direction = self
+            .modifier
+            .get_layout_direction()
+            .unwrap_or_else(crate::layout::direction::current);
+        let rtl = direction == LayoutDirection::Rtl;
+        ctx.changed(&direction);
         // Each shape keeps ITS OWN default container, which is what upstream's
         // `NavigationSuiteDefaults.colors()` does by delegating to `ShortNavigationBarDefaults` for the
         // bar and to `WideNavigationRailDefaults` for the rail. Those two defaults differ:
@@ -734,9 +740,14 @@ impl NavigationSuiteScaffold {
                     // reached down over the bar and swallowed the part of the last item to its right
                     // (reported on the demo: `Profile` right of the action was dead). An offset leaves
                     // the node exactly the action's own rect, so only the action is hittable.
-                    let x = match primary_action_alignment {
-                        Alignment::Start => PRIMARY_ACTION_PADDING,
-                        Alignment::Center => 0.0,
+                    // The alignment ITSELF mirrors (`Alignment::Start` is the left edge in LTR and the
+                    // right one in RTL, `layout/node.rs`'s `anchor`), but `absolute_offset` does NOT —
+                    // that is what the modifier documents. So the inset's sign follows the mirrored
+                    // side, not the caller's word: without the flip an RTL `End` action was pushed
+                    // another 16dp off the left edge instead of being inset from it.
+                    let x = match (primary_action_alignment, rtl) {
+                        (Alignment::Center, _) => 0.0,
+                        (Alignment::Start, false) | (Alignment::End, true) => PRIMARY_ACTION_PADDING,
                         _ => -PRIMARY_ACTION_PADDING,
                     };
                     Stack::new()
@@ -1027,6 +1038,51 @@ mod tests {
     /// the container reached down over the bar and the part of the last item to its right went dead
     /// (reported on the demo, `Profile`). The insets are an offset now, and this is the guard.
     #[test]
+    /// RTL: the action is inset from the LOGICAL end, which is the LEFT edge when the layout runs
+    /// right-to-left. The alignment mirrors itself, `absolute_offset` does not, so the sign is flipped by
+    /// hand — without that it was pushed 16dp off the left edge instead of inset from it.
+    #[test]
+    fn the_primary_action_is_inset_from_the_logical_end_under_rtl() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
+        let mut composer = Composer::new();
+        crate::layout::direction::provides(LayoutDirection::Rtl, || {
+            composer.compose(|ctx| {
+                scaffold()
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+        });
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut found: Option<f32> = None;
+        fn walk(
+            nodes: &[crate::layout::node::LayoutNode],
+            idx: usize,
+            x: f32,
+            out: &mut Option<f32>,
+        ) {
+            let n = &nodes[idx];
+            let ax = x + n.position.x;
+            if n.measured_size.width == 56.0 && n.measured_size.height == 56.0 {
+                *out = Some(ax);
+            }
+            for &child in &n.children {
+                walk(nodes, child, ax, out);
+            }
+        }
+        walk(nodes, root, 0.0, &mut found);
+        let x = found.expect("the action is composed");
+        assert!(
+            (x - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            "16dp in from the LEFT edge under RTL, got {x}"
+        );
+    }
     fn the_primary_action_does_not_swallow_the_item_beside_it() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(500.0, 700.0);
