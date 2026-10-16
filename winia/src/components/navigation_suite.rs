@@ -610,26 +610,7 @@ impl NavigationSuiteScaffold {
             // (`NavigationSuite.kt:632-683`). No morph: upstream switches these with a plain `when`, and
             // the classic rail and drawer carry their own animation.
             NavigationSuiteType::NavigationRail => {
-                let mut rail = NavigationRail::new(move |ctx| {
-                    for item in items_for_shape.clone() {
-                        let icon = item.icon.clone();
-                        let mut b = NavigationRailItem::new(item.selected, move |ctx| icon(ctx))
-                            .colors(rail_item_colors)
-                            .on_click(move || {
-                                if let Some(cb) = item.on_click.as_ref() {
-                                    cb()
-                                }
-                            });
-                        if let Some(label) = item.label.clone() {
-                            b = b.label(move |ctx| label(ctx));
-                        }
-                        b.build(ctx);
-                    }
-                })
-                .container_color(suite_colors.navigation_rail_container);
-                if let Some(primary_action) = primary_action {
-                    rail = rail.header(primary_action);
-                }
+
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
@@ -643,33 +624,17 @@ impl NavigationSuiteScaffold {
                                 .modifier(Modifier::new().layout_weight(1.0))
                                 .build(ctx);
                         }
-                        rail.build(ctx);
+                        build_classic_rail_shape(
+                            ctx,
+                            items_for_shape.clone(),
+                            suite_colors.navigation_rail_container,
+                            rail_item_colors,
+                            primary_action,
+                        );
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
             }
             NavigationSuiteType::NavigationDrawer => {
-                let sheet = DrawerSheet::permanent(move |ctx| {
-                    if let Some(primary_action) = primary_action {
-                        primary_action(ctx);
-                    }
-                    for item in items_for_shape.clone() {
-                        let icon = item.icon.clone();
-                        let label = item.label.clone().unwrap_or_else(|| {
-                            Arc::new(|ctx: &mut ComposeCtx| {
-                                crate::components::Text::new("").build(ctx);
-                            })
-                        });
-                        NavigationDrawerItem::new(move |ctx| label(ctx), item.selected)
-                            .icon(move |ctx| icon(ctx))
-                            .on_click(move || {
-                                if let Some(cb) = item.on_click.as_ref() {
-                                    cb()
-                                }
-                            })
-                            .build(ctx);
-                    }
-                })
-                .container_color(suite_colors.navigation_drawer_container);
                 Row::new()
                     .modifier(Modifier::new().fill_max_width().fill_max_height().then(self.modifier))
                     .build(ctx, |ctx| {
@@ -684,7 +649,12 @@ impl NavigationSuiteScaffold {
                                 .modifier(Modifier::new().layout_weight(1.0))
                                 .build(ctx);
                         }
-                        sheet.build(ctx);
+                        build_drawer_shape(
+                            ctx,
+                            items_for_shape.clone(),
+                            suite_colors.navigation_drawer_container,
+                            primary_action,
+                        );
                         WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
                     });
             }
@@ -752,14 +722,14 @@ impl NavigationSuiteScaffold {
                         match ctx.start_restartable_group(mk, morph_modifier, morph) {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
-                                ShortNavigationBar::new(move |ctx| {
-                                    for item in items_for_shape.clone() {
-                                        render_bar_item(ctx, item, icon_position, bar_item_colors);
-                                    }
-                                })
-                                .arrangement(arrangement)
-                                .container_color(bar_container)
-                                .build(ctx);
+                                build_bar_shape(
+                                    ctx,
+                                    items_for_shape.clone(),
+                                    arrangement,
+                                    icon_position,
+                                    bar_container,
+                                    bar_item_colors,
+                                );
                             }
                         }
                         ctx.end_restartable_group();
@@ -836,40 +806,16 @@ impl NavigationSuiteScaffold {
                             GroupStatus::Skip => {}
                             GroupStatus::Enter => {
                                 let items = items_for_shape.clone();
-                                let mut rail = WideNavigationRail::new(rail_state, move |ctx| {
-                                    for item in items {
-                                        let icon = item.icon.clone();
-                                        let label = item
-                                            .label
-                                            .clone()
-                                            .unwrap_or_else(|| Arc::new(|ctx: &mut ComposeCtx| {
-                                                crate::components::Text::new("").build(ctx);
-                                            }));
-                                        let b = WideNavigationRailItem::new(
-                                            item.selected,
-                                            move |ctx| icon(ctx),
-                                            move |ctx| label(ctx),
-                                        )
-                                        .colors(rail_item_colors)
-                                        .progress(rail_item_progress.clone())
-                                        .on_click(move || {
-                                            if let Some(cb) = item.on_click.as_ref() {
-                                                cb()
-                                            }
-                                        });
-                                        b.build(ctx);
-                                    }
-                                })
-                                .arrangement(vertical_arrangement)
-                                .container_color(rail_container);
-                                // Upstream's contract for a VERTICAL shape: the primary action goes in
-                                // as the component's header (`NavigationSuite.kt:183-187`, `:612-620`) —
-                                // the same slot the rail demos put their FAB in. Leaving it out is why
-                                // a wide window showed no FAB at all.
-                                if let Some(primary_action) = primary_action {
-                                    rail = rail.header(primary_action);
-                                }
-                                rail.build(ctx);
+                                build_rail_shape(
+                                    ctx,
+                                    items,
+                                    rail_state,
+                                    rail_item_progress.clone(),
+                                    rail_container,
+                                    vertical_arrangement,
+                                    rail_item_colors,
+                                    primary_action,
+                                );
                             }
                         }
                         ctx.end_restartable_group();
@@ -949,6 +895,130 @@ impl MeasurePolicy for SuiteMorphPolicy {
 }
 
 #[composable]
+/// The classic `NavigationRail` (the legacy `NavigationRail` shape). It takes no arrangement — the caller
+/// spaces it, as upstream does — and its action is its header, like the wide rail's.
+fn build_classic_rail_shape(
+    ctx: &mut ComposeCtx,
+    items: Vec<NavigationSuiteItem>,
+    container: Color,
+    item_colors: crate::components::navigation_rail::NavigationRailItemColors,
+    header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+) {
+    let mut rail = NavigationRail::new(move |ctx| {
+        for item in items {
+            let icon = item.icon.clone();
+            let mut b = NavigationRailItem::new(item.selected, move |ctx| icon(ctx))
+                .colors(item_colors)
+                .on_click(move || {
+                    if let Some(cb) = item.on_click.as_ref() {
+                        cb()
+                    }
+                });
+            if let Some(label) = item.label.clone() {
+                b = b.label(move |ctx| label(ctx));
+            }
+            b.build(ctx);
+        }
+    })
+    .container_color(container);
+    if let Some(header) = header {
+        rail = rail.header(header);
+    }
+    rail.build(ctx);
+}
+
+/// The permanent drawer sheet (the legacy `NavigationDrawer` shape): the action on top, then the rows.
+fn build_drawer_shape(
+    ctx: &mut ComposeCtx,
+    items: Vec<NavigationSuiteItem>,
+    container: Color,
+    header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+) {
+    DrawerSheet::permanent(move |ctx| {
+        if let Some(header) = header {
+            header(ctx);
+        }
+        for item in items {
+            let icon = item.icon.clone();
+            let label = item.label.clone().unwrap_or_else(|| {
+                Arc::new(|ctx: &mut ComposeCtx| {
+                    crate::components::Text::new("").build(ctx);
+                })
+            });
+            NavigationDrawerItem::new(move |ctx| label(ctx), item.selected)
+                .icon(move |ctx| icon(ctx))
+                .on_click(move || {
+                    if let Some(cb) = item.on_click.as_ref() {
+                        cb()
+                    }
+                })
+                .build(ctx);
+        }
+    })
+    .container_color(container)
+    .build(ctx);
+}
+
+/// The wide rail. Shared like [`build_bar_shape`]; `progress` is the item morph progress the caller
+/// already runs (the rail's own `FastSpatial` token), and `header` is where a VERTICAL shape takes the
+/// primary action (`NavigationSuite.kt:183-187`, `:612-620`).
+fn build_rail_shape(
+    ctx: &mut ComposeCtx,
+    items: Vec<NavigationSuiteItem>,
+    rail_state: WideNavigationRailState,
+    progress: State<f32>,
+    container: Color,
+    arrangement: Arrangement,
+    item_colors: crate::components::navigation_rail::NavigationRailItemColors,
+    header: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+) {
+    let mut rail = WideNavigationRail::new(rail_state, move |ctx| {
+        for item in items {
+            let icon = item.icon.clone();
+            let label = item.label.clone().unwrap_or_else(|| {
+                Arc::new(|ctx: &mut ComposeCtx| {
+                    crate::components::Text::new("").build(ctx);
+                })
+            });
+            let b = WideNavigationRailItem::new(item.selected, move |ctx| icon(ctx), move |ctx| label(ctx))
+                .colors(item_colors)
+                .progress(progress.clone())
+                .on_click(move || {
+                    if let Some(cb) = item.on_click.as_ref() {
+                        cb()
+                    }
+                });
+            b.build(ctx);
+        }
+    })
+    .arrangement(arrangement)
+    .container_color(container);
+    if let Some(header) = header {
+        rail = rail.header(header);
+    }
+    rail.build(ctx);
+}
+
+/// The short bar. Shared by the scaffold's shape host and a standalone [`NavigationSuite`]: the
+/// construction is identical, and in the scaffold the items simply carry handle-backed payloads.
+fn build_bar_shape(
+    ctx: &mut ComposeCtx,
+    items: Vec<NavigationSuiteItem>,
+    arrangement: ShortNavigationBarArrangement,
+    icon_position: NavigationItemIconPosition,
+    container: Color,
+    item_colors: crate::components::navigation_bar::NavigationBarItemColors,
+) {
+    ShortNavigationBar::new(move |ctx| {
+        for item in items {
+            render_bar_item(ctx, item, icon_position, item_colors);
+        }
+    })
+    .arrangement(arrangement)
+    .container_color(container)
+    .build(ctx);
+}
+
 fn render_bar_item(
     ctx: &mut ComposeCtx,
     item: NavigationSuiteItem,
@@ -1165,6 +1235,160 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
             nodes[child].position = placements[index].position;
             nodes[child].measured_size = placements[index].size;
         }
+    }
+}
+
+// ═══════════════ NavigationSuite ═══════════════
+
+/// `NavigationSuite`: the shape host on its own — one shape, its items, no scaffold.
+///
+/// Upstream's `NavigationSuite` (`:569-693`) exists so a caller can put the navigation into THEIR OWN
+/// layout: it takes a type, the colours, the vertical arrangement, the primary action and the items, and
+/// renders that one shape. winia's shapes were reachable only through the scaffold; this is the same
+/// construction, and both now go through the same `build_*_shape` helpers.
+///
+/// It has no morph, no visibility state and no content: that is the scaffold's business. For a BAR shape
+/// the action is ignored here — upstream floats it above the bar from the LAYOUT
+/// ([`NavigationSuiteScaffoldLayout`]), not from the navigation itself.
+pub struct NavigationSuite {
+    items: Vec<NavigationSuiteItem>,
+    layout_type: NavigationSuiteType,
+    container_color: Option<Color>,
+    vertical_arrangement: Arrangement,
+    primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    modifier: Modifier,
+}
+
+impl NavigationSuite {
+    pub fn new(
+        items: impl FnOnce(&mut NavigationSuiteItems),
+        layout_type: NavigationSuiteType,
+    ) -> Self {
+        let mut collector = NavigationSuiteItems::default();
+        items(&mut collector);
+        Self {
+            items: collector.0,
+            layout_type,
+            container_color: None,
+            vertical_arrangement: NavigationSuiteDefaults::vertical_arrangement(),
+            primary_action: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    pub fn container_color(mut self, color: Color) -> Self {
+        self.container_color = Some(color);
+        self
+    }
+
+    pub fn vertical_arrangement(mut self, arrangement: Arrangement) -> Self {
+        self.vertical_arrangement = arrangement;
+        self
+    }
+
+    /// For a VERTICAL shape this becomes the navigation's header; a bar shape has no slot for it here.
+    pub fn primary_action(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.primary_action = Some(Box::new(content));
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.layout_type);
+        ctx.changed(&self.vertical_arrangement);
+        ctx.changed(&self.container_color);
+        let theme = WiniaTheme::colors();
+        let colors = NavigationSuiteDefaults::colors(&theme);
+        let item_colors = NavigationSuiteDefaults::item_colors(&theme);
+        let container = self.container_color;
+        let items = self.items;
+        let action = self.primary_action;
+        let arrangement = self.vertical_arrangement;
+        let modifier = self.modifier;
+        // A hugging wrapper carries the caller's modifier: the shapes each take their own, and the
+        // helper signatures stay the shapes' business rather than this component's.
+        crate::layout::components::Stack::new()
+            .modifier(modifier)
+            .build(ctx, |ctx| {
+        match self.layout_type {
+            NavigationSuiteType::ShortNavigationBarCompact
+            | NavigationSuiteType::ShortNavigationBarMedium
+            | NavigationSuiteType::NavigationBar => {
+                let (bar_arrangement, icon_position, default_container) = match self.layout_type {
+                    NavigationSuiteType::ShortNavigationBarCompact => (
+                        ShortNavigationBarArrangement::EqualWeight,
+                        NavigationItemIconPosition::Top,
+                        colors.short_navigation_bar_container,
+                    ),
+                    NavigationSuiteType::NavigationBar => (
+                        ShortNavigationBarArrangement::EqualWeight,
+                        NavigationItemIconPosition::Top,
+                        colors.navigation_bar_container,
+                    ),
+                    _ => (
+                        ShortNavigationBarArrangement::Centered,
+                        NavigationItemIconPosition::Start,
+                        colors.short_navigation_bar_container,
+                    ),
+                };
+                build_bar_shape(
+                    ctx,
+                    items,
+                    bar_arrangement,
+                    icon_position,
+                    container.unwrap_or(default_container),
+                    item_colors.short_navigation_bar,
+                );
+            }
+            NavigationSuiteType::WideNavigationRailCollapsed
+            | NavigationSuiteType::WideNavigationRailExpanded => {
+                let expanded = self.layout_type == NavigationSuiteType::WideNavigationRailExpanded;
+                let rail_state = WideNavigationRailState::new(ctx);
+                if expanded {
+                    rail_state.expand();
+                } else {
+                    rail_state.collapse();
+                }
+                // The rail's own item token (`material3/NavigationRail.kt:271`: `FastSpatial`).
+                let progress = ctx.animate_float_as_state(
+                    if expanded { 1.0 } else { 0.0 },
+                    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::spatial_fast()),
+                );
+                build_rail_shape(
+                    ctx,
+                    items,
+                    rail_state,
+                    progress,
+                    container.unwrap_or(colors.wide_navigation_rail_container),
+                    arrangement,
+                    item_colors.wide_navigation_rail,
+                    action,
+                );
+            }
+            NavigationSuiteType::NavigationRail => build_classic_rail_shape(
+                ctx,
+                items,
+                container.unwrap_or(colors.navigation_rail_container),
+                item_colors.wide_navigation_rail,
+                action,
+            ),
+            NavigationSuiteType::NavigationDrawer => build_drawer_shape(
+                ctx,
+                items,
+                container.unwrap_or(colors.navigation_drawer_container),
+                action,
+            ),
+            NavigationSuiteType::None => {}
+        }
+            });
     }
 }
 
@@ -1415,6 +1639,43 @@ mod tests {
     /// the start and the content beside it, and PARKS the action off-view — a vertical shape keeps it in
     /// its own header, which is what upstream's rail branch means by never placing it.
     #[test]
+    /// `NavigationSuite` renders the ONE shape it is given, with no scaffold around it, through the same
+    /// helpers the scaffold's shape host uses: a bar type gives the 80dp bar, a rail type the 96dp
+    /// collapsed rail, and the classic type the 80dp classic rail.
+    #[test]
+    fn the_standalone_suite_renders_the_shape_it_is_given() {
+        let size = |t: NavigationSuiteType| -> (f32, f32) {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                NavigationSuite::new(
+                    |items| {
+                        for _ in 0..3 {
+                            items.item(
+                                true,
+                                |ctx| icon(ctx, 24.0),
+                                |ctx| crate::components::Text::new("A").build(ctx),
+                                || {},
+                            );
+                        }
+                    },
+                    t,
+                )
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let s = nodes[root].measured_size;
+            (s.width, s.height)
+        };
+        let bar = size(NavigationSuiteType::ShortNavigationBarCompact);
+        assert!((bar.1 - 80.0).abs() < 0.5, "a bar is 80dp tall, got {bar:?}");
+        let rail = size(NavigationSuiteType::WideNavigationRailCollapsed);
+        assert!((rail.0 - 96.0).abs() < 0.5, "a collapsed wide rail is 96dp wide, got {rail:?}");
+        let classic = size(NavigationSuiteType::NavigationRail);
+        assert!((classic.0 - 80.0).abs() < 0.5, "the classic rail is 80dp wide, got {classic:?}");
+    }
+
     fn the_scaffold_layout_places_the_three_slots() {
         let probe = |t: NavigationSuiteType| -> Vec<(f32, f32, f32, f32)> {
             let mut composer = Composer::new();
