@@ -972,6 +972,202 @@ fn render_bar_item(
     b.build(ctx);
 }
 
+// ═══════════════ NavigationSuiteScaffoldLayout ═══════════════
+
+/// `NavigationSuiteScaffoldLayout`: the placement half of the scaffold, on its own.
+///
+/// Upstream splits the component so a caller can bring its OWN navigation and content and still get the
+/// scaffold's geometry (`NavigationSuiteScaffoldLayout`, `:377-490`). The three slots are placed by
+/// shape, and the numbers are upstream's:
+///
+/// - a BAR layout puts the content at the top with the height the navigation leaves, the navigation at
+///   the bottom, and the primary action `PrimaryActionContentPadding` (16dp) above the navigation at the
+///   caller's horizontal alignment;
+/// - a RAIL layout puts the navigation at the start, full height, and the content beside it. The action
+///   is NOT placed: for a vertical shape it belongs to the navigation itself (upstream's `NavigationSuite`
+///   passes it as the rail's header), so the layout measures it and parks it off-view — the same thing
+///   upstream's rail branch does, minus the composition staying alive.
+pub struct NavigationSuiteScaffoldLayout {
+    navigation_suite: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    content: Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>,
+    primary_action: Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>,
+    primary_action_alignment: Alignment,
+    layout_type: NavigationSuiteType,
+    content_color: Option<Color>,
+    modifier: Modifier,
+}
+
+impl NavigationSuiteScaffoldLayout {
+    /// `navigation_suite` is the navigation itself (`NavigationSuite`'s job upstream, or yours),
+    /// `content` the app content beside/above it.
+    pub fn new(
+        navigation_suite: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            navigation_suite: Box::new(navigation_suite),
+            content: Box::new(content),
+            primary_action: None,
+            primary_action_alignment: Alignment::End,
+            layout_type: NavigationSuiteType::ShortNavigationBarCompact,
+            content_color: None,
+            modifier: Modifier::new(),
+        }
+    }
+
+    /// The shape the placement follows (default `ShortNavigationBarCompact` = the bar geometry).
+    pub fn layout_type(mut self, layout_type: NavigationSuiteType) -> Self {
+        self.layout_type = layout_type;
+        self
+    }
+
+    /// An action to float above a BAR layout; a rail layout leaves it to the navigation.
+    pub fn primary_action(
+        mut self,
+        content: impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static,
+    ) -> Self {
+        self.primary_action = Some(Box::new(content));
+        self
+    }
+
+    pub fn primary_action_alignment(mut self, alignment: Alignment) -> Self {
+        self.primary_action_alignment = alignment;
+        self
+    }
+
+    pub fn content_color(mut self, color: Color) -> Self {
+        self.content_color = Some(color);
+        self
+    }
+
+    pub fn modifier(mut self, modifier: Modifier) -> Self {
+        self.modifier = self.modifier.then(modifier);
+        self
+    }
+
+    #[composable]
+    pub fn build(self, ctx: &mut ComposeCtx) {
+        ctx.changed(&self.layout_type);
+        ctx.changed(&self.primary_action_alignment);
+        let theme = WiniaTheme::colors();
+        let content_color = self.content_color.unwrap_or(theme.on_background);
+        let navigation_suite = self.navigation_suite;
+        let content = self.content;
+        let primary_action = self.primary_action;
+        let policy = SuiteScaffoldLayoutPolicy {
+            layout_type: self.layout_type,
+            alignment: self.primary_action_alignment,
+        };
+        let key = ctx.next_key();
+        let modifier = Modifier::new().fill_max_size().then(self.modifier);
+        match ctx.start_restartable_group(key, modifier, policy) {
+            GroupStatus::Skip => {}
+            GroupStatus::Enter => {
+                navigation_suite(ctx);
+                match primary_action {
+                    Some(action) => action(ctx),
+                    // The policy indexes children[1] as the action, so the slot stays even without one.
+                    None => {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, Modifier::new().size(0.0, 0.0));
+                        ctx.end_node();
+                    }
+                }
+                WiniaTheme::with_content_color(content_color, ctx, |ctx| content(ctx));
+            }
+        }
+        ctx.end_restartable_group();
+    }
+}
+
+/// Places the three slots of [`NavigationSuiteScaffoldLayout`].
+#[derive(Debug)]
+struct SuiteScaffoldLayoutPolicy {
+    layout_type: NavigationSuiteType,
+    alignment: Alignment,
+}
+
+impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
+    fn measure(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        policies: &[Box<dyn MeasurePolicy>],
+        children: &[usize],
+        c: Constraints,
+    ) -> (Size, Vec<Placement>) {
+        let is_bar = matches!(
+            self.layout_type,
+            NavigationSuiteType::ShortNavigationBarCompact
+                | NavigationSuiteType::ShortNavigationBarMedium
+                | NavigationSuiteType::NavigationBar
+        );
+        let (nav, _) = measure_node(
+            nodes,
+            policies,
+            children[0],
+            Constraints::new(0.0, c.max_width, 0.0, c.max_height),
+        );
+        // The content gets what the navigation leaves on the axis it took.
+        let content_c = if is_bar {
+            Constraints::new(0.0, c.max_width, 0.0, (c.max_height - nav.height).max(0.0))
+        } else {
+            Constraints::new(0.0, (c.max_width - nav.width).max(0.0), 0.0, c.max_height)
+        };
+        let (content, _) = measure_node(nodes, policies, children[2], content_c);
+        let (action, _) = measure_node(
+            nodes,
+            policies,
+            children[1],
+            Constraints::new(0.0, c.max_width, 0.0, c.max_height),
+        );
+        let placements = if is_bar {
+            let action_x = match self.alignment {
+                Alignment::Start => PRIMARY_ACTION_PADDING,
+                Alignment::Center => (c.max_width - action.width) / 2.0,
+                _ => c.max_width - action.width - PRIMARY_ACTION_PADDING,
+            };
+            vec![
+                Placement {
+                    size: nav,
+                    position: Offset::new(0.0, c.max_height - nav.height),
+                },
+                Placement {
+                    size: action,
+                    position: Offset::new(action_x, c.max_height - action.height - PRIMARY_ACTION_PADDING - nav.height),
+                },
+                Placement { size: content, position: Offset::new(0.0, 0.0) },
+            ]
+        } else {
+            vec![
+                Placement { size: nav, position: Offset::new(0.0, 0.0) },
+                // A vertical shape keeps its action in its own header, so this slot is parked off-view
+                // rather than placed (upstream's rail branch does not place it at all).
+                Placement {
+                    size: action,
+                    position: Offset::new(c.max_width + 1000.0, 0.0),
+                },
+                Placement {
+                    size: content,
+                    position: Offset::new(nav.width, 0.0),
+                },
+            ]
+        };
+        (Size::new(c.max_width, c.max_height), placements)
+    }
+
+    fn place(
+        &self,
+        nodes: &mut Vec<crate::layout::node::LayoutNode>,
+        children: &[usize],
+        placements: &[Placement],
+    ) {
+        for (index, &child) in children.iter().enumerate() {
+            nodes[child].position = placements[index].position;
+            nodes[child].measured_size = placements[index].size;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1212,6 +1408,76 @@ mod tests {
     /// rail, `Start` (the default, upstream's `Top`) leaves them at `TopSpace`. Only a rail with SLACK
     /// can tell them apart, which is why the suite's rail fills the window's height.
     #[test]
+    /// `NavigationSuiteScaffoldLayout` places three slots by shape, with upstream's numbers.
+    ///
+    /// A BAR layout gives the content the height the navigation leaves, pins the navigation to the bottom
+    /// and floats the action 16dp above it at the caller's alignment. A RAIL layout puts the navigation at
+    /// the start and the content beside it, and PARKS the action off-view — a vertical shape keeps it in
+    /// its own header, which is what upstream's rail branch means by never placing it.
+    #[test]
+    fn the_scaffold_layout_places_the_three_slots() {
+        let probe = |t: NavigationSuiteType| -> Vec<(f32, f32, f32, f32)> {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                NavigationSuiteScaffoldLayout::new(
+                    |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                        ctx.end_node();
+                    },
+                    // Fills, so the height it is given is the height it reports.
+                    |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().fill_max_size());
+                        ctx.end_node();
+                    },
+                )
+                .layout_type(t)
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                    ctx.end_node();
+                })
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[root]
+                .children
+                .iter()
+                .map(|&c| {
+                    let n = &nodes[c];
+                    (
+                        n.position.x,
+                        n.position.y,
+                        n.measured_size.width,
+                        n.measured_size.height,
+                    )
+                })
+                .collect()
+        };
+
+        let bar = probe(NavigationSuiteType::ShortNavigationBarCompact);
+        assert_eq!(bar.len(), 3, "navigation, action, content");
+        assert_eq!((bar[0].0, bar[0].1), (0.0, 620.0), "the navigation is pinned to the bottom");
+        assert_eq!(bar[2].3, 620.0, "and the content gets the height it leaves");
+        assert_eq!(
+            (bar[1].0, bar[1].1),
+            (428.0, 548.0),
+            "the action is 16dp above the navigation and 16dp in from the end"
+        );
+
+        let rail = probe(NavigationSuiteType::WideNavigationRailCollapsed);
+        assert_eq!((rail[0].0, rail[0].1), (0.0, 0.0), "the rail sits at the start");
+        assert_eq!(rail[2].0, 96.0, "and the content starts after it");
+        assert!(
+            rail[1].0 > 500.0,
+            "the action is parked off-view for a vertical shape, got {}",
+            rail[1].0
+        );
+    }
+
     fn the_vertical_arrangement_moves_the_rails_items() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
