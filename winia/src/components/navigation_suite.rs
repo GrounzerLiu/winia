@@ -729,22 +729,30 @@ impl NavigationSuiteScaffold {
                     // both stopped responding). With the insets as padding the node's content box is
                     // exactly the action's own rect, and clicking it still works.
                     let anim = progress.clone();
+                    // The insets are an OFFSET, never padding. Padding grows the node, and hit testing
+                    // walks NODE rects (`content_box()` IS `measured_size`), so a padded container
+                    // reached down over the bar and swallowed the part of the last item to its right
+                    // (reported on the demo: `Profile` right of the action was dead). An offset leaves
+                    // the node exactly the action's own rect, so only the action is hittable.
+                    let x = match primary_action_alignment {
+                        Alignment::Start => PRIMARY_ACTION_PADDING,
+                        Alignment::Center => 0.0,
+                        _ => -PRIMARY_ACTION_PADDING,
+                    };
                     Stack::new()
                         .modifier(
                             Modifier::new()
-                                .padding_sides(
-                                    0.0,
-                                    0.0,
-                                    PRIMARY_ACTION_PADDING,
-                                    NAVIGATION_BAR_HEIGHT + PRIMARY_ACTION_PADDING,
-                                )
+                                .absolute_offset(
+                                    x,
                                 // The action RIDES the navigation's animation — upstream places it at
                                 // `layoutHeight - h - 16 - navigationHeight * animationProgress`
                                 // (`:461-468`), so as the bar slides away it comes down to 16dp from the
                                 // bottom edge and goes back up with the bar.
-                                .absolute_offset_y(SizeValue::Dynamic(Arc::new(move || {
-                                    NAVIGATION_BAR_HEIGHT * (1.0 - anim.get().clamp(0.0, 1.0))
-                                }))),
+                                    SizeValue::Dynamic(Arc::new(move || {
+                                        -(PRIMARY_ACTION_PADDING
+                                            + NAVIGATION_BAR_HEIGHT * anim.get().clamp(0.0, 1.0))
+                                    })),
+                                ),
                         )
                         .build(ctx, primary_action);
                 }
@@ -1014,6 +1022,46 @@ mod tests {
     /// `primaryActionContent` floats above the bar: 16dp clear of it, 16dp in from the trailing edge
     /// with the default `Alignment::End` (`NavigationSuiteScaffoldLayout` `:456-470`).
     #[test]
+    /// The action must never steal clicks from what sits beside it. It used to: the insets were PADDING,
+    /// padding grows the node, and hit testing walks node rects (`content_box()` is `measured_size`) — so
+    /// the container reached down over the bar and the part of the last item to its right went dead
+    /// (reported on the demo, `Profile`). The insets are an offset now, and this is the guard.
+    #[test]
+    fn the_primary_action_does_not_swallow_the_item_beside_it() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(500.0, 700.0);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            scaffold()
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0).test_tag("suite-action"));
+                    ctx.end_node();
+                })
+                .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let action = nodes
+            .iter()
+            .position(|n| n.modifier.get_test_tag() == Some("suite-action"))
+            .expect("the action is composed");
+        let hits = |x: f32, y: f32| crate::layout::node::hit_test(nodes, root, x, y);
+        // On the action itself (it is 448..504 x 568..624): hittable.
+        assert!(
+            hits(470.0, 590.0).contains(&action),
+            "the action answers for its own rect"
+        );
+        // On the LAST bar item, to the right of the action's x-range in the bar's own row (y 640..720):
+        // the action must not be in that path.
+        let beside = hits(470.0, 680.0);
+        assert!(beside.contains(&root), "the point is inside the layout");
+        assert!(
+            !beside.contains(&action),
+            "a click beside the action reaches what is there, not the action"
+        );
+    }
     fn the_primary_action_floats_above_the_bar() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(500.0, 700.0);
