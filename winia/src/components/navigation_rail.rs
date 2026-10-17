@@ -2051,26 +2051,39 @@ impl MeasurePolicy for WideNavigationRailLayoutPolicy {
         // content's total height BEFORE the first child is placed, so this measures each child once more
         // — the same arithmetic the loop below uses (settled width, then the header's 40 or the item gap).
         // A rail that hugs its content has no slack, so the arrangement is then a no-op, as upstream's is.
-        // The slack is what the ITEMS may spread into, so the header's own height and padding are not
-        // part of it (upstream keeps the header at the top and arranges the items). An unbounded height is
-        // no slack at all — INFINITY here would put every placement at INFINITY and break hit testing.
+        // The slack is what the ITEMS may spread into, but the header still OCCUPIES its own height plus
+        // the header gap (`WNRHeaderPadding`) above them, so that has to come out of the available space
+        // first — otherwise `End` pushes the items past the rail's bottom by exactly that much. Upstream
+        // keeps the header at the top and arranges the items under it.
+        //
+        // The unbounded sentinel in this crate is `f32::MAX`, which IS finite (`layout/flex.rs`), and a
+        // non-lazy scroll container rewrites a child's max to it (`layout/node.rs`). `is_finite()` would
+        // let it through and every placement would land at ~3.4e38 — the same trap that guard was added
+        // for. Compare against the sentinel itself.
+        let mut header_h = 0.0f32;
         let mut items_h = 0.0f32;
         for (index, &child) in children.iter().enumerate() {
-            if index == 0 && self.has_header {
-                continue;
-            }
             let (size, _) = measure_node(
                 nodes,
                 policies,
                 child,
                 Constraints::new(0.0, width, 0.0, c.max_height),
             );
+            if index == 0 && self.has_header {
+                header_h = size.height + WIDE_RAIL_HEADER_PADDING;
+                continue;
+            }
             items_h += size.height + RAIL_VERTICAL_PADDING
                 + (WIDE_RAIL_ITEM_GAP_EXPANDED - RAIL_VERTICAL_PADDING) * p;
         }
-        let bounded = c.max_height.is_finite();
+        let bounded = c.max_height < f32::MAX;
         let slack = if bounded {
-            (c.max_height - RAIL_VERTICAL_PADDING - WIDE_RAIL_TOP_PADDING - items_h).max(0.0)
+            (c.max_height
+                - RAIL_VERTICAL_PADDING
+                - WIDE_RAIL_TOP_PADDING
+                - header_h
+                - items_h)
+                .max(0.0)
         } else {
             0.0
         };

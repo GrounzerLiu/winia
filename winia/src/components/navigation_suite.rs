@@ -1213,9 +1213,13 @@ impl MeasurePolicy for SuiteScaffoldLayoutPolicy {
             Constraints::new(0.0, c.max_width, 0.0, c.max_height),
         );
         let placements = if is_bar {
+            // A floating child has no horizontal stretch, so `Stretch` takes the trailing edge like
+            // `End` — and "trailing" is the LOGICAL one: under RTL that is the LEFT edge.
             let action_x = match (self.alignment, self.rtl) {
                 (Alignment::Center, _) => (c.max_width - action.width) / 2.0,
-                (Alignment::Start, false) | (Alignment::End, true) => PRIMARY_ACTION_PADDING,
+                (Alignment::Start, false)
+                | (Alignment::End, true)
+                | (Alignment::Stretch, true) => PRIMARY_ACTION_PADDING,
                 _ => c.max_width - action.width - PRIMARY_ACTION_PADDING,
             };
             vec![
@@ -1423,7 +1427,6 @@ mod tests {
     use super::*;
     use crate::runtime::composer::Composer;
     use crate::layout::constraints::Constraints;
-    use crate::layout::node::LayoutNode;
     use crate::modifier::Modifier as M;
 
     fn icon(ctx: &mut ComposeCtx, size: f32) {
@@ -1686,7 +1689,7 @@ mod tests {
     /// the start and the content beside it, and PARKS the action off-view — a vertical shape keeps it in
     /// its own header, which is what upstream's rail branch means by never placing it.
     #[test]
-fn the_scaffold_layout_places_the_three_slots() {
+    fn the_scaffold_layout_places_the_three_slots() {
         let probe = |t: NavigationSuiteType| -> Vec<(f32, f32, f32, f32)> {
             let mut composer = Composer::new();
             composer.compose(|ctx| {
@@ -1749,11 +1752,163 @@ fn the_scaffold_layout_places_the_three_slots() {
         );
     }
 
-        /// `vertical_arrangement` reaches the rail: `End` pushes the header + items to the bottom of the
+        /// The unbounded sentinel this crate actually produces is `f32::MAX`, not `INFINITY`, and it IS
+    /// finite — `is_finite()` lets it through. A rail measured against it must not compute a slack of
+    /// ~3.4e38 and place its items out at that coordinate.
+    #[test]
+    fn an_unbounded_rail_computes_no_slack() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            scaffold()
+                .layout_type(NavigationSuiteType::WideNavigationRailCollapsed)
+                .vertical_arrangement(Arrangement::End)
+                .build(ctx);
+        });
+        // `f32::MAX` is the sentinel the pipeline rewrites a child's max to under a scroll container;
+        // `Constraints::UNBOUNDED` uses INFINITY and was already caught.
+        composer.layout(Constraints::new(0.0, 1000.0, 0.0, f32::MAX));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let mut worst = 0.0f32;
+        fn walk(nodes: &[crate::layout::node::LayoutNode], idx: usize, ay: f32, worst: &mut f32) {
+            let n = &nodes[idx];
+            let y = ay + n.position.y;
+            if !y.is_finite() || y > 1.0e9 {
+                *worst = y;
+            }
+            for &child in &n.children {
+                walk(nodes, child, y, worst);
+            }
+        }
+        walk(nodes, root, 0.0, &mut worst);
+        assert!(
+            worst.abs() < 1.0,
+            "no placement may be pushed to the sentinel, got y={worst}"
+        );
+    }
+
+    /// `Stretch` is not a horizontal placement for a floating action, so it takes the LOGICAL trailing
+    /// edge — the right one under LTR, the left one under RTL. It used to fall through to the physical
+    /// right edge in both directions, which put it at the leading edge under RTL.
+    #[test]
+    fn a_stretched_action_takes_the_logical_trailing_edge() {
+        let probe = |rtl: bool| -> f32 {
+            let mut composer = Composer::new();
+            let mut run = || {
+                composer.compose(|ctx| {
+                    NavigationSuiteScaffoldLayout::new(
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                            ctx.end_node();
+                        },
+                        |ctx| {
+                            let k = ctx.next_key();
+                            ctx.start_leaf(k, M::new().fill_max_size());
+                            ctx.end_node();
+                        },
+                    )
+                    .layout_type(NavigationSuiteType::ShortNavigationBarCompact)
+                    .primary_action_alignment(Alignment::Stretch)
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+                });
+                composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            };
+            if rtl {
+                crate::layout::direction::provides(LayoutDirection::Rtl, run);
+            } else {
+                run();
+            }
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[nodes[root].children[1]].position.x
+        };
+        assert!(
+            (probe(false) - (500.0 - 56.0 - PRIMARY_ACTION_PADDING)).abs() < 0.5,
+            "LTR: the trailing edge is the right one"
+        );
+        assert!(
+            (probe(true) - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            "RTL: the trailing edge is the LEFT one"
+        );
+    }
+
+    /// A rail that has a primary action AND a non-default arrangement: the header occupies its own
+    /// height plus `WNRHeaderPadding` above the items, so the slack has to reserve it. Without that the
+    /// items are pushed past the rail's bottom by exactly `header + 40` — 88dp for a 56dp action.
+    #[test]
+    fn an_arranged_rail_with_a_primary_action_keeps_its_items_inside() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let last_item_bottom = |arrangement: Arrangement| -> (f32, f32) {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                scaffold()
+                    .layout_type(NavigationSuiteType::WideNavigationRailCollapsed)
+                    .vertical_arrangement(arrangement)
+                    .primary_action(|ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                        ctx.end_node();
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut rail_bottom = 0.0f32;
+            let mut last_bottom = 0.0f32;
+            fn walk(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                ax: f32,
+                ay: f32,
+                rail_bottom: &mut f32,
+                last_bottom: &mut f32,
+            ) {
+                let n = &nodes[idx];
+                let (x, y) = (ax + n.position.x, ay + n.position.y);
+                let s = n.measured_size;
+                // The rail is the full-height column at the leading edge.
+                if x <= 0.5 && s.width > 80.0 && s.width < 200.0 && s.height > 500.0 {
+                    *rail_bottom = y + s.height;
+                }
+                // Its items are the 64-tall rows inside it.
+                if x < 96.0 && s.width > 40.0 && (s.height - 64.0).abs() < 0.5 {
+                    *last_bottom = (y + s.height).max(*last_bottom);
+                }
+                for &child in &n.children {
+                    walk(nodes, child, x, y, rail_bottom, last_bottom);
+                }
+            }
+            walk(nodes, root, 0.0, 0.0, &mut rail_bottom, &mut last_bottom);
+            (last_bottom, rail_bottom)
+        };
+        for arrangement in [Arrangement::End, Arrangement::Center] {
+            let (last, rail) = last_item_bottom(arrangement);
+            assert!(
+                rail > 0.0,
+                "the rail is laid out at a full height, got {rail}"
+            );
+            assert!(
+                last <= rail + 0.5,
+                "{arrangement:?}: the last item's bottom {last} must stay inside the rail {rail}"
+            );
+        }
+    }
+
+    /// `vertical_arrangement` reaches the rail: `End` pushes the ITEMS to the bottom of the
     /// rail, `Start` (the default, upstream's `Top`) leaves them at `TopSpace`. Only a rail with SLACK
     /// can tell them apart, which is why the suite's rail fills the window's height.
     #[test]
-fn the_vertical_arrangement_moves_the_rails_items() {
+    fn the_vertical_arrangement_moves_the_rails_items() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let first_item_y = |arrangement: Arrangement| -> f32 {
@@ -1802,7 +1957,7 @@ fn the_vertical_arrangement_moves_the_rails_items() {
     /// Measured in the demo first (921x544): LTR rail at x=0 with the action at 20; RTL rail at 825
     /// (= 921 - 96) with the action at 845, i.e. the same 20dp.
     #[test]
-fn the_rail_layout_docks_on_the_right_under_rtl() {
+    fn the_rail_layout_docks_on_the_right_under_rtl() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         let mut composer = Composer::new();
@@ -1862,7 +2017,7 @@ fn the_rail_layout_docks_on_the_right_under_rtl() {
     /// `ShortNavigationBarMedium`, whose icon sits to the left), and `NavigationDrawer` is a permanent
     /// drawer sheet: a 240..360dp column at the leading edge whose rows are the drawer's own items.
     #[test]
-fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
+    fn the_legacy_bar_and_drawer_render_their_classic_shapes() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
         // (the first 24x24 icon, the first text, a 56-tall row that spans >=200, the widest 80-tall box)
