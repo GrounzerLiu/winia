@@ -153,10 +153,12 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
     // "the bar stays on top" claim above would be vacuous): sample a point
     // the ghost covers but the bar does not. Over the white surface the
     // ghost pulls green down (255·p), where an untilted background is 255.
+    // This reads the ELEVATED moment, so it names that progress: it used to print
+    // `p_at_probe` (the tree-order one) and would have misled whoever saw it fail.
     let ghost = pixel_rgb(&mut elevated, probe_x as i32, 70);
     assert!(
         ghost.1 < 250,
-        "the leaving ghost must tint the strip at p={p_at_probe}, got {ghost:?}"
+        "the leaving ghost must tint the strip at p={P_ELEVATED}, got {ghost:?}"
     );
     // ...and over the bar itself the wash is bounded by the ghost's alpha.
     let wash = 255.0 * (1.0 - p_at_probe);

@@ -2283,6 +2283,23 @@ mod tests {
         );
     }
 
+    /// A scaffold that stops building (its parent Skipped it) must not leave `is_animating` stuck on:
+    /// the mounted `State` keeps animating on its own, and `is_animating` peeks it, so the value
+    /// settles even when no further build runs. This is what makes the mount safe.
+    #[test]
+    fn is_animating_settles_even_if_no_build_runs_again() {
+        let state = NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible);
+        let mid = crate::runtime::state::State::new(0.5f32);
+        state.attach_progress(mid.clone());
+        assert!(state.is_animating(), "mid-flight reads as animating");
+        // The tween reaches its end without a rebuild; `peek` sees the new value.
+        mid.set(1.0);
+        assert!(
+            !state.is_animating(),
+            "the settled value must be reported even when no build runs again"
+        );
+    }
+
     /// `target_value` flips with the request; `is_animating` reports the SCAFFOLD's real progress,
     /// which the scaffold mounts into the state. A veto leaves both where they were.
     #[test]

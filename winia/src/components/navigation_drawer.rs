@@ -2059,9 +2059,12 @@ mod tests {
         crate::layout::direction::provides(LayoutDirection::Rtl, || {
             drive(&mut c);
             let closed_page = x_of(&c, PAGE_TAG).expect("the page is laid out");
+            // A LITERAL, not a range: the page is a 31dp label right-aligned in its 800dp box, so
+            // 800 - 31 = 769. A range would pass a page parked at, say, 400 — which is what a wrong
+            // push would produce — and this test exists to catch exactly that.
             assert!(
-                (0.0..800.0).contains(&closed_page),
-                "closed under RTL the page stays INSIDE the window, got x={closed_page}"
+                (closed_page - (800.0 - 31.0)).abs() < 0.5,
+                "closed under RTL the page sits at its right-aligned position, got x={closed_page}"
             );
             let closed_sheet = x_of(&c, SHEET_TAG).expect("the sheet is laid out");
             assert!(
