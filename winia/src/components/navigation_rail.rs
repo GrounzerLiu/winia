@@ -667,6 +667,65 @@ mod tests {
         }
     }
 
+    /// `WideNavigationRail::arrangement` had no test of its own: the API was added for the navigation
+    /// suite and only exercised through it. Start keeps the stack at the top, Center splits the slack,
+    /// End pushes it to the bottom — and the header, when there is one, stays at the top in all three.
+    #[test]
+    fn the_rail_arrangement_moves_the_items_only() {
+        let first_item_y = |arrangement: Arrangement| -> f32 {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                let state = WideNavigationRailState::new(ctx);
+                WideNavigationRail::new(state, |ctx| {
+                    for i in 0..3 {
+                        WideNavigationRailItem::new(
+                            i == 0,
+                            |ctx| icon_leaf(ctx, NAVIGATION_RAIL_ICON_SIZE),
+                            |ctx| crate::components::Text::new("Item").build(ctx),
+                        )
+                        .build(ctx);
+                    }
+                })
+                .arrangement(arrangement)
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 96.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let mut found: Option<f32> = None;
+            fn walk(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                y: f32,
+                out: &mut Option<f32>,
+            ) {
+                let n = &nodes[idx];
+                let ay = y + n.position.y;
+                // The wide rail's collapsed items are 64 tall (`WIDE_RAIL_ITEM_MIN_HEIGHT`).
+                if out.is_none() && (n.measured_size.height - 64.0).abs() < 0.5 {
+                    *out = Some(ay);
+                }
+                for &child in &n.children {
+                    walk(nodes, child, ay, out);
+                }
+            }
+            walk(nodes, root, 0.0, &mut found);
+            found.expect("the rail lays its items out")
+        };
+
+        let start = first_item_y(Arrangement::Start);
+        let center = first_item_y(Arrangement::Center);
+        let end = first_item_y(Arrangement::End);
+        assert!(
+            end > start + 50.0,
+            "End pushes the items down (start {start}, end {end})"
+        );
+        assert!(
+            center > start + 20.0 && center < end - 20.0,
+            "Center sits between Start and End (start {start}, center {center}, end {end})"
+        );
+    }
+
     fn icon_leaf(ctx: &mut ComposeCtx, size: f32) {
         let key = ctx.next_key();
         ctx.start_leaf(key, Modifier::new().size(size, size));

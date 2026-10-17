@@ -2083,6 +2083,167 @@ mod tests {
         assert!(bar.is_none(), "and there is no 80dp bar in this shape");
     }
 
+    /// Degenerate inputs must not panic: a suite with NO items still lays out, and the scaffold layout
+    /// with NO primary action still keeps the slot alive (its policy indexes `children[1]`).
+    #[test]
+    fn a_suite_with_no_items_and_no_action_still_lays_out() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+
+        // No items at all, in every shape.
+        for t in [
+            NavigationSuiteType::ShortNavigationBarCompact,
+            NavigationSuiteType::WideNavigationRailCollapsed,
+            NavigationSuiteType::NavigationRail,
+            NavigationSuiteType::NavigationDrawer,
+        ] {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                NavigationSuite::new(|_items| {}, t).build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let s = nodes[root].measured_size;
+            assert!(
+                s.width.is_finite() && s.height.is_finite(),
+                "{t:?}: a zero-item suite must still measure finitely, got {s:?}"
+            );
+        }
+
+        // `NavigationSuiteScaffoldLayout` with NO primary action: its policy indexes `children[1]` as the
+        // action, so the slot has to stay alive even when the caller gives none.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            NavigationSuiteScaffoldLayout::new(
+                |ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                    ctx.end_node();
+                },
+                |ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().fill_max_size());
+                    ctx.end_node();
+                },
+            )
+            .layout_type(NavigationSuiteType::ShortNavigationBarCompact)
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        assert_eq!(
+            nodes[root].children.len(),
+            3,
+            "navigation, action placeholder and content stay addressable"
+        );
+        let placeholder = &nodes[nodes[root].children[1]];
+        assert!(
+            placeholder.measured_size.width == 0.0 && placeholder.measured_size.height == 0.0,
+            "the placeholder occupies nothing, got {:?}",
+            placeholder.measured_size
+        );
+    }
+
+    /// The legacy shapes mirror too. A classic rail docks on the RIGHT under RTL (its 80dp column),
+    /// and a drawer's 240..360 column does the same — neither is a bare-x placement.
+    #[test]
+    fn the_legacy_shapes_mirror_under_rtl() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        let probe = |t: NavigationSuiteType| -> f32 {
+            let mut composer = Composer::new();
+            let mut run = || {
+                composer.compose(|ctx| scaffold().layout_type(t).build(ctx));
+                composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            };
+            crate::layout::direction::provides(LayoutDirection::Rtl, run);
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let nav = &nodes[nodes[root].children[0]];
+            nav.position.x
+        };
+
+        let rail_x = probe(NavigationSuiteType::NavigationRail);
+        assert!(
+            (rail_x - (1000.0 - 80.0)).abs() < 0.5,
+            "the classic rail docks on the right under RTL, got {rail_x}"
+        );
+
+        let drawer_x = probe(NavigationSuiteType::NavigationDrawer);
+        assert!(
+            drawer_x > 500.0,
+            "the drawer column is on the right under RTL, got {drawer_x}"
+        );
+    }
+
+    /// The classic shapes space their items BY HAND: `Center` and `End` get a leading weighted spacer
+    /// inside the shape's own column (where the weight is height), and `Center` gets a trailing one too.
+    /// Without the axis being vertical, or without the trailing spacer, `Center` would equal `End`.
+    #[test]
+    fn the_legacy_shapes_honour_the_vertical_arrangement() {
+        crate::layout::adaptive::reset_window_size_state();
+        crate::layout::adaptive::set_window_size(1000.0, 700.0);
+        // The classic shapes' own item rows are 56dp tall and sit inside the shape's leading column;
+        // report the FIRST and LAST y. The x bound keeps the window-wide content out of it.
+        let rows = |t: NavigationSuiteType, arrangement: Arrangement| -> (f32, f32) {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                scaffold()
+                    .layout_type(t)
+                    .vertical_arrangement(arrangement)
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 1000.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            let (mut first, mut last) = (f32::MAX, f32::MIN);
+            fn walk(
+                nodes: &[crate::layout::node::LayoutNode],
+                idx: usize,
+                x: f32,
+                y: f32,
+                first: &mut f32,
+                last: &mut f32,
+            ) {
+                let n = &nodes[idx];
+                let (ax, ay) = (x + n.position.x, y + n.position.y);
+                // The classic rail is 80 wide and the drawer's column at most 360: staying inside the
+                // leading column keeps the window-wide content out of the sample.
+                if ax < 360.0
+                    && (n.measured_size.height - 56.0).abs() < 0.5
+                    && n.measured_size.width >= 40.0
+                {
+                    *first = (*first).min(ay);
+                    *last = (*last).max(ay);
+                }
+                for &child in &n.children {
+                    walk(nodes, child, ax, ay, first, last);
+                }
+            }
+            walk(nodes, root, 0.0, 0.0, &mut first, &mut last);
+            (first, last)
+        };
+
+        for t in [
+            NavigationSuiteType::NavigationRail,
+            NavigationSuiteType::NavigationDrawer,
+        ] {
+            let (start_first, _) = rows(t, Arrangement::Start);
+            let (end_first, _) = rows(t, Arrangement::End);
+            let (center_first, _) = rows(t, Arrangement::Center);
+            assert!(
+                end_first > start_first + 50.0,
+                "{t:?}: End pushes the items down (start {start_first}, end {end_first})"
+            );
+            assert!(
+                center_first > start_first + 20.0 && center_first < end_first - 20.0,
+                "{t:?}: Center sits between Start and End (start {start_first}, center {center_first}, end {end_first})"
+            );
+        }
+    }
+
     /// The legacy types render the CLASSIC components, not the short bar / wide rail: `NavigationRail`
     /// is the 80dp classic rail and takes the primary action as its header, as upstream's own mapping
     /// does (`NavigationSuite.kt:632-658`).
