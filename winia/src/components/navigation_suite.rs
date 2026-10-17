@@ -18,18 +18,25 @@
 //!
 //! `primaryActionContent` (the FAB slot) is implemented: `.primary_action(..)` floats it 16dp above
 //! the bar, 16dp in from the trailing edge by default, and `.primary_action_alignment(..)` moves it.
-//! Upstream only PLACES it for a bar shape (its rail branch measures the slot without placing it);
-//! winia does the same and parks the slot off-view instead of dropping it, so a vertical shape that
-//! wants a FAB puts it in the rail's own header.
+//! Upstream only PLACES it for a bar shape (its rail branch measures the slot without placing it).
+//! winia's scaffold does the same, and for a vertical shape it passes the action in as the RAIL'S
+//! HEADER (`NavigationSuiteScaffold.kt:183-187`), so a FAB still shows on a rail layout.
+//! [`NavigationSuiteScaffoldLayout`], the standalone placement component, parks that slot off-view
+//! instead of dropping it — a different component, and the one place the parking applies.
 //!
 //! Deliberate deviation, `NavigationSuiteScaffoldLayout`'s content constraint: upstream measures the
 //! content with a TIGHT `min = max` (`NavigationSuiteScaffold.kt:428-437`), so it fills whatever the
-//! navigation leaves. winia uses a max-only constraint. Making it tight here fights the show/hide
-//! animation — the navigation's height is animated, and pinning the content to `max - nav.height`
-//! every frame breaks `the_state_hides_the_suite_and_the_action_rides_the_animation` (measured: the
-//! content's height jumped to 75.66 where the test expects the bar's own height). A hugging content
-//! therefore keeps its natural size instead of stretching. Revisit if the visibility animation is
-//! reworked to run on a settled navigation height.
+//! navigation leaves. winia uses a max-only constraint, so a content that hugs its own size keeps that
+//! size instead of being stretched to the freed space.
+//!
+//! This is NOT a workaround for the show/hide animation, though an earlier revision of this note said
+//! it was. `NavigationSuiteScaffold` does not use `NavigationSuiteScaffoldLayout` at all — it
+//! hand-builds its `Row`/`Column`/`Stack` and gives the content `layout_weight(1.0)` +
+//! `fill_max_size`, so its content already takes `height - navigation * progress` every frame and does
+//! so green. Tightening the standalone layout's constraint is therefore untested rather than known to
+//! be harmful; whoever wants to match upstream here should try it and run
+//! `the_scaffold_layout_places_the_three_slots` plus a new hugging-content case, not cite the
+//! visibility test.
 //!
 //! Each positional item's icon and label use separate movable handles. Their remembered values and
 //! node identities survive bar/rail switches, and their own State reads still invalidate the current
@@ -1587,7 +1594,7 @@ mod tests {
         walk(nodes, root, 0.0, &mut found);
         let x = found.expect("the action is composed");
         assert!(
-            (x - PRIMARY_ACTION_PADDING).abs() < 0.5,
+            (x - 16.0).abs() < 0.5,
             "16dp in from the LEFT edge under RTL, got {x}"
         );
     }
@@ -2165,8 +2172,11 @@ mod tests {
                 "{t:?}: the navigation is pinned to the bottom"
             );
             assert_eq!(slots[2].3, 620.0, "{t:?}: the content gets the rest");
+            // The 16 is a LITERAL, not `PRIMARY_ACTION_PADDING`: a test that reads the same constant
+            // the production code reads stays green if the constant is changed, which is how the RTL
+            // test's magnitude went unpinned. `PrimaryActionContentPadding` is 16dp.
             assert!(
-                (slots[1].1 - (700.0 - 56.0 - PRIMARY_ACTION_PADDING - 80.0)).abs() < 0.5,
+                (slots[1].1 - (700.0 - 56.0 - 16.0 - 80.0)).abs() < 0.5,
                 "{t:?}: the action floats 16dp above the navigation, got {}",
                 slots[1].1
             );
@@ -2190,8 +2200,8 @@ mod tests {
                 "{t:?}: the content starts where the navigation ends"
             );
             assert!(
-                slots[1].0 > 500.0,
-                "{t:?}: the action is parked off-view, got {}",
+                (slots[1].0 - (500.0 + 1000.0)).abs() < 0.5,
+                "{t:?}: the action is parked at max_width + 1000, got {}",
                 slots[1].0
             );
         }
@@ -2237,6 +2247,15 @@ mod tests {
         assert_eq!(slots.len(), 3, "the three slots stay addressable");
         assert_eq!((slots[2].0, slots[2].1), (0.0, 0.0), "an empty navigation leaves the content at 0");
         assert_eq!(slots[2].2, 500.0, "and the content takes the whole width");
+        // The action is what tells the two families apart here: with a zero-width navigation the
+        // content assertions above hold identically under either branch, and only the parked x does
+        // not. `max_width + 1000` is the vertical family's park, so this is the assertion that would
+        // catch `None` being classified as a bar (where it would sit at 500 - 56 - 16 = 428).
+        assert!(
+            (slots[1].0 - (500.0 + 1000.0)).abs() < 0.5,
+            "None is the VERTICAL branch: the action is parked at max_width + 1000, got {}",
+            slots[1].0
+        );
     }
 
     /// `target_value` and `is_animating` are upstream's interface, and here they answer what this
@@ -2290,9 +2309,16 @@ mod tests {
             let root = composer.layout_root_idx().unwrap();
             let nodes = composer.arena_nodes();
             let s = nodes[root].measured_size;
+            // Not `is_finite()`: the unbounded sentinel in this crate is `f32::MAX`, which IS finite
+            // (`layout/flex.rs`), so a layout that measured at the sentinel would slip through. Any
+            // real measurement here is at most the constraint.
             assert!(
-                s.width.is_finite() && s.height.is_finite(),
-                "{t:?}: a zero-item suite must still measure finitely, got {s:?}"
+                s.width < f32::MAX && s.height < f32::MAX,
+                "{t:?}: a zero-item suite must measure at a real size, not the sentinel, got {s:?}"
+            );
+            assert!(
+                s.width > 0.0 && s.height > 0.0,
+                "{t:?}: and it still occupies something, got {s:?}"
             );
         }
 
@@ -2357,9 +2383,12 @@ mod tests {
         );
 
         let drawer_x = probe(NavigationSuiteType::NavigationDrawer);
+        // The drawer fills its `sizeIn(240, 360)` band to the MAXIMUM here (its items want the wide
+        // side), so the docked right edge is 1000 - 360. Measured, not assumed: the first version of
+        // this assertion guessed 240 and read 640.
         assert!(
-            drawer_x > 500.0,
-            "the drawer column is on the right under RTL, got {drawer_x}"
+            (drawer_x - (1000.0 - 360.0)).abs() < 0.5,
+            "the drawer column docks on the right under RTL at 1000 - 360, got {drawer_x}"
         );
     }
 
@@ -2370,8 +2399,9 @@ mod tests {
     fn the_legacy_shapes_honour_the_vertical_arrangement() {
         crate::layout::adaptive::reset_window_size_state();
         crate::layout::adaptive::set_window_size(1000.0, 700.0);
-        // The classic shapes' own item rows are 56dp tall and sit inside the shape's leading column;
-        // report the FIRST and LAST y. The x bound keeps the window-wide content out of it.
+        // The classic shapes' own item rows are 56dp tall and sit inside the shape's leading column.
+        // Only the FIRST y is compared: the spacers move the whole stack, so the first row is the
+        // sensitive one. The x bound keeps the window-wide content out of the sample.
         let rows = |t: NavigationSuiteType, arrangement: Arrangement| -> (f32, f32) {
             let mut composer = Composer::new();
             composer.compose(|ctx| {

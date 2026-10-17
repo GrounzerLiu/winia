@@ -669,7 +669,8 @@ mod tests {
 
     /// `WideNavigationRail::arrangement` had no test of its own: the API was added for the navigation
     /// suite and only exercised through it. Start keeps the stack at the top, Center splits the slack,
-    /// End pushes it to the bottom — and the header, when there is one, stays at the top in all three.
+    /// End pushes it to the bottom. This builds NO header: the header's own position under a non-default
+    /// arrangement is covered by `an_arranged_rail_with_a_primary_action_keeps_its_items_inside`.
     #[test]
     fn the_rail_arrangement_moves_the_items_only() {
         let first_item_y = |arrangement: Arrangement| -> f32 {
