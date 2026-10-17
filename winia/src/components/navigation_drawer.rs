@@ -1053,9 +1053,17 @@ impl DismissibleNavigationDrawer {
     }
 }
 
-/// Places a dismissible drawer's two children: the sheet at the drag offset, the content PUSHED by
-/// `sheet_width + offset` (negative under RTL, where `placeRelative` mirrors it and the sheet docks
-/// on the right).
+/// Places a dismissible drawer's two children: the sheet at the drag offset, the content PUSHED aside
+/// by the width the sheet takes out of it.
+///
+/// The two directions have DIFFERENT offset ranges, because the closed anchor is `-width` under LTR
+/// and `+width` under RTL (`DrawerState::update_anchors`). So the pushed distance is
+///
+///     LTR:  sheet_width + offset   (offset -360 closed .. 0 open  ->  0 .. +360)
+///     RTL:  offset - sheet_width   (offset    0 open .. +360 closed -> -360 .. 0)
+///
+/// The first version negated the LTR expression under RTL, which put the page at -720 when the drawer
+/// was CLOSED: `-(360 + 360)`. It looked right in LTR only because `360 + (-360)` happens to be 0.
 #[derive(Debug)]
 struct DismissibleDrawerPolicy {
     offset: State<f32>,
@@ -1077,8 +1085,13 @@ impl crate::layout::node::MeasurePolicy for DismissibleDrawerPolicy {
         // re-measured while the drawer moves. The modal drawer reads the same state through a dynamic
         // offset for the same reason.
         let offset = self.offset.get();
-        let pushed = self.sheet_width + offset;
-        let content_x = if self.rtl { -pushed } else { pushed };
+        // The closed anchor carries the direction's sign (`-width` LTR, `+width` RTL), so the pushed
+        // distance is a different expression per direction — see this struct's doc.
+        let content_x = if self.rtl {
+            offset - self.sheet_width
+        } else {
+            self.sheet_width + offset
+        };
         (
             content.0,
             vec![
@@ -2010,6 +2023,65 @@ mod tests {
             Some(360.0),
             "and the content is pushed out by exactly the sheet's width, not covered"
         );
+    }
+
+    /// The same two endpoints under RTL, where the CLOSED anchor is `+width` instead of `-width`
+    /// (`DrawerState::update_anchors`). The content's pushed distance is therefore a different
+    /// expression per direction; the first version negated the LTR one, which parked the page at
+    /// `-(360 + 360) = -720` while the drawer was closed — every element of the page off the left
+    /// edge. Reported from the demo: Dismissible + RTL showed an empty screen.
+    #[test]
+    fn a_dismissible_drawer_pushes_its_content_the_right_way_under_rtl() {
+        let state = DrawerState::new(DrawerValue::Closed);
+        let mut c = comp();
+        let mut drive = |c: &mut Composer| {
+            let st = state.clone();
+            c.compose(move |ctx| {
+                crate::layout::adaptive::set_window_size(800.0, 600.0);
+                DismissibleNavigationDrawer::new(|ctx| {
+                    crate::components::Text::new("page")
+                        .modifier(Modifier::new().test_tag(PAGE_TAG))
+                        .build(ctx);
+                })
+                .drawer_state(st.clone())
+                .drawer_content(|ctx| {
+                    DrawerSheet::dismissible(|_| {})
+                        .modifier(Modifier::new().test_tag(SHEET_TAG))
+                        .build(ctx);
+                })
+                .build(ctx);
+            });
+            c.layout(crate::layout::Constraints::new(0.0, 800.0, 0.0, 600.0));
+        };
+        // The page is a HUGGING label, so under RTL it right-aligns inside its box: `x_of` reports the
+        // label's absolute x, which is not 0 even when the box is. What matters is that the box is
+        // inside the window when closed, and that opening moves it LEFT by the sheet's width.
+        crate::layout::direction::provides(LayoutDirection::Rtl, || {
+            drive(&mut c);
+            let closed_page = x_of(&c, PAGE_TAG).expect("the page is laid out");
+            assert!(
+                (0.0..800.0).contains(&closed_page),
+                "closed under RTL the page stays INSIDE the window, got x={closed_page}"
+            );
+            let closed_sheet = x_of(&c, SHEET_TAG).expect("the sheet is laid out");
+            assert!(
+                closed_sheet >= 800.0,
+                "and the sheet parks off the trailing edge, got x={closed_sheet}"
+            );
+
+            state.snap_to(DrawerValue::Open);
+            drive(&mut c);
+            let open_page = x_of(&c, PAGE_TAG).expect("the page is laid out");
+            assert!(
+                (closed_page - open_page - 360.0).abs() < 0.5,
+                "opening pushes the page LEFT by the sheet's width: closed {closed_page}, open {open_page}"
+            );
+            let open_sheet = x_of(&c, SHEET_TAG).expect("the sheet is laid out");
+            assert!(
+                open_sheet < closed_sheet,
+                "and the sheet slides in from the right: closed {closed_sheet}, open {open_sheet}"
+            );
+        });
     }
 
     /// A PERMANENT drawer has no state at all: the sheet is always on screen and the content follows
