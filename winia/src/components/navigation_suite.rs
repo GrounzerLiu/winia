@@ -16,9 +16,20 @@
 //! 底栏；否则→**收起**宽轨（上游从不默认展开——展开是 rail 自己的状态，或显式
 //! `.layout_type(WideNavigationRailExpanded)`）。窗口 resize 由 app 层触发重组，形态实时切换。
 //!
-//! `primaryActionContent`（FAB 槽）已实现：`.primary_action(..)` 浮在底栏上方 16dp，
-//! 默认靠结束边 16dp，可用 `.primary_action_alignment(..)` 改。**上游只在底栏形态放置它**
-//! （rail 分支只测量不摆放），这里照做——rail 形态要 FAB 请放进 rail 自己的 header。
+//! `primaryActionContent` (the FAB slot) is implemented: `.primary_action(..)` floats it 16dp above
+//! the bar, 16dp in from the trailing edge by default, and `.primary_action_alignment(..)` moves it.
+//! Upstream only PLACES it for a bar shape (its rail branch measures the slot without placing it);
+//! winia does the same and parks the slot off-view instead of dropping it, so a vertical shape that
+//! wants a FAB puts it in the rail's own header.
+//!
+//! Deliberate deviation, `NavigationSuiteScaffoldLayout`'s content constraint: upstream measures the
+//! content with a TIGHT `min = max` (`NavigationSuiteScaffold.kt:428-437`), so it fills whatever the
+//! navigation leaves. winia uses a max-only constraint. Making it tight here fights the show/hide
+//! animation — the navigation's height is animated, and pinning the content to `max - nav.height`
+//! every frame breaks `the_state_hides_the_suite_and_the_action_rides_the_animation` (measured: the
+//! content's height jumped to 75.66 where the test expects the bar's own height). A hugging content
+//! therefore keeps its natural size instead of stretching. Revisit if the visibility animation is
+//! reworked to run on a settled navigation height.
 //!
 //! Each positional item's icon and label use separate movable handles. Their remembered values and
 //! node identities survive bar/rail switches, and their own State reads still invalidate the current
@@ -270,6 +281,21 @@ impl NavigationSuiteScaffoldState {
 
     pub fn is_visible(&self) -> bool {
         self.value.get() == NavigationSuiteScaffoldValue::Visible
+    }
+
+    /// `targetValue`. Upstream's state owns an `Animatable`, so a change leaves `currentValue`
+    /// trailing `targetValue` while the animation runs. Here the animation lives in the SCAFFOLD's
+    /// layout progress (`NavigationSuiteScaffoldLayout`'s `animationProgress`), not in this value, so
+    /// the two are equal by construction — this accessor exists because upstream's interface has it,
+    /// and it is honest about answering the same thing rather than pretending to a second state.
+    pub fn target_value(&self) -> NavigationSuiteScaffoldValue {
+        self.value.get()
+    }
+
+    /// `isAnimating`: upstream reports its `Animatable` running. The animation is the scaffold's, and
+    /// this state cannot see it, so there is nothing to report — always `false`.
+    pub fn is_animating(&self) -> bool {
+        false
     }
 
     /// Ask to move to `target`; a vetoed request leaves everything as it was.
@@ -2211,6 +2237,35 @@ mod tests {
         assert_eq!(slots.len(), 3, "the three slots stay addressable");
         assert_eq!((slots[2].0, slots[2].1), (0.0, 0.0), "an empty navigation leaves the content at 0");
         assert_eq!(slots[2].2, 500.0, "and the content takes the whole width");
+    }
+
+    /// `target_value` and `is_animating` are upstream's interface, and here they answer what this
+    /// state can actually know: the animation is the SCAFFOLD's layout progress, so the state never
+    /// trails a target and never reports itself animating. A veto still leaves both unchanged.
+    #[test]
+    fn the_state_reports_a_target_and_never_animates_itself() {
+        let state = NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible);
+        assert_eq!(state.target_value(), NavigationSuiteScaffoldValue::Visible);
+        assert_eq!(state.current_value(), NavigationSuiteScaffoldValue::Visible);
+        assert!(!state.is_animating(), "the state does not own the animation");
+
+        state.hide();
+        assert_eq!(state.target_value(), NavigationSuiteScaffoldValue::Hidden);
+        assert_eq!(
+            state.target_value(),
+            state.current_value(),
+            "they are equal by construction here — there is no second value to trail"
+        );
+        assert!(!state.is_animating());
+
+        // A veto leaves the target where it was, exactly like the current value.
+        let vetoed = NavigationSuiteScaffoldState::with_confirm(
+            NavigationSuiteScaffoldValue::Visible,
+            |_| false,
+        );
+        vetoed.hide();
+        assert_eq!(vetoed.target_value(), NavigationSuiteScaffoldValue::Visible);
+        assert_eq!(vetoed.current_value(), NavigationSuiteScaffoldValue::Visible);
     }
 
     /// Degenerate inputs must not panic: a suite with NO items still lays out, and the scaffold layout
