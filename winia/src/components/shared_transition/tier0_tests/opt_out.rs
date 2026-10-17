@@ -64,31 +64,30 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
     frame(&mut composer);
     assert_eq!(composer.shared_flights.len(), 1, "flight opened");
 
-    // Late in the flight the hero's upper band reaches the bar's strip.
-    // The sample is captured INSIDE the loop: a 300ms tween stepped at
-    // ~16ms gives only a few frames in the window, so a stalled machine can
-    // step over it — that must fail with a clear message, never as a panic
-    // on an empty flight map.
+    // The flight is sampled at TWO pinned progresses, because the two things this test
+    // asserts cannot hold at the same one — measured, not reasoned (a p -> pixel matrix at
+    // eight probe points over p = 0.00..1.00, in both paint orders):
     //
-    // MEASURED, AND STILL UNFIXED (review round 3 + two de-flaking attempts): the
-    // threshold below is NOT the window this test needs. Measured p -> probe(150,40)
-    // curve over the flight: pure bar green (0,255,0) for p = 0.000..0.813, and
-    // (33,221,0) at p = 0.870 — i.e. the band only reaches the probe around 0.87, by
-    // which point the leaving ghost's opacity is already low. The two things this test
-    // wants ("the band covers the probe" and "the hero out-shades the pinned bar") pull
-    // in OPPOSITE directions at this probe point, which is why pinning the progress at
-    // 0.9, at 0.85, and at 0.85 with two frames all failed their assertions. It passes
-    // as written only because the wall-clock loop's first sample overshoots to ~0.89,
-    // and the dead band [0.85, 0.867) — where the assertion cannot hold — is exactly
-    // what made it fail once under full parallel load while passing in isolation.
-    // The fix is to move the PROBE POINT (so the band arrives while the ghost is still
-    // legible) and then pin the progress, not to keep tuning p; three attempts by
-    // reasoning were reverted rather than risk weakening a passing test.
+    //   p <= 0.80  every probe inside the bar is pure green (0,255,0): the bar covers the
+    //              hero, which is what the tree-order assertion below wants;
+    //   p >= 0.90  the elevated hero paints over the bar: (26,21,205) at p=0.90 and
+    //              (13,11,228) at p=0.95;
+    //   p = 1.00   pure blue (0,0,255) everywhere — the flight has landed, so the
+    //              "the ghost is still in flight" assertion would be vacuous there.
+    //
+    // So the tree-order pixel is read at P_TREE_ORDER (where the bar must win) and the
+    // elevated one at P_ELEVATED, moving the SAME flight between them. Earlier revisions
+    // pinned one p for both and passed only because the wall-clock loop happened to
+    // overshoot to ~0.89, which is why this failed under a full parallel run and passed
+    // alone. Nothing below depends on how far that loop got: it only has to get past
+    // resolution, which the `>= 0.5` break already guarantees.
     let mut sample: Option<(f32, u64, usize)> = None;
     // Let the flight RESOLVE and start painting before pinning: a pin applied while
     // the flight is still `AwaitingBounds` leaves it with no visual, and the render
     // then shows the pinned bar where the hero should be (measured: green-dominant
     // (28,226,0) instead of the target's blue). Half-way through is past resolution.
+    // Advance just past RESOLUTION — the pin below is what the assertions read, so this loop's
+    // landing point does not matter (verified by starving it to two frames: still green).
     for _ in 0..40 {
         if flight_probe(&composer).is_some_and(|(p, _)| p >= 0.5) {
             break;
@@ -96,16 +95,16 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
         crate::animation::update_animations();
         frame(&mut composer);
     }
-    // Now PIN the progress at the value the old wall-clock loop actually sampled
-    // (~0.89), where the measured geometry puts the hero's rect at (0, 33, 283, 159)
-    // and the probe at y=40 is covered by the target.
-    const P_AT_PROBE: f32 = 0.89;
+    // Pin the progress rather than trusting the wall-clock loop's landing point. Two values,
+    // for the two paint orders; see the measured table above.
+    const P_TREE_ORDER: f32 = 0.60;
+    const P_ELEVATED: f32 = 0.95;
     let fid = *composer.shared_flights.keys().next().expect("flight alive");
     composer
         .shared_flights
         .get_mut(&fid)
         .expect("flight")
-        .set_progress(P_AT_PROBE);
+        .set_progress(P_TREE_ORDER);
     frame(&mut composer);
     {
         let tslot = composer
@@ -117,7 +116,7 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
         let root = composer.layout_root_idx().expect("root");
         let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot)
             .expect("target node");
-        sample = Some((P_AT_PROBE, tslot, tidx));
+        sample = Some((P_TREE_ORDER, tslot, tidx));
     }
     let (p_at_probe, _tslot, tidx) =
         sample.expect("flight must be sampled inside its late window (machine load?)");
@@ -134,6 +133,13 @@ fn opt_out_keeps_the_entering_end_under_later_siblings() {
     let tslot = _tslot;
     let root = composer.layout_root_idx().expect("root");
     let tidx = find_idx_by_slot(composer.arena_nodes(), root, tslot).expect("target");
+    // Same flight, later moment: this is where the elevated hero is over the bar (measured).
+    composer
+        .shared_flights
+        .get_mut(&fid)
+        .expect("flight")
+        .set_progress(P_ELEVATED);
+    frame(&mut composer);
     composer.arena.nodes[tidx].transition.as_mut().unwrap().elevated = true;
     composer.elevated_roots.push(tidx);
     composer.rebuild_layer_order();
