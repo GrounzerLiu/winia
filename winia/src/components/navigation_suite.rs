@@ -266,6 +266,9 @@ pub enum NavigationSuiteScaffoldValue {
 pub struct NavigationSuiteScaffoldState {
     value: State<NavigationSuiteScaffoldValue>,
     confirm: Arc<dyn Fn(NavigationSuiteScaffoldValue) -> bool + Send + Sync>,
+    /// The scaffold's layout progress, mounted by its `build` — the source `is_animating` reads,
+    /// exactly as `WideNavigationRailState` carries its morph progress.
+    progress: Arc<parking_lot::Mutex<Option<State<f32>>>>,
 }
 
 impl NavigationSuiteScaffoldState {
@@ -279,7 +282,11 @@ impl NavigationSuiteScaffoldState {
         initial: NavigationSuiteScaffoldValue,
         confirm: impl Fn(NavigationSuiteScaffoldValue) -> bool + Send + Sync + 'static,
     ) -> Self {
-        Self { value: State::new(initial), confirm: Arc::new(confirm) }
+        Self {
+            value: State::new(initial),
+            confirm: Arc::new(confirm),
+            progress: Arc::new(parking_lot::Mutex::new(None)),
+        }
     }
 
     pub fn current_value(&self) -> NavigationSuiteScaffoldValue {
@@ -299,10 +306,23 @@ impl NavigationSuiteScaffoldState {
         self.value.get()
     }
 
-    /// `isAnimating`: upstream reports its `Animatable` running. The animation is the scaffold's, and
-    /// this state cannot see it, so there is nothing to report — always `false`.
+    /// `isAnimating`: whether the show/hide animation is running. The scaffold mounts its layout
+    /// progress here from its `build`, so this reports the real thing rather than a constant. The
+    /// read is `peek`ed: asking must not subscribe the caller to every animation frame.
     pub fn is_animating(&self) -> bool {
-        false
+        match &*self.progress.lock() {
+            Some(p) => {
+                let v = p.peek();
+                v > 0.01 && v < 0.99
+            }
+            None => false,
+        }
+    }
+
+    /// Mount the scaffold's layout progress. `pub(crate)`: the progress belongs to the component,
+    /// exactly as `WideNavigationRailState::attach_progress` does.
+    pub(crate) fn attach_progress(&self, p: State<f32>) {
+        *self.progress.lock() = Some(p);
     }
 
     /// Ask to move to `target`; a vetoed request leaves everything as it was.
@@ -555,6 +575,11 @@ impl NavigationSuiteScaffold {
             )),
         );
         let scale = progress.get().max(0.0).min(1.0);
+        // Mount it into the caller's state so `is_animating` answers about THIS animation. Done
+        // before the early-outs below, so a suite that is not animating still has a source.
+        if let Some(state) = self.state.as_ref() {
+            state.attach_progress(progress.clone());
+        }
 
         // 收拢完成：换形态 + 展开（set 通知 → 下帧以新形态渲染）
         if !hidden && ph == SuitePhase::Collapsing && scale <= 0.01 {
@@ -2258,24 +2283,34 @@ mod tests {
         );
     }
 
-    /// `target_value` and `is_animating` are upstream's interface, and here they answer what this
-    /// state can actually know: the animation is the SCAFFOLD's layout progress, so the state never
-    /// trails a target and never reports itself animating. A veto still leaves both unchanged.
+    /// `target_value` flips with the request; `is_animating` reports the SCAFFOLD's real progress,
+    /// which the scaffold mounts into the state. A veto leaves both where they were.
     #[test]
-    fn the_state_reports_a_target_and_never_animates_itself() {
+    fn the_state_reports_a_target_and_the_real_animation() {
         let state = NavigationSuiteScaffoldState::new(NavigationSuiteScaffoldValue::Visible);
         assert_eq!(state.target_value(), NavigationSuiteScaffoldValue::Visible);
         assert_eq!(state.current_value(), NavigationSuiteScaffoldValue::Visible);
-        assert!(!state.is_animating(), "the state does not own the animation");
+        assert!(
+            !state.is_animating(),
+            "nothing is mounted yet, so there is nothing to report"
+        );
 
         state.hide();
         assert_eq!(state.target_value(), NavigationSuiteScaffoldValue::Hidden);
         assert_eq!(
             state.target_value(),
             state.current_value(),
-            "they are equal by construction here — there is no second value to trail"
+            "the value flips at request time — the animation is the layout progress, not a second value"
         );
-        assert!(!state.is_animating());
+
+        // Mount a progress the way the scaffold does: mid-flight reports animating, the ends do not.
+        let mid = crate::runtime::state::State::new(0.5f32);
+        state.attach_progress(mid.clone());
+        assert!(state.is_animating(), "half-way is animating");
+        mid.set(0.0);
+        assert!(!state.is_animating(), "settled hidden is not animating");
+        mid.set(1.0);
+        assert!(!state.is_animating(), "settled visible is not animating");
 
         // A veto leaves the target where it was, exactly like the current value.
         let vetoed = NavigationSuiteScaffoldState::with_confirm(
