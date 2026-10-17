@@ -2083,6 +2083,136 @@ mod tests {
         assert!(bar.is_none(), "and there is no 80dp bar in this shape");
     }
 
+    /// Every layout type the policy promises to place, not just the two the first test picked. The
+    /// split is bar vs vertical: a bar pins the navigation to the bottom and the content above it; a
+    /// vertical shape puts the navigation at the leading edge with the content beside it and parks the
+    /// action off-view.
+    #[test]
+    fn every_layout_type_gets_its_familys_placement() {
+        let probe = |t: NavigationSuiteType| -> Vec<(f32, f32, f32, f32)> {
+            let mut composer = Composer::new();
+            composer.compose(|ctx| {
+                NavigationSuiteScaffoldLayout::new(
+                    |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().width(96.0).height(80.0));
+                        ctx.end_node();
+                    },
+                    |ctx| {
+                        let k = ctx.next_key();
+                        ctx.start_leaf(k, M::new().fill_max_size());
+                        ctx.end_node();
+                    },
+                )
+                .layout_type(t)
+                .primary_action(|ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                    ctx.end_node();
+                })
+                .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+            let root = composer.layout_root_idx().unwrap();
+            let nodes = composer.arena_nodes();
+            nodes[root]
+                .children
+                .iter()
+                .map(|&c| {
+                    let n = &nodes[c];
+                    (n.position.x, n.position.y, n.measured_size.width, n.measured_size.height)
+                })
+                .collect()
+        };
+
+        // The whole bar family: navigation pinned to the bottom, content above it, action 16dp up.
+        for t in [
+            NavigationSuiteType::ShortNavigationBarCompact,
+            NavigationSuiteType::ShortNavigationBarMedium,
+            NavigationSuiteType::NavigationBar,
+        ] {
+            let slots = probe(t);
+            assert_eq!(slots.len(), 3, "{t:?}: navigation, action, content");
+            assert_eq!(
+                (slots[0].0, slots[0].1),
+                (0.0, 620.0),
+                "{t:?}: the navigation is pinned to the bottom"
+            );
+            assert_eq!(slots[2].3, 620.0, "{t:?}: the content gets the rest");
+            assert!(
+                (slots[1].1 - (700.0 - 56.0 - PRIMARY_ACTION_PADDING - 80.0)).abs() < 0.5,
+                "{t:?}: the action floats 16dp above the navigation, got {}",
+                slots[1].1
+            );
+        }
+
+        // The whole vertical family: navigation at the leading edge, content beside it, action parked.
+        for t in [
+            NavigationSuiteType::WideNavigationRailCollapsed,
+            NavigationSuiteType::WideNavigationRailExpanded,
+            NavigationSuiteType::NavigationRail,
+            NavigationSuiteType::NavigationDrawer,
+        ] {
+            let slots = probe(t);
+            assert_eq!(
+                (slots[0].0, slots[0].1),
+                (0.0, 0.0),
+                "{t:?}: the navigation sits at the leading edge"
+            );
+            assert_eq!(
+                slots[2].0, slots[0].2,
+                "{t:?}: the content starts where the navigation ends"
+            );
+            assert!(
+                slots[1].0 > 500.0,
+                "{t:?}: the action is parked off-view, got {}",
+                slots[1].0
+            );
+        }
+
+        // `None` is the vertical branch too — upstream's `isNavigationBar` is the same three types, so
+        // a `None` layout still measures the navigation slot and offsets the content by it. That is
+        // correct for what `None` means ("no navigation"): the caller passes an EMPTY navigation and
+        // the offset is zero. This case passes an empty one, which is the reachable, meaningful shape;
+        // supplying real navigation content with `None` would be a caller error, not a placement rule.
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            NavigationSuiteScaffoldLayout::new(
+                |ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().size(0.0, 0.0));
+                    ctx.end_node();
+                },
+                |ctx| {
+                    let k = ctx.next_key();
+                    ctx.start_leaf(k, M::new().fill_max_size());
+                    ctx.end_node();
+                },
+            )
+            .layout_type(NavigationSuiteType::None)
+            .primary_action(|ctx| {
+                let k = ctx.next_key();
+                ctx.start_leaf(k, M::new().width(56.0).height(56.0));
+                ctx.end_node();
+            })
+            .build(ctx);
+        });
+        composer.layout(Constraints::new(0.0, 500.0, 0.0, 700.0));
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let slots: Vec<(f32, f32, f32, f32)> = nodes[root]
+            .children
+            .iter()
+            .map(|&c| {
+                let n = &nodes[c];
+                (n.position.x, n.position.y, n.measured_size.width, n.measured_size.height)
+            })
+            .collect();
+        assert_eq!(slots.len(), 3, "the three slots stay addressable");
+        assert_eq!((slots[2].0, slots[2].1), (0.0, 0.0), "an empty navigation leaves the content at 0");
+        assert_eq!(slots[2].2, 500.0, "and the content takes the whole width");
+    }
+
     /// Degenerate inputs must not panic: a suite with NO items still lays out, and the scaffold layout
     /// with NO primary action still keeps the slot alive (its policy indexes `children[1]`).
     #[test]
