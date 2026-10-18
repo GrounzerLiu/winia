@@ -32,9 +32,13 @@ conditional `remember_infinite_transition`, say — is only handled correctly by
 - Runs **once**, when the slot is dropped. Never on a plain recomposition.
 - Registering again at the same call site **replaces** the previous callback instead of stacking
   them, so a component that composes every frame does not accumulate cleanups.
-- Runs for every removal path a slot can take: tail truncation in `start_slot`, the Enter-time
-  prune of unvisited children in `end_restartable_group`, end-of-frame truncation, `end_movable`,
-  and the disposal of a movable store.
+- Runs for **every** way a slot can go away. Two mechanisms cover it: the collection sites that
+  drop slots deliberately (tail truncation in `start_slot`, the Enter-time prune of unvisited
+  children in `end_restartable_group`, end-of-frame truncation, `end_movable`), and `Slot`'s own
+  `Drop`, which catches the rest — a whole `Composer` being dropped, a `movable_store` entry
+  removed, a `retain` in `end_scope`. Keeping both matters: a lifecycle callback that silently
+  stops running because it moved from a node (which had a `Drop`) into a slot (which did not) is
+  exactly the regression this API shipped with for one commit.
 - Costs **no layout node** and consumes no layout slot (see §2).
 - The callback is `FnOnce + Send`; it must not assume it runs on a particular thread beyond the
   composing one, and it must not compose.
@@ -112,8 +116,11 @@ tick it, so use tokio timers for time-driven work.
 1. **Post-apply timing.** Compose runs effects after the composition commits; these run inside the
    compose pass. Moving them needs a commit hook the composer does not have. Treat an effect body
    as "runs somewhere inside the frame".
-2. **Dropping the whole `Composer` does not run the callbacks.** The tree is dropped wholesale at
-   shutdown. This is unchanged from the `on_remove` era.
+2. **A panicking callback takes the rest of that removal with it.** Callbacks are drained into a
+   list and run in order; if one panics, the ones after it are dropped without running. The slot
+   tree itself is already consistent by then (every site finishes the structural change first —
+   `start_slot` runs them after pushing the new slot for that reason), so the composer can unwind
+   cleanly, but those cleanups do not happen.
 3. **Cancellation is cooperative.** An aborted task stops at its next await; work already done
    before that point is not undone.
 

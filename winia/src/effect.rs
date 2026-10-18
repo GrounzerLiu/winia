@@ -480,6 +480,40 @@ mod tests {
         );
     }
 
+
+    /// Dropping the whole `Composer` runs the callbacks too.
+    ///
+    /// This is the path with no explicit collector, and it used to work by accident: the callback
+    /// rode on a `LayoutNode`, which has a `Drop` that fires `on_remove`. Moving the callback into
+    /// the slot dropped that guarantee — measured on `remember_infinite_transition`: its animation id
+    /// stayed in the global table after the composer went away (1 before the drop, still 1 after).
+    /// `Slot` has its own `Drop` now, and this pins it.
+    #[test]
+    fn dropping_the_composer_runs_the_forget_callbacks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc as StdArc;
+        let ran = StdArc::new(AtomicUsize::new(0));
+        {
+            let mut composer = crate::runtime::composer::Composer::new();
+            let r = ran.clone();
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                let r2 = r.clone();
+                DisposableEffect::new(()).build(ctx, move |_| {
+                    let r3 = r2.clone();
+                    Box::new(move || {
+                        r3.fetch_add(1, Ordering::SeqCst);
+                    })
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+            assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing has been removed yet");
+        }
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "dropping the composer must run the cleanup, not leak it"
+        );
+    }
     // ── DisposableEffect: the lifecycle it promises ──
 
     /// Setup runs once for one key, and a key change runs the OLD cleanup before the new setup.

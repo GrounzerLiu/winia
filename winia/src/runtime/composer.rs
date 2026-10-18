@@ -1096,6 +1096,23 @@ struct Slot {
     forget: HashMap<u64, Box<dyn FnOnce() + Send>>,
 }
 
+impl Drop for Slot {
+    /// The removal path with no collector: a slot can be dropped wholesale — the whole `Composer`
+    /// going away, a `movable_store` entry removed, a `retain` in `end_scope` — and none of those
+    /// go through `truncate_children`. `LayoutNode` has the same `Drop` for the same reason, and
+    /// losing it here was a real leak: a `remember_infinite_transition`'s ids stayed in the global
+    /// animation table after its composer was dropped (measured 1 -> 0 before the migration, 1 -> 1
+    /// after it).
+    ///
+    /// The explicit sites drain `forget` before dropping, so this fires only for the paths they do
+    /// not cover, and never twice.
+    fn drop(&mut self) {
+        for (_, f) in self.forget.drain() {
+            f();
+        }
+    }
+}
+
 impl Slot {
     fn new(key: u64) -> Self {
         Self {
@@ -1671,6 +1688,9 @@ impl SlotTable {
         self.active_slot_key = key;
         ACTIVE_SLOT_KEY.with(|c| c.set(key));
         let is_dirty = self.dirty_keys.remove(&key);
+        // Lifecycle callbacks from slots this call drops; run at the END, once the tree and the
+        // cursors are consistent again.
+        let mut orphaned: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
         #[cfg(debug_assertions)] {
             if std::env::var("WINIA_SLOT_TRACE").is_ok() {
                 eprintln!("[slot] key={} path={:?} dirty={}", key >> 32, self.path.clone(), is_dirty);
@@ -1744,8 +1764,7 @@ impl SlotTable {
             }
             // Dropped slots take their lifecycle callbacks with them; run them after the
             // structural change so a callback that composes nothing sees a consistent tree.
-            let orphaned = SlotTable::truncate_children(&mut parent.children, idx);
-            for f in orphaned { f(); }
+            orphaned = SlotTable::truncate_children(&mut parent.children, idx);
             parent.children.push(Slot::new(key));
             // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
             // 否则残留 true 会让下一帧本应 clean 的 slot 误判为 Dirty
@@ -1754,6 +1773,10 @@ impl SlotTable {
         }
         if let Some(last) = self.child_counters.last_mut() { *last += 1; }
         self.child_counters.push(0);
+        // Last, not first: `parent.children` and `self.path` are already in their new shape, so a
+        // panicking cleanup unwinds from a consistent composer instead of one missing the slot it
+        // was about to create.
+        for f in orphaned { f(); }
         SlotStatus::Dirty
     }
 
@@ -1775,10 +1798,11 @@ impl SlotTable {
 
     /// Drain a whole removed subtree's callbacks into `out`. Moves out of the slot rather than
     /// borrowing, because the caller drops the slot straight after.
-    fn collect_forgets(slot: Slot, out: &mut Vec<Box<dyn FnOnce() + Send>>) {
-        let Slot { forget, children, .. } = slot;
-        out.extend(forget.into_values());
-        for child in children { SlotTable::collect_forgets(child, out); }
+    fn collect_forgets(mut slot: Slot, out: &mut Vec<Box<dyn FnOnce() + Send>>) {
+        out.extend(std::mem::take(&mut slot.forget).into_values());
+        for child in std::mem::take(&mut slot.children) {
+            SlotTable::collect_forgets(child, out);
+        }
     }
 
     /// Truncate `children` to `len`, handing back the callbacks owned by whatever was dropped.
