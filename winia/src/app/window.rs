@@ -112,19 +112,22 @@ impl Window {
         let created_id = ctx.remember_at_key(key, || 0u64);
         let _wid = created_id.get();
 
-        // 创建仅用于 layout + on_remove 的 leaf slot
-        // on_remove 中读取 State 最新值（以应对已创建窗口的 id）。
-        // The request is stored on this Composer's lifecycle context so a
-        // different window cannot consume it.
+        // The lifecycle callback reads the LATEST id at fire time (a window is created asynchronously,
+        // so the id at declaration time is 0). The request is stored on this Composer's lifecycle
+        // context so a different window cannot consume it.
+        //
+        // It used to ride on a placeholder leaf slot created just to carry an `on_remove`; the
+        // callback now lives in the slot itself (`effect::on_forget`), so nothing is materialized.
+        // The salted key above is still needed for `created_id`, but the callback no longer shares it.
         let cid = created_id.clone();
         let lifecycle = ctx.window_lifecycle();
         let remove_lifecycle = lifecycle.clone();
-        ctx.start_leaf_with_remove(key, Modifier::new(), Box::new(move || {
+        crate::effect::on_forget(ctx, move || {
             let wid = cid.get();
             if wid != 0 && CREATED.lock().unwrap().contains(&wid) {
                 remove_lifecycle.set_pending_remove(wid);
             }
-        }));
+        });
 
         // The theme this window resolves against, REMEMBERED across frames: the declaring tree re-runs
         // every frame and may switch which theme node wraps this window — palette, typography and direction

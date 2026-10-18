@@ -2697,16 +2697,17 @@ impl ComposeCtx<'_> {
     pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
         let ids_state = self.remember(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
         let ids = ids_state.get();
-        // 自动清理：组合点移除 → on_remove 触发 → 表内移除本作用域全部动画
-        let key = self.next_key();
+        // 自动清理：组合点移除 → 从全局表移除本作用域全部动画。
+        // `effect::on_forget` keeps the callback in the slot rather than on an implicit leaf node:
+        // the node was a real child of the enclosing container, so a transition created inside a
+        // spaced `Column`/`Row` opened a gap between its neighbours for a callback layout never used.
         let ids2 = std::sync::Arc::clone(&ids);
-        self.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(move || {
+        crate::effect::on_forget(self, move || {
             let ids: Vec<StateId> = ids2.lock().unwrap().drain(..).collect();
             for sid in ids {
                 crate::animation::remove_animation_by_state(sid);
             }
-        }));
-        self.end_node();
+        });
         InfiniteTransition { ids }
     }
 }

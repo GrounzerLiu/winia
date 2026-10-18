@@ -3076,7 +3076,22 @@ impl Composer {
         // The same pruning applies inside a movable placement. Moving a surviving subtree preserves
         // its state; omitting a conditional/list child removes it, and reinsertion initializes anew.
         if !was_skip {
-            self.slot_table.current_slot().children.retain(|c| c.visited);
+            // Pruning is a DROP, so it has to collect lifecycle callbacks the same way the other
+            // removal sites do. `retain` alone silently discarded them: a `LaunchedEffect` inside a
+            // branch that stopped composing kept its task running (caught by
+            // `animation::test_infinite_transition_auto_dispose`).
+            let slot = self.slot_table.current_slot();
+            let mut orphaned = Vec::new();
+            let mut kept = Vec::with_capacity(slot.children.len());
+            for child in slot.children.drain(..) {
+                if child.visited {
+                    kept.push(child);
+                } else {
+                    SlotTable::collect_forgets(child, &mut orphaned);
+                }
+            }
+            slot.children = kept;
+            for f in orphaned { f(); }
         }
         // Skip：content 未执行——slot 树保留（上帧 children 结构）——物化时
         // 整棵子树按 key 从 prev_node_by_key 恢复（stub 机制已由物化替代）
