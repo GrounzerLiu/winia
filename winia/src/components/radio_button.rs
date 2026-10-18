@@ -174,8 +174,18 @@ fn radio_button_impl(
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let color = colors.radio_color(enabled, selected);
 
-    // The radio's colour, per M3 — see `radio_colour_spec`.
-    let color_spec = crate::animation::AnimationSpec::Spring(radio_colour_spec());
+    // The radio's colour, per M3 — see `radio_colour_spec`. A DISABLED radio snaps instead:
+    // `RadioButton.kt:146-154` returns the disabled colour through `rememberUpdatedState` and says why —
+    // "If not enabled 'snap' to the disabled state, as there should be no animations between enabled /
+    // disabled". Animating it unconditionally made the switch to disabled read as a slow fade.
+    //
+    // Note the DOT is different: upstream's `animateDpAsState` for it has no enabled branch, so it keeps
+    // its spring in both states, and so does this.
+    let color_spec = if enabled {
+        crate::animation::AnimationSpec::Spring(radio_colour_spec())
+    } else {
+        crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
+    };
     let color_anim = ctx.animate_color_as_state(color, color_spec);
 
     // The dot's appearance, which M3 animates with the `FastSpatial` token — see `radio_dot_spec`.
@@ -577,6 +587,98 @@ mod tests {
         (a.0 - b.0).abs() <= 6 && (a.1 - b.1).abs() <= 6 && (a.2 - b.2).abs() <= 6
     }
 
+
+    /// M3 SNAPS the colour when the radio becomes disabled — `RadioButton.kt:146-154` returns the
+    /// disabled colour through `rememberUpdatedState` and says why: "there should be no animations
+    /// between enabled / disabled". This pins the FIRST frame after the flip: with the old
+    /// unconditional spring the ring was still painted in the enabled colour there (and faded over
+    /// the following frames); with `Snap` it is the disabled colour immediately.
+    #[test]
+    fn a_radio_snaps_to_its_disabled_colour_instead_of_fading_to_it() {
+        use skia_safe::{Color as SkColor, surfaces};
+        let _g = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let colors = RadioButtonDefaults::radio_button_colors(&theme);
+        // Selected, so the 10 dp dot fills the centre SOLIDLY: sampling the ring instead lands on its
+        // anti-aliased edge (measured 90,86,94 against the solid 73,69,78 — 90% coverage blended with
+        // white), which would make the test depend on sub-pixel coverage rather than on the colour.
+        let enabled_colour = colors.selected_color;
+        let disabled_colour = colors.disabled_selected_color;
+        assert_ne!(
+            (enabled_colour.r, enabled_colour.g, enabled_colour.b),
+            (disabled_colour.r, disabled_colour.g, disabled_colour.b),
+            "the two colours must differ for this test to mean anything"
+        );
+
+        // Sampled at the visual's CENTRE: the node's top-left plus 20,20 puts us on the dot.
+        let ring = |composer: &crate::runtime::composer::Composer| -> (i32, i32, i32) {
+            let mut surface = surfaces::raster_n32_premul((300, 300)).unwrap();
+            let canvas = surface.canvas();
+            canvas.clear(SkColor::WHITE);
+            let root = composer.layout_root_idx().expect("root");
+            crate::render::render(composer.arena_nodes(), root, canvas);
+            let pm = surface.peek_pixels().expect("pixmap");
+            let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            let (ox, oy) = radio_frame_origin(composer).expect("the touch target is in the tree");
+            let x = (ox + 20.0) as usize;
+            let y = (oy + 20.0) as usize;
+            let p = px[y * 300 + x];
+            (p[2] as i32, p[1] as i32, p[0] as i32)
+        };
+        // Compare against what the pixel SHOULD be: the dot colour composited over the white canvas.
+        // The disabled colours carry alpha 0.38 (`RadioButtonTokens.*IconOpacity`), so the raw RGB is not
+        // what a pixel reads — measured 170,169,171 for (29,27,32) at 0.38 over white.
+        let over_white = |c: Color| -> (i32, i32, i32) {
+            let a = c.a as f32 / 255.0;
+            (
+                (c.r as f32 * a + 255.0 * (1.0 - a)) as i32,
+                (c.g as f32 * a + 255.0 * (1.0 - a)) as i32,
+                (c.b as f32 * a + 255.0 * (1.0 - a)) as i32,
+            )
+        };
+        let near = |a: (i32, i32, i32), b: (i32, i32, i32)| -> bool {
+            (a.0 - b.0).abs() <= 8 && (a.1 - b.1).abs() <= 8 && (a.2 - b.2).abs() <= 8
+        };
+
+        let enabled = crate::runtime::state::State::new(true);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let e = enabled.clone();
+            let c = colors;
+            composer.compose(move |ctx: &mut ComposeCtx| {
+                RadioButton::new(true).enabled(e.get()).colors(c).on_click(|| {}).build(ctx);
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+        };
+        build(&mut composer);
+        // Settle the enter animation so the enabled colour is fully there.
+        for _ in 0..40 {
+            if !crate::animation::update_animations() {
+                break;
+            }
+        }
+        build(&mut composer);
+        assert!(
+            near(ring(&composer), over_white(enabled_colour)),
+            "enabled: the dot is the enabled colour, got {:?} against {:?}",
+            ring(&composer),
+            over_white(enabled_colour)
+        );
+
+        // Flip to disabled and take ONE frame: no `update_animations` in between.
+        enabled.set(false);
+        build(&mut composer);
+        assert!(
+            near(ring(&composer), over_white(disabled_colour)),
+            "disabled SNAPS: the FIRST frame is already the disabled colour, got {:?} against {:?}",
+            ring(&composer),
+            over_white(disabled_colour)
+        );
+        crate::animation::clear_all_animations();
+    }
     /// The node an interactive radio occupies, and the state layer it names.
     ///
     /// `material3/RadioButton.kt:100-115` applies `Modifier.minimumInteractiveComponentSize()` (48 dp) whenever
