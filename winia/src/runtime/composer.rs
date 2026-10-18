@@ -968,7 +968,18 @@ impl<'a> ComposeCtx<'a> {
             .start_node(key, modifier, Some(Box::new(policy)), None);
     }
 
-    /// 开始一个叶子节点并设置移除回调
+    /// Start a leaf node that carries an `on_remove` callback — one that needs a NODE. For a cleanup
+    /// with no layout meaning, use [`crate::effect::on_forget`] instead.
+    ///
+    /// The distinction is not cosmetic. A node created here is a real child of the enclosing
+    /// container, so it takes part in layout and consumes a spacing slot: an effect hung on a leaf
+    /// between two rows of a `Column(spacing = 10)` pushed the second row from y=29 to y=39. That is
+    /// exactly why `effect::on_forget` exists — it keeps the callback in the slot and materializes
+    /// nothing (`docs/effects.md` §2).
+    ///
+    /// Reach for this only when the callback belongs to a node's actual lifetime — `Window` and
+    /// `remember_infinite_transition` both used it for a while and both were migrated away, which is
+    /// a fair signal that "I have a cleanup callback" is not a reason to use it.
     pub fn start_leaf_with_remove(
         &mut self,
         key: u64,
