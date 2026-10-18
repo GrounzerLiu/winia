@@ -305,6 +305,22 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember(slot_key, || State::new(init()))
     }
 
+    /// Run `f` when the slot being composed RIGHT NOW is dropped — a lifecycle hook that costs no
+    /// layout node.
+    ///
+    /// This is what effects use for their cleanup. The alternative the framework had first was an
+    /// implicit leaf node carrying an `on_remove`: it worked, but the node was a real child of the
+    /// enclosing container, so an effect inside a `Column(spacing = 10)` pushed its next sibling
+    /// down by one spacing slot (measured: y 29 -> 39). Compose has the same shape of hook — a
+    /// `RememberObserver` lives in the slot table and never materializes.
+    ///
+    /// Registering again at the same call site REPLACES the previous callback rather than stacking,
+    /// which is what a recomposition needs.
+    pub fn remember_on_forget(&mut self, f: impl FnOnce() + Send + 'static) {
+        let slot_key = self.next_remember_key();
+        self.composer.slot_table.remember_on_forget(slot_key, Box::new(f));
+    }
+
     /// Remember a callable whose placed state and nodes move between hosts without changing identity.
     /// The callable is initialized once, like `remember { movableContentOf { ... } }`; read dynamic
     /// values through State or an explicit latest-value channel rather than replacing its captures.
@@ -1063,6 +1079,10 @@ struct Slot {
     /// inlines the store's subtree in its place, so the content's nodes are parented by whoever
     /// invokes it, while its slots (and so its state) live in the store.
     movable_ref: Option<u64>,
+    /// Lifecycle callbacks owned by this slot, keyed like `remembered` so a recomposition
+    /// REPLACES rather than stacks. Drained — and run — when the slot is dropped. This is what
+    /// lets an effect clean up without materializing a layout node to carry the callback.
+    forget: HashMap<u64, Box<dyn FnOnce() + Send>>,
 }
 
 impl Slot {
@@ -1081,6 +1101,7 @@ impl Slot {
             skip_policy: None,
             movable_store: None,
             movable_ref: None,
+            forget: HashMap::new(),
             direction: crate::layout::LayoutDirection::Ltr,
         }
     }
@@ -1710,7 +1731,10 @@ impl SlotTable {
                 let pkey = parent.key;
                 eprintln!("[slot-trunc] key={:x} parent={:x} idx={} len={}", key, pkey, idx, plen);
             }
-            parent.children.truncate(idx);
+            // Dropped slots take their lifecycle callbacks with them; run them after the
+            // structural change so a callback that composes nothing sees a consistent tree.
+            let orphaned = SlotTable::truncate_children(&mut parent.children, idx);
+            for f in orphaned { f(); }
             parent.children.push(Slot::new(key));
             // 新建 slot：本帧返回 Dirty 即已执行；立即消费 dirty 标记，
             // 否则残留 true 会让下一帧本应 clean 的 slot 误判为 Dirty
@@ -1730,6 +1754,34 @@ impl SlotTable {
         self.current_slot().children_count = count;
         self.path.pop();
         self.child_counters.pop();
+    }
+
+    /// Register a lifecycle callback on the CURRENT slot, replacing any earlier one at the same
+    /// key. It runs when the slot is dropped, never on a plain recomposition.
+    fn remember_on_forget(&mut self, slot_key: u64, f: Box<dyn FnOnce() + Send>) {
+        self.current_slot().forget.insert(slot_key, f);
+    }
+
+    /// Drain a whole removed subtree's callbacks into `out`. Moves out of the slot rather than
+    /// borrowing, because the caller drops the slot straight after.
+    fn collect_forgets(slot: Slot, out: &mut Vec<Box<dyn FnOnce() + Send>>) {
+        let Slot { forget, children, .. } = slot;
+        out.extend(forget.into_values());
+        for child in children { SlotTable::collect_forgets(child, out); }
+    }
+
+    /// Truncate `children` to `len`, handing back the callbacks owned by whatever was dropped.
+    /// Every place that drops slots goes through here, so a `remember_on_forget` callback can
+    /// never leak just because a branch took a different shape.
+    fn truncate_children(
+        children: &mut Vec<Slot>,
+        len: usize,
+    ) -> Vec<Box<dyn FnOnce() + Send>> {
+        let mut out = Vec::new();
+        for dropped in children.drain(len.min(children.len())..) {
+            SlotTable::collect_forgets(dropped, &mut out);
+        }
+        out
     }
 
     fn remember<T: Clone + 'static>(
@@ -1773,7 +1825,8 @@ impl SlotTable {
 
     fn truncate(&mut self) {
         if let Some(&idx) = self.child_counters.first() {
-            self.root_slot.children.truncate(idx);
+            let orphaned = SlotTable::truncate_children(&mut self.root_slot.children, idx);
+            for f in orphaned { f(); }
         }
     }
 
@@ -1798,6 +1851,16 @@ impl SlotTable {
         }
         let mut live = crate::layout::node::SlotKeySet::default();
         for child in &mut self.root_slot.children { references(child, false, &mut live); }
+        // A movable store that is going away can carry lifecycle callbacks (an effect placed inside
+        // movable content). Its slots are dropped here, not truncated out of a parent, so collect
+        // them explicitly — otherwise that cleanup would silently never run.
+        let mut orphaned = Vec::new();
+        for (id, store) in self.movable_store.iter_mut() {
+            if !live.contains(id) {
+                SlotTable::collect_forgets(std::mem::replace(store, Slot::new(0)), &mut orphaned);
+            }
+        }
+        for f in orphaned { f(); }
         self.movable_store.retain(|id, _| live.contains(id));
         self.movable_frame.retain(|id, _| live.contains(id));
     }
@@ -1935,7 +1998,11 @@ impl SlotTable {
         let count = self.child_counters.first().copied().unwrap_or(0);
         // This root is not closed by end_restartable_group. Trim its uncomposed tail here, otherwise
         // descriptor replay resurrects removed conditional/list children.
-        self.current_slot().children.truncate(count);
+        let orphaned = {
+            let slot = self.current_slot();
+            SlotTable::truncate_children(&mut slot.children, count)
+        };
+        for f in orphaned { f(); }
         self.movable_composing = None;
         self.path = std::mem::take(&mut self.movable_saved_path);
         self.child_counters = std::mem::take(&mut self.movable_saved_counters);

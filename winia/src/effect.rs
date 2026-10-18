@@ -44,14 +44,21 @@ use tokio::task::JoinHandle;
 // remember_coroutine_scope
 // ═══════════════════════════════════════════════════════════
 
-/// 挂载一个组合点移除时的清理回调（P2-5 样板合并——
-/// LaunchedEffect/DisposableEffect 共用：隐式 leaf + on_remove + end 配对）。
-/// #[composable]：内部 next_key 从调用点（effect build 内语句）取稳定 base
+/// Attach a cleanup to the composition point being built: it runs when that slot is dropped.
+///
+/// This used to materialize an implicit LEAF NODE and hang the callback on its `on_remove`, because
+/// the slot table had no other place to put one. The node was a real child of the enclosing
+/// container, which cost more than a wasted allocation: an effect inside `Column(spacing = 10)`
+/// pushed its next sibling down by one spacing slot (measured: y 29 -> 39), so a `LaunchedEffect`
+/// between two rows opened a gap that nothing in the layout asked for. `remember_on_forget` keeps
+/// the callback in the slot itself — the same place Compose keeps a `RememberObserver` — and
+/// materializes nothing.
+///
+/// Still `#[composable]`: its scope slot is the thing that dies with the call site, so a branch
+/// that stops composing takes the callback with it.
 #[composable]
 fn attach_cleanup(ctx: &mut ComposeCtx, cleanup: impl FnOnce() + Send + 'static) {
-    let key = ctx.next_key();
-    ctx.start_leaf_with_remove(key, crate::modifier::Modifier::new(), Box::new(cleanup));
-    ctx.end_node();
+    ctx.remember_on_forget(cleanup);
 }
 
 /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
@@ -418,6 +425,45 @@ pub fn with_frame_nanos() -> impl std::future::Future<Output = u64> + Send {
 mod tests {
     use super::*;
 
+
+    // ── Effects are not layout citizens ──
+
+    /// An effect occupies no layout node, so it does not shift its neighbours.
+    ///
+    /// This is the regression test for the reason `remember_on_forget` exists. The cleanup used to
+    /// ride on an implicit LEAF NODE, which was a real child of the enclosing container: an effect
+    /// sitting between two rows of a `Column(spacing = 10)` pushed the second row from y=29 to y=39,
+    /// i.e. opened a one-spacing gap that nothing in the layout asked for.
+    #[test]
+    fn an_effect_adds_no_layout_node_and_no_spacing_slot() {
+        let sample = |with_effect: bool| -> (Vec<f32>, usize) {
+            let mut composer = crate::runtime::composer::Composer::new();
+            composer.compose(|ctx: &mut ComposeCtx| {
+                crate::layout::Column::new().spacing(10.0).build(ctx, |ctx| {
+                    crate::components::Text::new("first").build(ctx);
+                    if with_effect {
+                        DisposableEffect::new(()).build(ctx, |_| Box::new(|| {}));
+                    }
+                    crate::components::Text::new("second").build(ctx);
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let nodes = composer.arena_nodes();
+            let root = composer.layout_root_idx().expect("root");
+            let ys = nodes[root].children.iter().map(|&c| nodes[c].position.y).collect();
+            (ys, nodes.len())
+        };
+        let (plain, plain_nodes) = sample(false);
+        let (with, with_nodes) = sample(true);
+        assert_eq!(
+            with, plain,
+            "an effect must not move its neighbours: without it {plain:?}, with it {with:?}"
+        );
+        assert_eq!(
+            with_nodes, plain_nodes,
+            "and it must not allocate a layout node: {plain_nodes} vs {with_nodes}"
+        );
+    }
 
     // ── DisposableEffect: the lifecycle it promises ──
 
