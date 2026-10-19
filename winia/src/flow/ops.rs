@@ -24,7 +24,8 @@ pub struct Debounce<S: Stream> {
 }
 
 // Nothing is pinned in place: the boxed timer is pinned by its own pointer, and the pending value is
-// only ever moved.
+// only ever moved. The impl covers every S for that reason; the Stream impl below still requires
+// S: Unpin, because polling the inner stream needs a Pin::new.
 impl<S: Stream> Unpin for Debounce<S> {}
 
 /// Emit an item only once the upstream has been quiet for [period].
@@ -251,6 +252,30 @@ mod tests {
             // The end, without touching the upstream again.
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(None));
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(None));
+        });
+    }
+
+    /// A real executor wakes this stream when the period elapses.
+    ///
+    /// The paused-clock tests above poll by hand with a noop waker, so an implementation that never
+    /// registered the timer waker would pass every one of them and hang in a real runtime. This one
+    /// awaits for real, under a timeout so a regression fails instead of hanging.
+    #[test]
+    fn a_real_executor_is_woken_when_the_period_elapses() {
+        use futures_util::StreamExt;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let feed = Feed::default();
+            feed.push(9);
+            let mut deb = debounce(FeedStream(feed.clone()), Duration::from_millis(10));
+            let next = tokio::time::timeout(Duration::from_secs(2), deb.next())
+                .await
+                .expect("the timer must wake the waiting task");
+            assert_eq!(next, Some(9));
         });
     }
 }

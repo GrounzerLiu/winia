@@ -102,10 +102,17 @@ impl FrameClock {
 
     /// Called by the render loop for this window's own frames.
     pub(crate) fn tick(&self) {
-        let _ = with_clock(self.window, |clock| clock.tx.send(monotonic_nanos()));
+        // Clone the sender out and send AFTER the registry lock is released: a send wakes
+        // waiters, and no waker should run while a registry guard is alive.
+        let sender = with_clock(self.window, |clock| clock.tx.clone());
+        let _ = sender.send(monotonic_nanos());
     }
 
     /// Wait for the next frame of THIS window.
+    ///
+    /// Resolves to 0 when the window's clock is gone (the window closed and forget_window ran): a 0
+    /// timestamp means "no frame will come", the same sentinel the global clock uses for a closed
+    /// channel.
     pub fn next_frame(&self) -> impl Future<Output = u64> + Send {
         let rx = with_clock(self.window, |clock| subscribe_next(&clock.tx));
         next_frame_on(rx)

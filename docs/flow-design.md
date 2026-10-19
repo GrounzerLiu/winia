@@ -64,7 +64,7 @@ available without adding a crate.
 
 - **L1 `State::changes() -> StateChanges<T>`** — `impl Stream<Item = T>`. Current value first, then
   each change, conflated to the latest value between polls, cancelled by `Drop`.
-- **L2 `snapshot_flow(ctx, f) -> impl Stream<Item = T>`** — the `snapshotFlow` analogue, built on a
+- **L2 `snapshot_flow(f) -> impl Stream<Item = T>`** — the `snapshotFlow` analogue, built on a
   tracking frame: run `f`, record the states it read, re-run on any of them, emit when the result
   differs. Needs a standalone dependency frame (constraint 3), which is why it is a separate layer.
 - **L3 operators and interaction sequences** — `debounce`/`sample` as free functions over `Stream`,
@@ -163,8 +163,9 @@ rather than state.
 ## 8. Non-goals
 
 - **A `Flow` type of our own.** `Stream` + `futures`/`tokio-stream` operators is the transport.
-- **Hot vs cold distinction as a public concept.** `changes()` is cold (subscribes on creation, one
-  collector), which is all the UI needs.
+- **Hot vs cold distinction as a public concept.** Both streams are hot in the sense that they
+  subscribe when they are created and keep receiving regardless of who polls; `changes()` supports
+  any number of collectors, each with its own subscription.
 - **Replacing the composer's dependency machinery.** L1's observer list is additive on purpose.
 - **Backpressure.** Conflation is the policy; a slow collector sees the latest value, not a queue.
 
@@ -173,6 +174,11 @@ rather than state.
 1. **Observer leaks.** A `StateChanges` dropped without polling still holds an `Arc`; `Drop`
    unsubscribes, and the weak list prunes dead entries on the next `notify`.
 2. **Waker races.** Store the waker before reading the value in `poll_next`; a change in between is
-   then either seen by the read or delivered by the wake.
+   then either seen by the read or delivered by the wake. For L2 that argument needs the subscription
+   to exist already, which is why a value is only accepted from a run whose reads were all
+   subscribed (see §6) — the first run of a poll may not be.
 3. **Unsubscribe vs notify.** A notification may arrive after `Drop`; the observer is already gone
    from the list, and a late wake on a dropped stream is a no-op.
+4. **States that never notify.** `Visual` and `Backchannel` writes do not notify at all, so
+   `changes()` over one of them emits the seed and nothing else, and a `snapshot_flow` reading one
+   only recomputes when some other read state moves.

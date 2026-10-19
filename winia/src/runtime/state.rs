@@ -1103,6 +1103,16 @@ pub(crate) fn begin_tracking_frame() -> DependencyFrameGuard {
     push_dependency_frame(DepMode::Compose, None)
 }
 
+/// Run a block with dependency recording OFF, restoring whatever frame was active afterwards.
+///
+/// This is for user code the framework runs at a point where some *other* frame happens to be
+/// active — a `side_effect` drained at the end of a compose that was itself started from a layout
+/// pass has the outer Layout frame live again, and a read there would be recorded as that
+/// composer's layout dependency under a slot key that does not belong to it.
+pub(crate) fn begin_no_deps_frame() -> DependencyFrameGuard {
+    push_dependency_frame(DepMode::None, None)
+}
+
 /// Finish recording and move the current buffer out without touching the outer frame.
 pub(crate) fn take_deps() -> Vec<(Arc<StateSignal>, u64)> {
     DEP_MODE.with(|m| m.set(DepMode::None));
@@ -1632,5 +1642,32 @@ mod tests {
         assert!(inner_queue.is_empty(), "panic frame 的新订阅应回滚");
         outer_state.set(4);
         assert_eq!(outer_queue.drain(), vec![outer_state.signal_id()]);
+    }
+
+    /// A read inside a no-deps frame records nothing, and the outer frame keeps recording after.
+    #[test]
+    fn a_no_deps_frame_records_nothing_and_restores_the_outer_frame() {
+        let outer_read = State::new(1i32);
+        let inner_read = State::new(2i32);
+        let mut outer = begin_tracking_frame();
+        let _ = outer_read.get();
+        {
+            let mut inner = begin_no_deps_frame();
+            let _ = inner_read.get();
+            inner.commit();
+        }
+        let _ = outer_read.get();
+        let deps = take_deps();
+        outer.commit();
+
+        let ids: Vec<_> = deps.iter().map(|(signal, _)| signal.id()).collect();
+        assert!(
+            ids.contains(&outer_read.signal_id()),
+            "reads outside the inner frame are recorded: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&inner_read.signal_id()),
+            "a read inside the no-deps frame records nothing: {ids:?}"
+        );
     }
 }

@@ -525,14 +525,23 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
     #[test]
     fn a_replacement_waits_for_the_aborted_body_to_stop() {
         use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc as StdArc;
+        use std::sync::{mpsc, Arc as StdArc, Mutex as StdMutex};
         use std::time::Duration;
 
-        struct SlowStop(StdArc<AtomicBool>);
-        impl Drop for SlowStop {
+        /// The old body's Drop blocks until the test releases it, so "the replacement has not
+        /// started yet" is a fact the test controls rather than a race it hopes to win.
+        struct GatedStop {
+            gate: StdMutex<Option<mpsc::Receiver<()>>>,
+            entered: StdArc<AtomicBool>,
+            stopped: StdArc<AtomicBool>,
+        }
+        impl Drop for GatedStop {
             fn drop(&mut self) {
-                std::thread::sleep(Duration::from_millis(30));
-                self.0.store(true, Ordering::SeqCst);
+                self.entered.store(true, Ordering::SeqCst);
+                if let Some(rx) = self.gate.lock().unwrap().take() {
+                    let _ = rx.recv_timeout(Duration::from_secs(5));
+                }
+                self.stopped.store(true, Ordering::SeqCst);
             }
         }
 
@@ -543,19 +552,32 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
             .unwrap();
         let _entered = rt.enter();
 
+        let (release, wait) = mpsc::channel::<()>();
         let old_started = StdArc::new(AtomicBool::new(false));
+        let drop_entered = StdArc::new(AtomicBool::new(false));
         let old_stopped = StdArc::new(AtomicBool::new(false));
         let replacement_ran = StdArc::new(AtomicBool::new(false));
-        let replacement_saw_it_running = StdArc::new(AtomicBool::new(false));
         let mut composer = crate::runtime::composer::Composer::new();
 
         let started = old_started.clone();
+        let gate = StdMutex::new(Some(wait));
+        let entered = drop_entered.clone();
         let stopped = old_stopped.clone();
         composer.compose(move |ctx: &mut ComposeCtx| {
-            LaunchedEffect::new(1u32).build(ctx, move |_| async move {
-                started.store(true, Ordering::SeqCst);
-                let _guard = SlowStop(stopped);
-                std::future::pending::<()>().await;
+            LaunchedEffect::new(1u32).build(ctx, move |_| {
+                let started = started.clone();
+                let gate = gate.lock().unwrap().take();
+                let entered = entered.clone();
+                let stopped = stopped.clone();
+                async move {
+                    started.store(true, Ordering::SeqCst);
+                    let _guard = GatedStop {
+                        gate: StdMutex::new(gate),
+                        entered,
+                        stopped,
+                    };
+                    std::future::pending::<()>().await;
+                }
             });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
@@ -563,32 +585,55 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
         // Wait until the old body is really running; a spawn that has not been polled holds no guard.
         rt.block_on(async {
             for _ in 0..500 {
-                if old_started.load(Ordering::SeqCst) { break; }
+                if old_started.load(Ordering::SeqCst) {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         });
         assert!(old_started.load(Ordering::SeqCst), "the old body started");
-        assert!(!old_stopped.load(Ordering::SeqCst), "and it is parked, not done");
 
-        let stopped = old_stopped.clone();
         let ran = replacement_ran.clone();
-        let saw = replacement_saw_it_running.clone();
         composer.compose(move |ctx: &mut ComposeCtx| {
-            LaunchedEffect::new(2u32).build(ctx, move |_| async move {
-                ran.store(true, Ordering::SeqCst);
-                if !stopped.load(Ordering::SeqCst) {
-                    saw.store(true, Ordering::SeqCst);
+            LaunchedEffect::new(2u32).build(ctx, move |_| {
+                let ran = ran.clone();
+                async move {
+                    ran.store(true, Ordering::SeqCst);
                 }
             });
         });
         composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
 
-        rt.block_on(async { tokio::time::sleep(Duration::from_millis(200)).await; });
-        assert!(replacement_ran.load(Ordering::SeqCst), "the replacement ran");
+        // The aborted body is now inside its Drop, blocked on the gate. With the join the
+        // replacement CANNOT have started: it is parked on the old task finishing.
+        rt.block_on(async {
+            for _ in 0..500 {
+                if drop_entered.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
         assert!(
-            !replacement_saw_it_running.load(Ordering::SeqCst),
-            "the replacement started before the aborted body was dropped: the join is missing"
+            drop_entered.load(Ordering::SeqCst),
+            "the aborted body reached its Drop"
         );
+        assert!(
+            !replacement_ran.load(Ordering::SeqCst),
+            "the replacement started while the aborted body was still being dropped: the join is missing"
+        );
+
+        release.send(()).expect("the gate is still open");
+        rt.block_on(async {
+            for _ in 0..2000 {
+                if replacement_ran.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+        assert!(old_stopped.load(Ordering::SeqCst), "the old body finished its Drop");
+        assert!(replacement_ran.load(Ordering::SeqCst), "and then the replacement ran");
     }
     /// A task spawned through the effect body's scope dies with the composition point.
     ///

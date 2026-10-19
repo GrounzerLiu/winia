@@ -11,7 +11,8 @@ pub use ops::{debounce, Debounce};
 
 use crate::runtime::state::{begin_tracking_frame, take_deps, StateId, StateObserver, StateSignal};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 /// Wakes the collecting task when any state the closure read changes.
@@ -21,7 +22,7 @@ struct FlowTracker {
 
 impl StateObserver for FlowTracker {
     fn on_change(&self, _id: StateId) {
-        if let Some(waker) = self.waker.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(waker) = self.waker.lock().take() {
             waker.wake();
         }
     }
@@ -95,7 +96,7 @@ impl<T: Clone + PartialEq, F: Fn() -> T> futures_util::Stream for SnapshotFlow<T
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
         let this = self.get_mut();
         // Waker BEFORE the run: a change that lands while compute() executes must not be lost.
-        *this.tracker.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
+        *this.tracker.waker.lock() = Some(cx.waker().clone());
 
         // A value is only trustworthy when every state it was computed from was ALREADY subscribed:
         // then a write that lands after the read still reaches the tracker and this poll is

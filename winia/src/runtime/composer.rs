@@ -3641,11 +3641,15 @@ impl Composer {
         pending_batch.commit();
         dependency_transaction.commit();
         compose_runtime_transaction.commit();
-        // The composition has committed: the slot tree is materialized, the read graph is
-        // reconciled and every transaction is closed, so user callbacks that publish to the outside
-        // world can run. Deliberately LAST — a `State` written here notifies with the dependency
-        // frame already closed, which is what makes it a write for the NEXT frame instead of one
-        // this pass would have to account for.
+        // The composition has committed: the slot tree is materialized, the read graph is reconciled
+        // and every transaction is closed, so user callbacks that publish to the outside world can
+        // run. Deliberately LAST — a `State` written here notifies with the dependency frame closed,
+        // so it becomes the NEXT PASS's input rather than an edge this one has to account for.
+        //
+        // Recording is forced OFF for the duration: when this compose() was started from a layout
+        // pass (a subcomposition), committing the inner frame restores the outer LAYOUT frame, and a
+        // read in a side effect would be filed as that composer's layout dependency.
+        let _no_deps = crate::runtime::state::begin_no_deps_frame();
         for effect in std::mem::take(&mut self.post_compose) {
             effect();
         }
