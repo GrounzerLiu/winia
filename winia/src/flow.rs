@@ -157,36 +157,134 @@ impl<T, F> Drop for SnapshotFlow<T, F> {
 ///
 /// Reading the source states in composition makes the caller recompose on every write — a scroll
 /// offset moving at 60 Hz recomposes a bar that only cares whether it is at the top. This keeps the
-/// recomposition tied to the RESULT: `snapshot_flow` owns the subscription and conflation, one small
-/// task copies each changed value into the `State`, and `State::set` dedups what did not change, so
-/// a component reading this handle recomposes only on a real flip.
+/// recomposition tied to the RESULT: the derive subscribes to whatever the closure reads and
+/// recomputes on each of those writes, but `State::set`'s dedup drops the ones that did not change
+/// the value, so a reader recomposes only on a real flip. It is synchronous — the write that changes
+/// the result is the write that notifies.
 ///
 /// The closure has to read through `get()`: `peek()` records no dependency, so a derived value built
 /// on it would never recompute.
 ///
-/// Costs one task per call site for the lifetime of the composition. Right for a handful of
-/// thresholds, wrong for a per-row consumer — a synchronous derived state is the open follow-up.
+/// The price is that the closure runs on whichever thread wrote the source, so keep it a cheap
+/// comparison. For an ASYNC source use `produce_state`, not this.
 #[crate::composable]
 pub fn remember_derived_state<T: Clone + PartialEq + Send + Sync + 'static>(
     ctx: &mut crate::runtime::composer::ComposeCtx,
     compute: impl Fn() -> T + Send + Sync + 'static,
 ) -> crate::runtime::state::State<T> {
-    let compute = std::sync::Arc::new(compute);
+    let compute: std::sync::Arc<dyn Fn() -> T + Send + Sync> = std::sync::Arc::new(compute);
     let seed = std::sync::Arc::clone(&compute);
     // `remember` already wraps the value in a `State`: building one inside would nest two.
     let state: crate::runtime::state::State<T> = ctx.remember(move || seed());
-    let sink = state.clone();
-    crate::effect::LaunchedEffect::new(()).build(ctx, move |scope| {
-        scope.spawn(async move {
-            use futures_util::StreamExt;
-            let mut flow = snapshot_flow(move || (compute)());
-            while let Some(value) = flow.next().await {
-                sink.set(value);
-            }
-        });
-        async {}
+    let observer: std::sync::Arc<Derived<T>> = {
+        let state = state.clone();
+        ctx.remember_handle(move || {
+            let derived = std::sync::Arc::new(Derived::new(compute, state));
+            let _ = derived.me.set(std::sync::Arc::downgrade(&derived));
+            derived
+        })
+    };
+    observer.start();
+    ctx.remember_on_forget({
+        let observer = observer.clone();
+        move || observer.stop()
     });
     state
+}
+
+/// The subscription behind [remember_derived_state]: recompute on every source write, publish only a
+/// changed result.
+struct Derived<T> {
+    compute: std::sync::Arc<dyn Fn() -> T + Send + Sync>,
+    state: crate::runtime::state::State<T>,
+    sources: std::sync::Mutex<Vec<std::sync::Arc<crate::runtime::state::StateSignal>>>,
+    /// Guards against a closure that writes a source it also reads: that write would re-enter
+    /// `refresh` through `notify`.
+    running: std::sync::atomic::AtomicBool,
+    me: std::sync::OnceLock<std::sync::Weak<Derived<T>>>,
+}
+
+impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
+    fn new(
+        compute: std::sync::Arc<dyn Fn() -> T + Send + Sync>,
+        state: crate::runtime::state::State<T>,
+    ) -> Self {
+        Self {
+            compute,
+            state,
+            sources: std::sync::Mutex::new(Vec::new()),
+            running: std::sync::atomic::AtomicBool::new(false),
+            me: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Subscribe and publish the first value. Runs once, from composition.
+    fn start(&self) {
+        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else { return };
+        let observer: std::sync::Arc<dyn crate::runtime::state::StateObserver> = me;
+        self.refresh(&observer);
+    }
+
+    /// Drop every subscription. Runs from the composition point's `on_forget`.
+    fn stop(&self) {
+        let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) else { return };
+        let observer: std::sync::Arc<dyn crate::runtime::state::StateObserver> = me;
+        self.reconcile(&observer, Vec::new());
+    }
+
+    /// Replace the subscription set with the states `deps` names.
+    fn reconcile(
+        &self,
+        observer: &std::sync::Arc<dyn crate::runtime::state::StateObserver>,
+        deps: Vec<(std::sync::Arc<crate::runtime::state::StateSignal>, u64)>,
+    ) {
+        let mut signals: Vec<std::sync::Arc<crate::runtime::state::StateSignal>> =
+            Vec::with_capacity(deps.len());
+        for (signal, _slot_key) in deps {
+            if !signals.iter().any(|s| s.id() == signal.id()) {
+                signals.push(signal);
+            }
+        }
+        let mut sources = self.sources.lock().unwrap_or_else(|e| e.into_inner());
+        for old in sources.iter() {
+            if !signals.iter().any(|s| s.id() == old.id()) {
+                old.unsubscribe_observer(observer);
+            }
+        }
+        for new in signals.iter() {
+            if !sources.iter().any(|s| s.id() == new.id()) {
+                new.subscribe_observer(observer);
+            }
+        }
+        *sources = signals;
+    }
+
+    /// Recompute, re-derive the subscription set, publish. The user closure runs outside any lock.
+    fn refresh(&self, observer: &std::sync::Arc<dyn crate::runtime::state::StateObserver>) {
+        if self.running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let mut frame = crate::runtime::state::begin_tracking_frame();
+        let value = (self.compute)();
+        let deps = crate::runtime::state::take_deps();
+        frame.commit();
+        self.running.store(false, std::sync::atomic::Ordering::Release);
+
+        self.reconcile(observer, deps);
+        // Dedup lives in `set`: an unchanged result notifies nobody.
+        self.state.set(value);
+    }
+}
+
+impl<T: Clone + PartialEq + Send + Sync + 'static> crate::runtime::state::StateObserver
+    for Derived<T>
+{
+    fn on_change(&self, _id: crate::runtime::state::StateId) {
+        if let Some(me) = self.me.get().and_then(|weak| weak.upgrade()) {
+            let observer: std::sync::Arc<dyn crate::runtime::state::StateObserver> = me;
+            self.refresh(&observer);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +399,109 @@ mod tests {
             "x is no longer read, so its write must not wake the collector"
         );
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending);
+    }
+
+    /// The derive is synchronous: the write that changes the result is the write that notifies.
+    #[test]
+    fn a_derived_state_updates_on_the_write_itself() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let source = State::new(0i32);
+        let s = source.clone();
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let slot: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot_in = slot.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let derived = crate::flow::remember_derived_state(ctx, move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                s.get() != 0
+            });
+            *slot_in.lock().unwrap() = Some(derived);
+        });
+        let derived = slot.lock().unwrap().clone().unwrap();
+        let settled = calls.load(Ordering::SeqCst);
+
+        source.set(5);
+        assert!(
+            derived.peek(),
+            "no runtime and no drive: the write itself published the new value"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), settled + 1, "one recompute per write");
+
+        source.set(6);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            settled + 2,
+            "the recompute happens even when the result does not change (that is what the dedup is for)"
+        );
+    }
+
+    /// Leaving the composition point drops the subscription.
+    #[test]
+    fn removing_the_composition_point_unsubscribes_the_derive() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let source = State::new(0i32);
+        let s = source.clone();
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let _ = crate::flow::remember_derived_state(ctx, move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                s.get() != 0
+            });
+        });
+        let settled = calls.load(Ordering::SeqCst);
+
+        composer.compose(|_ctx| {});
+        source.set(7);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            settled,
+            "the derive must not recompute after its composition point is gone"
+        );
+    }
+
+    /// A branch that stops reading a state drops that subscription.
+    #[test]
+    fn a_derived_state_resubscribes_when_its_reads_change() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let flag = State::new(true);
+        let a = State::new(1i32);
+        let b = State::new(2i32);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let (f, x, y, c) = (flag.clone(), a.clone(), b.clone(), calls.clone());
+        let slot: std::sync::Arc<std::sync::Mutex<Option<State<i32>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot_in = slot.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let derived = crate::flow::remember_derived_state(ctx, move || {
+                c.fetch_add(1, Ordering::SeqCst);
+                if f.get() { x.get() } else { y.get() }
+            });
+            *slot_in.lock().unwrap() = Some(derived);
+        });
+        let derived = slot.lock().unwrap().clone().unwrap();
+        assert_eq!(derived.peek(), 1);
+
+        flag.set(false);
+        assert_eq!(derived.peek(), 2, "the branch flip recomputed through the flag it reads");
+
+        let settled = calls.load(Ordering::SeqCst);
+        a.set(9);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            settled,
+            "the state the closure stopped reading must not recompute it"
+        );
+        b.set(10);
+        assert_eq!(derived.peek(), 10, "the state it reads now does");
     }
 
     /// The derived State notifies only when the computed RESULT changes.
