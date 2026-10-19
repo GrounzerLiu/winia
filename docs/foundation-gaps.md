@@ -33,9 +33,14 @@ same absent primitive:
 | `snapshot_flow` | `flow.rs` | observe a set of reads and re-run when they change |
 | the dependency frame + revision handshake | `runtime/state.rs` | subscribe-at-read and rollback on panic |
 
-Each carries its own resubscription and dedup logic. A real snapshot layer would let all three
-collapse into thin adapters — and would close a gap they share: **within one pass, two reads of two
-different states can observe different moments.**
+Each carries its own resubscription and dedup logic, and they share a gap: **within one pass, two
+reads of two different states can observe different moments.**
+
+A faithful Compose-style snapshot layer is **not** the right answer here — the record-based design
+costs thousands of lines in the hottest path and buys properties a single-threaded composer does
+not need. What is worth building is the cheaper half: a global write version plus atomic write
+batches. See [snapshot-feasibility.md](snapshot-feasibility.md) for the measurements, the four
+options and the recommended phases.
 
 ### 2. Saveable — state that survives the window
 
