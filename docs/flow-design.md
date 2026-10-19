@@ -118,11 +118,20 @@ lines, and the composer's typed queue never had to move.
 signals it read, reconcile the subscription set against the previous run, and compare the value with
 the last emitted one.
 
+**The value is only accepted from a run whose reads were already subscribed.** Because the
+subscription is installed after the read, a write that lands in between reaches nobody: the stream
+would emit the pre-write value and then park with no wake. So a run that read a state the tracker was
+not listening to is discarded — reconcile, run again, and accept the first value whose reads were all
+covered (bounded at four passes). In the steady state that is the first run; a first poll or a branch
+change costs one extra run. Pinned by `a_write_during_the_computation_is_not_lost`, where the
+closure writes the state it just read.
+
 **Subscription reconciliation matters.** The set is replaced, not added to: a closure whose reads
 depend on a branch (read `x` only while `flag` is true) would otherwise keep waking on `x` after the
 branch turns off. Pinned by `a_branch_that_stops_reading_a_state_unsubscribes_from_it`.
 
-**Known costs.** One re-run of the closure per notification batch rather than per state read — fine
+**Known costs.** One run of the closure per notification batch (two when the read set changed)
+rather than one per state read — fine
 for the intended "watch a threshold" usage, wrong for a closure that is expensive per state change
 (compose the work out of it, or debounce at the collector). And a closure that writes a state it
 reads is a feedback loop with no natural stop; the caller owns that.

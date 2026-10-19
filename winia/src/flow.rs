@@ -84,6 +84,11 @@ where
     }
 }
 
+/// How many times one poll may recompute while it is learning the closure's read set. A closure
+/// whose reads grow every pass would otherwise spin here; four covers first-poll and branch-change
+/// cases with room to spare.
+const MAX_TRACKING_PASSES: usize = 4;
+
 impl<T: Clone + PartialEq, F: Fn() -> T> futures_util::Stream for SnapshotFlow<T, F> {
     type Item = T;
 
@@ -92,18 +97,39 @@ impl<T: Clone + PartialEq, F: Fn() -> T> futures_util::Stream for SnapshotFlow<T
         // Waker BEFORE the run: a change that lands while compute() executes must not be lost.
         *this.tracker.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(cx.waker().clone());
 
-        let mut frame = begin_tracking_frame();
-        let value = (this.compute)();
-        let deps = take_deps();
-        frame.commit();
+        // A value is only trustworthy when every state it was computed from was ALREADY subscribed:
+        // then a write that lands after the read still reaches the tracker and this poll is
+        // repeated. A first run (or one that crossed a branch) reads states the tracker is not
+        // listening to yet, and a write between that read and the subscription would be delivered to
+        // nobody — the stream would park on a stale value. Reconciling and running again closes that
+        // window; in the steady state the first run is covered and the loop body runs once.
+        let mut value = None;
+        for _ in 0..MAX_TRACKING_PASSES {
+            let mut frame = begin_tracking_frame();
+            let computed = (this.compute)();
+            let deps = take_deps();
+            frame.commit();
 
-        let mut signals: Vec<Arc<StateSignal>> = Vec::with_capacity(deps.len());
-        for (signal, _slot_key) in deps {
-            if !signals.iter().any(|s| s.id() == signal.id()) {
-                signals.push(signal);
+            let mut signals: Vec<Arc<StateSignal>> = Vec::with_capacity(deps.len());
+            for (signal, _slot_key) in deps {
+                if !signals.iter().any(|s| s.id() == signal.id()) {
+                    signals.push(signal);
+                }
+            }
+            let covered = signals
+                .iter()
+                .all(|signal| this.subscribed.iter().any(|s| s.id() == signal.id()));
+
+            value = Some(computed);
+            // Always reconcile: a run that stopped reading a state has to drop it, or the tracker
+            // keeps waking on a state the closure no longer looks at. Only the VALUE is conditional
+            // on the run having read nothing new.
+            this.resubscribe(signals);
+            if covered {
+                break;
             }
         }
-        this.resubscribe(signals);
+        let value = value.expect("the loop runs at least once");
 
         if this.last.as_ref() != Some(&value) {
             this.last = Some(value.clone());
@@ -234,5 +260,38 @@ mod tests {
             "x is no longer read, so its write must not wake the collector"
         );
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending);
+    }
+
+    /// A write that lands INSIDE the computation is not lost.
+    ///
+    /// The closure reads the state and then writes it - the interleaving the subscription used to
+    /// miss: the write happens after the read and before the tracker is listening to that state.
+    /// Without the covered-run loop the stream emits the pre-write value and then parks with no wake.
+    #[test]
+    fn a_write_during_the_computation_is_not_lost() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let counter = Arc::new(CountingWaker(AtomicUsize::new(0)));
+        let w = waker(counter.clone());
+        let mut cx = Context::from_waker(&w);
+
+        let state = State::new(0i32);
+        let s = state.clone();
+        let once = Arc::new(AtomicBool::new(true));
+        let mut flow = snapshot_flow(move || {
+            let value = s.get();
+            if once.swap(false, Ordering::SeqCst) {
+                // After this run's read, before the subscription: exactly the window.
+                s.set(1);
+            }
+            value
+        });
+
+        assert_eq!(
+            poll_once(&mut flow, &mut cx),
+            Poll::Ready(Some(1)),
+            "the emitted value must come from a run whose reads were already subscribed"
+        );
+        assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending, "and then it settles");
     }
 }
