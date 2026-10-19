@@ -445,6 +445,27 @@ pub mod persist {
             Self { dir: dir.into() }
         }
 
+        /// The platform's per-user data directory for `app`.
+        ///
+        /// `%LOCALAPPDATA%\<app>` on Windows, `$HOME/Library/Application Support/<app>` on macOS,
+        /// `$XDG_DATA_HOME/<app>` or `$HOME/.local/share/<app>` elsewhere. The directory is NOT
+        /// created here and nothing is read or written until a window closes.
+        ///
+        /// Returns `None` when the environment names no data directory, and for a name that is not a
+        /// plain directory component (empty, a separator, `.`/`..`): a value that escaped the app's
+        /// own directory would write outside it, which is not this type's decision to make. There is
+        /// deliberately no temp-directory fallback: persisting into a directory that the OS clears is
+        /// worse than not persisting, because it looks like it worked.
+        pub fn for_app(app: &str) -> Option<Self> {
+            let app = valid_app_name(app)?;
+            Some(Self::open(data_root()?.join(app)))
+        }
+
+        /// Where snapshots for `app` would go, without creating or touching anything.
+        pub fn for_app_path(app: &str) -> Option<PathBuf> {
+            Self::for_app(app).map(|store| store.dir)
+        }
+
         fn path_for(&self, key: u64) -> PathBuf {
             self.dir.join(format!("window-{key:016x}.json"))
         }
@@ -522,6 +543,54 @@ pub mod persist {
         pub fn forget(&self, key: u64) {
             let _ = std::fs::remove_file(self.path_for(key));
         }
+    }
+
+    /// A directory component that cannot escape its parent.
+    fn valid_app_name(app: &str) -> Option<&str> {
+        let trimmed = app.trim();
+        if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+            return None;
+        }
+        if trimmed.contains(['/', '\\', '\0']) || trimmed.contains("..") {
+            return None;
+        }
+        // Windows reserves these even as a plain component.
+        const RESERVED: [&str; 6] = ["con", "prn", "aux", "nul", "com1", "lpt1"];
+        let lower = trimmed.to_ascii_lowercase();
+        if RESERVED.contains(&lower.as_str()) {
+            return None;
+        }
+        Some(trimmed)
+    }
+
+    /// The platform root that per-application directories live in.
+    fn data_root() -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
+                return Some(PathBuf::from(dir));
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(home) = std::env::var_os("HOME") {
+                return Some(PathBuf::from(home).join("Library").join("Application Support"));
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
+                let dir = PathBuf::from(dir);
+                // The spec says relative values are invalid and must be ignored.
+                if dir.is_absolute() {
+                    return Some(dir);
+                }
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return Some(PathBuf::from(home).join(".local").join("share"));
+            }
+        }
+        None
     }
 
     fn encode(values: &HashMap<String, SavedValue>) -> String {
@@ -775,6 +844,36 @@ pub mod persist {
             assert_eq!(loaded.get("b"), Some(&SavedValue::I64(2)));
             assert!(!loaded.contains_key("a"));
             let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// An application name is one directory component, or it is refused.
+        #[test]
+        fn an_app_name_cannot_escape_its_directory() {
+            assert_eq!(valid_app_name("my-app"), Some("my-app"));
+            assert_eq!(valid_app_name("  spaced  "), Some("spaced"));
+            for bad in ["", "   ", ".", "..", "a/b", "a\\b", "../evil", "x..y", "nul"] {
+                assert_eq!(valid_app_name(bad), None, "{bad:?} must be refused");
+            }
+        }
+
+        /// The resolved directory sits under the platform root and under the app name.
+        #[test]
+        fn for_app_puts_the_app_under_the_platform_root() {
+            let Some(path) = PersistStore::for_app_path("winia-demo") else {
+                // No data directory in this environment: nothing to assert, and nothing to create.
+                return;
+            };
+            assert!(path.ends_with("winia-demo"), "{}", path.display());
+            if let Some(root) = data_root() {
+                assert!(path.starts_with(&root), "{}", path.display());
+            }
+            assert!(!path.exists(), "resolving a path must not create it");
+        }
+
+        #[test]
+        fn for_app_refuses_a_bad_name_without_touching_the_filesystem() {
+            assert!(PersistStore::for_app("../escape").is_none());
+            assert!(PersistStore::for_app("").is_none());
         }
 
         /// The configured store is optional: no store means no disk access at all.

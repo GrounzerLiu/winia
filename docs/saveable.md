@@ -49,10 +49,19 @@ usual "close" for `if show { Window::new(..) }`). App exit is not covered.
 ## Persistence (opt-in)
 
 ```rust
-winia::runtime::saveable::persist::set_store(Some(
-    winia::runtime::saveable::persist::PersistStore::open(data_dir.join("myapp")),
-));
+use winia::runtime::saveable::persist::PersistStore;
+
+// %LOCALAPPDATA%\myapp on Windows, $HOME/Library/Application Support/myapp on macOS,
+// $XDG_DATA_HOME/myapp (or ~/.local/share/myapp) elsewhere. None when the environment
+// names no data directory — and no temp-dir fallback, because that would look like it worked.
+if let Some(store) = PersistStore::for_app("myapp") {
+    winia::runtime::saveable::persist::set_store(Some(store));
+}
 ```
+
+Files are `window-<key>.json` inside that one directory, so the directory IS the namespace: give
+each application its own. `PersistStore::open(path)` takes an explicit directory when the app
+manages its own locations.
 
 With a store configured, snapshots are written on both close paths and read when a window is
 created, so state survives a process restart. Without one, everything stays in memory (the default,
