@@ -3422,12 +3422,15 @@ pub(crate) mod tests {
             spec: InfiniteRepeatableSpec::restart(Duration::from_millis(50)),
             start: Instant::now(),
         };
-        // 跑 6 个周期（每个 50ms，用 10ms sleep 推进）
+        // 6 cycles of 50 ms. Sampled at 1 ms, not 10 ms: the triangle hits its peak only inside a
+        // ~2.5 ms window per half-cycle, so 10 ms sampling misses it depending on machine load and the
+        // assertion below flaked once in a full run (the value seen depends on when the scheduler runs
+        // this thread). Same wall time, deterministic phase coverage.
         let mut max_seen = 0.0f32;
         let mut min_seen = 10.0f32;
-        for _ in 0..30 {
+        for _ in 0..300 {
             inf.update();
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(1));
             let v = state.get();
             max_seen = max_seen.max(v);
             min_seen = min_seen.min(v);
