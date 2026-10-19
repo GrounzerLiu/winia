@@ -133,6 +133,13 @@ closure writes the state it just read.
 depend on a branch (read `x` only while `flag` is true) would otherwise keep waking on `x` after the
 branch turns off. Pinned by `a_branch_that_stops_reading_a_state_unsubscribes_from_it`.
 
+**Derive a predicate, not a flag.** `remember_derived_state` pays for itself when the closure reads
+a CONTINUOUS state and answers a question with two or three answers — `offset != 0`,
+`fraction >= 1.0`, `offset < limit`. Deriving a predicate that already reads a `State<bool>`
+(`LazyListState::is_scrolling`, `NavigationRailState::is_expanded`) buys nothing: that state is
+discrete already, so the reader recomposes on the flip anyway, and the derive adds a recompute per
+write on top.
+
 **Known costs.** One run of the closure per notification batch (two when a state is read for the
 first time, and up to four for a closure whose read set never settles) rather than one per state read
 — fine

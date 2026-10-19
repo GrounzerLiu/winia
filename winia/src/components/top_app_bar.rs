@@ -175,6 +175,20 @@ impl TopAppBarScrollBehavior {
     pub fn collapse_fraction(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(scroll) => { let r = self.collapse_range(); if r <= 0.0 { 0.0 } else { (scroll.offset.get() / r).clamp(0.0, 1.0) } }, TopAppBarBehaviorKind::Nested(state, _) => state.collapsed_fraction() } }
     pub fn current_height(&self) -> f32 { match &self.kind { TopAppBarBehaviorKind::Legacy(_) => self.expanded_height - self.collapse_range() * self.collapse_fraction(), TopAppBarBehaviorKind::Nested(state, _) => state.current_height(self.expanded_height) } }
     pub fn is_collapsed(&self) -> bool { self.collapse_fraction() >= 1.0 }
+
+    /// [`is_collapsed`](Self::is_collapsed) as a `State` that notifies only on the transition.
+    ///
+    /// The predicate reads the continuous collapse fraction, so calling it during composition makes
+    /// the caller recompose on every scroll pixel to be told "not yet" again. The derived handle
+    /// recomposes it when the bar reaches the collapsed end and when it leaves it.
+    #[crate::composable]
+    pub fn remember_is_collapsed(
+        &self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+    ) -> crate::runtime::state::State<bool> {
+        let source = self.clone();
+        crate::flow::remember_derived_state(ctx, move || source.is_collapsed())
+    }
     pub fn state(&self) -> Option<TopAppBarState> { match &self.kind { TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()), _ => None } }
     pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::new(state.clone(), *mode)), _ => None } }
     pub fn nested_scroll_connection_with_scroll(&self, scroll: ScrollState) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::with_scroll(state.clone(), *mode, scroll)), _ => None } }
@@ -585,5 +599,29 @@ mod tests {
         scroll.offset.set(0.0);
         connection.on_post_scroll(ScrollDelta::ZERO, ScrollDelta::ZERO, NestedScrollSource::Drag);
         assert_eq!(state.content_offset.get(), 0.0);
+    }
+
+    /// The derived collapsed flag flips at the end of the range, and only there.
+    ///
+    /// A predicate over the continuous fraction: the bar is "collapsed" at exactly one end of the
+    /// range, so reading the fraction during composition to answer it would recompose per pixel.
+    #[test]
+    fn the_derived_collapsed_flag_flips_at_the_end_of_the_range() {
+        let scroll = ScrollState::new();
+        let behavior = TopAppBarScrollBehavior::new(scroll.clone(), TOP_APP_BAR_LARGE_HEIGHT);
+        let mut composer = Composer::new();
+        let slot: std::sync::Arc<std::sync::Mutex<Option<crate::runtime::state::State<bool>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let out = slot.clone();
+        composer.compose(move |ctx| {
+            *out.lock().unwrap() = Some(behavior.remember_is_collapsed(ctx));
+        });
+        let flag = slot.lock().unwrap().clone().unwrap();
+
+        assert!(!flag.peek(), "an unscrolled bar is expanded");
+        scroll.offset.set(44.0);
+        assert!(!flag.peek(), "half way through the range is not collapsed");
+        scroll.offset.set(TOP_APP_BAR_LARGE_HEIGHT - TOP_APP_BAR_HEIGHT);
+        assert!(flag.peek(), "the end of the range is");
     }
 }
