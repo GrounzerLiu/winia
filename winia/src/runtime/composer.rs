@@ -530,6 +530,20 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember_handle(slot_key, init)
     }
 
+    /// Queue `effect` to run once the composition being built has committed.
+    ///
+    /// This is Compose's `SideEffect`: it runs at the end of this `compose()`, after the slot tree
+    /// is materialized and after the dependency frame closed. Two consequences: it sees the tree
+    /// this frame actually built (not a half-built one), and a `State` it writes is scheduled for
+    /// the next frame rather than swallowed by the pass that is ending.
+    ///
+    /// No cleanup and no rollback — a composition that panics before the drain drops the callback
+    /// without running it. Use it to publish to something outside the composition (a platform
+    /// window, a store, an analytics sink), not to mutate composition state.
+    pub fn side_effect(&mut self, effect: impl FnOnce() + Send + 'static) {
+        self.composer.post_compose.push(Box::new(effect));
+    }
+
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
     pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
         self.composer.slot_table.remember(key, || State::new(init()))
@@ -2534,6 +2548,11 @@ pub struct Composer {
     /// 顶层弹出层（Popup/Dialog/DropdownMenu——组合期注册，compose 后取走；
     /// 内容为独立组合单元——独立 Composer 物化/布局/渲染，不参与主树布局）
     pub(crate) overlays: Vec<crate::overlay::OverlayDesc>,
+    /// Callbacks queued by `ComposeCtx::side_effect`, run once at the END of a successful
+    /// `compose()` — after the slot tree is materialized and after the dependency frame closed.
+    /// Compose's `SideEffect`: publishing to the world outside the composition, with no cleanup
+    /// and no rollback. A pass that panics before the drain drops them unrun.
+    post_compose: Vec<Box<dyn FnOnce() + Send>>,
     /// 本帧组合期各 overlay 的 active 状态（Popup/Dialog build 总执行时记录——
     /// Skip 帧不记录 → sync 保留上帧；主动关闭 visible=false → 记录 false →
     /// sync 删除）。区分"注册方 Skip"（保留）与"主动关闭"（删除）——
@@ -2718,6 +2737,7 @@ impl Composer {
             node_stack: Vec::new(),
             group_skip_stack: Vec::new(),
             overlays: Vec::new(),
+            post_compose: Vec::new(),
             overlay_active: HashMap::new(),
             slot_deps: HashMap::new(),
             compose_slot_reads: crate::layout::node::SlotKeyMap::default(),
@@ -3401,6 +3421,9 @@ impl Composer {
         self.slot_table.frame_no = self.compose_count;
         self.slot_table.reset();
         self.overlay_active.clear(); // 每帧组合期重记录（Skip 帧不记录）
+        // A pass that panicked before its drain leaves its callbacks behind; they belong to a
+        // composition that never committed, so they must not run in this one.
+        self.post_compose.clear();
         self.current_group_key = 0;
         self.lifecycle.reset_for_compose();
         self.path_counters.clear();
@@ -3594,6 +3617,14 @@ impl Composer {
         pending_batch.commit();
         dependency_transaction.commit();
         compose_runtime_transaction.commit();
+        // The composition has committed: the slot tree is materialized, the read graph is
+        // reconciled and every transaction is closed, so user callbacks that publish to the outside
+        // world can run. Deliberately LAST — a `State` written here notifies with the dependency
+        // frame already closed, which is what makes it a write for the NEXT frame instead of one
+        // this pass would have to account for.
+        for effect in std::mem::take(&mut self.post_compose) {
+            effect();
+        }
     }
 
     /// 返回 LayoutNode 树的根节点引用

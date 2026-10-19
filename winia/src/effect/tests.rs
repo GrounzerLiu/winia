@@ -465,3 +465,55 @@ fn a_scope_is_cancelled_by_its_composition_point_not_by_refcount() {
         "the scope must cancel with its composition point, even while a clone is still alive"
     );
 }
+
+// ── side_effect: after the composition commits ──
+
+/// A side effect is deferred past the rest of the composition.
+///
+/// It is registered FIRST here and still runs LAST, which is the whole contract: the callback runs
+/// at the end of the compose pass, after the tree is materialized, not at its call position.
+#[test]
+fn a_side_effect_runs_after_the_whole_composition_is_built() {
+    use std::sync::{Arc as StdArc, Mutex as StdMutex};
+    let log: StdArc<StdMutex<Vec<&'static str>>> = StdArc::new(StdMutex::new(Vec::new()));
+    let mut composer = crate::runtime::composer::Composer::new();
+
+    let l1 = log.clone();
+    let l2 = log.clone();
+    composer.compose(move |ctx: &mut ComposeCtx| {
+        let l = l1.clone();
+        side_effect(ctx, move || l.lock().unwrap().push("side effect"));
+        DisposableEffect::new(1u32).build(ctx, move |_| {
+            l2.lock().unwrap().push("setup");
+            Box::new(|| {})
+        });
+    });
+    composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["setup", "side effect"],
+        "the side effect is deferred past the rest of the composition"
+    );
+}
+
+/// It runs once per composition, and not at all on a pass that does not happen.
+#[test]
+fn a_side_effect_does_not_run_when_the_composition_does_not() {
+    use std::sync::{Arc as StdArc, Mutex as StdMutex};
+    let runs: StdArc<StdMutex<usize>> = StdArc::new(StdMutex::new(0));
+    let mut composer = crate::runtime::composer::Composer::new();
+
+    let r = runs.clone();
+    assert!(
+        composer.recompose(move |ctx: &mut ComposeCtx| {
+            side_effect(ctx, move || *r.lock().unwrap() += 1);
+        }),
+        "a fresh composer has work to do"
+    );
+    assert_eq!(*runs.lock().unwrap(), 1, "one composition, one run");
+
+    // Nothing is pending: `recompose` short-circuits and the content never runs.
+    assert!(!composer.recompose(|_ctx: &mut ComposeCtx| {}));
+    assert_eq!(*runs.lock().unwrap(), 1, "an idle frame must not re-run the side effect");
+}

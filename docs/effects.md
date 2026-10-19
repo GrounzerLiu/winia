@@ -100,6 +100,24 @@ DisposableEffect::new(key).build(ctx, |k| {
 - Setup and cleanup are the caller's code and are never invoked while a framework lock is held —
   a panic in them cannot poison the effect, and re-entering the same state cannot deadlock.
 
+### `side_effect(ctx, f)`
+
+Compose's `SideEffect`: the callback runs **once, at the end of the compose pass that registered
+it** — after the slot tree is materialized and after the dependency frame closed.
+
+```rust
+// The window is not part of the composition: push the value out, don't store it in.
+side_effect(ctx, move || window.set_title(title.clone()));
+```
+
+That timing is the whole point. It sees the tree this frame actually built rather than a half-built
+one, and a `State` it writes notifies with the dependency frame already closed, so the write is
+scheduled for the next frame instead of being attributed to the pass that is ending.
+
+No cleanup and no rollback: a composition that is skipped does not re-run it, and a pass that panics
+before the drain drops it unrun. That makes it right for idempotent publishing to something outside
+the composition, and wrong for anything that needs a teardown — use `DisposableEffect` for that.
+
 ### `remember_updated_state(ctx, value)`
 
 A `State` that always holds the value from the most recent composition:
@@ -143,9 +161,11 @@ tick it, so use tokio timers for time-driven work.
 
 ## 4. What is NOT guaranteed
 
-1. **Post-apply timing.** Compose runs effects after the composition commits; these run inside the
-   compose pass. Moving them needs a commit hook the composer does not have. Treat an effect body
-   as "runs somewhere inside the frame".
+1. **Post-apply timing.** Compose runs its effects after the composition commits; `LaunchedEffect`,
+   `DisposableEffect` and `observe_watch` here run inside the compose pass instead, because moving
+   them needs a commit hook the composer does not have. `side_effect` is the exception — it is
+   queued and drained at the end of the pass — so reach for it when the work has to see the finished
+   tree. Treat a `LaunchedEffect`/`DisposableEffect` body as "runs somewhere inside the frame".
 2. **Cleanup order is not defined.** Callbacks are drained into one list per removed subtree: a
    slot's own callbacks come from a `HashMap` (arbitrary order), and the slots themselves are
    visited parent first. Compose runs `onForgotten` in reverse composition order; this does not.

@@ -1,8 +1,28 @@
-//! Cleanup registration for component authors: `on_forget` and `remember_updated_state`.
+//! Hooks for component authors: `side_effect`, `on_forget` and `remember_updated_state`.
 
 use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::runtime::state::State;
+
+/// Publish something to the world outside the composition, once this frame has committed.
+///
+/// Compose's `SideEffect`. The callback runs at the end of the compose pass that called it — after
+/// the slot tree is materialized and after the dependency frame closed — so it sees the tree this
+/// frame actually built, and a `State` it writes is scheduled for the NEXT frame instead of being
+/// attributed to the pass that is ending.
+///
+/// ```ignore
+/// // The window is not part of the composition: push the value out, don't store it in.
+/// side_effect(ctx, move || window.set_title(title.clone()));
+/// ```
+///
+/// Runs once per composition that contains the call, with **no cleanup**: a composition that is
+/// skipped does not re-run it, and a pass that panics before the drain drops it unrun. That is what
+/// makes it safe for idempotent publishing and wrong for anything that needs a teardown — use
+/// `DisposableEffect` for that.
+pub fn side_effect(ctx: &mut ComposeCtx, effect: impl FnOnce() + Send + 'static) {
+    ctx.side_effect(effect);
+}
 
 /// Follow the latest value of `value` across recompositions.
 ///
