@@ -518,6 +518,18 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.prev_sibling_slot_key()
     }
 
+    /// Remember a plain handle (no `State` wrapper): the slot stores `T` itself.
+    ///
+    /// `remember` always allocates a `State<T>` — a `StateInner` plus a `StateSignal` — even when
+    /// the caller only wants somewhere to keep a handle, which for an effect is every instance.
+    /// This is the same storage the typed helpers below use; it is crate-private because exposing
+    /// it would hand callers a slot they can never invalidate, which is a decision the framework
+    /// has not made yet (`docs/state-handles.md` §7.5).
+    pub(crate) fn remember_handle<T: Clone + 'static>(&mut self, init: impl FnOnce() -> T) -> T {
+        let slot_key = self.next_remember_key();
+        self.composer.slot_table.remember_handle(slot_key, init)
+    }
+
     /// 使用固定 key 记住一个状态（不受 remember_counter 影响，适合跨分支持久化的值）
     pub fn remember_at_key<T: Clone + 'static>(&mut self, key: u64, init: impl FnOnce() -> T) -> State<T> {
         self.composer.slot_table.remember(key, || State::new(init()))

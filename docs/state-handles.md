@@ -302,7 +302,11 @@ Still open:
 - Decide whether `ComposeCtx` exposes a public `remember_handle`, which would let
   the handle-shaped sites in §7.4 drop their `.get()`. Not urgent — the layer is
   inert and costs one `StateInner` per instance — but it is the only reason those
-  spellings are unavoidable.
+  spellings are unavoidable. A crate-private `ComposeCtx::remember_handle` exists
+  now (`composer.rs`) and the effect subsystem stores its bookkeeping with it: an
+  effect's `CoroutineScope` and its key/task cell hold no value anything can write,
+  so the `State` wrapper was two allocations and a lock per instance that no reader
+  could ever wake. Making it public is still the open decision.
 - Reconsider what step 3 called "remove the `State` alias". There is no alias:
   `State<T>` (`state.rs:687`) and `Reactive<T>` (`state.rs:457`) are two
   newtypes over the same `RawState<T>`, and `ctx.remember` hands out `State<T>`.

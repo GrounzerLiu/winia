@@ -44,23 +44,6 @@ use tokio::task::JoinHandle;
 // remember_coroutine_scope
 // ═══════════════════════════════════════════════════════════
 
-/// Attach a cleanup to the composition point being built: it runs when that slot is dropped.
-///
-/// This used to materialize an implicit LEAF NODE and hang the callback on its `on_remove`, because
-/// the slot table had no other place to put one. The node was a real child of the enclosing
-/// container, which cost more than a wasted allocation: an effect inside `Column(spacing = 10)`
-/// pushed its next sibling down by one spacing slot (measured: y 29 -> 39), so a `LaunchedEffect`
-/// between two rows opened a gap that nothing in the layout asked for. `remember_on_forget` keeps
-/// the callback in the slot itself — the same place Compose keeps a `RememberObserver` — and
-/// materializes nothing.
-///
-/// Still `#[composable]`: its scope slot is the thing that dies with the call site, so a branch
-/// that stops composing takes the callback with it.
-#[composable]
-fn attach_cleanup(ctx: &mut ComposeCtx, cleanup: impl FnOnce() + Send + 'static) {
-    on_forget(ctx, cleanup);
-}
-
 /// Register `cleanup` for the composition point being built here: it runs when that point is
 /// removed, and never on a plain recomposition.
 ///
@@ -104,6 +87,15 @@ impl Clone for CoroutineScope {
 }
 
 impl CoroutineScope {
+    /// A scope bound to the tokio runtime the composition is running on.
+    fn from_runtime() -> Self {
+        let rt = Handle::try_current().expect(
+            "remember_coroutine_scope requires an active tokio runtime. \
+             `run_app` creates one internally; tests driving `Composer` directly must enter a runtime first."
+        );
+        CoroutineScope { state: Arc::new(ScopeState { handles: Mutex::new(Vec::new()) }), rt }
+    }
+
     /// 启动一个协程。当此 composable 离开组合树时，任务会被自动 abort。
     pub fn spawn(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
         let handle = self.rt.spawn(fut);
@@ -119,15 +111,10 @@ impl CoroutineScope {
 /// #[composable]：内部 remember 从调用点语句取稳定 base
 #[composable]
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
-    // `.peek()`: the slot holds a handle, and nothing ever writes it. A tracked read would only
-    // register a dependency edge that can never fire (AGENTS.md, "remember and State handles").
-    ctx.remember(|| {
-        let rt = Handle::try_current().expect(
-            "remember_coroutine_scope requires an active tokio runtime. \
-             `run_app` creates one internally; tests driving `Composer` directly must enter a runtime first."
-        );
-        CoroutineScope { state: Arc::new(ScopeState { handles: Mutex::new(Vec::new()) }), rt }
-    }).peek()
+    // `remember_handle`: the slot holds the scope itself, not a `State` wrapping it. There is
+    // nothing to invalidate here, and a `State` would cost a `StateInner` plus a `StateSignal`
+    // per effect instance for a value that is never written.
+    ctx.remember_handle(CoroutineScope::from_runtime)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -160,14 +147,17 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
         ctx: &mut ComposeCtx,
         block: impl FnOnce(CoroutineScope) -> F + Send + 'static,
     ) {
-        let scope = remember_coroutine_scope(ctx);
+        // Inlined instead of calling `remember_coroutine_scope`: that is a `#[composable]`
+        // function, so it would add a scope slot per effect per frame purely to get a remember key
+        // this `build` already has.
+        let scope: CoroutineScope = ctx.remember_handle(CoroutineScope::from_runtime);
 
-        let state: crate::runtime::state::State<Arc<Mutex<LaunchedEffectState<T>>>> =
-            ctx.remember(|| Arc::new(Mutex::new(LaunchedEffectState { prev_key: None, task: None })));
+        // `remember_handle`, not `remember`: nothing ever writes this slot, so the `State` wrapper
+        // would be a `StateInner` + `StateSignal` per effect instance with no possible reader.
+        let state: Arc<Mutex<LaunchedEffectState<T>>> =
+            ctx.remember_handle(|| Arc::new(Mutex::new(LaunchedEffectState { prev_key: None, task: None })));
 
-        // `.peek()`: this slot holds the effect's bookkeeping, never a value the framework writes,
-        // so a tracked read would only add a dependency edge that can never fire.
-        let state_clone = Arc::clone(&state.peek());
+        let state_clone = Arc::clone(&state);
         let key_changed = {
             let s = state_clone.lock().unwrap();
             s.prev_key.as_ref() != Some(&self.key)
@@ -200,19 +190,21 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
             let mut s = state_clone.lock().unwrap();
             s.task = Some(join_handle);
             s.prev_key = Some(self.key);
-        }
 
-        // on_remove 时取消
-        let state_for_remove = Arc::clone(&state_clone);
-        attach_cleanup(ctx, move || {
-            let taken = {
-                let mut s = state_for_remove.lock().unwrap();
-                s.task.take()
-            };
-            if let Some(task) = taken {
-                task.abort();
-            }
-        });
+            // Registered once per (re)start, not once per frame: `remember_on_forget` keeps the
+            // callback in this slot's map, where it survives recomposition until the slot is
+            // dropped, and the closure below only reads the stable `Arc` it captured.
+            let state_for_remove = Arc::clone(&state_clone);
+            ctx.remember_on_forget(move || {
+                let taken = {
+                    let mut s = state_for_remove.lock().unwrap();
+                    s.task.take()
+                };
+                if let Some(task) = taken {
+                    task.abort();
+                }
+            });
+        }
     }
 }
 
@@ -238,13 +230,13 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     pub fn build<F: FnOnce() + Send + 'static>(
         self,
         ctx: &mut ComposeCtx,
-        effect: impl Fn(T) -> F + Send + Sync + 'static,
+        effect: impl Fn(T) -> F + Send + 'static,
     ) {
-        let state: crate::runtime::state::State<Arc<Mutex<DisposableState<T>>>> =
-            ctx.remember(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
+        // `remember_handle` for the same reason as `LaunchedEffect`: bookkeeping, never written.
+        let state: Arc<Mutex<DisposableState<T>>> =
+            ctx.remember_handle(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
 
-        // `.peek()`: same reason as LaunchedEffect above — the slot is bookkeeping, not state.
-        let state_clone = Arc::clone(&state.peek());
+        let state_clone = Arc::clone(&state);
         let key_changed = {
             let s = state_clone.lock().unwrap();
             s.prev_key.as_ref() != Some(&self.key)
@@ -270,21 +262,22 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
             let mut s = state_clone.lock().unwrap();
             s.cleanup = Some(next);
             s.prev_key = Some(self.key);
-        }
 
-        // on_remove 时执行最终清理
-        let state_for_remove = Arc::clone(&state_clone);
-        attach_cleanup(ctx, move || {
-            let taken = {
-                let mut s = state_for_remove.lock().unwrap();
-                s.cleanup.take()
-            };
-            // Outside the lock, same reason as above: this runs during composition teardown and a
-            // panic here must not take the whole effect mechanism down with it.
-            if let Some(cleanup) = taken {
-                cleanup();
-            }
-        });
+            // Registered once per (re)start: the callback lives in this slot's map until the slot
+            // is dropped, and it only reads the stable `Arc` captured above.
+            let state_for_remove = Arc::clone(&state_clone);
+            ctx.remember_on_forget(move || {
+                let taken = {
+                    let mut s = state_for_remove.lock().unwrap();
+                    s.cleanup.take()
+                };
+                // Outside the lock, same reason as above: this runs during composition teardown and
+                // a panic here must not take the whole effect mechanism down with it.
+                if let Some(cleanup) = taken {
+                    cleanup();
+                }
+            });
+        }
     }
 }
 
@@ -321,10 +314,9 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
     // wrapper it replaced only added a layer: the outer handle was written once at init and read once
     // per frame, so it could never invalidate anything the inner one did not.
     let state: State<T> = ctx.remember(|| initial.clone());
-    let slot: State<Arc<Mutex<WatchSubscription<T>>>> = ctx.remember(|| {
-        Arc::new(Mutex::new(WatchSubscription { rx: None, task: None }))
-    });
-    let slot_arc = Arc::clone(&slot.peek());
+    let slot: Arc<Mutex<WatchSubscription<T>>> =
+        ctx.remember_handle(|| Arc::new(Mutex::new(WatchSubscription { rx: None, task: None })));
+    let slot_arc = Arc::clone(&slot);
 
     // `same_channel` is the receiver's identity test: two clones of one channel answer true, two
     // channels answer false. That is the key this effect restarts on.
@@ -364,25 +356,28 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
             }
             follow_watch(rx, s_state).await;
         });
-        let mut s = slot_arc.lock().unwrap();
-        s.rx = Some(rx_keep);
-        s.task = Some(handle);
-    }
-
-    // Leaving the composition stops the subscription too. The task is spawned on the runtime
-    // directly (`rt.spawn`, not `CoroutineScope::spawn`), so `ScopeState::drop` does not know
-    // about it, and dropping an `AbortHandle` cancels nothing: without this the task outlived the
-    // slot and kept following a channel whose `State` had no readers left.
-    let slot_for_remove = Arc::clone(&slot_arc);
-    attach_cleanup(ctx, move || {
-        let taken = {
-            let mut s = slot_for_remove.lock().unwrap();
-            s.task.take()
-        };
-        if let Some(task) = taken {
-            task.abort();
+        {
+            let mut s = slot_arc.lock().unwrap();
+            s.rx = Some(rx_keep);
+            s.task = Some(handle);
         }
-    });
+
+        // Leaving the composition stops the subscription too. The task is spawned on the runtime
+        // directly (`rt.spawn`, not `CoroutineScope::spawn`), so `ScopeState::drop` does not know
+        // about it, and dropping an `AbortHandle` cancels nothing: without this the task outlived
+        // the slot and kept following a channel whose `State` had no readers left. Registered once
+        // per subscription — the callback lives in this slot's map and only reads the stable `Arc`.
+        let slot_for_remove = Arc::clone(&slot_arc);
+        ctx.remember_on_forget(move || {
+            let taken = {
+                let mut s = slot_for_remove.lock().unwrap();
+                s.task.take()
+            };
+            if let Some(task) = taken {
+                task.abort();
+            }
+        });
+    }
 
     state
 }
@@ -463,7 +458,9 @@ pub fn with_frame_nanos() -> impl std::future::Future<Output = u64> + Send {
     // ⚠ 必须在这里同步执行：放进 async body 会在首次 poll 才运行——若
     // frame_tick 发生在 subscribe 与 poll 之间，会把"下一帧"误当旧帧丢弃
     // → 死等（曾引入此 bug）。
-    let _ = rx.try_recv();
+    // Drain EVERY tick that predates the subscription. One `try_recv` was not enough: with several
+    // frames buffered the future returned the oldest of them instead of the next frame.
+    while rx.try_recv().is_ok() {}
     async move {
         loop {
             match rx.recv().await {
