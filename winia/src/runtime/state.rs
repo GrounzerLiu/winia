@@ -1661,13 +1661,45 @@ mod tests {
         outer.commit();
 
         let ids: Vec<_> = deps.iter().map(|(signal, _)| signal.id()).collect();
-        assert!(
-            ids.contains(&outer_read.signal_id()),
-            "reads outside the inner frame are recorded: {ids:?}"
+        // TWO reads of the outer state, one before the inner frame and one after: the second is what
+        // proves the outer frame was restored, not just that the inner one stopped recording.
+        assert_eq!(
+            ids.iter().filter(|id| **id == outer_read.signal_id()).count(),
+            2,
+            "the outer frame keeps recording after the inner one closes: {ids:?}"
         );
         assert!(
             !ids.contains(&inner_read.signal_id()),
             "a read inside the no-deps frame records nothing: {ids:?}"
+        );
+    }
+
+    /// A side effect's read does not become the outer composer's layout dependency.
+    ///
+    /// The drain runs after the compose transactions close. When that compose was started from a
+    /// layout pass, committing the inner frame restores the host's Layout frame, so without the
+    /// no-deps guard a read in the effect would subscribe the host queue and be filed under a slot
+    /// key that does not belong to it.
+    #[test]
+    fn a_side_effect_read_does_not_become_a_layout_dependency() {
+        let host = ComposerSubscription::new();
+        let state = State::new(1i32);
+        let mut composer = crate::runtime::composer::Composer::new();
+
+        let mut frame = begin_layout_deps_with_queue(Arc::downgrade(&host));
+        composer.compose(|ctx| {
+            let s = state.clone();
+            crate::effect::side_effect(ctx, move || {
+                let _ = s.get();
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        frame.commit();
+
+        state.set(2);
+        assert!(
+            host.drain().is_empty(),
+            "the effect's read must not become a layout dependency of the host"
         );
     }
 }

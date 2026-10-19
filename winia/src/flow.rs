@@ -22,7 +22,11 @@ struct FlowTracker {
 
 impl StateObserver for FlowTracker {
     fn on_change(&self, _id: StateId) {
-        if let Some(waker) = self.waker.lock().take() {
+        // Take the waker OUT before waking: the guard from an `if let` scrutinee lives for the whole
+        // body, so waking inside it would run the waker while the tracker mutex is held (and the
+        // mutex is not reentrant).
+        let waker = self.waker.lock().take();
+        if let Some(waker) = waker {
             waker.wake();
         }
     }

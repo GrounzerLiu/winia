@@ -84,6 +84,14 @@ fn with_clock<R>(window: u64, f: impl FnOnce(&WindowClock) -> R) -> R {
     f(clock)
 }
 
+/// Like [`with_clock`], but does NOT create the entry. Use this on paths that must not resurrect a
+/// clock `forget_window` removed: a re-created entry is never ticked again, and the registry would
+/// grow one dead clock per call.
+fn with_existing_clock<R>(window: u64, f: impl FnOnce(&WindowClock) -> R) -> Option<R> {
+    let mut clocks = WINDOW_CLOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    clocks.get(&window).map(f)
+}
+
 /// The frame clock of one window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameClock {
@@ -92,7 +100,12 @@ pub struct FrameClock {
 
 impl FrameClock {
     /// The clock of the window with this id (the winit window id).
+    ///
+    /// Creates the window's clock on first use: this is the registration point (`forget_window` is
+    /// its teardown), which is why `tick` and [`next_frame`](Self::next_frame) deliberately do not
+    /// create one — a tick for a window that is gone must not resurrect its clock.
     pub fn for_window(window: u64) -> Self {
+        with_clock(window, |_| ());
         Self { window }
     }
 
@@ -104,18 +117,26 @@ impl FrameClock {
     pub(crate) fn tick(&self) {
         // Clone the sender out and send AFTER the registry lock is released: a send wakes
         // waiters, and no waker should run while a registry guard is alive.
-        let sender = with_clock(self.window, |clock| clock.tx.clone());
-        let _ = sender.send(monotonic_nanos());
+        if let Some(sender) = with_existing_clock(self.window, |clock| clock.tx.clone()) {
+            let _ = sender.send(monotonic_nanos());
+        }
     }
 
     /// Wait for the next frame of THIS window.
     ///
-    /// Resolves to 0 when the window's clock is gone (the window closed and forget_window ran): a 0
-    /// timestamp means "no frame will come", the same sentinel the global clock uses for a closed
-    /// channel.
+    /// Resolves to 0 when the window's clock is gone: a 0 timestamp means "no frame will come", the
+    /// same sentinel the global clock uses for a closed channel. That covers both a waiter that was
+    /// already parked when the window closed (its channel closes) and a call made after
+    /// `forget_window` ran — the clock is not resurrected for it, because a re-created entry would
+    /// never be ticked again.
     pub fn next_frame(&self) -> impl Future<Output = u64> + Send {
-        let rx = with_clock(self.window, |clock| subscribe_next(&clock.tx));
-        next_frame_on(rx)
+        let rx = with_existing_clock(self.window, |clock| subscribe_next(&clock.tx));
+        async move {
+            match rx {
+                Some(rx) => next_frame_on(rx).await,
+                None => 0,
+            }
+        }
     }
 }
 
@@ -169,5 +190,30 @@ mod tests {
         );
         frame_tick();
         assert!(matches!(poll_once(&mut fut), Poll::Ready(_)));
+    }
+
+    /// A call made AFTER forget_window resolves to 0 instead of waiting forever.
+    ///
+    /// The entry is gone and next_frame must not silently re-create it: a re-created clock is never
+    /// ticked again, so the waiter would hang and the registry would keep one dead entry per call.
+    #[test]
+    fn next_frame_after_forget_resolves_to_zero() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let clock = FrameClock::for_window(0xD1E);
+            forget_window(0xD1E);
+
+            let value = tokio::time::timeout(std::time::Duration::from_secs(1), clock.next_frame())
+                .await
+                .expect("it must resolve, not park on a clock nobody will tick");
+            assert_eq!(value, 0, "a closed window clock reports 0");
+            assert!(
+                with_existing_clock(0xD1E, |_| ()).is_none(),
+                "the call must not resurrect the entry"
+            );
+        });
     }
 }

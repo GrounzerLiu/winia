@@ -178,6 +178,20 @@ pub fn subcompose_overlay(
     subcompose_sized(constraints, false, content)
 }
 
+/// A subcomposition belongs to the same window as its host: a `ctx.frame_clock()` captured inside
+/// `BoxWithConstraints` / `TabRow` content has to wait on that window's frames, and window 0 never
+/// ticks.
+///
+/// Applied on EVERY branch, not just the fresh one: the cached and remembered composers come back
+/// from earlier layout passes, and the thread-local cache is not scoped to a window, so a composer
+/// built while another window laid out the same node index can be handed to this one.
+fn inherit_window(host: Option<*mut Composer>, composer: &mut Composer) {
+    let Some(host) = host else { return };
+    // SAFETY: LAYOUT_HOST is armed for the duration of `Composer::layout` (see `LayoutHostGuard`),
+    // and this only runs from a measure pass, i.e. within that window.
+    composer.set_window_id(unsafe { (*host).window_id() });
+}
+
 fn subcompose_sized(
     constraints: Constraints,
     sized_by_content: bool,
@@ -195,10 +209,11 @@ fn subcompose_sized(
     // The composition that ran for THIS node last frame, if any: composing the content into its slot
     // table again is what lets a `remember` inside the content survive the frame.
     let remembered = node.and_then(|n| SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&n)));
-    let inner: Box<Composer> = match (cached, remembered) {
+    let mut inner: Box<Composer> = match (cached, remembered) {
         // Same constraints as the parked composition: arrange the EXISTING tree again rather than
         // composing the content a second time this frame.
         (Some(mut composer), _) if composer_ran_under(&composer, constraints) => {
+            inherit_window(host, &mut composer);
             composer.relayout_subcomposition(constraints);
             composer
         }
@@ -206,6 +221,7 @@ fn subcompose_sized(
         // (and the values they remember) carry over.
         (_, Some(composer)) => {
             let mut composer = composer;
+            inherit_window(host, &mut composer);
             composer.prepare_subcomposition_for_recompose();
             composer.compose(content);
             composer.layout(constraints);
@@ -213,14 +229,7 @@ fn subcompose_sized(
         }
         _ => {
             let mut fresh = Box::new(Composer::new());
-            // A subcomposition belongs to the same window as its host: a ctx.frame_clock() captured
-            // inside BoxWithConstraints / TabRow content has to wait on that window's frames, and
-            // window 0 never ticks.
-            if let Some(host) = host {
-                // SAFETY: LAYOUT_HOST is armed for the duration of Composer::layout (see
-                // LayoutHostGuard), and this runs inside a measure pass, i.e. within that window.
-                fresh.set_window_id(unsafe { (*host).window_id() });
-            }
+            inherit_window(host, &mut fresh);
             fresh.compose(content);
             fresh.layout(constraints);
             fresh

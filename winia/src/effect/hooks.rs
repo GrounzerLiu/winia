@@ -8,8 +8,13 @@ use crate::runtime::state::State;
 ///
 /// Compose's `SideEffect`. The callback runs at the end of the compose pass that called it — after
 /// the slot tree is materialized and after the dependency frame closed — so it sees the tree this
-/// frame actually built, and a `State` it writes is scheduled for the NEXT frame instead of being
-/// attributed to the pass that is ending.
+/// pass actually built, and a `State` it writes belongs to the NEXT pass instead of being
+/// attributed to the one that is ending.
+///
+/// "Next pass", not "next frame": `recompose_until_stable` runs that pass before layout, so the
+/// value is on screen in the same frame. The exception is content composed during layout (overlays,
+/// subcompositions), which is re-composed on the next frame instead — there the intermediate value
+/// can be visible for one frame.
 ///
 /// ```ignore
 /// // The window is not part of the composition: push the value out, don't store it in.

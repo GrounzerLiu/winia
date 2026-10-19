@@ -84,10 +84,12 @@ fn side_effect_demo_ui(ctx: &mut ComposeCtx) {
     // Registered here, runs at the end of this composition: after materialization, after the
     // dependency frame closed, after every transaction committed.
     side_effect(ctx, {
-        clone!(count, published, analytics);
+        clone!(count, published, analytics, runs);
         move || {
             let value = count.peek();
-            // Scheduled for the NEXT composition — see the trailing number in the UI.
+            // Lands on the NEXT PASS: this one already read `published`, and the pass the write
+            // schedules is what renders the new number - before layout, so nothing flickers.
+            runs.fetch_add(1, Ordering::SeqCst);
             published.set(value);
             analytics.lock().unwrap().published.push(value);
             println!("[side_effect] published {value}");

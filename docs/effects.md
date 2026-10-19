@@ -116,11 +116,15 @@ to the NEXT PASS instead of the one that is ending.
 
 "Next pass", not "next frame": `recompose_until_stable` keeps composing while anything is pending,
 and it finishes before layout runs, so the value a `side_effect` writes is on screen in the same
-frame — the screen never shows the intermediate value. What the extra pass costs is composition
-time, not a dropped or delayed frame.
+frame. What the extra pass costs is composition time, not a dropped or delayed frame.
+
+The exception is content composed DURING layout — overlays and subcompositions. Their composers are
+re-entered through `take_compose_after_layout()`, not through the pending-state loop, so a
+`side_effect` there lands on the next frame and its intermediate value can be visible for one frame.
 
 No cleanup and no rollback: a composition that is skipped does not re-run it, and a pass that panics
-before the drain drops it unrun. That makes it right for idempotent publishing to something outside
+before the drain drops it unrun. If an effect panics DURING the drain, the effects queued after it in
+the same pass are dropped unrun — the queue was already taken, so the next pass does not retry them. That makes it right for idempotent publishing to something outside
 the composition, and wrong for anything that needs a teardown — use `DisposableEffect` for that.
 
 ### `produce_state(ctx, initial, key, producer)`

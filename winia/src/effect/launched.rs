@@ -64,6 +64,9 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
             if let Some(old) = &previous {
                 old.abort();
             }
+            // The body was handed this scope, so anything it spawned through `scope.spawn` belongs
+            // to the restart too: a Compose coroutine cancels its children with it.
+            scope.abort_spawned();
             // The new body waits for the old one to finish before it runs. Without this the two
             // bodies overlap for as long as the aborted future takes to unwind, which for an effect
             // that mutates shared state is a real interleaving rather than a theoretical one.

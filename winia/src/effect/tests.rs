@@ -632,7 +632,8 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
         });
-        assert!(old_stopped.load(Ordering::SeqCst), "the old body finished its Drop");
+        // `old_stopped` is set by the Drop that released the gate, so asserting it here would be
+        // vacuous; the gate having been released and the replacement running is the real evidence.
         assert!(replacement_ran.load(Ordering::SeqCst), "and then the replacement ran");
     }
     /// A task spawned through the effect body's scope dies with the composition point.
@@ -683,5 +684,55 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
             *log.lock().unwrap(),
             vec!["spawned task dropped"],
             "a task spawned through the effect's scope must die with the composition point"
+        );
+    }
+    /// A key change cancels the tasks the OLD body spawned, not just the body itself.
+    ///
+    /// The body is handed the composition scope, so `scope.spawn` children are part of that body: a
+    /// restart has to take them down with it, the way a Compose coroutine cancels its children.
+    #[test]
+    fn a_key_change_cancels_the_tasks_the_old_body_spawned() {
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
+        struct Marker(StdArc<StdMutex<Vec<&'static str>>>, &'static str);
+        impl Drop for Marker {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push(self.1);
+            }
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = rt.enter();
+        let log: StdArc<StdMutex<Vec<&'static str>>> = StdArc::new(StdMutex::new(Vec::new()));
+        let mut composer = crate::runtime::composer::Composer::new();
+
+        let l = log.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            LaunchedEffect::new(1u32).build(ctx, move |scope| {
+                scope.spawn(async move {
+                    let _guard = Marker(l, "child of key 1");
+                    std::future::pending::<()>().await;
+                });
+                async {}
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..30 { tokio::task::yield_now().await; } });
+        assert!(log.lock().unwrap().is_empty(), "the child task is parked");
+
+        // Same slot, new key: the body restarts, and its children go with it.
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            LaunchedEffect::new(2u32).build(ctx, |_| async {});
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..30 { tokio::task::yield_now().await; } });
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["child of key 1"],
+            "the old body's child must be cancelled by the restart"
         );
     }

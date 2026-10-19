@@ -7,11 +7,14 @@ use std::sync::Mutex;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
-/// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
+/// A coroutine scope bound to a composition point: its tasks are cancelled when the point goes
+/// away.
 ///
-/// 内部用 `Arc<ScopeState>` 管理任务列表。当最后一个 `CoroutineScope` clone
-/// 被 drop 时（即组合点被移除），`ScopeState::drop` abort 所有未完成任务。
-/// 重组时 `remember` 返回同一个 scope，不会触发 drop。
+/// Tasks live in `Arc<ScopeState>`. Cancellation is driven by the composition, not by the
+/// refcount: the owner registers `on_forget` (`hook_scope_teardown`), so the tasks die when the
+/// slot does even if a clone is still alive — which is the point, because a task that captured the
+/// scope keeps the `Arc` alive by itself. `ScopeState::drop` still aborts as a last resort, but it
+/// can no longer be the only mechanism.
 pub struct CoroutineScope {
     state: Arc<ScopeState>,
     /// The runtime every task of this scope runs on. Visible to the sibling effect modules, which
@@ -72,6 +75,14 @@ impl CoroutineScope {
         let mut h = self.state.handles.lock().unwrap();
         h.retain(|jh| !jh.is_finished());
         h.push(handle);
+    }
+
+    /// Abort every task spawned through this scope without dropping the scope itself.
+    ///
+    /// Used on a key change: the body is cancelled and restarted, and the tasks it spawned belong
+    /// to that cancelled body, the way a Compose coroutine's children die with it.
+    pub(super) fn abort_spawned(&self) {
+        self.state.abort_all();
     }
 }
 
