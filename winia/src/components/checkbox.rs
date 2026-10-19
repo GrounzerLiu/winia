@@ -163,6 +163,53 @@ impl CheckboxColors {
     }
 }
 
+
+/// The mutable view a [`CheckboxStyling`] writes into; starts from the theme's derivation.
+pub struct CheckboxStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    pub colors: CheckboxColors,
+}
+
+impl CheckboxStylingScope {
+    pub fn checked_box(&mut self, color: Color) {
+        self.colors.checked_box = color;
+    }
+    pub fn unchecked_box(&mut self, color: Color) {
+        self.colors.unchecked_box = color;
+    }
+    pub fn checked_checkmark(&mut self, color: Color) {
+        self.colors.checked_checkmark = color;
+    }
+    pub fn unchecked_checkmark(&mut self, color: Color) {
+        self.colors.unchecked_checkmark = color;
+    }
+    pub fn disabled_checked_box(&mut self, color: Color) {
+        self.colors.disabled_checked_box = color;
+    }
+    pub fn disabled_unchecked_box(&mut self, color: Color) {
+        self.colors.disabled_unchecked_box = color;
+    }
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: CheckboxColors) {
+        self.colors = colors;
+    }
+}
+
+/// One checkbox styling, registered through [`crate::component_styles::ComponentStyles::with`].
+pub type CheckboxStyling = crate::component_styles::Styling<CheckboxStylingScope>;
+
+/// The checkbox resolution: the theme's derivation, with the styling in scope applied on top.
+pub fn checkbox_colors_with_styles(theme: &crate::theme::ThemeColors) -> CheckboxColors {
+    let mut colors = CheckboxDefaults::checkbox_colors(theme);
+    let styles = crate::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<CheckboxStyling>() {
+        let mut scope = CheckboxStylingScope { theme: theme.clone(), colors };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
+}
+
 /// Checkbox 默认值（对标 material3 `CheckboxDefaults`）
 pub struct CheckboxDefaults;
 
@@ -237,7 +284,7 @@ fn checkbox_impl(
     ctx.changed(&colors);
     let key = ctx.next_key();
     let theme = WiniaTheme::colors();
-    let colors = colors.unwrap_or_else(|| crate::component_styles::checkbox_colors_with_styles(&theme));
+    let colors = colors.unwrap_or_else(|| checkbox_colors_with_styles(&theme));
     let interaction = interaction_source
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let box_color = colors.box_color(enabled, state);
@@ -1315,4 +1362,18 @@ mod tests {
         // Column 应 Enter（content 重跑 → ps 重算 → TriStateCheckbox 变 On）
         let d2 = composer.compose_dirty_count;
         assert!(d2 >= 1, "c3 变化后 Column 应 Enter（dirty 计数 {d2}）");
+    }
+
+    #[test]
+    fn a_checkbox_styling_overrides_only_what_it_sets() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let purple = Color::from_argb(255, 120, 0, 200);
+        let plain = checkbox_colors_with_styles(&theme);
+        let styled = crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(CheckboxStyling::new(move |scope| scope.checked_box(purple))),
+            || checkbox_colors_with_styles(&theme),
+        );
+        assert_eq!(styled.checked_box, purple);
+        assert_eq!(styled.unchecked_box, plain.unchecked_box, "the rest is the theme's");
     }

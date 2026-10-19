@@ -328,6 +328,63 @@ impl ButtonBorder {
 /// Button 默认值（对标 material3 `ButtonDefaults`——M3 small button tokens）
 pub struct ButtonDefaults;
 
+
+/// The mutable view a [`ButtonStyling`] writes into.
+///
+/// It starts from what the button would have used anyway (`colors` is already the variant default for
+/// the current theme), so a styling that sets one field leaves the rest exactly as the roles left them.
+/// `theme` is exposed so a styling can derive from roles instead of hard-coding a colour.
+pub struct ButtonStylingScope {
+    pub theme: crate::theme::ThemeColors,
+    pub colors: ButtonColors,
+}
+
+impl ButtonStylingScope {
+    /// The container colour for the resting, enabled state.
+    pub fn container(&mut self, color: crate::graphics::Color) {
+        self.colors.container = color;
+    }
+
+    /// The label/icon colour for the resting, enabled state.
+    pub fn content(&mut self, color: crate::graphics::Color) {
+        self.colors.content = color;
+    }
+
+    /// The disabled pair, which M3 keeps at 12%/38% of `on_surface` roles.
+    pub fn disabled(&mut self, container: crate::graphics::Color, content: crate::graphics::Color) {
+        self.colors.disabled_container = container;
+        self.colors.disabled_content = content;
+    }
+
+    /// Replace the whole set at once.
+    pub fn colors(&mut self, colors: ButtonColors) {
+        self.colors = colors;
+    }
+}
+
+/// One button styling, registered through [`crate::component_styles::ComponentStyles::with`].
+pub type ButtonStyling = crate::component_styles::Styling<ButtonStylingScope>;
+
+/// What a button should look like: the variant default for `theme`, with the styling in scope applied
+/// on top when there is one.
+///
+/// This is the ONE place the precedence (explicit parameter > styling > theme) is decided, so
+/// `Button::build` must resolve through it - calling `ButtonColors::from_theme` directly would silently
+/// ignore every styling.
+pub fn button_colors_with_styles(
+    theme: &crate::theme::ThemeColors,
+    variant: ButtonStyle,
+) -> ButtonColors {
+    let mut colors = ButtonColors::from_theme(theme, variant);
+    let styles = crate::component_styles::current_component_styles();
+    if let Some(styling) = styles.get::<ButtonStyling>() {
+        let mut scope = ButtonStylingScope { theme: theme.clone(), colors };
+        styling.apply(&mut scope);
+        colors = scope.colors;
+    }
+    colors
+}
+
 impl ButtonDefaults {
     /// 默认形状：胶囊（对标 `ButtonSmallTokens.ContainerShapeRound` = CornerFull）
     pub fn shape() -> Shape {
@@ -633,7 +690,7 @@ impl Button {
         // 默认颜色统一从 ButtonDefaults 取（对标 material3 ButtonDefaults.buttonColors）
         let colors = self
             .colors
-            .unwrap_or_else(|| crate::component_styles::button_colors_with_styles(&theme, self.style));
+            .unwrap_or_else(|| button_colors_with_styles(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self.interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
@@ -1556,5 +1613,85 @@ mod tests {
             Shape::rounded(8.0),
             "and it arrives at Small's PressedContainerShape (CornerSmall = 8)"
         );
+    }
+
+    // ── component stylings ──
+
+    fn green() -> crate::graphics::Color { crate::graphics::Color::from_argb(255, 0, 128, 0) }
+    fn red() -> crate::graphics::Color { crate::graphics::Color::from_argb(255, 200, 0, 0) }
+
+    /// The point of the styling layer: one styling, every call site, nothing to change per button.
+    #[test]
+    fn a_button_styling_reaches_the_derivation_every_button_uses() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let plain = button_colors_with_styles(&theme, ButtonStyle::Filled);
+        assert_eq!(plain.container, theme.primary, "the default still comes from the role colour");
+
+        let styled = crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(ButtonStyling::new(|scope| scope.container(green()))),
+            || button_colors_with_styles(&theme, ButtonStyle::Filled),
+        );
+        assert_eq!(styled.container, green());
+        assert_eq!(styled.content, plain.content, "only what the styling set changed");
+    }
+
+    #[test]
+    fn a_button_styling_can_derive_from_the_theme() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let styled = crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(ButtonStyling::new(|scope| scope.container(scope.theme.tertiary))),
+            || button_colors_with_styles(&theme, ButtonStyle::Filled),
+        );
+        assert_eq!(styled.container, theme.tertiary);
+    }
+
+    #[test]
+    fn the_button_styling_ends_with_its_block() {
+        let theme = crate::theme::ThemeColors::default_light();
+        crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(ButtonStyling::new(|scope| scope.container(green()))),
+            || assert_eq!(button_colors_with_styles(&theme, ButtonStyle::Filled).container, green()),
+        );
+        assert_eq!(
+            button_colors_with_styles(&theme, ButtonStyle::Filled).container,
+            theme.primary,
+            "outside the block the theme derivation is back"
+        );
+    }
+
+    /// With no styling in scope the resolution has to be byte-identical to the old derivation.
+    #[test]
+    fn no_button_styling_means_the_old_derivation() {
+        let theme = crate::theme::ThemeColors::default_light();
+        for variant in [
+            ButtonStyle::Filled,
+            ButtonStyle::Elevated,
+            ButtonStyle::Tonal,
+            ButtonStyle::Outlined,
+            ButtonStyle::Text,
+        ] {
+            let resolved = button_colors_with_styles(&theme, variant);
+            let old = ButtonColors::from_theme(&theme, variant);
+            assert_eq!(resolved.container, old.container, "{variant:?}");
+            assert_eq!(resolved.content, old.content, "{variant:?}");
+            assert_eq!(resolved.disabled_container, old.disabled_container, "{variant:?}");
+            assert_eq!(resolved.disabled_content, old.disabled_content, "{variant:?}");
+        }
+    }
+
+    /// Broader then narrower: the registered styling is one function, and later setters win.
+    #[test]
+    fn a_narrower_button_styling_wins_over_a_broader_one() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let broad = ButtonStyling::new(|scope| scope.container(red()));
+        let narrow = ButtonStyling::new(|scope| scope.container(green()));
+        let styled = crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new().with(broad.then(narrow)),
+            || button_colors_with_styles(&theme, ButtonStyle::Filled),
+        );
+        assert_eq!(styled.container, green());
     }
 }

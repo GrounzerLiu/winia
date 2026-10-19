@@ -321,20 +321,35 @@ palette stays blue". The second is optional per class and provided once for a su
 ```rust
 use winia::prelude::*;
 
-winia::component_styles::with_component_styles(
-    ComponentStyles::new().button(ButtonStyling::new(|scope| {
+with_component_styles(
+    ComponentStyles::new().with(ButtonStyling::new(|scope| {
         scope.container(Color::from_argb(255, 0, 128, 0));
     })),
-    || App::new().build(ctx),
+    || app(ctx),
 );
 ```
 
-**MUST** resolve a component's default appearance through the shared helper the styling layer
-exposes (`component_styles::button_colors_with_styles(theme, variant)` for a button), not by calling
-the theme derivation directly: the helper is the single place where "explicit parameter > styling >
-theme" is decided, and a component that bypasses it silently ignores every styling. The current
-participants are Button and Checkbox; `winia/src/component_styles.rs` documents the contract
-(what a scope exposes, how `then` layers, what `None` means).
+**Where the pieces live.** `winia/src/component_styles.rs` holds the MECHANISM only: the generic
+`Styling<S>` (a function over a scope, composable with `then`), the type-keyed `ComponentStyles`
+registry, and the `CompositionLocal` plus its provider. A component owns its SCOPE and its styling
+alias in its own file:
+
+```rust
+// winia/src/components/button.rs - the colours it sets are defined here, so the scope is here.
+pub struct ButtonStylingScope { pub theme: ThemeColors, pub colors: ButtonColors }
+pub type ButtonStyling = Styling<ButtonStylingScope>;
+pub fn button_colors_with_styles(theme: &ThemeColors, variant: ButtonStyle) -> ButtonColors;
+```
+
+**MUST** keep it that way. A per-component `Option` field on the registry would make the mechanism
+module depend on every component in the crate (the opposite of the direction every component reads),
+and would grow one file by three types per component. The registry is keyed by `TypeId` of the
+styling type instead, so adding a component touches that component's file and nothing else.
+
+**MUST** resolve a component's default appearance through its own helper (`button_colors_with_styles`
+for a button) rather than calling the theme derivation directly: the helper is the single place
+"explicit parameter > styling > theme" is decided, and a component that bypasses it silently ignores
+every styling. The current participants are Button and Checkbox.
 
 **MUST NOT** let a styling replace the theme derivation wholesale: the scope starts from the theme's
 answer, so a styling that sets one field leaves the rest exactly as the role colours left them.

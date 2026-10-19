@@ -101,10 +101,9 @@ pub mod prelude {
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
         Visual, write_batch,
     };
-    pub use crate::component_styles::{
-        with_component_styles, ButtonStyling, ButtonStylingScope, CheckboxStyling,
-        CheckboxStylingScope, ComponentStyles,
-    };
+    pub use crate::component_styles::{with_component_styles, ComponentStyles, Styling};
+    pub use crate::components::button::{ButtonStyling, ButtonStylingScope};
+    pub use crate::components::checkbox::{CheckboxStyling, CheckboxStylingScope};
     pub use crate::runtime::saveable::{
         remember_saveable, with_saveable_registry, Saveable, SaveableStateRegistry, SavedValue,
     };
