@@ -1702,4 +1702,79 @@ mod tests {
             "the effect's read must not become a layout dependency of the host"
         );
     }
+
+    /// A panicking side effect takes the rest of that pass's queue with it.
+    ///
+    /// The queue is taken before the drain, so the effects behind the panicking one are dropped
+    /// unrun and the next pass does not retry them. Documented in docs/effects.md; this pins it.
+    #[test]
+    fn a_panicking_side_effect_drops_the_rest_of_its_queue() {
+        let ran: Arc<std::sync::Mutex<Vec<&'static str>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut composer = crate::runtime::composer::Composer::new();
+        let log = ran.clone();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let first = log.clone();
+            let second = log.clone();
+            composer.compose(move |ctx| {
+                crate::effect::side_effect(ctx, move || {
+                    first.lock().unwrap().push("first");
+                    panic!("boom");
+                });
+                crate::effect::side_effect(ctx, move || {
+                    second.lock().unwrap().push("second");
+                });
+            });
+        }));
+
+        assert!(outcome.is_err(), "the panic propagates out of compose");
+        assert_eq!(
+            *ran.lock().unwrap(),
+            vec!["first"],
+            "the effects queued behind the panicking one are dropped unrun"
+        );
+        composer.compose(|_ctx| {});
+        assert_eq!(
+            *ran.lock().unwrap(),
+            vec!["first"],
+            "and the next pass does not run them either — the queue was already taken"
+        );
+    }
+
+    /// Each composer drains its own queue: an overlay does not run the page's effects.
+    #[test]
+    fn each_composer_drains_its_own_side_effects() {
+        let ran: Arc<std::sync::Mutex<Vec<&'static str>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut page = crate::runtime::composer::Composer::new();
+        let mut overlay = crate::runtime::composer::Composer::new();
+
+        let log = ran.clone();
+        page.compose(move |ctx| {
+            let log = log.clone();
+            crate::effect::side_effect(ctx, move || log.lock().unwrap().push("page"));
+        });
+        let log = ran.clone();
+        overlay.compose(move |ctx| {
+            let log = log.clone();
+            crate::effect::side_effect(ctx, move || log.lock().unwrap().push("overlay"));
+        });
+
+        assert_eq!(
+            *ran.lock().unwrap(),
+            vec!["page", "overlay"],
+            "each composer runs exactly the effects it queued, when it commits"
+        );
+    }
+
+    /// `ctx.frame_clock()` is the composer's own window, not a global or a default.
+    #[test]
+    fn a_composer_reports_its_own_window_clock() {
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.set_window_id(0xABCD);
+        let seen = Arc::new(std::sync::Mutex::new(0u64));
+        let s = seen.clone();
+        composer.compose(move |ctx| {
+            *s.lock().unwrap() = ctx.frame_clock().window();
+        });
+        assert_eq!(*seen.lock().unwrap(), 0xABCD);
+    }
 }

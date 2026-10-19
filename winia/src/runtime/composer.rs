@@ -2522,8 +2522,14 @@ impl Drop for PendingBatchGuard {
 /// - 管理 SlotTable（组合节点的持久化存储）
 /// - 调度重组（状态变化 → 标记 dirty → 下一帧批量重组）
 /// - 持有全局 key 计数器
+static NEXT_COMPOSER_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Composer {
     pub(crate) slot_table: SlotTable,
+    /// Identity of this composer, unique for the process lifetime. Anything that caches per composer
+    /// must key on this rather than on an arena index: node indices are local to a composer, so two
+    /// windows (or a page and an overlay) both have a node 0.
+    pub(crate) uid: u64,
     pub(crate) current_group_key: u32,
     compose_transaction: Option<ComposeRuntimeSnapshot>,
     /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
@@ -2719,6 +2725,11 @@ pub struct Composer {
 impl Composer {
 /// 选区注册表（由 SelectionContainer 在 compose 时注入，供事件处理访问）
 
+    /// This composer's process-unique identity; see the `uid` field.
+    pub(crate) fn uid(&self) -> u64 {
+        self.uid
+    }
+
     pub(crate) fn take_layout_override_fresh(&mut self) -> bool {
         std::mem::take(&mut self.layout_override_fresh)
     }
@@ -2726,6 +2737,7 @@ impl Composer {
     pub fn new() -> Self {
         let pending_states = crate::runtime::state::ComposerSubscription::new();
         Self {
+            uid: NEXT_COMPOSER_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             slot_table: SlotTable::new(),
             current_group_key: 0,
             compose_transaction: None,
@@ -3793,6 +3805,7 @@ impl Composer {
                 &mut self.arena,
                 &mut self.reused_nodes,
                 parked,
+                self.uid,
             );
             // 阶段D：重建 slot_key → 节点索引映射（供下帧 start_node 复用）+ dirty 冒泡
             self.prev_node_by_key.clear();

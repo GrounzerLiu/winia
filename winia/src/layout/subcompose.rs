@@ -57,7 +57,11 @@ thread_local! {
     /// content into the SAME slot table — a `remember` reads its value out of that table by slot key,
     /// so the table is what has to survive a frame. Keyed by the node being measured; an entry is
     /// replaced when that node measures again.
-    static SUBCOMPOSITION_CACHE: std::cell::RefCell<std::collections::HashMap<usize, Box<Composer>>> =
+    ///
+    /// Keyed by (HOST COMPOSER id, node index). The node index alone is not a key: indices are local to
+    /// a composer, so two windows — or a page and an overlay — both have a node 0, and a composer built
+    /// for one would be handed to the other, carrying its slots (and its remembered values) across.
+    static SUBCOMPOSITION_CACHE: std::cell::RefCell<std::collections::HashMap<(u64, usize), Box<Composer>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -208,7 +212,11 @@ fn subcompose_sized(
     let node = current_measuring_node();
     // The composition that ran for THIS node last frame, if any: composing the content into its slot
     // table again is what lets a `remember` inside the content survive the frame.
-    let remembered = node.and_then(|n| SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&n)));
+    let host_uid = host.map(|host| unsafe { (*host).uid() });
+    let remembered = match (host_uid, node) {
+        (Some(uid), Some(n)) => SUBCOMPOSITION_CACHE.with(|c| c.borrow_mut().remove(&(uid, n))),
+        _ => None,
+    };
     let mut inner: Box<Composer> = match (cached, remembered) {
         // Same constraints as the parked composition: arrange the EXISTING tree again rather than
         // composing the content a second time this frame.
@@ -276,6 +284,7 @@ pub(crate) fn adopt_parked(
     arena: &mut NodeArena,
     reused: &mut NodeMarks,
     mut parked: Vec<(usize, Subcomposition)>,
+    host_uid: u64,
 ) -> Option<Box<Composer>> {
     let mut adopted = 0;
     for (node_idx, entry) in parked.drain(..) {
@@ -293,7 +302,7 @@ pub(crate) fn adopt_parked(
             // while the node is: an entry is replaced when the node measures again, and the cache holds
             // at most one composer per subcomposing node.
             SUBCOMPOSITION_CACHE.with(|c| {
-                c.borrow_mut().insert(node_idx, Box::new(composer));
+                c.borrow_mut().insert((host_uid, node_idx), Box::new(composer));
             });
         }
     }

@@ -535,6 +535,40 @@ mod tests {
         );
     }
 
+    /// A parked subcomposition belongs to the composer that built it.
+    ///
+    /// Node indices are local to a composer, so two composers both measure a node 0. Keyed by the
+    /// index alone, the second one was handed the first one's composition — and every `remember`
+    /// inside the content came across with it.
+    #[test]
+    fn a_parked_subcomposition_is_not_reused_by_another_composer() {
+        fn remembered_value(tag: i32) -> Vec<i32> {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let out = seen.clone();
+            let mut composer = Composer::new();
+            composer.compose(move |ctx| {
+                BoxWithConstraints::new()
+                    .modifier(Modifier::new().size(120.0, 60.0))
+                    .build(ctx, move |ctx, _scope| {
+                        let remembered: crate::runtime::state::State<i32> =
+                            ctx.remember(|| tag);
+                        out.lock().unwrap().push(remembered.peek());
+                        crate::components::Text::new("inside").build(ctx);
+                    });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+            let value = seen.lock().unwrap().clone();
+            value
+        }
+
+        assert_eq!(remembered_value(1), vec![1]);
+        assert_eq!(
+            remembered_value(2),
+            vec![2],
+            "the second composer must not see the first one's remembered value"
+        );
+    }
+
     // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is
     // covered by `layout::subcompose`'s own tests. It cannot be tested here through
     // `measure_node` alone, because `subcompose()` requires the composer's layout pass to be armed
