@@ -313,6 +313,37 @@ const TOP_APP_BAR_HEIGHT: f32 = 64.0;
 **MUST** keep four-state colour sets (enabled / disabled / pressed / hovered) in the `XColors` type,
 not as inline `if` chains, so a caller can restyle the component without copying it.
 
+### 6.1 Restyling one component class, once
+
+Role colours cover "this app is green"; a component styling covers "every button is green while the
+palette stays blue". The second is optional per class and provided once for a subtree:
+
+```rust
+use winia::prelude::*;
+
+winia::component_styles::with_component_styles(
+    ComponentStyles::new().button(ButtonStyling::new(|scope| {
+        scope.container(Color::from_argb(255, 0, 128, 0));
+    })),
+    || App::new().build(ctx),
+);
+```
+
+**MUST** resolve a component's default appearance through the shared helper the styling layer
+exposes (`component_styles::button_colors_with_styles(theme, variant)` for a button), not by calling
+the theme derivation directly: the helper is the single place where "explicit parameter > styling >
+theme" is decided, and a component that bypasses it silently ignores every styling. The current
+participants are Button and Checkbox; `winia/src/component_styles.rs` documents the contract
+(what a scope exposes, how `then` layers, what `None` means).
+
+**MUST NOT** let a styling replace the theme derivation wholesale: the scope starts from the theme's
+answer, so a styling that sets one field leaves the rest exactly as the role colours left them.
+
+One caveat, the same one every `CompositionLocal` has: providing a NEW set does not invalidate
+readers that were composed before it. A styling that changes at runtime (a user switching to a brand
+palette) has to be driven by a `State` read inside the subtree, the way `WiniaTheme::auto` follows the
+system theme - otherwise the components keep the colours they composed with.
+
 ## 7. Slots
 
 Optional named content goes in `Option<Box<dyn FnOnce(&mut ComposeCtx) + Send>>` with a builder

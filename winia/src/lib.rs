@@ -29,6 +29,7 @@
 //! `OverlayAnimSpec` and the four presentation helpers they need with it, which places five things
 //! worse than it fixes one. So the edge is deliberate, narrow — one type — and recorded here.
 
+pub mod component_styles;
 pub mod runtime;
 pub mod unit;
 pub mod anim_trace;
@@ -99,6 +100,10 @@ pub mod prelude {
     pub use crate::runtime::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
         Visual, write_batch,
+    };
+    pub use crate::component_styles::{
+        with_component_styles, ButtonStyling, ButtonStylingScope, CheckboxStyling,
+        CheckboxStylingScope, ComponentStyles,
     };
     pub use crate::runtime::saveable::{
         remember_saveable, with_saveable_registry, Saveable, SaveableStateRegistry, SavedValue,

@@ -237,7 +237,7 @@ fn checkbox_impl(
     ctx.changed(&colors);
     let key = ctx.next_key();
     let theme = WiniaTheme::colors();
-    let colors = colors.unwrap_or_else(|| CheckboxDefaults::checkbox_colors(&theme));
+    let colors = colors.unwrap_or_else(|| crate::component_styles::checkbox_colors_with_styles(&theme));
     let interaction = interaction_source
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let box_color = colors.box_color(enabled, state);

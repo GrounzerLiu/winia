@@ -631,7 +631,9 @@ impl Button {
         let key = ctx.next_key();
         let theme = crate::theme::WiniaTheme::colors();
         // 默认颜色统一从 ButtonDefaults 取（对标 material3 ButtonDefaults.buttonColors）
-        let colors = self.colors.unwrap_or_else(|| ButtonDefaults::button_colors(&theme, self.style));
+        let colors = self
+            .colors
+            .unwrap_or_else(|| crate::component_styles::button_colors_with_styles(&theme, self.style));
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self.interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
