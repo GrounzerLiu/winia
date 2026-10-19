@@ -35,8 +35,11 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
     ) {
         // Inlined instead of calling `remember_coroutine_scope`: that is a `#[composable]`
         // function, so it would add a scope slot per effect per frame purely to get a remember key
-        // this `build` already has.
+        // this `build` already has. The teardown registration is the part that must NOT be skipped —
+        // without it a `scope.spawn` in the body outlives the slot (its task holds a scope clone, so
+        // the refcount never reaches zero and `ScopeState::drop` never aborts it).
         let scope: CoroutineScope = ctx.remember_handle(CoroutineScope::from_runtime);
+        crate::effect::scope::hook_scope_teardown(ctx, &scope);
 
         // `remember_handle`, not `remember`: nothing ever writes this slot, so the `State` wrapper
         // would be a `StateInner` + `StateSignal` per effect instance with no possible reader.

@@ -590,3 +590,53 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
             "the replacement started before the aborted body was dropped: the join is missing"
         );
     }
+    /// A task spawned through the effect body's scope dies with the composition point.
+    ///
+    /// scope.spawn puts the task in ScopeState.handles, and that list is only aborted by the
+    /// scope's on_forget (or by ScopeState::drop). A task that captured a scope clone keeps the Arc
+    /// alive, so drop never runs: without the registration the task outlives its slot forever.
+    #[test]
+    fn a_scope_spawned_task_dies_with_the_effect() {
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
+        struct Marker(StdArc<StdMutex<Vec<&'static str>>>, &'static str);
+        impl Drop for Marker {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().push(self.1);
+            }
+        }
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _entered = rt.enter();
+        let log: StdArc<StdMutex<Vec<&'static str>>> = StdArc::new(StdMutex::new(Vec::new()));
+        let mut composer = crate::runtime::composer::Composer::new();
+
+        let l = log.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            LaunchedEffect::new(1u32).build(ctx, move |scope| {
+                // The task holds a scope clone, which is what keeps the Arc alive after the body
+                // finishes: refcount teardown alone can never abort it.
+                let keep = scope.clone();
+                scope.spawn(async move {
+                    let _guard = Marker(l, "spawned task dropped");
+                    let _keep = keep;
+                    std::future::pending::<()>().await;
+                });
+                async {}
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..30 { tokio::task::yield_now().await; } });
+        assert!(log.lock().unwrap().is_empty(), "the spawned task is parked, nothing dropped yet");
+
+        // The composition point goes away; the spawned task must go with it.
+        composer.compose(|_ctx: &mut ComposeCtx| {});
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..30 { tokio::task::yield_now().await; } });
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["spawned task dropped"],
+            "a task spawned through the effect's scope must die with the composition point"
+        );
+    }

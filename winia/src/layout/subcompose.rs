@@ -213,6 +213,14 @@ fn subcompose_sized(
         }
         _ => {
             let mut fresh = Box::new(Composer::new());
+            // A subcomposition belongs to the same window as its host: a ctx.frame_clock() captured
+            // inside BoxWithConstraints / TabRow content has to wait on that window's frames, and
+            // window 0 never ticks.
+            if let Some(host) = host {
+                // SAFETY: LAYOUT_HOST is armed for the duration of Composer::layout (see
+                // LayoutHostGuard), and this runs inside a measure pass, i.e. within that window.
+                fresh.set_window_id(unsafe { (*host).window_id() });
+            }
             fresh.compose(content);
             fresh.layout(constraints);
             fresh

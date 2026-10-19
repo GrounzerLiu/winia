@@ -510,6 +510,31 @@ mod tests {
         assert_eq!(texts(&composer), ["BWC max 200"], "and back — both directions");
     }
 
+    /// A subcomposition belongs to its host's window: a clock captured inside `BoxWithConstraints`
+    /// content waits on that window's frames. Without the id it binds to window 0, which never ticks,
+    /// and the effect that captured it never runs again.
+    #[test]
+    fn a_subcomposition_inherits_its_hosts_window_identity() {
+        let mut composer = Composer::new();
+        composer.set_window_id(0xD00D);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen_in = seen.clone();
+        composer.compose(move |ctx| {
+            BoxWithConstraints::new()
+                .modifier(Modifier::new().size(120.0, 60.0))
+                .build(ctx, move |ctx, _scope| {
+                    *seen_in.lock().unwrap() = Some(ctx.frame_clock().window());
+                });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some(0xD00D),
+            "the subcomposition follows the window that hosts it"
+        );
+    }
+
     // NOTE: the policy's own half (`subcompose()` measured without a composed tree around it) is
     // covered by `layout::subcompose`'s own tests. It cannot be tested here through
     // `measure_node` alone, because `subcompose()` requires the composer's layout pass to be armed

@@ -86,18 +86,26 @@ pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     // per effect instance for a value that is never written.
     let scope = ctx.remember_handle(CoroutineScope::from_runtime);
 
-    // Cancel on the composition point going away, not on the last clone being dropped. Refcount
-    // teardown was the whole contract before, and it is a promise the caller can accidentally
-    // break: keeping one clone alive (a struct field, a task spawned on the runtime directly) keeps
-    // every task this scope owns running past the point that owned it.
-    if !scope
+    hook_scope_teardown(ctx, &scope);
+    scope
+}
+
+/// Register this composition point's teardown for `scope`: the tasks it spawned are aborted when the
+/// point goes away, not when the last clone is dropped. Refcount teardown is a promise the caller can
+/// accidentally break — keeping one clone alive (a struct field, or a task that captured the scope)
+/// keeps every task the scope owns running past the point that owned it.
+///
+/// Idempotent per scope (`forget_hooked`), so the effects that remember a scope directly can call it
+/// on every recomposition. Every place that creates a scope for a composition point has to call it;
+/// `LaunchedEffect` did not, which is how a `scope.spawn` inside an effect body outlived its slot.
+pub(super) fn hook_scope_teardown(ctx: &mut ComposeCtx, scope: &CoroutineScope) {
+    if scope
         .state
         .forget_hooked
         .swap(true, std::sync::atomic::Ordering::Relaxed)
     {
-        let state = Arc::clone(&scope.state);
-        ctx.remember_on_forget(move || state.abort_all());
+        return;
     }
-
-    scope
+    let state = Arc::clone(&scope.state);
+    ctx.remember_on_forget(move || state.abort_all());
 }

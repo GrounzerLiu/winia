@@ -2233,6 +2233,10 @@ impl AppState {
         // FocusRequester created by this window's initial composition is bound
         // to this WindowId, just like later redraw compositions.
         let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
+        // The initial composition below runs BEFORE the first redraw, so the window id has to be set
+        // here as well: an effect that captures ctx.frame_clock() on that pass would otherwise bind
+        // to window 0 (which never ticks) and never be re-run.
+        pw.composer.set_window_id(window_id.into_raw() as u64);
         // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
         let density = crate::unit::Density::from_density(sf as f32);
         crate::runtime::density::with_density(density, || {
