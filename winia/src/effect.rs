@@ -119,13 +119,15 @@ impl CoroutineScope {
 /// #[composable]：内部 remember 从调用点语句取稳定 base
 #[composable]
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
+    // `.peek()`: the slot holds a handle, and nothing ever writes it. A tracked read would only
+    // register a dependency edge that can never fire (AGENTS.md, "remember and State handles").
     ctx.remember(|| {
         let rt = Handle::try_current().expect(
             "remember_coroutine_scope requires an active tokio runtime. \
              `run_app` creates one internally; tests driving `Composer` directly must enter a runtime first."
         );
         CoroutineScope { state: Arc::new(ScopeState { handles: Mutex::new(Vec::new()) }), rt }
-    }).get()
+    }).peek()
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -163,7 +165,9 @@ impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
         let state: crate::runtime::state::State<Arc<Mutex<LaunchedEffectState<T>>>> =
             ctx.remember(|| Arc::new(Mutex::new(LaunchedEffectState { prev_key: None, task: None })));
 
-        let state_clone = Arc::clone(&state.get());
+        // `.peek()`: this slot holds the effect's bookkeeping, never a value the framework writes,
+        // so a tracked read would only add a dependency edge that can never fire.
+        let state_clone = Arc::clone(&state.peek());
         let key_changed = {
             let s = state_clone.lock().unwrap();
             s.prev_key.as_ref() != Some(&self.key)
@@ -239,7 +243,8 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
         let state: crate::runtime::state::State<Arc<Mutex<DisposableState<T>>>> =
             ctx.remember(|| Arc::new(Mutex::new(DisposableState { prev_key: None, cleanup: None })));
 
-        let state_clone = Arc::clone(&state.get());
+        // `.peek()`: same reason as LaunchedEffect above — the slot is bookkeeping, not state.
+        let state_clone = Arc::clone(&state.peek());
         let key_changed = {
             let s = state_clone.lock().unwrap();
             s.prev_key.as_ref() != Some(&self.key)
@@ -288,10 +293,14 @@ impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
 // ═══════════════════════════════════════════════════════════
 
 /// What `observe_watch` remembers across recompositions: the receiver it is currently subscribed to
-/// and the handle that ends that subscription.
+/// and the task following it.
+///
+/// The task is a `JoinHandle`, not an `AbortHandle`, for the same reason
+/// `LaunchedEffectState::task` is one: `abort` only asks, so a replacement that started at once
+/// would overlap the old task until it unwinds — and both of them write the same `State`.
 struct WatchSubscription<T> {
     rx: Option<tokio::sync::watch::Receiver<T>>,
-    abort_handle: Option<tokio::task::AbortHandle>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Bridge a `watch::Receiver` straight into a `State` (no `WatchStream` hop: `send` is always
@@ -313,9 +322,9 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
     // per frame, so it could never invalidate anything the inner one did not.
     let state: State<T> = ctx.remember(|| initial.clone());
     let slot: State<Arc<Mutex<WatchSubscription<T>>>> = ctx.remember(|| {
-        Arc::new(Mutex::new(WatchSubscription { rx: None, abort_handle: None }))
+        Arc::new(Mutex::new(WatchSubscription { rx: None, task: None }))
     });
-    let slot_arc = Arc::clone(&slot.get());
+    let slot_arc = Arc::clone(&slot.peek());
 
     // `same_channel` is the receiver's identity test: two clones of one channel answer true, two
     // channels answer false. That is the key this effect restarts on.
@@ -329,14 +338,14 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
 
     if needs_subscribe {
         let scope = remember_coroutine_scope(ctx);
-        // Abort the old subscription OUTSIDE the lock, and before the new one starts: the two must
-        // not both push into the same State.
+        // Take the old handle out of the slot OUTSIDE the lock, then abort it: the abort itself is
+        // not user code, but this file keeps every task-handle call off the shared guard.
         let previous = {
             let mut s = slot_arc.lock().unwrap();
-            s.abort_handle.take()
+            s.task.take()
         };
-        if let Some(h) = previous {
-            h.abort();
+        if let Some(old) = &previous {
+            old.abort();
         }
         let s_state = state.clone();
         // Keep one clone for the slot's identity check; the task owns the other.
@@ -344,23 +353,54 @@ pub fn observe_watch<T: Clone + Send + Sync + PartialEq + 'static>(
         // The task owns the receiver instead of sharing it behind a lock: `changed()` borrows the
         // receiver for the length of the wait, so a guard alive across that await would make the
         // future `!Send` — and it would be held for the whole, indefinite wait besides.
+        //
+        // The replacement waits for the aborted task to stop before following the new channel.
+        // Without the join the two overlap until the abort unwinds, and the old task can still run
+        // the `set` that follows its last `changed()` — writing the PREVIOUS channel's value over
+        // the new one. `LaunchedEffect` joins for exactly this reason.
         let handle = scope.rt.spawn(async move {
-            let mut rx = rx;
-            // Seed from the channel's CURRENT value, so a re-subscription lands on the new source
-            // instead of keeping whatever the previous receiver had left in the State.
-            s_state.set(rx.borrow_and_update().clone());
-            loop {
-                if rx.changed().await.is_err() {
-                    break;
-                }
-                s_state.set(rx.borrow_and_update().clone());
+            if let Some(old) = previous {
+                let _ = old.await;
             }
+            follow_watch(rx, s_state).await;
         });
         let mut s = slot_arc.lock().unwrap();
         s.rx = Some(rx_keep);
-        s.abort_handle = Some(handle.abort_handle());
+        s.task = Some(handle);
     }
+
+    // Leaving the composition stops the subscription too. The task is spawned on the runtime
+    // directly (`rt.spawn`, not `CoroutineScope::spawn`), so `ScopeState::drop` does not know
+    // about it, and dropping an `AbortHandle` cancels nothing: without this the task outlived the
+    // slot and kept following a channel whose `State` had no readers left.
+    let slot_for_remove = Arc::clone(&slot_arc);
+    attach_cleanup(ctx, move || {
+        let taken = {
+            let mut s = slot_for_remove.lock().unwrap();
+            s.task.take()
+        };
+        if let Some(task) = taken {
+            task.abort();
+        }
+    });
+
     state
+}
+
+/// Follow `rx` into `state` until the channel closes or the task is aborted.
+async fn follow_watch<T>(mut rx: tokio::sync::watch::Receiver<T>, state: State<T>)
+where
+    T: Clone + Send + Sync + PartialEq + 'static,
+{
+    // Seed from the channel's CURRENT value, so a re-subscription lands on the new source instead of
+    // keeping whatever the previous receiver had left in the State.
+    state.set(rx.borrow_and_update().clone());
+    loop {
+        if rx.changed().await.is_err() {
+            break;
+        }
+        state.set(rx.borrow_and_update().clone());
+    }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -761,5 +801,48 @@ mod tests {
             let v2 = fut2.await;
             assert!(v2 > v, "第二次 tick 时间戳必须递增（{v} -> {v2}）");
         });
+    }
+
+    // ── observe_watch: leaving the composition stops the subscription ──
+
+    /// Removing the composition point stops the watch task.
+    ///
+    /// The task is spawned on the runtime directly (`rt.spawn`, not `CoroutineScope::spawn`), so
+    /// `ScopeState::drop` does not know about it, and dropping an `AbortHandle` cancels nothing.
+    /// Before the `on_forget` hook was added the task outlived the slot and kept writing the
+    /// `State` after the composition point (and every reader of it) was gone.
+    #[test]
+    fn observe_watch_stops_when_the_composition_point_is_removed() {
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _e = rt.enter();
+        let (tx, rx) = tokio::sync::watch::channel(1u32);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let kept: StdArc<StdMutex<Option<State<u32>>>> = StdArc::new(StdMutex::new(None));
+
+        let k = kept.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            let v = observe_watch(ctx, rx.clone(), 0);
+            *k.lock().unwrap() = Some(v);
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });
+
+        let state = kept.lock().unwrap().clone().expect("the effect returned a state");
+        assert_eq!(state.peek(), 1, "the subscription seeds the channel's current value");
+
+        // A frame that does not mention the effect: the slot is dropped, so its forget callback
+        // runs and has to abort the task.
+        composer.compose(|_ctx: &mut ComposeCtx| {});
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });
+
+        let _ = tx.send(2);
+        rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });
+        assert_eq!(
+            state.peek(),
+            1,
+            "a removed composition point must stop listening: the task outlived its slot"
+        );
     }
 }

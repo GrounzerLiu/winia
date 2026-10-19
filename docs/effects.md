@@ -105,6 +105,16 @@ DisposableEffect::new(key).build(ctx, |k| {
 Bridges a `watch::Receiver` into a `State`. A **replaced** receiver is re-subscribed (compared with
 `same_channel`); a receiver passed once and never changed costs nothing after the first frame.
 
+The subscription is a task on the tokio runtime, and two things end it:
+
+- **The composition point goes away** — an `on_forget` callback aborts the task. Without it the task
+  outlived its slot: it is spawned with `rt.spawn`, not `CoroutineScope::spawn`, so
+  `ScopeState::drop` never knew about it, and dropping an `AbortHandle` cancels nothing.
+- **The receiver is replaced** — the old task is aborted and then *joined* before the new
+  subscription starts. The join matters for the same reason `LaunchedEffect` has one: `abort` only
+  asks, so the old task can still run the `set` that follows its last `changed()` and write the
+  previous channel's value over the new one.
+
 ### `with_frame_nanos()`
 
 Awaits the next render tick and returns a monotonic nanosecond timestamp. Driven by
@@ -116,13 +126,20 @@ tick it, so use tokio timers for time-driven work.
 1. **Post-apply timing.** Compose runs effects after the composition commits; these run inside the
    compose pass. Moving them needs a commit hook the composer does not have. Treat an effect body
    as "runs somewhere inside the frame".
-2. **A panicking callback takes the rest of that removal with it.** Callbacks are drained into a
-   list and run in order; if one panics, the ones after it are dropped without running. The slot
-   tree itself is already consistent by then (every site finishes the structural change first —
-   `start_slot` runs them after pushing the new slot for that reason), so the composer can unwind
-   cleanly, but those cleanups do not happen.
+2. **Cleanup order is not defined.** Callbacks are drained into one list per removed subtree: a
+   slot's own callbacks come from a `HashMap` (arbitrary order), and the slots themselves are
+   visited parent first. Compose runs `onForgotten` in reverse composition order; this does not.
+   A panicking callback also takes the rest of that removal with it — the callbacks after it in the
+   list are dropped without running. The slot tree itself is already consistent by then (every site
+   finishes the structural change first — `start_slot` runs them after pushing the new slot for
+   that reason), so the composer can unwind cleanly, but those cleanups do not happen.
 3. **Cancellation is cooperative.** An aborted task stops at its next await; work already done
    before that point is not undone.
+4. **`CoroutineScope` teardown is refcount-based, not composition-based.** `ScopeState::drop` aborts
+   the tasks it spawned, and it only runs when the LAST clone of the scope goes away. Keep a clone
+   alive past the composition point — stored in a long-lived struct, or moved into a task spawned on
+   the runtime directly — and those tasks are never aborted. `LaunchedEffect` is safe because it
+   registers its own `on_forget` as well; a caller holding a raw scope has no such guarantee.
 
 See also: `docs/state-handles.md` for the write semantics these effects drive, and
 `docs/movable-content.md` for the slot-storage rules `on_forget` follows.

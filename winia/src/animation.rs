@@ -2696,7 +2696,9 @@ impl ComposeCtx<'_> {
     /// 双重触发安全（ids drain 幂等）。
     pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
         let ids_state = self.remember(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
-        let ids = ids_state.get();
+        // `.peek()`: the slot is a container whose contents are pushed through the mutex; the State
+        // itself is never written, so a tracked read could only add a dead dependency edge.
+        let ids = ids_state.peek();
         // 自动清理：组合点移除 → 从全局表移除本作用域全部动画。
         // `effect::on_forget` keeps the callback in the slot rather than on an implicit leaf node:
         // the node was a real child of the enclosing container, so a transition created inside a
