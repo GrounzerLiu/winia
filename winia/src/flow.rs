@@ -192,6 +192,11 @@ pub fn remember_derived_state<T: Clone + PartialEq + Send + Sync + 'static>(
     state
 }
 
+/// How many times one refresh may recompute while the world keeps moving under it.
+///
+/// A writer that never pauses would otherwise spin here; past this the last attempt is published.
+const MAX_DERIVE_ATTEMPTS: usize = 4;
+
 /// The subscription behind [remember_derived_state]: recompute on every source write, publish only a
 /// changed result.
 struct Derived<T> {
@@ -260,14 +265,29 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
     }
 
     /// Recompute, re-derive the subscription set, publish. The user closure runs outside any lock.
+    ///
+    /// The computation is a seqlock: the global write version is sampled before and after, and a
+    /// computation the world changed underneath is thrown away and run again (bounded). Without it, a
+    /// closure reading two states could publish a pair that never coexisted — the same half-pair a
+    /// `write_batch` prevents on the writing side.
     fn refresh(&self, observer: &std::sync::Arc<dyn crate::runtime::state::StateObserver>) {
         if self.running.swap(true, std::sync::atomic::Ordering::AcqRel) {
             return;
         }
-        let mut frame = crate::runtime::state::begin_tracking_frame();
-        let value = (self.compute)();
-        let deps = crate::runtime::state::take_deps();
-        frame.commit();
+
+        let mut attempts = 0;
+        let (value, deps) = loop {
+            let version = crate::runtime::state::global_version();
+            let mut frame = crate::runtime::state::begin_tracking_frame();
+            let value = (self.compute)();
+            let deps = crate::runtime::state::take_deps();
+            frame.commit();
+            attempts += 1;
+            let stable = crate::runtime::state::global_version() == version;
+            if stable || attempts >= MAX_DERIVE_ATTEMPTS {
+                break (value, deps);
+            }
+        };
         self.running.store(false, std::sync::atomic::Ordering::Release);
 
         self.reconcile(observer, deps);
@@ -401,6 +421,43 @@ mod tests {
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending);
     }
 
+    /// A computation the world moved under is thrown away, not published.
+    ///
+    /// The closure writes a state it has already read on its second invocation (the first monitored
+    /// one — the seed runs before it), so the pair it computed never coexisted. The retry recomputes
+    /// and publishes the consistent pair; without it the UI would see the mixed one.
+    #[test]
+    fn a_derive_retries_when_the_world_moves_under_it() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let a = State::new(0i32);
+        let b = State::new(0i32);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let (aa, bb, c) = (a.clone(), b.clone(), calls.clone());
+        let slot: std::sync::Arc<std::sync::Mutex<Option<State<(i32, i32)>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let out = slot.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let derived = crate::flow::remember_derived_state(ctx, move || {
+                let av = aa.get();
+                if c.fetch_add(1, Ordering::SeqCst) == 1 {
+                    // Mid-computation write: the version moves, so this result is discarded.
+                    aa.set(9);
+                }
+                let bv = bb.get();
+                (av, bv)
+            });
+            *out.lock().unwrap() = Some(derived);
+        });
+
+        let derived = slot.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            derived.peek(),
+            (9, 0),
+            "the published pair must be one that actually held at some instant"
+        );
+    }
     /// The derive is synchronous: the write that changes the result is the write that notifies.
     #[test]
     fn a_derived_state_updates_on_the_write_itself() {
