@@ -100,6 +100,26 @@ DisposableEffect::new(key).build(ctx, |k| {
 - Setup and cleanup are the caller's code and are never invoked while a framework lock is held —
   a panic in them cannot poison the effect, and re-entering the same state cannot deadlock.
 
+### `remember_updated_state(ctx, value)`
+
+A `State` that always holds the value from the most recent composition:
+
+```rust
+let latest = remember_updated_state(ctx, on_event);
+LaunchedEffect::new(()).build(ctx, move |_| async move {
+    loop {
+        wait().await;
+        latest.get()();      // the CURRENT callback, not the one this body started with
+    }
+});
+```
+
+The write is **silent** — it does not schedule a recompose. The value changed *because* this
+composition ran, so a second frame would buy nothing, and a read later in the same pass already sees
+the new value. What this exists for is the long-lived effect: a `LaunchedEffect::new(())` body
+captures its surroundings once, and without a handle like this it keeps calling the first frame's
+closure forever.
+
 ### `observe_watch(ctx, rx, initial)`
 
 Bridges a `watch::Receiver` into a `State`. A **replaced** receiver is re-subscribed (compared with
@@ -135,11 +155,12 @@ tick it, so use tokio timers for time-driven work.
    that reason), so the composer can unwind cleanly, but those cleanups do not happen.
 3. **Cancellation is cooperative.** An aborted task stops at its next await; work already done
    before that point is not undone.
-4. **`CoroutineScope` teardown is refcount-based, not composition-based.** `ScopeState::drop` aborts
-   the tasks it spawned, and it only runs when the LAST clone of the scope goes away. Keep a clone
-   alive past the composition point — stored in a long-lived struct, or moved into a task spawned on
-   the runtime directly — and those tasks are never aborted. `LaunchedEffect` is safe because it
-   registers its own `on_forget` as well; a caller holding a raw scope has no such guarantee.
+4. **Only tasks spawned through the scope belong to it.** `CoroutineScope::spawn` registers the
+   task, and the scope aborts its tasks when its composition point goes away — an `on_forget`
+   callback, so keeping a clone alive past that point no longer extends their life (it used to:
+   teardown hung off `ScopeState::drop` and therefore off the refcount). Framework code that wants
+   a different lifetime spawns with `rt.spawn` and cancels the task itself; `LaunchedEffect` and
+   `observe_watch` both do that on purpose.
 
 See also: `docs/state-handles.md` for the write semantics these effects drive, and
 `docs/movable-content.md` for the slot-storage rules `on_forget` follows.
