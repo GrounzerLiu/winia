@@ -392,6 +392,15 @@ impl<T> RawState<T> {
     pub(crate) fn notify(&self, wake: bool) {
         self.inner.signal.notify(wake);
     }
+
+    /// Publish a value change: deferred into an open batch, or committed now (version, then observers).
+    fn publish(&self, wake: bool) {
+        if defer_write(&self.inner.signal) {
+            return;
+        }
+        GLOBAL_VERSION.fetch_add(1, Ordering::Release);
+        self.notify(wake);
+    }
 }
 
 impl<T: 'static> RawState<T> {
@@ -438,7 +447,7 @@ impl<T: 'static> RawState<T> {
         }
         *current = value;
         drop(current);
-        self.notify(true);
+        self.publish(true);
     }
 
     /// In-place mutation with dedup: clone-compare-swap so no-op updates
@@ -457,7 +466,7 @@ impl<T: 'static> RawState<T> {
         }
         *current = staged;
         drop(current);
-        self.notify(true);
+        self.publish(true);
     }
 
     /// Animation-tick write: dedup + notify, skip WAKE_FN (redraw already
@@ -472,7 +481,7 @@ impl<T: 'static> RawState<T> {
         }
         *current = value;
         drop(current);
-        self.notify(false);
+        self.publish(false);
     }
 
     /// Draw-layer write: no dedup, no notify, no wake. The animation engine
@@ -747,6 +756,89 @@ pub(crate) struct StateInner<T> {
 // remains a separate u32 sequence until that API is migrated.
 static NEXT_STATE_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PUBLIC_STATE_ID: AtomicU32 = AtomicU32::new(1);
+
+// ── Write batches and the global version ──
+
+/// The whole-world version: advances once per committed write, and once per write batch.
+///
+/// It is the cheap half of a snapshot system (see docs/snapshot-feasibility.md): no per-snapshot
+/// records, just a monotonic counter a reader can sample before and after a computation to tell
+/// whether the world moved underneath it.
+static GLOBAL_VERSION: AtomicU64 = AtomicU64::new(1);
+
+/// The version of the last committed write or batch.
+pub(crate) fn global_version() -> u64 {
+    GLOBAL_VERSION.load(Ordering::Acquire)
+}
+
+thread_local! {
+    /// Writes that still have to be published while a batch is open.
+    static DEFERRED_WRITES: std::cell::RefCell<Option<Vec<Arc<StateSignal>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Apply several state writes as ONE change.
+///
+/// Every `set`/`update` inside the closure takes effect immediately — the writer reads its own
+/// writes — but observers are notified once, after the closure returns, and the global version
+/// advances once for the whole batch. Without this, a reader woken by the first write of a pair
+/// observes the second one still at its old value.
+///
+/// Batches nest: only the outermost commits, so a component's own batch inside a larger one merges
+/// into it. A panic inside the closure still publishes what was written — the values are already
+/// applied, and leaving observers unwoken would be worse than a spurious wake.
+///
+/// A state written twice in one batch notifies once even if the net effect was nil; the batch
+/// deliberately does not diff.
+pub fn write_batch<R>(f: impl FnOnce() -> R) -> R {
+    let outermost = DEFERRED_WRITES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_some() {
+            false
+        } else {
+            *slot = Some(Vec::new());
+            true
+        }
+    });
+    if !outermost {
+        return f();
+    }
+    let _commit = BatchCommit;
+    f()
+}
+
+struct BatchCommit;
+
+impl Drop for BatchCommit {
+    fn drop(&mut self) {
+        let deferred = DEFERRED_WRITES.with(|slot| slot.borrow_mut().take()).unwrap_or_default();
+        if deferred.is_empty() {
+            return;
+        }
+        GLOBAL_VERSION.fetch_add(1, Ordering::Release);
+        // One notification per touched state, in first-write order.
+        let mut seen = std::collections::HashSet::with_capacity(deferred.len());
+        for signal in deferred {
+            if seen.insert(signal.id()) {
+                signal.notify(true);
+            }
+        }
+    }
+}
+
+/// Hand `signal` to the open batch, or say no so the caller publishes immediately.
+fn defer_write(signal: &Arc<StateSignal>) -> bool {
+    DEFERRED_WRITES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        match slot.as_mut() {
+            Some(list) => {
+                list.push(Arc::clone(signal));
+                true
+            }
+            None => false,
+        }
+    })
+}
 
 fn next_state_id() -> StateId {
     StateId::new(NEXT_STATE_ID.fetch_add(1, Ordering::Relaxed))
@@ -1776,5 +1868,90 @@ mod tests {
             *s.lock().unwrap() = ctx.frame_clock().window();
         });
         assert_eq!(*seen.lock().unwrap(), 0xABCD);
+    }
+
+    /// A batch publishes once: one version bump, and the writer sees its own writes.
+    #[test]
+    fn a_write_batch_notifies_and_bumps_the_version_once() {
+        let a = State::new(0i32);
+        let before = global_version();
+
+        write_batch(|| {
+            a.set(1);
+            assert_eq!(a.peek(), 1, "the writer reads its own write inside the batch");
+            a.set(2);
+            a.set(3);
+        });
+
+        assert_eq!(a.peek(), 3);
+        assert_eq!(
+            global_version(),
+            before + 1,
+            "three writes in one batch advance the world once"
+        );
+
+        a.set(4);
+        assert_eq!(global_version(), before + 2, "and a plain write is a batch of one");
+    }
+
+    /// The point of a batch: a reader woken by it sees the finished pair, not half of it.
+    #[test]
+    fn a_batch_makes_a_pair_visible_together() {
+        struct WatchB {
+            b: State<i32>,
+            log: Arc<std::sync::Mutex<Vec<i32>>>,
+        }
+        impl StateObserver for WatchB {
+            fn on_change(&self, _id: StateId) {
+                self.log.lock().unwrap().push(self.b.peek());
+            }
+        }
+
+        let a = State::new(0i32);
+        let b = State::new(0i32);
+        let log: Arc<std::sync::Mutex<Vec<i32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observer: Arc<dyn StateObserver> = Arc::new(WatchB { b: b.clone(), log: log.clone() });
+        a.raw.inner.signal.subscribe_observer(&observer);
+
+        // Without a batch the observer runs before the second write, so it sees the old b.
+        a.set(1);
+        assert_eq!(*log.lock().unwrap(), vec![0], "an unbatched reader sees half of the pair");
+
+        log.lock().unwrap().clear();
+        write_batch(|| {
+            a.set(2);
+            b.set(2);
+        });
+        assert_eq!(*log.lock().unwrap(), vec![2], "a batched one sees the whole pair");
+    }
+
+    /// Nested batches merge into the outermost one.
+    #[test]
+    fn a_nested_batch_commits_with_its_parent() {
+        let a = State::new(0i32);
+        let before = global_version();
+        write_batch(|| {
+            a.set(1);
+            write_batch(|| a.set(2));
+        });
+        assert_eq!(a.peek(), 2);
+        assert_eq!(global_version(), before + 1, "one commit for the whole nest");
+    }
+
+    /// A panic inside the batch still publishes what was written: the values are in, and leaving
+    /// observers unwoken would be worse than a spurious wake.
+    #[test]
+    fn a_panicking_batch_still_publishes() {
+        let a = State::new(0i32);
+        let before = global_version();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            write_batch(|| {
+                a.set(7);
+                panic!("boom");
+            });
+        }));
+        assert!(outcome.is_err(), "the panic propagates");
+        assert_eq!(a.peek(), 7, "the write was applied before the panic");
+        assert_eq!(global_version(), before + 1, "and it was published on the way out");
     }
 }

@@ -98,7 +98,7 @@ pub mod prelude {
     pub use crate::runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
     pub use crate::runtime::state::{
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
-        Visual,
+        Visual, write_batch,
     };
     pub use crate::graphics::{Brush, BrushTile};
     pub use crate::graphics::{

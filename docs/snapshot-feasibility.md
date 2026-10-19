@@ -97,7 +97,7 @@ Cost: ~40 lines on top of B. This is where the version earns its keep.
 
 | Phase | Work | Cost | Why |
 | --- | --- | --- | --- |
-| 1 | B: write batch + global version | 1-2 days | atomic groups; one wake per batch; the version everything else wants |
+| 1 | B: write batch + global version | **done** | atomic groups; one wake per batch; the version everything else wants |
 | 2 | D: derives check the version | hours | makes `remember_derived_state` correct under concurrent writers |
 | 3 | C: pass gate, only if measured | 1 day | closes torn passes; needs the `try_write` design |
 | — | A: records | weeks | do not do this |
