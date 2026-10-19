@@ -118,6 +118,28 @@ No cleanup and no rollback: a composition that is skipped does not re-run it, an
 before the drain drops it unrun. That makes it right for idempotent publishing to something outside
 the composition, and wrong for anything that needs a teardown — use `DisposableEffect` for that.
 
+### `produce_state(ctx, initial, key, producer)`
+
+An async producer feeding a `State` — Compose's `produceState`:
+
+```rust
+let status = produce_state(ctx, Status::Unknown, (), move |state| async move {
+    let mut updates = api.subscribe();
+    while let Some(next) = updates.next().await {
+        state.set(next);
+    }
+});
+```
+
+The state is remembered at `initial` and returned to read in composition; the producer receives a
+clone of the same handle, so it publishes with `state.set(..)`. A new `key` cancels the running
+producer and starts another, and leaving the composition cancels it for good — both are
+`LaunchedEffect`'s contract, which is what this is built on.
+
+Reach for it when the source is not a `watch` channel: an API with a callback, a socket, a query
+with intermediate results. For a `watch::Receiver` prefer `observe_watch` (which also re-subscribes
+when the receiver is replaced); for a value derived from other states prefer `snapshot_flow`.
+
 ### `remember_updated_state(ctx, value)`
 
 A `State` that always holds the value from the most recent composition:

@@ -240,6 +240,7 @@ pub mod prelude {
     pub use crate::effect::{
         LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope,
         observe_watch, with_frame_nanos, remember_updated_state, on_forget, side_effect,
+        produce_state,
     };
     pub use crate::animation::{
         animate_int_as_state, animate_value_as_state, cancel_animation, Animatable, DecaySpec,

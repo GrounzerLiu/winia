@@ -38,6 +38,7 @@ mod disposable;
 mod frame_clock;
 mod hooks;
 mod launched;
+mod produce;
 mod scope;
 mod watch;
 
@@ -45,6 +46,7 @@ pub use disposable::DisposableEffect;
 pub use frame_clock::{frame_tick, with_frame_nanos};
 pub use hooks::{on_forget, remember_updated_state, side_effect};
 pub use launched::LaunchedEffect;
+pub use produce::produce_state;
 pub use scope::{remember_coroutine_scope, CoroutineScope};
 pub use watch::observe_watch;
 
