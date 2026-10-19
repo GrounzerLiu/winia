@@ -96,7 +96,8 @@ pub mod prelude {
     pub use crate::runtime::composer::ComposeCtx;
     pub use crate::runtime::state_list::{ListSnapshot, MapSnapshot, StateList, StateMap};
     pub use crate::runtime::state::{
-        Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateId, Visual,
+        Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
+        Visual,
     };
     pub use crate::graphics::{Brush, BrushTile};
     pub use crate::graphics::{

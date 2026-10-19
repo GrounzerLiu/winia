@@ -12,8 +12,11 @@
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll, Waker};
 
 // ── State identity and Composer invalidation queue ──
 
@@ -214,6 +217,17 @@ struct Subscriber {
     queue: Weak<ComposerSubscription>,
 }
 
+/// A consumer of a signal's notifications that is not a Composer.
+///
+/// The Compose path above (a coalesced `pending` queue drained by a frame loop) and this one stay
+/// separate on purpose — see `docs/flow-design.md` §5, "Subscriber model". Unifying them would put
+/// the read handshake and the per-frame reconcile behind a trait object for no user-visible gain.
+pub(crate) trait StateObserver: Send + Sync {
+    /// The value changed. Called WITHOUT the signal's subscriber lock held, because an observer
+    /// may read or subscribe to the same signal and the mutex is not reentrant.
+    fn on_change(&self, id: StateId);
+}
+
 /// A State's signal owns its subscribers. There is no global state-id -> owner
 /// map, so an unowned State cannot accidentally notify a stale Composer.
 pub(crate) struct StateSignal {
@@ -222,6 +236,9 @@ pub(crate) struct StateSignal {
     /// are linearized under the subscriber lock before the value is read.
     revision: AtomicU64,
     subscribers: Mutex<Vec<Subscriber>>,
+    /// `State::changes` collectors. Lazily created: most states never have one, and an empty
+    /// `OnceLock` costs nothing on the common path.
+    observers: OnceLock<Mutex<Vec<Weak<dyn StateObserver>>>>,
 }
 
 impl StateSignal {
@@ -235,6 +252,7 @@ impl StateSignal {
             id,
             revision: AtomicU64::new(0),
             subscribers: Mutex::new(Vec::new()),
+            observers: OnceLock::new(),
         })
     }
 
@@ -296,6 +314,39 @@ impl StateSignal {
         if wake && has_live_queues {
             wake_loop();
         }
+
+        // Stream observers, OUTSIDE every lock: `on_change` is user-visible code (it wakes a
+        // task), and an observer that reads this same state would re-enter `subscribe`.
+        if let Some(list) = self.observers.get() {
+            let live: Vec<Arc<dyn StateObserver>> = {
+                let mut list = list.lock();
+                list.retain(|weak| weak.strong_count() > 0);
+                list.iter().filter_map(|weak| weak.upgrade()).collect()
+            };
+            for observer in live {
+                observer.on_change(self.id);
+            }
+        }
+    }
+
+    /// Register a non-composer observer. The signal only holds a weak handle, so a dropped
+    /// `StateChanges` unsubscribes even if its `Drop` never runs to completion.
+    fn subscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
+        let list = self.observers.get_or_init(|| Mutex::new(Vec::new()));
+        let mut list = list.lock();
+        list.retain(|weak| weak.strong_count() > 0);
+        list.push(Arc::downgrade(observer));
+    }
+
+    fn unsubscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
+        let Some(list) = self.observers.get() else {
+            return;
+        };
+        let mut list = list.lock();
+        list.retain(|weak| match weak.upgrade() {
+            Some(existing) => !Arc::ptr_eq(&existing, observer),
+            None => false,
+        });
     }
 }
 
@@ -779,6 +830,80 @@ impl<T: Clone + PartialEq + 'static> State<T> {
         self.raw.update_reactive(f);
     }
 
+    /// Observe this state from outside a composition: the current value first, then each change.
+    ///
+    /// Returns a `Stream` (futures), so `StreamExt` operators apply and a coroutine can await it.
+    /// Delivery is **conflated** — the stream reads the cell at poll time, so several writes
+    /// between two polls surface as the latest value once. Dropping the stream unsubscribes.
+    ///
+    /// A stream does not wake the event loop (it is not a composition); the awaiting task's waker
+    /// is what gets woken. See `docs/flow-design.md` for the layer above this one.
+    pub fn changes(&self) -> StateChanges<T>
+    where
+        T: Send + Sync,
+    {
+        let observer = Arc::new(ChangesObserver { waker: Mutex::new(None) });
+        let signal = &self.raw.inner.signal;
+        signal.subscribe_observer(&(observer.clone() as Arc<dyn StateObserver>));
+        StateChanges {
+            inner: Arc::clone(&self.raw.inner),
+            observer,
+            last: None,
+        }
+    }
+
+}
+
+
+/// Waker slot for one [`StateChanges`] collector.
+struct ChangesObserver {
+    waker: Mutex<Option<Waker>>,
+}
+
+impl StateObserver for ChangesObserver {
+    fn on_change(&self, _id: StateId) {
+        // Take the waker: the stream re-registers on its next poll, and a change that lands while
+        // the stream is being polled is seen by that poll's read.
+        if let Some(waker) = self.waker.lock().take() {
+            waker.wake();
+        }
+    }
+}
+
+/// The stream returned by [`State::changes`].
+pub struct StateChanges<T> {
+    inner: Arc<StateInner<T>>,
+    observer: Arc<ChangesObserver>,
+    /// Last value handed out; `None` until the seed has been emitted.
+    last: Option<T>,
+}
+
+// Nothing in here relies on pinning, so the handle is free to move.
+impl<T> Unpin for StateChanges<T> {}
+
+impl<T: Clone + PartialEq> futures_util::Stream for StateChanges<T> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<T>> {
+        let this = self.get_mut();
+        // Register BEFORE reading: a write that lands between the read and the registration would
+        // otherwise never wake this task.
+        *this.observer.waker.lock() = Some(cx.waker().clone());
+        let value = this.inner.value.read().clone();
+        if this.last.as_ref() != Some(&value) {
+            this.last = Some(value.clone());
+            Poll::Ready(Some(value))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl<T> Drop for StateChanges<T> {
+    fn drop(&mut self) {
+        let observer: Arc<dyn StateObserver> = self.observer.clone();
+        self.inner.signal.unsubscribe_observer(&observer);
+    }
 }
 
 impl<T: 'static> State<T> {
@@ -1127,6 +1252,85 @@ impl std::ops::Mul<&State<f32>> for f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    // ── State::changes: observing from outside a composition ──
+
+    fn poll_once<T>(s: &mut StateChanges<T>, cx: &mut Context<'_>) -> Poll<Option<T>>
+    where
+        T: Clone + PartialEq,
+    {
+        use futures_util::Stream as _;
+        Pin::new(s).poll_next(cx)
+    }
+
+    /// The seed is the current value; then one item per change.
+    #[test]
+    fn changes_emits_the_current_value_then_each_change() {
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let state = State::new(0u32);
+        let mut changes = state.changes();
+
+        assert_eq!(poll_once(&mut changes, &mut cx), Poll::Ready(Some(0)), "seed");
+        assert_eq!(poll_once(&mut changes, &mut cx), Poll::Pending, "nothing new yet");
+
+        state.set(1);
+        assert_eq!(poll_once(&mut changes, &mut cx), Poll::Ready(Some(1)));
+
+        // A write that changes nothing must not re-emit.
+        state.set(1);
+        assert_eq!(poll_once(&mut changes, &mut cx), Poll::Pending);
+    }
+
+    /// Several writes between two polls collapse to the latest value: the stream reads the cell.
+    #[test]
+    fn changes_conflates_writes_between_polls() {
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let state = State::new(0u32);
+        let mut changes = state.changes();
+
+        assert_eq!(poll_once(&mut changes, &mut cx), Poll::Ready(Some(0)));
+        state.set(1);
+        state.set(2);
+        state.set(3);
+        assert_eq!(
+            poll_once(&mut changes, &mut cx),
+            Poll::Ready(Some(3)),
+            "the latest value wins; intermediate ones are not queued"
+        );
+    }
+
+    /// Dropping the stream removes its observer instead of leaving a dead entry behind.
+    #[test]
+    fn a_dropped_stream_unsubscribes() {
+        let state = State::new(0u32);
+        let changes = state.changes();
+        {
+            let list = state.raw.inner.signal.observers.get().expect("observer list");
+            assert_eq!(list.lock().len(), 1);
+        }
+        drop(changes);
+        let list = state.raw.inner.signal.observers.get().expect("observer list");
+        assert!(list.lock().is_empty(), "drop must unsubscribe");
+    }
+
+    /// Two collectors on one state both receive the change.
+    #[test]
+    fn every_collector_sees_the_change() {
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let state = State::new(0u32);
+        let mut a = state.changes();
+        let mut b = state.changes();
+        assert_eq!(poll_once(&mut a, &mut cx), Poll::Ready(Some(0)));
+        assert_eq!(poll_once(&mut b, &mut cx), Poll::Ready(Some(0)));
+
+        state.set(5);
+        assert_eq!(poll_once(&mut a, &mut cx), Poll::Ready(Some(5)));
+        assert_eq!(poll_once(&mut b, &mut cx), Poll::Ready(Some(5)));
+    }
 
 
     #[test]
