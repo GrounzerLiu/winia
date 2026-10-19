@@ -195,8 +195,9 @@ LaunchedEffect::new(()).build(ctx, move |_| async move {
 });
 ```
 
-The clock handle is `Send`, so it can be captured into any task. Overlay compositions are separate
-composers and report window id 0, so use the page's handle when an overlay has to follow the page.
+The clock handle is `Send`, so it can be captured into any task. An overlay runs in its own
+`Composer`, but it inherits the window id of the page that opened it, so `ctx.frame_clock()` inside
+an overlay follows the same window.
 
 ## 4. What is NOT guaranteed
 

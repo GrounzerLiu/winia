@@ -1301,6 +1301,9 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             // 共享主窗 AdaptiveContext，确保 overlay 读 window_size/density 与主窗一致
             let mut composer = Composer::new();
             composer.adaptive = pw.composer.adaptive.clone();
+            // The overlay is its own composer, but it belongs to the same window: frame_clock()
+            // inside it has to wait on THIS window's frames rather than on window 0's.
+            composer.set_window_id(pw.composer.window_id());
             let enter_anim = desc.enter_anim.clone();
             pw.overlay.layers.push(OverlayWindow::new_with_composer(desc, composer));
             if let Some(p) = pw.overlay.layers.last().and_then(|o| o.progress.clone()) {
@@ -1537,5 +1540,46 @@ mod overlay_close_tests {
                 "a content that owns its exit is left open (defers = {defers})"
             );
         }
+    }
+
+    /// An overlay is its own composer, but it still belongs to the window that hosts it: a clock
+    /// handle a component captures inside an overlay must wait on that window's frames.
+    #[test]
+    fn an_overlay_composer_inherits_its_windows_clock_identity() {
+        let desc = OverlayDesc {
+            id: 21,
+            anchor_slot: None,
+            direction: None,
+            position: PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: true,
+            focus_scope: true,
+            dismiss_on_outside: true,
+            dismiss_on_back_press: true,
+            dismiss_defers_to_content: false,
+            click_passthrough: false,
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            on_dismiss: None,
+            enter_anim: None,
+            exit_anim: None,
+            content: Box::new(|_| {}),
+            local_snapshot: Vec::new(),
+        };
+
+        let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
+        pw.composer.set_window_id(0xD00D);
+        pw.composer.compose(|ctx: &mut crate::runtime::composer::ComposeCtx| {
+            ctx.open_overlay(desc);
+        });
+        super::sync_overlays(&mut pw, true);
+
+        let overlay = pw.overlay.layers.first().expect("the overlay was created");
+        assert_eq!(
+            overlay.composer.window_id(),
+            0xD00D,
+            "an overlay follows the window that hosts it"
+        );
     }
 }
