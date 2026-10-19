@@ -153,6 +153,42 @@ impl<T, F> Drop for SnapshotFlow<T, F> {
         }
     }
 }
+/// A `State` that mirrors `compute()`, notified only when the computed value changes.
+///
+/// Reading the source states in composition makes the caller recompose on every write — a scroll
+/// offset moving at 60 Hz recomposes a bar that only cares whether it is at the top. This keeps the
+/// recomposition tied to the RESULT: `snapshot_flow` owns the subscription and conflation, one small
+/// task copies each changed value into the `State`, and `State::set` dedups what did not change, so
+/// a component reading this handle recomposes only on a real flip.
+///
+/// The closure has to read through `get()`: `peek()` records no dependency, so a derived value built
+/// on it would never recompute.
+///
+/// Costs one task per call site for the lifetime of the composition. Right for a handful of
+/// thresholds, wrong for a per-row consumer — a synchronous derived state is the open follow-up.
+#[crate::composable]
+pub fn remember_derived_state<T: Clone + PartialEq + Send + Sync + 'static>(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    compute: impl Fn() -> T + Send + Sync + 'static,
+) -> crate::runtime::state::State<T> {
+    let compute = std::sync::Arc::new(compute);
+    let seed = std::sync::Arc::clone(&compute);
+    // `remember` already wraps the value in a `State`: building one inside would nest two.
+    let state: crate::runtime::state::State<T> = ctx.remember(move || seed());
+    let sink = state.clone();
+    crate::effect::LaunchedEffect::new(()).build(ctx, move |scope| {
+        scope.spawn(async move {
+            use futures_util::StreamExt;
+            let mut flow = snapshot_flow(move || (compute)());
+            while let Some(value) = flow.next().await {
+                sink.set(value);
+            }
+        });
+        async {}
+    });
+    state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +301,69 @@ mod tests {
             "x is no longer read, so its write must not wake the collector"
         );
         assert_eq!(poll_once(&mut flow, &mut cx), Poll::Pending);
+    }
+
+    /// The derived State notifies only when the computed RESULT changes.
+    ///
+    /// That is the whole point of the helper: a source that moves within one bucket must not
+    /// recompose the reader.
+    #[test]
+    fn a_derived_state_notifies_only_when_the_result_changes() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = rt.enter();
+
+        let source = State::new(0i32);
+        let s = source.clone();
+        let slot: std::sync::Arc<std::sync::Mutex<Option<State<bool>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot_in = slot.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let derived = crate::flow::remember_derived_state(ctx, move || s.get() != 0);
+            *slot_in.lock().unwrap() = Some(derived);
+        });
+        let drive = || rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });
+        drive();
+
+        let derived = slot.lock().unwrap().clone().unwrap();
+        assert!(!derived.peek(), "the seed comes from the first computation");
+        let mut changes = derived.changes();
+        // The seed is the stream's first item.
+        assert_eq!(rt.block_on(async { futures_util::StreamExt::next(&mut changes).await }), Some(false));
+
+        // A flip notifies once.
+        source.set(5);
+        drive();
+        assert!(derived.peek(), "the derived value follows the source");
+        assert_eq!(
+            rt.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    futures_util::StreamExt::next(&mut changes),
+                )
+                .await
+                .expect("the flip notifies")
+            }),
+            Some(true)
+        );
+
+        // Movement inside the same bucket does not.
+        source.set(6);
+        drive();
+        assert!(
+            rt.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    futures_util::StreamExt::next(&mut changes),
+                )
+                .await
+                .is_err()
+            }),
+            "a value that stays in the same bucket must not notify"
+        );
     }
 
     /// A write that lands INSIDE the computation is not lost.

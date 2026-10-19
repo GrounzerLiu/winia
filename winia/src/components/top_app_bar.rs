@@ -229,7 +229,15 @@ impl TopAppBar {
         // (112/136 and 120/152 — `expanded_height`).
         let subtitle_present = self.subtitle.is_some();
         let expanded = expanded_height(self.variant, subtitle_present);
-        let fraction = self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0);
+        // A single-row bar never collapses, so the only thing it needs from the scroll is
+        // "away from the top or not". Reading the offset itself would make it recompose on every
+        // scroll pixel; the derived boolean flips only when that fact changes.
+        let two_row = is_two_row(self.variant);
+        let fraction = if two_row {
+            self.scroll_behavior.as_ref().map(|behavior| { debug_assert!((behavior.expanded_height() - expanded).abs() < f32::EPSILON); behavior.collapse_fraction() }).unwrap_or(0.0)
+        } else {
+            0.0
+        };
         let height = expanded - (expanded - TOP_APP_BAR_HEIGHT) * fraction;
         let navigation_present = self.navigation_icon.is_some();
         let actions_present = self.actions.is_some();
@@ -241,7 +249,20 @@ impl TopAppBar {
         };
         let policy = TopAppBarLayoutPolicy { variant: self.variant, fraction, direction, navigation_present, actions_present, subtitle_present, expanded_height: expanded, bottom_inset };
         let title_style = title_style(if is_two_row(self.variant) { expanded_title_style(self.variant) } else { WiniaTheme::typography().title_large }, colors.title);
-        let scroll_offset = self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0);
+        let scroll_offset = if two_row {
+            self.scroll_behavior.as_ref().map(|behavior| behavior.scroll_offset()).unwrap_or(0.0)
+        } else {
+            // The first consumer of the flow layer: `snapshot_flow` watches `offset != 0`, and the
+            // `State` it feeds is what this composition depends on.
+            let scrolled = match &self.scroll_behavior {
+                Some(behavior) => {
+                    let source = behavior.clone();
+                    crate::flow::remember_derived_state(ctx, move || source.scroll_offset() != 0.0).get()
+                }
+                None => false,
+            };
+            if scrolled { 1.0 } else { 0.0 }
+        };
         let target_container = colors.container_color(self.variant, scroll_offset, fraction);
         let container_color = if matches!(self.variant, TopAppBarVariant::Standard | TopAppBarVariant::CenterAligned) {
             // M3 animates this one with DefaultEffects — see `top_app_bar_container_spec`.
