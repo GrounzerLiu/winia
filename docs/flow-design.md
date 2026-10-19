@@ -1,7 +1,7 @@
 # Flows: observing state from outside a composition
 
-> Status: **layers 1 and 2 implemented** — `State::changes` and `snapshot_flow`. Layer 3
-> (operators, interaction sequences) is planned here, not built.
+> Status: **layers 1–3 implemented** — `State::changes`, `snapshot_flow`, `debounce`. The rest of
+> layer 3 (`sample`, interaction sequences) is planned here, not built.
 
 ## 1. The problem
 
@@ -127,7 +127,31 @@ for the intended "watch a threshold" usage, wrong for a closure that is expensiv
 (compose the work out of it, or debounce at the collector). And a closure that writes a state it
 reads is a feedback loop with no natural stop; the caller owns that.
 
-## 7. Non-goals
+## 7. Layer 3: operators
+
+```rust
+let quiet = debounce(query.changes(), Duration::from_millis(300));
+```
+
+`debounce` is the operator UI code actually reaches for: a search field that fires once the user
+stops typing, a scroll position that has to settle before it is published. It is a `Stream`
+adapter in `flow/ops.rs`, not a method on anything.
+
+Semantics, each pinned by a test under a paused tokio clock:
+
+- an item that arrives before the period elapses **replaces** the pending one and restarts the
+  clock, so a burst of N becomes one emission of the last value;
+- the end of the upstream does not drop the pending value — it still waits out its period, then the
+  stream finishes;
+- the timer is created on the first item, inside the poll, so a tokio runtime with time enabled is
+  required (the same requirement `LaunchedEffect` has).
+
+`sample` (emit the latest value once per period) is not built: `snapshot_flow` already conflates
+by frame, which covers the scroll-driven case, and no caller has needed the tick-aligned variant
+yet. Interaction sequences remain unbuilt for the same reason — no use case has asked for order
+rather than state.
+
+## 8. Non-goals
 
 - **A `Flow` type of our own.** `Stream` + `futures`/`tokio-stream` operators is the transport.
 - **Hot vs cold distinction as a public concept.** `changes()` is cold (subscribes on creation, one
@@ -135,7 +159,7 @@ reads is a feedback loop with no natural stop; the caller owns that.
 - **Replacing the composer's dependency machinery.** L1's observer list is additive on purpose.
 - **Backpressure.** Conflation is the policy; a slow collector sees the latest value, not a queue.
 
-## 8. Risks
+## 9. Risks
 
 1. **Observer leaks.** A `StateChanges` dropped without polling still holds an `Arc`; `Drop`
    unsubscribes, and the weak list prunes dead entries on the next `notify`.

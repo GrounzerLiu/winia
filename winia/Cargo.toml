@@ -69,6 +69,9 @@ windows = { version = "0.62", optional = true, features = [
 ] }
 [dev-dependencies]
 serde_json = "1"
+# The flow operator tests drive debounce under a PAUSED clock, so they assert exact periods instead
+# of sleeping. Test builds only: tokio's `test-util` feature is what `start_paused` needs.
+tokio = { version = "1", features = ["test-util"] }
 
 # ── UI-test fixtures: ONE bin target (cargo test does not run it; path is target/debug/fixture_all.exe) ──
 # tests/ui_test.rs drives it over the stdin/stdout pipe (independent of examples — test assets).

@@ -5,6 +5,10 @@
 //! it useful for "do something when this becomes true" work (a scroll position crossing a threshold,
 //! a debounced query, a filtered list becoming empty).
 
+pub mod ops;
+
+pub use ops::{debounce, Debounce};
+
 use crate::runtime::state::{begin_tracking_frame, take_deps, StateId, StateObserver, StateSignal};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
