@@ -1151,6 +1151,7 @@ impl ApplicationHandler for AppState {
                     if let Some(registry) = pw.composer.saveable_registry() {
                         let saved = registry.perform_save();
                         if !saved.is_empty() {
+                            crate::runtime::saveable::persist::save_saved(key, &saved);
                             self.saveable.insert(key, saved);
                         }
                     }
@@ -2254,7 +2255,13 @@ impl AppState {
         // and it cannot survive a reopen on its own.
         let saveable_key = pending.saveable_key.or(pending.created_id);
         if let Some(key) = saveable_key {
-            let restored = self.saveable.remove(&key).unwrap_or_default();
+            // In-memory first (a window re-opened in this process), then whatever a previous RUN
+            // left on disk. Both are best-effort: a missing or corrupt file is just an empty map.
+            let restored = self
+                .saveable
+                .remove(&key)
+                .or_else(|| crate::runtime::saveable::persist::load_saved(key))
+                .unwrap_or_default();
             pw.saveable_key = Some(key);
             pw.composer
                 .set_saveable_registry(crate::runtime::saveable::SaveableStateRegistry::new(restored));

@@ -100,6 +100,7 @@ impl Window {
                     if let Some(registry) = pw.composer.saveable_registry() {
                         let saved = registry.perform_save();
                         if !saved.is_empty() {
+                            crate::runtime::saveable::persist::save_saved(key, &saved);
                             saveable.insert(key, saved);
                         }
                     }

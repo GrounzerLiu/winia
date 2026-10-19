@@ -48,9 +48,9 @@ options and the recommended phases.
 `runtime/saveable.rs`: `remember_saveable` + `SaveableStateRegistry`, wired into the window
 lifecycle (`AppState.saveable`, keyed by `created_id`). See [saveable.md](saveable.md).
 
-What is *not* done: persistence across a process restart (nothing is serialized to disk), and
-`nav.rs` still carries its own `SaveableStateHolder` for navigation entries rather than sharing the
-registry.
+Persistence across a process restart is opt-in (`saveable::persist::set_store`) and implemented
+(versioned, atomic, size-capped JSON). What is *not* done: `nav.rs` still carries its own
+`SaveableStateHolder` for navigation entries rather than sharing the registry.
 
 
 **Why it mattered.** The effect work made window lifetime explicit (`FrameClock::for_window`,

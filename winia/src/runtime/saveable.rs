@@ -399,3 +399,420 @@ mod tests {
         );
     }
 }
+// ── Persistence ──
+
+/// On-disk form of the registry, for state that has to survive the process.
+///
+/// Everything here is defensive on purpose: a corrupted, truncated, oversized or foreign file must
+/// never panic and never take the UI down. Any problem is logged and treated as "nothing saved" - the
+/// application starts fresh, which is the only sane degradation for a cache-like file.
+///
+/// Format (JSON, `version` first so a future change can reject cleanly):
+///
+/// ```json
+/// {"version":1,"values":{"count":{"i":42},"name":{"t":"hi"},"ratio":{"f":"400921fb54442d18"}}}
+/// ```
+///
+/// `f64` is stored as the hex of its bits, not as a JSON number: JSON has no NaN or infinity, and
+/// rounding a value the user saved would be a silent corruption. The tags also keep the format
+/// self-describing, so an unknown one is skipped instead of poisoning the whole file.
+pub mod persist {
+    use crate::debug_log;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    use super::SavedValue;
+
+    /// Refuse anything larger: a saved-state file is a few kilobytes, so a multi-megabyte one is
+    /// either foreign or hostile, and reading it would be a slow way to run out of memory.
+    const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+    const FORMAT_VERSION: u64 = 1;
+
+    /// Where snapshots live between runs.
+    #[derive(Clone, Debug)]
+    pub struct PersistStore {
+        dir: PathBuf,
+    }
+
+    impl PersistStore {
+        /// Use `dir` for snapshots. The directory is created on first save, not here.
+        ///
+        /// `dir` is the whole namespace: one per application. Window keys are derived from call
+        /// sites inside that application, so two applications sharing a directory would look up
+        /// each other's keys.
+        pub fn open(dir: impl Into<PathBuf>) -> Self {
+            Self { dir: dir.into() }
+        }
+
+        fn path_for(&self, key: u64) -> PathBuf {
+            self.dir.join(format!("window-{key:016x}.json"))
+        }
+
+        /// Read the snapshot for `key`. Any failure - missing file, wrong version, unreadable, too
+        /// large, corrupt - yields an empty map rather than an error: the caller cannot do anything
+        /// useful with the distinction, and a fresh start is always valid.
+        pub fn load(&self, key: u64) -> HashMap<String, SavedValue> {
+            let path = self.path_for(key);
+            let meta = match std::fs::metadata(&path) {
+                Ok(meta) => meta,
+                Err(_) => return HashMap::new(),
+            };
+            if !meta.is_file() {
+                return HashMap::new();
+            }
+            if meta.len() > MAX_FILE_BYTES {
+                debug_log!("[saveable] refusing to read {}: {} bytes", path.display(), meta.len());
+                return HashMap::new();
+            }
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(e) => {
+                    debug_log!("[saveable] unreadable {}: {e}", path.display());
+                    return HashMap::new();
+                }
+            };
+            match decode(&text) {
+                Some(values) => values,
+                None => {
+                    debug_log!("[saveable] ignoring corrupt state in {}", path.display());
+                    HashMap::new()
+                }
+            }
+        }
+
+        /// Write the snapshot for `key`. Errors are logged, never propagated: losing a restore point is
+        /// not worth taking a window down.
+        pub fn save(&self, key: u64, values: &HashMap<String, SavedValue>) {
+            if let Err(e) = std::fs::create_dir_all(&self.dir) {
+                debug_log!("[saveable] cannot create {}: {e}", self.dir.display());
+                return;
+            }
+            let path = self.path_for(key);
+            let body = encode(values);
+            // Refuse to WRITE something the reader would refuse to read: an oversized file that is
+            // silently ignored on the next run is worse than a logged skip.
+            if body.len() as u64 > MAX_FILE_BYTES {
+                debug_log!(
+                    "[saveable] not saving {}: {} bytes exceeds the {} byte cap",
+                    path.display(),
+                    body.len(),
+                    MAX_FILE_BYTES
+                );
+                return;
+            }
+            // Atomic replace: a crash mid-write must not leave a half file that the next run then
+            // refuses - the previous snapshot stays valid instead.
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, body) {
+                debug_log!("[saveable] cannot write {}: {e}", tmp.display());
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                // Windows refuses to rename onto an existing file; drop the old one and retry once.
+                let _ = std::fs::remove_file(&path);
+                if let Err(e2) = std::fs::rename(&tmp, &path) {
+                    debug_log!("[saveable] cannot replace {}: {e} / {e2}", path.display());
+                    let _ = std::fs::remove_file(&tmp);
+                }
+            }
+        }
+
+        /// Remove a snapshot, e.g. once its window has restored it and no longer needs the file.
+        pub fn forget(&self, key: u64) {
+            let _ = std::fs::remove_file(self.path_for(key));
+        }
+    }
+
+    fn encode(values: &HashMap<String, SavedValue>) -> String {
+        let mut map = serde_json::Map::with_capacity(values.len());
+        for (key, value) in values {
+            let encoded = match value {
+                SavedValue::Bool(v) => Some(serde_json::json!({ "b": v })),
+                SavedValue::I64(v) => Some(serde_json::json!({ "i": v })),
+                SavedValue::F64(v) => Some(serde_json::json!({ "f": format!("{:016x}", v.to_bits()) })),
+                SavedValue::Text(v) => Some(serde_json::json!({ "t": v })),
+            };
+            if let Some(encoded) = encoded {
+                map.insert(key.clone(), encoded);
+            }
+        }
+        serde_json::json!({ "version": FORMAT_VERSION, "values": map }).to_string()
+    }
+
+    fn decode(text: &str) -> Option<HashMap<String, SavedValue>> {
+        let root: serde_json::Value = serde_json::from_str(text).ok()?;
+        let version = root.get("version")?.as_u64()?;
+        if version != FORMAT_VERSION {
+            debug_log!("[saveable] snapshot version {version} is not {FORMAT_VERSION}; ignoring");
+            return None;
+        }
+        let values = root.get("values")?.as_object()?;
+        let mut out = HashMap::with_capacity(values.len());
+        for (key, value) in values {
+            // A single malformed entry is skipped, not fatal: the rest of the snapshot is still good.
+            if let Some(decoded) = decode_value(value) {
+                out.insert(key.clone(), decoded);
+            }
+        }
+        Some(out)
+    }
+
+    fn decode_value(value: &serde_json::Value) -> Option<SavedValue> {
+        let object = value.as_object()?;
+        if let Some(v) = object.get("b").and_then(|v| v.as_bool()) {
+            return Some(SavedValue::Bool(v));
+        }
+        if let Some(v) = object.get("i").and_then(|v| v.as_i64()) {
+            return Some(SavedValue::I64(v));
+        }
+        if let Some(text) = object.get("f").and_then(|v| v.as_str()) {
+            let bits = u64::from_str_radix(text, 16).ok()?;
+            return Some(SavedValue::F64(f64::from_bits(bits)));
+        }
+        if let Some(text) = object.get("t").and_then(|v| v.as_str()) {
+            return Some(SavedValue::Text(text.to_string()));
+        }
+        None
+    }
+
+    static STORE: std::sync::Mutex<Option<Arc<PersistStore>>> = std::sync::Mutex::new(None);
+
+    /// Send snapshots to disk. Call before the first window opens; without it state only lives in
+    /// memory for the process lifetime (the default, and the right one for tests).
+    pub fn set_store(store: Option<PersistStore>) {
+        *STORE.lock().unwrap_or_else(|e| e.into_inner()) = store.map(Arc::new);
+    }
+
+    /// The configured store, if any.
+    pub(crate) fn store() -> Option<Arc<PersistStore>> {
+        STORE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Load a snapshot from the configured store (empty when there is none).
+    pub(crate) fn load_saved(key: u64) -> Option<HashMap<String, SavedValue>> {
+        store().map(|store| store.load(key))
+    }
+
+    /// Persist a snapshot to the configured store, if any.
+    pub(crate) fn save_saved(key: u64, values: &HashMap<String, SavedValue>) {
+        if let Some(store) = store() {
+            store.save(key, values);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A scratch directory INSIDE the workspace: the test runner may be sandboxed away from the
+        /// system temp directory, and a test that silently cannot write would assert on nothing.
+        fn temp_dir(tag: &str) -> PathBuf {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            // Under the WORKSPACE target directory (the one cargo itself writes to), not the process
+            // temp dir and not the crate dir: a test binary may be sandboxed away from both.
+            let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let dir = workspace
+                .join("target")
+                .join("test-tmp")
+                .join(format!("saveable-{tag}-{unique}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            dir
+        }
+
+        /// Save and fail loudly if the file did not appear - otherwise a sandboxed or read-only
+        /// environment turns every assertion below into "left: 0" with no clue why.
+        fn save_or_fail(store: &PersistStore, key: u64, values: &HashMap<String, SavedValue>) {
+            store.save(key, values);
+            assert!(
+                store.path_for(key).is_file(),
+                "the snapshot was not written to {} (permissions?)",
+                store.path_for(key).display()
+            );
+        }
+
+        fn sample() -> HashMap<String, SavedValue> {
+            let mut values = HashMap::new();
+            values.insert("count".to_string(), SavedValue::I64(42));
+            values.insert("name".to_string(), SavedValue::Text("hi".to_string()));
+            values.insert("ratio".to_string(), SavedValue::F64(0.5));
+            values.insert("flag".to_string(), SavedValue::Bool(true));
+            values
+        }
+
+        #[test]
+        fn a_snapshot_round_trips_through_the_file() {
+            let dir = temp_dir("roundtrip");
+            let store = PersistStore::open(&dir);
+            save_or_fail(&store, 7, &sample());
+            let mut loaded = store.load(7);
+            loaded.remove("ratio");
+            assert_eq!(loaded.len(), 3);
+            assert_eq!(store.load(7).get("ratio"), Some(&SavedValue::F64(0.5)));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn nan_survives_exactly() {
+            let dir = temp_dir("nan");
+            let store = PersistStore::open(&dir);
+            let mut values = HashMap::new();
+            values.insert("nan".to_string(), SavedValue::F64(f64::NAN));
+            values.insert("inf".to_string(), SavedValue::F64(f64::INFINITY));
+            save_or_fail(&store, 1, &values);
+            let loaded = store.load(1);
+            match loaded.get("nan") {
+                Some(SavedValue::F64(v)) => assert!(v.is_nan(), "NaN has to come back as NaN"),
+                other => panic!("expected a NaN, got {other:?}"),
+            }
+            match loaded.get("inf") {
+                Some(SavedValue::F64(v)) => assert_eq!(*v, f64::INFINITY),
+                other => panic!("expected infinity, got {other:?}"),
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn missing_directory_loads_empty() {
+            let dir = temp_dir("missing");
+            let store = PersistStore::open(&dir);
+            assert!(store.load(3).is_empty());
+        }
+
+        #[test]
+        fn corrupt_file_loads_empty_instead_of_panicking() {
+            let dir = temp_dir("corrupt");
+            let store = PersistStore::open(&dir);
+            store.save(5, &sample());
+            std::fs::write(store.path_for(5), "{ this is not json").unwrap();
+            assert!(store.load(5).is_empty(), "a corrupt file is ignored, not fatal");
+
+            std::fs::write(store.path_for(5), "").unwrap();
+            assert!(store.load(5).is_empty(), "an empty file is ignored too");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_truncated_snapshot_is_ignored() {
+            let dir = temp_dir("truncated");
+            let store = PersistStore::open(&dir);
+            store.save(9, &sample());
+            let body = std::fs::read_to_string(store.path_for(9)).unwrap();
+            std::fs::write(store.path_for(9), &body[..body.len() / 2]).unwrap();
+            assert!(store.load(9).is_empty());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn an_oversized_snapshot_is_refused() {
+            let dir = temp_dir("oversized");
+            let store = PersistStore::open(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(store.path_for(9), vec![b'x'; (MAX_FILE_BYTES + 1) as usize]).unwrap();
+            assert!(store.load(9).is_empty(), "a multi-megabyte file is not worth reading");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn an_unknown_version_is_ignored() {
+            let dir = temp_dir("version");
+            let store = PersistStore::open(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(store.path_for(1), r#"{"version":99,"values":{"a":{"i":1}}}"#).unwrap();
+            assert!(store.load(1).is_empty(), "a future format must not be guessed at");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_malformed_entry_is_skipped_and_the_rest_survives() {
+            let dir = temp_dir("partial");
+            let store = PersistStore::open(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                store.path_for(1),
+                r#"{"version":1,"values":{"good":{"i":3},"bad":{"zzz":1},"also":{"t":"ok"}}}"#,
+            )
+            .unwrap();
+            let loaded = store.load(1);
+            assert_eq!(loaded.get("good"), Some(&SavedValue::I64(3)));
+            assert_eq!(loaded.get("also"), Some(&SavedValue::Text("ok".to_string())));
+            assert!(!loaded.contains_key("bad"));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A value too large for the reader is not written in the first place.
+        #[test]
+        fn an_oversized_value_is_not_written() {
+            let dir = temp_dir("bigvalue");
+            let store = PersistStore::open(&dir);
+            let mut values = HashMap::new();
+            values.insert("huge".to_string(), SavedValue::Text("x".repeat((MAX_FILE_BYTES + 1) as usize)));
+            store.save(1, &values);
+            assert!(
+                !store.path_for(1).exists(),
+                "a snapshot the reader would refuse must not be written"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn saving_twice_replaces_the_snapshot() {
+            let dir = temp_dir("overwrite");
+            let store = PersistStore::open(&dir);
+            let mut first = HashMap::new();
+            first.insert("a".to_string(), SavedValue::I64(1));
+            save_or_fail(&store, 2, &first);
+            let mut second = HashMap::new();
+            second.insert("b".to_string(), SavedValue::I64(2));
+            save_or_fail(&store, 2, &second);
+            let loaded = store.load(2);
+            assert_eq!(loaded.get("b"), Some(&SavedValue::I64(2)));
+            assert!(!loaded.contains_key("a"));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// The configured store is optional: no store means no disk access at all.
+        /// The configured store is process-global, so tests that change it take turns.
+        static STORE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        #[test]
+        fn the_global_store_is_optional_and_round_trips() {
+            let _serial = STORE_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            let dir = temp_dir("global");
+            set_store(Some(PersistStore::open(&dir)));
+            let mut values = HashMap::new();
+            values.insert("k".to_string(), SavedValue::I64(1));
+            save_saved(5, &values);
+            assert_eq!(
+                load_saved(5).and_then(|v| v.get("k").cloned()),
+                Some(SavedValue::I64(1))
+            );
+
+            set_store(None);
+            assert!(
+                load_saved(5).is_none(),
+                "with no store configured nothing touches the disk"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn a_read_only_directory_does_not_panic_or_lose_the_process() {
+            let dir = temp_dir("readonly");
+            let store = PersistStore::open(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            // Simulate an unwritable target by replacing the destination with a directory: renaming
+            // onto it fails, and the store must swallow that rather than propagate.
+            std::fs::create_dir_all(store.path_for(4)).unwrap();
+            store.save(4, &sample());
+            assert!(store.load(4).is_empty());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+}

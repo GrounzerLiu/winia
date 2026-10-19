@@ -46,10 +46,33 @@ declarative close (`process_detached`, when the declaring tree stops declaring t
 usual "close" for `if show { Window::new(..) }`). App exit is not covered.
 
 
-## Limits, stated up front
+## Persistence (opt-in)
 
-- **Same process only.** Nothing is serialized to disk. Surviving a process restart needs a
-  persisted form (`SavedValue` -> bytes), which is a separate decision about where it lives.
+```rust
+winia::runtime::saveable::persist::set_store(Some(
+    winia::runtime::saveable::persist::PersistStore::open(data_dir.join("myapp")),
+));
+```
+
+With a store configured, snapshots are written on both close paths and read when a window is
+created, so state survives a process restart. Without one, everything stays in memory (the default,
+and what tests want).
+
+The on-disk form is JSON with a `version` field and one tagged entry per value (`{"i":42}`,
+`{"t":"hi"}`, `{"b":true}`, `{"f":"<hex bits>"}`). `f64` is stored as its bits, not a JSON number:
+JSON has no NaN or infinity, and rounding a saved value would be a silent corruption.
+
+What makes it safe to keep a cache-like file around:
+
+- **Never fatal.** Every failure — missing directory, permissions, disk full, truncated file,
+  corrupt JSON, an unknown version, an oversized file — is logged and treated as "nothing saved".
+- **Atomic replace.** The body goes to `<name>.json.tmp` and is renamed into place, so a crash
+  mid-write leaves the previous snapshot intact instead of a half file.
+- **Bounded.** A snapshot larger than 4 MiB is refused unread; a saved state is kilobytes.
+- **Tolerant reads.** A single malformed entry is skipped and the rest of the snapshot survives;
+  an unknown future `version` is ignored rather than guessed at.
+
+## Limits, stated up front
 - **A closed set of types.** `SavedValue` is a closed enum on purpose (Compose restricts it to Bundle
   types for the same reason): a value that must be reconstructable is data, not a handle. A custom
   type implements `Saveable` and flattens itself.
