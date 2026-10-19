@@ -21,8 +21,10 @@ count.update(|v| *v += 1);
 - `SaveableStateRegistry::new(restored)` — where values come from and go to; `perform_save()` returns
   the current snapshot; `consume_restored(key)` takes a value once.
 - `with_saveable_registry(registry, || { ... })` — provide one for a composition you manage yourself.
-- A composer can carry one (`Composer::set_saveable_registry`), which is how the window lifecycle uses
-  it: the registry is provided for every pass, not only the first.
+- A composer can carry one (`Composer::set_saveable_registry`, crate-internal), which is how the
+  window lifecycle uses it: the registry is provided for every pass, not only the first. From outside
+  the crate, `with_saveable_registry` is the public route — and it has to wrap EVERY pass, not just
+  the first, or a call site that appears later is never registered.
 
 Without a registry in scope, `remember_saveable` is plain `remember` with an explicit key — the same
 call site works in tests and previews, it just never leaves the slot.
@@ -30,13 +32,19 @@ call site works in tests and previews, it just never leaves the slot.
 ## What restores what
 
 ```text
-window closes  ->  registry.perform_save()  ->  HashMap<created_id, HashMap<key, SavedValue>>
+window closes  ->  registry.perform_save()  ->  HashMap<saveable_key, HashMap<key, SavedValue>>
 window reopens ->  registry = new(saved)    ->  remember_saveable(key, ..) restores by key
 ```
 
-`AppState` keeps that map keyed by the window's `created_id` (the declarer's id, not the volatile
-`WindowId`), so a window recreated with the same id picks its state back up. The snapshot is taken on
-`CloseRequested`, while the composition that provides the registry is still alive.
+The map is keyed by `saveable_key`: the DECLARATION SITE of the window, not its `WindowId` and not
+its `created_id` (a fresh one is minted for every window, so it cannot carry state across a reopen).
+`Window::build` passes the salted key of its own call site; `open_window_with_saveable_key` lets a
+programmatic opener supply its own.
+
+Snapshots are taken in BOTH close paths: `CloseRequested` (the user closed the window) and the
+declarative close (`process_detached`, when the declaring tree stops declaring the window — the
+usual "close" for `if show { Window::new(..) }`). App exit is not covered.
+
 
 ## Limits, stated up front
 
@@ -46,8 +54,8 @@ window reopens ->  registry = new(saved)    ->  remember_saveable(key, ..) resto
   types for the same reason): a value that must be reconstructable is data, not a handle. A custom
   type implements `Saveable` and flattens itself.
 - **Keys are explicit and ordered.** Two `remember_saveable` calls with the same key in one
-  composition: the first to be composed restores, the second looks like a fresh value — a duplicated
-  key is visible rather than silently shared.
+  composition: restore goes to the first to compose (the value is consumed once) and save also goes to
+  the first registration, so both legs pick the same owner. A duplicate key asserts in debug builds.
 - **Removal drops the provider.** A composition point that goes away stops feeding the registry, so a
   dead composition cannot overwrite the next window's state.
 

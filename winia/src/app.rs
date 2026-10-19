@@ -46,6 +46,9 @@ struct PendingWindow {
     pub content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>,
     pub on_close: Option<Box<dyn FnMut() + Send>>,
     pub created_id: Option<u64>,
+    /// Stable key for saveable state, when the caller has one (the declaring call site's salted key).
+    /// `created_id` is minted fresh for every window, so it cannot carry state across a reopen.
+    pub saveable_key: Option<u64>,
     pub theme: Option<crate::theme::WindowTheme>,
 }
 use skiwin::capture::{request_capture, take_capture};
@@ -203,6 +206,8 @@ pub(crate) struct PerWindow {
     window_size_backchannel: std::cell::RefCell<Option<crate::runtime::state::Backchannel<(f32, f32)>>>,
     pub(crate) on_close: Option<Box<dyn FnMut() + Send>>,
     pub(crate) created_id: Option<u64>,
+    /// Stable key this window saves its saveable state under (see `PendingWindow::saveable_key`).
+    pub(crate) saveable_key: Option<u64>,
 
     /// 焦点节点的 slot_key
     pub(crate) focused_slot_key: Option<u64>,
@@ -236,7 +241,7 @@ impl PerWindow {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
         let theme = WindowThemeState::from_theme(theme);
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, theme, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -968,7 +973,12 @@ impl ApplicationHandler for AppState {
         }
         AppState::process_pending_windows(self, event_loop);
         // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
-        crate::app::window::Window::process_detached(&mut self.windows, event_loop, &|| debug::force_shutdown());
+        crate::app::window::Window::process_detached(
+            &mut self.windows,
+            event_loop,
+            &|| debug::force_shutdown(),
+            &mut self.saveable,
+        );
         // Redraw requests raised from OUTSIDE the window they concern: a `Window` node publishing a new
         // theme intent runs in its DECLARING tree, which leaves the window's own composer with nothing
         // pending — without this its frame would never be scheduled and the new theme would sit unseen.
@@ -1137,11 +1147,11 @@ impl ApplicationHandler for AppState {
             WindowEvent::CloseRequested => {
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 // Snapshot saveable state while the composition is still alive to provide it.
-                if let Some(created_id) = pw.created_id {
+                if let Some(key) = pw.saveable_key {
                     if let Some(registry) = pw.composer.saveable_registry() {
                         let saved = registry.perform_save();
                         if !saved.is_empty() {
-                            self.saveable.insert(created_id, saved);
+                            self.saveable.insert(key, saved);
                         }
                     }
                 }
@@ -2239,9 +2249,13 @@ impl AppState {
         pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
-        // A window recreated with the same created_id picks up what the last one saved.
-        if let Some(created_id) = pending.created_id {
-            let restored = self.saveable.remove(&created_id).unwrap_or_default();
+        // A window re-opened at the same declaration site picks up what the last one saved. The key
+        // is the caller's stable one; `created_id` is a fallback for openers that have nothing better,
+        // and it cannot survive a reopen on its own.
+        let saveable_key = pending.saveable_key.or(pending.created_id);
+        if let Some(key) = saveable_key {
+            let restored = self.saveable.remove(&key).unwrap_or_default();
+            pw.saveable_key = Some(key);
             pw.composer
                 .set_saveable_registry(crate::runtime::saveable::SaveableStateRegistry::new(restored));
         }
@@ -2323,7 +2337,16 @@ fn take_redraw_requests() -> Vec<u64> {
 }
 
 pub fn open_window_with_title(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
-    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, theme });
+    open_window_with_saveable_key(width, height, title, content, on_close, created_id, None, theme);
+}
+
+/// [`open_window_with_title`] plus a STABLE key for saveable state.
+///
+/// The key has to survive a close: it is what a re-opened window is matched against. `created_id`
+/// cannot do that job (a fresh one is minted per window), so the declarative `Window` passes the
+/// salted key of its own call site.
+pub fn open_window_with_saveable_key(width: f32, height: f32, title: String, content: Option<Box<dyn Fn(&mut ComposeCtx) + Send>>, on_close: Option<Box<dyn FnMut() + Send>>, created_id: Option<u64>, saveable_key: Option<u64>, theme: Option<crate::theme::WindowTheme>) {
+    GLOBAL_PENDING.lock().unwrap().push(PendingWindow { width, height, title, content, on_close, created_id, saveable_key, theme });
     wake_impl();
 }
 

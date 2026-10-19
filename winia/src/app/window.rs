@@ -65,7 +65,8 @@ impl Window {
     /// 在 compose 末尾调用，检测是否有关闭窗口需求
     pub(crate) fn process_detached(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
                                    event_loop: &dyn winit::event_loop::ActiveEventLoop,
-                                   force_shutdown: &dyn Fn()) {
+                                   force_shutdown: &dyn Fn(),
+                                   saveable: &mut std::collections::HashMap<u64, std::collections::HashMap<String, crate::runtime::saveable::SavedValue>>) {
         let pending: Vec<(winit::window::WindowId, u64)> = windows
             .iter()
             .filter_map(|(window_id, pw)| {
@@ -75,14 +76,15 @@ impl Window {
         for (owner_window_id, wid) in pending {
             let Some(pw) = windows.get(&owner_window_id) else { continue };
             pw.composer.reset_pending_window_remove();
-            Self::close_detached_window(windows, event_loop, force_shutdown, wid);
+            Self::close_detached_window(windows, event_loop, force_shutdown, wid, saveable);
         }
     }
 
     fn close_detached_window(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
                              event_loop: &dyn winit::event_loop::ActiveEventLoop,
                              force_shutdown: &dyn Fn(),
-                             wid: u64) {
+                             wid: u64,
+                             saveable: &mut std::collections::HashMap<u64, std::collections::HashMap<String, crate::runtime::saveable::SavedValue>>) {
         // Window::build was not called for the Composer that owns this request.
         if !CREATED.lock().unwrap().contains(&wid) { return; }
         CREATED.lock().unwrap().remove(&wid);
@@ -92,6 +94,16 @@ impl Window {
             .collect();
         for w in to_close {
             if let Some(mut pw) = windows.remove(&w) {
+                // A programmatic close (the declarer stopped declaring the window) is the usual way a
+                // window goes away, so it has to snapshot saveable state too.
+                if let Some(key) = pw.saveable_key {
+                    if let Some(registry) = pw.composer.saveable_registry() {
+                        let saved = registry.perform_save();
+                        if !saved.is_empty() {
+                            saveable.insert(key, saved);
+                        }
+                    }
+                }
                 // 清理 debug 树条目（逻辑关闭不走 winit Destroyed——残留会误判）
                 crate::debug::remove_tree(w.into_raw() as u64);
                 if let Some(ref mut cb) = pw.on_close { cb(); }
@@ -171,9 +183,11 @@ impl Window {
             // the window to its startup colors — the app's own theme switch flipped the surface behind the
             // tree while every component kept composing with the old colors. `app::open_window` wraps the
             // content in it, so this stays a plain closure.
-            app::open_window_with_title(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
+            // The saveable key is the DECLARATION SITE's salted key, not the freshly minted window id:
+            // a re-opened window has to be matched against the site that declared it.
+            app::open_window_with_saveable_key(w, h, self.state.title.clone(), Some(Box::new(move |ctx| {
                 sub_window_content(ctx, &content);
-            })), wrapped, Some(id), Some(theme));
+            })), wrapped, Some(id), Some(key), Some(theme));
         }
 
         ctx.end_node();

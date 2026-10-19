@@ -112,6 +112,21 @@ impl SaveableStateRegistry {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).restored.remove(key)
     }
 
+    /// Decode the value saved under `key` and consume it only if it decodes.
+    ///
+    /// A value whose type does not match this call site is LEFT in place: consuming it first and
+    /// decoding afterwards would destroy data on a mismatch, and the mismatch is exactly what a
+    /// changed type at that key looks like.
+    fn restore_typed<T: Saveable>(&self, key: &str) -> Option<T> {
+        let raw = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.restored.get(key).cloned()
+        };
+        let value = T::from_saved(&raw?)?;
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).restored.remove(key);
+        Some(value)
+    }
+
     /// Snapshot every registered value. Call it while the composition is still alive.
     pub fn perform_save(&self) -> HashMap<String, SavedValue> {
         let providers: Vec<(u64, String, Provider)> = {
@@ -121,7 +136,9 @@ impl SaveableStateRegistry {
         let mut out = HashMap::new();
         for (_id, key, provider) in providers {
             if let Some(value) = provider() {
-                out.insert(key, value);
+                // First registration wins, the same rule restore uses (the first composed call site
+                // owns the key). Last-wins on save would swap two call sites' values across windows.
+                out.entry(key).or_insert(value);
             }
         }
         out
@@ -129,6 +146,10 @@ impl SaveableStateRegistry {
 
     fn register(self: &Arc<Self>, key: &str, provider: Provider) -> SaveableRegistration {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        debug_assert!(
+            !inner.providers.iter().any(|(_, existing, _)| existing == key),
+            "two composition points registered the same saveable key: {key}"
+        );
         let id = inner.next_id;
         inner.next_id += 1;
         inner.providers.push((id, key.to_string(), provider));
@@ -168,6 +189,12 @@ pub fn with_saveable_registry<R>(registry: Arc<SaveableStateRegistry>, f: impl F
     SAVEABLE_REGISTRY.provides(registry, f)
 }
 
+/// Whether a registry is currently in scope (test helper: the local has no public probe).
+#[cfg(test)]
+pub(crate) fn registry_in_scope() -> bool {
+    SAVEABLE_REGISTRY.try_current().is_some()
+}
+
 /// The composer-side form: provide an already-held registry without cloning the Arc twice.
 pub(crate) fn with_registry_of<R>(registry: &Arc<SaveableStateRegistry>, f: impl FnOnce() -> R) -> R {
     SAVEABLE_REGISTRY.provides(Arc::clone(registry), f)
@@ -185,19 +212,28 @@ pub fn remember_saveable<T: Saveable>(
     init: impl FnOnce() -> T,
 ) -> State<T> {
     let registry = SAVEABLE_REGISTRY.try_current();
-    let restored = registry
-        .as_ref()
-        .and_then(|registry| registry.consume_restored(key))
-        .and_then(|value| T::from_saved(&value));
+    // Decode first, consume second: a value that does not fit this call site stays for a later one.
+    let restored: Option<T> = registry.as_ref().and_then(|registry| registry.restore_typed(key));
     // `remember` already wraps the value in a `State`: building one inside would nest two.
     let state: State<T> = ctx.remember(move || restored.unwrap_or_else(init));
     if let Some(registry) = registry {
-        let sink = state.clone();
-        let provider: Provider = Arc::new(move || Some(T::to_saved(&sink.peek())));
-        let registration = registry.register(key, provider);
-        // The registration lives in the slot: dropping it (the composition point going away) removes
-        // the provider, so a dead composition cannot keep feeding the next window.
-        ctx.remember_handle(move || Arc::new(registration));
+        // The registration is kept in a slot so a CHANGED key can replace it. Registering on every
+        // pass would churn (remember_handle only runs its init once, so the extra registration is
+        // dropped again) and, worse, a key that changed after the first pass would never be the one
+        // saved: the old key would keep writing the old state forever.
+        type RegistrationCell = Arc<std::sync::Mutex<Option<(String, Arc<SaveableRegistration>)>>>;
+        let cell: RegistrationCell = ctx.remember_handle(|| Arc::new(std::sync::Mutex::new(None)));
+        let mut slot = cell.lock().unwrap_or_else(|e| e.into_inner());
+        let stale = slot.as_ref().map(|(registered, _)| registered != key).unwrap_or(true);
+        if stale {
+            // Drop the old registration first: it holds the same key while we register the new one,
+            // and a duplicate key is a debug assertion.
+            *slot = None;
+            let sink = state.clone();
+            let provider: Provider = Arc::new(move || Some(T::to_saved(&sink.peek())));
+            let registration = registry.register(key, provider);
+            *slot = Some((key.to_string(), Arc::new(registration)));
+        }
     }
     state
 }
@@ -260,23 +296,86 @@ mod tests {
     }
 
     /// A registry attached to a composer is in scope on every pass, not just the first.
+    ///
+    /// The second call site does not exist on the first pass, so it can only register if the
+    /// registry is provided again when it appears. (Asserting a value that survived from pass 1 would
+    /// prove nothing: the slot would return it with or without a registry.)
     #[test]
     fn a_composers_registry_is_provided_on_every_pass() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let registry = SaveableStateRegistry::new(HashMap::new());
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.set_saveable_registry(registry.clone());
+        let later = Arc::new(AtomicBool::new(false));
+
+        let flag = later.clone();
+        composer.compose(move |ctx| {
+            let _ = remember_saveable(ctx, "first", || 1i32);
+            if flag.load(Ordering::SeqCst) {
+                let _ = remember_saveable(ctx, "second", || 2i32);
+            }
+        });
+        assert!(!registry.perform_save().contains_key("second"));
+
+        later.store(true, Ordering::SeqCst);
+        let flag = later.clone();
+        composer.compose(move |ctx| {
+            let _ = remember_saveable(ctx, "first", || 1i32);
+            if flag.load(Ordering::SeqCst) {
+                let _ = remember_saveable(ctx, "second", || 2i32);
+            }
+        });
+        assert!(
+            registry.perform_save().contains_key("second"),
+            "the call site that appeared on pass 2 registered, so the registry was in scope"
+        );
+    }
+
+    /// A key that changes re-registers: the old key stops saving and the new one starts.
+    #[test]
+    fn a_changed_key_reregisters() {
         let registry = SaveableStateRegistry::new(HashMap::new());
         let mut composer = crate::runtime::composer::Composer::new();
         composer.set_saveable_registry(registry.clone());
 
-        let mut seen = None;
-        composer.compose(|ctx| seen = Some(remember_saveable(ctx, "k", || 3i32)));
-        let state: State<i32> = seen.expect("composed");
-        state.set(9);
+        composer.compose(|ctx| {
+            let _ = remember_saveable(ctx, "tab.a", || 1i32);
+        });
+        assert!(registry.perform_save().contains_key("tab.a"));
 
-        // A later pass re-enters the same scope with the registry still in scope.
-        let mut again = None;
-        composer.compose(|ctx| again = Some(remember_saveable(ctx, "k", || 0i32)));
-        assert_eq!(again.expect("composed").peek(), 9, "the same slot, registry or not");
+        composer.compose(|ctx| {
+            let _ = remember_saveable(ctx, "tab.b", || 1i32);
+        });
+        let saved = registry.perform_save();
+        assert!(saved.contains_key("tab.b"), "the new key saves");
+        assert!(!saved.contains_key("tab.a"), "and the old one no longer does");
+    }
 
-        assert_eq!(registry.perform_save().get("k"), Some(&SavedValue::I64(9)));
+    /// Every scalar round-trips, and a mismatched variant is refused rather than coerced.
+    #[test]
+    fn every_scalar_round_trips_and_mismatches_are_refused() {
+        assert_eq!(bool::from_saved(&true.to_saved()), Some(true));
+        assert_eq!(f64::from_saved(&1.5f64.to_saved()), Some(1.5));
+        assert_eq!(String::from_saved(&"hi".to_string().to_saved()), Some("hi".to_string()));
+        assert_eq!(i32::from_saved(&(-7i32).to_saved()), Some(-7));
+        assert_eq!(i64::from_saved(&(9i64).to_saved()), Some(9));
+        assert_eq!(i32::from_saved(&SavedValue::Text("x".into())), None);
+        assert_eq!(bool::from_saved(&SavedValue::I64(1)), None);
+    }
+
+    /// A value that does not decode is left for a call site that can use it, not destroyed.
+    #[test]
+    fn an_undecodable_value_is_not_consumed() {
+        let mut restored = HashMap::new();
+        restored.insert("k".to_string(), SavedValue::Text("not a number".into()));
+        let registry = SaveableStateRegistry::new(restored);
+        assert!(registry.restore_typed::<i32>("k").is_none());
+        assert_eq!(
+            registry.consume_restored("k"),
+            Some(SavedValue::Text("not a number".into())),
+            "the value is still there for a call site that can read it"
+        );
     }
 
     /// A composition point that goes away takes its provider with it.

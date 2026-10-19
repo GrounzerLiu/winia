@@ -1304,6 +1304,11 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
             // The overlay is its own composer, but it belongs to the same window: frame_clock()
             // inside it has to wait on THIS window's frames rather than on window 0's.
             composer.set_window_id(pw.composer.window_id());
+            // And it saves into the same place: overlay content that calls remember_saveable has to
+            // be snapshotted with the page it belongs to.
+            if let Some(registry) = pw.composer.saveable_registry() {
+                composer.set_saveable_registry(registry);
+            }
             let enter_anim = desc.enter_anim.clone();
             pw.overlay.layers.push(OverlayWindow::new_with_composer(desc, composer));
             if let Some(p) = pw.overlay.layers.last().and_then(|o| o.progress.clone()) {
@@ -1570,6 +1575,8 @@ mod overlay_close_tests {
 
         let mut pw = PerWindow::new(Box::new(|_| {}), 100.0, 100.0, ThemeColors::default_light());
         pw.composer.set_window_id(0xD00D);
+        let registry = crate::runtime::saveable::SaveableStateRegistry::new(Default::default());
+        pw.composer.set_saveable_registry(registry.clone());
         pw.composer.compose(|ctx: &mut crate::runtime::composer::ComposeCtx| {
             ctx.open_overlay(desc);
         });
@@ -1580,6 +1587,10 @@ mod overlay_close_tests {
             overlay.composer.window_id(),
             0xD00D,
             "an overlay follows the window that hosts it"
+        );
+        assert!(
+            overlay.composer.saveable_registry().is_some(),
+            "and saves into the same registry: remember_saveable in overlay content belongs to the page"
         );
     }
 }

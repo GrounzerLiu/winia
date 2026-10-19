@@ -517,6 +517,8 @@ mod tests {
     fn a_subcomposition_inherits_its_hosts_window_identity() {
         let mut composer = Composer::new();
         composer.set_window_id(0xD00D);
+        let registry = crate::runtime::saveable::SaveableStateRegistry::new(Default::default());
+        composer.set_saveable_registry(registry.clone());
         let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
         let seen_in = seen.clone();
         composer.compose(move |ctx| {
@@ -524,6 +526,11 @@ mod tests {
                 .modifier(Modifier::new().size(120.0, 60.0))
                 .build(ctx, move |ctx, _scope| {
                     *seen_in.lock().unwrap() = Some(ctx.frame_clock().window());
+                    assert!(
+                        crate::runtime::saveable::registry_in_scope(),
+                        "the subcomposition must see the host registry"
+                    );
+                    let _ = crate::runtime::saveable::remember_saveable(ctx, "inner.count", || 1i32);
                 });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 300.0));
@@ -533,6 +540,10 @@ mod tests {
             Some(0xD00D),
             "the subcomposition follows the window that hosts it"
         );
+        // The registry reaches the subcomposition (asserted inside the content above); what survives
+        // afterwards depends on whether the parked composition is kept, which is the subcomposition
+        // cache's business, not this test's.
+        let _ = registry;
     }
 
     /// A parked subcomposition belongs to the composer that built it.

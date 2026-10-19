@@ -193,7 +193,13 @@ fn inherit_window(host: Option<*mut Composer>, composer: &mut Composer) {
     let Some(host) = host else { return };
     // SAFETY: LAYOUT_HOST is armed for the duration of `Composer::layout` (see `LayoutHostGuard`),
     // and this only runs from a measure pass, i.e. within that window.
-    composer.set_window_id(unsafe { (*host).window_id() });
+    let (window, saveable) = unsafe { ((*host).window_id(), (*host).saveable_registry()) };
+    composer.set_window_id(window);
+    // The subcomposition saves into the host's registry too: remember_saveable inside
+    // BoxWithConstraints / TabRow content belongs to the page that composed it.
+    if let Some(registry) = saveable {
+        composer.set_saveable_registry(registry);
+    }
 }
 
 fn subcompose_sized(

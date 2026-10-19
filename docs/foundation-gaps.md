@@ -8,7 +8,7 @@ The criterion matters. A missing component (a Chip variant, a toolbar) is not a 
 written on top of what exists. A missing foundation shows up as *the same work repeated by every
 caller* — or as machinery that has been approximated three times in three places.
 
-Status as of 2026-10-19 (branch `v2`, 1587 lib tests).
+Status as of 2026-10-19 (branch `v2`, 1592 lib tests).
 
 ## What is missing
 
@@ -53,9 +53,9 @@ What is *not* done: persistence across a process restart (nothing is serialized 
 registry.
 
 
-**Why it matters now.** The effect work made window lifetime explicit (`FrameClock::for_window`,
-`forget_window`, overlay composers inheriting the page's id). A recreated window still comes up with
-empty `remember` slots, and no mechanism exists to refill them.
+**Why it mattered.** The effect work made window lifetime explicit (`FrameClock::for_window`,
+`forget_window`, overlay composers inheriting the page's id); a recreated window used to come up with
+empty `remember` slots. That is what `remember_saveable` fixes — see [saveable.md](saveable.md).
 
 ### 3. The scroll-container family
 
