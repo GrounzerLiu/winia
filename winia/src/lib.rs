@@ -100,6 +100,9 @@ pub mod prelude {
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
         Visual, write_batch,
     };
+    pub use crate::runtime::saveable::{
+        remember_saveable, with_saveable_registry, Saveable, SaveableStateRegistry, SavedValue,
+    };
     pub use crate::graphics::{Brush, BrushTile};
     pub use crate::graphics::{
         AxisValue, ContentScale, IconSource, ImageAlignment, PathFillType, SymbolAxes,

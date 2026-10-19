@@ -807,6 +807,9 @@ impl PerWindow {
 struct AppState {
     /// 已创建的窗口
     windows: HashMap<WindowId, PerWindow>,
+    /// Saveable values of windows that have closed, keyed by `created_id`: a window recreated with
+    /// the same id picks its state back up.
+    saveable: HashMap<u64, HashMap<String, crate::runtime::saveable::SavedValue>>,
     /// 待创建的窗口（由 Window composable 排队）
     pending_content: Vec<PendingWindow>,
     /// 父窗口 ID（用于 is_parent 判断，不依赖 HashMap 顺序）
@@ -1133,6 +1136,15 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::CloseRequested => {
                 if let Some(ref mut cb) = pw.on_close { cb(); }
+                // Snapshot saveable state while the composition is still alive to provide it.
+                if let Some(created_id) = pw.created_id {
+                    if let Some(registry) = pw.composer.saveable_registry() {
+                        let saved = registry.perform_save();
+                        if !saved.is_empty() {
+                            self.saveable.insert(created_id, saved);
+                        }
+                    }
+                }
                 if let Some(ref sw) = pw.skia_window {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
@@ -2227,6 +2239,12 @@ impl AppState {
         pw.theme.cell = theme;
         pw.on_close = pending.on_close;
         pw.created_id = pending.created_id;
+        // A window recreated with the same created_id picks up what the last one saved.
+        if let Some(created_id) = pending.created_id {
+            let restored = self.saveable.remove(&created_id).unwrap_or_default();
+            pw.composer
+                .set_saveable_registry(crate::runtime::saveable::SaveableStateRegistry::new(restored));
+        }
         pw.scale_factor = sf;
         pw.skia_window = Some(skia_window);
         pw.clock.frame_interval = frame_interval;
@@ -4183,6 +4201,7 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     let state = AppState {
         init: Some(Box::new(app)),
         was_animating: false,
+        saveable: HashMap::new(),
         windows: HashMap::new(),
         pending_content: Vec::new(),
         parent_window_id: None,

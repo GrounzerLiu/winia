@@ -43,10 +43,15 @@ not need. What is worth building is the cheaper half: a global write version plu
 batches. See [snapshot-feasibility.md](snapshot-feasibility.md) for the measurements, the four
 options and the recommended phases.
 
-### 2. Saveable — state that survives the window
+### 2. Saveable — SHIPPED (in-memory, same process)
 
-`rememberSaveable` + `Saver` have no general equivalent. The only implementation is
-`nav.rs`'s `SaveableStateHolder` (modelled on Nav3), which is scoped to navigation entries.
+`runtime/saveable.rs`: `remember_saveable` + `SaveableStateRegistry`, wired into the window
+lifecycle (`AppState.saveable`, keyed by `created_id`). See [saveable.md](saveable.md).
+
+What is *not* done: persistence across a process restart (nothing is serialized to disk), and
+`nav.rs` still carries its own `SaveableStateHolder` for navigation entries rather than sharing the
+registry.
+
 
 **Why it matters now.** The effect work made window lifetime explicit (`FrameClock::for_window`,
 `forget_window`, overlay composers inheriting the page's id). A recreated window still comes up with

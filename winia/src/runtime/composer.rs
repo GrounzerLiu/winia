@@ -2530,6 +2530,9 @@ pub struct Composer {
     /// must key on this rather than on an arena index: node indices are local to a composer, so two
     /// windows (or a page and an overlay) both have a node 0.
     pub(crate) uid: u64,
+    /// Where this window's saveable values come from and go to. Provided to every compose pass, so
+    /// `remember_saveable` sees it on every frame rather than only the first.
+    pub(crate) saveable: Option<std::sync::Arc<crate::runtime::saveable::SaveableStateRegistry>>,
     pub(crate) current_group_key: u32,
     compose_transaction: Option<ComposeRuntimeSnapshot>,
     /// 每路径独立 counter（next_group_key 用）——同组合位置跨帧 counter 恒定，
@@ -2738,6 +2741,7 @@ impl Composer {
         let pending_states = crate::runtime::state::ComposerSubscription::new();
         Self {
             uid: NEXT_COMPOSER_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            saveable: None,
             slot_table: SlotTable::new(),
             current_group_key: 0,
             compose_transaction: None,
@@ -3444,6 +3448,32 @@ impl Composer {
 
     /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
+        // The window's saveable registry is provided for EVERY pass, not just the first: a slot that
+        // is re-entered has to be able to register again.
+        match self.saveable.clone() {
+            Some(registry) => {
+                crate::runtime::saveable::with_registry_of(&registry, || self.compose_inner(content))
+            }
+            None => self.compose_inner(content),
+        }
+    }
+
+    /// The registry this composer's window saves into, if it has one.
+    pub(crate) fn saveable_registry(
+        &self,
+    ) -> Option<std::sync::Arc<crate::runtime::saveable::SaveableStateRegistry>> {
+        self.saveable.clone()
+    }
+
+    /// Attach the registry this composer's window saves into and restores from.
+    pub(crate) fn set_saveable_registry(
+        &mut self,
+        registry: std::sync::Arc<crate::runtime::saveable::SaveableStateRegistry>,
+    ) {
+        self.saveable = Some(registry);
+    }
+
+    fn compose_inner(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
         // Tag this pass for the torn-read instrument: a read that observes another thread's write
         // from after this point is a pass split across two worlds.
         let _pass = crate::runtime::state::begin_pass();
