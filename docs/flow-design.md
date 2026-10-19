@@ -1,7 +1,7 @@
 # Flows: observing state from outside a composition
 
-> Status: **design + layer 1 implemented** (`State::changes`). Layers 2 (`snapshot_flow`) and 3
-> (operators, interaction sequences) are planned here, not built.
+> Status: **layers 1 and 2 implemented** — `State::changes` and `snapshot_flow`. Layer 3
+> (operators, interaction sequences) is planned here, not built.
 
 ## 1. The problem
 
@@ -99,22 +99,33 @@ Why not unify both consumer types behind the trait now: the composer's path also
 read handshake (`enqueue_if_changed`) and the per-frame `retain_signals` reconciliation. A second
 list keeps that machinery exactly as audited; unification is a refactor with no user-visible gain.
 
-## 6. Layer 2 sketch (`snapshotFlow`)
+## 6. Layer 2: `snapshot_flow`
 
 ```rust
-let collapsed = snapshot_flow(ctx, move || list_state.first_visible_index() > 0);
+let collapsed = snapshot_flow(move || index(state.clone()) > 0);
 // -> impl Stream<Item = bool>, emitted only when the boolean flips
 ```
 
-Mechanism: a `Tracker` implementing `StateObserver` doubles as the dependency frame's queue. Run
-`f` inside a frame whose queue is the tracker; `take_deps()` yields the signals it read; subscribe
-the tracker to them; on any change re-run, compare with the last emitted value, emit if different.
-Requires generalizing the dep frame's queue type from `Weak<ComposerSubscription>` to
-`Weak<dyn StateObserver>` (three call sites: the two `begin_*_deps_with_queue` producers and
-`get_tracked`'s handshake).
+No ctx, and nothing is composed: it is a plain function returning a stream.
 
-Known costs, to be measured before shipping: one re-run per notification batch, not per state read;
-and a re-run that reads a state the collector also writes is a feedback loop the caller owns.
+**Mechanism, as built.** The plan above started from "generalize the dependency frame's queue to a
+`dyn StateObserver`". Reading the code showed a cheaper seam: `record_dep` writes the read into the
+thread-local buffer *before* it looks at the recorder queue, so a frame pushed with **no queue at
+all** already records reads and subscribes nothing. `begin_tracking_frame()` is that frame — three
+lines, and the composer's typed queue never had to move.
+
+`poll_next` then: store the waker, push a tracking frame, run the closure, `take_deps()` for the
+signals it read, reconcile the subscription set against the previous run, and compare the value with
+the last emitted one.
+
+**Subscription reconciliation matters.** The set is replaced, not added to: a closure whose reads
+depend on a branch (read `x` only while `flag` is true) would otherwise keep waking on `x` after the
+branch turns off. Pinned by `a_branch_that_stops_reading_a_state_unsubscribes_from_it`.
+
+**Known costs.** One re-run of the closure per notification batch rather than per state read — fine
+for the intended "watch a threshold" usage, wrong for a closure that is expensive per state change
+(compose the work out of it, or debounce at the collector). And a closure that writes a state it
+reads is a feedback loop with no natural stop; the caller owns that.
 
 ## 7. Non-goals
 

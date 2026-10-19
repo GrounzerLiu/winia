@@ -331,14 +331,14 @@ impl StateSignal {
 
     /// Register a non-composer observer. The signal only holds a weak handle, so a dropped
     /// `StateChanges` unsubscribes even if its `Drop` never runs to completion.
-    fn subscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
+    pub(crate) fn subscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
         let list = self.observers.get_or_init(|| Mutex::new(Vec::new()));
         let mut list = list.lock();
         list.retain(|weak| weak.strong_count() > 0);
         list.push(Arc::downgrade(observer));
     }
 
-    fn unsubscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
+    pub(crate) fn unsubscribe_observer(&self, observer: &Arc<dyn StateObserver>) {
         let Some(list) = self.observers.get() else {
             return;
         };
@@ -1092,6 +1092,15 @@ pub(crate) fn begin_compose_deps_with_queue(queue: Weak<ComposerSubscription>) -
 /// Begin layout dependency recording for a live Composer subscription.
 pub(crate) fn begin_layout_deps_with_queue(queue: Weak<ComposerSubscription>) -> DependencyFrameGuard {
     push_dependency_frame(DepMode::Layout, Some(queue))
+}
+
+/// Begin a read-tracking frame that subscribes nothing: reads still land in the buffer for
+/// [`take_deps`], but no recorder queue is attached, so `State::get` only records.
+///
+/// This is what lets a stream recompute a closure and learn which states it read —
+/// `snapshot_flow` (`docs/flow-design.md` layer 2) runs the closure inside one of these.
+pub(crate) fn begin_tracking_frame() -> DependencyFrameGuard {
+    push_dependency_frame(DepMode::Compose, None)
 }
 
 /// Finish recording and move the current buffer out without touching the outer frame.
