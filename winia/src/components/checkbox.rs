@@ -167,6 +167,8 @@ impl CheckboxColors {
 /// The mutable view a [`CheckboxStyling`] writes into; starts from the theme's derivation.
 pub struct CheckboxStylingScope {
     pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark (see `ButtonStylingScope::is_dark`).
+    pub is_dark: bool,
     pub colors: CheckboxColors,
 }
 
@@ -203,7 +205,11 @@ pub fn checkbox_colors_with_styles(theme: &crate::theme::ThemeColors) -> Checkbo
     let mut colors = CheckboxDefaults::checkbox_colors(theme);
     let styles = crate::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<CheckboxStyling>() {
-        let mut scope = CheckboxStylingScope { theme: theme.clone(), colors };
+        let mut scope = CheckboxStylingScope {
+            theme: theme.clone(),
+            is_dark: crate::component_styles::palette_is_dark(theme),
+            colors,
+        };
         styling.apply(&mut scope);
         colors = scope.colors;
     }

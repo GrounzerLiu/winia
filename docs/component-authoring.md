@@ -341,6 +341,9 @@ pub type ButtonStyling = Styling<ButtonStylingScope>;
 pub fn button_colors_with_styles(theme: &ThemeColors, variant: ButtonStyle) -> ButtonColors;
 ```
 
+The framework itself, its contract for a component author, and the light/dark story are specified in
+[component-styling.md](component-styling.md).
+
 **MUST** keep it that way. A per-component `Option` field on the registry would make the mechanism
 module depend on every component in the crate (the opposite of the direction every component reads),
 and would grow one file by three types per component. The registry is keyed by `TypeId` of the

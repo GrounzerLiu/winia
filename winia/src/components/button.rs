@@ -336,6 +336,10 @@ pub struct ButtonDefaults;
 /// `theme` is exposed so a styling can derive from roles instead of hard-coding a colour.
 pub struct ButtonStylingScope {
     pub theme: crate::theme::ThemeColors,
+    /// Whether the palette in scope is dark - the usual reason to branch inside a styling
+    /// (`if scope.is_dark { ... } else { ... }`). Decided from the palette, so a subtree pinned to a
+    /// light theme styles as light even when the system is dark.
+    pub is_dark: bool,
     pub colors: ButtonColors,
 }
 
@@ -378,7 +382,11 @@ pub fn button_colors_with_styles(
     let mut colors = ButtonColors::from_theme(theme, variant);
     let styles = crate::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<ButtonStyling>() {
-        let mut scope = ButtonStylingScope { theme: theme.clone(), colors };
+        let mut scope = ButtonStylingScope {
+            theme: theme.clone(),
+            is_dark: crate::component_styles::palette_is_dark(theme),
+            colors,
+        };
         styling.apply(&mut scope);
         colors = scope.colors;
     }
@@ -1693,5 +1701,41 @@ mod tests {
             || button_colors_with_styles(&theme, ButtonStyle::Filled),
         );
         assert_eq!(styled.container, green());
+    }
+
+    /// Light and dark palettes answer `is_dark` differently, so one styling can branch on it.
+    #[test]
+    fn a_button_styling_can_style_light_and_dark_differently() {
+        let light = crate::theme::ThemeColors::default_light();
+        let dark = crate::theme::ThemeColors::default_dark();
+        assert!(!crate::component_styles::palette_is_dark(&light));
+        assert!(crate::component_styles::palette_is_dark(&dark));
+
+        let styling = ButtonStyling::new(|scope| {
+            scope.container(if scope.is_dark { red() } else { green() });
+        });
+        let styles = crate::component_styles::ComponentStyles::new().with(styling);
+        let on_light = crate::component_styles::with_component_styles(styles.clone(), || {
+            button_colors_with_styles(&light, ButtonStyle::Filled)
+        });
+        let on_dark = crate::component_styles::with_component_styles(styles, || {
+            button_colors_with_styles(&dark, ButtonStyle::Filled)
+        });
+        assert_eq!(on_light.container, green());
+        assert_eq!(on_dark.container, red());
+    }
+
+    /// A page set layers on top of the application set without copying it.
+    #[test]
+    fn a_merged_set_lets_the_page_win_per_class() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let base = crate::component_styles::ComponentStyles::new()
+            .with(ButtonStyling::new(|scope| scope.container(red())));
+        let page = crate::component_styles::ComponentStyles::new()
+            .with(ButtonStyling::new(|scope| scope.container(green())));
+        let resolved = crate::component_styles::with_component_styles(base.merge(page), || {
+            button_colors_with_styles(&theme, ButtonStyle::Filled)
+        });
+        assert_eq!(resolved.container, green());
     }
 }

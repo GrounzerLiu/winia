@@ -82,6 +82,16 @@ impl ComponentStyles {
         self.by_type.get(&TypeId::of::<T>())?.downcast_ref::<T>()
     }
 
+    /// `self` with `other`'s entries on top: the same class from `other` replaces `self`'s, and
+    /// everything else is kept. This is how an application layers a base set (brand) with a page set
+    /// (one screen restyled) without copying the base.
+    pub fn merge(mut self, other: ComponentStyles) -> Self {
+        for (class, styling) in other.by_type {
+            self.by_type.insert(class, styling);
+        }
+        self
+    }
+
     /// How many component classes are styled (for tests and diagnostics).
     pub fn len(&self) -> usize {
         self.by_type.len()
@@ -112,6 +122,17 @@ static LOCAL_STYLES: std::sync::LazyLock<CompositionLocal<Arc<ComponentStyles>>>
 /// runtime has to be driven by a `State` read inside the subtree.
 pub fn with_component_styles<R>(styles: ComponentStyles, content: impl FnOnce() -> R) -> R {
     LOCAL_STYLES.provides(Arc::new(styles), content)
+}
+
+/// Whether the palette in scope is a DARK one, decided by the lightness of its `surface` in Oklab.
+///
+/// It answers "what does this palette look like", which is the question a styling has: a subtree
+/// pinned to `WiniaTheme::light()` under a dark system must style as light, and the platform's
+/// `isSystemInDarkTheme` would say the opposite. Deciding it from the palette also keeps working for
+/// a custom scheme produced by a seed, where nothing records a mode.
+pub fn palette_is_dark(colors: &crate::theme::ThemeColors) -> bool {
+    // `to_oklab` returns [alpha, L, a, b] - index 1 is the lightness.
+    colors.surface.to_oklab()[1] < 0.5
 }
 
 /// The stylings in scope (an empty set when none were provided).
@@ -169,5 +190,37 @@ mod tests {
             });
             assert_eq!(current_component_styles().len(), 1, "and the outer one is back");
         });
+    }
+
+    /// `merge` keeps classes the argument does not mention, and lets it win for the ones it does.
+    #[test]
+    fn merge_overrides_per_class_and_keeps_the_rest() {
+        struct A(u8);
+        struct B(u8);
+        type AStyling = Styling<A>;
+        type BStyling = Styling<B>;
+
+        let base = ComponentStyles::new()
+            .with(AStyling::new(|a| a.0 = 1))
+            .with(BStyling::new(|b| b.0 = 1));
+        let page = ComponentStyles::new().with(AStyling::new(|a| a.0 = 2));
+        let merged = base.merge(page);
+        assert_eq!(merged.len(), 2, "the class the page did not mention survives");
+
+        let mut a = A(0);
+        let mut b = B(0);
+        merged.get::<AStyling>().unwrap().apply(&mut a);
+        merged.get::<BStyling>().unwrap().apply(&mut b);
+        assert_eq!(a.0, 2, "the page wins for its class");
+        assert_eq!(b.0, 1, "and the base still applies to the others");
+    }
+
+    /// The mode is decided from the palette, not from the platform: a theme pinned light under a dark
+    /// system has to style as light.
+    #[test]
+    fn the_palette_decides_whether_it_is_dark() {
+        use crate::theme::ThemeColors;
+        assert!(!palette_is_dark(&ThemeColors::default_light()));
+        assert!(palette_is_dark(&ThemeColors::default_dark()));
     }
 }
