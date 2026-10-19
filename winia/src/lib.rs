@@ -239,7 +239,7 @@ pub mod prelude {
     pub use crate::flow::{debounce, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{
         LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope,
-        observe_watch, with_frame_nanos, remember_updated_state, on_forget, side_effect,
+        observe_watch, with_frame_nanos, remember_updated_state, on_forget, side_effect, FrameClock,
         produce_state,
     };
     pub use crate::animation::{

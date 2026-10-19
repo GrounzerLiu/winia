@@ -293,6 +293,14 @@ impl<'a> ComposeCtx<'a> {
         }
     }
 
+    /// The frame clock of this composition's window.
+    ///
+    /// Prefer this over the process-wide `with_frame_nanos`: with more than one window the global
+    /// clock wakes a waiter on ANY window's frame, while this one wakes it only on its own.
+    pub fn frame_clock(&self) -> crate::effect::FrameClock {
+        crate::effect::FrameClock::for_window(self.composer.window_id)
+    }
+
     /// Return the Window lifecycle context owned by this Composer.
     pub(crate) fn window_lifecycle(&self) -> crate::runtime::lifecycle::LifecycleState {
         self.composer.lifecycle.clone()
@@ -2641,6 +2649,9 @@ pub struct Composer {
     pub(crate) selection_registrar: Option<crate::text::selection::SelectionRegistrar>,
     /// Window lifecycle flags are scoped to this Composer, not the thread.
     pub(crate) lifecycle: crate::runtime::lifecycle::LifecycleState,
+    /// The winit window this composer belongs to; 0 when unwired (a test, an overlay composer).
+    /// `ComposeCtx::frame_clock` hands out this window's clock.
+    pub(crate) window_id: u64,
     /// Adaptive window size context owned by this Composer.
     pub(crate) adaptive: crate::layout::adaptive::AdaptiveContext,
     /// State IDs used by this Composer's animation registrations.
@@ -2763,6 +2774,7 @@ impl Composer {
             live_residue: 0,
             selection_registrar: None,
             lifecycle: crate::runtime::lifecycle::LifecycleState::default(),
+            window_id: 0,
             adaptive: crate::layout::adaptive::AdaptiveContext::new(),
             animation_state_ids: HashSet::new(),
             shared_flights: HashMap::new(),
@@ -2789,6 +2801,15 @@ impl Composer {
     /// 获取当前正在构建的节点 ID（node_stack 栈顶）
     pub fn current_node_id(&self) -> Option<u64> {
         self.node_stack.last().map(|&idx| self.arena.nodes[idx].id)
+    }
+
+    /// Bind this composer to the window whose frames should drive `ComposeCtx::frame_clock`.
+    pub(crate) fn set_window_id(&mut self, window: u64) {
+        self.window_id = window;
+    }
+
+    pub fn window_id(&self) -> u64 {
+        self.window_id
     }
 
     pub(crate) fn pending_window_close_id(&self) -> Option<u64> {

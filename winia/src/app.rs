@@ -635,6 +635,8 @@ impl PerWindow {
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
+        // 帧时钟按窗口分发：ComposeCtx::frame_clock() 用它把等待者绑到本窗口的帧上。
+        self.composer.set_window_id(window_id.into_raw() as u64);
         // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
         self.clock.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
@@ -1135,6 +1137,8 @@ impl ApplicationHandler for AppState {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
                 self.windows.remove(&window_id);
+                // 窗口没了，它的帧时钟一并丢掉（否则每开一个窗口注册表就多一份）。
+                crate::effect::forget_window(window_id.into_raw() as u64);
                 // 清理 debug 树条目（窗口关闭后不再渲染——残留会让 UI 测试误判）
                 debug::remove_tree(window_id.into_raw() as u64);
                 // 通知其他窗口重绘（状态可能已变化）
@@ -1506,8 +1510,10 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
-                // 帧时钟 tick（P3-12：with_frame_nanos 的驱动源——每帧广播时间戳）
+                // 帧时钟 tick：全局的（with_frame_nanos，任意窗口的帧）和本窗口的
+                // （ctx.frame_clock()，只被自己的帧唤醒）。
                 crate::effect::frame_tick();
+                crate::effect::FrameClock::for_window(window_id.into_raw() as u64).tick();
                 // 尺寸自愈校准：以 winit 实际 surface 尺寸为准。winit #2094 类
                 // 陈旧事件（最大化时旧尺寸事件可能后到）由此在下一帧纠正——
                 // 偏差 >0.5 逻辑像素即更新 pw + 通知尺寸 State（套件形态随之刷新）

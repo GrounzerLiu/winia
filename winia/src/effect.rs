@@ -43,7 +43,8 @@ mod scope;
 mod watch;
 
 pub use disposable::DisposableEffect;
-pub use frame_clock::{frame_tick, with_frame_nanos};
+pub use frame_clock::{frame_tick, with_frame_nanos, FrameClock};
+pub(crate) use frame_clock::forget_window;
 pub use hooks::{on_forget, remember_updated_state, side_effect};
 pub use launched::LaunchedEffect;
 pub use produce::produce_state;

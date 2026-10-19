@@ -1,11 +1,16 @@
-//! The frame clock `with_frame_nanos` waits on, ticked by the render loop.
+//! The frame clock: one process-wide (any window) and one per window.
+//!
+//! Two clocks on purpose. The global one is what `with_frame_nanos` waits on and what every window
+//! ticks: a waiter there is woken by ANY window's frame, which is right for a single window and
+//! wrong for several. `FrameClock::for_window` is the precise one — a waiter is woken only by its
+//! own window's frames.
 
-use std::sync::LazyLock;
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::{LazyLock, Mutex};
 use tokio::sync::broadcast;
 
-/// 帧时钟发送端——渲染循环（RedrawRequested 处理器）每帧调用 [`frame_tick`]。
-/// broadcast 队列化每个帧时间戳：订阅者收到**下一帧**（无 watch 的跳过语义）。
-/// static 持有 receiver 防 send 因无订阅者而失败。
+/// Every window ticks it; `with_frame_nanos` waits on it.
 static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)> = LazyLock::new(|| {
     let (tx, rx) = broadcast::channel(16);
     (tx, rx)
@@ -13,58 +18,149 @@ static FRAME_CLOCK: LazyLock<(broadcast::Sender<u64>, broadcast::Receiver<u64>)>
 
 static FRAME_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
-/// 单调时钟纳秒（Instant 基准——墙钟 SystemTime 可能回拨，导致 dt 为负/巨大）
+/// Monotonic nanoseconds from a process-local epoch (a wall clock can step backwards).
 fn monotonic_nanos() -> u64 {
     let epoch = *FRAME_EPOCH.get_or_init(std::time::Instant::now);
-    // max(1)：首次初始化与调用同纳秒时 elapsed=0（测试断言 > 0 会失败）
+    // max(1): the first call can land in the same nanosecond as the epoch.
     (epoch.elapsed().as_nanos() as u64).max(1)
 }
 
-/// 帧循环每帧调用（app.rs RedrawRequested 内注入）——向所有等待者广播帧时间戳。
-/// 无副作用失败：无订阅者时 send 返回 Err，忽略（帧时钟只是辅助驱动）。
+/// Subscribe and discard whatever predates the call. Synchronous on purpose: a tick that lands
+/// between the call and the first poll is the NEXT frame, not a stale one, so this has to run
+/// before the future is handed back.
+fn subscribe_next(tx: &broadcast::Sender<u64>) -> broadcast::Receiver<u64> {
+    let mut rx = tx.subscribe();
+    while rx.try_recv().is_ok() {}
+    rx
+}
+
+async fn next_frame_on(mut rx: broadcast::Receiver<u64>) -> u64 {
+    loop {
+        match rx.recv().await {
+            Ok(v) => return v,
+            // The receiver fell behind the buffer (a long stall); skip to the next frame.
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            // The sender is gone — the window this clock belonged to was dropped.
+            Err(broadcast::error::RecvError::Closed) => return 0,
+        }
+    }
+}
+
+/// The render loop calls this once per frame, for every window.
 pub fn frame_tick() {
     let _ = FRAME_CLOCK.0.send(monotonic_nanos());
 }
 
-/// 等待下一帧并返回帧时间戳（纳秒，UNIX epoch 基准）——
-/// 自定义动画的帧驱动入口（对标 Compose `withFrameNanos`）。
+/// Wait for the next frame of ANY window and return its timestamp.
 ///
-/// 用法（LaunchedEffect / CoroutineScope 内）：
-/// ```ignore
-/// scope.spawn(async move {
-///     let mut last = 0u64;
-///     loop {
-///         let now = winia::effect::with_frame_nanos().await;
-///         let dt = (now - last) as f32 / 1e9;
-///         last = now;
-///         // 按 dt 推进自定义状态……
-///     }
-/// });
-/// ```
+/// Use it in an example or a single-window app. With more than one window a waiter here is woken
+/// by whichever window drew first; capture a [`FrameClock`] with `ctx.frame_clock()` when that
+/// matters.
 ///
-/// 注意：帧时钟由渲染循环驱动——窗口未渲染（最小化/无 request_redraw）时
-/// 不会返回。需要"时间驱动"而非"帧驱动"请用 tokio sleep。
-pub fn with_frame_nanos() -> impl std::future::Future<Output = u64> + Send {
-    // 非 async fn：subscribe 在**调用时**执行（async fn 在首次 poll 才执行——
-    // 会错过调用与 await 之间 frame_tick 发出的帧）
-    let mut rx = FRAME_CLOCK.0.subscribe();
-    // 同步丢弃订阅时刻已存在的旧帧：broadcast 新 receiver 的游标从当前
-    // 最新开始——不丢弃的话 recv 会立即返回"已经发生"的帧而非"下一帧"
-    //（并行测试 poll 时机不定——flaky 根因）。
-    // ⚠ 必须在这里同步执行：放进 async body 会在首次 poll 才运行——若
-    // frame_tick 发生在 subscribe 与 poll 之间，会把"下一帧"误当旧帧丢弃
-    // → 死等（曾引入此 bug）。
-    // Drain EVERY tick that predates the subscription. One `try_recv` was not enough: with several
-    // frames buffered the future returned the oldest of them instead of the next frame.
-    while rx.try_recv().is_ok() {}
-    async move {
-        loop {
-            match rx.recv().await {
-                Ok(v) => return v,
-                // 订阅晚于缓冲区淘汰（长时间无渲染后恢复）——跳过丢失帧继续等
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return 0, // 发送端消亡——兜底
-            }
-        }
+/// The clock is driven by the render loop: a window that is not rendering (minimised, no
+/// `request_redraw`) does not tick it, so use tokio timers for time-driven work.
+pub fn with_frame_nanos() -> impl Future<Output = u64> + Send {
+    let rx = subscribe_next(&FRAME_CLOCK.0);
+    next_frame_on(rx)
+}
+
+// ── per window ──
+
+struct WindowClock {
+    tx: broadcast::Sender<u64>,
+    /// Keeps a receiver alive so a tick with no waiter is still delivered to the buffer.
+    _keep: broadcast::Receiver<u64>,
+}
+
+static WINDOW_CLOCKS: LazyLock<Mutex<HashMap<u64, WindowClock>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn with_clock<R>(window: u64, f: impl FnOnce(&WindowClock) -> R) -> R {
+    let mut clocks = WINDOW_CLOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    let clock = clocks.entry(window).or_insert_with(|| {
+        let (tx, keep) = broadcast::channel(16);
+        WindowClock { tx, _keep: keep }
+    });
+    f(clock)
+}
+
+/// The frame clock of one window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameClock {
+    window: u64,
+}
+
+impl FrameClock {
+    /// The clock of the window with this id (the winit window id).
+    pub fn for_window(window: u64) -> Self {
+        Self { window }
+    }
+
+    pub fn window(&self) -> u64 {
+        self.window
+    }
+
+    /// Called by the render loop for this window's own frames.
+    pub(crate) fn tick(&self) {
+        let _ = with_clock(self.window, |clock| clock.tx.send(monotonic_nanos()));
+    }
+
+    /// Wait for the next frame of THIS window.
+    pub fn next_frame(&self) -> impl Future<Output = u64> + Send {
+        let rx = with_clock(self.window, |clock| subscribe_next(&clock.tx));
+        next_frame_on(rx)
+    }
+}
+
+/// Forget a window's clock when the window goes away, so the registry does not grow per window.
+pub(crate) fn forget_window(window: u64) {
+    WINDOW_CLOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&window);
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    fn poll_once<F: Future<Output = u64>>(fut: &mut Pin<Box<F>>) -> Poll<u64> {
+        let waker = futures_util::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        fut.as_mut().poll(&mut cx)
+    }
+
+    /// A window's clock is woken only by that window's frames.
+    #[test]
+    fn a_window_clock_is_woken_only_by_its_own_window() {
+        let a = FrameClock::for_window(0xA000);
+        let b = FrameClock::for_window(0xB000);
+        let mut fut = Box::pin(a.next_frame());
+
+        b.tick();
+        assert!(
+            matches!(poll_once(&mut fut), Poll::Pending),
+            "another window's frame must not wake it"
+        );
+
+        a.tick();
+        assert!(
+            matches!(poll_once(&mut fut), Poll::Ready(_)),
+            "its own window's frame does"
+        );
+    }
+
+    /// The process-wide clock stays "any window", which is what with_frame_nanos documents.
+    #[test]
+    fn the_global_clock_ignores_window_ticks() {
+        let mut fut = Box::pin(with_frame_nanos());
+        FrameClock::for_window(0xC000).tick();
+        assert!(
+            matches!(poll_once(&mut fut), Poll::Pending),
+            "a window tick is not a global tick"
+        );
+        frame_tick();
+        assert!(matches!(poll_once(&mut fut), Poll::Ready(_)));
     }
 }

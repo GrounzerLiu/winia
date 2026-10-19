@@ -175,11 +175,28 @@ The subscription is a task on the tokio runtime, and two things end it:
   asks, so the old task can still run the `set` that follows its last `changed()` and write the
   previous channel's value over the new one.
 
-### `with_frame_nanos()`
+### `with_frame_nanos()` and `ctx.frame_clock()`
 
-Awaits the next render tick and returns a monotonic nanosecond timestamp. Driven by
-`frame_tick()`, which the render loop calls per frame — a window that is not rendering does not
-tick it, so use tokio timers for time-driven work.
+Awaits the next render tick and returns a monotonic nanosecond timestamp. Driven by `frame_tick()`,
+which the render loop calls per frame — a window that is not rendering does not tick it, so use
+tokio timers for time-driven work.
+
+`with_frame_nanos()` waits on the **process-wide** clock: every window ticks it, so a waiter is
+woken by whichever window drew first. With one window that is exactly right; with several, capture
+the window's own clock instead:
+
+```rust
+let clock = ctx.frame_clock();          // bound to this composition's window
+LaunchedEffect::new(()).build(ctx, move |_| async move {
+    loop {
+        let now = clock.next_frame().await;   // only THIS window's frames
+        // ...
+    }
+});
+```
+
+The clock handle is `Send`, so it can be captured into any task. Overlay compositions are separate
+composers and report window id 0, so use the page's handle when an overlay has to follow the page.
 
 ## 4. What is NOT guaranteed
 
