@@ -247,13 +247,10 @@ fn observe_watch_follows_a_replaced_receiver() {
 /// A key change ABORTS the old body (a parked future is dropped, it does not linger) and runs the
 /// replacement exactly once.
 ///
-/// KNOWN GAP, recorded rather than hidden: this does NOT prove the replacement waits for the old
-/// body to stop. The mutation that removes that join — spawning the new body directly — still
-/// passes here, because on a `current_thread` runtime the abort lands before the new task is
-/// polled either way. The join matters for the multi-threaded runtime `run_app` builds, where the
-/// two tasks really do run on different workers, and that interleaving is not reproducible with a
-/// deterministic test on this harness. The ordering is therefore a code-level guarantee with a
-/// comment saying why, not a pinned behaviour.
+/// This arm pins the ABORT, not the join: on a `current_thread` runtime the abort lands before the
+/// replacement is polled either way, so deleting the join still passes here. The join is pinned
+/// separately by `a_replacement_waits_for_the_aborted_body_to_stop`, which runs on a two-worker
+/// runtime and gives the old body's Drop enough time to be observably still running.
 #[test]
 fn a_launched_effect_key_change_aborts_the_old_body() {
     use std::sync::{Arc as StdArc, Mutex as StdMutex};
@@ -517,3 +514,79 @@ fn a_side_effect_does_not_run_when_the_composition_does_not() {
     assert!(!composer.recompose(|_ctx: &mut ComposeCtx| {}));
     assert_eq!(*runs.lock().unwrap(), 1, "an idle frame must not re-run the side effect");
 }
+
+    /// The replacement waits for the aborted body to STOP, not just to be told to stop.
+    ///
+    /// The single-threaded arm above cannot show this: on a current-thread runtime the abort lands
+    /// before the replacement is polled either way, so deleting the join still passes. Here the old
+    /// body's Drop blocks for a moment, which turns "did the replacement start before the old one
+    /// was gone" into a fact instead of a race — without the join the new body runs immediately on
+    /// the other worker and sees the flag still unset.
+    #[test]
+    fn a_replacement_waits_for_the_aborted_body_to_stop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc as StdArc;
+        use std::time::Duration;
+
+        struct SlowStop(StdArc<AtomicBool>);
+        impl Drop for SlowStop {
+            fn drop(&mut self) {
+                std::thread::sleep(Duration::from_millis(30));
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = rt.enter();
+
+        let old_started = StdArc::new(AtomicBool::new(false));
+        let old_stopped = StdArc::new(AtomicBool::new(false));
+        let replacement_ran = StdArc::new(AtomicBool::new(false));
+        let replacement_saw_it_running = StdArc::new(AtomicBool::new(false));
+        let mut composer = crate::runtime::composer::Composer::new();
+
+        let started = old_started.clone();
+        let stopped = old_stopped.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            LaunchedEffect::new(1u32).build(ctx, move |_| async move {
+                started.store(true, Ordering::SeqCst);
+                let _guard = SlowStop(stopped);
+                std::future::pending::<()>().await;
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+        // Wait until the old body is really running; a spawn that has not been polled holds no guard.
+        rt.block_on(async {
+            for _ in 0..500 {
+                if old_started.load(Ordering::SeqCst) { break; }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+        assert!(old_started.load(Ordering::SeqCst), "the old body started");
+        assert!(!old_stopped.load(Ordering::SeqCst), "and it is parked, not done");
+
+        let stopped = old_stopped.clone();
+        let ran = replacement_ran.clone();
+        let saw = replacement_saw_it_running.clone();
+        composer.compose(move |ctx: &mut ComposeCtx| {
+            LaunchedEffect::new(2u32).build(ctx, move |_| async move {
+                ran.store(true, Ordering::SeqCst);
+                if !stopped.load(Ordering::SeqCst) {
+                    saw.store(true, Ordering::SeqCst);
+                }
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(200)).await; });
+        assert!(replacement_ran.load(Ordering::SeqCst), "the replacement ran");
+        assert!(
+            !replacement_saw_it_running.load(Ordering::SeqCst),
+            "the replacement started before the aborted body was dropped: the join is missing"
+        );
+    }
