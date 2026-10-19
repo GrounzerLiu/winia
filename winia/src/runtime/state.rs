@@ -400,20 +400,32 @@ impl<T> RawState<T> {
         self.inner.signal.notify(wake);
     }
 
-    /// Publish a value change: deferred into an open batch, or committed now (version, then observers).
+    /// Stamp a write that is ABOUT to change the value.
+    ///
+    /// The version has to move before the store, not after it: a reader that samples the version
+    /// around its computation only catches a write that both moved the version and became visible
+    /// inside that window. Bumping afterwards leaves a gap where the value is already new and the
+    /// version still old, and the reader accepts a pair that never existed.
+    fn begin_write(&self) {
+        let version = GLOBAL_VERSION.fetch_add(1, Ordering::Release) + 1;
+        #[cfg(debug_assertions)]
+        {
+            self.inner
+                .signal
+                .last_write_version
+                .store(version, Ordering::Release);
+            self.inner
+                .signal
+                .last_write_pass
+                .store(current_pass_id(), Ordering::Release);
+        }
+    }
+
+    /// Publish a value change that is already stored: deferred into an open batch, or notified now.
     fn publish(&self, wake: bool) {
-        if defer_write(&self.inner.signal) {
+        if defer_write(&self.inner.signal, wake) {
             return;
         }
-        let version = GLOBAL_VERSION.fetch_add(1, Ordering::Release) + 1;
-        self.inner
-            .signal
-            .last_write_version
-            .store(version, Ordering::Release);
-        self.inner
-            .signal
-            .last_write_pass
-            .store(current_pass_id(), Ordering::Release);
         self.notify(wake);
     }
 }
@@ -434,10 +446,11 @@ impl<T: 'static> RawState<T> {
     where
         T: Clone,
     {
-        #[cfg(debug_assertions)]
-        note_pass_read(&self.inner.signal);
         let registration = register_dependency(self.inner.signal.clone());
         let value = self.inner.value.read().clone();
+        // AFTER the read: a write that lands between the two would otherwise go unseen.
+        #[cfg(debug_assertions)]
+        note_pass_read(&self.inner.signal);
         if let Some((queue, observed_revision)) = registration {
             self.inner
                 .signal
@@ -462,6 +475,7 @@ impl<T: 'static> RawState<T> {
         if *current == value {
             return;
         }
+        self.begin_write();
         *current = value;
         drop(current);
         self.publish(true);
@@ -481,6 +495,7 @@ impl<T: 'static> RawState<T> {
         if *current == staged {
             return;
         }
+        self.begin_write();
         *current = staged;
         drop(current);
         self.publish(true);
@@ -496,6 +511,7 @@ impl<T: 'static> RawState<T> {
         if *current == value {
             return;
         }
+        self.begin_write();
         *current = value;
         drop(current);
         self.publish(false);
@@ -789,17 +805,22 @@ pub(crate) fn global_version() -> u64 {
 }
 
 thread_local! {
-    /// Writes that still have to be published while a batch is open.
-    static DEFERRED_WRITES: std::cell::RefCell<Option<Vec<Arc<StateSignal>>>> =
+    /// Writes that still have to be published while a batch is open, with the wake flag each one
+    /// asked for (an `Animating` tick must not start waking the event loop just because it landed
+    /// inside a batch).
+    static DEFERRED_WRITES: std::cell::RefCell<Option<Vec<(Arc<StateSignal>, bool)>>> =
         const { std::cell::RefCell::new(None) };
 }
 
 /// Apply several state writes as ONE change.
 ///
 /// Every `set`/`update` inside the closure takes effect immediately — the writer reads its own
-/// writes — but observers are notified once, after the closure returns, and the global version
-/// advances once for the whole batch. Without this, a reader woken by the first write of a pair
-/// observes the second one still at its old value.
+/// writes — but observers are notified once, after the closure returns. Without this, a reader
+/// woken by the first write of a pair observes the second one still at its old value.
+///
+/// Each write still advances the global version as it happens: the version orders writes against
+/// the values they published, and a batch that bumped only at commit would leave a window where a
+/// concurrent reader could sample an unchanged version across a changed pair.
 ///
 /// Batches nest: only the outermost commits, so a component's own batch inside a larger one merges
 /// into it. A panic inside the closure still publishes what was written — the values are already
@@ -807,6 +828,10 @@ thread_local! {
 ///
 /// A state written twice in one batch notifies once even if the net effect was nil; the batch
 /// deliberately does not diff.
+///
+/// The batch is THREAD-SCOPED: a write from another thread during the closure is published
+/// immediately, as a batch of its own. That is the honest boundary — making it global would mean
+/// blocking writers behind the composing thread.
 pub fn write_batch<R>(f: impl FnOnce() -> R) -> R {
     let outermost = DEFERRED_WRITES.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -832,12 +857,30 @@ impl Drop for BatchCommit {
         if deferred.is_empty() {
             return;
         }
-        GLOBAL_VERSION.fetch_add(1, Ordering::Release);
-        // One notification per touched state, in first-write order.
-        let mut seen = std::collections::HashSet::with_capacity(deferred.len());
-        for signal in deferred {
-            if seen.insert(signal.id()) {
-                signal.notify(true);
+        // Coalesce by state, keeping "wake" if ANY write to it wanted one.
+        let mut merged: Vec<(Arc<StateSignal>, bool)> = Vec::with_capacity(deferred.len());
+        for (signal, wake) in deferred {
+            match merged.iter_mut().find(|(seen, _)| seen.id() == signal.id()) {
+                Some((_, wanted)) => *wanted |= wake,
+                None => merged.push((signal, wake)),
+            }
+        }
+
+        // Notify one state at a time, surviving a panicking observer: the rest of the batch still
+        // has to be told, and a panic escaping a Drop during an unwind aborts the process.
+        let mut first_panic = None;
+        for (signal, wake) in merged {
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.notify(wake)));
+            if let Err(payload) = outcome {
+                if first_panic.is_none() {
+                    first_panic = Some(payload);
+                }
+            }
+        }
+        if let Some(payload) = first_panic {
+            if !std::thread::panicking() {
+                std::panic::resume_unwind(payload);
             }
         }
     }
@@ -879,9 +922,15 @@ impl Drop for PassGuard {
 /// line a read has to stay behind to count as consistent.
 pub(crate) fn begin_pass() -> PassGuard {
     let previous = CURRENT_PASS.with(|slot| slot.get());
-    let info = PassInfo {
-        id: NEXT_PASS_ID.fetch_add(1, Ordering::Relaxed),
-        start_version: global_version(),
+    // A nested pass on the same thread (a subcomposition composing during layout) is part of the
+    // same composition: it inherits the id and the start version, so a write it makes is not
+    // reported as a foreign write of the pass that contains it.
+    let info = match previous {
+        Some(outer) => outer,
+        None => PassInfo {
+            id: NEXT_PASS_ID.fetch_add(1, Ordering::Relaxed),
+            start_version: global_version(),
+        },
     };
     CURRENT_PASS.with(|slot| slot.set(Some(info)));
     PassGuard { previous }
@@ -915,12 +964,12 @@ pub(crate) fn torn_pass_reads() -> usize {
 }
 
 /// Hand `signal` to the open batch, or say no so the caller publishes immediately.
-fn defer_write(signal: &Arc<StateSignal>) -> bool {
+fn defer_write(signal: &Arc<StateSignal>, wake: bool) -> bool {
     DEFERRED_WRITES.with(|slot| {
         let mut slot = slot.borrow_mut();
         match slot.as_mut() {
             Some(list) => {
-                list.push(Arc::clone(signal));
+                list.push((Arc::clone(signal), wake));
                 true
             }
             None => false,
@@ -1958,28 +2007,41 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), 0xABCD);
     }
 
-    /// A batch publishes once: one version bump, and the writer sees its own writes.
+    /// A batch applies eagerly and publishes once, while every write keeps its own version stamp.
+    ///
+    /// The version has to move per write, not per batch: it orders writes against the values they
+    /// published, and a batch that bumped only at commit would let a concurrent reader sample an
+    /// unchanged version across a changed pair.
     #[test]
-    fn a_write_batch_notifies_and_bumps_the_version_once() {
+    fn a_write_batch_applies_eagerly_and_publishes_once() {
+        struct Counter(Arc<std::sync::atomic::AtomicUsize>);
+        impl StateObserver for Counter {
+            fn on_change(&self, _id: StateId) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         let a = State::new(0i32);
-        let before = global_version();
+        let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observer: Arc<dyn StateObserver> = Arc::new(Counter(seen.clone()));
+        a.raw.inner.signal.subscribe_observer(&observer);
+        let before_version = global_version();
 
         write_batch(|| {
             a.set(1);
             assert_eq!(a.peek(), 1, "the writer reads its own write inside the batch");
             a.set(2);
             a.set(3);
+            assert_eq!(seen.load(Ordering::Relaxed), 0, "nothing is published while the batch is open");
         });
 
         assert_eq!(a.peek(), 3);
+        assert_eq!(seen.load(Ordering::Relaxed), 1, "one notification for the whole batch");
         assert_eq!(
             global_version(),
-            before + 1,
-            "three writes in one batch advance the world once"
+            before_version + 3,
+            "but three version stamps, one per write"
         );
-
-        a.set(4);
-        assert_eq!(global_version(), before + 2, "and a plain write is a batch of one");
     }
 
     /// The point of a batch: a reader woken by it sees the finished pair, not half of it.
@@ -2023,7 +2085,11 @@ mod tests {
             write_batch(|| a.set(2));
         });
         assert_eq!(a.peek(), 2);
-        assert_eq!(global_version(), before + 1, "one commit for the whole nest");
+        assert_eq!(
+            global_version(),
+            before + 2,
+            "one PUBLISH for the nest, but each write keeps its own version stamp"
+        );
     }
 
     /// A panic inside the batch still publishes what was written: the values are in, and leaving
@@ -2043,9 +2109,13 @@ mod tests {
         assert_eq!(global_version(), before + 1, "and it was published on the way out");
     }
 
+    /// The torn-read counter is process-global, so the tests that assert a delta on it take turns.
+    static PASS_COUNTER_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A read that sees ANOTHER thread's write from mid-pass is counted as a torn read.
     #[test]
     fn a_foreign_mid_pass_write_is_counted_as_a_torn_read() {
+        let _serial = PASS_COUNTER_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0i32);
         let writer = state.clone();
         let before = torn_pass_reads();
@@ -2080,6 +2150,7 @@ mod tests {
     /// A write the pass made itself is the normal pattern, not a torn read.
     #[test]
     fn a_write_from_the_pass_itself_is_not_a_torn_read() {
+        let _serial = PASS_COUNTER_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let state = State::new(0i32);
         let handle = state.clone();
         let before = torn_pass_reads();
@@ -2091,5 +2162,39 @@ mod tests {
             let _ = ctx;
         });
         assert_eq!(torn_pass_reads(), before, "a component setting state while it builds is expected");
+    }
+
+    /// A nested pass on the same thread is part of the same composition, so its writes are not torn.
+    #[test]
+    fn a_nested_pass_write_is_not_a_torn_read() {
+        let _serial = PASS_COUNTER_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let state = State::new(0i32);
+        let handle = state.clone();
+        let before = torn_pass_reads();
+        let mut outer = crate::runtime::composer::Composer::new();
+        let mut inner = crate::runtime::composer::Composer::new();
+        outer.compose(move |_ctx| {
+            let _ = handle.get();
+            inner.compose(|_ctx| {
+                handle.set(1);
+            });
+            let _ = handle.get();
+        });
+        assert_eq!(torn_pass_reads(), before, "same thread, same composition");
+    }
+
+    /// A batched write is stamped at the version it committed at, or the instrument goes blind to it.
+    #[test]
+    fn a_batched_write_stamps_the_version_it_committed_at() {
+        let a = State::new(0i32);
+        write_batch(|| {
+            a.set(1);
+            assert!(
+                a.raw.inner.signal.last_write_version.load(Ordering::Relaxed) > 0,
+                "a batched write is stamped as it happens, not at commit"
+            );
+        });
+        let stamped = a.raw.inner.signal.last_write_version.load(Ordering::Relaxed);
+        assert!(stamped > 0 && stamped <= global_version(), "and the stamp is a real version");
     }
 }

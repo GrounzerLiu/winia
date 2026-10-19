@@ -8,7 +8,7 @@ The criterion matters. A missing component (a Chip variant, a toolbar) is not a 
 written on top of what exists. A missing foundation shows up as *the same work repeated by every
 caller* — or as machinery that has been approximated three times in three places.
 
-Status as of 2026-10-19 (branch `v2`, 1578 lib tests).
+Status as of 2026-10-19 (branch `v2`, 1587 lib tests).
 
 ## What is missing
 
@@ -22,7 +22,8 @@ A reader inside one snapshot sees one consistent moment, even if ten states chan
 
 **What winia has.** `State` = a value + a revision + a `Subscriber` list (`runtime/state.rs`), plus
 a *pass-scoped* dependency frame: reads are recorded during a compose pass and reconciled at commit.
-There is no global version and no transactional write.
+Since the feasibility study, also a global write version and `write_batch` — the cheap half of a
+snapshot system, with no per-snapshot records. See [snapshot-feasibility.md](snapshot-feasibility.md).
 
 **Why it is a foundation gap.** Three separate pieces of machinery are currently approximating the
 same absent primitive:
@@ -64,13 +65,11 @@ empty `remember` slots, and no mechanism exists to refill them.
 This is the most *user-visible* gap in the list: it cannot be papered over inside a component the way
 a semantics attribute can.
 
-### 4. AnchoredDraggable
+### 4. ~~AnchoredDraggable~~ — already shared
 
-The anchored-drag state machine (settle targets, velocity hand-off, snap after fling) is implemented
-twice: `components/bottom_sheet.rs` and `components/navigation_drawer.rs`. Compose keeps it in
-foundation (`AnchoredDraggable`) so sheet-like components share one implementation.
-
-Every new sheet-shaped component currently pays for the second copy again.
+Corrected during review: `overlay/anchored_draggable.rs` IS the shared state machine (settle targets,
+velocity hand-off, snap after fling), used by `navigation_drawer`, `sheet_state` and the bottom sheet.
+There is nothing to extract here.
 
 ### 5. Drag and drop
 
@@ -99,9 +98,11 @@ this rather than build it, so its absence from the foundation list is a decision
 
 ## Recommendation
 
-**Snapshot is the highest-leverage item.** It is the primitive that the three approximations above
-are all standing in for, and it is the only one on this list that would *delete* code rather than add
-it.
+**Snapshot is the highest-leverage item** — but the study that followed this survey found that the
+faithful (record-based) version costs thousands of lines in the hottest path and buys properties a
+single-threaded composer does not need. What shipped instead is write batches plus a global version:
+it does not delete the three approximations, it gives them something to stand on.
+See [snapshot-feasibility.md](snapshot-feasibility.md).
 
 **LazyRow and Pager are the highest-visibility items.** They are additive, touch nothing existing, and
 unblock whole categories of screens.
@@ -109,8 +110,8 @@ unblock whole categories of screens.
 ## Re-checking this document
 
 ```bash
-ls winia/src/layout | grep -i 'lazy\|grid\|pager'          # scroll containers
-grep -rln 'SwipeToDismiss\|AnchoredDraggable' winia/src     # anchored drag
-grep -rln 'CompositionLocal' winia/src | wc -l               # exists
-grep -rn 'MutableSnapshot\|snapshot {' winia/src             # snapshot: expect nothing
+ls winia/src/layout | grep -i 'lazy\|grid\|pager'      # scroll containers: only lazy_column today
+grep -rln 'AnchoredDraggableState' winia/src            # the shared drag state machine (exists)
+grep -rln 'CompositionLocal' winia/src | wc -l           # exists
+grep -rn 'MutableSnapshot' winia/src                     # records: expect nothing
 ```

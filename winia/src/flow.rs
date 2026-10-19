@@ -204,8 +204,11 @@ struct Derived<T> {
     state: crate::runtime::state::State<T>,
     sources: std::sync::Mutex<Vec<std::sync::Arc<crate::runtime::state::StateSignal>>>,
     /// Guards against a closure that writes a source it also reads: that write would re-enter
-    /// `refresh` through `notify`.
+    /// `refresh` through `notify`. Held until the value is published, so a write in that window
+    /// marks `dirty` instead of being dropped or racing a second refresh.
     running: std::sync::atomic::AtomicBool,
+    /// Set when a source changed while a refresh was running; the refresh loops again.
+    dirty: std::sync::atomic::AtomicBool,
     me: std::sync::OnceLock<std::sync::Weak<Derived<T>>>,
 }
 
@@ -219,6 +222,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
             state,
             sources: std::sync::Mutex::new(Vec::new()),
             running: std::sync::atomic::AtomicBool::new(false),
+            dirty: std::sync::atomic::AtomicBool::new(false),
             me: std::sync::OnceLock::new(),
         }
     }
@@ -272,27 +276,38 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Derived<T> {
     /// `write_batch` prevents on the writing side.
     fn refresh(&self, observer: &std::sync::Arc<dyn crate::runtime::state::StateObserver>) {
         if self.running.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            // A refresh is already running; it publishes before clearing the guard and will see this.
+            self.dirty.store(true, std::sync::atomic::Ordering::Release);
             return;
         }
 
-        let mut attempts = 0;
-        let (value, deps) = loop {
-            let version = crate::runtime::state::global_version();
-            let mut frame = crate::runtime::state::begin_tracking_frame();
-            let value = (self.compute)();
-            let deps = crate::runtime::state::take_deps();
-            frame.commit();
-            attempts += 1;
-            let stable = crate::runtime::state::global_version() == version;
-            if stable || attempts >= MAX_DERIVE_ATTEMPTS {
-                break (value, deps);
+        let mut rounds = 0;
+        loop {
+            self.dirty.store(false, std::sync::atomic::Ordering::Release);
+            let mut attempts = 0;
+            let (value, deps) = loop {
+                let version = crate::runtime::state::global_version();
+                let mut frame = crate::runtime::state::begin_tracking_frame();
+                let value = (self.compute)();
+                let deps = crate::runtime::state::take_deps();
+                frame.commit();
+                attempts += 1;
+                let stable = crate::runtime::state::global_version() == version;
+                if stable || attempts >= MAX_DERIVE_ATTEMPTS {
+                    break (value, deps);
+                }
+            };
+            self.reconcile(observer, deps);
+            // Publish while the guard is still held: a source written between the last version
+            // sample and here lands in `dirty` instead of being dropped or racing a second refresh.
+            // Dedup lives in `set`: an unchanged result notifies nobody.
+            self.state.set(value);
+            rounds += 1;
+            if !self.dirty.load(std::sync::atomic::Ordering::Acquire) || rounds >= MAX_DERIVE_ATTEMPTS {
+                break;
             }
-        };
+        }
         self.running.store(false, std::sync::atomic::Ordering::Release);
-
-        self.reconcile(observer, deps);
-        // Dedup lives in `set`: an unchanged result notifies nobody.
-        self.state.set(value);
     }
 }
 
@@ -424,8 +439,10 @@ mod tests {
     /// A computation the world moved under is thrown away, not published.
     ///
     /// The closure writes a state it has already read on its second invocation (the first monitored
-    /// one — the seed runs before it), so the pair it computed never coexisted. The retry recomputes
-    /// and publishes the consistent pair; without it the UI would see the mixed one.
+    /// one — the seed runs before it). The pair it computed did exist, but only for an instant, and
+    /// the write it makes is the one whose notification would otherwise have been missed: the tracker
+    /// is not subscribed yet. Left alone the stream parks on that half-pair; the version check makes
+    /// the refresh run again and publish the pair that held afterwards.
     #[test]
     fn a_derive_retries_when_the_world_moves_under_it() {
         use std::sync::atomic::{AtomicUsize, Ordering};
