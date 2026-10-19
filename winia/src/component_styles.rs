@@ -124,6 +124,55 @@ pub fn with_component_styles<R>(styles: ComponentStyles, content: impl FnOnce() 
     LOCAL_STYLES.provides(Arc::new(styles), content)
 }
 
+/// Provide `styles` and re-compose the subtree when the SET ITSELF changes.
+///
+/// The plain [`with_component_styles`] is a `CompositionLocal` provider, and a local does not
+/// invalidate its readers: a set that changes at runtime (a brand switch, a screen selecting a
+/// different look) only reaches components that recompose for some other reason. This form compares
+/// the `Arc` it provided last time with the one it is given now and dirties the subtree when they
+/// differ - the same remedy `WiniaTheme` applies to a theme switch.
+///
+/// Identity, not equality: hold the `Arc` and rebuild it only when the styling actually changes.
+/// A set reconstructed every frame is a different set every frame here, and will re-compose the
+/// subtree every frame.
+#[crate::composable]
+pub fn with_component_styles_when_changed<R>(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    styles: Arc<ComponentStyles>,
+    content: impl FnOnce(&mut crate::runtime::composer::ComposeCtx) -> R,
+) -> R {
+    // Keyed by position, not by call site: this also runs from a per-frame wrapper where there is no
+    // `#[composable]` statement to key off, and two providers in one composer must not share the
+    // memory of what they last provided.
+    const NAMESPACE: u64 = 0x7769_6e69_6173_7479; // "winia sty"
+    let slot_key = ctx.position_key(NAMESPACE);
+    // Seeded with the value being provided, so the first frame does not dirty itself for nothing.
+    let previous = {
+        let seed = Arc::clone(&styles);
+        ctx.remember_backchannel_at_key(slot_key, move || {
+            crate::runtime::state::Backchannel::new(Some(seed))
+        })
+    };
+    let same = previous
+        .get()
+        .as_ref()
+        .is_some_and(|provided| Arc::ptr_eq(provided, &styles));
+    if !same {
+        previous.set(Some(Arc::clone(&styles)));
+        ctx.mark_subtree_dirty();
+    }
+    LOCAL_STYLES.provides(styles, move || content(ctx))
+}
+
+/// The same provider for the immutable case, without a ctx: kept for callers that build the set once
+/// (an application root) and never change it.
+pub fn with_component_styles_arc<R>(
+    styles: Arc<ComponentStyles>,
+    content: impl FnOnce() -> R,
+) -> R {
+    LOCAL_STYLES.provides(styles, content)
+}
+
 /// Whether the palette in scope is a DARK one, decided by the lightness of its `surface` in Oklab.
 ///
 /// It answers "what does this palette look like", which is the question a styling has: a subtree
@@ -219,8 +268,34 @@ mod tests {
     /// system has to style as light.
     #[test]
     fn the_palette_decides_whether_it_is_dark() {
+        use crate::graphics::Color;
         use crate::theme::ThemeColors;
         assert!(!palette_is_dark(&ThemeColors::default_light()));
         assert!(palette_is_dark(&ThemeColors::default_dark()));
+
+        // Only `surface` decides: a palette whose surface is light is a light palette even if other
+        // roles are dark, and the other way round.
+        let light_surface = ThemeColors {
+            surface: Color::from_argb(255, 255, 255, 255),
+            ..ThemeColors::default_dark()
+        };
+        assert!(!palette_is_dark(&light_surface), "surface alone decides");
+        let dark_surface = ThemeColors {
+            surface: Color::from_argb(255, 10, 10, 10),
+            ..ThemeColors::default_light()
+        };
+        assert!(palette_is_dark(&dark_surface));
+
+        // Around the Oklab threshold (L = 0.5 is #636363): just below is dark, just above is light.
+        let below = ThemeColors {
+            surface: Color::from_argb(255, 0x5A, 0x5A, 0x5A),
+            ..ThemeColors::default_light()
+        };
+        let above = ThemeColors {
+            surface: Color::from_argb(255, 0x70, 0x70, 0x70),
+            ..ThemeColors::default_light()
+        };
+        assert!(palette_is_dark(&below), "#5A5A5A is below L=0.5");
+        assert!(!palette_is_dark(&above), "#707070 is above L=0.5");
     }
 }

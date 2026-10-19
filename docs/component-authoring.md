@@ -336,9 +336,14 @@ alias in its own file:
 
 ```rust
 // winia/src/components/button.rs - the colours it sets are defined here, so the scope is here.
-pub struct ButtonStylingScope { pub theme: ThemeColors, pub colors: ButtonColors }
+pub struct ButtonStylingScope {
+    pub theme: ThemeColors,
+    pub is_dark: bool,
+    pub colors: ButtonColors,
+    pub border: Option<Color>,
+}
 pub type ButtonStyling = Styling<ButtonStylingScope>;
-pub fn button_colors_with_styles(theme: &ThemeColors, variant: ButtonStyle) -> ButtonColors;
+pub fn button_visual_with_styles(theme: &ThemeColors, variant: ButtonStyle) -> ButtonVisual;
 ```
 
 The framework itself, its contract for a component author, and the light/dark story are specified in
@@ -349,13 +354,19 @@ module depend on every component in the crate (the opposite of the direction eve
 and would grow one file by three types per component. The registry is keyed by `TypeId` of the
 styling type instead, so adding a component touches that component's file and nothing else.
 
-**MUST** resolve a component's default appearance through its own helper (`button_colors_with_styles`
+**MUST** resolve a component's default appearance through its own helper (`button_visual_with_styles`
 for a button) rather than calling the theme derivation directly: the helper is the single place
 "explicit parameter > styling > theme" is decided, and a component that bypasses it silently ignores
 every styling. The current participants are Button and Checkbox.
 
 **MUST NOT** let a styling replace the theme derivation wholesale: the scope starts from the theme's
 answer, so a styling that sets one field leaves the rest exactly as the role colours left them.
+
+**MUST** declare the RESOLVED appearance with `ctx.changed` before the restartable group starts
+(`ctx.changed(&colors)`), the same whitelist rule as any other parameter: a class styling is global
+rather than a field of the builder, so without this a Clean slot keeps the label style and the border
+it built on an earlier pass while only live closures (background, ripple) update - the container
+changes and the text inside it does not.
 
 One caveat, the same one every `CompositionLocal` has: providing a NEW set does not invalidate
 readers that were composed before it. A styling that changes at runtime (a user switching to a brand

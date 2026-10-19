@@ -182,8 +182,23 @@ impl CheckboxStylingScope {
     pub fn checked_checkmark(&mut self, color: Color) {
         self.colors.checked_checkmark = color;
     }
-    pub fn unchecked_checkmark(&mut self, color: Color) {
-        self.colors.unchecked_checkmark = color;
+    pub fn disabled_indeterminate_box(&mut self, color: Color) {
+        self.colors.disabled_indeterminate_box = color;
+    }
+    pub fn checked_border(&mut self, color: Color) {
+        self.colors.checked_border = color;
+    }
+    pub fn unchecked_border(&mut self, color: Color) {
+        self.colors.unchecked_border = color;
+    }
+    pub fn disabled_border(&mut self, color: Color) {
+        self.colors.disabled_border = color;
+    }
+    pub fn disabled_unchecked_border(&mut self, color: Color) {
+        self.colors.disabled_unchecked_border = color;
+    }
+    pub fn disabled_indeterminate_border(&mut self, color: Color) {
+        self.colors.disabled_indeterminate_border = color;
     }
     pub fn disabled_checked_box(&mut self, color: Color) {
         self.colors.disabled_checked_box = color;
@@ -285,12 +300,15 @@ fn checkbox_impl(
     interaction_source: Option<MutableInteractionSource>,
     modifier: Modifier,
 ) {
+    let key = ctx.next_key();
+    let theme = WiniaTheme::colors();
+    // Resolve BEFORE declaring parameters: the resolved set is a parameter too. A styling change that
+    // only reaches a live closure would repaint the box while the checkmark tint (built on Enter) keeps
+    // the old colour.
+    let colors = colors.unwrap_or_else(|| checkbox_colors_with_styles(&theme));
     ctx.changed(&state);
     ctx.changed(&enabled);
     ctx.changed(&colors);
-    let key = ctx.next_key();
-    let theme = WiniaTheme::colors();
-    let colors = colors.unwrap_or_else(|| checkbox_colors_with_styles(&theme));
     let interaction = interaction_source
         .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
     let box_color = colors.box_color(enabled, state);

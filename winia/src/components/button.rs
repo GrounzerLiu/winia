@@ -341,6 +341,9 @@ pub struct ButtonStylingScope {
     /// light theme styles as light even when the system is dark.
     pub is_dark: bool,
     pub colors: ButtonColors,
+    /// The Outlined variant's border colour. `None` keeps the theme's `outline_variant`; the other
+    /// variants have no default border, so this only matters when the caller adds one.
+    pub border: Option<crate::graphics::Color>,
 }
 
 impl ButtonStylingScope {
@@ -354,16 +357,30 @@ impl ButtonStylingScope {
         self.colors.content = color;
     }
 
-    /// The disabled pair, which M3 keeps at 12%/38% of `on_surface` roles.
+    /// The disabled pair: the container is `on_surface` at 10% (Filled/Elevated) or 12% (Tonal) and
+    /// transparent for Outlined/Text; the content is `on_surface_variant` at 38% throughout.
     pub fn disabled(&mut self, container: crate::graphics::Color, content: crate::graphics::Color) {
         self.colors.disabled_container = container;
         self.colors.disabled_content = content;
+    }
+
+    /// The Outlined variant's border colour.
+    pub fn border(&mut self, color: crate::graphics::Color) {
+        self.border = Some(color);
     }
 
     /// Replace the whole set at once.
     pub fn colors(&mut self, colors: ButtonColors) {
         self.colors = colors;
     }
+}
+
+/// Everything a button resolves from the theme plus the styling: its colour set and, when a styling
+/// asked for one, the outlined border colour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ButtonVisual {
+    pub colors: ButtonColors,
+    pub border: Option<crate::graphics::Color>,
 }
 
 /// One button styling, registered through [`crate::component_styles::ComponentStyles::with`].
@@ -375,22 +392,35 @@ pub type ButtonStyling = crate::component_styles::Styling<ButtonStylingScope>;
 /// This is the ONE place the precedence (explicit parameter > styling > theme) is decided, so
 /// `Button::build` must resolve through it - calling `ButtonColors::from_theme` directly would silently
 /// ignore every styling.
-pub fn button_colors_with_styles(
+pub fn button_visual_with_styles(
     theme: &crate::theme::ThemeColors,
     variant: ButtonStyle,
-) -> ButtonColors {
-    let mut colors = ButtonColors::from_theme(theme, variant);
+) -> ButtonVisual {
+    let mut visual = ButtonVisual {
+        colors: ButtonColors::from_theme(theme, variant),
+        border: None,
+    };
     let styles = crate::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<ButtonStyling>() {
         let mut scope = ButtonStylingScope {
             theme: theme.clone(),
             is_dark: crate::component_styles::palette_is_dark(theme),
-            colors,
+            colors: visual.colors,
+            border: None,
         };
         styling.apply(&mut scope);
-        colors = scope.colors;
+        visual.colors = scope.colors;
+        visual.border = scope.border;
     }
-    colors
+    visual
+}
+
+/// The colour half of [`button_visual_with_styles`], for callers that only need the colours.
+pub fn button_colors_with_styles(
+    theme: &crate::theme::ThemeColors,
+    variant: ButtonStyle,
+) -> ButtonColors {
+    button_visual_with_styles(theme, variant).colors
 }
 
 impl ButtonDefaults {
@@ -690,15 +720,19 @@ impl Button {
     /// 根据 style 自动从 WiniaTheme 读取默认颜色（用户 modifier 可覆盖）。
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
-        // 参数暂存（参数相等跳过——style/enabled 未变 → 容器 Skip）
-        ctx.changed(&self.style);
-        ctx.changed(&self.enabled);
         let key = ctx.next_key();
         let theme = crate::theme::WiniaTheme::colors();
-        // 默认颜色统一从 ButtonDefaults 取（对标 material3 ButtonDefaults.buttonColors）
-        let colors = self
-            .colors
-            .unwrap_or_else(|| button_colors_with_styles(&theme, self.style));
+        // Resolve BEFORE declaring parameters: the resolved set is itself a parameter. A styling that
+        // changes at runtime must re-enter the group, or a Clean slot keeps the label style and the
+        // border it built on the previous pass while only the background (a live closure) updates.
+        let visual = button_visual_with_styles(&theme, self.style);
+        let colors = self.colors.unwrap_or(visual.colors);
+        // 参数暂存（参数相等跳过——style/enabled/解析出的颜色未变 → 容器 Skip）
+        ctx.changed(&self.style);
+        ctx.changed(&self.enabled);
+        ctx.changed(&self.colors);
+        ctx.changed(&colors);
+        ctx.changed(&visual.border);
         // 交互源：外部注入或内部 remember（对标 Compose Button 的 interactionSource 参数）
         let interaction = self.interaction_source
             .unwrap_or_else(|| ctx.remember(|| MutableInteractionSource::new()).get());
@@ -825,10 +859,13 @@ impl Button {
         // （对标 material3 OutlinedButton = Button(border = BorderStroke(1.dp, OutlineVariant))）
         let border = self.border.or_else(|| {
             if self.style == ButtonStyle::Outlined {
-                Some(ButtonBorder::outlined(&theme, self.enabled)).map(|mut b| {
-                    b.width = self.size_variant.outline_width();
-                    b
-                })
+                let mut b = ButtonBorder::outlined(&theme, self.enabled);
+                // A styling may restyle the border too; without one this is the theme's colour.
+                if let Some(color) = visual.border {
+                    b.color = color;
+                }
+                b.width = self.size_variant.outline_width();
+                Some(b)
             } else {
                 None
             }
@@ -1723,6 +1760,77 @@ mod tests {
         });
         assert_eq!(on_light.container, green());
         assert_eq!(on_dark.container, red());
+    }
+
+    /// The build path really uses the styling - a resolver-only test would pass if build reverted to
+    /// `ButtonColors::from_theme`.
+    #[test]
+    fn a_composed_button_paints_the_class_styling() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let styled = green();
+        crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(ButtonStyling::new(move |scope| scope.container(styled))),
+            || {
+                composer.compose(|ctx| {
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                        Button::filled().build(ctx, |ctx| {
+                            crate::components::text::Text::new("Save").build(ctx);
+                        });
+                    });
+                });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            },
+        );
+
+        let painted = composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    _ => None,
+                })
+            })
+            .expect("the container paints a background");
+        assert_eq!(painted, green(), "build must resolve through the styling layer");
+    }
+
+    /// An explicit parameter still beats the class styling.
+    #[test]
+    fn an_explicit_colour_beats_the_class_styling() {
+        let theme = crate::theme::ThemeColors::default_light();
+        let explicit = crate::graphics::Color::from_argb(255, 0, 0, 255);
+        let mut composer = crate::runtime::composer::Composer::new();
+        crate::component_styles::with_component_styles(
+            crate::component_styles::ComponentStyles::new()
+                .with(ButtonStyling::new(|scope| scope.container(green()))),
+            || {
+                composer.compose(|ctx| {
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                        Button::filled()
+                            .colors(ButtonColors::new(explicit, explicit, explicit, explicit))
+                            .build(ctx, |ctx| {
+                                crate::components::text::Text::new("Save").build(ctx);
+                            });
+                    });
+                });
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+            },
+        );
+
+        let painted = composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    _ => None,
+                })
+            })
+            .expect("the container paints a background");
+        assert_eq!(painted, explicit, "explicit parameter > class styling > theme");
     }
 
     /// A page set layers on top of the application set without copying it.

@@ -72,15 +72,22 @@ the subtree and the styling is resolved again with the other answer.
 
 To join the framework a component needs three things in its own file:
 
-1. A scope struct with the fields it can restyle (`theme`, `is_dark`, its colour set, and any other
-   knob it exposes), with setter methods that write those fields.
+1. A scope struct with the fields it can restyle (`theme`, `is_dark`, its colour set, plus any other
+   field the component resolves and can sensibly default), with setter methods that write them.
+   One scope type per component: the scope TYPE is the registry key.
 2. `pub type XStyling = Styling<XStylingScope>;`
-3. One resolution function (`x_colors_with_styles`) that starts from the theme derivation, applies
+3. One resolution function (`x_visual_with_styles`) that starts from the theme derivation, applies
    `current_component_styles().get::<XStyling>()` when present, and returns the result. `build` MUST
-   resolve through it; calling the theme derivation directly silently ignores every styling.
+   resolve through it AND declare the resolved appearance with `ctx.changed`, or a Clean slot keeps
+   the parts that are built on Enter (a label style, a border) while live closures repaint.
 
-Rule of thumb for what a scope exposes: exactly the knobs the builder already has. A styling is a
-class-wide default, not a new API surface.
+Rule of thumb for what a scope exposes: the COLOUR fields the component derives from the theme,
+plus a knob only when the styling must be able to override it (Button exposes its outlined border
+because the border colour is part of what a caller sees). A styling is a class-wide default, not a
+second builder: shape, size and padding stay builder parameters unless a component decides otherwise.
+
+A scope type is a class key: two components that share one scope struct share one entry, and the
+later registration silently wins for both.
 
 ## What is deliberately not here yet
 
@@ -92,12 +99,26 @@ class-wide default, not a new API surface.
   derivation until it is wired; the framework does not care which classes are registered.
 - **Instance styling shortcuts.** A single instance is still restyled through the builder
   (`Button::colors`, `Button::shape`), which is also what Compose does.
+- **Every knob.** Shape, size, padding and elevation stay builder parameters. A component may expose
+  one of them in its scope when the colour of something depends on it (see the Button border).
+
+Known asymmetries, so they are not mistaken for bugs: the focus ring and the checkbox ripple come from
+theme roles (`primary`, `on_surface`), not from the resolved colour set, so a class styling does not
+recolour them; `ButtonDefaults::button_colors` returns the THEME derivation, so passing it explicitly
+(`Button::colors(ButtonDefaults::button_colors(..))`) deliberately opts out of class styling;
+`SplitButton` resolves its own colours and passes `.colors(...)` down, so a Button styling does not
+reach a split button today.
 
 ## Cost
 
-One `CompositionLocal` read per component build (a thread-local stack walk plus a `TypeId` hash
-lookup), and the empty registry is allocated once. A styling is resolved per build, not per frame:
-building a button happens on recomposition, not on every paint.
+Per component build: one `CompositionLocal` read (a thread-local `RefCell` borrow, a reverse scan of
+the active provider stack, an `Arc` clone) plus one `TypeId` hash lookup. The empty registry is
+allocated once, so an application that never styles anything pays only that read. Installing a set
+costs two allocations (the `Arc<ComponentStyles>` and the local's own boxed entry).
+
+A styled build additionally pays `palette_is_dark` - three `powf` calls through `to_oklab` on the
+surface colour. It is resolved per build, not per frame, but a component inside an always-running
+parent resolves on every pass even when its own group would skip.
 
 ## Tests
 
