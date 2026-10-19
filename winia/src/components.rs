@@ -194,3 +194,106 @@ pub use swipe_to_dismiss::{
 pub use shared_transition::{SharedContentState, SharedTransitionDefaults, SharedTransitionLayout, SharedTransitionScope};
 pub use crate::transition::{BoundsTransform, OverlayClip, PathMotion, PlaceHolderSize, ResizeMode, SharedBounds, SharedKind};
 pub use search_bar::{SearchBar, SearchBarColors, SearchBarDefaults, SearchBarState, DockedSearchBar, SEARCH_ICON_PATH, BACK_ICON_PATH, SEARCH_BAR_HEIGHT};
+#[cfg(test)]
+mod conventions {
+    //! Source-level checks for the rules in `docs/component-authoring.md`.
+    //!
+    //! Not every rule can be checked by reading text, but the three below are the ones that fail
+    //! silently and are mechanical enough to enforce instead of hoping a reviewer remembers:
+    //!
+    //! 1. a container that compares parameters declares them (`ctx.changed`), 2. a `remember` does not
+    //!    nest a `State` inside a `State`, 3. a component does not spawn its own task.
+
+    use std::path::PathBuf;
+
+    /// Containers that compose a restartable group WITHOUT parameter comparison, because their
+    /// content is driven by something else (an animation tick, an inner composition that reads the
+    /// state itself). Adding a file here is a deliberate decision - say why in the same diff.
+    const CONTENT_DRIVEN_WITHOUT_CHANGED: &[&str] = &[
+        "animated_size.rs",        // re-runs every animation tick
+        "animated_visibility.rs",  // same
+        "chip.rs",                 // look is baked into the modifier; state is read inside the group
+        "dropdown_menu.rs",        // anchor content reads the menu state itself (see its comment)
+        "selection_container.rs",  // selection registry reads
+        "tooltip.rs",              // anchored content, no parameter of its own to compare
+    ];
+
+    fn component_sources() -> Vec<(String, String)> {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src").join("components");
+        let mut out = Vec::new();
+        let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            out.push((name, text));
+        }
+        assert!(out.len() > 40, "the component directory moved: {} files", out.len());
+        out
+    }
+
+    #[test]
+    fn every_container_declares_its_parameters() {
+        let mut offenders = Vec::new();
+        for (name, text) in component_sources() {
+            if !text.contains("start_restartable_group") {
+                continue;
+            }
+            if text.contains("ctx.changed(") || CONTENT_DRIVEN_WITHOUT_CHANGED.contains(&name.as_str()) {
+                continue;
+            }
+            offenders.push(name);
+        }
+        assert!(
+            offenders.is_empty(),
+            "these containers compose a restartable group without declaring a single parameter via ctx.changed: {offenders:?}. A parameter the group does not compare is a change the Clean slot skips past forever (docs/component-authoring.md section 3.2). Either declare the parameters, or add the file to CONTENT_DRIVEN_WITHOUT_CHANGED with the reason."
+        );
+    }
+
+    #[test]
+    fn no_component_nests_a_state_in_remember() {
+        let mut offenders = Vec::new();
+        for (name, text) in component_sources() {
+            for (line_no, line) in text.lines().enumerate() {
+                if !line.contains("remember(") {
+                    continue;
+                }
+                // The bare type name matters: `SheetState::new()` is a handle, not a nested `State`.
+                let nested = line.contains("|| State::new(")
+                    || line.contains("||State::new(")
+                    || line.contains("|| Animating::new(")
+                    || line.contains("||Animating::new(");
+                if nested {
+                    offenders.push(format!("{name}:{}", line_no + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these lines nest a handle inside a remember: {offenders:?}. `ctx.remember(|| value)` already wraps the value - see docs/state-handles.md section 7.4."
+        );
+    }
+
+    #[test]
+    fn no_component_spawns_its_own_task() {
+        let mut offenders = Vec::new();
+        for (name, text) in component_sources() {
+            for (line_no, line) in text.lines().enumerate() {
+                // `scope.spawn` is the sanctioned form (it is cancelled with the composition point);
+                // a bare runtime spawn is not.
+                let runtime_spawn = line.contains("rt.spawn(") || line.contains("tokio::spawn(");
+                if runtime_spawn && !line.trim_start().starts_with("//") {
+                    offenders.push(format!("{name}:{}", line_no + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these lines spawn a task: {offenders:?}. Spawn through an effect (LaunchedEffect / produce_state / a scope), which cancels the task with the composition point - docs/component-authoring.md section 4.4."
+        );
+    }
+}

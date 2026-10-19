@@ -239,7 +239,7 @@ pub mod prelude {
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
     pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
-    pub use crate::flow::{debounce, snapshot_flow, SnapshotFlow};
+    pub use crate::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{
         LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope,
         observe_watch, with_frame_nanos, remember_updated_state, on_forget, side_effect, FrameClock,
