@@ -99,11 +99,26 @@ Cost: ~40 lines on top of B. This is where the version earns its keep.
 | --- | --- | --- | --- |
 | 1 | B: write batch + global version | **done** | atomic groups; one wake per batch; the version everything else wants |
 | 2 | D: derives check the version | **done** | makes `remember_derived_state` correct under concurrent writers |
-| 3 | C: pass gate, only if measured | 1 day | closes torn passes; needs the `try_write` design |
+| 3 | C: pass gate | **measured, not built** | the instrument found no torn read in the suite (see below), so the gate stays deferred |
 | — | A: records | weeks | do not do this |
 
 Phase 1 and 2 are additive and testable without touching the composition machinery, which is why
 they are worth doing first even though they are not "the snapshot system".
+
+## Phase 3: what the instrument measured
+
+`state::begin_pass` tags a compose pass; every write records the global version and the pass that
+made it; `State::get` inside a pass counts a read whose state was written after the pass began by
+somebody else (writes the pass made itself are the normal "a component sets state while building"
+pattern and are excluded). Debug builds only.
+
+A full suite run — 1585 tests, every widget, the date picker, the lazy list, effects, flows,
+subcompositions — produced **one** torn read, and that one is the instrument's own test
+(`a_foreign_mid_pass_write_is_counted_as_a_torn_read`), which builds the situation on purpose.
+
+So the gate (option C) is **not** justified yet: nothing in the framework or its tests actually
+produces a torn pass. The instrument stays in the debug build, and the gate should be reconsidered
+only when a real application trips it — with the `try_write` design, never a blocking lock.
 
 ## How to validate each phase
 

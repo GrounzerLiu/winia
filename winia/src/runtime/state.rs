@@ -239,6 +239,11 @@ pub(crate) struct StateSignal {
     /// `State::changes` collectors. Lazily created: most states never have one, and an empty
     /// `OnceLock` costs nothing on the common path.
     observers: OnceLock<Mutex<Vec<Weak<dyn StateObserver>>>>,
+    /// The global version this state was last written at, and the pass that wrote it (0 = no pass).
+    /// Together they let a read inside a pass tell whether it is looking at a value that landed after
+    /// the pass began, and whether this thread is the one that put it there.
+    last_write_version: AtomicU64,
+    last_write_pass: AtomicU64,
 }
 
 impl StateSignal {
@@ -253,6 +258,8 @@ impl StateSignal {
             revision: AtomicU64::new(0),
             subscribers: Mutex::new(Vec::new()),
             observers: OnceLock::new(),
+            last_write_version: AtomicU64::new(0),
+            last_write_pass: AtomicU64::new(0),
         })
     }
 
@@ -398,7 +405,15 @@ impl<T> RawState<T> {
         if defer_write(&self.inner.signal) {
             return;
         }
-        GLOBAL_VERSION.fetch_add(1, Ordering::Release);
+        let version = GLOBAL_VERSION.fetch_add(1, Ordering::Release) + 1;
+        self.inner
+            .signal
+            .last_write_version
+            .store(version, Ordering::Release);
+        self.inner
+            .signal
+            .last_write_pass
+            .store(current_pass_id(), Ordering::Release);
         self.notify(wake);
     }
 }
@@ -419,6 +434,8 @@ impl<T: 'static> RawState<T> {
     where
         T: Clone,
     {
+        #[cfg(debug_assertions)]
+        note_pass_read(&self.inner.signal);
         let registration = register_dependency(self.inner.signal.clone());
         let value = self.inner.value.read().clone();
         if let Some((queue, observed_revision)) = registration {
@@ -824,6 +841,77 @@ impl Drop for BatchCommit {
             }
         }
     }
+}
+
+// ── Pass instrumentation (debug only) ──
+
+static NEXT_PASS_ID: AtomicU64 = AtomicU64::new(1);
+static TORN_PASS_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(Clone, Copy)]
+struct PassInfo {
+    id: u64,
+    start_version: u64,
+}
+
+thread_local! {
+    static CURRENT_PASS: std::cell::Cell<Option<PassInfo>> = const { std::cell::Cell::new(None) };
+}
+
+/// The current thread's pass id, or 0 when it is not composing.
+fn current_pass_id() -> u64 {
+    CURRENT_PASS.with(|slot| slot.get().map(|info| info.id).unwrap_or(0))
+}
+
+/// Marks this thread as being inside a compose pass until dropped.
+pub(crate) struct PassGuard {
+    previous: Option<PassInfo>,
+}
+
+impl Drop for PassGuard {
+    fn drop(&mut self) {
+        let previous = self.previous;
+        CURRENT_PASS.with(|slot| slot.set(previous));
+    }
+}
+
+/// Begin a compose pass on this thread: the id tags writes made from here, and the version is the
+/// line a read has to stay behind to count as consistent.
+pub(crate) fn begin_pass() -> PassGuard {
+    let previous = CURRENT_PASS.with(|slot| slot.get());
+    let info = PassInfo {
+        id: NEXT_PASS_ID.fetch_add(1, Ordering::Relaxed),
+        start_version: global_version(),
+    };
+    CURRENT_PASS.with(|slot| slot.set(Some(info)));
+    PassGuard { previous }
+}
+
+/// Count a read that observed a state written by someone ELSE after this pass began.
+///
+/// That is a torn pass: two reads in one composition see different worlds. Writes this pass made
+/// itself are expected (a component may set state while it builds) and are not counted.
+#[cfg(debug_assertions)]
+pub(crate) fn note_pass_read(signal: &Arc<StateSignal>) {
+    let Some(pass) = CURRENT_PASS.with(|slot| slot.get()) else {
+        return;
+    };
+    if signal.last_write_version.load(Ordering::Acquire) <= pass.start_version {
+        return;
+    }
+    if signal.last_write_pass.load(Ordering::Acquire) == pass.id {
+        return;
+    }
+    let count = TORN_PASS_READS.fetch_add(1, Ordering::Relaxed) + 1;
+    if count == 1 {
+        // Once per process: the first time this fires is the one worth looking at.
+        eprintln!("[torn-pass] a read observed a mid-pass write from another thread");
+    }
+}
+
+/// How many torn reads this process has observed (debug builds only).
+pub(crate) fn torn_pass_reads() -> usize {
+    TORN_PASS_READS.load(Ordering::Relaxed)
 }
 
 /// Hand `signal` to the open batch, or say no so the caller publishes immediately.
@@ -1953,5 +2041,55 @@ mod tests {
         assert!(outcome.is_err(), "the panic propagates");
         assert_eq!(a.peek(), 7, "the write was applied before the panic");
         assert_eq!(global_version(), before + 1, "and it was published on the way out");
+    }
+
+    /// A read that sees ANOTHER thread's write from mid-pass is counted as a torn read.
+    #[test]
+    fn a_foreign_mid_pass_write_is_counted_as_a_torn_read() {
+        let state = State::new(0i32);
+        let writer = state.clone();
+        let before = torn_pass_reads();
+        let (read_done, wait_read) = std::sync::mpsc::channel::<()>();
+        let (written, wait_write) = std::sync::mpsc::channel::<()>();
+
+        std::thread::scope(|scope| {
+            let reader = state.clone();
+            scope.spawn(move || {
+                let mut composer = crate::runtime::composer::Composer::new();
+                composer.compose(move |ctx| {
+                    let _ = reader.get();
+                    read_done.send(()).unwrap();
+                    wait_write.recv().unwrap();
+                    // The write landed while this pass was running, from another thread.
+                    let _ = reader.get();
+                    let _ = ctx;
+                });
+            });
+            wait_read.recv().unwrap();
+            writer.set(1);
+            written.send(()).unwrap();
+        });
+
+        assert_eq!(
+            torn_pass_reads(),
+            before + 1,
+            "the second read observed a mid-pass write from another thread"
+        );
+    }
+
+    /// A write the pass made itself is the normal pattern, not a torn read.
+    #[test]
+    fn a_write_from_the_pass_itself_is_not_a_torn_read() {
+        let state = State::new(0i32);
+        let handle = state.clone();
+        let before = torn_pass_reads();
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.compose(move |ctx| {
+            let _ = handle.get();
+            handle.set(1);
+            let _ = handle.get();
+            let _ = ctx;
+        });
+        assert_eq!(torn_pass_reads(), before, "a component setting state while it builds is expected");
     }
 }

@@ -3444,6 +3444,9 @@ impl Composer {
 
     /// 执行组合：运行 content 闭包，构建/更新组合树和布局树。
     pub fn compose(&mut self, content: impl FnOnce(&mut ComposeCtx)) {
+        // Tag this pass for the torn-read instrument: a read that observes another thread's write
+        // from after this point is a pass split across two worlds.
+        let _pass = crate::runtime::state::begin_pass();
         // Isolate shared TLS so a nested Composer can compose without replacing
         // the caller's active slot/group/statement context.
         let _runtime_frame = begin_runtime_frame();
