@@ -111,8 +111,13 @@ side_effect(ctx, move || window.set_title(title.clone()));
 ```
 
 That timing is the whole point. It sees the tree this frame actually built rather than a half-built
-one, and a `State` it writes notifies with the dependency frame already closed, so the write is
-scheduled for the next frame instead of being attributed to the pass that is ending.
+one, and a `State` it writes notifies with the dependency frame already closed, so the write belongs
+to the NEXT PASS instead of the one that is ending.
+
+"Next pass", not "next frame": `recompose_until_stable` keeps composing while anything is pending,
+and it finishes before layout runs, so the value a `side_effect` writes is on screen in the same
+frame — the screen never shows the intermediate value. What the extra pass costs is composition
+time, not a dropped or delayed frame.
 
 No cleanup and no rollback: a composition that is skipped does not re-run it, and a pass that panics
 before the drain drops it unrun. That makes it right for idempotent publishing to something outside

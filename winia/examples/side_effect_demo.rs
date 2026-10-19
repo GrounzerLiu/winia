@@ -6,15 +6,18 @@
 //!
 //! - the callback runs **after** the slot tree has been materialized, so it sees the tree this
 //!   frame actually built, not a half-built one;
-//! - a `State` it writes is therefore scheduled for the **next** composition, not attributed to
-//!   the one that is ending;
+//! - a `State` it writes is therefore consumed by the **next pass**, not attributed to the one
+//!   that is ending — and `recompose_until_stable` runs that pass before layout, so the screen
+//!   never shows the intermediate value;
 //! - there is **no cleanup** — use `DisposableEffect` when something has to be torn down.
 //!
-//! The demo makes the second point visible. `count` is composition state; `published` is written
-//! only from the side effect, so it always trails `count` by exactly one composition. Press +1 and
-//! watch the two numbers move one after the other — that gap is the frame boundary.
+//! That last point has a consequence worth stating plainly: `published` below does NOT trail
+//! `count` on screen. Both settle inside the same frame, which is why the interesting number here
+//! is `runs` — the effect runs once per pass, and a click costs two passes (the one that ran it
+//! and the one its write scheduled).
 
 use letclone::clone;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use winia::prelude::*;
 
@@ -73,6 +76,9 @@ fn side_effect_demo_ui(ctx: &mut ComposeCtx) {
     let analytics: Arc<Mutex<Analytics>> = ctx
         .remember(|| Arc::new(Mutex::new(Analytics::default())))
         .peek();
+    // How many times the effect has run. A plain atomic, not a State: it is an observation of the
+    // effect, not something the composition should react to.
+    let runs: Arc<AtomicUsize> = ctx.remember(|| Arc::new(AtomicUsize::new(0))).peek();
 
     // ── The side effect ──
     // Registered here, runs at the end of this composition: after materialization, after the
@@ -133,11 +139,15 @@ fn side_effect_demo_ui(ctx: &mut ComposeCtx) {
                             .font_size(12.0)
                             .color(WiniaTheme::colors().on_surface_variant)
                             .build(ctx);
+                        Text::new(format!("side-effect runs: {}", runs.load(Ordering::SeqCst)))
+                            .font_size(12.0)
+                            .build(ctx);
                         caption(
                             ctx,
-                            "Press +1 once: count moves immediately, published catches up on the \
-                             next composition. The write is scheduled after the dependency frame \
-                             closed, which is exactly why it lands one frame late.",
+                            "Press +1: count changes, and published follows it before anything is \
+                             drawn - the write lands on the next PASS of the same frame, which \
+                             recompose_until_stable runs before layout. So the two numbers agree \
+                             on screen; what a click costs is the extra pass, and runs goes up by two.",
                         );
                     });
             });

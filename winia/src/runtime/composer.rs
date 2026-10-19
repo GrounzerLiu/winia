@@ -542,8 +542,11 @@ impl<'a> ComposeCtx<'a> {
     ///
     /// This is Compose's `SideEffect`: it runs at the end of this `compose()`, after the slot tree
     /// is materialized and after the dependency frame closed. Two consequences: it sees the tree
-    /// this frame actually built (not a half-built one), and a `State` it writes is scheduled for
-    /// the next frame rather than swallowed by the pass that is ending.
+    /// this frame actually built (not a half-built one), and a `State` it writes survives the pass
+    /// that is ending rather than being swallowed by it.
+    ///
+    /// The write lands on the NEXT PASS, not the next frame: `recompose_until_stable` runs that pass
+    /// before layout, so the value is on screen in the same frame.
     ///
     /// No cleanup and no rollback — a composition that panics before the drain drops the callback
     /// without running it. Use it to publish to something outside the composition (a platform

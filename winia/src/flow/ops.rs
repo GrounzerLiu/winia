@@ -55,22 +55,27 @@ impl<S: Stream + Unpin> Stream for Debounce<S> {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<S::Item>> {
         let this = self.get_mut();
 
-        // Drain whatever the upstream has, so the period is measured from the LAST value.
-        loop {
-            match Pin::new(&mut this.inner).poll_next(cx) {
-                Poll::Ready(Some(item)) => {
-                    this.pending = Some(item);
-                    let deadline = Instant::now() + this.period;
-                    match &mut this.timer {
-                        Some(timer) => timer.as_mut().reset(deadline),
-                        None => this.timer = Some(Box::pin(sleep_until(deadline))),
+        // A Stream is only allowed to be polled until it reports the end, and a pending value still
+        // has its own period to wait out — so the drain is skipped once the end is known, rather than
+        // the whole poll short-circuiting.
+        if !this.ended {
+            // Drain whatever the upstream has, so the period is measured from the LAST value.
+            loop {
+                match Pin::new(&mut this.inner).poll_next(cx) {
+                    Poll::Ready(Some(item)) => {
+                        this.pending = Some(item);
+                        let deadline = Instant::now() + this.period;
+                        match &mut this.timer {
+                            Some(timer) => timer.as_mut().reset(deadline),
+                            None => this.timer = Some(Box::pin(sleep_until(deadline))),
+                        }
                     }
+                    Poll::Ready(None) => {
+                        this.ended = true;
+                        break;
+                    }
+                    Poll::Pending => break,
                 }
-                Poll::Ready(None) => {
-                    this.ended = true;
-                    break;
-                }
-                Poll::Pending => break,
             }
         }
 
@@ -210,6 +215,42 @@ mod tests {
             tokio::time::advance(Duration::from_millis(40)).await;
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(7)));
             assert_eq!(poll(&mut deb, &waker), Poll::Ready(None), "and then the stream ends");
+        });
+    }
+
+    /// The upstream is polled only until it reports the end.
+    ///
+    /// A `Stream` may panic when polled after `None`. This one does, so the test fails loudly if the
+    /// drain loop ever touches a finished upstream again.
+    #[test]
+    fn a_finished_upstream_is_never_polled_again() {
+        struct EndAfterOne {
+            polls: usize,
+        }
+
+        impl Stream for EndAfterOne {
+            type Item = i32;
+            fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<i32>> {
+                self.polls += 1;
+                match self.polls {
+                    1 => Poll::Ready(Some(7)),
+                    2 => Poll::Ready(None),
+                    _ => panic!("the upstream was polled after it reported the end"),
+                }
+            }
+        }
+
+        let rt = paused_runtime();
+        rt.block_on(async {
+            let waker = futures_util::task::noop_waker();
+            let mut deb = debounce(EndAfterOne { polls: 0 }, Duration::from_millis(10));
+
+            assert!(poll(&mut deb, &waker).is_pending(), "the value waits out the period");
+            tokio::time::advance(Duration::from_millis(20)).await;
+            assert_eq!(poll(&mut deb, &waker), Poll::Ready(Some(7)));
+            // The end, without touching the upstream again.
+            assert_eq!(poll(&mut deb, &waker), Poll::Ready(None));
+            assert_eq!(poll(&mut deb, &waker), Poll::Ready(None));
         });
     }
 }
