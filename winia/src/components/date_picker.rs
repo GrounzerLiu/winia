@@ -2442,6 +2442,11 @@ fn months_navigation(
                     .arrangement(Arrangement::Start)
                     .alignment(Alignment::Center)
                     .build(ctx, |ctx| {
+                        // The arrows only care whether the list is at an end, so they listen to the
+                        // derived flags instead of the scroll offset: scrolling inside one month does
+                        // not rebuild them.
+                        let back_enabled = list.remember_can_scroll_backward(ctx);
+                        let forward_enabled = list.remember_can_scroll_forward(ctx);
                         // The last page the list can show, so a forward step cannot ask past the end
                         // and leave the arrow's own request stranded above the clamp.
                         let last_page = CalendarModel::number_of_months_in_range(&state.year_range())
@@ -2453,7 +2458,7 @@ fn months_navigation(
                             let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
                             back_flight.set(Some(target));
                             back.animate_scroll_to_item(target, 0.0);
-                        }, list.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
+                        }, back_enabled.get(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::Small, true);
                         let forward = list.clone();
                         let forward_flight = step_in_flight.clone();
                         let forward_anchor = list.first_visible();
@@ -2461,7 +2466,7 @@ fn months_navigation(
                             let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
                             forward_flight.set(Some(target));
                             forward.animate_scroll_to_item(target, 0.0);
-                        }, list.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
+                        }, forward_enabled.get(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::Small, true);
                     });
             }
         });
@@ -3255,6 +3260,10 @@ fn docked_navigation(
                 .arrangement(Arrangement::Start)
                 .alignment(Alignment::Center)
                 .build(ctx, |ctx| {
+                    // Derived flags, so the arrows rebuild when the list reaches an end and not on
+                    // every scroll pixel.
+                    let back_enabled = month_rows.remember_can_scroll_backward(ctx);
+                    let forward_enabled = month_rows.remember_can_scroll_forward(ctx);
                     // The last page the list can show, so a forward step cannot ask past the end.
                     let last_page = CalendarModel::number_of_months_in_range(&state.year_range())
                         .saturating_sub(1) as usize;
@@ -3265,7 +3274,7 @@ fn docked_navigation(
                         let target = arrow_target(back_anchor, back_flight.get(), false, last_page);
                         back_flight.set(Some(target));
                         back.animate_scroll_to_item(target, 0.0);
-                    }, month_rows.can_scroll_backward(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    }, back_enabled.get(), CHEVRON_LEFT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                     let panel_toggle = panel.clone();
                     let is_open = months_open;
                     // Abbreviated month ("Sep", not "September") — the M3 specs docked figure.
@@ -3291,7 +3300,7 @@ fn docked_navigation(
                         let target = arrow_target(forward_anchor, forward_flight.get(), true, last_page);
                         forward_flight.set(Some(target));
                         forward.animate_scroll_to_item(target, 0.0);
-                    }, month_rows.can_scroll_forward(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
+                    }, forward_enabled.get(), CHEVRON_RIGHT_PATH, navigation_color, IconButtonSize::XSmall, !panel_open);
                 });
             // Year group: step arrows around the year; the button swaps in the year list.
             Row::new()

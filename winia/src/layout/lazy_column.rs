@@ -170,6 +170,32 @@ impl LazyListState {
     /// Whether there is content before the first visible item (Compose
     /// `LazyListState.canScrollBackward`).
     pub fn can_scroll_backward(&self) -> bool { self.offset.get() > 0.5 }
+
+    /// [`can_scroll_forward`](Self::can_scroll_forward) as a `State` that notifies only when the
+    /// ANSWER changes.
+    ///
+    /// Calling `can_scroll_forward()` during composition makes the caller recompose on every scroll
+    /// pixel — a chevron that only cares "am I at the end" is rebuilt 60 times a second to be told
+    /// "no" again. Reading this handle recomposes it when the list reaches its end and when it leaves
+    /// it, which is the only information the caller actually uses.
+    #[crate::composable]
+    pub fn remember_can_scroll_forward(
+        &self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+    ) -> crate::runtime::state::State<bool> {
+        let source = self.clone();
+        crate::flow::remember_derived_state(ctx, move || source.can_scroll_forward())
+    }
+
+    /// [`can_scroll_backward`](Self::can_scroll_backward) as a `State` that notifies only on a flip.
+    #[crate::composable]
+    pub fn remember_can_scroll_backward(
+        &self,
+        ctx: &mut crate::runtime::composer::ComposeCtx,
+    ) -> crate::runtime::state::State<bool> {
+        let source = self.clone();
+        crate::flow::remember_derived_state(ctx, move || source.can_scroll_backward())
+    }
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`, which
     /// callers use to stay off a list that is already moving.
     pub fn is_scrolling(&self) -> bool { self.is_scrolling.get() }
@@ -3188,5 +3214,27 @@ mod tests {
             "the resize frame itself must cover the new viewport's bottom, not the frame after it \
              (covered={covered})"
         );
+    }
+
+    /// The derived scroll flags follow the boundary synchronously, and only that.
+    #[test]
+    fn the_derived_scroll_flags_flip_at_the_boundary() {
+        let list = LazyListState::new();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let slots: std::sync::Arc<std::sync::Mutex<Option<(crate::runtime::state::State<bool>, crate::runtime::state::State<bool>)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let l = list.clone();
+        let out = slots.clone();
+        composer.compose(move |ctx| {
+            let back = l.remember_can_scroll_backward(ctx);
+            let forward = l.remember_can_scroll_forward(ctx);
+            *out.lock().unwrap() = Some((back, forward));
+        });
+        let (back, forward) = slots.lock().unwrap().clone().unwrap();
+        assert!(!back.peek(), "at the top: nothing to go back to");
+        assert!(!forward.peek(), "and nothing laid out past the end yet");
+
+        list.offset.set(10.0);
+        assert!(back.peek(), "a write past the boundary flips it with no executor involved");
     }
 }
