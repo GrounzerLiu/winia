@@ -2246,6 +2246,20 @@ impl AppState {
                         if let Some(target) = find_scroll_target(nodes, r, dx, dy) {
                             let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                             handled = consumed.x != 0.0 || consumed.y != 0.0;
+                            // An injected wheel behaves like a real one: a snapping container settles
+                            // once the wheel stops, not after every event. Without this a UI test sees
+                            // the wheel leaving the list between two pages while a real mouse does not.
+                            let nodes = pw.composer.arena_nodes();
+                            let state = if dy != 0.0 {
+                                nodes[target].modifier.vertical_scroll_state()
+                            } else {
+                                nodes[target].modifier.horizontal_scroll_state()
+                            };
+                            if let Some(ss) = state {
+                                if ss.snaps() {
+                                    note_wheel_settle(window_id.into_raw() as u64, &ss);
+                                }
+                            }
                         }
                     }
                 }
