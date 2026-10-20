@@ -1243,7 +1243,13 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // `fill_items` pins every item to the viewport, so unmeasured items can be priced exactly. It
         // has to be declared, or the flat estimate is used and every position outside the measured
         // window — and so every fling that leaves it — is computed from the wrong size.
-        let uniform = if self.fill_items && vh > 0.0 { Some(vh) } else { None };
+        let uniform = if let Some(size) = self.item_main_size {
+            Some(size)
+        } else if self.fill_items && vh > 0.0 {
+            Some(vh)
+        } else {
+            None
+        };
         if cache.uniform != uniform {
             cache.set_uniform(uniform);
         }
@@ -1259,7 +1265,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）；
         // 含 主轴 contentPadding（对齐 Compose：max_offset = before + 内容 + after - 视口）
         let (pad_before, pad_after) = self.content_padding;
-        let mut content_h = pad_before + pad_after;
+        // The snap offset is a PLACEMENT shift (Compose shifts the page, not the scroll target), so the
+        // content is that much longer: without it the last page could never reach its rest position.
+        let snap_shift = self.snap_offset.max(0.0);
+        let mut content_h = pad_before + pad_after + snap_shift;
         for g in 0..self.total {
             // `coverage_height`, like `prefix_height` and the window walk: `max_off` clamps an offset that
             // `prefix_height` produced, so the two have to price unmeasured items the same way or the end
@@ -1341,7 +1350,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         {
             Some(crate::modifier::SnapSpec {
                 step: page_size + self.spacing,
-                offset: self.snap_offset,
+                // Page k rests at `pad_before + k * step`: the pages are shifted by the snap offset in
+                // PLACEMENT, so the scroll positions stay on clean boundaries and the padding is part
+                // of the anchor rather than an error term.
+                anchor: pad_before,
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
                 min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,
@@ -1424,7 +1436,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                         main_pos = pad_before + prefix_height(&cache, self.globals[i], self.spacing);
                         main_init = true;
                     }
-                    let p = main_pos;
+                    // The snap offset moves every item forward, which is what makes a page smaller
+                    // than the viewport rest where `SnapPosition` asks (Compose shifts the page in
+                    // layout, it does not skew the snap positions).
+                    let p = main_pos + snap_shift;
                     main_pos += h + self.spacing;
                     p
                 }

@@ -92,43 +92,53 @@ impl PagerState {
         self.list.is_scrolling()
     }
 
-    /// Jump to `page` (Compose's `scrollToPage`). `page_offset` is in pixels, positive moving the page
-    /// further along the main axis.
+    /// Jump to `page` (Compose's `scrollToPage`).
+    ///
+    /// `page_offset` is a FRACTION of the page size, as in Compose (`PagerState.kt:679-680`), not
+    /// pixels: `0.0` is the page's rest position, `1.0` is a whole page past it. It is converted with
+    /// the page size the last frame resolved, so a caller that jumps on the first frame gets the
+    /// pixel-ness of `PageSize::Fill`.
     pub fn scroll_to_page(&self, page: usize, page_offset: f32) {
-        self.list.scroll_to_item(page, page_offset);
+        let step = self.page_size.peek();
+        let pixels = if step > 0.0 { page_offset * step } else { 0.0 };
+        self.target_page.set(page);
+        self.list.scroll_to_item(page, pixels);
     }
 
-    /// Animate to `page` (Compose's `animateScrollToPage`).
+    /// Animate to `page` (Compose's `animateScrollToPage`); `page_offset` is a page fraction.
     pub fn animate_scroll_to_page(&self, page: usize, page_offset: f32) {
-        self.list.animate_scroll_to_item(page, page_offset);
+        let step = self.page_size.peek();
+        let pixels = if step > 0.0 { page_offset * step } else { 0.0 };
+        self.target_page.set(page);
+        self.list.animate_scroll_to_item(page, pixels);
     }
 
-    /// Recompute the page-shaped view from the list's anchors.
+    /// Recompute the page-shaped view from the list's scroll offset.
     ///
     /// Called by the builder once the list has composed; every write compares first, so a pager that
     /// did not move does not wake its readers (a `State::set` with an equal value is already deduped,
     /// but the fraction is a float and this keeps the intent visible).
-    fn sync_from_list(&self) {
-        let viewport = self.list.viewport_main_size();
-        if viewport <= 0.0 {
+    fn sync_from_list(&self, page_size: f32, spacing: f32, pad_before: f32) {
+        // Pages are PLACED at `pad_before + k * step + snap_shift`, and the snap positions are
+        // `pad_before + k * step`, so the scroll offset divided by the step gives the page position
+        // directly - no viewport, no first-visible anchor (dividing by the viewport is what made a
+        // `PageSize::Fixed` pager report the wrong page and a fraction scaled by page/viewport).
+        let step = page_size + spacing;
+        if step <= 0.0 {
             return;
         }
-        let first = self.list.first_visible();
-        let offset = self.list.first_visible_offset();
-        let raw = (offset / viewport).clamp(0.0, 1.0);
-        // The page closest to the snap position owns the fraction: at 0.6 through page 2 the pager is
-        // 0.4 of the way into page 3, so it reports page 3 with -0.4 - which is what makes the
-        // counter flip halfway through a swipe, as Compose's does.
-        let (page, fraction) = if raw < 0.5 {
-            (first, raw)
-        } else {
-            (first.saturating_add(1).min(self.page_count.saturating_sub(1)), raw - 1.0)
-        };
-        self.current_page.set(page);
+        let position = (self.list.offset() - pad_before) / step;
+        let last = self.page_count.saturating_sub(1) as f32;
+        let rounded = position.round().clamp(0.0, last);
+        let current = rounded as usize;
+        // `round()` puts the rest position at an integer, so the fraction is in [-0.5, 0.5): half a
+        // page into a swipe the counter flips, which is Compose's definition.
+        let fraction = (position - rounded).clamp(-0.5, 0.5);
+        self.current_page.set(current);
         self.current_page_offset_fraction.set(fraction);
-        self.target_page.set(page);
+        self.target_page.set(current);
         if !self.list.is_scrolling() {
-            self.settled_page.set(page);
+            self.settled_page.set(current);
         }
     }
 }
@@ -275,9 +285,11 @@ impl<A: LazyAxis> Pager<A> {
         // long after the first frame). A page that fills the viewport always offsets by 0.
         let viewport = state.list.viewport_main_size();
         let page_size = match self.page_size {
-            PageSize::Fill => viewport,
+            PageSize::Fill => viewport.max(1.0),
             PageSize::Fixed(size) => size,
         };
+        let page_spacing = self.page_spacing;
+        let content_padding = self.content_padding;
         if state.page_size.peek() != page_size {
             state.page_size.set(page_size);
         }
@@ -306,7 +318,9 @@ impl<A: LazyAxis> Pager<A> {
         // during composition would let a sibling composed later in the same pass see the new page
         // while one composed earlier still sees the old one. The write schedules the pass that makes
         // the counter visible, which is the same one-frame step Compose has.
-        crate::effect::side_effect(ctx, move || sync.sync_from_list());
+        crate::effect::side_effect(ctx, move || {
+            sync.sync_from_list(page_size, page_spacing, content_padding)
+        });
     }
 }
 
@@ -440,6 +454,9 @@ mod tests {
         assert_eq!(info.page_size, 120.0, "a fixed page keeps its size");
         assert_eq!(info.viewport_size, 300.0);
         assert_eq!(info.page_count, 9);
+        // The page counter divides by the STEP (page + spacing), not by the viewport.
+        assert_eq!(state.current_page(), 0, "page 0 at rest");
+        assert!(state.current_page_offset_fraction().abs() < 1e-3, "fraction 0 at rest, got {}", state.current_page_offset_fraction());
     }
 
     #[test]
@@ -510,5 +527,45 @@ mod tests {
         });
         assert!(!has_wheel_channel, "userScrollEnabled=false must not attach the horizontal scroll channel");
         let _ = has_scroll;
+    }
+
+    /// The snap positions stay on page boundaries even when the page is offset inside the viewport: the
+    /// `SnapPosition` shift is applied to the page's PLACEMENT, not to the scroll target (Compose
+    /// shifts the page too). A centred fixed page therefore rests at `k * step`, not at `k * step +
+    /// offset`, which is what this pins.
+    #[test]
+    fn a_centred_fixed_page_rests_on_a_page_boundary() {
+        let state = PagerState::new(9);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let mut build = |composer: &mut Composer, state: PagerState| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state)
+                        .page_size(PageSize::Fixed(120.0))
+                        .snap_position(SnapPosition::Center)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
+        };
+        build(&mut composer, state.clone());
+        state.scroll_to_page(1, 0.0);
+        build(&mut composer, state.clone());
+        build(&mut composer, state.clone());
+        assert!(
+            (state.list_state().offset() - 120.0).abs() < 0.5,
+            "page 1 rests at one page boundary (120), not at boundary + snap offset: got {}",
+            state.list_state().offset()
+        );
+        assert_eq!(state.current_page(), 1);
+        assert!(
+            state.current_page_offset_fraction().abs() < 1e-3,
+            "and the fraction is 0 at rest, got {}",
+            state.current_page_offset_fraction()
+        );
     }
 }

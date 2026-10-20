@@ -2696,9 +2696,10 @@ pub(crate) struct SnapSpec {
     /// in the direction of travel (Compose `calculateFinalSnappingItem`,
     /// `LazyListSnapLayoutInfoProvider.kt:139-145`).
     pub min_fling_velocity: f32,
-    /// Where inside an item the list rests: `0.0` is its leading edge; `(viewport - item) / 2.0`
-    /// centres a fixed-size page (Compose's `SnapPosition.Center`).
-    pub offset: f32,
+    /// The scroll position of snap position 0: the main-axis content padding, so the positions are
+    /// `anchor + k * step`. (The `SnapPosition` shift is a PLACEMENT offset in the list, not part of
+    /// this: Compose moves the page, not the scroll target.)
+    pub anchor: f32,
 }
 
 /// Where a snapping fling should land, from where it started and how fast it was let go.
@@ -2717,9 +2718,9 @@ fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
     // The snap positions are `k * step + offset`: with a fixed page that does not fill the viewport,
     // `offset` is how far the page sits from the leading edge (`SnapPosition.Center` is half the
     // leftover space). A page that fills the viewport has offset 0 and this is the old behaviour.
-    let position = (current - snap.offset).max(0.0);
-    let lower = (position / step).floor() * step + snap.offset; // distance to it is <= 0
-    let upper = (position / step).ceil() * step + snap.offset; // distance to it is >= 0
+    let position = (current - snap.anchor).max(0.0);
+    let lower = (position / step).floor() * step + snap.anchor; // distance to it is <= 0
+    let upper = (position / step).ceil() * step + snap.anchor; // distance to it is >= 0
     let picked = if velocity.abs() < snap.min_fling_velocity {
         if (upper - current).abs() <= (current - lower).abs() {
             upper
@@ -2984,7 +2985,7 @@ mod tests {
     fn a_snapping_fling_moves_at_most_one_page() {
         const STEP: f32 = 336.0;
         const MIN_FLING: f32 = 400.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING, offset: 0.0 };
+        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING, anchor: 0.0 };
         let limit = STEP * 10.0;
 
         // Anywhere inside a page, any velocity: the answer is one of the two neighbours, never further.
@@ -3045,7 +3046,7 @@ mod tests {
         const STEP: f32 = 336.0;
         let scroll = ScrollState::new();
         scroll.fling_limit.set(STEP * 10.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, offset: 0.0 }));
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
         scroll.offset.set(100.0);
 
         scroll.fling(4000.0);
@@ -3090,7 +3091,7 @@ mod tests {
         crate::animation::clear_all_animations();
 
         const STEP: f32 = 336.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, offset: 0.0 };
+        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 };
         let settle = |offset: f32, velocity: f32| {
             let scroll = ScrollState::new();
             scroll.fling_limit.set(STEP * 10.0);

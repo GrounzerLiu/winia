@@ -57,24 +57,37 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   step becomes page + spacing, which lets the next page peek in.
 - **`page_spacing` is part of the step.** It is added between items, so the snap distance is
   `page + spacing` (it used to be the page alone, which was only right for `spacing = 0`).
-- **`snap_position` places a fixed page** inside the viewport: `Start` puts it at the leading edge
-  (offset 0), `Center` at `(viewport - page) / 2`, `End` at `viewport - page`. A filled page always
-  rests at Start because there is no leftover space.
+- **`snap_position` shifts the PAGE, not the scroll target** (which is what Compose's
+  `SnapPosition.position()` does): every item is placed `Start`=0 / `Center`=(viewport-page)/2 /
+  `End`=viewport-page pixels further along the main axis, and the snap positions stay on clean page
+  boundaries `pad_before + k * step`. That is why a centred fixed page rests exactly on a boundary,
+  and why the first page cannot be centred (the scroll clamps at 0).
+- **The content is that much longer** (`content_h` includes the shift), so the LAST page can reach
+  its rest position too.
 - **`content_padding`** is main-axis padding before the first page and after the last;
   `.content_padding_cross` on the underlying list is not exposed here.
 - **RTL: not mirrored.** The lazy list has no layout-direction handling today - a horizontal
   `LazyRow`/pager lays out from the left in every direction, and `reverse_layout` is the only flip.
   Compose mirrors a horizontal pager under RTL. This is a gap in the lazy list, not in the pager, and
   it is listed under Differences.
-- The pages are placed by the lazy list's measure: the policy measures the window, places each page at
-  `offset + cumulative(item + spacing)`, and writes `first_visible_index` / `first_visible_offset`,
-  `viewport_main` and the snap step back for the pager to derive from.
+- The pages are placed by the lazy list's measure in CONTENT coordinates
+  (`pad_before + cumulative(item + spacing) + snap shift`); the scroll offset is applied by the scroll
+  modifier when it paints, not in the placement. The policy writes `first_visible_index` /
+  `first_visible_offset`, `viewport_main` and the snap step back; the pager derives the page from the
+  scroll offset and the step, so it only needs `viewport_main` for the `Fill` page size (one frame
+  stale on the very first pass: `Center`/`End` behave as `Start` until it lands).
 
 ## Behaviour
 
 - **`current_page` is the page CLOSEST to the snap position**, not the first visible one: halfway
   through a swipe the counter flips to the next page, and the offset fraction stays in `[-0.5, 0.5)`.
-  This is Compose's definition and what makes a dot indicator behave.
+  This is Compose's definition and what makes a dot indicator behave. It is computed from the
+  scroll offset divided by the STEP (page + spacing), never by the viewport: for `PageSize::Fixed`
+  the viewport division made the counter lag a whole page and scaled the fraction by page/viewport.
+- **`scroll_to_page(page, fraction)` / `animate_scroll_to_page` take a page FRACTION**, as Compose
+  does (`0.0` = the rest position, `1.0` = a whole page past it), converted with the page size the
+  last frame resolved. `target_page` is the page a programmatic scroll asked for; the derive resets
+  it to the settled page once the scroll comes to rest.
 - **The counter is derived and published at the end of the pass** (`side_effect`): it is recomputed
   from the anchors the pass observed, so a programmatic `scroll_to_page` (which lands during LAYOUT)
   shows up on the next frame - the same eventual consistency Compose has while a scroll animates. A

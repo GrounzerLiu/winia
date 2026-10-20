@@ -89,16 +89,19 @@ target** for everything it reads.
 
 - **MUST** mark a component `#[composable]` when it is self-contained: it remembers state and consumes
   that state itself (Button, Checkbox, TextField, Icon, the effect hooks).
-- **MUST NOT** mark a **container** whose content closure reads state the parent has to hear about:
-  `Column`, `Row`, `Stack`, and the animation containers (`AnimatedVisibility`, `AnimatedContent`, ...)
-  are deliberately not composable.
-- **Why:** with a scope in between, a `State::get()` inside the content registers on the container, so
-  the parent Skips and the change never re-runs the content. That is how the checkbox demo's
-  select-all stopped propagating. The full rule and the current list are in
-  `docs/key-system-design.md` section 7.1-7.2.
+- **MUST NOT** mark a LAYOUT PRIMITIVE that hands the caller's closure straight through: `Column`,
+  `Row`, `Stack`, `Flow`, and the animation containers (`AnimatedVisibility`, `AnimatedContent`,
+  `Crossfade`, `AnimatedSize`) stay scope-free.
+- **Why:** a `State::get()` written at the top of the content closure belongs to whoever composed
+  it. With a scope in between it registers on the container instead, the parent Skips, and the
+  change never re-runs the content - that is how the checkbox demo's select-all stopped
+  propagating. Every other component that composes a restartable group IS `#[composable]` (34 of
+  the 39 that do), because its content is composed by the component, not passed through. The full
+  rule and the current exclusion list are in `docs/key-system-design.md` section 7.1-7.2.
 
-When in doubt, look at what the body does: if a `State::get()` in the CONTENT must re-run the
-container as well, no scope. If every read is internal, a scope.
+The distinction is about the closure, not the shape: a container that passes the caller's closure
+through unchanged must not insert a scope; a container that composes its children itself (and
+therefore has to declare its own parameters) takes one.
 
 ### 1.3 Content closures
 
@@ -184,9 +187,12 @@ pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) 
 }
 ```
 
-**MUST** declare every parameter the content or the slots read. **MUST NOT** rely on `Modifier`
-equality to carry a parameter: `.test_tag()` is in the modifier's param set precisely so a change can
-be observed, but nothing else is.
+**MUST** declare every parameter the content or the slots read. The modifier chain carries some of
+them and the declaration carries the rest - know which channel you are using: `Modifier::param_eq`
+(`modifier.rs`) compares sizes, padding, border, semantics, layout direction, z-index and `test_tag`,
+and `TextField` relies on that for its visual parameters (`text_field.rs:909-916`); everything the
+chain cannot express - closures, flag-shaped branch controls, values passed outside the modifier -
+has to go through `ctx.changed`, or a Clean slot Skips past it.
 
 **The failure it prevents:** an undeclared parameter does not cause a stale frame twice - it causes a
 Clean slot to Skip past the change forever, and it looks exactly like a broken state notification. The
@@ -393,8 +399,9 @@ has in Compose (touch slot, inset, alignment) instead of letting the content dec
 - A disabled component **MUST NOT** silently drop its semantics: a disabled button has no `clickable`,
   so it has to claim its label explicitly or the accessibility tree loses its name
   (`docs/semantics.md`, rule 1).
-- A focusable component **MUST** obtain a `FocusRequester` (`Modifier::request_focus` attaches it)
-  the way `Text`, `Button` and `TextField` do, and focus has to survive recomposition: the runtime
+- A focusable component **MUST** obtain a `FocusRequester` and attach it with
+  `Modifier::focus_requester(..)` (the requester's own `request_focus()` is what moves focus);
+  `TextField` is the model to copy (`text_field.rs:1568`). Focus has to survive recomposition: the runtime
   restores it by slot key, so a component that changes its slot layout on a branch can lose it
   (that is what `ctx.key` is for).
 
