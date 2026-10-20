@@ -38,6 +38,9 @@ pub struct PagerState {
     settled_page: State<usize>,
     /// The page size along the main axis, as the builder resolved it (the viewport for `Fill`).
     page_size: State<f32>,
+    /// The builder's page-size SPEC (`None` = Fill): the derive reads the spec, not a captured value,
+    /// because `remember_derived_state` keeps the first closure it was given.
+    page_size_spec: State<Option<f32>>,
     /// The spacing and the leading content padding the list was built with: the derive reads them as
     /// States so a builder change re-derives instead of freezing the first frame's values.
     spacing: State<f32>,
@@ -54,6 +57,7 @@ impl PagerState {
             target_page: State::new(0),
             settled_page: State::new(0),
             page_size: State::new(0.0),
+            page_size_spec: State::new(None),
             spacing: State::new(0.0),
             pad_before: State::new(0.0),
         }
@@ -291,9 +295,16 @@ impl<A: LazyAxis> Pager<A> {
         // the previous measure, which is stable for anything a caller would notice (a fling settles
         // long after the first frame). A page that fills the viewport always offsets by 0.
         let viewport = state.list.viewport_main_size();
-        let page_size = match self.page_size {
-            PageSize::Fill => viewport,
-            PageSize::Fixed(size) => size,
+        let page_size_spec = match self.page_size {
+            PageSize::Fill => None,
+            PageSize::Fixed(size) => Some(size),
+        };
+        if state.page_size_spec.peek() != page_size_spec {
+            state.page_size_spec.set(page_size_spec);
+        }
+        let page_size = match page_size_spec {
+            Some(size) => size,
+            None => viewport,
         };
         let page_spacing = self.page_spacing;
         let content_padding = self.content_padding;
@@ -333,11 +344,15 @@ impl<A: LazyAxis> Pager<A> {
         // subscribes to the offset directly, so the two States move on every scroll frame; Compose's
         // `currentPageOffsetFraction` is continuous for the same reason.
         let mirror = state.clone();
+        let list = state.list.clone();
         let _position = crate::flow::remember_derived_state(ctx, move || {
-            // Read through `get()`, not the captured builder values: the derive is remembered once, so
-            // a captured size would freeze the first frame's answer (page size is 0 until the first
-            // measure). These are States, so a change re-derives.
-            let page_size = mirror.page_size.get();
+            // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
+            // value would freeze the first frame's answer - and the first frame's viewport is 0, which
+            // is exactly why the counter never moved (step 0 -> early return, forever).
+            let page_size = match mirror.page_size_spec.get() {
+                Some(size) => size,
+                None => list.viewport_main_size(),
+            };
             let spacing = mirror.spacing.get();
             let pad_before = mirror.pad_before.get();
             mirror.sync_from_list(page_size, spacing, pad_before);

@@ -111,7 +111,11 @@ pub struct LazyListState {
     pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
     /// The viewport's main-axis size from the last measure: what a pager needs to turn a pixel offset
     /// into a page fraction. `0.0` until the first measure.
-    pub(crate) viewport_main: crate::runtime::state::Backchannel<f32>,
+    ///
+    /// A `State`, not a backchannel: the first measure is where a pager learns its page size, and the
+    /// pager's own build does not run again just because the viewport appeared - a derived value that
+    /// reads this has to be woken by the write.
+    pub(crate) viewport_main: crate::runtime::state::State<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
@@ -143,7 +147,7 @@ impl LazyListState {
             known_total: crate::runtime::state::State::new(usize::MAX),
             jump_request: crate::runtime::state::State::new(None),
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
-            viewport_main: crate::runtime::state::Backchannel::new(0.0),
+            viewport_main: crate::runtime::state::State::new(0.0),
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             is_scrolling: crate::runtime::state::State::new(false),
@@ -163,6 +167,9 @@ impl LazyListState {
     pub fn first_visible_offset(&self) -> f32 { self.first_visible_offset.get() }
 
     /// The viewport size along the main axis, as of the last measure (`0.0` before the first one).
+    ///
+    /// A tracked read: a caller deriving from it (a pager's page size) is woken when the first measure
+    /// resolves it, which a `peek` would miss - the pager's build does not re-run by itself.
     pub fn viewport_main_size(&self) -> f32 { self.viewport_main.get() }
 
     /// Whether there is content past the last visible item (Compose

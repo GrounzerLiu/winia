@@ -188,6 +188,55 @@ impl Default for FrameClock {
     }
 }
 
+// ── Wheel settle ──
+
+/// A wheel snap waiting for the wheel to stop, per window (`WindowId`, state, deadline).
+///
+/// Compose snaps when the SCROLL SESSION ends: the wheel applies its deltas, and the fling behavior
+/// runs once afterwards (the snap fling behavior is what lands the list on a page). Snapping inside
+/// the wheel handler runs after every tick, so a slow wheel is pulled back to the page it started on
+/// before the next tick can carry it over the midpoint.
+static WHEEL_SETTLE: std::sync::Mutex<
+    Option<(u64, crate::modifier::ScrollState, std::time::Instant)>,
+> = std::sync::Mutex::new(None);
+
+/// How long after the last wheel event the snap runs (a wheel session is short and silent).
+const WHEEL_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+
+type WheelSettle = Option<(u64, crate::modifier::ScrollState, std::time::Instant)>;
+
+fn wheel_settle_guard() -> std::sync::MutexGuard<'static, WheelSettle> {
+    WHEEL_SETTLE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Record that this window's wheel left a snapping container between two pages.
+pub(crate) fn note_wheel_settle(window: u64, state: &crate::modifier::ScrollState) {
+    *wheel_settle_guard() = Some((
+        window,
+        state.clone(),
+        std::time::Instant::now() + WHEEL_SETTLE_DELAY,
+    ));
+}
+
+/// The settle for this window, if its deadline has passed (and it is cleared).
+fn take_due_wheel_settle(window: u64) -> Option<crate::modifier::ScrollState> {
+    let mut guard = wheel_settle_guard();
+    let due = matches!(
+        guard.as_ref(),
+        Some((w, _, at)) if *w == window && std::time::Instant::now() >= *at
+    );
+    if due {
+        guard.take().map(|(_, state, _)| state)
+    } else {
+        None
+    }
+}
+
+/// Whether a settle is still waiting for its deadline in this window.
+fn wheel_settle_pending(window: u64) -> bool {
+    matches!(wheel_settle_guard().as_ref(), Some((w, _, _)) if *w == window)
+}
+
 // ── PerWindow ──
 
 pub(crate) struct PerWindow {
@@ -639,6 +688,21 @@ impl PerWindow {
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
+        // A pending wheel snap settles HERE, once the wheel has stopped - not inside the wheel
+        // handler. Compose ends the scroll session and only then runs the fling behavior; snapping
+        // per wheel tick pulled the list back to the page before the next tick could accumulate.
+        let wid = window_id.into_raw() as u64;
+        if let Some(state) = take_due_wheel_settle(wid) {
+            if state.snaps() {
+                // Velocity 0: the NEAREST snap position, not the next one.
+                state.fling(0.0);
+            }
+        } else if wheel_settle_pending(wid) {
+            // Come back for it: this frame draws the wheel delta, the next one settles.
+            if let Some(ref sw) = self.skia_window {
+                sw.request_redraw();
+            }
+        }
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // 帧时钟按窗口分发：ComposeCtx::frame_clock() 用它把等待者绑到本窗口的帧上。
         self.composer.set_window_id(window_id.into_raw() as u64);
@@ -1171,8 +1235,7 @@ impl ApplicationHandler for AppState {
                             };
                             if let Some(ss) = settle {
                                 if ss.snaps() {
-                                    // Velocity 0: the NEAREST snap position, not the next one.
-                                    ss.fling(0.0);
+                                    note_wheel_settle(window_id.into_raw() as u64, &ss);
                                 }
                             }
                         }
@@ -4238,6 +4301,32 @@ mod drag_target_selection_tests {
         let n = &composer.arena_nodes()[root];
         assert!(n.measured_size.height > 0.0,
             "无固定高度 + 无限约束应随内容撑开（>0），实际 {}", n.measured_size.height);
+    }
+
+    /// The wheel snap waits for the session to end: a deadline set by the last wheel event, taken
+    /// once it passes. Snapping per event pulled the list back before the next event could carry it
+    /// over the midpoint (reported as "wheel scrolls a bit and jumps back").
+    #[test]
+    fn a_wheel_settle_waits_for_its_deadline_and_is_taken_once() {
+        use crate::modifier::ScrollState;
+        let window = 0x5EE1_0001u64;
+        let other = 0x5EE1_0002u64;
+        let state = ScrollState::new();
+
+        super::note_wheel_settle(window, &state);
+        assert!(super::wheel_settle_pending(window), "the deadline has not passed yet");
+        assert!(super::take_due_wheel_settle(other).is_none(), "another window's settle is not ours");
+        assert!(
+            super::take_due_wheel_settle(window).is_none(),
+            "a settle that is not due is not taken (it would kill the wheel session)"
+        );
+
+        std::thread::sleep(super::WHEEL_SETTLE_DELAY + std::time::Duration::from_millis(20));
+        assert!(
+            super::take_due_wheel_settle(window).is_some(),
+            "once the wheel has stopped the settle is taken"
+        );
+        assert!(!super::wheel_settle_pending(window), "and it is cleared, so it runs once");
     }
 }
 
