@@ -221,6 +221,12 @@ pub struct Pager<A: LazyAxis> {
     /// Compose's `snapAnimationSpec`: the spring a settle runs on. material3's `DefaultEffects`
     /// unless a caller says otherwise.
     snap_animation_spec: crate::animation::SpringSpec,
+    /// Compose's `PagerSnapDistance.atMost`: how many pages one flick may carry. `1` by default.
+    max_pages_per_fling: usize,
+    /// Compose's `pageNestedScrollConnection`: a connection the pager attaches to its own list, so an
+    /// ancestor/descendant can observe (and consume) the pager's drags and flings.
+    page_nested_scroll_connection:
+        Option<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>>,
 }
 
 /// A pager whose pages scroll horizontally (Compose's `HorizontalPager`).
@@ -255,6 +261,8 @@ impl<A: LazyAxis> Pager<A> {
             user_scroll_enabled: true,
             snap_positional_threshold: 0.5,
             snap_animation_spec: crate::modifier::default_snap_settle(),
+            max_pages_per_fling: 1,
+            page_nested_scroll_connection: None,
         }
     }
 
@@ -314,6 +322,29 @@ impl<A: LazyAxis> Pager<A> {
     /// the same spec, so both settles of one pager share one curve.
     pub fn snap_animation_spec(mut self, spec: crate::animation::SpringSpec) -> Self {
         self.snap_animation_spec = spec;
+        self
+    }
+
+    /// How many pages ONE flick may carry, at least one (Compose's `PagerSnapDistance.atMost`, whose
+    /// default is `1`). A flick above the fling floor carries as many pages as the decay estimate
+    /// suggests, capped here; `1` is "a gesture moves at most one page", the pager's usual feel.
+    pub fn max_pages_per_fling(mut self, pages: usize) -> Self {
+        assert!(pages >= 1, "max_pages_per_fling must be at least 1, got {pages}");
+        self.max_pages_per_fling = pages;
+        self
+    }
+
+    /// A nested-scroll connection attached to the pager's own list (Compose's
+    /// `pageNestedScrollConnection`).
+    ///
+    /// The hook only: Compose's `PagerDefaults.pageNestedScrollConnection` also implements "a nested
+    /// pre-scroll past the pager's end turns a page", and that behaviour is not ported - pass a
+    /// connection whose `pre_scroll`/`post_scroll` do what your layout needs.
+    pub fn page_nested_scroll_connection(
+        mut self,
+        connection: impl crate::nested_scroll::NestedScrollConnection + 'static,
+    ) -> Self {
+        self.page_nested_scroll_connection = Some(std::sync::Arc::new(connection));
         self
     }
 
@@ -388,8 +419,14 @@ impl<A: LazyAxis> Pager<A> {
             .content_padding(self.content_padding, self.content_padding)
             .snap_positional_threshold(self.snap_positional_threshold)
             .snap_animation_spec(self.snap_animation_spec.clone())
+            .snap_max_pages(self.max_pages_per_fling)
             .reverse_layout(self.reverse)
-            .modifier(self.modifier);
+            .modifier(match self.page_nested_scroll_connection.clone() {
+                // Compose's `pageNestedScrollConnection` rides on the list's own modifier, so the scroll
+                // dispatch that walks the hit path finds it on the container the drags land on.
+                Some(connection) => self.modifier.then(Modifier::new().nested_scroll_arc(connection)),
+                None => self.modifier,
+            });
         list = match self.page_size {
             PageSize::Fill => list.fill_items(true),
             PageSize::Fixed(size) => list.item_main_size(size),
@@ -1008,6 +1045,7 @@ mod tests {
                             damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_SPATIAL,
                             ..Default::default()
                         })
+                        .max_pages_per_fling(3)
                         .modifier(Modifier::new().fill_max_width().fill_max_height())
                         .build(ctx, |ctx, page| {
                             crate::components::text::Text::new(format!("Page {page}")).build(ctx);
@@ -1023,6 +1061,7 @@ mod tests {
         assert!((spec.positional_threshold - 0.3).abs() < 1e-6, "the threshold reaches the spec");
         assert_eq!(spec.settle.stiffness, 3800.0, "and so does the settle spring");
         assert_eq!(spec.settle.damping_ratio, 0.9);
+        assert_eq!(spec.max_pages_per_fling, 3, "and the page ceiling");
     }
 
     /// The point of the threshold: at 40% of a page, a slow release carries on with `0.3` and goes back
@@ -1078,5 +1117,134 @@ mod tests {
         assert!(land(None).abs() < 0.01, "the default 0.5 sends a 40% release back");
 
         crate::animation::clear_all_animations();
+    }
+
+    /// Compose's `PagerSnapDistance.atMost(n)`: a hard flick carries up to `n` pages, and exactly one
+    /// unless the caller raises the ceiling.
+    #[test]
+    fn max_pages_per_fling_lets_a_flick_carry_more_than_one_page() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        // Fling 4000 px/s from page 0 and report the page it lands on.
+        let land = |max_pages: Option<usize>| -> f32 {
+            let state = PagerState::new(6);
+            let mut composer = Composer::new();
+            let theme = crate::theme::ThemeColors::default_light();
+            let build = |composer: &mut Composer| {
+                composer.compose(|ctx| {
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                        let mut pager = HorizontalPager::new(state.clone());
+                        if let Some(pages) = max_pages {
+                            pager = pager.max_pages_per_fling(pages);
+                        }
+                        pager
+                            .modifier(Modifier::new().fill_max_width().fill_max_height())
+                            .build(ctx, |ctx, page| {
+                                crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                            });
+                    });
+                });
+                composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+            };
+            build(&mut composer);
+            build(&mut composer);
+
+            let page = state.layout_info().page_size;
+            assert!(page > 0.0, "the page size resolved");
+            let scroll = pager_scroll_state(&composer);
+            scroll.fling(4000.0);
+            for _ in 0..400 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                if !crate::animation::has_animation_for_state(scroll.offset.state_id()) {
+                    break;
+                }
+            }
+            scroll.offset.peek() / page
+        };
+
+        assert!(
+            (land(None) - 1.0).abs() < 0.01,
+            "the default ceiling is one page, however hard the flick"
+        );
+        assert!(
+            (land(Some(3)) - 3.0).abs() < 0.01,
+            "three pages when the ceiling allows them"
+        );
+
+        crate::animation::clear_all_animations();
+    }
+
+    /// A nested-scroll connection the test can count.
+    struct CountingConnection {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::nested_scroll::NestedScrollConnection for CountingConnection {
+        fn on_pre_scroll(
+            &self,
+            _available: crate::nested_scroll::ScrollDelta,
+            _source: crate::nested_scroll::NestedScrollSource,
+        ) -> crate::nested_scroll::ScrollDelta {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            crate::nested_scroll::ScrollDelta::ZERO
+        }
+    }
+
+    /// Compose's `pageNestedScrollConnection` is a hook: the caller's connection rides on the list's own
+    /// modifier (the node the drags land on), and nothing is attached unless somebody asks.
+    #[test]
+    fn a_page_nested_scroll_connection_rides_on_the_lists_modifier() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = PagerState::new(5);
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer, with_connection: bool| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let mut pager = HorizontalPager::new(state.clone());
+                    if with_connection {
+                        pager = pager.page_nested_scroll_connection(CountingConnection {
+                            calls: calls.clone(),
+                        });
+                    }
+                    pager
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+
+        build(&mut composer, false);
+        assert!(
+            composer
+                .arena_nodes()
+                .iter()
+                .all(|node| node.modifier.nested_scroll_connection().is_none()),
+            "a pager attaches no nested-scroll connection by default"
+        );
+
+        build(&mut composer, true);
+        let attached = composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| node.modifier.nested_scroll_connection())
+            .expect("the pager attaches the caller's connection to its list");
+        attached.on_pre_scroll(
+            crate::nested_scroll::ScrollDelta::new(0.0, 10.0),
+            crate::nested_scroll::NestedScrollSource::Drag,
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "the attached connection IS the caller's"
+        );
     }
 }

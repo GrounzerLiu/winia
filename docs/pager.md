@@ -48,7 +48,10 @@ Builder parameters, all mapped onto the lazy list: `.modifier`, `.content_paddin
 (`contentPadding`), `.page_spacing(px)` (`pageSpacing`), `.reverse_layout(bool)` (`reverseLayout`),
 `.page_size(PageSize::Fill | PageSize::Fixed(px))` (`PageSize`), `.snap_position(..)` (`snapPosition`,
 only visible for a fixed page smaller than the viewport), `.beyond_viewport_page_count(n)`
-(`beyondViewportPageCount`), `.user_scroll_enabled(bool)` (`userScrollEnabled`). The content is a
+(`beyondViewportPageCount`), `.user_scroll_enabled(bool)` (`userScrollEnabled`),
+`.snap_positional_threshold(f32)` (`snapPositionalThreshold`), `.snap_animation_spec(SpringSpec)`
+(`snapAnimationSpec`), `.max_pages_per_fling(n)` (`PagerSnapDistance.atMost(n)`),
+`.page_nested_scroll_connection(conn)` (`pageNestedScrollConnection`). The content is a
 `build(ctx, |ctx, page| ...)` parameter, the `Fn(&mut ComposeCtx, T)` shape `docs/component-authoring.md`
 1.3 reserves for a container that hands its content a scope value.
 
@@ -110,6 +113,12 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   thrown, whatever the threshold says. `snap_animation_spec(SpringSpec)` (`snapAnimationSpec`) is the
   spring the settle runs on; the default is material3's `DefaultEffects` (stiffness 1600, damping 1.0),
   and the wheel's page step uses the same spec, so one pager has one settle curve.
+- **`max_pages_per_fling(n)`** is Compose's `PagerSnapDistance.atMost(n)`: how many pages one flick may
+  carry, `1` by default. Above the fling floor the target is the page the release starts in, plus as
+  many pages as the decay's asymptote (`v0 / friction`) suggests, rounded to whole pages, never fewer
+  than the one page it was thrown toward, and capped by this number. So `1` is exactly the old
+  one-page-per-gesture rule, and `3` lets a hard flick cross a gallery in one motion. The wheel is NOT
+  affected: a notch is still one page.
 - **One wheel NOTCH moves one page** (`ScrollState::snap_page`), which also gives the date picker's
   months the same feel; a non-paged list keeps scrolling smoothly. A notch is a discrete
   `LineDelta`; a continuous `PixelDelta` stream (a precision touchpad, a high-resolution wheel) is a
@@ -134,8 +143,8 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `snapPosition` (`Start/Center/End`) | A snap offset inside the step; a filled page always rests at Start, so it only shows with `PageSize::Fixed`. |
 | `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel; programmatic scrolling still works. |
 | `flingBehavior` — a replaceable `TargetedFlingBehavior` | Not exposed: the settle is the scroll state's own. Two of its parameters ARE knobs (`snap_positional_threshold`, `snap_animation_spec`), but substituting the behaviour would need a trait the list does not have — the state picks an animation and the frame clock runs it, a `performFling` strategy would have to drive the scroll itself. |
-| `PagerSnapDistance` (default `atMost(1)`) | Not exposed: a release moves at most one page, which IS `atMost(1)`. `snapPositionalThreshold` is `snap_positional_threshold`. |
-| `pageNestedScrollConnection` | Not exposed: the list underneath takes a `NestedScrollConnection` through `Modifier::nested_scroll`, but there is no pager-specific default. |
+| `PagerSnapDistance` (default `atMost(1)`) | `max_pages_per_fling(n)`; the default `1` matches Compose's, and unlike Compose there is no `0` ("no fling at all") — turn user scrolling off instead. |
+| `pageNestedScrollConnection` | A hook: `page_nested_scroll_connection(conn)` attaches the caller's `NestedScrollConnection` to the pager's list. Compose's DEFAULT connection (a nested pre-scroll past the pager's end turns a page) is not ported. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is the content parameter instead. |
 | RTL mirrors the pages | Not mirrored: the lazy list has no layout-direction handling. |
 | The wheel takes the DOMINANT axis and is ignored by a container on the other axis (`NonTouchScrollingLogic.kt:255-264`), so a plain vertical wheel does not move a `HorizontalPager` | A vertical wheel IS routed to a horizontal PAGER (and only to one, so a vertical ancestor keeps its wheel); non-paging horizontal lists still ignore it. |
@@ -151,7 +160,9 @@ node, not only on the reported size); a centred fixed pager reaches its last pag
 survives the list rebuilding itself mid-spring; `user_scroll_enabled(false)` removes the scroll
 channel; the fraction stays inside `[-0.5, 0.5)`, including past the last page; the two fling knobs
 reach the snap spec the measure writes back, the defaults are 0.5 and material3's `DefaultEffects`
-spring, and a slow release at 40% of a page turns it under `0.3` but not under the default `0.5`.
+spring, a slow release at 40% of a page turns it under `0.3` but not under the default `0.5`, a
+4000 px/s flick lands one page out by default and three with `max_pages_per_fling(3)`, and a caller's
+nested-scroll connection rides on the list's modifier while a default pager attaches none.
 
 `cargo test -p winia --lib positional_threshold` / `settle_spring` - the threshold decision itself
 (`snap_target` at 40% and 60%, above and below the fling floor) and that `snap_settle` returns the

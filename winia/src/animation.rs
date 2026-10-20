@@ -542,6 +542,13 @@ impl DecaySpec {
         assert!(threshold > 0.0, "DecaySpec::new: threshold 必须 > 0（收到 {threshold}）");
         Self { friction, threshold }
     }
+
+    /// How far a fling started at `initial_velocity` would travel: the asymptote `v0 / friction` of
+    /// `value(t) = v0/friction · (1 - e^(-friction·t))`. This is where the motion goes ignoring the
+    /// velocity threshold, and it is what a pager estimates "how many pages would this flick carry" from.
+    pub fn target_value(&self, initial_velocity: f32) -> f32 {
+        if self.friction > 0.0 { initial_velocity / self.friction } else { 0.0 }
+    }
 }
 
 impl Default for DecaySpec {
@@ -3895,6 +3902,19 @@ pub(crate) mod tests {
         }
         assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
         assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
+    }
+
+    /// `target_value` is the asymptote the decay itself lands on, `v0 / friction` — the number a pager
+    /// estimates "how many pages would this flick carry" from, so it must agree with the motion.
+    #[test]
+    fn a_decay_target_value_is_the_asymptote() {
+        let spec = exponential_decay(4.2);
+        assert!((spec.target_value(840.0) - 200.0).abs() < 1e-3, "840 / 4.2");
+        assert!(
+            (spec.target_value(-840.0) + 200.0).abs() < 1e-3,
+            "signed, so a backward flick estimates backwards"
+        );
+        assert_eq!(spec.target_value(0.0), 0.0);
     }
 
     /// Decay（指数衰减）：v0=1000、friction=4.2 → 极限 = 1000/4.2 ≈ 238.1

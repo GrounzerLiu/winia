@@ -1794,6 +1794,15 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.push(ModifierElement::NestedScroll { connection: Arc::new(connection) })
     }
 
+    /// Attach an already-shared nested-scroll connection - for a component that keeps a handle of its
+    /// own (the pager's `page_nested_scroll_connection`) and attaches it on every build.
+    pub(crate) fn nested_scroll_arc(
+        self,
+        connection: Arc<dyn crate::nested_scroll::NestedScrollConnection>,
+    ) -> Self {
+        self.push(ModifierElement::NestedScroll { connection })
+    }
+
     /// 水平滚动（绑定 ScrollState——对齐 vertical_scroll）
     pub fn horizontal_scroll(self, state: ScrollState) -> Self {
         // 无 builder 期 get 副作用（同 vertical_scroll，State Phase4）。
@@ -2685,6 +2694,11 @@ pub struct ScrollState {
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
 }
 
+/// The friction every fling in this tree decays with: `lazy_column.rs`, `top_app_bar.rs` and the
+/// scroll state all pass 4.2 to `exponential_decay`. A page estimate has to use the same number as the
+/// decay that would run, or "how far would this flick carry" answers a different question.
+const FLING_FRICTION: f32 = 4.2;
+
 /// How a PAGED list's fling settles, written back by the list's measure and read by
 /// [`ScrollState::fling_with_boundary`].
 ///
@@ -2712,6 +2726,9 @@ pub(crate) struct SnapSpec {
     pub positional_threshold: f32,
     /// The spring the settle runs on (Compose's `snapAnimationSpec`). See [`default_snap_settle`].
     pub settle: crate::animation::SpringSpec,
+    /// How many pages one gesture may carry, at least one (Compose's `PagerSnapDistance.atMost`; the
+    /// default `1` is Compose's own default, and the ceiling a pager's feel rests on).
+    pub max_pages_per_fling: usize,
 }
 
 impl Default for SnapSpec {
@@ -2722,6 +2739,7 @@ impl Default for SnapSpec {
             anchor: 0.0,
             positional_threshold: 0.5,
             settle: default_snap_settle(),
+            max_pages_per_fling: 1,
         }
     }
 }
@@ -2781,10 +2799,20 @@ fn snap_target(current: f32, velocity: f32, snap: &SnapSpec, limit: f32) -> f32 
         } else {
             lower
         }
-    } else if velocity > 0.0 {
-        upper
     } else {
-        lower
+        // A flick above the floor: the page the release starts in, plus as many pages as the fling
+        // would carry on its own - estimated from the decay's asymptote, rounded to whole pages,
+        // never fewer than the one page it was thrown toward, and capped by the caller's ceiling
+        // (Compose's `PagerSnapDistance.atMost`). `1` reproduces the old one-page-per-gesture rule
+        // exactly; a bigger cap is what makes a hard flick cross a gallery in one motion.
+        let start = lower - snap.anchor;
+        let carried = (crate::animation::DecaySpec::default()
+            .target_value(velocity.abs()) / step)
+            .round()
+            .max(1.0);
+        let pages = carried.min(snap.max_pages_per_fling.max(1) as f32) * step;
+        let target = if velocity > 0.0 { start + pages } else { (start - pages).max(0.0) };
+        target + snap.anchor
     };
     picked.clamp(0.0, limit.max(0.0))
 }
@@ -2971,7 +2999,7 @@ impl ScrollState {
         crate::animation::push_fling_with_boundary(
             off.clone(),
             velocity,
-            crate::animation::exponential_decay(4.2),
+            crate::animation::exponential_decay(FLING_FRICTION),
             {
                 let limit = limit.clone();
                 move |o| {
@@ -3157,6 +3185,43 @@ mod tests {
             "above the fling floor the velocity decides, whatever the threshold says"
         );
         assert_eq!(snap_target(120.0, -9000.0, &snap, limit), 0.0);
+    }
+
+    /// `max_pages_per_fling` is Compose's `PagerSnapDistance.atMost`: the default `1` keeps the
+    /// one-page-per-gesture rule, and a bigger ceiling lets a hard flick carry as many pages as the
+    /// decay estimate suggests (4000 px/s at 4.2 friction is ~952 px, ~2.8 pages at 336 px each).
+    #[test]
+    fn a_flick_carries_as_many_pages_as_the_ceiling_allows() {
+        const STEP: f32 = 336.0;
+        let mut snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
+        let limit = STEP * 10.0;
+
+        assert_eq!(
+            snap_target(0.0, 4000.0, &snap, limit),
+            STEP,
+            "the default ceiling is one page, however hard the flick"
+        );
+        snap.max_pages_per_fling = 3;
+        assert_eq!(
+            snap_target(0.0, 4000.0, &snap, limit),
+            STEP * 3.0,
+            "two and a bit pages of travel round to three"
+        );
+        assert_eq!(
+            snap_target(0.0, 500.0, &snap, limit),
+            STEP,
+            "a gentle flick above the floor still moves exactly one page"
+        );
+        assert_eq!(
+            snap_target(STEP * 9.0, 4000.0, &snap, limit),
+            limit,
+            "the end of the list still holds"
+        );
+        assert_eq!(
+            snap_target(STEP * 2.0, -4000.0, &snap, limit),
+            0.0,
+            "and so does its start"
+        );
     }
 
     /// A caller can settle on its own spring; the default is material3's `DefaultEffects`.

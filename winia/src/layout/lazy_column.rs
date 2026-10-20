@@ -448,6 +448,8 @@ pub struct LazyList<A: LazyAxis> {
     /// The spring a paging settle runs on (Compose's `snapAnimationSpec`); written back into the snap
     /// spec, so the wheel's page step and a fling settle with the same curve.
     snap_animation_spec: crate::animation::SpringSpec,
+    /// How many pages one fling may carry (Compose's `PagerSnapDistance.atMost`), at least one.
+    snap_max_pages: usize,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -484,6 +486,7 @@ impl<A: LazyAxis> LazyList<A> {
             snap_offset: 0.0,
             snap_positional_threshold: 0.5,
             snap_animation_spec: crate::modifier::default_snap_settle(),
+            snap_max_pages: 1,
         }
     }
 
@@ -552,6 +555,13 @@ impl<A: LazyAxis> LazyList<A> {
     /// pager cannot drift apart.
     pub fn snap_animation_spec(mut self, spec: crate::animation::SpringSpec) -> Self {
         self.snap_animation_spec = spec;
+        self
+    }
+
+    /// How many pages one fling may carry, at least one (Compose's `PagerSnapDistance.atMost`). The
+    /// default `1` is Compose's own: one gesture moves at most one page.
+    pub fn snap_max_pages(mut self, pages: usize) -> Self {
+        self.snap_max_pages = pages.max(1);
         self
     }
 
@@ -934,6 +944,8 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&snap_positional_threshold);
         let snap_animation_spec = self.snap_animation_spec.clone();
         ctx.changed(&snap_animation_spec);
+        let snap_max_pages = self.snap_max_pages;
+        ctx.changed(&snap_max_pages);
         let beyond_bounds = self.beyond_bounds;
         ctx.changed(&beyond_bounds);
         let user_scroll = self.user_scroll;
@@ -1152,6 +1164,7 @@ impl<A: LazyAxis> LazyList<A> {
             snap_offset: self.snap_offset,
             snap_positional_threshold: self.snap_positional_threshold,
             snap_animation_spec: self.snap_animation_spec.clone(),
+            snap_max_pages: self.snap_max_pages,
             beyond_bounds: self.beyond_bounds,
             state: state.clone(),
         };
@@ -1244,6 +1257,8 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub snap_positional_threshold: f32,
     /// The settle spring written into the snap spec (`SnapSpec::settle`).
     pub snap_animation_spec: crate::animation::SpringSpec,
+    /// The page ceiling written into the snap spec (`SnapSpec::max_pages_per_fling`).
+    pub snap_max_pages: usize,
     /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
     pub beyond_bounds: usize,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
@@ -1431,6 +1446,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 anchor: 0.0,
                 positional_threshold: self.snap_positional_threshold,
                 settle: self.snap_animation_spec.clone(),
+                max_pages_per_fling: self.snap_max_pages,
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
                 min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,
