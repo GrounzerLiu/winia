@@ -103,6 +103,11 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   synchronous observer never sees the new page next to the old fraction.
 - **Only a window of pages composes** (`beyond_viewport_page_count`, Compose's
   `beyondViewportPageCount`), so a 200-page pager composes a handful.
+- **Not every path re-snaps, and that is on purpose.** A wheel notch, a drag release and a fling all
+  settle on a page. A resize that changes the page size, a scrollbar-thumb drag, and a programmatic
+  `scroll_to_page(page, fraction)` with a fractional offset can leave the pager off the grid - the
+  last one by design (Compose's `scrollToPage(pageOffsetFraction)`), and a generic "snap whatever is
+  off-grid" pass would fight it. Those paths need their own decision, not a background heal.
 - **One gesture moves at most one page**, because the snap is the lazy list's own: below
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
 - **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
@@ -132,9 +137,11 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   So the events of one gesture bank travel in `WheelPager` (`app.rs`) and a page is armed only once a
   real notch's worth has accumulated (`PIXEL_PAGE_TRAVEL` = 60 logical px = three 20 px lines); a gap
   of `SESSION_GAP` (400 ms), a reversal, or a different container starts the bank over, and at most one
-  page turns per event. A notch with no page left in that direction is SWALLOWED (the bar pulses) and
-  never pixel-scrolled: the pixel path cancels the settle in flight and nudges the offset, which strands
-  the pager between two pages until the next notch re-derives a target. Compose reaches a similar result by a different route: its mouse-wheel logic
+  page turns per event. A notch with no page left in that direction never pixel-scrolls the pager —
+  that path cancels the settle in flight and nudges the offset, which strands the pager between two
+  pages until the next notch re-derives a target. The event goes to the NESTED chain instead (an
+  ancestor may still use it, which is what keeps a carousel inside a list from freezing that list at its
+  last page), and the pager's bar pulses when nobody moves. Compose reaches a similar result by a different route: its mouse-wheel logic
   synthesizes a velocity (up to 1 dp/ms, `MouseWheelScrollingLogic.kt:250-256,308-310`), and the snap
   fling behavior runs on wheel (`shouldBeTriggeredByMouseWheel`, default true) so a notch at or above
   `MinFlingVelocityDp` (400 dp/s) advances a page. winia's step is exact - one page per notch whatever

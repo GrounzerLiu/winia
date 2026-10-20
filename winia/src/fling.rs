@@ -42,6 +42,14 @@ pub struct FlingContext {
     pub density: f32,
 }
 
+impl FlingContext {
+    /// Build the shape the framework hands [`FlingBehavior::plan`], so a strategy can be unit-tested
+    /// outside this crate (the struct is `#[non_exhaustive]`, which rules out a literal).
+    pub fn new(offset: f32, velocity: f32, limit: f32, snap: Option<SnapInfo>, density: f32) -> Self {
+        Self { offset, velocity, limit, snap, density }
+    }
+}
+
 /// The settle spring a snapping container runs unless a caller overrides it: material3 hands
 /// `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects` (`DatePicker.kt:744`), which resolves
 /// through `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
@@ -65,7 +73,8 @@ pub struct SnapInfo {
     pub step: f32,
     /// The scroll position of snap position 0.
     pub anchor: f32,
-    /// The fling speed at or above which the velocity picks the page (`MinFlingVelocityDp`, 400 dp/s).
+    /// The fling speed at or above which the velocity picks the page, in **px/s**: Compose's
+    /// `MinFlingVelocityDp` (400 dp/s) converted at the density the list composed under.
     pub min_fling_velocity: f32,
     /// How far into a page a slow release has to be before it carries on (`snapPositionalThreshold`).
     pub positional_threshold: f32,

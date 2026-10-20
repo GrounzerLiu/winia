@@ -241,16 +241,16 @@ impl LazyListState {
         self.jump_request.set(Some((index, scroll_offset, true)));
     }
 
-    /// 惯性滚动（对标 Compose flingBehavior）：以 `velocity`(px/s) 启动指数衰减
-    /// 滚动，撞到滚动极限立即停止（极限由测量期回写——`fling_limit`）。
+    /// Start a fling on this list from code (the gesture path calls
+    /// `ScrollState::fling_with_boundary` on the state the list assembles and does not come here).
     ///
-    /// ⚠ This is the THIRD velocity floor in the snap story, and the only one not bypassed: it carries
-    /// its own `|v| < 1.0` check and reads no snap record, so a paged list released through this entry
-    /// point decays instead of snapping. The pointer path does not come here — `dispatch_nested_scroll_fling`
-    /// calls `ScrollState::fling_with_boundary` on the state the list assembles, and that one snaps. So
-    /// this is a gap for a caller that flings a lazy list directly, not for the gesture. Fixing it means
-    /// routing through the assembled `ScrollState` (or duplicating its filter), which is worth doing when
-    /// something first needs it; the date picker does not.
+    /// It runs the SAME strategy path, so a paging list settles on a page boundary instead of decaying
+    /// across one, and the plan-based velocity floor applies. A custom `fling_behavior` is a component
+    /// parameter and is not reachable from this entry point - it runs the built-in strategy.
+    ///
+    /// Unlike the old decay-only version, this now writes `is_scrolling` (the state the assembled
+    /// `ScrollState` shares as `is_scroll_in_progress`), so a caller observing that flag sees the
+    /// direct fling like a gesture one.
     pub fn fling(&self, velocity: f32) {
         if !velocity.is_finite() {
             return;
@@ -3487,11 +3487,14 @@ mod tests {
             }
         }
         let end = state.offset.get();
+        // The built-in plan for 4000 px/s from 50 px at a 200 px step: the page the release starts in
+        // (0) plus one page, which is the default `max_pages_per_fling`. A decay would stop at
+        // 50 + 4000/4.2 ≈ 1002 px, i.e. ~2 px off a boundary - which is why this pins the VALUE and
+        // not merely "a boundary".
         assert!(
-            (end / STEP - (end / STEP).round()).abs() < 1e-3,
-            "a paging list flings onto a page boundary, got {end} (a decay would stop at ~1000)"
+            (end - STEP).abs() < 0.5,
+            "a paging list flings to page 1 (200), got {end}"
         );
-        assert!(end >= STEP, "and it moved at least one page, got {end}");
         crate::animation::clear_all_animations();
     }
 

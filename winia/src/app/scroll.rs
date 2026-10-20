@@ -72,6 +72,33 @@ pub(crate) fn dispatch_nested_scroll_delta(
     source: crate::nested_scroll::NestedScrollSource,
     density: crate::unit::Density,
 ) -> crate::nested_scroll::ScrollDelta {
+    nested_scroll_delta(nodes, root, target, delta, source, density, true)
+}
+
+/// The same chain for an event the TARGET itself cannot use (a paging container with no page left):
+/// ancestors still get their pre-scroll chance and their post-scroll report, but the target's own
+/// offset is left alone. Nudging it is exactly what strands a paged container between two pages, and
+/// dropping the event instead would stop a carousel inside a list from scrolling that list at its end.
+pub(crate) fn dispatch_nested_scroll_delta_to_ancestors(
+    nodes: &mut [LayoutNode],
+    root: usize,
+    target: usize,
+    delta: crate::nested_scroll::ScrollDelta,
+    source: crate::nested_scroll::NestedScrollSource,
+    density: crate::unit::Density,
+) -> crate::nested_scroll::ScrollDelta {
+    nested_scroll_delta(nodes, root, target, delta, source, density, false)
+}
+
+fn nested_scroll_delta(
+    nodes: &mut [LayoutNode],
+    root: usize,
+    target: usize,
+    delta: crate::nested_scroll::ScrollDelta,
+    source: crate::nested_scroll::NestedScrollSource,
+    density: crate::unit::Density,
+    consume_target: bool,
+) -> crate::nested_scroll::ScrollDelta {
     fn path_to(nodes: &[LayoutNode], current: usize, target: usize, path: &mut Vec<usize>) -> bool {
         path.push(current);
         if current == target { return true; }
@@ -96,7 +123,11 @@ pub(crate) fn dispatch_nested_scroll_delta(
             remaining = remaining - part;
         }
     }
-    let child_consumed = apply_scroll_delta_inner(nodes, target, remaining.x, remaining.y, density, false);
+    let child_consumed = if consume_target {
+        apply_scroll_delta_inner(nodes, target, remaining.x, remaining.y, density, false)
+    } else {
+        crate::nested_scroll::ScrollDelta::ZERO
+    };
     total = total + child_consumed;
     remaining = remaining - child_consumed;
     // post-scroll：祖先从内到外（**含 target 自身**——TopAppBar 等 connection

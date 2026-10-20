@@ -75,8 +75,13 @@ impl FlingBehavior for AlwaysDecay {
     }
 }
 
+// Build it once and keep the Arc: the strategy is a parameter by IDENTITY, so a fresh
+// allocation on every rebuild is a new parameter every frame (and the list can never skip).
+let behavior: std::sync::Arc<dyn FlingBehavior> =
+    ctx.remember(|| std::sync::Arc::new(AlwaysDecay));
+
 HorizontalPager::new(state)
-    .fling_behavior(AlwaysDecay)
+    .fling_behavior(behavior)
     .build(ctx, |ctx, page| { /* ... */ });
 ```
 
@@ -117,7 +122,7 @@ impl FlingBehavior for NeverPastTheEnd {
 
 | API | What it sets |
 | --- | --- |
-| `Pager::fling_behavior(impl FlingBehavior)` | the strategy a pager's releases run through |
+| `Pager::fling_behavior(Arc<dyn FlingBehavior>)` | the strategy a pager's releases run through |
 | `LazyList::fling_behavior(Arc<dyn FlingBehavior>)` | the same, for a list used without a pager |
 | `ScrollState::fling_behavior` | the field both of the above assemble into; a caller holding a bare `ScrollState` can set it directly |
 

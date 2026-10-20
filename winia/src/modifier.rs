@@ -3296,34 +3296,6 @@ mod tests {
         crate::animation::clear_all_animations();
     }
 
-    /// PROBE (temporary): rapid consecutive notches must still settle on a page boundary.
-    #[test]
-    fn probe_rapid_notches_settle_on_a_boundary() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        crate::animation::clear_all_animations();
-        const STEP: f32 = 200.0;
-        let scroll = ScrollState::new();
-        scroll.fling_limit.set(4000.0);
-        scroll.snap.set(Some(SnapInfo { step: STEP, ..Default::default() }));
-        for i in 0..12 {
-            let stepped = scroll.snap_page(true, false);
-            crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(1));
-            eprintln!("notch {i}: stepped={stepped} offset={}", scroll.offset.get());
-        }
-        for _ in 0..800 {
-            crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(2));
-            if !scroll.is_scroll_in_progress.peek() { break; }
-        }
-        let off = scroll.offset.get();
-        eprintln!("final offset={off} goal={:?} running={}", *scroll.step_goal.lock().unwrap(), scroll.is_scroll_in_progress.peek());
-        assert!(
-            (off / STEP - (off / STEP).round()).abs() < 1e-3,
-            "rapid notches left the list mid-page at {off}"
-        );
-    }
-
     /// A step that is CANCELLED leaves no goal behind: the next notch steps from where the list
     /// actually is. A drag, a fling or a programmatic jump cancels the spring without firing its
     /// completion callback (which is the only other thing that clears the goal), so the goal is

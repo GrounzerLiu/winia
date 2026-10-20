@@ -424,24 +424,26 @@ fn apply_wheel_to_target(
             return WheelOutcome { paged: true, consumed: Default::default() }
         }
         WheelPage::AtEnd => {
-            // The notch hit the end of the pages. Pulse the bar so the wheel reads as received, and
-            // leave the offset alone: a paged container settles on a page, and a 20 px nudge is what
-            // strands it between two.
-            pulse_refused_wheel(&nodes[target], wheel.dx, wheel.dy, Default::default());
-            return WheelOutcome { paged: true, consumed: Default::default() };
+            // The notch hit the end of the pages. The paged container must not be nudged - a pixel
+            // scroll cancels the settle in flight and strands it between two pages - but the event is
+            // not swallowed either: an ancestor still gets its pre-scroll chance, so a carousel inside
+            // a list does not stop scrolling that list at its last page.
+            let consumed = crate::app::scroll::dispatch_nested_scroll_delta_to_ancestors(
+                nodes,
+                root_idx,
+                target,
+                crate::nested_scroll::ScrollDelta::new(wheel.dx, wheel.dy),
+                crate::nested_scroll::NestedScrollSource::Wheel,
+                density,
+            );
+            let (pulse_dx, pulse_dy) = wheel_axes_for(&nodes[target], wheel.dx, wheel.dy);
+            pulse_refused_wheel(&nodes[target], pulse_dx, pulse_dy, consumed);
+            return WheelOutcome { paged: false, consumed };
         }
         WheelPage::NotPaged => {}
     }
     // A horizontal-only target takes the wheel's dy as dx (see `wheel_scroll_target`).
-    let (dx, dy) = {
-        let only_horizontal = nodes[target].modifier.vertical_scroll_state().is_none()
-            && nodes[target].modifier.horizontal_scroll_state().is_some();
-        if only_horizontal && wheel.dy != 0.0 {
-            (wheel.dy, 0.0)
-        } else {
-            (wheel.dx, wheel.dy)
-        }
-    };
+    let (dx, dy) = wheel_axes_for(&nodes[target], wheel.dx, wheel.dy);
     let consumed = dispatch_nested_scroll_delta(
         nodes,
         root_idx,
@@ -452,6 +454,18 @@ fn apply_wheel_to_target(
     );
     pulse_refused_wheel(&nodes[target], dx, dy, consumed);
     WheelOutcome { paged: false, consumed }
+}
+
+/// The axes a wheel event acts on for `target`: a horizontal-only container reads the wheel's dy as
+/// dx (a plain vertical wheel has to move a horizontal list, see `wheel_scroll_target`).
+fn wheel_axes_for(node: &LayoutNode, dx: f32, dy: f32) -> (f32, f32) {
+    let only_horizontal = node.modifier.vertical_scroll_state().is_none()
+        && node.modifier.horizontal_scroll_state().is_some();
+    if only_horizontal && dy != 0.0 {
+        (dy, 0.0)
+    } else {
+        (dx, dy)
+    }
 }
 
 /// Pulse the scrollbar of an axis whose wheel event moved nothing: that bump is what tells the user
@@ -4828,7 +4842,10 @@ mod wheel_paging_tests {
             Instant::now(),
         );
 
-        assert!(outcome.paged, "the notch belongs to the pager, so it is handled");
+        assert!(
+            !outcome.paged,
+            "the pager refused the page, so it did not claim the event (an ancestor may)"
+        );
         assert_eq!(
             state.offset.peek(),
             before,
@@ -4854,6 +4871,57 @@ mod wheel_paging_tests {
             state.offset.peek()
         );
         crate::animation::clear_all_animations();
+    }
+
+    /// A refused page step must still reach the NESTED chain: a carousel inside a list cannot stop that
+    /// list from scrolling just because it ran out of pages.
+    #[test]
+    fn a_refused_page_step_still_reaches_an_ancestors_nested_chain() {
+        use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta};
+
+        #[derive(Debug)]
+        struct Recording {
+            seen: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
+        }
+        impl NestedScrollConnection for Recording {
+            fn on_pre_scroll(&self, available: ScrollDelta, _source: NestedScrollSource) -> ScrollDelta {
+                self.seen.lock().unwrap().push(available.y);
+                ScrollDelta::ZERO
+            }
+        }
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let state = paging_state();
+        state.offset.set(PAGE * 9.0);
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .size(400.0, 600.0)
+                    .nested_scroll(Recording { seen: seen.clone() }),
+            ),
+            vertical(state.clone()),
+        ];
+        // The dispatch walks from the root to the target, so the two have to be linked.
+        nodes[0].children.push(1);
+        let mut pager = WheelPager::default();
+        let wheel = WheelDelta { dx: 0.0, dy: -20.0, kind: WheelKind::Notch };
+        apply_wheel_to_target(
+            &mut nodes,
+            0,
+            1,
+            MAIN_TREE_WHEEL_SPACE,
+            wheel,
+            &mut pager,
+            crate::unit::Density::from_density(1.0),
+            Instant::now(),
+        );
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[-20.0],
+            "the ancestor's pre-scroll still sees the wheel the pager could not use"
+        );
+        assert_eq!(state.offset.peek(), PAGE * 9.0, "and the pager itself did not move");
     }
 
     /// A touchpad event on a pager is swallowed while it banks: a page either turns or nothing moves,
