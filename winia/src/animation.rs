@@ -28,6 +28,64 @@ use std::time::{Duration, Instant};
 use std::sync::Arc;
 use std::sync::{Mutex, LazyLock};
 
+// ═══════════════════════════════════════════════════════════
+// The clock
+// ═══════════════════════════════════════════════════════════
+
+/// The time every motion in this module reads.
+///
+/// Production always gets `Instant::now()`. A test can install a [`TestClock`], which freezes this
+/// thread's time and advances it only when the test says so — that is what lets an animation test
+/// assert a TRAJECTORY instead of sleeping and hoping the machine kept up. (`TimedAnimation` already
+/// evaluates a spec at an arbitrary time; this does the same for a running `Motion`.)
+fn now() -> Instant {
+    #[cfg(test)]
+    {
+        if let Some(t) = TEST_CLOCK.with(|c| *c.borrow()) {
+            return t;
+        }
+    }
+    Instant::now()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The installed test clock, if any. Thread-local on purpose: the animation registries are
+    /// process-global and the suite is serial, but a frozen clock must never leak into another test
+    /// (or another thread's test) by accident.
+    static TEST_CLOCK: std::cell::RefCell<Option<Instant>> = std::cell::RefCell::new(None);
+}
+
+/// A frozen clock for tests: install it, advance it, and every motion started or updated on this
+/// thread follows that timeline. Dropping it restores real time — on panic too.
+#[cfg(test)]
+pub(crate) struct TestClock;
+
+#[cfg(test)]
+impl TestClock {
+    pub(crate) fn install() -> Self {
+        TEST_CLOCK.with(|c| *c.borrow_mut() = Some(Instant::now()));
+        Self
+    }
+
+    pub(crate) fn advance(&self, delta: Duration) {
+        TEST_CLOCK.with(|c| {
+            let mut slot = c.borrow_mut();
+            let t = slot
+                .as_mut()
+                .expect("advanced a TestClock that was not installed");
+            *t += delta;
+        });
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestClock {
+    fn drop(&mut self) {
+        TEST_CLOCK.with(|c| *c.borrow_mut() = None);
+    }
+}
+
 /// The velocity handed to a new animation when a retarget interrupts the old one, carried PER
 /// COMPONENT.
 ///
@@ -293,7 +351,7 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
         // first cycle runs; `FastForward` begins that many into the first cycle. Both are applied to the
         // FIRST cycle only. The phase is taken from one fixed origin (no per-cycle restart), so the loop
         // cannot drift and an offset is never re-applied.
-        let elapsed = self.start.elapsed();
+        let elapsed = now().saturating_duration_since(self.start);
         let period = self.spec.duration.as_secs_f32().max(0.001);
         let elapsed = match self.spec.start_offset_type {
             StartOffsetType::Delay => match elapsed.checked_sub(self.spec.start_offset) {
@@ -359,7 +417,7 @@ pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
 ) {
     let sid = visual.state_id();
     if has_animation_for_state(sid) { return; } // 跨列表去重
-    let anim = Infinite { state: visual, from, to, spec, start: Instant::now() };
+    let anim = Infinite { state: visual, from, to, spec, start: now() };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
@@ -469,8 +527,11 @@ pub fn push_animatable_with_velocity_and_done<
     let mut anim = Motion::from_animating(handle);
     anim.start_with_velocity(target, spec, RetargetVelocity::scalar(velocity));
     anim.on_finish(done);
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     crate::runtime::state::wake_loop();
 }
 
@@ -533,8 +594,11 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
     let mut anim = Motion::from_animating(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     // 立即执行首次更新，避免等下一帧 flash
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     // 唤醒事件循环启动推进轮次（渲染中注册——渲染后 Wait 休眠会卡住动画）
     crate::runtime::state::wake_loop();
 }
@@ -603,8 +667,9 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
     let spec = normalise_target_spec(spec);
     let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
-    anim.update();
-    ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
+    if anim.update() {
+        ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
+    }
     // 唤醒事件循环启动推进轮次（同 push_animatable）
     crate::runtime::state::wake_loop();
 }
@@ -664,8 +729,11 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     }
     let mut anim = Motion::new(state);
     anim.animate_decay(initial_velocity, spec);
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     // 唤醒事件循环启动推进轮次（同 push_animatable）
     crate::runtime::state::wake_loop();
 }
@@ -688,8 +756,11 @@ pub fn push_decay_vector<T: Clone + PartialEq + AnimatableValue + Send + Sync + 
     }
     let mut anim = Motion::new(state);
     anim.animate_decay_with_velocity(velocity, spec);
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     crate::runtime::state::wake_loop();
 }
 
@@ -741,8 +812,11 @@ fn push_fling_internal(
     }
     anim.on_finish(on_finish);
     anim.animate_decay(initial_velocity, spec);
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     crate::runtime::state::wake_loop();
 }
 
@@ -887,8 +961,11 @@ fn push_animatable_with_result_inner<T: Clone + PartialEq + AnimatableValue + Se
     let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     anim.on_finish_with(done);
-    anim.update();
-    ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    // A motion that completes on its first update is not registered: its writes and callbacks already
+    // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
+    if anim.update() {
+        ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
+    }
     crate::runtime::state::wake_loop();
 }
 
@@ -929,7 +1006,7 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> AnimationIn
                 spec_kind(&s.spec),
                 s.from.to_f32(),
                 s.to.to_f32(),
-                s.start.elapsed().as_millis(),
+                now().saturating_duration_since(s.start).as_millis(),
                 s.last_velocity,
                 match (&s.lanes, &s.decay_lanes) {
                     (Some(lanes), _) => format!(" components={}", lanes.len()),
@@ -1434,10 +1511,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to,
-            start: Instant::now(),
+            start: now(),
             spec,
             last_velocity: start_velocity.max_abs(),
-            last_update: Instant::now(),
+            last_update: now(),
             current_displacement: displacement,
             initial_velocity: 0.0,
             lanes,
@@ -1460,10 +1537,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to: from.clone(), // Decay 无目标——占位（更新时用解析式）
-            start: Instant::now(),
+            start: now(),
             spec: AnimationSpec::Decay(spec),
             last_velocity: 0.0,
-            last_update: Instant::now(),
+            last_update: now(),
             current_displacement: 0.0,
             initial_velocity,
             lanes: None,
@@ -1500,10 +1577,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         self.anim_state = Some(AnimationState {
             from: from.clone(),
             to: from.clone(),
-            start: Instant::now(),
+            start: now(),
             spec: AnimationSpec::Decay(spec),
             last_velocity: scalar_velocity,
-            last_update: Instant::now(),
+            last_update: now(),
             current_displacement: 0.0,
             initial_velocity: scalar_velocity,
             lanes: None,
@@ -1515,17 +1592,17 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
     /// 检查并更新动画值，返回是否还在动画中
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
-        let now = Instant::now();
+        let now = now();
         // 极端参数保护：Spring/Decay 超过 5s 未收敛强制完成——Spring 有 done
         // 阈值但渐近收敛可能永不达（stiffness=0）；Decay 的 friction 过小时
         // 速度衰减极慢（e^(-0.1·t) 需 ~94s 才低于阈值）。Tween/Keyframes/
         // Repeatable 有明确时长、Snap 立即完成——不被截断（用户设 >5s 时长合法）
-        if now.duration_since(state.start) > Duration::from_secs(5) {
+        if now.saturating_duration_since(state.start) > Duration::from_secs(5) {
             let overrun = match &state.spec {
                 AnimationSpec::Spring(_) => Some(state.to.clone()),
                 // Decay：写当前解析值（极限可能因 friction 过小而超大——不跳极限）
                 AnimationSpec::Decay(spec) => {
-                    let t = now.duration_since(state.start).as_secs_f32();
+                    let t = now.saturating_duration_since(state.start).as_secs_f32();
                     let friction = spec.friction.max(0.001);
                     match state.decay_lanes.as_ref() {
                         Some(lanes) => {
@@ -1554,16 +1631,48 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 _ => None,
             };
             if let Some(final_val) = overrun {
-                self.state.set(final_val);
+                // The guard ends the motion, but a value RANGE still wins: writing a bounded motion's own
+                // target past its bound is exactly what the bounds exist to prevent, and the normal write
+                // path applies them below the guard's early return.
                 let velocity = state.last_velocity;
+                let (final_val, bound_hit) = match &self.clamp {
+                    Some(clamp) => {
+                        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
+                        let raw = AnimatableValue::to_f32(&final_val);
+                        if final_val.write_components(&mut components) == 1 {
+                            let clamped = clamp(raw);
+                            if clamped != raw {
+                                (AnimatableValue::from_f32(clamped), true)
+                            } else {
+                                (final_val, false)
+                            }
+                        } else {
+                            (final_val, false)
+                        }
+                    }
+                    None => (final_val, false),
+                };
+                self.state.set(final_val);
                 self.anim_state = None;
+                if bound_hit {
+                    if let Some(f) = self.on_boundary.take() {
+                        f(velocity);
+                    }
+                }
                 if let Some(f) = self.on_finish.take() {
-                    f(MotionEnd { reason: MotionEndReason::Forced, velocity });
+                    f(MotionEnd {
+                        reason: if bound_hit {
+                            MotionEndReason::BoundReached
+                        } else {
+                            MotionEndReason::Forced
+                        },
+                        velocity,
+                    });
                 }
                 return false;
             }
         }
-        let dt = now.duration_since(state.last_update);
+        let dt = now.saturating_duration_since(state.last_update);
         state.last_update = now;
         let mut boundary_velocity = None;
         let mut bound_hit = false;
@@ -1573,7 +1682,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         // term — the rule this engine used to stop on. Both are kept: whichever comes first ends the
         // motion, with the exact target written, so a spring that the integrator has already brought to
         // rest does not keep ticking, and one the estimate says is done does not linger.
-        let spring_elapsed = now.duration_since(state.start);
+        let spring_elapsed = now.saturating_duration_since(state.start);
         let spring_on_clock = state
             .spring_duration
             .is_some_and(|duration| spring_elapsed >= duration);
@@ -1636,7 +1745,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 }
             }
             AnimationSpec::Tween(spec) => {
-                let elapsed = now - state.start;
+                let elapsed = now.saturating_duration_since(state.start);
                 // `delayMillis`: hold `from` until it elapses (Compose's `tween(delayMillis)`) — the
                 // animation is still running, so the loop keeps ticking and nothing snaps.
                 if elapsed < spec.delay {
@@ -1660,7 +1769,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 }
             }
             AnimationSpec::Keyframes(spec) => {
-                let elapsed = now - state.start;
+                let elapsed = now.saturating_duration_since(state.start);
                 // duration=0 → 立即完成（同 Tween）
                 let t = if spec.duration.is_zero() {
                     1.0
@@ -1682,7 +1791,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 // bases (spring, decay, a nested repeat) cannot be constructed at all.
                 let base = &spec.base;
                 let base_duration = base.duration();
-                let elapsed = now - state.start;
+                let elapsed = now.saturating_duration_since(state.start);
                 let total = base_duration.saturating_mul(spec.iterations);
                 // Compose's `initialStartOffset` (`repeatable(..., initialStartOffset = …)`): `Delay`
                 // holds the first value until the offset has passed, `FastForward` begins that far into
@@ -1720,14 +1829,14 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 // Compose's `snap(delayMillis)`: hold the value where it is for the delay, then jump.
                 // The animation is still running during the hold (the frame loop keeps ticking) and
                 // nothing is written to the state until the jump.
-                if now.duration_since(state.start) < spec.delay {
+                if now.saturating_duration_since(state.start) < spec.delay {
                     (state.from.clone(), false)
                 } else {
                     (state.to.clone(), true)
                 }
             }
             AnimationSpec::Decay(spec) => {
-                let elapsed = now - state.start;
+                let elapsed = now.saturating_duration_since(state.start);
                 let t = elapsed.as_secs_f32();
                 let friction = spec.friction.max(0.001); // 除零保护（friction<=0 退化为极慢）
                 if let Some(lanes) = state.decay_lanes.as_mut() {
@@ -3333,6 +3442,15 @@ impl AnimatableValue for crate::graphics::Color {
 pub(crate) mod tests {
     // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
     pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The suite's shared guard: serialises the global registries AND installs a frozen clock, so a
+    /// test advances time explicitly instead of sleeping. Bind the tuple for the whole test — dropping
+    /// it restores real time and releases the lock (in that order, on panic too).
+    pub(crate) fn serial_clock() -> (std::sync::MutexGuard<'static, ()>, super::TestClock) {
+        let guard = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        (guard, super::TestClock::install())
+    }
+
     use super::*;
     use std::sync::Arc;
     use crate::runtime::composer::Composer;
@@ -3388,7 +3506,7 @@ pub(crate) mod tests {
     /// gives `ln(123 / 0.01) / (0.6 * sqrt(700)) ≈ 0.59 s`, and the value lands EXACTLY on the target.
     #[test]
     fn a_spring_finishes_without_waiting_for_the_extreme_parameter_protection() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         clear_all_animations();
         let state = State::new(0.0f32);
         let spec = AnimationSpec::Spring(SpringSpec {
@@ -3401,7 +3519,7 @@ pub(crate) mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while is_animating() && std::time::Instant::now() < deadline {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         let finished = !is_animating();
         clear_all_animations();
@@ -3416,7 +3534,7 @@ pub(crate) mod tests {
 
     #[test]
     fn spring_converges_to_target() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 临界阻尼，50→300
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 50.0, 300.0, 300);
         assert!(done, "spring should settle within 300 frames");
@@ -3425,7 +3543,7 @@ pub(crate) mod tests {
 
     #[test]
     fn spring_bouncy_overshoots_then_converges() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 欠阻尼 bouncy，应超调后收敛
         let (mut val, mut done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 5);
         // 早期应明显低于目标（尚未到达）或已超调
@@ -3446,7 +3564,7 @@ pub(crate) mod tests {
 
     #[test]
     fn spring_reverse_animation() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 反向 300→50 也应收敛（此前 bug：分母 max(EPSILON) 卡死）
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 300.0, 50.0, 300);
         assert!(done);
@@ -3455,7 +3573,7 @@ pub(crate) mod tests {
 
     #[test]
     fn spring_dt_zero_is_safe() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // dt=0 不应 panic/产生 NaN
         let mut disp = -250.0f32;
         let mut vel = 0.0f32;
@@ -3466,13 +3584,13 @@ pub(crate) mod tests {
 
     #[test]
     fn tween_completes_within_duration() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
         // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
         let mut frames = 0;
         while anim.update() && frames < 60 {
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
             frames += 1;
         }
         assert!(frames < 60, "tween should finish within 600ms, took {} frames", frames);
@@ -3483,7 +3601,7 @@ pub(crate) mod tests {
     /// has passed, then the tween runs its full duration from there.
     #[test]
     fn tween_holds_from_until_its_delay_elapses() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(
             100.0,
@@ -3496,7 +3614,7 @@ pub(crate) mod tests {
         let mut held_at = 0.0f32;
         for _ in 0..6 {
             assert!(anim.update(), "a delayed tween is still running");
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
             held_at = anim.state.get();
         }
         assert_eq!(held_at, 0.0, "the value has not moved while the delay runs");
@@ -3504,7 +3622,7 @@ pub(crate) mod tests {
         // …and once the delay is past, it completes the 60 ms tween (180 ms of delay + tween).
         let mut frames = 6;
         while anim.update() && frames < 60 {
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
             frames += 1;
         }
         assert!(frames < 60, "the delayed tween finishes (took {frames} frames)");
@@ -3513,13 +3631,13 @@ pub(crate) mod tests {
 
     #[test]
     fn infinite_float_restart_loops() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let state = State::new(0.0);
         let mut inf = Infinite {
             state: state.clone().into_visual(),
             from: 0.0, to: 10.0,
             spec: InfiniteRepeatableSpec::restart(Duration::from_millis(50)),
-            start: Instant::now(),
+            start: now(),
         };
         // 6 cycles of 50 ms. Sampled at 1 ms, not 10 ms: the triangle hits its peak only inside a
         // ~2.5 ms window per half-cycle, so 10 ms sampling misses it depending on machine load and the
@@ -3529,7 +3647,7 @@ pub(crate) mod tests {
         let mut min_seen = 10.0f32;
         for _ in 0..300 {
             inf.update();
-            std::thread::sleep(Duration::from_millis(1));
+            _clock.advance(Duration::from_millis(1));
             let v = state.get();
             max_seen = max_seen.max(v);
             min_seen = min_seen.min(v);
@@ -3542,19 +3660,19 @@ pub(crate) mod tests {
 
     #[test]
     fn infinite_float_reverse_oscillates() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let state = State::new(0.4);
         let mut inf = Infinite {
             state: state.clone().into_visual(),
             from: 0.4, to: 1.0,
             spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
-            start: Instant::now(),
+            start: now(),
         };
         let mut saw_high = false;
         let mut saw_low = false;
         for _ in 0..30 {
             inf.update();
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
             let v = state.get();
             if v > 0.95 { saw_high = true; }
             if v < 0.45 { saw_low = true; }
@@ -3584,7 +3702,7 @@ pub(crate) mod tests {
     /// replaced by a tween, which mixes the two colours through `lerp` and lands on the target.
     #[test]
     fn a_decay_on_a_colour_fades_instead_of_painting_a_grey() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         super::tests::clear_all_animations();
         let from = crate::graphics::Color::from_argb(255, 33, 150, 243);
         let to = crate::graphics::Color::from_argb(255, 244, 67, 54);
@@ -3596,13 +3714,13 @@ pub(crate) mod tests {
             super::active_animations_report()
         );
         let grey = crate::graphics::Color::from_oklab([1.0, from.to_oklab()[1], 0.0, 0.0]);
-        std::thread::sleep(Duration::from_millis(120));
+        _clock.advance(Duration::from_millis(120));
         super::update_animations();
         let mid = state.peek();
         assert_ne!(mid, grey, "the fade must never paint the placeholder grey");
         for _ in 0..400 {
             super::update_animations();
-            std::thread::sleep(Duration::from_millis(2));
+            _clock.advance(Duration::from_millis(2));
             if !super::has_animation_for_state(state.state_id()) {
                 break;
             }
@@ -3615,7 +3733,7 @@ pub(crate) mod tests {
     /// the target.
     #[test]
     fn a_decay_on_a_size_interpolates_both_axes() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         super::tests::clear_all_animations();
         let from = crate::unit::Size::new(10.0, 10.0);
         let target = crate::unit::Size::new(80.0, 20.0);
@@ -3638,7 +3756,7 @@ pub(crate) mod tests {
                 "a frame left the from..to box: {v:?} (a placeholder writes the origin)"
             );
             super::update_animations();
-            std::thread::sleep(Duration::from_millis(2));
+            _clock.advance(Duration::from_millis(2));
             if !super::has_animation_for_state(state.state_id()) {
                 break;
             }
@@ -3677,7 +3795,7 @@ pub(crate) mod tests {
     /// CAM16 blend.
     #[test]
     fn color_lerp_interpolates_in_oklab() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         use crate::graphics::Color;
         let from = Color::from_argb(128, 33, 150, 243);
         let to = Color::from_argb(255, 255, 82, 82);
@@ -3712,7 +3830,7 @@ pub(crate) mod tests {
     #[test]
     fn a_colour_spring_runs_on_every_component() {
         use std::time::Duration;
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         super::tests::clear_all_animations();
 
         let from = crate::graphics::Color::from_argb(255, 0x40, 0x40, 0x40);
@@ -3737,7 +3855,7 @@ pub(crate) mod tests {
             if !update_animations() {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
             let lightness = color.peek().to_oklab()[1];
             // The first two frames are skipped: the three states are separate pushes, so one can start a frame
             // later than another, and under load that phase offset showed up as a gap three times the budget
@@ -3769,14 +3887,14 @@ pub(crate) mod tests {
 
     #[test]
     fn infinite_color_reverse_cycles() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         use crate::graphics::Color;
         let state = State::new(Color::RED);
         let mut inf = Infinite {
             state: state.clone().into_visual(),
             from: Color::RED, to: Color::BLUE,
             spec: InfiniteRepeatableSpec::reverse(Duration::from_millis(50)),
-            start: Instant::now(),
+            start: now(),
         };
         let mut saw_blue = false;
         let mut saw_red = false;
@@ -3784,7 +3902,7 @@ pub(crate) mod tests {
         // 前半（phase<1）红→蓝、后半蓝→红。拨动 inf.start 到各相位并 update，直接采样
         // 端点邻域——避免旧 sleep(10ms)×30 采样在负载下跳过仅几 ms 宽的端点窗口（flaky）。
         let set_phase = |inf: &mut Infinite<Color>, phase_ms: u64| {
-            inf.start = std::time::Instant::now() - std::time::Duration::from_millis(phase_ms);
+            inf.start = now() - std::time::Duration::from_millis(phase_ms);
         };
         // 蓝端：phase≈25ms（t→1）；红端：phase≈0/50/75ms（t→0）
         for phase_ms in [0u64, 24, 25, 26, 49, 50, 51, 74, 75, 76] {
@@ -3800,7 +3918,7 @@ pub(crate) mod tests {
 
     #[test]
     fn composer_drop_cleans_owned_animation_without_touching_other_composer() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         clear_all_animations();
         let owned = State::new(0.0f32);
         let foreign = State::new(0.0f32);
@@ -3820,7 +3938,7 @@ pub(crate) mod tests {
 
     #[test]
     fn remove_animation_by_state_cleans_lists() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 推入 f32 + Color + 无限 Color 三种动画
         let s1 = State::new(0.0f32);
         let s2 = State::new(crate::graphics::Color::RED);
@@ -3842,7 +3960,7 @@ pub(crate) mod tests {
 
     #[test]
     fn keyframes_interpolate_segments() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         use crate::unit::DpExt;
         // 0%→0, 50%→50, 100%→100，线性
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
@@ -3856,14 +3974,14 @@ pub(crate) mod tests {
 
     #[test]
     fn repeatable_runs_iterations() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
                 TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) })));
         let mut frames = 0;
         while anim.update() && frames < 100 {
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
             frames += 1;
         }
         // 3 × 40ms = 120ms，应完成
@@ -3873,14 +3991,14 @@ pub(crate) mod tests {
 
     #[test]
     fn repeatable_reverse_even_ends_at_from() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
                 TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) })));
         while anim.update() {
-            std::thread::sleep(Duration::from_millis(10));
+            _clock.advance(Duration::from_millis(10));
         }
         // 2 次反向：第1次 0→100，第2次 100→0，结束于 0（from）
         let final_val = anim.state.peek();
@@ -3889,7 +4007,7 @@ pub(crate) mod tests {
 
     #[test]
     fn keyframes_first_frame_offset() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 首帧 progress > 0 时，t < 首帧 progress 应取首帧值
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.5, 0.7), (1.0, 1.0)]);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.1), 0.7);
@@ -3900,7 +4018,7 @@ pub(crate) mod tests {
 
     #[test]
     fn snap_jumps_immediately() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(42.0, AnimationSpec::Snap(SnapSpec::default()));
         assert!(!anim.update(), "snap completes in one update");
@@ -3909,7 +4027,7 @@ pub(crate) mod tests {
 
     #[test]
     fn offset_dedup_is_exact_not_norm() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // blocking bug：两个同范数不同 Offset 不应互相误判为同目标
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
@@ -3928,7 +4046,7 @@ pub(crate) mod tests {
 
     #[test]
     fn offset_spring_no_longer_downgraded_to_tween() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 曾经的 blocking bug：Offset 用 Spring 会沿范数收敛到 (norm,norm) 而非目标，
         // 因此被强制降级成 Tween。现在 Offset 声明 `write_components`（x、y 各一条弹簧），
         // 两条弹簧各自落到目标——降级不再需要，这个测试守住"不再降级"。
@@ -3941,7 +4059,7 @@ pub(crate) mod tests {
             if !update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            _clock.advance(std::time::Duration::from_millis(8));
         }
         assert_eq!(
             s.peek(),
@@ -3954,7 +4072,7 @@ pub(crate) mod tests {
 
     #[test]
     fn size_spring_lands_each_axis_on_its_own_target() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // Compose 的 `IntSize.VectorConverter`：宽高各一条弹簧，两条都到位动画才结束
         // （`AnimationModifier.kt:70-74`）。两轴位移差得远（宽 +10、高 −1）——单值位移
         // 会沿范数同时拉两轴，谁也落不到自己的目标上。
@@ -3970,7 +4088,7 @@ pub(crate) mod tests {
             if !update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            _clock.advance(std::time::Duration::from_millis(8));
             frames += 1;
         }
         assert!(frames > 1, "两条分量弹簧要跑若干帧，不是一次 Snap（frames={frames}）");
@@ -3979,7 +4097,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_retarget_carries_each_axis_its_own_velocity() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // Compose's `Animatable.animateTo` hands the running velocity to the replacement animation
         // PER COMPONENT (`IntSize`'s converter is two-dimensional): interrupting while the width is
         // travelling fast must not give the height a velocity it never had. One scalar velocity
@@ -3989,7 +4107,7 @@ pub(crate) mod tests {
         let spec = AnimationSpec::Spring(SpringSpec::default());
         push_animatable(s.clone(), Size::new(100.0, 100.0), spec.clone());
         for _ in 0..4 {
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            _clock.advance(std::time::Duration::from_millis(8));
             update_animations();
             assert_eq!(s.peek().height, 100.0, "the height's target never moved, so it must not move");
         }
@@ -4000,7 +4118,7 @@ pub(crate) mod tests {
             if !update_animations() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            _clock.advance(std::time::Duration::from_millis(8));
             frames += 1;
             assert_eq!(
                 s.peek().height, 100.0,
@@ -4014,7 +4132,7 @@ pub(crate) mod tests {
 
     #[test]
     fn spring_done_returns_exact_target() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // 回归：Spring 渐近收敛——done 时 Animatable 必须写出精确目标值
         // （修复前返回 to+残余位移——AnimatedVisibility 的 exit 完成检测
         //   progress<0.001 会因残余位移卡住/误判）
@@ -4022,11 +4140,11 @@ pub(crate) mod tests {
         let st = State::new(1.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
-        // 步进直到完成：update() 用真实时钟（Instant::now()）——连续调用 dt≈0
-        // 永不推进，需真实帧间隔（16ms ≈ 60fps）；上限 100 帧防死循环
+        // 步进直到完成：每帧把冻结时钟推进 16ms（60fps），update() 用注入的时间而不是墙钟。
+        // 上限 100 帧防死循环。
         let mut frames = 0;
         while anim.update() && frames < 100 {
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
             frames += 1;
         }
         assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
@@ -4050,7 +4168,7 @@ pub(crate) mod tests {
     /// 验证：单调递增、done 后精确停靠极限值
     #[test]
     fn decay_moves_and_stops_at_limit() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_decay(1000.0, DecaySpec::new(4.2, 0.1));
@@ -4060,7 +4178,7 @@ pub(crate) mod tests {
             let v = st.peek();
             assert!(v >= prev - 0.01, "decay 必须单调（帧 {}：{prev} -> {v}）", frames);
             prev = v;
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
         assert!(frames < 300, "decay 应收敛");
@@ -4077,7 +4195,7 @@ pub(crate) mod tests {
     /// （修复前回退 300ms 线性：3 次迭代 = 900ms；Keyframes base 50ms×3=150ms）
     #[test]
     fn repeatable_keyframes_base() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(
@@ -4093,7 +4211,7 @@ pub(crate) mod tests {
         );
         let mut frames = 0;
         while anim.update() && frames < 30 {
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
             frames += 1;
         }
         assert!(frames < 20, "Keyframes base 3×50ms 应在 ~10 帧内完成（实际 {frames}——回退 300ms 线性会 >20）");
@@ -4103,7 +4221,7 @@ pub(crate) mod tests {
     /// P2-10：Repeatable 支持 Snap base——立即完成
     #[test]
     fn repeatable_snap_base() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(
@@ -4117,7 +4235,7 @@ pub(crate) mod tests {
     /// Decay：初始速度为 0 → 立即完成，值不变
     #[test]
     fn decay_zero_velocity_done_immediately() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(42.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_decay(0.0, DecaySpec::default());
@@ -4128,7 +4246,7 @@ pub(crate) mod tests {
     /// animateIntAsState：target 变化自动动画，值单调逼近且最终精确到达
     #[test]
     fn animate_int_as_state_animates_to_target() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut composer = Composer::new();
         let value: std::cell::RefCell<Option<State<i32>>> = std::cell::RefCell::new(None);
         let mut recompose = |composer: &mut Composer, t: i32| {
@@ -4154,7 +4272,7 @@ pub(crate) mod tests {
         let mut frames = 0;
         loop {
             crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            _clock.advance(std::time::Duration::from_millis(20));
             let v = value.borrow().as_ref().unwrap().peek();
             assert!(v >= prev, "i32 动画必须单调递增（{prev} -> {v}）");
             prev = v;
@@ -4169,7 +4287,7 @@ pub(crate) mod tests {
     /// animateValueAsState 泛型：Color target 动画到达目标色
     #[test]
     fn animate_value_as_state_color_reaches_target() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut composer = Composer::new();
         let from = crate::graphics::Color::from_argb(255, 0, 0, 0);
         let to = crate::graphics::Color::from_argb(255, 255, 255, 255);
@@ -4195,7 +4313,7 @@ pub(crate) mod tests {
         let mut frames = 0;
         loop {
             crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            _clock.advance(std::time::Duration::from_millis(20));
             let v = value.borrow().as_ref().unwrap().peek();
             frames += 1;
             if v == to || frames > 60 {
@@ -4209,14 +4327,14 @@ pub(crate) mod tests {
     /// 新动画继承旧速度（物理连续，Compose 打断语义）
     #[test]
     fn retarget_inherits_velocity() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_decay(1000.0, DecaySpec::default());
         // 步进 5 帧（20ms）——速度衰减但仍 > 0
         for _ in 0..5 {
             anim.update();
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         let old_vel = anim.anim_state.as_ref().unwrap().last_velocity;
         assert!(old_vel > 100.0, "5 帧后速度应仍显著（实际 {old_vel}）");
@@ -4233,13 +4351,13 @@ pub(crate) mod tests {
     /// （回归：Reset 按钮 set(0) 后下一帧被 Decay 写回——reset 无效）
     #[test]
     fn cancel_animation_stops_decay() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         push_decay(st.clone(), 1000.0, DecaySpec::default());
         // 推进 5 帧——值显著移动
         for _ in 0..5 {
             super::update_animations();
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         let mid = st.peek();
         assert!(mid > 50.0, "Decay 推进后值应显著（实际 {mid}）");
@@ -4249,7 +4367,7 @@ pub(crate) mod tests {
         // 再推进 5 帧——值必须保持 0（不被动画写回）
         for _ in 0..5 {
             super::update_animations();
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         assert_eq!(st.peek(), 0.0, "取消后值必须保持（修复前被 Decay 写回）");
     }
@@ -4258,14 +4376,14 @@ pub(crate) mod tests {
     /// （Tween 期间 last_velocity 不更新，继承它会带着过期物理速度）
     #[test]
     fn retarget_after_tween_restarts_from_rest() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         // 1) Spring 跑起来（速度显著）
         anim.animate_to(100.0, AnimationSpec::Spring(SpringSpec::default()));
         for _ in 0..5 {
             anim.update();
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         let spring_vel = anim.anim_state.as_ref().unwrap().last_velocity;
         assert!(spring_vel > 10.0, "Spring 推进后速度应显著（实际 {spring_vel}）");
@@ -4273,7 +4391,7 @@ pub(crate) mod tests {
         anim.animate_to(200.0, AnimationSpec::Tween(TweenSpec::default()));
         for _ in 0..3 {
             anim.update();
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
         }
         let tween_vel = anim.anim_state.as_ref().unwrap().last_velocity;
         assert_eq!(tween_vel, 0.0, "Tween 必须从静止开始（review fix：不继承 Spring 速度）");
@@ -4287,14 +4405,14 @@ pub(crate) mod tests {
     /// fling 消耗完即停）。v0=10000 极限 2380 → 被 clamp 在 100
     #[test]
     fn fling_clamps_at_boundary_and_stops() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.set_clamp(|o| o.min(100.0));
         anim.animate_decay(10000.0, DecaySpec::new(4.2, 0.1));
         let mut frames = 0;
         while anim.update() && frames < 300 {
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
         assert!(frames < 300, "fling 撞边界应收敛（{frames} 帧）");
@@ -4303,7 +4421,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fling_boundary_callback_reports_remaining_velocity_once() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         clear_all_animations();
         let state = State::new(95.0f32);
         let boundary_velocity = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -4318,7 +4436,7 @@ pub(crate) mod tests {
         );
         for _ in 0..20 {
             if !update_animations() { break; }
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         let velocities = boundary_velocity.lock().unwrap();
         assert_eq!(state.peek(), 100.0);
@@ -4328,14 +4446,14 @@ pub(crate) mod tests {
 
     #[test]
     fn fling_clamps_below_zero() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(50.0f32);
         let mut anim = Motion::new(st.clone());
         anim.set_clamp(|o| o.max(0.0));
         anim.animate_decay(-500.0, DecaySpec::new(4.2, 0.1));
         let mut frames = 0;
         while anim.update() && frames < 300 {
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
         assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
@@ -4346,14 +4464,14 @@ pub(crate) mod tests {
     #[test]
     #[should_panic(expected = "friction 必须 > 0")]
     fn decay_spec_rejects_nonpositive_friction() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let _ = DecaySpec::new(0.0, 0.1);
     }
 
     /// 限制 #6：duration=0 的 Tween/Keyframes 立即完成且值精确 = to（无除零 NaN）
     #[test]
     fn zero_duration_tween_and_keyframes_complete_immediately() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // Tween duration=0
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
@@ -4375,14 +4493,14 @@ pub(crate) mod tests {
     /// 全局表里的新动画继承旧速度
     #[test]
     fn push_retarget_inherits_velocity() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         use crate::runtime::state::State;
         let st = State::new(0.0f32);
         push_decay(st.clone(), 1000.0, DecaySpec::default());
         // 推进 5 帧（update_animations 驱动全局表）
         for _ in 0..5 {
             super::update_animations();
-            std::thread::sleep(Duration::from_millis(20));
+            _clock.advance(Duration::from_millis(20));
         }
         let vel_before = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
@@ -4402,13 +4520,13 @@ pub(crate) mod tests {
         // 清理：等动画结束（避免残留影响其他测试）
         for _ in 0..60 {
             if !super::update_animations() { break; }
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
         }
     }
 
     #[test]
     fn on_finish_fires_when_animation_completes() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         // finishedListener（对标 Compose）：动画完成帧触发一次
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
@@ -4431,7 +4549,7 @@ pub(crate) mod tests {
     #[test]
     fn scroll_with_animation_no_dup_key() {
         use std::cell::RefCell;
-        let _g = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut composer = crate::runtime::composer::Composer::new();
         let scroll = RefCell::new(None::<crate::modifier::ScrollState>);
         let page = RefCell::new(None::<crate::runtime::state::State<u32>>);
@@ -4495,7 +4613,7 @@ pub(crate) mod tests {
             frame_parity.borrow().set(!frame_parity.borrow().get());
             for _ in 0..5 {
                 crate::animation::update_animations();
-                std::thread::sleep(std::time::Duration::from_millis(8));
+                _clock.advance(std::time::Duration::from_millis(8));
             }
             scene(&mut composer);
             scene(&mut composer);
@@ -4514,7 +4632,7 @@ pub(crate) mod tests {
     /// 1.0 instead of staying put.
     #[test]
     fn push_animatable_with_done_cancels_a_conflicting_animation() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let state = crate::runtime::state::State::new(0.2f32);
         let slow = AnimationSpec::Spring(SpringSpec {
@@ -4526,7 +4644,7 @@ pub(crate) mod tests {
         // Let it get well clear of 0.2 but nowhere near 1.0.
         for _ in 0..12 {
             update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            _clock.advance(std::time::Duration::from_millis(16));
         }
         let mid = state.peek();
         assert!(mid > 0.3 && mid < 0.9, "the first animation is mid-flight (value {mid})");
@@ -4538,7 +4656,7 @@ pub(crate) mod tests {
         });
         for _ in 0..30 {
             update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            _clock.advance(std::time::Duration::from_millis(16));
         }
         let end = state.peek();
         assert!(
@@ -4557,7 +4675,7 @@ pub(crate) mod tests {
     /// done at 0.55 and the value ended at 0.97).
     #[test]
     fn push_animatable_with_velocity_and_done_cancels_a_conflicting_animation_too() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let state = crate::runtime::state::State::new(0.2f32);
         let slow = AnimationSpec::Spring(SpringSpec {
@@ -4568,7 +4686,7 @@ pub(crate) mod tests {
         push_animatable(state.clone(), 1.0, slow.clone());
         for _ in 0..12 {
             update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            _clock.advance(std::time::Duration::from_millis(16));
         }
         let mid = state.peek();
         assert!(mid > 0.3 && mid < 0.9, "the first animation is mid-flight (value {mid})");
@@ -4579,7 +4697,7 @@ pub(crate) mod tests {
         });
         for _ in 0..30 {
             update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            _clock.advance(std::time::Duration::from_millis(16));
         }
         let end = state.peek();
         assert!(
@@ -4596,7 +4714,7 @@ pub(crate) mod tests {
     /// loop's first value for the offset, `FastForward` begins that far into the first cycle.
     #[test]
     fn an_infinite_loop_honours_its_start_offset() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         // FastForward: a 400 ms cycle entered 300 ms in → the first step is already three quarters along.
         let fast = crate::runtime::state::State::new(0.0f32);
@@ -4626,7 +4744,7 @@ pub(crate) mod tests {
         update_animations();
         let held = slow.peek();
         assert!(held < 0.02, "Delay holds the first value for the offset (value {held})");
-        std::thread::sleep(Duration::from_millis(430)); // 300 ms of waiting + ~130 ms into the cycle
+        _clock.advance(Duration::from_millis(430)); // 300 ms of waiting + ~130 ms into the cycle
         update_animations();
         let moving = slow.peek();
         assert!(
@@ -4641,7 +4759,7 @@ pub(crate) mod tests {
     /// state, so nothing else can drive it, and the callback fires once per motion that finishes.
     #[test]
     fn the_ctx_animate_state_with_done_reports_each_finished_motion() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let visible = crate::runtime::state::State::new(false);
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -4667,7 +4785,7 @@ pub(crate) mod tests {
             for _ in 0..frames {
                 frame(composer);
                 update_animations();
-                std::thread::sleep(std::time::Duration::from_millis(16));
+                _clock.advance(std::time::Duration::from_millis(16));
             }
         };
         frame(&mut composer); // the state is created AT the target: nothing runs, nothing reports
@@ -4702,7 +4820,7 @@ pub(crate) mod tests {
     /// (`normalise_target_spec`), so a fling on an `Offset` never moved at all.
     #[test]
     fn a_vector_fling_decays_each_component_on_its_own() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let start = crate::unit::Offset::new(10.0, 20.0);
         let velocity = crate::unit::Offset::new(100.0, -60.0);
@@ -4710,6 +4828,7 @@ pub(crate) mod tests {
         let spec = DecaySpec::new(friction, 0.1);
         let state = crate::runtime::state::State::new(start);
         push_decay_vector(state.clone(), velocity, spec);
+        _clock.advance(Duration::from_millis(16));
         update_animations();
         let mid = state.peek();
         let (limit_x, limit_y) = (10.0 + 100.0 / friction, 20.0 - 60.0 / friction);
@@ -4725,7 +4844,7 @@ pub(crate) mod tests {
         );
         let mut frames = 0;
         while update_animations() && frames < 400 {
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
             frames += 1;
         }
         let end = state.peek();
@@ -4742,7 +4861,7 @@ pub(crate) mod tests {
     /// describes: a 100 → 300 flight through `340f at 200ms` overshoots to 340 and lands exactly on 300.
     #[test]
     fn composes_keyframe_shape_drives_the_same_motion() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let spec = KeyframesOf::between(100.0, 300.0)
             .at(0, 100.0)
@@ -4764,7 +4883,7 @@ pub(crate) mod tests {
         let mut mid = state.peek();
         let mut frames = 0;
         while update_animations() && frames < 200 {
-            std::thread::sleep(Duration::from_millis(4));
+            _clock.advance(Duration::from_millis(4));
             frames += 1;
             let v = state.peek();
             if v > mid {
@@ -4789,17 +4908,17 @@ pub(crate) mod tests {
     /// repeat always began at its first frame.
     #[test]
     fn a_delayed_snap_and_a_delayed_repeat_both_hold_first() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
         // snap(delayMillis = 250): nothing moves for 250 ms, then the target appears in one frame.
         let state = crate::runtime::state::State::new(0.0f32);
         push_animatable(state.clone(), 1.0, AnimationSpec::Snap(SnapSpec::new(Duration::from_millis(250))));
         update_animations();
-        std::thread::sleep(Duration::from_millis(120));
+        _clock.advance(Duration::from_millis(120));
         assert!(update_animations(), "the animation is still running during the hold");
         assert_eq!(state.peek(), 0.0, "and the value has not moved yet");
-        std::thread::sleep(Duration::from_millis(180));
+        _clock.advance(Duration::from_millis(180));
         assert!(!update_animations(), "after the delay the snap completes");
         assert_eq!(state.peek(), 1.0, "writing the target exactly");
         clear_all_animations();
@@ -4839,10 +4958,10 @@ pub(crate) mod tests {
             ),
         );
         update_animations();
-        std::thread::sleep(Duration::from_millis(120));
+        _clock.advance(Duration::from_millis(120));
         update_animations();
         assert_eq!(slow.peek(), 0.0, "a delayed repeat holds its first value");
-        std::thread::sleep(Duration::from_millis(300));
+        _clock.advance(Duration::from_millis(300));
         update_animations();
         let moving = slow.peek();
         assert!(
@@ -4859,7 +4978,7 @@ pub(crate) mod tests {
     /// registered lets it pull the value straight back off what the caller just wrote.
     #[test]
     fn the_animatable_handle_reports_and_controls_its_motion() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let mut composer = Composer::new();
         let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
@@ -4888,7 +5007,7 @@ pub(crate) mod tests {
         let mut frames = 0;
         while frames < 10 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
             frames += 1;
         }
         let mid = a.value();
@@ -4901,14 +5020,14 @@ pub(crate) mod tests {
         let stopped = a.value();
         for _ in 0..5 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
         }
         assert_eq!(a.value(), stopped, "and nothing moves it afterwards");
 
         a.animate_to(500.0, slow.clone());
         for _ in 0..4 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
         }
         assert!(a.value() > stopped, "the second motion is running");
         a.snap_to(0.0);
@@ -4916,7 +5035,7 @@ pub(crate) mod tests {
         assert!(!a.is_running(), "snapTo cancels too");
         for _ in 0..6 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(16));
+            _clock.advance(Duration::from_millis(16));
         }
         assert_eq!(a.value(), 0.0, "the cancelled motion does not pull the value back");
         assert_eq!(a.as_state().peek(), 0.0, "as_state() is the same value the frame paints");
@@ -4928,7 +5047,7 @@ pub(crate) mod tests {
     /// threshold arrives sooner, a tight one keeps travelling.
     #[test]
     fn a_looser_visibility_threshold_arrives_sooner() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let soft = SpringSpec {
             stiffness: 60.0,
@@ -4944,7 +5063,7 @@ pub(crate) mod tests {
             );
             let mut frames = 0;
             while update_animations() && frames < 600 {
-                std::thread::sleep(Duration::from_millis(8));
+                _clock.advance(Duration::from_millis(8));
                 frames += 1;
             }
             assert_eq!(state.peek(), 100.0, "a spring still lands on its exact target");
@@ -4974,7 +5093,7 @@ pub(crate) mod tests {
     /// one. Before it there was no way to ask — the registry was write-only from outside.
     #[test]
     fn the_active_animation_report_names_what_is_running() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         assert!(active_animations_report().is_empty(), "nothing runs before anything is pushed");
 
@@ -5021,7 +5140,7 @@ pub(crate) mod tests {
     /// are unaffected. Measured here so the deviation is a number, not a suspicion.
     #[test]
     fn a_long_frame_does_not_leave_a_spring_behind_the_clock() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let spring = crate::runtime::state::State::new(0.0f32);
         let tween = crate::runtime::state::State::new(0.0f32);
@@ -5039,7 +5158,7 @@ pub(crate) mod tests {
         );
         update_animations();
         // One 400 ms frame: no update runs in between, exactly what a stalled loop looks like.
-        std::thread::sleep(Duration::from_millis(400));
+        _clock.advance(Duration::from_millis(400));
         update_animations();
         let (s, t) = (spring.peek(), tween.peek());
         assert_eq!(t, 100.0, "the tween reads the clock, so it arrives ({t})");
@@ -5059,7 +5178,7 @@ pub(crate) mod tests {
     /// travel on to 900/4.2 = 214.3.
     #[test]
     fn the_handle_keeps_its_value_inside_its_bounds() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let mut composer = Composer::new();
         let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
@@ -5085,7 +5204,7 @@ pub(crate) mod tests {
         );
         for _ in 0..60 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         assert_eq!(a.value(), 1.0, "the value stops exactly at the upper bound");
         assert!(!a.is_running(), "and the motion ends there rather than pushing on");
@@ -5096,7 +5215,7 @@ pub(crate) mod tests {
         a.animate_decay(900.0, exponential_decay(4.2));
         for _ in 0..60 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         assert_eq!(a.value(), 100.0, "the fling parks on the bound");
         assert!(!a.is_running());
@@ -5110,7 +5229,7 @@ pub(crate) mod tests {
         );
         for _ in 0..40 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         assert_eq!(a.value(), 200.0, "with no bounds the target is reached");
         clear_all_animations();
@@ -5120,7 +5239,7 @@ pub(crate) mod tests {
     /// limit. (Bounds are a scalar concept — see the module note on `set_bounds`.)
     #[test]
     fn the_handle_can_fling_a_vector_value() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let mut composer = Composer::new();
         let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<crate::unit::Offset>>>> =
@@ -5137,7 +5256,7 @@ pub(crate) mod tests {
         o.animate_decay(crate::unit::Offset::new(100.0, -60.0), exponential_decay(4.2));
         let mut frames = 0;
         while update_animations() && frames < 400 {
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
             frames += 1;
         }
         let v = o.value();
@@ -5154,7 +5273,7 @@ pub(crate) mod tests {
     /// and one stopped by a value range looked the same. Measured here for all three.
     #[test]
     fn a_completion_callback_is_told_why_the_motion_ended() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let mut composer = Composer::new();
         let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
@@ -5178,7 +5297,7 @@ pub(crate) mod tests {
         let step = |frames: u32| {
             for _ in 0..frames {
                 update_animations();
-                std::thread::sleep(Duration::from_millis(6));
+                _clock.advance(Duration::from_millis(6));
             }
         };
 
@@ -5210,10 +5329,10 @@ pub(crate) mod tests {
             }),
             record.clone(),
         );
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_millis(5600) {
+        // 400 frames of 30 ms = 12 s of engine time: past the 5 s guard, and no wall-clock wait.
+        for _ in 0..400 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(30));
+            _clock.advance(Duration::from_millis(30));
         }
         assert_eq!(seen.lock().unwrap().len(), 3, "the guard reports instead of vanishing");
         assert_eq!(
@@ -5271,7 +5390,7 @@ pub(crate) mod tests {
     /// With only the velocity gate — the rule this replaced — the same spring ran about 0.15 s longer.
     #[test]
     fn a_spring_ends_on_the_estimated_clock() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let spec = SpringSpec {
             stiffness: 400.0,
@@ -5282,15 +5401,15 @@ pub(crate) mod tests {
         let estimate = estimate_spring_duration_seconds(400.0, 1.0, 0.0, -100.0, 1.0);
         let state = crate::runtime::state::State::new(0.0f32);
         push_animatable(state.clone(), 100.0, AnimationSpec::Spring(spec));
-        let start = std::time::Instant::now();
         let mut frames = 0u32;
         let mut before_end = 0.0f32;
         while update_animations() && frames < 600 {
             before_end = state.peek();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
             frames += 1;
         }
-        let took = start.elapsed().as_secs_f32();
+        // Eight milliseconds per frame is the timeline the motion ran on.
+        let took = frames as f32 * 0.008;
         assert_eq!(state.peek(), 100.0, "the motion ends exactly on the target");
         assert!(
             took - estimate < 0.08,
@@ -5311,7 +5430,7 @@ pub(crate) mod tests {
     /// leg's 150 ms the value must still be on its way BACK, not already at the second target.
     #[test]
     fn a_sequence_runs_its_steps_one_after_another() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let mut composer = Composer::new();
         let held: std::rc::Rc<std::cell::RefCell<Option<Animatable<f32>>>> =
@@ -5333,10 +5452,9 @@ pub(crate) mod tests {
         ]);
 
         // Midway through the first leg: up, and nowhere near the second target.
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_millis(80) {
+        for _ in 0..10 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         let rising = a.value();
         assert!(
@@ -5345,10 +5463,9 @@ pub(crate) mod tests {
         );
 
         // Once both legs are done the value is at the second target and the queue is empty.
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_millis(400) {
+        for _ in 0..60 {
             update_animations();
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
         }
         assert_eq!(a.value(), 0.0, "the sequence ended on its last step");
         assert!(!a.is_running());
@@ -5360,7 +5477,7 @@ pub(crate) mod tests {
     /// against a real registered animation, sampled every frame, for a spring, a tween and a fling.
     #[test]
     fn a_timed_animation_matches_the_running_one() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
         let specs: Vec<(&str, AnimationSpec)> = vec![
             (
@@ -5387,11 +5504,17 @@ pub(crate) mod tests {
                 AnimationSpec::Decay(decay) => push_decay(state.clone(), 900.0, decay),
                 other => push_animatable(state.clone(), 100.0, other),
             }
-            let start = std::time::Instant::now();
+            // Advance FIRST, then update: the running motion's own elapsed time then equals `elapsed`,
+            // so the comparison is between two evaluations of the same instant, not one 16 ms behind.
+            let mut elapsed = Duration::ZERO;
             let mut worst = 0.0f32;
-            while start.elapsed() < Duration::from_millis(280) {
+            // 8 ms frames (120 Hz): the comparison is between the query and a frame-driven motion, and
+            // a coarser step would make the running spring's own integrator error the thing measured.
+            while elapsed < Duration::from_millis(280) {
+                _clock.advance(Duration::from_millis(8));
+                elapsed += Duration::from_millis(8);
                 update_animations();
-                let gap = (state.peek() - timed.value_at(start.elapsed())).abs();
+                let gap = (state.peek() - timed.value_at(elapsed)).abs();
                 worst = worst.max(gap);
             }
             // 5 % of the travel, not a pixel: the RUNNING motion integrates with whatever step its frames
@@ -5494,7 +5617,7 @@ pub(crate) mod tests {
         );
 
         // Then through the engine: a reverse loop carrying that curve, sampled on its return leg.
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let state = crate::runtime::state::State::new(0.0f32);
         push_infinite(
@@ -5503,15 +5626,16 @@ pub(crate) mod tests {
             1.0f32,
             InfiniteRepeatableSpec::reverse(Duration::from_millis(400)).with_base(tween),
         );
-        let start = std::time::Instant::now();
+        let mut elapsed = Duration::ZERO;
         let mut on_the_return_leg = None;
-        while start.elapsed() < Duration::from_millis(560) {
+        while elapsed < Duration::from_millis(560) {
             update_animations();
-            let t = start.elapsed().as_secs_f32();
+            let t = elapsed.as_secs_f32();
             if (0.48..0.52).contains(&t) {
                 on_the_return_leg = Some(state.peek());
             }
-            std::thread::sleep(Duration::from_millis(8));
+            _clock.advance(Duration::from_millis(8));
+            elapsed += Duration::from_millis(8);
         }
         let value = on_the_return_leg.expect("the loop was sampled on its return leg");
         assert!(
@@ -5534,7 +5658,7 @@ pub(crate) mod tests {
     /// slow leg too early, a slow one leaves the quick leg mid-flight).
     #[test]
     fn a_transition_chooses_a_spec_for_each_pair() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         clear_all_animations();
         let linear = || Arc::new(interpolator::Linear::new()) as Arc<dyn interpolator::Interpolator>;
         let slow = AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(700), linear()));
@@ -5577,7 +5701,7 @@ pub(crate) mod tests {
             for _ in 0..frames {
                 frame(composer);
                 update_animations();
-                std::thread::sleep(Duration::from_millis(16));
+                _clock.advance(Duration::from_millis(16));
             }
         };
         run(&mut composer, 40, &mut frame);
@@ -5612,14 +5736,14 @@ mod repeated_tests {
     /// 验证动画引擎在反复触发（点击循环）时值正确（旧动画移除/去重无双驱动）。
     #[test]
     fn repeated_animation_cycles_converge() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let state = crate::runtime::state::State::new(40.0f32);
 
         // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
             push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
             }));
-            std::thread::sleep(std::time::Duration::from_millis(400));
+            _clock.advance(std::time::Duration::from_millis(400));
             update_animations();
             let v = state.peek();
             eprintln!("[repeat-anim] round {} target={} val={:.1}", i, target, v);
@@ -5631,21 +5755,21 @@ mod repeated_tests {
     /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
     #[test]
     fn mid_flight_retarget_switches() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let state = crate::runtime::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(1000), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        _clock.advance(std::time::Duration::from_millis(50));
         update_animations();
         let mid = state.peek();
         assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
         push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        _clock.advance(std::time::Duration::from_millis(300));
         update_animations();
         // 完成判定可能差一帧（dt 偏移）——再 sleep + update 一次确保收敛
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        _clock.advance(std::time::Duration::from_millis(250));
         update_animations();
         let v = state.peek();
         eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
@@ -5655,7 +5779,7 @@ mod repeated_tests {
     /// i32 插值（animate_int_as_state 的基础）：四舍五入 + spring 支持
     #[test]
     fn int_value_lerp_rounds() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         use crate::animation::AnimatableValue;
         assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.5), 5);
         assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.51), 5);
@@ -5666,7 +5790,7 @@ mod repeated_tests {
         let state = crate::runtime::state::State::new(0i32);
         push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        _clock.advance(std::time::Duration::from_millis(300));
         update_animations();
         assert_eq!(state.peek(), 100, "i32 动画应收敛到 100");
     }
@@ -5675,7 +5799,7 @@ mod repeated_tests {
     /// 映射 + push_animatable 驱动收敛
     #[test]
     fn transition_animate_generic_value() {
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         let mut composer = crate::runtime::composer::Composer::new();
         let mut captured = None;
         composer.compose(|ctx| {
@@ -5689,7 +5813,7 @@ mod repeated_tests {
     #[test]
     fn transition_animate_value_named_wrapper() {
         // animate_value is the Compose-named twin of the generic animate<U>.
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         crate::animation::clear_all_animations();
         let mut composer = crate::runtime::composer::Composer::new();
         let mut captured = None;
@@ -5706,7 +5830,7 @@ mod repeated_tests {
     fn transition_child_follows_parent_target() {
         // create_child_transition: child target derives from parent target on every
         // call — flip the parent, the child re-maps and animates to the new value.
-        let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = super::tests::serial_clock();
         crate::animation::clear_all_animations();
         let mut composer = crate::runtime::composer::Composer::new();
         let parent = crate::runtime::state::State::new(1i32);
@@ -5732,7 +5856,7 @@ mod repeated_tests {
         build(&mut composer, &child_val);
         for _ in 0..10 {
             crate::animation::update_animations();
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            _clock.advance(std::time::Duration::from_millis(50));
             build(&mut composer, &child_val);
         }
         let v = child_val.borrow().clone().unwrap().peek();
@@ -5756,7 +5880,7 @@ mod repeated_tests {
 /// `animateTo` always runs what it is given.
 #[test]
 fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
-    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
     clear_all_animations();
 
     let state: State<f32> = State::new(0.0);
@@ -5779,7 +5903,7 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
     anim.animate_to(100.0, SpringSpec { stiffness: 20.0, ..SpringSpec::default() });
     for _ in 0..3 {
         update_animations();
-        std::thread::sleep(Duration::from_millis(2));
+        _clock.advance(Duration::from_millis(2));
     }
     assert!(has_animation_for_state(sid), "the spring is running");
     assert!(mine("spring("), "a spring is registered before the re-target");
@@ -5801,7 +5925,7 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
 
     for _ in 0..200 {
         update_animations();
-        std::thread::sleep(Duration::from_millis(1));
+        _clock.advance(Duration::from_millis(1));
         if !has_animation_for_state(sid) {
             break;
         }
@@ -5834,7 +5958,7 @@ fn slot_owned_branch(
 #[test]
 fn a_slot_owned_motion_dies_with_its_slot() {
     use crate::runtime::composer::Composer;
-    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
     clear_all_animations();
 
     let show = State::new(true);
@@ -5888,7 +6012,7 @@ fn a_slot_owned_motion_dies_with_its_slot() {
 #[test]
 fn test_infinite_transition_auto_dispose() {
     // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
-    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
     use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
@@ -5947,7 +6071,7 @@ fn test_infinite_transition_auto_dispose() {
 #[test]
 fn test_infinite_transition_manual_dispose_idempotent() {
     // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
-    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
     use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
     use crate::layout::BoxLayout;
@@ -6008,7 +6132,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     /// Wiring test for the table-driven interpolators (v1's 29 curves plus `Linear`).
     #[test]
     fn tween_uses_table_interpolator() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         use crate::animation::interpolator::{EaseInQuad, Interpolator, Linear};
         // 1. The default is Compose's `tween()` easing, `FastOutSlowIn` — not a linear ramp. Its
         //    midpoint sits at 0.776 (see `interpolator::tests` for the solved reference values).
@@ -6035,7 +6159,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
             AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(300), delay: Duration::ZERO, interpolator: Arc::new(EaseInQuad::new()),
             }),
         );
-        std::thread::sleep(Duration::from_millis(60));
+        _clock.advance(Duration::from_millis(60));
         anim.update();
         let v = st.peek();
         assert!(
@@ -6053,7 +6177,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
                 crate::animation::interpolator::Linear::new(),
             )),
         );
-        std::thread::sleep(Duration::from_millis(60));
+        _clock.advance(Duration::from_millis(60));
         anim2.update();
         assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
     }
@@ -6062,7 +6186,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     /// 修复前用 eased>=1.0 判定，过冲使动画提前结束于越界值
     #[test]
     fn tween_overshoot_interpolator_settles_at_target() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         use crate::animation::interpolator::{EaseOutElastic, Interpolator};
         // 曲线本身在 t≈0.98 处 eased 就 > 1.0（过冲）
         let ease = EaseOutElastic::new();
@@ -6076,7 +6200,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         );
         let mut frames = 0;
         while anim.update() && frames < 30 {
-            std::thread::sleep(Duration::from_millis(40));
+            _clock.advance(Duration::from_millis(40));
             frames += 1;
         }
         assert!(frames < 30, "动画应收敛");
@@ -6087,7 +6211,7 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     /// 末帧 progress<1.0 时插值结果 ≠ to
     #[test]
     fn keyframes_settles_at_target() {
-        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_guard, _clock) = crate::animation::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         // 末帧 progress=0.8（<1.0）——done 时若用插值结果将 ≠ to
@@ -6103,9 +6227,118 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         );
         let mut frames = 0;
         while anim.update() && frames < 20 {
-            std::thread::sleep(Duration::from_millis(40));
+            _clock.advance(Duration::from_millis(40));
             frames += 1;
         }
         assert!(frames < 20, "keyframes 应收敛");
         assert_eq!(st.peek(), 100.0, "keyframes 完成必须精确停靠目标（末帧 progress<1.0 时修复前≠to）");
     }
+
+/// With a frozen clock the engine's trajectory is a function of time, so a test can assert WHERE the
+/// value is at each timestamp instead of sleeping and sampling whenever the machine wakes up.
+#[test]
+fn a_spring_follows_the_clock_frame_by_frame() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    clear_all_animations();
+    let st = State::new(0.0f32);
+    push_animatable(
+        st.clone(),
+        100.0,
+        AnimationSpec::Spring(SpringSpec {
+            stiffness: 400.0,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            threshold: 0.1,
+            mass: 1.0,
+        }),
+    );
+
+    // 8 ms frames. A critically damped spring approaches from one side, so the samples must be
+    // monotone; the first frame has to move, and the motion has to have ENDED inside the window.
+    let mut samples = Vec::new();
+    let mut alive = true;
+    for _ in 0..200 {
+        _clock.advance(Duration::from_millis(8));
+        alive = update_animations();
+        samples.push(st.peek());
+        if !alive {
+            break;
+        }
+    }
+    assert!(!alive, "the spring finished inside the 1.6 s window");
+    assert!(
+        samples[0] > 1.0 && samples[0] < 100.0,
+        "the first frame moved without arriving (at {})",
+        samples[0]
+    );
+    for pair in samples.windows(2) {
+        assert!(
+            pair[1] >= pair[0] - 1e-3,
+            "a critically damped spring does not go back: {:?}",
+            pair
+        );
+    }
+    assert_eq!(st.peek(), 100.0, "and it lands exactly on the target");
+    clear_all_animations();
+}
+
+/// A motion that finishes on its first update is not left in the registry: its callbacks already ran,
+/// and an entry would keep `is_animating()` / `has_animation_for_state` true for a frame.
+#[test]
+fn a_motion_that_finishes_at_once_is_not_registered() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    clear_all_animations();
+    let st = State::new(0.0f32);
+    push_animatable(st.clone(), 1.0, AnimationSpec::Snap(SnapSpec::default()));
+    assert_eq!(st.peek(), 1.0, "the jump happened during the push");
+    assert!(
+        !has_animation_for_state(st.state_id()),
+        "nothing is left in the registry"
+    );
+    assert!(!is_animating(), "and the engine is idle");
+}
+
+/// The 5 s guard must not write past a value bound: a bounded motion that overruns ends AT the bound
+/// with `BoundReached`, not forced onto a target outside the range.
+#[test]
+fn the_overrun_guard_honours_a_value_bound() {
+    let (_guard, _clock) = crate::animation::tests::serial_clock();
+    clear_all_animations();
+    let st = State::new(0.0f32);
+    let ends = std::sync::Arc::new(std::sync::Mutex::new(Vec::<MotionEnd>::new()));
+    let rec = ends.clone();
+    // Slow enough that the value is still inside the bound when the guard fires (~5.9/ω s in, the
+    // displacement is under 2 % of the travel), with a threshold that puts the estimated clock at
+    // ~15 s — well past the guard.
+    push_animatable_with_result(
+        st.clone(),
+        100.0,
+        AnimationSpec::Spring(SpringSpec {
+            stiffness: 1.5,
+            damping_ratio: SpringSpec::DAMPING_RATIO_NO_BOUNCY,
+            mass: 1.0,
+            threshold: 0.0001,
+        }),
+        move |end| rec.lock().unwrap().push(end),
+    );
+    set_animation_bounds(st.state_id(), Some((0.0, 10.0)));
+
+    for _ in 0..220 {
+        update_animations();
+        _clock.advance(Duration::from_millis(30));
+    }
+
+    let ends = ends.lock().unwrap();
+    assert_eq!(ends.len(), 1, "the motion ended once");
+    assert_eq!(
+        ends[0].reason,
+        MotionEndReason::BoundReached,
+        "the bound ends it, not the guard"
+    );
+    assert_eq!(
+        st.peek(),
+        10.0,
+        "and the value stops at the bound instead of the target outside it"
+    );
+    clear_all_animations();
+}
+

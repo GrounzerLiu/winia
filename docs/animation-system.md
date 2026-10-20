@@ -152,11 +152,29 @@ rendering does not tick them — use tokio timers for wall-clock work.
   one NDJSON line per subject per frame (layout rect, painted rect, alpha in three parts).
 - `trace_flag(name)` — a cached env-var switch for per-component traces.
 
-Tests share the global registries, so: take `animation::tests::TEST_SERIAL`, call
-`clear_all_animations()`, drive the engine by hand (`update_animations()` in a loop with short sleeps),
-and clear again at the end. The suite must run single-threaded: `RUST_TEST_THREADS=1` is set in the
-local (untracked) `.cargo/config.toml`, so anything running these tests elsewhere — CI included —
-has to set it too, or a parallel `clear_all_animations` wipes a motion mid-test.
+**Time is injectable.** Every motion reads the module's `now()`: `Instant::now()` in production, and a
+frozen thread-local clock in a test. `animation::tests::serial_clock()` gives the test both the shared
+suites lock and that clock; advance it explicitly and the whole engine follows that timeline:
+
+```rust
+let (_guard, clock) = animation::tests::serial_clock();
+clear_all_animations();
+push_animatable(state.clone(), 100.0, spring);
+
+for _ in 0..200 {
+    clock.advance(Duration::from_millis(8));   // one 120 Hz frame of ENGINE time
+    update_animations();
+    // assert the value at exactly this timestamp
+}
+```
+
+Nothing sleeps, nothing depends on how fast the machine is, and a test can assert a trajectory frame by
+frame instead of sampling one instant. The animation module's suite has no `std::thread::sleep` left.
+
+Tests share the global registries, so: call `clear_all_animations()` at both ends, and note the suite
+must run single-threaded — `RUST_TEST_THREADS=1` is set in the local (untracked) `.cargo/config.toml`,
+so anything running these tests elsewhere (CI included) has to set it too, or a parallel
+`clear_all_animations` wipes a motion mid-test.
 
 ## 12. Known limitations
 
