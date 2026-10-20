@@ -2779,6 +2779,16 @@ pub(crate) fn default_snap_settle() -> crate::animation::SpringSpec {
     }
 }
 
+/// Whether a spring spec can produce a finite motion at all. A NaN anywhere in it poisons the value
+/// the same way a NaN target does, and the scroll offset is the one state a container cannot recover
+/// from - so a plan is checked before it is executed, not trusted.
+fn spring_is_finite(spec: &crate::animation::SpringSpec) -> bool {
+    spec.stiffness.is_finite()
+        && spec.damping_ratio.is_finite()
+        && spec.mass.is_finite()
+        && spec.threshold.is_finite()
+}
+
 /// The landing position of a snapping fling — the math lives in [`crate::fling::snap_target`], which is
 /// also what `SnapFlingBehavior` plans with, so a test here and a running pager cannot disagree. This
 /// wrapper only exists to keep the unit tests below working against a `SnapSpec`.
@@ -2841,6 +2851,17 @@ impl ScrollState {
     /// means.
     pub(crate) fn snaps(&self) -> bool {
         self.snap.peek().is_some_and(|s| s.step.is_finite() && s.step > 0.0)
+    }
+
+    /// Whether a release is worth asking a strategy about: the container snaps, or it carries a
+    /// [`FlingBehavior`](crate::fling::FlingBehavior) of its own.
+    ///
+    /// The gesture path's 50 px/s floor is a DECAY floor (it stops the tail of a drag from banking
+    /// momentum), and both of these settle a release that carries no momentum of its own - so the floor
+    /// is skipped for them. Without this the custom strategy on a list with no snap spec would never
+    /// see a slow release at all, which is the one release a positional snap exists for.
+    pub(crate) fn wants_fling(&self) -> bool {
+        self.snaps() || self.fling_behavior.is_some()
     }
 
     /// Move ONE snap position forward or back, and animate there.
@@ -2924,17 +2945,30 @@ impl ScrollState {
         if !velocity.is_finite() {
             return;
         }
-        let snapping = self.snap.peek().filter(|s| s.step.is_finite() && s.step > 0.0);
-        // The 1 px/s floor keeps a scrollbar's trailing jitter from starting a decay that nothing asked
-        // for. A snap must not have that floor: with `calculateApproachOffset` at zero there IS no decay
-        // to suppress, so a release at rest has to still run the snap spring — that is the whole
-        // behaviour. Compose has no equivalent floor at all: `Scrollable.kt:857-881` calls
-        // `performFling` on every drag and trackpad release (the mouse-wheel path returns early at
-        // `:858-860` on `shouldBeTriggeredByMouseWheel` — a flag, not a velocity threshold), and
-        // `SnapFlingBehavior.kt:139-158` then always computes a snap offset, which is how a slow drag
-        // past halfway still advances a page and a slow drag short of it returns to the page it started
-        // on.
-        if snapping.is_none() && velocity.abs() < 1.0 {
+        // The strategy decides what this release turns into. `None` means the built-in one, which is
+        // the behaviour this method had before the trait existed: a paged container settles on a page
+        // boundary with ONE spring (launched with the gesture's velocity, so the momentum is carried
+        // into the settle - Compose zeroes `calculateApproachOffset` for material3, `DatePicker.kt:749-753`,
+        // and `tryApproach` then animates nothing, `SnapFlingBehavior.kt:165-176`), and anything else
+        // keeps its momentum as a decay.
+        let context = crate::fling::FlingContext {
+            offset: self.offset.peek(),
+            velocity,
+            limit: self.fling_limit.peek(),
+            snap: self.snap.peek().map(|snap| snap.info()),
+            density: crate::runtime::density::current_density().density,
+        };
+        let plan = match &self.fling_behavior {
+            Some(behavior) => behavior.plan(context),
+            None => crate::fling::SnapFlingBehavior.plan(context),
+        };
+        // The 1 px/s floor is a DECAY floor: it stops a scrollbar's trailing jitter from starting a
+        // decay nothing asked for. A plan that settles somewhere has no decay to suppress, so the floor
+        // is applied to the ANSWER, not to the container — a custom strategy on a list without a snap
+        // spec still sees its slow release. (The gesture path's 50 px/s floor is keyed on
+        // `wants_fling` for the same reason.) Compose has no floor at all: `Scrollable.kt:857-881`
+        // calls `performFling` on every release.
+        if velocity.abs() < 1.0 && matches!(&plan, crate::fling::FlingPlan::Decay { .. }) {
             return;
         }
         // A gesture-driven fling supersedes any page step in flight: whatever that step was heading for
@@ -2945,29 +2979,24 @@ impl ScrollState {
         let limit = self.fling_limit.clone();
         let done_flag = self.is_scroll_in_progress.clone();
 
-        // The strategy decides what this release turns into. `None` means the built-in one, which is
-        // the behaviour this method had before the trait existed: a paged container settles on a page
-        // boundary with ONE spring (launched with the gesture's velocity, so the momentum is carried
-        // into the settle - Compose zeroes `calculateApproachOffset` for material3, `DatePicker.kt:749-753`,
-        // and `tryApproach` then animates nothing, `SnapFlingBehavior.kt:165-176`), and anything else
-        // keeps its momentum as a decay.
-        let context = crate::fling::FlingContext {
-            offset: off.peek(),
-            velocity,
-            limit: limit.peek(),
-            snap: self.snap.peek().map(|snap| snap.info()),
-            density: crate::runtime::density::current_density().density,
-        };
-        let plan = match &self.fling_behavior {
-            Some(behavior) => behavior.plan(context),
-            None => crate::fling::SnapFlingBehavior.plan(context),
-        };
-
         match plan {
             crate::fling::FlingPlan::Spring { target, spec } => {
                 // A strategy may aim past the content on purpose (a "bounce past the end" plan); the
                 // container's own limit is still what the value is allowed to reach.
-                let target = target.clamp(0.0, limit.peek().max(0.0));
+                let limit_now = limit.peek().max(0.0);
+                let target = target.clamp(0.0, limit_now);
+                if !target.is_finite() || !spring_is_finite(&spec) {
+                    // A NaN plan must not reach the offset: the engine's overrun guard writes the
+                    // spring's target verbatim after five seconds (animation.rs), and a NaN offset is
+                    // something a container never recovers from.
+                    self.is_scroll_in_progress.set(false);
+                    return;
+                }
+                // A new fling supersedes whatever is still running. Without this, a second release
+                // whose plan lands on the SAME target hits the engine's same-target dedup, which
+                // reports `done` immediately and clears `is_scroll_in_progress` while the first spring
+                // is still moving.
+                crate::animation::cancel_animation(&self.offset);
                 let settle = done_flag.clone();
                 crate::animation::push_animatable_with_velocity_and_done(
                     off,
@@ -3426,6 +3455,123 @@ mod tests {
             !crate::animation::has_animation_for_state(plain.offset.state_id()),
             "an unsnapped container still ignores a sub-1 px/s release instead of decaying from it"
         );
+    }
+
+    /// The 1 px/s floor belongs to the DECAY, so it is applied to the plan: a custom strategy on a
+    /// container with no snap spec still sees a release that carries almost no momentum.
+    #[test]
+    fn a_slow_release_still_reaches_a_custom_strategy() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct LandOnFourHundred;
+        impl crate::fling::FlingBehavior for LandOnFourHundred {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(
+                    400.0,
+                    crate::animation::SpringSpec {
+                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(1000.0);
+
+        // Control: with the built-in strategy and no snap spec, 0.5 px/s is the tail of a drag.
+        scroll.fling(0.5);
+        assert!(
+            !crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "the decay floor still drops a release that carries no momentum"
+        );
+        assert_eq!(scroll.offset.get(), 0.0);
+
+        scroll.fling_behavior = Some(std::sync::Arc::new(LandOnFourHundred));
+        scroll.fling(0.5);
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "the strategy decides what a slow release means, not the floor"
+        );
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert!(
+            (scroll.offset.get() - 400.0).abs() < 0.5,
+            "and it ran the plan, got {}",
+            scroll.offset.get()
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// A plan that is not finite never reaches the offset: the engine's overrun guard would write it
+    /// verbatim after five seconds, and a NaN scroll offset is something a container cannot recover from.
+    #[test]
+    fn a_non_finite_plan_is_refused() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct NanTarget;
+        impl crate::fling::FlingBehavior for NanTarget {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(f32::NAN, crate::animation::SpringSpec::default())
+            }
+        }
+        #[derive(Debug)]
+        struct NanSpring;
+        impl crate::fling::FlingBehavior for NanSpring {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(
+                    100.0,
+                    crate::animation::SpringSpec { stiffness: f32::NAN, ..Default::default() },
+                )
+            }
+        }
+
+        for behavior in [
+            std::sync::Arc::new(NanTarget) as std::sync::Arc<dyn crate::fling::FlingBehavior>,
+            std::sync::Arc::new(NanSpring),
+        ] {
+            let mut scroll = ScrollState::new();
+            scroll.fling_limit.set(1000.0);
+            scroll.fling_behavior = Some(behavior);
+            scroll.fling(500.0);
+            assert!(
+                !crate::animation::has_animation_for_state(scroll.offset.state_id()),
+                "a plan the engine cannot run must not start"
+            );
+            assert_eq!(scroll.offset.get(), 0.0, "and the offset stays where it was");
+            assert!(!scroll.is_scroll_in_progress.peek(), "nor does it claim to be scrolling");
+        }
+    }
+
+    /// Two releases landing on the SAME target: the second must not report a finish while the first
+    /// spring is still moving. The engine's same-target dedup would call `done` immediately.
+    #[test]
+    fn a_second_fling_to_the_same_target_keeps_the_scroll_in_progress_flag() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(1000.0);
+        scroll.snap.set(Some(SnapSpec { step: 200.0, ..Default::default() }));
+        scroll.offset.set(50.0);
+        scroll.fling(4000.0);
+        assert!(scroll.is_scroll_in_progress.peek(), "the first release settled onto page 1");
+        // The same flick again, before the first spring has moved: same target, same state.
+        scroll.fling(4000.0);
+        assert!(
+            scroll.is_scroll_in_progress.peek(),
+            "the running settle still owns the flag - the second release must not report a finish"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// A container with a custom strategy runs ITS plan, not the built-in one: the release lands

@@ -344,8 +344,16 @@ impl<A: LazyAxis> Pager<A> {
     /// release and answers with a [`FlingPlan`](crate::fling::FlingPlan) — a spring to somewhere, free
     /// momentum, or nothing — which the frame clock executes. It runs inside winia's push-based
     /// animation model, so a strategy DESCRIBES the motion; it cannot drive the scroll per frame.
-    pub fn fling_behavior(mut self, behavior: impl crate::fling::FlingBehavior + 'static) -> Self {
-        self.fling_behavior = Some(std::sync::Arc::new(behavior));
+    ///
+    /// It takes an `Arc` because the strategy is compared by IDENTITY: a new behaviour allocated on
+    /// every rebuild is a new parameter every frame, which makes the list re-enter instead of ever
+    /// being clean. Build it once — `ctx.remember(|| std::sync::Arc::new(MyBehavior))` — and hand the
+    /// same `Arc` down.
+    pub fn fling_behavior(
+        mut self,
+        behavior: std::sync::Arc<dyn crate::fling::FlingBehavior>,
+    ) -> Self {
+        self.fling_behavior = Some(behavior);
         self
     }
 
@@ -1211,26 +1219,28 @@ mod tests {
         }
     }
 
+    /// A strategy that lands on the end of the list, whatever it was asked.
+    #[derive(Debug)]
+    struct LandOnLast;
+
+    impl crate::fling::FlingBehavior for LandOnLast {
+        fn plan(&self, fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+            crate::fling::FlingPlan::spring(
+                fling.limit,
+                crate::animation::SpringSpec {
+                    stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                    ..Default::default()
+                },
+            )
+        }
+    }
+
     /// `fling_behavior` reaches the scroll state the frame assembles, and the strategy decides where a
     /// release lands: a pager with a custom strategy is not bound by page boundaries at all.
     #[test]
     fn a_pager_hands_its_fling_behavior_to_the_list() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
-
-        #[derive(Debug)]
-        struct LandOnLast;
-        impl crate::fling::FlingBehavior for LandOnLast {
-            fn plan(&self, fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
-                crate::fling::FlingPlan::spring(
-                    fling.limit,
-                    crate::animation::SpringSpec {
-                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
-                        ..Default::default()
-                    },
-                )
-            }
-        }
 
         let state = PagerState::new(4);
         let mut composer = Composer::new();
@@ -1240,7 +1250,7 @@ mod tests {
                 crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                     let mut pager = HorizontalPager::new(state.clone());
                     if with_behavior {
-                        pager = pager.fling_behavior(LandOnLast);
+                        pager = pager.fling_behavior(std::sync::Arc::new(LandOnLast));
                     }
                     pager
                         .modifier(Modifier::new().fill_max_width().fill_max_height())

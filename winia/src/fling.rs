@@ -147,7 +147,9 @@ pub(crate) fn snap_target(current: f32, velocity: f32, snap: &SnapInfo, limit: f
         }
     } else {
         let start = lower - snap.anchor;
-        let carried = (DecaySpec::default().target_value(velocity.abs()) / step)
+        let carried = (crate::animation::exponential_decay(FLING_FRICTION)
+            .target_value(velocity.abs())
+            / step)
             .round()
             .max(1.0);
         let pages = carried.min(snap.max_pages_per_fling.max(1) as f32) * step;

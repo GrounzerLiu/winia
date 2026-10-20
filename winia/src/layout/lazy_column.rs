@@ -260,7 +260,7 @@ impl LazyListState {
         crate::animation::push_fling(
             off,
             velocity,
-            crate::animation::exponential_decay(4.2),
+            crate::animation::exponential_decay(crate::fling::FLING_FRICTION),
             move |o| {
                 // The limit IS the truth: `f32::MAX` before the measure has run, `0` when the content
                 // fits (see `LazyListState::fling_limit`).
@@ -549,6 +549,10 @@ impl<A: LazyAxis> LazyList<A> {
     /// How far into a page a release has to be before it carries on to the next one, in `0.0..=1.0`
     /// (Compose's `snapPositionalThreshold`, `0.5` by default). Only consulted under the fling floor.
     pub fn snap_positional_threshold(mut self, threshold: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&threshold) && threshold.is_finite(),
+            "snap_positional_threshold must be within 0.0..=1.0, got {threshold}"
+        );
         self.snap_positional_threshold = threshold;
         self
     }

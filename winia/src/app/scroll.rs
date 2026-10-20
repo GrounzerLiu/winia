@@ -158,14 +158,15 @@ pub(crate) fn dispatch_nested_scroll_fling(
             .collect();
     let child_started = {
         let node = &nodes[target];
-        // The 50 px/s floor below is a DEACAY floor — it stops a release that is really just the tail
-        // of a drag from banking momentum. A paging list must ignore it: its whole motion is the snap
-        // spring, so a slow drag past halfway that is let go with the finger nearly still has to still
-        // advance a page. Skipping the fling there left the list resting between two pages for good,
-        // because nothing else ever snaps it back. Compose has no such floor — `Scrollable.kt:857-881`
-        // calls `performFling` on every release.
+        // The 50 px/s floor below is a DECAY floor — it stops a release that is really just the tail
+        // of a drag from banking momentum. A container that settles must ignore it: a paging list's
+        // whole motion is the snap spring, and a caller's own fling behaviour may want the release too,
+        // so a slow drag past halfway that is let go with the finger nearly still has to still advance
+        // a page (`wants_fling` covers both). Skipping the fling there left the list resting between two
+        // pages for good, because nothing else ever snaps it back. Compose has no such floor —
+        // `Scrollable.kt:857-881` calls `performFling` on every release.
         if let Some(ss) = node.modifier.vertical_scroll_state() {
-            if child_velocity.y.abs() >= 50.0 || ss.snaps() {
+            if child_velocity.y.abs() >= 50.0 || ss.wants_fling() {
                 let post_connections = post_connections.clone();
                 ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
                     // child 实际消费 = 起始 − 边界剩余（剩余为 0 时全消费）
@@ -182,7 +183,7 @@ pub(crate) fn dispatch_nested_scroll_fling(
                 true
             } else { ss.is_scroll_in_progress.set(false); false }
         } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
-            if child_velocity.x.abs() >= 50.0 || ss.snaps() {
+            if child_velocity.x.abs() >= 50.0 || ss.wants_fling() {
                 let post_connections = post_connections.clone();
                 // ⚠ reverse（RTL）滚动：fling 速度方向与手势 delta 同需镜像
                 //（apply_scroll_delta 已镜像 delta，此处镜像速度保持一致）
@@ -470,6 +471,11 @@ mod release_velocity_floor_tests {
         scroll.offset.set(offset);
         scroll.fling_limit.set(STEP * 9.0);
         scroll.snap.set(snap);
+        tree_with(scroll)
+    }
+
+    /// The same tree around a caller-configured state (a custom fling behaviour, say).
+    fn tree_with(scroll: ScrollState) -> (Vec<LayoutNode>, ScrollState) {
         let mut nodes = vec![
             LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
             LayoutNode::leaf(
@@ -531,6 +537,41 @@ mod release_velocity_floor_tests {
             end >= STEP,
             "and it advanced to the nearer page ahead ({end} should be at least one page in)"
         );
+    }
+
+    /// The 50 px/s floor is keyed on `wants_fling`, so a container carrying its own fling behaviour
+    /// (and no snap spec) is asked about a release it would otherwise never see.
+    #[test]
+    fn a_custom_strategy_flings_below_the_decay_floor() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct LandOnTwoPages;
+        impl crate::fling::FlingBehavior for LandOnTwoPages {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(
+                    STEP * 2.0,
+                    crate::animation::SpringSpec {
+                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.offset.set(STEP * 0.2);
+        scroll.fling_limit.set(STEP * 9.0);
+        scroll.fling_behavior = Some(std::sync::Arc::new(LandOnTwoPages));
+        let (mut nodes, scroll) = tree_with(scroll);
+        dispatch_nested_scroll_fling(&mut nodes, 0, 1, ScrollVelocity { x: 0.0, y: GENTLE });
+
+        assert!(
+            crate::animation::has_animation_for_state(scroll.offset.state_id()),
+            "a container with its own fling behaviour must be asked about a {GENTLE} px/s release"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// The control, and the reason the test above is about the exception rather than about the number:

@@ -145,7 +145,7 @@ impl NestedScrollConnection for TopAppBarNestedConnection {
         crate::animation::push_fling(
             state.height_offset.clone(),
             -available.y,
-            crate::animation::exponential_decay(4.2),
+            crate::animation::exponential_decay(crate::fling::FLING_FRICTION),
             move |offset| offset.clamp(limit.get().min(0.0), 0.0),
             || {},
         );
