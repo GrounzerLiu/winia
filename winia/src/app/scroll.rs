@@ -452,7 +452,8 @@ mod release_velocity_floor_tests {
     use super::{dispatch_nested_scroll_fling};
     use crate::layout::node::LayoutNode;
     use crate::unit::{Offset, Size};
-    use crate::modifier::{Modifier, ScrollState, SnapSpec};
+    use crate::fling::SnapInfo;
+    use crate::modifier::{Modifier, ScrollState};
     use crate::nested_scroll::ScrollVelocity;
 
     const STEP: f32 = 336.0;
@@ -466,7 +467,7 @@ mod release_velocity_floor_tests {
     /// The offset matters: at an exact page boundary the snap target equals the current offset and the
     /// spring is never registered (`push_animatable_with_velocity_and_done` short-circuits on
     /// `peek() == target`), which would make a `has_animation` assertion vacuous.
-    fn tree(snap: Option<SnapSpec>, offset: f32) -> (Vec<LayoutNode>, ScrollState) {
+    fn tree(snap: Option<SnapInfo>, offset: f32) -> (Vec<LayoutNode>, ScrollState) {
         let scroll = ScrollState::new();
         scroll.offset.set(offset);
         scroll.fling_limit.set(STEP * 9.0);
@@ -493,8 +494,8 @@ mod release_velocity_floor_tests {
         (nodes, scroll)
     }
 
-    fn snap_spec() -> SnapSpec {
-        SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }
+    fn snap_spec() -> SnapInfo {
+        SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() }
     }
 
     /// A paged list released below the 50 px/s floor still flings — because its whole motion is the

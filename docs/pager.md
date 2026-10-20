@@ -132,7 +132,9 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   So the events of one gesture bank travel in `WheelPager` (`app.rs`) and a page is armed only once a
   real notch's worth has accumulated (`PIXEL_PAGE_TRAVEL` = 60 logical px = three 20 px lines); a gap
   of `SESSION_GAP` (400 ms), a reversal, or a different container starts the bank over, and at most one
-  page turns per event. Compose reaches a similar result by a different route: its mouse-wheel logic
+  page turns per event. A notch with no page left in that direction is SWALLOWED (the bar pulses) and
+  never pixel-scrolled: the pixel path cancels the settle in flight and nudges the offset, which strands
+  the pager between two pages until the next notch re-derives a target. Compose reaches a similar result by a different route: its mouse-wheel logic
   synthesizes a velocity (up to 1 dp/ms, `MouseWheelScrollingLogic.kt:250-256,308-310`), and the snap
   fling behavior runs on wheel (`shouldBeTriggeredByMouseWheel`, default true) so a notch at or above
   `MinFlingVelocityDp` (400 dp/s) advances a page. winia's step is exact - one page per notch whatever

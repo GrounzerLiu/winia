@@ -232,6 +232,14 @@ enum WheelPage {
     Held,
     /// It started a page step.
     Stepped,
+    /// A paging container with no page left in that direction.
+    ///
+    /// Deliberately NOT a pixel scroll. The pixel path cancels the animation in flight and moves the
+    /// offset by the delta, which leaves the container BETWEEN two pages with nothing left to snap it
+    /// back — it sits there until the next notch happens to re-derive a page target. That is the
+    /// "stuck half-way between two pages during a fast scroll" report, and the page either turns or
+    /// nothing moves is the whole contract of a paged container.
+    AtEnd,
 }
 
 /// What one wheel event did to one scroll target.
@@ -386,9 +394,8 @@ fn wheel_page_step(
         || node.modifier.is_horizontal_scroll_reverse();
     match pager.page_step((space, node.id, vertical_axis), amount, wheel.kind, now) {
         Some(forward) if state.snap_page(forward, reverse) => WheelPage::Stepped,
-        // The container has no page left in that direction: fall back to the pixel scroll, which
-        // consumes nothing at the edge and therefore flashes the scrollbar instead.
-        Some(_) => WheelPage::NotPaged,
+        // No page left in that direction: swallowed (and the bar pulses), never nudged.
+        Some(_) => WheelPage::AtEnd,
         None => WheelPage::Held,
     }
 }
@@ -413,8 +420,16 @@ fn apply_wheel_to_target(
     now: std::time::Instant,
 ) -> WheelOutcome {
     match wheel_page_step(nodes, target, space, wheel, pager, now) {
-        WheelPage::Stepped => return WheelOutcome { paged: true, consumed: Default::default() },
-        WheelPage::Held => return WheelOutcome { paged: true, consumed: Default::default() },
+        WheelPage::Stepped | WheelPage::Held => {
+            return WheelOutcome { paged: true, consumed: Default::default() }
+        }
+        WheelPage::AtEnd => {
+            // The notch hit the end of the pages. Pulse the bar so the wheel reads as received, and
+            // leave the offset alone: a paged container settles on a page, and a 20 px nudge is what
+            // strands it between two.
+            pulse_refused_wheel(&nodes[target], wheel.dx, wheel.dy, Default::default());
+            return WheelOutcome { paged: true, consumed: Default::default() };
+        }
         WheelPage::NotPaged => {}
     }
     // A horizontal-only target takes the wheel's dy as dx (see `wheel_scroll_target`).
@@ -435,25 +450,30 @@ fn apply_wheel_to_target(
         crate::nested_scroll::NestedScrollSource::Wheel,
         density,
     );
-    // P1-3: a target that consumed zero (already at the top or bottom) still pulses its scrollbar, which
-    // is what tells the user the wheel arrived at all (M3/CMP do the same; a fade driven by the offset
-    // cannot see it, hence the explicit bump).
-    // P2-1: decided per axis - a diagonal scroll at the top edge consumes x while y is stuck, and a
-    // joint condition would lose the vertical pulse.
-    {
-        let node = &nodes[target];
-        if dy != 0.0 && consumed.y == 0.0 {
-            if let Some(ss) = node.modifier.vertical_scroll_state() {
-                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-            }
-        }
-        if dx != 0.0 && consumed.x == 0.0 {
-            if let Some(ss) = node.modifier.horizontal_scroll_state() {
-                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-            }
+    pulse_refused_wheel(&nodes[target], dx, dy, consumed);
+    WheelOutcome { paged: false, consumed }
+}
+
+/// Pulse the scrollbar of an axis whose wheel event moved nothing: that bump is what tells the user
+/// the wheel arrived at all (a fade driven by the offset cannot see it). Decided per axis — a diagonal
+/// scroll at the top edge consumes x while y is stuck, and a joint condition would lose the vertical
+/// pulse.
+fn pulse_refused_wheel(
+    node: &LayoutNode,
+    dx: f32,
+    dy: f32,
+    consumed: crate::nested_scroll::ScrollDelta,
+) {
+    if dy != 0.0 && consumed.y == 0.0 {
+        if let Some(ss) = node.modifier.vertical_scroll_state() {
+            ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
         }
     }
-    WheelOutcome { paged: false, consumed }
+    if dx != 0.0 && consumed.x == 0.0 {
+        if let Some(ss) = node.modifier.horizontal_scroll_state() {
+            ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+        }
+    }
 }
 
 // ── PerWindow ──
@@ -4552,11 +4572,12 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
 #[cfg(test)]
 mod wheel_paging_tests {
     use super::{
-        wheel_kind_for_lines, wheel_page_step, wheel_scroll_target, WheelDelta, WheelKind,
-        WheelPage, WheelPager, MAIN_TREE_WHEEL_SPACE,
+        apply_wheel_to_target, wheel_kind_for_lines, wheel_page_step, wheel_scroll_target,
+        WheelDelta, WheelKind, WheelPage, WheelPager, MAIN_TREE_WHEEL_SPACE,
     };
     use crate::layout::node::LayoutNode;
-    use crate::modifier::{Modifier, ScrollState, SnapSpec};
+    use crate::fling::SnapInfo;
+    use crate::modifier::{Modifier, ScrollState};
     use std::time::{Duration, Instant};
 
     /// One page of a pager, in logical px.
@@ -4566,7 +4587,7 @@ mod wheel_paging_tests {
     fn paging_state() -> ScrollState {
         let state = ScrollState::new();
         state.fling_limit.set(PAGE * 9.0);
-        state.snap.set(Some(SnapSpec { step: PAGE, min_fling_velocity: 400.0, ..Default::default() }));
+        state.snap.set(Some(SnapInfo { step: PAGE, min_fling_velocity: 400.0, ..Default::default() }));
         state
     }
 
@@ -4769,6 +4790,69 @@ mod wheel_paging_tests {
             "a list without a snap spec keeps pixel scrolling"
         );
 
+        crate::animation::clear_all_animations();
+    }
+
+    /// A notch with no page left in that direction is swallowed, not pixel-scrolled: the pixel path
+    /// cancels the settle in flight and nudges the offset off the page, which is the "stuck between two
+    /// pages during a fast scroll" state (the next notch re-derives a page and appears to fix it).
+    #[test]
+    fn a_refused_page_step_neither_nudges_nor_cancels_the_settle() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        // Between the last two pages, with a step to the last one in flight.
+        let state = paging_state();
+        state.offset.set(PAGE * 8.5);
+        assert!(state.snap_page(true, false), "a step to the last page starts");
+        assert!(
+            crate::animation::has_animation_for_state(state.offset.state_id()),
+            "the settle is running"
+        );
+
+        let mut nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            vertical(state.clone()),
+        ];
+        let mut pager = WheelPager::default();
+        let wheel = WheelDelta { dx: 0.0, dy: -20.0, kind: WheelKind::Notch };
+        let before = state.offset.peek();
+        let outcome = apply_wheel_to_target(
+            &mut nodes,
+            0,
+            1,
+            MAIN_TREE_WHEEL_SPACE,
+            wheel,
+            &mut pager,
+            crate::unit::Density::from_density(1.0),
+            Instant::now(),
+        );
+
+        assert!(outcome.paged, "the notch belongs to the pager, so it is handled");
+        assert_eq!(
+            state.offset.peek(),
+            before,
+            "a refused page step must not move the offset - that is the pixel path's job, and it would \
+             strand the pager between two pages"
+        );
+        assert!(
+            crate::animation::has_animation_for_state(state.offset.state_id()),
+            "nor may it cancel the settle that is already running"
+        );
+
+        // Let it land, so the rest of the suite starts from a clean animation table.
+        for _ in 0..400 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !state.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert!(
+            (state.offset.peek() - PAGE * 9.0).abs() < 0.5,
+            "and the settle still lands on the last page, got {}",
+            state.offset.peek()
+        );
         crate::animation::clear_all_animations();
     }
 

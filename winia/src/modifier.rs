@@ -11,6 +11,8 @@ use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
 use crate::fling::FlingBehavior as _;
+#[cfg(test)]
+use crate::fling::SnapInfo;
 use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 use crate::input::{KbEvent, PointerEvent};
 use crate::layout::{Dimension, IntrinsicSize, SizeValue};
@@ -2688,7 +2690,7 @@ pub struct ScrollState {
     pub(crate) scroll_pulse: crate::runtime::state::State<u64>,
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
     /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
-    pub(crate) snap: crate::runtime::state::Backchannel<Option<SnapSpec>>,
+    pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::fling::SnapInfo>>,
     /// Where a page step is currently heading, if one is in flight. A second notch has to step from
     /// the page the first one targeted: reading the live offset mid-spring lands inside the same page
     /// and the notch is lost (four fast notches moved three pages).
@@ -2698,85 +2700,6 @@ pub struct ScrollState {
     /// anything else decays. A component assembles this from its own builder parameter; a caller
     /// holding a bare `ScrollState` can set it directly.
     pub fling_behavior: Option<std::sync::Arc<dyn crate::fling::FlingBehavior>>,
-}
-
-/// How a PAGED list's fling settles, written back by the list's measure and read by
-/// [`ScrollState::fling_with_boundary`].
-///
-/// The pair is what Compose splits across `snapFlingBehavior` and `SnapLayoutInfoProvider`: `step` is
-/// the spacing of the snap positions, and `min_fling_velocity` is `MinFlingVelocityDp = 400.dp`
-/// converted at the density the list composed under, which is the threshold between "settle on the
-/// nearer position" and "carry on to the next one".
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SnapSpec {
-    /// Distance between two snap positions — the page size.
-    pub step: f32,
-    /// Below this velocity the fling settles on the NEARER snap position, at or above it on the one
-    /// in the direction of travel (Compose `calculateFinalSnappingItem`,
-    /// `LazyListSnapLayoutInfoProvider.kt:139-145`).
-    pub min_fling_velocity: f32,
-    /// The scroll position of snap position 0: the positions are `anchor + k * step`. A pager keeps it
-    /// at 0 - its pages are placed after the content padding, which is a PLACEMENT shift, not part of
-    /// the scroll target. (The `SnapPosition` shift is the same rule: Compose moves the page, not the
-    /// scroll target.)
-    pub anchor: f32,
-    /// How far into the page a release has to be before it carries on to the NEXT one, as a fraction
-    /// of the step in `0.0..=1.0` (Compose's `snapPositionalThreshold`, default `0.5`). Below the
-    /// fling floor this is the only thing deciding the target, so it is what a slow drag-past-halfway
-    /// turns on; at or above it, the velocity picks the page and the threshold is not consulted.
-    pub positional_threshold: f32,
-    /// The spring the settle runs on (Compose's `snapAnimationSpec`). See [`default_snap_settle`].
-    pub settle: crate::animation::SpringSpec,
-    /// How many pages one gesture may carry, at least one (Compose's `PagerSnapDistance.atMost`; the
-    /// default `1` is Compose's own default, and the ceiling a pager's feel rests on).
-    pub max_pages_per_fling: usize,
-}
-
-impl Default for SnapSpec {
-    fn default() -> Self {
-        Self {
-            step: 1.0,
-            min_fling_velocity: 400.0,
-            anchor: 0.0,
-            positional_threshold: 0.5,
-            settle: default_snap_settle(),
-            max_pages_per_fling: 1,
-        }
-    }
-}
-
-impl SnapSpec {
-    /// The settle as the animation engine wants it.
-    fn settle_spec(&self) -> crate::animation::AnimationSpec {
-        crate::animation::AnimationSpec::Spring(self.settle.clone())
-    }
-
-    /// This spec as a fling strategy sees it.
-    pub(crate) fn info(&self) -> crate::fling::SnapInfo {
-        crate::fling::SnapInfo {
-            step: self.step,
-            anchor: self.anchor,
-            min_fling_velocity: self.min_fling_velocity,
-            positional_threshold: self.positional_threshold,
-            settle: self.settle.clone(),
-            max_pages_per_fling: self.max_pages_per_fling,
-        }
-    }
-}
-
-/// The settle spring a snapping container runs unless a caller overrides it: material3 hands
-/// `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects` (`DatePicker.kt:744`), which resolves
-/// through `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
-/// `spring(dampingRatio = SpringDefaultEffectsDamping, stiffness = SpringDefaultEffectsStiffness)`,
-/// and `StandardMotionTokens.kt:22-23` puts those at **1.0 and 1600.0** (the expressive scheme is the
-/// same). This used to be foundation's `rememberSnapFlingBehavior` default
-/// (`spring(stiffness = Spring.StiffnessMediumLow)`, `SnapFlingBehavior.kt:238`), which visibly
-/// lagged the picker it was ported from.
-pub(crate) fn default_snap_settle() -> crate::animation::SpringSpec {
-    crate::animation::SpringSpec {
-        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
-        ..crate::animation::SpringSpec::default()
-    }
 }
 
 /// Whether a spring spec can produce a finite motion at all. A NaN anywhere in it poisons the value
@@ -2791,10 +2714,10 @@ fn spring_is_finite(spec: &crate::animation::SpringSpec) -> bool {
 
 /// The landing position of a snapping fling — the math lives in [`crate::fling::snap_target`], which is
 /// also what `SnapFlingBehavior` plans with, so a test here and a running pager cannot disagree. This
-/// wrapper only exists to keep the unit tests below working against a `SnapSpec`.
+/// wrapper only exists to keep the unit tests below working against a `SnapInfo`.
 #[cfg(test)]
-fn snap_target(current: f32, velocity: f32, snap: &SnapSpec, limit: f32) -> f32 {
-    crate::fling::snap_target(current, velocity, &snap.info(), limit)
+fn snap_target(current: f32, velocity: f32, snap: &SnapInfo, limit: f32) -> f32 {
+    crate::fling::snap_target(current, velocity, snap, limit)
 }
 
 impl ScrollState {
@@ -2955,7 +2878,7 @@ impl ScrollState {
             offset: self.offset.peek(),
             velocity,
             limit: self.fling_limit.peek(),
-            snap: self.snap.peek().map(|snap| snap.info()),
+            snap: self.snap.peek(),
             density: crate::runtime::density::current_density().density,
         };
         let plan = match &self.fling_behavior {
@@ -3156,7 +3079,7 @@ mod tests {
     fn a_snapping_fling_moves_at_most_one_page() {
         const STEP: f32 = 336.0;
         const MIN_FLING: f32 = 400.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING, ..Default::default() };
+        let snap = SnapInfo { step: STEP, min_fling_velocity: MIN_FLING, ..Default::default() };
         let limit = STEP * 10.0;
 
         // Anywhere inside a page, any velocity: the answer is one of the two neighbours, never further.
@@ -3195,7 +3118,7 @@ mod tests {
     #[test]
     fn the_positional_threshold_decides_a_slow_release() {
         const STEP: f32 = 200.0;
-        let mut snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
+        let mut snap = SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
         let limit = STEP * 5.0;
 
         assert_eq!(snap_target(80.0, 0.0, &snap, limit), 0.0, "0.5 at 40% of the page: back");
@@ -3226,7 +3149,7 @@ mod tests {
     #[test]
     fn a_flick_carries_as_many_pages_as_the_ceiling_allows() {
         const STEP: f32 = 336.0;
-        let mut snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
+        let mut snap = SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
         let limit = STEP * 10.0;
 
         assert_eq!(
@@ -3265,7 +3188,7 @@ mod tests {
             damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_SPATIAL,
             ..Default::default()
         };
-        let snap = SnapSpec { settle: custom.clone(), ..Default::default() };
+        let snap = SnapInfo { settle: custom.clone(), ..Default::default() };
         match snap.settle_spec() {
             crate::animation::AnimationSpec::Spring(spec) => {
                 assert_eq!(spec.stiffness, 3800.0);
@@ -3282,7 +3205,7 @@ mod tests {
     #[test]
     fn the_snap_spring_is_material3s_default_effects() {
         // What every snapping container settles on unless a caller supplies its own spec.
-        match SnapSpec::default().settle_spec() {
+        match SnapInfo::default().settle_spec() {
             crate::animation::AnimationSpec::Spring(spec) => {
                 assert_eq!(spec.stiffness, 1600.0, "material3's DefaultEffects stiffness");
                 assert_eq!(
@@ -3305,7 +3228,7 @@ mod tests {
         const STEP: f32 = 336.0;
         let scroll = ScrollState::new();
         scroll.fling_limit.set(STEP * 10.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
+        scroll.snap.set(Some(SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
         scroll.offset.set(100.0);
 
         scroll.fling(4000.0);
@@ -3344,7 +3267,7 @@ mod tests {
         // Three 200 px pages (snap positions 0/200/400) in a 200 px viewport, plus 100 px of trailing
         // content padding: the limit is 500 while the LAST snap position is 400.
         scroll.fling_limit.set(500.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
+        scroll.snap.set(Some(SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
 
         assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
         assert_eq!(
@@ -3363,7 +3286,7 @@ mod tests {
         crate::animation::clear_all_animations();
         let reversed = ScrollState::new();
         reversed.fling_limit.set(1000.0);
-        reversed.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
+        reversed.snap.set(Some(SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
         assert!(reversed.snap_page(false, true));
         assert_eq!(*reversed.step_goal.lock().unwrap(), Some(STEP));
 
@@ -3371,6 +3294,34 @@ mod tests {
         let plain = ScrollState::new();
         assert!(!plain.snap_page(true, false));
         crate::animation::clear_all_animations();
+    }
+
+    /// PROBE (temporary): rapid consecutive notches must still settle on a page boundary.
+    #[test]
+    fn probe_rapid_notches_settle_on_a_boundary() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        const STEP: f32 = 200.0;
+        let scroll = ScrollState::new();
+        scroll.fling_limit.set(4000.0);
+        scroll.snap.set(Some(SnapInfo { step: STEP, ..Default::default() }));
+        for i in 0..12 {
+            let stepped = scroll.snap_page(true, false);
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            eprintln!("notch {i}: stepped={stepped} offset={}", scroll.offset.get());
+        }
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() { break; }
+        }
+        let off = scroll.offset.get();
+        eprintln!("final offset={off} goal={:?} running={}", *scroll.step_goal.lock().unwrap(), scroll.is_scroll_in_progress.peek());
+        assert!(
+            (off / STEP - (off / STEP).round()).abs() < 1e-3,
+            "rapid notches left the list mid-page at {off}"
+        );
     }
 
     /// A step that is CANCELLED leaves no goal behind: the next notch steps from where the list
@@ -3385,7 +3336,7 @@ mod tests {
         const STEP: f32 = 200.0;
         let scroll = ScrollState::new();
         scroll.fling_limit.set(1000.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
+        scroll.snap.set(Some(SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
 
         assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
         assert_eq!(*scroll.step_goal.lock().unwrap(), Some(STEP));
@@ -3423,7 +3374,7 @@ mod tests {
         crate::animation::clear_all_animations();
 
         const STEP: f32 = 336.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
+        let snap = SnapInfo { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
         let settle = |offset: f32, velocity: f32| {
             let scroll = ScrollState::new();
             scroll.fling_limit.set(STEP * 10.0);
@@ -3576,7 +3527,7 @@ mod tests {
 
         let mut scroll = ScrollState::new();
         scroll.fling_limit.set(1000.0);
-        scroll.snap.set(Some(SnapSpec { step: 200.0, ..Default::default() }));
+        scroll.snap.set(Some(SnapInfo { step: 200.0, ..Default::default() }));
         scroll.offset.set(50.0);
         scroll.fling(4000.0);
         assert!(scroll.is_scroll_in_progress.peek(), "the first release settled onto page 1");
@@ -3642,7 +3593,7 @@ mod tests {
         // The control: a settle that lands inside the content reports nothing (this is every pager).
         let mut inside = ScrollState::new();
         inside.fling_limit.set(300.0);
-        inside.snap.set(Some(SnapSpec { step: 200.0, ..Default::default() }));
+        inside.snap.set(Some(SnapInfo { step: 200.0, ..Default::default() }));
         inside.offset.set(50.0);
         let quiet = std::sync::Arc::new(AtomicUsize::new(0));
         let q = quiet.clone();

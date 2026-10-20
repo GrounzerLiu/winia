@@ -448,7 +448,7 @@ winia had two velocity floors in the way — 50 px/s at the call site and 1 px/s
 — both written for the decay, and both of which a snap has no use for since it has no decay phase to
 suppress. A drag carried past halfway and then let go with the finger nearly still fell through both and
 came to rest between two months permanently: nothing else ever snaps the list back. Both floors now step
-aside when a `SnapSpec` is configured.
+aside when a snap record (`SnapInfo`) is configured.
 
 The first version of this did all three differently, and each was visible:
 

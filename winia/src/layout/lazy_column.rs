@@ -132,7 +132,7 @@ pub struct LazyListState {
     /// every measured item fills the viewport; `None` means no snapping. Lives beside `fling_limit` for
     /// the same reason — the ScrollState `build` assembles is shared with the measure policy, and this
     /// is the one that tells a finished fling where to land.
-    pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::modifier::SnapSpec>>,
+    pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::fling::SnapInfo>>,
     /// The in-flight wheel page target, shared by every ScrollState assembled for this list.
     /// Recomposition must not erase it while the spring is still moving.
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
@@ -245,29 +245,32 @@ impl LazyListState {
     /// 滚动，撞到滚动极限立即停止（极限由测量期回写——`fling_limit`）。
     ///
     /// ⚠ This is the THIRD velocity floor in the snap story, and the only one not bypassed: it carries
-    /// its own `|v| < 1.0` check and reads no `SnapSpec`, so a paged list released through this entry
+    /// its own `|v| < 1.0` check and reads no snap record, so a paged list released through this entry
     /// point decays instead of snapping. The pointer path does not come here — `dispatch_nested_scroll_fling`
     /// calls `ScrollState::fling_with_boundary` on the state the list assembles, and that one snaps. So
     /// this is a gap for a caller that flings a lazy list directly, not for the gesture. Fixing it means
     /// routing through the assembled `ScrollState` (or duplicating its filter), which is worth doing when
     /// something first needs it; the date picker does not.
     pub fn fling(&self, velocity: f32) {
-        if !velocity.is_finite() || velocity.abs() < 1.0 {
+        if !velocity.is_finite() {
             return;
         }
-        let off = self.offset.clone();
-        let limit = self.fling_limit.clone();
-        crate::animation::push_fling(
-            off,
-            velocity,
-            crate::animation::exponential_decay(crate::fling::FLING_FRICTION),
-            move |o| {
-                // The limit IS the truth: `f32::MAX` before the measure has run, `0` when the content
-                // fits (see `LazyListState::fling_limit`).
-                o.clamp(0.0, limit.peek())
-            },
-            || {},
-        );
+        // The SAME path the gesture uses: the scroll state is assembled around this list's shared
+        // states and asks its fling strategy, so a paging list settles on a page boundary instead of
+        // decaying across one, and the plan-based velocity floor applies. (A CUSTOM `fling_behavior` is
+        // a component parameter — the pager hands it to the state it assembles each frame — so this
+        // entry point runs the built-in strategy; it is the list-level escape hatch, not the component
+        // path.)
+        let state = crate::modifier::ScrollState {
+            offset: self.offset.clone(),
+            is_scroll_in_progress: self.is_scrolling.clone(),
+            fling_limit: self.fling_limit.clone(),
+            scroll_pulse: self.scroll_pulse.clone(),
+            snap: self.snap.clone(),
+            step_goal: self.step_goal.clone(),
+            fling_behavior: None,
+        };
+        state.fling(velocity);
     }
 }
 
@@ -487,7 +490,7 @@ impl<A: LazyAxis> LazyList<A> {
             user_scroll: true,
             snap_offset: 0.0,
             snap_positional_threshold: 0.5,
-            snap_animation_spec: crate::modifier::default_snap_settle(),
+            snap_animation_spec: crate::fling::default_snap_settle(),
             snap_max_pages: 1,
             fling_behavior: None,
         }
@@ -1278,11 +1281,11 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub item_main_size: Option<f32>,
     /// Where inside an item a snapping list rests (`SnapPosition`), from `snap_offset`.
     pub snap_offset: f32,
-    /// The release threshold written into the snap spec (`SnapSpec::positional_threshold`).
+    /// The release threshold written into the snap record (`SnapInfo::positional_threshold`).
     pub snap_positional_threshold: f32,
-    /// The settle spring written into the snap spec (`SnapSpec::settle`).
+    /// The settle spring written into the snap record (`SnapInfo::settle`).
     pub snap_animation_spec: crate::animation::SpringSpec,
-    /// The page ceiling written into the snap spec (`SnapSpec::max_pages_per_fling`).
+    /// The page ceiling written into the snap record (`SnapInfo::max_pages_per_fling`).
     pub snap_max_pages: usize,
     /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
     pub beyond_bounds: usize,
@@ -1464,7 +1467,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             && page_size > 0.0
             && measured.iter().all(|(size, _)| (size - page_size).abs() < 0.5)
         {
-            Some(crate::modifier::SnapSpec {
+            Some(crate::fling::SnapInfo {
                 step: page_size + self.spacing,
                 // Page k is placed after `pad_before`, but its scroll snap position is `k * step`;
                 // the leading padding belongs to layout, not to the scroll state's snap anchor.
@@ -3457,6 +3460,39 @@ mod tests {
 
         list.offset.set(10.0);
         assert!(back.peek(), "a write past the boundary flips it with no executor involved");
+    }
+
+    /// A DIRECT fling on a paging list (no component, no gesture) goes through the same strategy as
+    /// the gesture path: it settles on a page boundary instead of decaying across it.
+    #[test]
+    fn a_direct_fling_on_a_paging_list_settles_on_a_page() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+        const STEP: f32 = 200.0;
+
+        let state = LazyListState::new();
+        state.fling_limit.set(2000.0);
+        state.snap.set(Some(crate::fling::SnapInfo {
+            step: STEP,
+            ..Default::default()
+        }));
+        state.offset.set(50.0);
+        state.fling(4000.0);
+
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !state.is_scrolling.peek() {
+                break;
+            }
+        }
+        let end = state.offset.get();
+        assert!(
+            (end / STEP - (end / STEP).round()).abs() < 1e-3,
+            "a paging list flings onto a page boundary, got {end} (a decay would stop at ~1000)"
+        );
+        assert!(end >= STEP, "and it moved at least one page, got {end}");
+        crate::animation::clear_all_animations();
     }
 
     /// A same-count data REPLACEMENT reaches the rows: the key sequence decides which item groups

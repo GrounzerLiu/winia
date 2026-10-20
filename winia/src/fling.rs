@@ -23,7 +23,11 @@ use crate::animation::{DecaySpec, SpringSpec};
 pub(crate) const FLING_FRICTION: f32 = 4.2;
 
 /// Everything a fling strategy is allowed to look at.
+///
+/// `#[non_exhaustive]`: the framework may hand a strategy more context later, and that must not be a
+/// breaking change for every implementation.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct FlingContext {
     /// Where the container is right now, in scroll px.
     pub offset: f32,
@@ -38,10 +42,24 @@ pub struct FlingContext {
     pub density: f32,
 }
 
-/// The paging configuration as a strategy sees it — the crate-internal `SnapSpec` without the
-/// identity used to compare elements, so a caller can decide with the same numbers the container's
-/// own measure wrote back.
+/// The settle spring a snapping container runs unless a caller overrides it: material3 hands
+/// `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects` (`DatePicker.kt:744`), which resolves
+/// through `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
+/// `spring(dampingRatio = SpringDefaultEffectsDamping, stiffness = SpringDefaultEffectsStiffness)`,
+/// and `StandardMotionTokens.kt:22-23` puts those at **1.0 and 1600.0** (the expressive scheme is the
+/// same).
+pub(crate) fn default_snap_settle() -> SpringSpec {
+    SpringSpec {
+        stiffness: SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+        ..SpringSpec::default()
+    }
+}
+
+/// The paging configuration: the record a snapping container's measure writes back and a fling
+/// strategy reads. It is ONE type for both sides — a strategy cannot decide with numbers the
+/// container never wrote, and a new knob cannot be added on one side only.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SnapInfo {
     /// Distance between two snap positions — the page size plus its spacing.
     pub step: f32,
@@ -57,8 +75,32 @@ pub struct SnapInfo {
     pub max_pages_per_fling: usize,
 }
 
+impl Default for SnapInfo {
+    fn default() -> Self {
+        Self {
+            step: 1.0,
+            anchor: 0.0,
+            min_fling_velocity: 400.0,
+            positional_threshold: 0.5,
+            settle: default_snap_settle(),
+            max_pages_per_fling: 1,
+        }
+    }
+}
+
+impl SnapInfo {
+    /// The settle as the animation engine wants it.
+    pub fn settle_spec(&self) -> crate::animation::AnimationSpec {
+        crate::animation::AnimationSpec::Spring(self.settle.clone())
+    }
+}
+
 /// The motion a fling should run.
+///
+/// `#[non_exhaustive]`: a plan variant may be added later, so a strategy's `match` needs a catch-all
+/// arm (delegating ones usually do) and the crate keeps the freedom to grow the vocabulary.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum FlingPlan {
     /// One spring, launched with the release velocity, landing on `target` (scroll px).
     Spring { target: f32, spec: SpringSpec },
@@ -169,7 +211,7 @@ mod tests {
             anchor: 0.0,
             min_fling_velocity: 400.0,
             positional_threshold: 0.5,
-            settle: crate::modifier::default_snap_settle(),
+            settle: default_snap_settle(),
             max_pages_per_fling: 1,
         }
     }

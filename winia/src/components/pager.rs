@@ -263,7 +263,7 @@ impl<A: LazyAxis> Pager<A> {
             beyond_viewport_page_count: 4,
             user_scroll_enabled: true,
             snap_positional_threshold: 0.5,
-            snap_animation_spec: crate::modifier::default_snap_settle(),
+            snap_animation_spec: crate::fling::default_snap_settle(),
             max_pages_per_fling: 1,
             page_nested_scroll_connection: None,
             fling_behavior: None,
