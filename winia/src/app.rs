@@ -1209,11 +1209,12 @@ impl ApplicationHandler for AppState {
                                 } else {
                                     nodes[target].modifier.vertical_scroll_state()
                                 };
-                                state.filter(|s| s.snaps()).map(|s| {
-                                    s.snap_page(ey < 0.0);
-                                })
+                                state
+                                    .filter(|s| s.snaps())
+                                    .map(|s| s.snap_page(ey < 0.0))
+                                    .unwrap_or(false)
                             };
-                            if paged.is_none() {
+                            if !paged {
                             // A horizontal-only target takes the wheel's dy as dx (see the finder).
                             let (dx, dy) = {
                                 let probe = pw.composer.arena_nodes();
@@ -2297,7 +2298,10 @@ impl AppState {
                                 } else {
                                     nodes[target].modifier.vertical_scroll_state()
                                 };
-                                state.filter(|s| s.snaps()).map(|s| s.snap_page(ey < 0.0)).is_some()
+                                state
+                                    .filter(|s| s.snaps())
+                                    .map(|s| s.snap_page(ey < 0.0))
+                                    .unwrap_or(false)
                             };
                             if paged {
                                 handled = true;

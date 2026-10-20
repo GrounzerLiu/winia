@@ -2820,13 +2820,15 @@ impl ScrollState {
     /// wheel on a pager barely moves it); winia does, for paged containers only - `snap` is `Some` -
     /// so a pager and a date picker move one page per notch while a plain list keeps scrolling
     /// smoothly.
-    pub(crate) fn snap_page(&self, forward: bool) {
+    /// Returns whether a step was started. A caller that gets `false` falls back to the pixel scroll,
+    /// so a container whose snap spec has not been resolved yet is never worse off than before.
+    pub(crate) fn snap_page(&self, forward: bool) -> bool {
         let Some(spec) = self
             .snap
             .peek()
             .filter(|s| s.step.is_finite() && s.step > 0.0)
         else {
-            return;
+            return false;
         };
         let raw_limit = self.fling_limit.peek();
         let limit = if raw_limit.is_finite() && raw_limit >= 0.0 { raw_limit } else { f32::MAX };
@@ -2838,7 +2840,7 @@ impl ScrollState {
         };
         let target = (spec.anchor + index * spec.step).clamp(0.0, limit);
         if (target - self.offset.peek()).abs() < 0.5 {
-            return;
+            return false;
         }
         self.is_scroll_in_progress.set(true);
         let done = self.is_scroll_in_progress.clone();
@@ -2849,6 +2851,7 @@ impl ScrollState {
             0.0,
             move || done.set(false),
         );
+        true
     }
 
     /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
