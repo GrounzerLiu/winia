@@ -10,8 +10,7 @@
 //! let state = ctx.remember(|| PagerState::new(5)).get();
 //! HorizontalPager::new(state)
 //!     .modifier(Modifier::new().fill_max_size())
-//!     .content(|ctx, page| Text::new(format!("Page {}", page)).build(ctx))
-//!     .build(ctx);
+//!     .build(ctx, |ctx, page| Text::new(format!("Page {}", page)).build(ctx));
 //! ```
 
 use std::marker::PhantomData;
@@ -175,7 +174,6 @@ pub struct Pager<A: LazyAxis> {
     snap_position: SnapPosition,
     beyond_viewport_page_count: usize,
     user_scroll_enabled: bool,
-    content: Option<Box<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>>,
 }
 
 /// A pager whose pages scroll horizontally (Compose's `HorizontalPager`).
@@ -208,14 +206,7 @@ impl<A: LazyAxis> Pager<A> {
             snap_position: SnapPosition::Start,
             beyond_viewport_page_count: 4,
             user_scroll_enabled: true,
-            content: None,
         }
-    }
-
-    /// The page content. The index is the page, starting at 0.
-    pub fn content(mut self, f: impl Fn(&mut ComposeCtx, usize) + Send + Sync + 'static) -> Self {
-        self.content = Some(Box::new(f));
-        self
     }
 
     pub fn modifier(mut self, modifier: Modifier) -> Self {
@@ -266,13 +257,17 @@ impl<A: LazyAxis> Pager<A> {
         self
     }
 
+    /// Compose the pager. `content` receives the page index, starting at 0 - the `PagerScope` shape
+    /// (`Fn(&mut ComposeCtx, T)` in docs/component-authoring.md 1.3), since a pager composes its
+    /// content once.
     #[composable]
-    pub fn build(self, ctx: &mut ComposeCtx) {
+    pub fn build(
+        self,
+        ctx: &mut ComposeCtx,
+        content: impl Fn(&mut ComposeCtx, usize) + Send + Sync + 'static,
+    ) {
         let state = self.state;
         let sync = state.clone();
-        let content = self
-            .content
-            .expect("Pager needs content: pager.content(|ctx, page| ..)");
         let count = state.page_count;
         ctx.changed(&count);
         // A fixed page sits at snap positions offset from the leading edge; the viewport comes from
@@ -307,7 +302,11 @@ impl<A: LazyAxis> Pager<A> {
         };
         list.items(count, |page| page as u64, move |ctx, page| content(ctx, page))
             .build(ctx);
-        sync.sync_from_list();
+        // Derived from the anchors this pass observed, published at the END of it: a `State` write
+        // during composition would let a sibling composed later in the same pass see the new page
+        // while one composed earlier still sees the old one. The write schedules the pass that makes
+        // the counter visible, which is the same one-frame step Compose has.
+        crate::effect::side_effect(ctx, move || sync.sync_from_list());
     }
 }
 
@@ -346,12 +345,11 @@ mod tests {
                 let c = composed.clone();
                 HorizontalPager::new(s)
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
-                    .content(move |ctx, page| {
+                    .build(ctx, move |ctx, page| {
                         use std::sync::atomic::Ordering;
                         c.fetch_add(1, Ordering::Relaxed);
                         crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
-                    })
-                    .build(ctx);
+                    });
             });
         });
         let _ = page_count;
@@ -419,10 +417,9 @@ mod tests {
                     .page_size(PageSize::Fixed(120.0))
                     .snap_position(SnapPosition::Center)
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
-                    .content(|ctx, page| {
+                    .build(ctx, |ctx, page| {
                         crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
-                    })
-                    .build(ctx);
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
@@ -433,10 +430,9 @@ mod tests {
                     .page_size(PageSize::Fixed(120.0))
                     .snap_position(SnapPosition::Center)
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
-                    .content(|ctx, page| {
+                    .build(ctx, |ctx, page| {
                         crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
-                    })
-                    .build(ctx);
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
@@ -462,11 +458,10 @@ mod tests {
                     HorizontalPager::new(s)
                         .beyond_viewport_page_count(beyond)
                         .modifier(Modifier::new().fill_max_width().fill_max_height())
-                        .content(move |ctx, page| {
+                        .build(ctx, move |ctx, page| {
                             c.fetch_add(1, Ordering::Relaxed);
                             crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
-                        })
-                        .build(ctx);
+                        });
                 });
             });
             composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
@@ -490,10 +485,9 @@ mod tests {
                 HorizontalPager::new(s)
                     .user_scroll_enabled(false)
                     .modifier(Modifier::new().fill_max_width().fill_max_height())
-                    .content(|ctx, page| {
+                    .build(ctx, |ctx, page| {
                         crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
-                    })
-                    .build(ctx);
+                    });
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));

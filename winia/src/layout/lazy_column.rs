@@ -886,6 +886,18 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&snap_paging);
         let fill_items = self.fill_items;
         ctx.changed(&fill_items);
+        // The knobs added for a pager are parameters of this container too: a Clean slot compares
+        // exactly what is declared here, so an undeclared one would silently keep the old behaviour
+        // (`item_main_size` / `snap_offset` change where content lands, `beyond_bounds` how much of it
+        // composes, `user_scroll` whether input reaches it).
+        let item_main_size = self.item_main_size;
+        ctx.changed(&item_main_size);
+        let snap_offset = self.snap_offset;
+        ctx.changed(&snap_offset);
+        let beyond_bounds = self.beyond_bounds;
+        ctx.changed(&beyond_bounds);
+        let user_scroll = self.user_scroll;
+        ctx.changed(&user_scroll);
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
