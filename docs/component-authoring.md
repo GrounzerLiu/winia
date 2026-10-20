@@ -199,6 +199,17 @@ and `TextField` relies on that for its visual parameters (`text_field.rs:909-916
 chain cannot express - closures, flag-shaped branch controls, values passed outside the modifier -
 has to go through `ctx.changed`, or a Clean slot Skips past it.
 
+**The caller has the same obligation**, and it is easier to get wrong there: a value read in the
+parent and captured into a container's content closure is invisible to that container's Skip
+decision. The parent re-runs (a sibling caption updates) while the captured content stays behind -
+measured on a manual page indicator: `let current = state.current_page(); Row::new().build(ctx, |ctx|
+... current ...)` kept highlighting dot 1 while the caption next to it said page 3. Read the state
+INSIDE the closure that has to re-run, or give the container a parameter to compare.
+
+The same trap in a different shape: a `State::get()` inside a container whose body is a restartable
+group makes THAT group a dependent, which is usually what you want - but only if the read happens
+there rather than in the caller.
+
 **The failure it prevents:** an undeclared parameter does not cause a stale frame twice - it causes a
 Clean slot to Skip past the change forever, and it looks exactly like a broken state notification. The
 `ctx.changed` contract is stated in `winia/src/runtime/composer.rs` (`ComposeCtx::changed`) and
