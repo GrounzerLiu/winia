@@ -98,11 +98,13 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
 - **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
   `scroll_to_page` and an external animation still move the pager.
-- **One wheel notch moves one page.** A wheel delta is a small fraction of a viewport-sized page, so
-  Compose's "scroll by pixels, then settle on the nearest snap position" would put the pager back
-  where it started - a wheel on a Compose pager barely moves it. winia treats a paged container's
-  wheel as a page step instead (`ScrollState::snap_page`), which also gives the date picker's months
-  the same feel. A non-paged list keeps scrolling smoothly.
+- **One wheel notch moves one page** (`ScrollState::snap_page`), which also gives the date picker's
+  months the same feel; a non-paged list keeps scrolling smoothly. Compose reaches a similar result by
+  a different route: its mouse-wheel logic synthesizes a velocity (up to 1 dp/ms,
+  `MouseWheelScrollingLogic.kt:250-256,308-310`), and the snap fling behavior runs on wheel
+  (`shouldBeTriggeredByMouseWheel`, default true) so a notch at or above `MinFlingVelocityDp` (400
+  dp/s) advances a page. winia's step is exact - one page per notch whatever the delta - and it
+  applies to any paged container rather than only to a pager.
 
 ## Differences from Compose
 
@@ -115,6 +117,7 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `flingBehavior`, `pageNestedScrollConnection`, `PagerSnapDistance` | Not exposed. Snapping is the lazy list's own (one page per gesture); a replaceable fling strategy would need a trait the list does not have. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is the content parameter instead. |
 | RTL mirrors the pages | Not mirrored: the lazy list has no layout-direction handling. |
+| The wheel takes the DOMINANT axis and is ignored by a container on the other axis (`NonTouchScrollingLogic.kt:255-264`), so a plain vertical wheel does not move a `HorizontalPager` | A vertical wheel IS routed to a horizontal PAGER (and only to one, so a vertical ancestor keeps its wheel); non-paging horizontal lists still ignore it. |
 
 ## Tests
 

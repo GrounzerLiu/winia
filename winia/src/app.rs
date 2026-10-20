@@ -188,54 +188,42 @@ impl Default for FrameClock {
     }
 }
 
-// ── Wheel settle ──
+// ── Wheel paging ──
 
-/// A wheel snap waiting for the wheel to stop, per window (`WindowId`, state, deadline).
+/// One wheel notch on a PAGED container moves one page (`ScrollState::snap_page`).
 ///
-/// Compose snaps when the SCROLL SESSION ends: the wheel applies its deltas, and the fling behavior
-/// runs once afterwards (the snap fling behavior is what lands the list on a page). Snapping inside
-/// the wheel handler runs after every tick, so a slow wheel is pulled back to the page it started on
-/// before the next tick can carry it over the midpoint.
-static WHEEL_SETTLE: std::sync::Mutex<
-    Option<(u64, crate::modifier::ScrollState, std::time::Instant)>,
-> = std::sync::Mutex::new(None);
-
-/// How long after the last wheel event the snap runs (a wheel session is short and silent).
-const WHEEL_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
-
-type WheelSettle = Option<(u64, crate::modifier::ScrollState, std::time::Instant)>;
-
-fn wheel_settle_guard() -> std::sync::MutexGuard<'static, WheelSettle> {
-    WHEEL_SETTLE.lock().unwrap_or_else(|e| e.into_inner())
+/// The axis is chosen by which scroll state the NODE has, not by which delta arrived: a precision
+/// trackpad can deliver a diagonal pixel delta to a vertical pager, and picking by delta then finds no
+/// horizontal state and silently pixel-scrolls it. A horizontal-only container still takes a vertical
+/// wheel (winia's deliberate deviation - Compose uses the dominant axis and ignores the rest, which
+/// leaves a HorizontalPager unmovable by a plain wheel).
+fn wheel_page_step(nodes: &[LayoutNode], target: usize, dx: f32, dy: f32) -> bool {
+    let node = &nodes[target];
+    let horizontal = node.modifier.horizontal_scroll_state();
+    let vertical = node.modifier.vertical_scroll_state();
+    let (state, forward) = match (horizontal, vertical) {
+        (Some(h), Some(v)) => {
+            if dx.abs() > dy.abs() {
+                (Some(h), dx < 0.0)
+            } else {
+                (Some(v), dy < 0.0)
+            }
+        }
+        (Some(h), None) => (Some(h), if dx != 0.0 { dx < 0.0 } else { dy < 0.0 }),
+        (None, Some(v)) => (Some(v), if dy != 0.0 { dy < 0.0 } else { dx < 0.0 }),
+        (None, None) => (None, false),
+    };
+    let Some(state) = state else {
+        return false;
+    };
+    // `reverseLayout` mirrors the direction (the pixel and fling paths do the same).
+    let reverse = node.modifier.is_lazy_scroll_reverse()
+        || node.modifier.is_horizontal_scroll_reverse();
+    state.snaps() && state.snap_page(forward, reverse)
 }
 
-/// Record that this window's wheel left a snapping container between two pages.
-pub(crate) fn note_wheel_settle(window: u64, state: &crate::modifier::ScrollState) {
-    *wheel_settle_guard() = Some((
-        window,
-        state.clone(),
-        std::time::Instant::now() + WHEEL_SETTLE_DELAY,
-    ));
-}
+// ── Wheel settle (retired) ──
 
-/// The settle for this window, if its deadline has passed (and it is cleared).
-fn take_due_wheel_settle(window: u64) -> Option<crate::modifier::ScrollState> {
-    let mut guard = wheel_settle_guard();
-    let due = matches!(
-        guard.as_ref(),
-        Some((w, _, at)) if *w == window && std::time::Instant::now() >= *at
-    );
-    if due {
-        guard.take().map(|(_, state, _)| state)
-    } else {
-        None
-    }
-}
-
-/// Whether a settle is still waiting for its deadline in this window.
-fn wheel_settle_pending(window: u64) -> bool {
-    matches!(wheel_settle_guard().as_ref(), Some((w, _, _)) if *w == window)
-}
 
 // ── PerWindow ──
 
@@ -688,21 +676,6 @@ impl PerWindow {
     /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
     /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
     fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
-        // A pending wheel snap settles HERE, once the wheel has stopped - not inside the wheel
-        // handler. Compose ends the scroll session and only then runs the fling behavior; snapping
-        // per wheel tick pulled the list back to the page before the next tick could accumulate.
-        let wid = window_id.into_raw() as u64;
-        if let Some(state) = take_due_wheel_settle(wid) {
-            if state.snaps() {
-                // Velocity 0: the NEAREST snap position, not the next one.
-                state.fling(0.0);
-            }
-        } else if wheel_settle_pending(wid) {
-            // Come back for it: this frame draws the wheel delta, the next one settles.
-            if let Some(ref sw) = self.skia_window {
-                sw.request_redraw();
-            }
-        }
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
         // 帧时钟按窗口分发：ComposeCtx::frame_clock() 用它把等待者绑到本窗口的帧上。
         self.composer.set_window_id(window_id.into_raw() as u64);
@@ -1181,45 +1154,24 @@ impl ApplicationHandler for AppState {
                             path.iter().rev().find(|&&idx| {
                                 (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
                                     || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
-                                    // A container that only scrolls horizontally still takes a vertical
-                                    // wheel: Compose routes the wheel to the axis the container has,
-                                    // which is why a wheel scrolls a HorizontalPager. Without this a
-                                    // pager ignored the wheel while a drag worked.
+                                    // A HORIZONTAL PAGER still takes a vertical wheel. Compose does not
+                                    // do this: its wheel logic takes the DOMINANT axis and returns 0 when
+                                    // that is not the container's axis (NonTouchScrollingLogic.kt:255-264),
+                                    // so a plain wheel over a HorizontalPager does nothing there. winia
+                                    // deviates for containers that PAGE - and only those, so a vertical
+                                    // ancestor keeps the wheel a plain horizontal row would have stolen.
                                     || (dy != 0.0
                                         && dx == 0.0
                                         && nodes[idx].modifier.vertical_scroll_state().is_none()
-                                        && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                                        && nodes[idx]
+                                            .modifier
+                                            .horizontal_scroll_state()
+                                            .is_some_and(|s| s.snaps()))
                             }).copied()
                         });
                         if let Some(target) = target {
-                            // A PAGED container moves a page per notch: a wheel delta is a small fraction of
-                            // a viewport-sized page, so scrolling by pixels and snapping afterwards returns
-                            // to where it started (a date picker's months and a pager both read as "the
-                            // wheel does nothing").
-                            let paged = {
-                                let nodes = pw.composer.arena_nodes();
-                                let only_horizontal = nodes[target]
-                                    .modifier
-                                    .vertical_scroll_state()
-                                    .is_none()
-                                    && nodes[target].modifier.horizontal_scroll_state().is_some();
-                                let (ex, _ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
-                                let state = if ex != 0.0 {
-                                    nodes[target].modifier.horizontal_scroll_state()
-                                } else {
-                                    nodes[target].modifier.vertical_scroll_state()
-                                };
-                                // Direction comes from the USER'S scroll, not from the routed axis: a
-                                // vertical wheel over a horizontal pager swaps dy into ex, and reading the
-                                // direction from the swapped value was always "backward" - one notch at
-                                // page 1 bounced back and every later notch went toward page 1 whichever way
-                                // the wheel turned.
-                                let forward = if dy != 0.0 { dy < 0.0 } else { dx < 0.0 };
-                                state
-                                    .filter(|s| s.snaps())
-                                    .map(|s| s.snap_page(forward))
-                                    .unwrap_or(false)
-                            };
+                            // One notch on a paged container moves one page; see `wheel_page_step`.
+                            let paged = wheel_page_step(pw.composer.arena_nodes(), target, dx, dy);
                             if !paged {
                             // A horizontal-only target takes the wheel's dy as dx (see the finder).
                             let (dx, dy) = {
@@ -1250,21 +1202,6 @@ impl ApplicationHandler for AppState {
                             if dx != 0.0 && consumed.x == 0.0 {
                                 if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
                                     ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                                }
-                            }
-                            // A snapping container settles after WHEEL input too, not only after a
-                            // drag release: Compose runs the fling behavior when a scroll session
-                            // ends, and a pager's snap fling behavior lands on the nearest page.
-                            // Without this the wheel left the list between two pages while a drag
-                            // release (which goes through `fling`) snapped.
-                            let settle = if dx != 0.0 {
-                                nodes[target].modifier.horizontal_scroll_state()
-                            } else {
-                                nodes[target].modifier.vertical_scroll_state()
-                            };
-                            if let Some(ss) = settle {
-                                if ss.snaps() {
-                                    note_wheel_settle(window_id.into_raw() as u64, &ss);
                                 }
                             }
                             }
@@ -2286,30 +2223,15 @@ impl AppState {
                                     || (dy != 0.0
                                         && dx == 0.0
                                         && nodes[idx].modifier.vertical_scroll_state().is_none()
-                                        && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                                        && nodes[idx]
+                                            .modifier
+                                            .horizontal_scroll_state()
+                                            .is_some_and(|s| s.snaps()))
                             }).copied()
                         });
                         if let Some(target) = by_pointer.or_else(|| find_scroll_target(nodes, r, dx, dy)) {
-                            // Same rule as the real wheel: a paged container moves ONE page per notch.
-                            let paged = {
-                                let nodes = pw.composer.arena_nodes();
-                                let only_horizontal = nodes[target]
-                                    .modifier
-                                    .vertical_scroll_state()
-                                    .is_none()
-                                    && nodes[target].modifier.horizontal_scroll_state().is_some();
-                                let (ex, _ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
-                                let state = if ex != 0.0 {
-                                    nodes[target].modifier.horizontal_scroll_state()
-                                } else {
-                                    nodes[target].modifier.vertical_scroll_state()
-                                };
-                                let forward = if dy != 0.0 { dy < 0.0 } else { dx < 0.0 };
-                                state
-                                    .filter(|s| s.snaps())
-                                    .map(|s| s.snap_page(forward))
-                                    .unwrap_or(false)
-                            };
+                            // Same helper as the real wheel, so the two paths cannot drift again.
+                            let paged = wheel_page_step(pw.composer.arena_nodes(), target, dx, dy);
                             if paged {
                                 handled = true;
                             } else {
@@ -2318,17 +2240,6 @@ impl AppState {
                             // An injected wheel behaves like a real one: a snapping container settles
                             // once the wheel stops, not after every event. Without this a UI test sees
                             // the wheel leaving the list between two pages while a real mouse does not.
-                            let nodes = pw.composer.arena_nodes();
-                            let state = if dy != 0.0 {
-                                nodes[target].modifier.vertical_scroll_state()
-                            } else {
-                                nodes[target].modifier.horizontal_scroll_state()
-                            };
-                            if let Some(ss) = state {
-                                if ss.snaps() {
-                                    note_wheel_settle(window_id.into_raw() as u64, &ss);
-                                }
-                            }
                             }
                         }
                     }
@@ -4387,31 +4298,6 @@ mod drag_target_selection_tests {
             "无固定高度 + 无限约束应随内容撑开（>0），实际 {}", n.measured_size.height);
     }
 
-    /// The wheel snap waits for the session to end: a deadline set by the last wheel event, taken
-    /// once it passes. Snapping per event pulled the list back before the next event could carry it
-    /// over the midpoint (reported as "wheel scrolls a bit and jumps back").
-    #[test]
-    fn a_wheel_settle_waits_for_its_deadline_and_is_taken_once() {
-        use crate::modifier::ScrollState;
-        let window = 0x5EE1_0001u64;
-        let other = 0x5EE1_0002u64;
-        let state = ScrollState::new();
-
-        super::note_wheel_settle(window, &state);
-        assert!(super::wheel_settle_pending(window), "the deadline has not passed yet");
-        assert!(super::take_due_wheel_settle(other).is_none(), "another window's settle is not ours");
-        assert!(
-            super::take_due_wheel_settle(window).is_none(),
-            "a settle that is not due is not taken (it would kill the wheel session)"
-        );
-
-        std::thread::sleep(super::WHEEL_SETTLE_DELAY + std::time::Duration::from_millis(20));
-        assert!(
-            super::take_due_wheel_settle(window).is_some(),
-            "once the wheel has stopped the settle is taken"
-        );
-        assert!(!super::wheel_settle_pending(window), "and it is cleared, so it runs once");
-    }
 }
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {

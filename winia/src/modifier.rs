@@ -2827,7 +2827,7 @@ impl ScrollState {
     /// smoothly.
     /// Returns whether a step was started. A caller that gets `false` falls back to the pixel scroll,
     /// so a container whose snap spec has not been resolved yet is never worse off than before.
-    pub(crate) fn snap_page(&self, forward: bool) -> bool {
+    pub(crate) fn snap_page(&self, forward: bool, reverse: bool) -> bool {
         let Some(spec) = self
             .snap
             .peek()
@@ -2837,6 +2837,9 @@ impl ScrollState {
         };
         let raw_limit = self.fling_limit.peek();
         let limit = if raw_limit.is_finite() && raw_limit >= 0.0 { raw_limit } else { f32::MAX };
+        // `reverseLayout` mirrors the scroll direction (the pixel and fling paths do the same), so a
+        // "forward" notch on a reversed container steps back.
+        let forward = forward != reverse;
         // Step from where a step in flight is heading, not from the live offset: a second notch
         // arriving mid-spring otherwise reads a position inside the SAME page and re-targets it.
         let mut goal = self.step_goal.lock().unwrap_or_else(|e| e.into_inner());
@@ -2847,7 +2850,15 @@ impl ScrollState {
         } else {
             (position.ceil() - 1.0).max(0.0)
         };
-        let target = (spec.anchor + index * spec.step).clamp(0.0, limit);
+        let target = spec.anchor + index * spec.step;
+        // Refuse rather than clamp: `limit` is `content - viewport`, which with a trailing
+        // `contentPadding` is PAST the last snap position, so clamping would scroll into the padding and
+        // the settle would drag it back (Compose guards this explicitly:
+        // PagerSnapLayoutInfoProvider.kt:181-187 zeroes both bounds when the list cannot scroll forward).
+        if limit < f32::MAX && target > limit + 0.5 {
+            return false;
+        }
+        let target = target.clamp(0.0, limit);
         if (target - base).abs() < 0.5 {
             return false;
         }
