@@ -1203,15 +1203,21 @@ impl ApplicationHandler for AppState {
                                     .vertical_scroll_state()
                                     .is_none()
                                     && nodes[target].modifier.horizontal_scroll_state().is_some();
-                                let (ex, ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
+                                let (ex, _ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
                                 let state = if ex != 0.0 {
                                     nodes[target].modifier.horizontal_scroll_state()
                                 } else {
                                     nodes[target].modifier.vertical_scroll_state()
                                 };
+                                // Direction comes from the USER'S scroll, not from the routed axis: a
+                                // vertical wheel over a horizontal pager swaps dy into ex, and reading the
+                                // direction from the swapped value was always "backward" - one notch at
+                                // page 1 bounced back and every later notch went toward page 1 whichever way
+                                // the wheel turned.
+                                let forward = if dy != 0.0 { dy < 0.0 } else { dx < 0.0 };
                                 state
                                     .filter(|s| s.snaps())
-                                    .map(|s| s.snap_page(ey < 0.0))
+                                    .map(|s| s.snap_page(forward))
                                     .unwrap_or(false)
                             };
                             if !paged {
@@ -2292,15 +2298,16 @@ impl AppState {
                                     .vertical_scroll_state()
                                     .is_none()
                                     && nodes[target].modifier.horizontal_scroll_state().is_some();
-                                let (ex, ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
+                                let (ex, _ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
                                 let state = if ex != 0.0 {
                                     nodes[target].modifier.horizontal_scroll_state()
                                 } else {
                                     nodes[target].modifier.vertical_scroll_state()
                                 };
+                                let forward = if dy != 0.0 { dy < 0.0 } else { dx < 0.0 };
                                 state
                                     .filter(|s| s.snaps())
-                                    .map(|s| s.snap_page(ey < 0.0))
+                                    .map(|s| s.snap_page(forward))
                                     .unwrap_or(false)
                             };
                             if paged {

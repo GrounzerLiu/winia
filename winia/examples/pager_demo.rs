@@ -103,13 +103,15 @@ fn pager_demo_ui(ctx: &mut ComposeCtx) {
                 .page_spacing(0.0)
                 .build(ctx, |ctx, page| page_card(ctx, page, "full viewport"));
 
-            // Dot indicator: reads current_page, so it recomposes when the counter flips.
-            let current = fill_state.current_page();
+            // Dot indicator. The read happens INSIDE the Row's content: the Row is a container
+            // with a restartable group, and a value captured outside its closure is invisible to
+            // that group's Skip decision - the caption above updated while the dots stayed on page 1.
+            let dots_state = fill_state.clone();
             caption(
                 ctx,
                 &format!(
                     "page {} of {} - offset fraction {:+.2}",
-                    current,
+                    fill_state.current_page(),
                     pages,
                     fill_state.current_page_offset_fraction()
                 ),
@@ -118,6 +120,7 @@ fn pager_demo_ui(ctx: &mut ComposeCtx) {
                 .modifier(Modifier::new().fill_max_width().padding_top(10.0))
                 .arrangement(Arrangement::Center)
                 .build(ctx, |ctx| {
+                    let current = dots_state.current_page();
                     for i in 0..pages {
                         let theme = WiniaTheme::colors();
                         let color = if i == current { theme.primary } else { theme.outline_variant };
