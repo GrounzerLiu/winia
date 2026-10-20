@@ -102,7 +102,10 @@ impl FlingBehavior for NeverPastTheEnd {
   side effects: the same context may be produced again by a later release.
 - **The plan is clamped to the container's limit.** A strategy may aim past the end on purpose (a
   "bounce past the edge" plan is clamped to the limit, which is what a scroll value is allowed to
-  reach); a `Decay` is clamped per frame the same way.
+  reach); a `Decay` is clamped per frame the same way. A `Spring` that the clamp moved reports the
+  boundary (`on_boundary(0.0)`) when it lands, so a post-fling connection still learns that the child
+  hit its end — a spring has no leftover velocity the way a decay does. A plan that lands inside the
+  limit reports nothing, which is every pager's default.
 - **`FlingPlan::None` starts no animation** and clears `is_scroll_in_progress`, so a container that
   declined does not sit there claiming to be scrolling.
 - **Identity is the parameter.** A component that takes a behavior compares it by `Arc` identity, not
@@ -129,3 +132,6 @@ motion at all, or momentum with the strategy's own decay.
 
 `cargo test -p winia --lib a_pager_hands_its_fling_behavior` - a pager hands its strategy to the
 list's scroll state, and the release lands where the strategy says instead of on a page boundary.
+
+`cargo test -p winia --lib a_clamped_spring_plan_reports_the_boundary` - a plan clamped by the limit
+reports the boundary when it lands, and a settle inside the content reports none.

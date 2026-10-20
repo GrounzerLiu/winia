@@ -2984,6 +2984,7 @@ impl ScrollState {
                 // A strategy may aim past the content on purpose (a "bounce past the end" plan); the
                 // container's own limit is still what the value is allowed to reach.
                 let limit_now = limit.peek().max(0.0);
+                let requested = target;
                 let target = target.clamp(0.0, limit_now);
                 if !target.is_finite() || !spring_is_finite(&spec) {
                     // A NaN plan must not reach the offset: the engine's overrun guard writes the
@@ -2997,13 +2998,27 @@ impl ScrollState {
                 // reports `done` immediately and clears `is_scroll_in_progress` while the first spring
                 // is still moving.
                 crate::animation::cancel_animation(&self.offset);
+                // A plan that asked to go PAST the container's limit cannot use that travel. A spring
+                // has no leftover velocity to hand on the way a decay does, but the post-fling chain
+                // still has to learn that the child reached its end - so the boundary is reported when
+                // the spring lands. (A plan that lands inside the limit reports nothing: the built-in
+                // one clamps itself, so a pager's behaviour here is unchanged.)
+                let clamped = (target - requested).abs() > 0.5;
                 let settle = done_flag.clone();
+                let mut boundary = Some(on_boundary);
                 crate::animation::push_animatable_with_velocity_and_done(
                     off,
                     target,
                     crate::animation::AnimationSpec::Spring(spec),
                     velocity,
-                    move || settle.set(false),
+                    move || {
+                        settle.set(false);
+                        if clamped {
+                            if let Some(report) = boundary.take() {
+                                report(0.0);
+                            }
+                        }
+                    },
                 );
             }
             crate::fling::FlingPlan::Decay { spec } => {
@@ -3570,6 +3585,81 @@ mod tests {
         assert!(
             scroll.is_scroll_in_progress.peek(),
             "the running settle still owns the flag - the second release must not report a finish"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// A plan that asks to go past the container's limit is clamped, and the boundary is reported when
+    /// the spring lands: a post-fling connection has to learn that the child hit its end, even though a
+    /// spring has no leftover velocity the way a decay does.
+    #[test]
+    fn a_clamped_spring_plan_reports_the_boundary_when_it_lands() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct Overshoot;
+        impl crate::fling::FlingBehavior for Overshoot {
+            fn plan(&self, fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(
+                    fling.limit + 500.0,
+                    crate::animation::SpringSpec {
+                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(300.0);
+        scroll.fling_behavior = Some(std::sync::Arc::new(Overshoot));
+        let reports = std::sync::Arc::new(AtomicUsize::new(0));
+        let r = reports.clone();
+        scroll.fling_with_boundary(800.0, move |remaining| {
+            assert_eq!(remaining, 0.0, "a clamped spring has no velocity left to hand on");
+            r.fetch_add(1, Ordering::Relaxed);
+        });
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert_eq!(
+            reports.load(Ordering::Relaxed),
+            1,
+            "a plan clamped by the limit reports the boundary once it lands"
+        );
+        assert!(
+            (scroll.offset.get() - 300.0).abs() < 0.5,
+            "and it stops at the limit, got {}",
+            scroll.offset.get()
+        );
+
+        // The control: a settle that lands inside the content reports nothing (this is every pager).
+        let mut inside = ScrollState::new();
+        inside.fling_limit.set(300.0);
+        inside.snap.set(Some(SnapSpec { step: 200.0, ..Default::default() }));
+        inside.offset.set(50.0);
+        let quiet = std::sync::Arc::new(AtomicUsize::new(0));
+        let q = quiet.clone();
+        inside.fling_with_boundary(12.0, move |_| {
+            q.fetch_add(1, Ordering::Relaxed);
+        });
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !inside.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert_eq!(
+            quiet.load(Ordering::Relaxed),
+            0,
+            "a settle inside the content reports no boundary"
         );
         crate::animation::clear_all_animations();
     }
