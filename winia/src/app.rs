@@ -190,40 +190,271 @@ impl Default for FrameClock {
 
 // ── Wheel paging ──
 
-/// One wheel notch on a PAGED container moves one page (`ScrollState::snap_page`).
+/// Where one wheel delta came from, which decides how much travel a page step costs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WheelKind {
+    /// A discrete notch (`LineDelta`) — a mouse wheel. One notch is one deliberate page step.
+    Notch,
+    /// A continuous high-resolution delta (`PixelDelta`, and the fractional lines some drivers send):
+    /// a precision touchpad delivers many of these per gesture, so they have to accumulate first.
+    Pixel,
+}
+
+/// One wheel event, normalized to logical px per axis (the `LineDelta`/`PixelDelta` conversion lives in
+/// `window_event`), plus where it came from.
+#[derive(Clone, Copy, Debug)]
+struct WheelDelta {
+    dx: f32,
+    dy: f32,
+    kind: WheelKind,
+}
+
+/// The kind a `LineDelta` reports.
+///
+/// A whole number of lines is a discrete notch. A FRACTIONAL one (some drivers and high-resolution
+/// wheels report half-line steps) is a continuous stream and has to bank travel like a touchpad -
+/// paging on every such event is the touchpad bug in another costume.
+fn wheel_kind_for_lines(x: f32, y: f32) -> WheelKind {
+    if x.fract() == 0.0 && y.fract() == 0.0 {
+        WheelKind::Notch
+    } else {
+        WheelKind::Pixel
+    }
+}
+
+/// What a PAGED container did with one wheel event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WheelPage {
+    /// Not a paging container on this wheel's axis: the caller pixel-scrolls it.
+    NotPaged,
+    /// A paging container whose travel gate is still banking the gesture: the event is swallowed, not
+    /// pixel-scrolled, because a page either turns or nothing moves.
+    Held,
+    /// It started a page step.
+    Stepped,
+}
+
+/// What one wheel event did to one scroll target.
+#[derive(Clone, Copy, Debug, Default)]
+struct WheelOutcome {
+    /// A paging container claimed the event — it stepped, or its gate is holding the step. The caller
+    /// reports the wheel as handled even though nothing pixel-scrolled.
+    paged: bool,
+    /// The delta pixel scrolling actually consumed (zero whenever `paged`).
+    consumed: crate::nested_scroll::ScrollDelta,
+}
+
+impl WheelOutcome {
+    /// Whether the container did anything at all with the event.
+    fn handled(&self) -> bool {
+        self.paged || self.consumed.x != 0.0 || self.consumed.y != 0.0
+    }
+}
+
+/// Wheel-session gate for PAGED containers, one per window (the field lives on `PerWindow`).
+///
+/// A precision touchpad reports `PixelDelta` as many 1-3 px events at up to ~120 Hz. Paging once per
+/// event — which the ungated path did — ran a Pager forward a dozen pages for a single flick, and no
+/// delta cut-off can fix that: the problem is per-event paging, not the magnitude. So the events of one
+/// gesture bank travel, and a page is armed only when a real notch's worth of it has accumulated (see
+/// `PIXEL_PAGE_TRAVEL`). A gap between events, a reversal, or a different container starts over. Plain,
+/// non-paging containers never reach this type: they keep scrolling by pixels, one event at a time.
+#[derive(Debug, Default)]
+struct WheelPager {
+    /// Which container and axis the banked travel belongs to: (tree space, node id, vertical axis).
+    key: Option<(u64, u64, bool)>,
+    /// Signed travel banked toward the next page step, in logical px.
+    travel: f32,
+    /// When the previous wheel event arrived (`None` before the first one).
+    last: Option<std::time::Instant>,
+}
+
+impl WheelPager {
+    /// A gap at least this long ends the gesture; banked travel does not survive it.
+    const SESSION_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+    /// Logical px of continuous travel one page step costs: three 20 px lines, i.e. one conventional
+    /// three-line mouse notch (the `LineDelta` conversion in `window_event` is 20 px per line). A 3 px
+    /// touchpad event therefore needs ~20 siblings before it may turn a page, while the same notch
+    /// delivered as pixels still pages on its own.
+    const PIXEL_PAGE_TRAVEL: f32 = 60.0;
+
+    /// Banks one wheel event aimed at `key` and reports whether that event earns a page step, and which
+    /// way (`Some(true)` = forward, the sense `ScrollState::snap_page` takes).
+    ///
+    /// `amount` is the signed delta along the axis the container pages on. A notch always earns its
+    /// step; a pixel delta earns one only once the banked travel reaches `PIXEL_PAGE_TRAVEL`. At most one
+    /// step per event and nothing carries over, so an oversized delta (an accelerated flick, a scale
+    /// change between two events) cannot cascade several pages out of a single event.
+    fn page_step(
+        &mut self,
+        key: (u64, u64, bool),
+        amount: f32,
+        kind: WheelKind,
+        now: std::time::Instant,
+    ) -> Option<bool> {
+        let stale = self
+            .last
+            .map_or(true, |t| now.saturating_duration_since(t) >= Self::SESSION_GAP);
+        // A new container, the other axis, a fresh gesture or a reversal all mean the banked travel
+        // belongs to a motion the user has abandoned: half a notch one way and half a notch back is a
+        // scrub, not a page step.
+        if stale || self.key != Some(key) || self.travel * amount < 0.0 {
+            self.travel = 0.0;
+            self.key = Some(key);
+        }
+        self.last = Some(now);
+        if kind == WheelKind::Notch {
+            // Discrete intent: page at once, and drop any pixel travel banked before the notch.
+            self.travel = 0.0;
+            return Some(amount < 0.0);
+        }
+        self.travel += amount;
+        if self.travel.abs() < Self::PIXEL_PAGE_TRAVEL {
+            return None;
+        }
+        self.travel = 0.0;
+        Some(amount < 0.0)
+    }
+}
+
+/// Wheel-session namespaces: the main tree and every overlay layer bank their travel separately, so a
+/// half-notch over a menu cannot carry into the list behind it.
+const MAIN_TREE_WHEEL_SPACE: u64 = 0;
+const OVERLAY_WHEEL_SPACE_BASE: u64 = 1;
+
+/// The scroll node one wheel event should act on, from a hit path (root to leaf, innermost last).
+///
+/// The rule is the main tree's, and it is shared so the overlay layers and the injected debug wheel
+/// cannot drift from it: a node takes the wheel when it has the axis the delta moves, or — for a purely
+/// vertical wheel — when it has a HORIZONTAL state that PAGES.
+fn wheel_scroll_target(nodes: &[LayoutNode], path: &[usize], dx: f32, dy: f32) -> Option<usize> {
+    // A HORIZONTAL PAGER still takes a vertical wheel. Compose does not do this: its wheel logic takes
+    // the DOMINANT axis and returns 0 when that is not the container's axis
+    // (NonTouchScrollingLogic.kt:255-264), so a plain wheel over a HorizontalPager does nothing there.
+    // winia deviates for containers that PAGE - and only those, so a vertical ancestor keeps the wheel
+    // a plain horizontal row would have stolen.
+    path.iter()
+        .rev()
+        .find(|&&idx| {
+            (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
+                || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                || (dy != 0.0
+                    && dx == 0.0
+                    && nodes[idx].modifier.vertical_scroll_state().is_none()
+                    && nodes[idx].modifier.horizontal_scroll_state().is_some_and(|s| s.snaps()))
+        })
+        .copied()
+}
+
+/// One wheel event on a PAGED container moves one page (`ScrollState::snap_page`).
 ///
 /// The axis is chosen by which scroll state the NODE has, not by which delta arrived: a precision
 /// trackpad can deliver a diagonal pixel delta to a vertical pager, and picking by delta then finds no
 /// horizontal state and silently pixel-scrolls it. A horizontal-only container still takes a vertical
 /// wheel (winia's deliberate deviation - Compose uses the dominant axis and ignores the rest, which
 /// leaves a HorizontalPager unmovable by a plain wheel).
-fn wheel_page_step(nodes: &[LayoutNode], target: usize, dx: f32, dy: f32) -> bool {
+///
+/// `space` namespaces `pager` per tree, so two arenas cannot share one gesture's banked travel.
+fn wheel_page_step(
+    nodes: &[LayoutNode],
+    target: usize,
+    space: u64,
+    wheel: WheelDelta,
+    pager: &mut WheelPager,
+    now: std::time::Instant,
+) -> WheelPage {
     let node = &nodes[target];
     let horizontal = node.modifier.horizontal_scroll_state();
     let vertical = node.modifier.vertical_scroll_state();
-    let (state, forward) = match (horizontal, vertical) {
+    let (state, vertical_axis, amount) = match (horizontal, vertical) {
         (Some(h), Some(v)) => {
-            if dx.abs() > dy.abs() {
-                (Some(h), dx < 0.0)
+            if wheel.dx.abs() > wheel.dy.abs() {
+                (h, false, wheel.dx)
             } else {
-                (Some(v), dy < 0.0)
+                (v, true, wheel.dy)
             }
         }
-        (Some(h), None) => (Some(h), if dx != 0.0 { dx < 0.0 } else { dy < 0.0 }),
-        (None, Some(v)) => (Some(v), if dy != 0.0 { dy < 0.0 } else { dx < 0.0 }),
-        (None, None) => (None, false),
+        (Some(h), None) => (h, false, if wheel.dx != 0.0 { wheel.dx } else { wheel.dy }),
+        (None, Some(v)) => (v, true, if wheel.dy != 0.0 { wheel.dy } else { wheel.dx }),
+        (None, None) => return WheelPage::NotPaged,
     };
-    let Some(state) = state else {
-        return false;
-    };
+    if !state.snaps() {
+        return WheelPage::NotPaged;
+    }
     // `reverseLayout` mirrors the direction (the pixel and fling paths do the same).
     let reverse = node.modifier.is_lazy_scroll_reverse()
         || node.modifier.is_horizontal_scroll_reverse();
-    state.snaps() && state.snap_page(forward, reverse)
+    match pager.page_step((space, node.id, vertical_axis), amount, wheel.kind, now) {
+        Some(forward) if state.snap_page(forward, reverse) => WheelPage::Stepped,
+        // The container has no page left in that direction: fall back to the pixel scroll, which
+        // consumes nothing at the edge and therefore flashes the scrollbar instead.
+        Some(_) => WheelPage::NotPaged,
+        None => WheelPage::Held,
+    }
 }
 
-// ── Wheel settle (retired) ──
-
+/// Applies one wheel event to `target` in the arena rooted at `root_idx`.
+///
+/// A paging container takes one page step; anything else pixel-scrolls through the nested-scroll chain,
+/// with a horizontal-only target reading the wheel's dy as dx. Shared by the main tree, the overlay
+/// layers and the injected debug wheel, so the three paths cannot drift apart again.
+///
+/// Nothing here settles the container between events: a snapping container settles once the wheel (or
+/// the injected gesture) stops, not after every event, which is both what a real mouse does and what a
+/// UI test has to see.
+fn apply_wheel_to_target(
+    nodes: &mut [LayoutNode],
+    root_idx: usize,
+    target: usize,
+    space: u64,
+    wheel: WheelDelta,
+    pager: &mut WheelPager,
+    density: crate::unit::Density,
+    now: std::time::Instant,
+) -> WheelOutcome {
+    match wheel_page_step(nodes, target, space, wheel, pager, now) {
+        WheelPage::Stepped => return WheelOutcome { paged: true, consumed: Default::default() },
+        WheelPage::Held => return WheelOutcome { paged: true, consumed: Default::default() },
+        WheelPage::NotPaged => {}
+    }
+    // A horizontal-only target takes the wheel's dy as dx (see `wheel_scroll_target`).
+    let (dx, dy) = {
+        let only_horizontal = nodes[target].modifier.vertical_scroll_state().is_none()
+            && nodes[target].modifier.horizontal_scroll_state().is_some();
+        if only_horizontal && wheel.dy != 0.0 {
+            (wheel.dy, 0.0)
+        } else {
+            (wheel.dx, wheel.dy)
+        }
+    };
+    let consumed = dispatch_nested_scroll_delta(
+        nodes,
+        root_idx,
+        target,
+        crate::nested_scroll::ScrollDelta::new(dx, dy),
+        crate::nested_scroll::NestedScrollSource::Wheel,
+        density,
+    );
+    // P1-3: a target that consumed zero (already at the top or bottom) still pulses its scrollbar, which
+    // is what tells the user the wheel arrived at all (M3/CMP do the same; a fade driven by the offset
+    // cannot see it, hence the explicit bump).
+    // P2-1: decided per axis - a diagonal scroll at the top edge consumes x while y is stuck, and a
+    // joint condition would lose the vertical pulse.
+    {
+        let node = &nodes[target];
+        if dy != 0.0 && consumed.y == 0.0 {
+            if let Some(ss) = node.modifier.vertical_scroll_state() {
+                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+            }
+        }
+        if dx != 0.0 && consumed.x == 0.0 {
+            if let Some(ss) = node.modifier.horizontal_scroll_state() {
+                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+            }
+        }
+    }
+    WheelOutcome { paged: false, consumed }
+}
 
 // ── PerWindow ──
 
@@ -267,6 +498,9 @@ pub(crate) struct PerWindow {
     /// The pointer and gesture state: what is down, what a gesture locked onto, and the
     /// sessions it opened (see `GestureState` — fourteen fields that used to be here).
     pub(crate) input: GestureState,
+    /// The wheel's page-step gate: how much travel the current gesture has banked toward the next
+    /// page, per window (see `WheelPager`).
+    wheel: WheelPager,
     /// The overlay host: the layers, and the interaction state that only makes sense against
     /// them (see `OverlayHost` — the group that used to be ten fields here).
     pub(crate) overlay: OverlayHost,
@@ -278,7 +512,7 @@ impl PerWindow {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
         let theme = WindowThemeState::from_theme(theme);
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -1084,26 +1318,35 @@ impl ApplicationHandler for AppState {
 
         match event {
             WindowEvent::MouseWheel { delta, .. } => {
-                let (dx, dy) = match delta {
-                    // LineDelta's 20 is logical px per line, matching the scroll offsets below.
-                    winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
+                let mut wheel = match delta {
+                    // LineDelta's 20 is logical px per line, matching the scroll offsets below. One
+                    // notch is discrete, so it pages as one (`WheelKind::Notch`).
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => WheelDelta {
+                        dx: x * 20.0,
+                        dy: y * 20.0,
+                        kind: wheel_kind_for_lines(x, y),
+                    },
                     // `PixelDelta` is a PHYSICAL position (winit), and everything downstream is
                     // logical, so it converts like the pointer positions do. Without this a
                     // touchpad scroll moved `density` times too far on a HiDPI display. Only
                     // platforms that emit PixelDelta (macOS/Linux touchpads) reached it — the
                     // win32 backend sends LineDelta — so the conversion is unverified here.
+                    //
+                    // Its events are continuous, so `WheelPager` decides when they add up to a page.
                     winit::event::MouseScrollDelta::PixelDelta(p) => {
                         let lp = p.to_logical::<f32>(pw.scale_factor);
-                        (lp.x, lp.y)
+                        WheelDelta { dx: lp.x, dy: lp.y, kind: WheelKind::Pixel }
                     }
                     // `MouseScrollDelta` is `#[non_exhaustive]` in winit 0.31 (it was marked so in
                     // 0.31.0-beta.3), so a future variant must not break this match: an unknown
                     // delta scrolls nothing rather than being guessed at.
-                    _ => (0.0, 0.0),
+                    _ => WheelDelta { dx: 0.0, dy: 0.0, kind: WheelKind::Notch },
                 };
                 // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
                 // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
-                let (dx, dy) = scroll_delta_with_shift(dx, dy, pw.modifiers.shift_key());
+                let (dx, dy) = scroll_delta_with_shift(wheel.dx, wheel.dy, pw.modifiers.shift_key());
+                wheel.dx = dx;
+                wheel.dy = dy;
                 if dx != 0.0 || dy != 0.0 {
                     // Overlays float ABOVE the main tree and own separate arenas, so a wheel over one has
                     // to scroll ITS container — a menu's list — rather than whatever the main tree has
@@ -1117,25 +1360,25 @@ impl ApplicationHandler for AppState {
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
-                        path.iter().rev().find(|&&idx| {
-                            (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
-                                || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
-                        }).copied().map(|t| (i, t, r))
+                        // The overlay's own arena, the main tree's rule: a menu's list pages exactly
+                        // like a pager in the main tree, and a horizontal pager inside the menu takes
+                        // the vertical wheel too.
+                        wheel_scroll_target(nodes, &path, wheel.dx, wheel.dy).map(|t| (i, t, r))
                     });
+                    let now = std::time::Instant::now();
+                    let density = crate::unit::Density::from_density(pw.scale_factor as f32);
                     if let Some((i, target, r)) = overlay_target {
                         let ov = &mut pw.overlay.layers[i];
-                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
-                        let nodes = ov.composer.arena_nodes();
-                        if dy != 0.0 && consumed.y == 0.0 {
-                            if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
-                                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                            }
-                        }
-                        if dx != 0.0 && consumed.x == 0.0 {
-                            if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
-                                ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                            }
-                        }
+                        apply_wheel_to_target(
+                            ov.composer.arena_nodes_mut(),
+                            r,
+                            target,
+                            OVERLAY_WHEEL_SPACE_BASE + i as u64,
+                            wheel,
+                            &mut pw.wheel,
+                            density,
+                            now,
+                        );
                     } else if let Some(root_idx) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
                         // §3.7 修复：优先按鼠标位置 hit-test，在命中路径上找滚动
@@ -1151,60 +1394,21 @@ impl ApplicationHandler for AppState {
                         let target = pw.input.last_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
                             // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
-                            path.iter().rev().find(|&&idx| {
-                                (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
-                                    || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
-                                    // A HORIZONTAL PAGER still takes a vertical wheel. Compose does not
-                                    // do this: its wheel logic takes the DOMINANT axis and returns 0 when
-                                    // that is not the container's axis (NonTouchScrollingLogic.kt:255-264),
-                                    // so a plain wheel over a HorizontalPager does nothing there. winia
-                                    // deviates for containers that PAGE - and only those, so a vertical
-                                    // ancestor keeps the wheel a plain horizontal row would have stolen.
-                                    || (dy != 0.0
-                                        && dx == 0.0
-                                        && nodes[idx].modifier.vertical_scroll_state().is_none()
-                                        && nodes[idx]
-                                            .modifier
-                                            .horizontal_scroll_state()
-                                            .is_some_and(|s| s.snaps()))
-                            }).copied()
+                            wheel_scroll_target(nodes, &path, wheel.dx, wheel.dy)
                         });
                         if let Some(target) = target {
-                            // One notch on a paged container moves one page; see `wheel_page_step`.
-                            let paged = wheel_page_step(pw.composer.arena_nodes(), target, dx, dy);
-                            if !paged {
-                            // A horizontal-only target takes the wheel's dy as dx (see the finder).
-                            let (dx, dy) = {
-                                let probe = pw.composer.arena_nodes();
-                                let only_horizontal =
-                                    probe[target].modifier.vertical_scroll_state().is_none()
-                                        && probe[target].modifier.horizontal_scroll_state().is_some();
-                                if only_horizontal && dy != 0.0 {
-                                    (dy, 0.0)
-                                } else {
-                                    (dx, dy)
-                                }
-                            };
-                            // P1-3：命中但消费为 0（顶/底继续滚）→ 触发目标的
-                            // scroll_pulse（scrollbar 侧以脉冲点亮 fade，给用户
-                            // "到底了"的反馈；M3/CMP 同行为）。offset 无变化时
-                            // 脉冲检测不到，故此处显式通知。
-                            let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), root_idx, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
-                            // P2-1：按轴独立判定——顶边斜滚（垂直顶住、水平正常
-                            // 消费）时联合条件会丢垂直 pulse。分轴自增本就绪，
-                            // 门控同样分轴。
-                            let nodes = pw.composer.arena_nodes();
-                            if dy != 0.0 && consumed.y == 0.0 {
-                                if let Some(ss) = nodes[target].modifier.vertical_scroll_state() {
-                                    ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                                }
-                            }
-                            if dx != 0.0 && consumed.x == 0.0 {
-                                if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
-                                    ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
-                                }
-                            }
-                            }
+                            // Paging, pixel scrolling and the edge pulse all live in the shared
+                            // helper; see `wheel_page_step` and `apply_wheel_to_target`.
+                            apply_wheel_to_target(
+                                pw.composer.arena_nodes_mut(),
+                                root_idx,
+                                target,
+                                MAIN_TREE_WHEEL_SPACE,
+                                wheel,
+                                &mut pw.wheel,
+                                density,
+                                now,
+                            );
                         }
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -2199,15 +2403,26 @@ impl AppState {
                         let r = ov.composer.layout_root_idx()?;
                         let nodes = ov.composer.arena_nodes();
                         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), lx, ly);
-                        path.iter().rev().find(|&&idx| {
-                            (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
-                                || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
-                        }).copied().map(|t| (i, t, r))
+                        wheel_scroll_target(nodes, &path, dx, dy).map(|t| (i, t, r))
                     });
+                    // An injected wheel is one notch — `s` in the debug protocol — so it pages at once
+                    // instead of banking travel the way a touchpad stream does.
+                    let wheel = WheelDelta { dx, dy, kind: WheelKind::Notch };
+                    let now = std::time::Instant::now();
+                    let density = crate::unit::Density::from_density(pw.scale_factor as f32);
                     if let Some((i, target, r)) = overlay_target {
                         let ov = &mut pw.overlay.layers[i];
-                        let consumed = dispatch_nested_scroll_delta(ov.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
-                        handled = consumed.x != 0.0 || consumed.y != 0.0;
+                        let outcome = apply_wheel_to_target(
+                            ov.composer.arena_nodes_mut(),
+                            r,
+                            target,
+                            OVERLAY_WHEEL_SPACE_BASE + i as u64,
+                            wheel,
+                            &mut pw.wheel,
+                            density,
+                            now,
+                        );
+                        handled = outcome.handled();
                     } else if let Some(r) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
                         // An injected wheel follows the REAL one when the test moved the pointer:
@@ -2217,30 +2432,21 @@ impl AppState {
                         // that never moves the mouse has to use.
                         let by_pointer = pw.input.last_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test_with_flights(nodes, r, pw.composer.transition_roots(), px, py);
-                            path.iter().rev().find(|&&idx| {
-                                (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
-                                    || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
-                                    || (dy != 0.0
-                                        && dx == 0.0
-                                        && nodes[idx].modifier.vertical_scroll_state().is_none()
-                                        && nodes[idx]
-                                            .modifier
-                                            .horizontal_scroll_state()
-                                            .is_some_and(|s| s.snaps()))
-                            }).copied()
+                            wheel_scroll_target(nodes, &path, dx, dy)
                         });
                         if let Some(target) = by_pointer.or_else(|| find_scroll_target(nodes, r, dx, dy)) {
                             // Same helper as the real wheel, so the two paths cannot drift again.
-                            let paged = wheel_page_step(pw.composer.arena_nodes(), target, dx, dy);
-                            if paged {
-                                handled = true;
-                            } else {
-                            let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
-                            handled = consumed.x != 0.0 || consumed.y != 0.0;
-                            // An injected wheel behaves like a real one: a snapping container settles
-                            // once the wheel stops, not after every event. Without this a UI test sees
-                            // the wheel leaving the list between two pages while a real mouse does not.
-                            }
+                            let outcome = apply_wheel_to_target(
+                                pw.composer.arena_nodes_mut(),
+                                r,
+                                target,
+                                MAIN_TREE_WHEEL_SPACE,
+                                wheel,
+                                &mut pw.wheel,
+                                density,
+                                now,
+                            );
+                            handled = outcome.handled();
                         }
                     }
                 }
@@ -4334,3 +4540,252 @@ pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     event_loop.run_app(state).expect("run_app");
     debug::end_session();
 }
+
+
+/// The wheel's page step: one notch pages, a stream of tiny high-resolution events has to bank a notch's
+/// worth of travel before any of them may, and a plain list never pages at all.
+///
+/// These pin the decisions `WheelPager` and `wheel_page_step` make, which is where a pager's feel lives.
+/// Without the gate, a 3 px `PixelDelta` at 120 Hz turned a page per event (a dozen pages for one
+/// flick); without the shared finder, the overlay layers could not page at all and a HorizontalPager
+/// could not be moved by a plain wheel.
+#[cfg(test)]
+mod wheel_paging_tests {
+    use super::{
+        wheel_kind_for_lines, wheel_page_step, wheel_scroll_target, WheelDelta, WheelKind,
+        WheelPage, WheelPager, MAIN_TREE_WHEEL_SPACE,
+    };
+    use crate::layout::node::LayoutNode;
+    use crate::modifier::{Modifier, ScrollState, SnapSpec};
+    use std::time::{Duration, Instant};
+
+    /// One page of a pager, in logical px.
+    const PAGE: f32 = 300.0;
+
+    /// A scroll state that pages, with a limit far past the positions these tests touch.
+    fn paging_state() -> ScrollState {
+        let state = ScrollState::new();
+        state.fling_limit.set(PAGE * 9.0);
+        state.snap.set(Some(SnapSpec { step: PAGE, min_fling_velocity: 400.0, anchor: 0.0 }));
+        state
+    }
+
+    fn vertical(state: ScrollState) -> LayoutNode {
+        LayoutNode::leaf(Modifier::new().vertical_scroll(state).size(400.0, PAGE))
+    }
+
+    fn horizontal(state: ScrollState) -> LayoutNode {
+        LayoutNode::leaf(Modifier::new().horizontal_scroll(state).size(PAGE, 400.0))
+    }
+
+    /// A notch is one deliberate page step, in either direction.
+    #[test]
+    fn a_notch_pages_on_its_own_delta() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        assert_eq!(pager.page_step(key, -20.0, WheelKind::Notch, now), Some(true), "an upward notch steps forward");
+        assert_eq!(pager.page_step(key, 20.0, WheelKind::Notch, now), Some(false), "a downward one steps back");
+    }
+
+    /// A precision touchpad's 3 px events must not each turn a page: twenty of them bank exactly one.
+    #[test]
+    fn tiny_pixel_events_bank_a_notch_before_they_page() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        for event in 1..20 {
+            assert_eq!(
+                pager.page_step(key, -3.0, WheelKind::Pixel, now),
+                None,
+                "touchpad event {event} carries {} px, short of the {} px a page costs",
+                event * 3,
+                WheelPager::PIXEL_PAGE_TRAVEL
+            );
+        }
+        assert_eq!(
+            pager.page_step(key, -3.0, WheelKind::Pixel, now),
+            Some(true),
+            "the twentieth 3 px event completes a notch's worth of travel"
+        );
+        assert_eq!(
+            pager.page_step(key, -3.0, WheelKind::Pixel, now),
+            None,
+            "and the bank starts over after a step"
+        );
+    }
+
+    /// A notch arriving in the middle of a touchpad gesture pages at once and takes no banked travel
+    /// with it, so the following touchpad events still have to earn their own page.
+    #[test]
+    fn a_notch_drops_travel_a_touchpad_banked() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        assert_eq!(pager.page_step(key, -40.0, WheelKind::Pixel, now), None, "40 px is short of a page");
+        assert_eq!(pager.page_step(key, -20.0, WheelKind::Notch, now), Some(true), "the notch itself pages");
+        assert_eq!(
+            pager.page_step(key, -20.0, WheelKind::Pixel, now),
+            None,
+            "the touchpad travel banked before the notch did not ride along with it"
+        );
+    }
+
+    /// Half a notch one way and half a notch back is a scrub, not a page step.
+    #[test]
+    fn a_reversal_starts_the_travel_over() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        assert_eq!(pager.page_step(key, -40.0, WheelKind::Pixel, now), None);
+        assert_eq!(pager.page_step(key, 40.0, WheelKind::Pixel, now), None, "40 px back is still short of a page");
+        assert_eq!(
+            pager.page_step(key, 20.0, WheelKind::Pixel, now),
+            Some(false),
+            "and only the reversed travel counts toward the page"
+        );
+    }
+
+    /// Travel banked before a pause is stale: a gesture that stopped is over.
+    #[test]
+    fn a_pause_ends_the_session() {
+        let mut pager = WheelPager::default();
+        let start = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        assert_eq!(pager.page_step(key, -40.0, WheelKind::Pixel, start), None);
+        let later = start + WheelPager::SESSION_GAP + Duration::from_millis(50);
+        assert_eq!(
+            pager.page_step(key, -40.0, WheelKind::Pixel, later),
+            None,
+            "the earlier 40 px does not count after a pause"
+        );
+        assert_eq!(
+            pager.page_step(key, -40.0, WheelKind::Pixel, later + Duration::from_millis(10)),
+            Some(true),
+            "but the second gesture's own travel does"
+        );
+    }
+
+    /// One event turns at most one page, even when the platform reports hundreds of pixels at once.
+    #[test]
+    fn one_oversized_event_turns_one_page_and_carries_nothing() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        let key = (MAIN_TREE_WHEEL_SPACE, 7, true);
+        assert_eq!(pager.page_step(key, -900.0, WheelKind::Pixel, now), Some(true), "a flick still turns a page");
+        assert_eq!(
+            pager.page_step(key, -5.0, WheelKind::Pixel, now),
+            None,
+            "the ~840 px left over must not cascade more pages out of one event"
+        );
+    }
+
+    /// A whole number of lines is a notch; a fractional one is a continuous stream and has to bank.
+    #[test]
+    fn fractional_lines_bank_instead_of_paging() {
+        assert_eq!(wheel_kind_for_lines(0.0, 3.0), WheelKind::Notch);
+        assert_eq!(wheel_kind_for_lines(0.0, -1.0), WheelKind::Notch);
+        assert_eq!(
+            wheel_kind_for_lines(0.0, 0.5),
+            WheelKind::Pixel,
+            "half a line is not a notch"
+        );
+        assert_eq!(wheel_kind_for_lines(0.25, 0.0), WheelKind::Pixel);
+    }
+
+    /// Two containers never share one gesture's travel, so a half-notch on one cannot page the other.
+    #[test]
+    fn another_container_banks_its_own_travel() {
+        let mut pager = WheelPager::default();
+        let now = Instant::now();
+        assert_eq!(pager.page_step((MAIN_TREE_WHEEL_SPACE, 7, true), -40.0, WheelKind::Pixel, now), None);
+        assert_eq!(
+            pager.page_step((MAIN_TREE_WHEEL_SPACE, 8, true), -40.0, WheelKind::Pixel, now),
+            None,
+            "travel banked on one pager must not page another"
+        );
+        assert_eq!(pager.page_step((MAIN_TREE_WHEEL_SPACE, 8, true), -20.0, WheelKind::Pixel, now), Some(true));
+    }
+
+    /// A vertical wheel reaches a HorizontalPager (winia's deliberate deviation from Compose), and a
+    /// plain horizontal row does not steal it from the vertical list around it.
+    #[test]
+    fn a_vertical_wheel_reaches_a_pager_but_not_a_plain_row() {
+        let nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            vertical(paging_state()),
+            horizontal(paging_state()),
+        ];
+        assert_eq!(
+            wheel_scroll_target(&nodes, &[0, 1, 2], 0.0, -20.0),
+            Some(2),
+            "the horizontal pager is the innermost node that takes a plain wheel"
+        );
+
+        let nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            vertical(ScrollState::new()),
+            horizontal(ScrollState::new()),
+        ];
+        assert_eq!(
+            wheel_scroll_target(&nodes, &[0, 1, 2], 0.0, -20.0),
+            Some(1),
+            "a horizontal row that does not page leaves the vertical wheel to the list around it"
+        );
+    }
+
+    /// The page step itself: a pager reached by a vertical wheel steps one page, and a container without
+    /// a snap spec is left to the caller's pixel scroll.
+    #[test]
+    fn a_page_step_is_taken_only_by_a_paging_container() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let state = paging_state();
+        let nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            horizontal(state.clone()),
+        ];
+        let mut pager = WheelPager::default();
+        let wheel = WheelDelta { dx: 0.0, dy: -20.0, kind: WheelKind::Notch };
+        assert_eq!(
+            wheel_page_step(&nodes, 1, MAIN_TREE_WHEEL_SPACE, wheel, &mut pager, Instant::now()),
+            WheelPage::Stepped,
+            "a horizontal pager reached by a vertical wheel takes one page"
+        );
+        assert_eq!(
+            *state.step_goal.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(PAGE),
+            "and it steps forward by exactly one page"
+        );
+
+        let plain = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            vertical(ScrollState::new()),
+        ];
+        assert_eq!(
+            wheel_page_step(&plain, 1, MAIN_TREE_WHEEL_SPACE, wheel, &mut pager, Instant::now()),
+            WheelPage::NotPaged,
+            "a list without a snap spec keeps pixel scrolling"
+        );
+
+        crate::animation::clear_all_animations();
+    }
+
+    /// A touchpad event on a pager is swallowed while it banks: a page either turns or nothing moves,
+    /// and pixel-scrolling a pager would leave it between two pages.
+    #[test]
+    fn a_banking_touchpad_event_is_held_not_pixel_scrolled() {
+        let mut pager = WheelPager::default();
+        let nodes = vec![
+            LayoutNode::leaf(Modifier::new().size(400.0, 600.0)),
+            vertical(paging_state()),
+        ];
+        let wheel = WheelDelta { dx: 0.0, dy: -3.0, kind: WheelKind::Pixel };
+        assert_eq!(
+            wheel_page_step(&nodes, 1, MAIN_TREE_WHEEL_SPACE, wheel, &mut pager, Instant::now()),
+            WheelPage::Held
+        );
+    }
+}
+

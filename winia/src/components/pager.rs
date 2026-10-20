@@ -116,7 +116,11 @@ impl PagerState {
     /// pixel-ness of `PageSize::Fill`.
     pub fn scroll_to_page(&self, page: usize, page_offset: f32) {
         let step = self.page_size.peek();
-        let pixels = if step > 0.0 { page_offset * step } else { 0.0 };
+        let pixels = if step > 0.0 {
+            page_offset * step - self.pad_before.peek()
+        } else {
+            -self.pad_before.peek()
+        };
         self.target_page.set(page);
         self.list.scroll_to_item(page, pixels);
     }
@@ -124,7 +128,11 @@ impl PagerState {
     /// Animate to `page` (Compose's `animateScrollToPage`); `page_offset` is a page fraction.
     pub fn animate_scroll_to_page(&self, page: usize, page_offset: f32) {
         let step = self.page_size.peek();
-        let pixels = if step > 0.0 { page_offset * step } else { 0.0 };
+        let pixels = if step > 0.0 {
+            page_offset * step - self.pad_before.peek()
+        } else {
+            -self.pad_before.peek()
+        };
         self.target_page.set(page);
         self.list.animate_scroll_to_item(page, pixels);
     }
@@ -133,25 +141,21 @@ impl PagerState {
     ///
     /// Called by the derived subscription on every scroll tick; the four writes go out in one
     /// `write_batch`, so a synchronous observer never sees the new page next to the old fraction.
-    fn sync_from_list(&self, page_size: f32, spacing: f32, pad_before: f32) {
-        // Pages are PLACED at `pad_before + k * step + snap_shift`, and the snap positions are
-        // `pad_before + k * step`, so the scroll offset divided by the step gives the page position
-        // directly - no viewport, no first-visible anchor (dividing by the viewport is what made a
-        // `PageSize::Fixed` pager report the wrong page and a fraction scaled by page/viewport).
+    fn sync_from_list(&self, page_size: f32, spacing: f32, _pad_before: f32) {
+        // Pages are placed after the list's leading padding, but the scroll positions themselves are
+        // 0, step, 2*step... The page position therefore comes directly from the list offset - no
+        // viewport division and no padding term.
         let step = page_size + spacing;
         if step <= 0.0 {
             return;
         }
-        // The first snap position is at `pad_before`, so a scroll of 0 is BEFORE it - clamp instead of
-        // reporting a negative fraction on the first frame (`-pad/step`), which is what a padded pager
-        // used to show.
-        let position = ((self.list.offset() - pad_before) / step).max(0.0);
+        let position = (self.list.offset() / step).max(0.0);
         let last = self.page_count.saturating_sub(1) as f32;
         let rounded = position.round().clamp(0.0, last);
         let current = rounded as usize;
         // `round()` puts the rest position at an integer, so the fraction is in [-0.5, 0.5): half a
         // page into a swipe the counter flips, which is Compose's definition.
-        let fraction = (position - rounded).clamp(-0.5, 0.5);
+        let fraction = (position - rounded).clamp(-0.5, 0.5 - f32::EPSILON);
         // One batch: a synchronous observer (another derive, a `State::changes` collector) woken by the
         // first write would otherwise read the new page with the previous frame's fraction. Compose
         // publishes both in one measure result.
@@ -307,9 +311,8 @@ impl<A: LazyAxis> Pager<A> {
         // The page count reaches the list as its item count, which the lazy list declares; declaring it
         // here would land on this scope while the parameters are compared on the list's own group.
         let count = state.page_count;
-        // A fixed page sits at snap positions offset from the leading edge; the viewport comes from
-        // the previous measure, which is stable for anything a caller would notice (a fling settles
-        // long after the first frame). A page that fills the viewport always offsets by 0.
+        // The list reports the full viewport; Pager pages use the usable space between the two
+        // main-axis content paddings, just like Compose's `mainAxisAvailableSize`.
         let viewport = state.list.viewport_main_size();
         let page_size_spec = match self.page_size {
             PageSize::Fill => None,
@@ -336,15 +339,13 @@ impl<A: LazyAxis> Pager<A> {
         if state.pad_before.peek() != self.content_padding {
             state.pad_before.set(self.content_padding);
         }
-        // A padded pager starts at its first snap position, not at 0 (which is `pad_before` before it):
-        // Compose places the first page at the content padding and calls that the start.
-        if self.content_padding > 0.0 && state.list.offset.peek() < self.content_padding {
-            state.list.offset.set(self.content_padding);
-        }
+        // SnapPosition is measured inside the usable layout space, not the outer padding. The list
+        // places the first page after `pad_before` while the scroll position for page 0 remains 0.
+        let available = (viewport - self.content_padding - self.content_padding).max(0.0);
         let snap_offset = match self.snap_position {
             SnapPosition::Start => 0.0,
-            SnapPosition::Center => ((viewport - page_size) / 2.0).max(0.0),
-            SnapPosition::End => (viewport - page_size).max(0.0),
+            SnapPosition::Center => ((available - page_size) / 2.0).max(0.0),
+            SnapPosition::End => (available - page_size).max(0.0),
         };
         let mut list = LazyList::<A>::new_list()
             .state(state.list.clone())
@@ -377,12 +378,15 @@ impl<A: LazyAxis> Pager<A> {
             // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
             // value would freeze the first frame's answer - and the first frame's viewport is 0, which
             // is exactly why the counter never moved (step 0 -> early return, forever).
+            let pad_before = mirror.pad_before.get();
             let page_size = match mirror.page_size_spec.get() {
                 Some(size) => size,
-                None => list.viewport_main_size(),
+                // A Fill page is `viewport - before - after` - the size `build` measures and snaps by.
+                // Dividing by the raw viewport here reported the page one late and scaled the fraction
+                // by page/viewport on any padded pager (the padded test only ever sat on page 0).
+                None => (list.viewport_main_size() - 2.0 * pad_before).max(0.0),
             };
             let spacing = mirror.spacing.get();
-            let pad_before = mirror.pad_before.get();
             mirror.sync_from_list(page_size, spacing, pad_before);
             (
                 mirror.current_page.peek(),
@@ -563,6 +567,52 @@ mod tests {
     }
 
     #[test]
+    fn beyond_zero_keeps_paging_snap_configured() {
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                HorizontalPager::new(state.clone())
+                    .beyond_viewport_page_count(0)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .build(ctx, |ctx, _page| {
+                        crate::components::text::Text::new("page").build(ctx);
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        assert!(state.list_state().snap.peek().is_some(), "a two-page pager must snap even with beyond=0");
+    }
+
+    #[test]
+    fn a_centered_fixed_pager_can_reach_its_last_page() {
+        let state = PagerState::new(4);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state.clone())
+                        .page_size(PageSize::Fixed(120.0))
+                        .snap_position(SnapPosition::Center)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
+        };
+        build(&mut composer);
+        state.scroll_to_page(3, 0.0);
+        build(&mut composer);
+        build(&mut composer);
+        assert_eq!(state.current_page(), 3, "the last page remains reachable with Center snap");
+        assert!(state.current_page_offset_fraction().abs() < 1e-3);
+    }
+
+    #[test]
     fn user_scroll_disabled_drops_the_scroll_channel() {
         let state = PagerState::new(5);
         let mut composer = Composer::new();
@@ -714,6 +764,28 @@ mod tests {
             "a Fill page is viewport - before - after (300 - 16 - 16), got {}",
             info.page_size
         );
+        let root = composer.layout_root_idx().unwrap();
+        let nodes = composer.arena_nodes();
+        let first_page = nodes[root].children.iter().copied().find(|&child| {
+            (nodes[child].measured_size.width - info.page_size).abs() < 0.5
+        }).expect("the first page uses the resolved Fill size");
+        assert!(
+            (nodes[first_page].measured_size.width - 268.0).abs() < 0.5,
+            "the measured page must honor content padding, got {}",
+            nodes[first_page].measured_size.width
+        );
+
+        // Page 1 at rest: the counter divides by the PADDED page size (268), not by the viewport (300).
+        // The derive used to fall back to the raw viewport, which only ever showed past page 0.
+        state.scroll_to_page(1, 0.0);
+        build(&mut composer, state.clone());
+        build(&mut composer, state.clone());
+        assert_eq!(state.current_page(), 1, "page 1 is the current page");
+        assert!(
+            state.current_page_offset_fraction().abs() < 1e-3,
+            "and it rests on fraction 0, got {}",
+            state.current_page_offset_fraction()
+        );
     }
 
     /// A different `PagerState` at the same call site must be followed: the derive is keyed by the
@@ -748,6 +820,110 @@ mod tests {
             second.current_page(),
             2,
             "the derive moved to the new state"
+        );
+    }
+
+    /// The `ScrollState` the last frame assembled for the pager's list - the handle a wheel notch
+    /// steps (it is what carries the `snap` spec and the page goal).
+    fn pager_scroll_state(composer: &Composer) -> crate::modifier::ScrollState {
+        composer
+            .arena_nodes()
+            .iter()
+            .find_map(|node| {
+                node.modifier.elements().iter().find_map(|el| match el {
+                    crate::modifier::ModifierElement::HorizontalScroll { state, .. } => {
+                        Some(state.clone())
+                    }
+                    _ => None,
+                })
+            })
+            .expect("the pager attaches a horizontal scroll channel")
+    }
+
+    /// The wheel's page goal lives on the LIST, not on the handle a frame assembles.
+    ///
+    /// A scroll tick rebuilds the lazy list, and `build` assembles a new `ScrollState` each time. With
+    /// the goal owned by that handle, the fresh one saw an empty goal and computed the next page from
+    /// the LIVE offset - which, mid-spring, is inside the page the first notch is already heading to,
+    /// so the second notch re-targeted the same page and the pager stopped responding. The goal is a
+    /// field of `LazyListState` now and every assembled handle clones it.
+    #[test]
+    fn a_page_step_survives_the_lists_rebuild() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state.clone())
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        // The page size resolves from the viewport the PREVIOUS measure wrote, so the first frame
+        // only records the viewport and the second resolves the Fill page.
+        build(&mut composer);
+        build(&mut composer);
+        let page = state.layout_info().page_size;
+        assert!(page > 0.0, "the first measure resolved the page size");
+
+        let first = pager_scroll_state(&composer);
+        assert!(
+            std::sync::Arc::ptr_eq(&first.step_goal, &state.list_state().step_goal),
+            "the frame's handle shares the list's page goal - that sharing is what outlives the frame"
+        );
+        assert!(first.snap_page(true, false), "page 0 -> 1 starts a step");
+        assert_eq!(
+            *state.list_state().step_goal.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(page),
+            "the step's goal is recorded on the list, not on the frame's handle"
+        );
+
+        // A scroll tick moves the offset, and the next frame rebuilds the list - the real path a
+        // second wheel notch takes while the first spring is still moving.
+        for _ in 0..4 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        build(&mut composer);
+        let second = pager_scroll_state(&composer);
+        assert!(second.snap_page(true, false), "page 1 -> 2 starts the next step");
+        assert_eq!(
+            *state.list_state().step_goal.lock().unwrap_or_else(|e| e.into_inner()),
+            Some(page * 2.0),
+            "the notch after the rebuild steps from the goal the first one left, not from the live offset"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// `current_page_offset_fraction` is documented as `[-0.5, 0.5)`, a HALF-OPEN interval. Past the
+    /// last reachable page the counter clamps to the last page, so an unclamped fraction would report
+    /// exactly `0.5` - and `current_page_position()` half a page further than the pager can be.
+    #[test]
+    fn the_fraction_stays_below_half_a_page_past_the_end() {
+        let state = PagerState::new(3);
+        let mut composer = Composer::new();
+        let composed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        compose_pager(&mut composer, state.clone(), composed.clone());
+        // A second frame: the page size is resolved from the viewport the first measure wrote.
+        compose_pager(&mut composer, state.clone(), composed.clone());
+        let step = state.layout_info().page_size;
+        assert!(step > 0.0, "the first measure resolved the page size");
+
+        // Written like a wheel or an overshooting fling leaves it, with no measure to clamp it back.
+        state.list_state().offset.set(step * 5.0);
+        assert_eq!(state.current_page(), 2, "the counter clamps to the last page");
+        assert!(
+            state.current_page_offset_fraction() < 0.5,
+            "the fraction must stay inside [-0.5, 0.5), got {}",
+            state.current_page_offset_fraction()
         );
     }
 }

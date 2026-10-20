@@ -55,8 +55,9 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 ## Layout
 
 - **A page fills the main axis by default** (`PageSize::Fill`): the item's main constraint is pinned to
-  the viewport, so one page is one snap position. `PageSize::Fixed(px)` pins the item instead and the
-  step becomes page + spacing, which lets the next page peek in.
+  the viewport LESS the main-axis `content_padding` (Compose's `mainAxisAvailableSize`), so a padded
+  pager's page is `viewport - before - after` and one page is one snap position. `PageSize::Fixed(px)`
+  pins the item instead and the step becomes page + spacing, which lets the next page peek in.
 - **`page_spacing` is part of the step.** It is added between items, so the snap distance is
   `page + spacing` (it used to be the page alone, which was only right for `spacing = 0`).
 - **`snap_position` shifts the PAGE, not the scroll target** (which is what Compose's
@@ -102,13 +103,20 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
 - **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
   `scroll_to_page` and an external animation still move the pager.
-- **One wheel notch moves one page** (`ScrollState::snap_page`), which also gives the date picker's
-  months the same feel; a non-paged list keeps scrolling smoothly. Compose reaches a similar result by
-  a different route: its mouse-wheel logic synthesizes a velocity (up to 1 dp/ms,
-  `MouseWheelScrollingLogic.kt:250-256,308-310`), and the snap fling behavior runs on wheel
-  (`shouldBeTriggeredByMouseWheel`, default true) so a notch at or above `MinFlingVelocityDp` (400
-  dp/s) advances a page. winia's step is exact - one page per notch whatever the delta - and it
-  applies to any paged container rather than only to a pager.
+- **One wheel NOTCH moves one page** (`ScrollState::snap_page`), which also gives the date picker's
+  months the same feel; a non-paged list keeps scrolling smoothly. A notch is a discrete
+  `LineDelta`; a continuous `PixelDelta` stream (a precision touchpad, a high-resolution wheel) is a
+  different thing and must not page per EVENT - a flick at 120 Hz ran a pager a dozen pages that way.
+  So the events of one gesture bank travel in `WheelPager` (`app.rs`) and a page is armed only once a
+  real notch's worth has accumulated (`PIXEL_PAGE_TRAVEL` = 60 logical px = three 20 px lines); a gap
+  of `SESSION_GAP` (400 ms), a reversal, or a different container starts the bank over, and at most one
+  page turns per event. Compose reaches a similar result by a different route: its mouse-wheel logic
+  synthesizes a velocity (up to 1 dp/ms, `MouseWheelScrollingLogic.kt:250-256,308-310`), and the snap
+  fling behavior runs on wheel (`shouldBeTriggeredByMouseWheel`, default true) so a notch at or above
+  `MinFlingVelocityDp` (400 dp/s) advances a page. winia's step is exact - one page per notch whatever
+  its magnitude - and it applies to any paged container rather than only to a pager. The same routing
+  serves the overlay layers, each banking its own travel: a pager inside a menu pages like one in the
+  main tree.
 
 ## Differences from Compose
 
@@ -127,7 +135,16 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 
 `cargo test -p winia --lib components::pager` - starts on page 0; `scroll_to_page(3)` lands on page 3
 (checked through both the list anchor and the page counter, across the layout-then-derive order); a
-200-page pager composes only a window; `beyond_viewport_page_count(0)` composes fewer still; a fixed
-page keeps its size and the viewport is reported; `user_scroll_enabled(false)` removes the scroll
-channel; the fraction stays under half a page.
+200-page pager composes only a window; `beyond_viewport_page_count(0)` composes fewer still AND still
+pages (the snap spec does not depend on a second composed page); a fixed page keeps its size and the
+viewport is reported; a padded `Fill` page MEASURES `viewport - before - after` (asserted on the page
+node, not only on the reported size); a centred fixed pager reaches its last page; a page step
+survives the list rebuilding itself mid-spring; `user_scroll_enabled(false)` removes the scroll
+channel; the fraction stays inside `[-0.5, 0.5)`, including past the last page.
+
+`cargo test -p winia --lib wheel` - one notch pages on its own delta; tiny `PixelDelta` events bank a
+notch before any of them pages; a notch drops travel a touchpad banked; a reversal and a pause each
+start the bank over; one oversized event turns one page and carries nothing; two containers never
+share one gesture's travel; a vertical wheel reaches a horizontal PAGER but not a plain row; a
+banking event is held rather than pixel-scrolled.
 `cargo test -p winia --lib layout::lazy_column` - the list underneath (window, snapping, anchors).

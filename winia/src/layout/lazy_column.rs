@@ -133,6 +133,9 @@ pub struct LazyListState {
     /// the same reason — the ScrollState `build` assembles is shared with the measure policy, and this
     /// is the one that tells a finished fling where to land.
     pub(crate) snap: crate::runtime::state::Backchannel<Option<crate::modifier::SnapSpec>>,
+    /// The in-flight wheel page target, shared by every ScrollState assembled for this list.
+    /// Recomposition must not erase it while the spring is still moving.
+    pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::runtime::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -150,6 +153,7 @@ impl LazyListState {
             viewport_main: crate::runtime::state::State::new(0.0),
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
+            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),
@@ -912,6 +916,7 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&self.content_padding);
         ctx.changed(&self.cross_padding);
         ctx.changed(&total);
+        ctx.changed(&self.reverse);
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）
@@ -932,6 +937,14 @@ impl<A: LazyAxis> LazyList<A> {
             c.rebase(&keys);
             cache.set(c);
         }
+        // The key sequence is a PARAMETER of this container, and it has to be declared: a same-count
+        // replacement or reorder changes it, and the group must re-enter - `intervals.rebuild()` and the
+        // height-cache rebase above live in the body, so a Skip would leave the rows and the cache on
+        // the previous data. (The item closures themselves are registered inside the body and cannot be
+        // compared, which is why it is the keys that are declared.) This became load-bearing only once
+        // the `LazyScroll` element could compare equal: before that every lazy list re-entered each
+        // frame by accident, and an undeclared data change was simply invisible.
+        ctx.changed(&sig);
 
         // key 校正：数据前部增删后，用 last_known_first_key 找回原 first visible 项。
         // ⚠ 仅当 total 变化（数据增删）时校正——正常滚动时锚点项变化是用户滚动
@@ -1068,8 +1081,8 @@ impl<A: LazyAxis> LazyList<A> {
             // scrollbar 侧 pulse 点亮对 lazy 同样生效。
             scroll_pulse: state.scroll_pulse.clone(),
             snap: state.snap.clone(),
-            // The goal belongs to this assembled handle: a page step is a gesture on THIS list.
-            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            // Keep the in-flight page target with the list, not with this per-build adapter.
+            step_goal: state.step_goal.clone(),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。
@@ -1236,14 +1249,21 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // exactly that inflation, which is what `fillParentMaxWidth` asks for and what makes a snap
         // position an item boundary.
         let (cb, ca) = self.cross_padding;
+        let (pad_before, pad_after) = self.content_padding;
         let mut child_constraints = A::child_constraints(constraints);
         let cross_max = A::cross_max(&child_constraints);
         child_constraints = A::with_cross_max(child_constraints, (cross_max - cb - ca).max(0.0));
-        if let Some(size) = self.item_main_size {
-            // A fixed page: the item does not fill the viewport, it is a set size.
-            child_constraints = A::with_main_exact(child_constraints, size);
+        // A pager's Fill pages occupy the usable viewport between the main-axis content padding,
+        // matching Compose's `mainAxisAvailableSize`. Ordinary lazy items remain wrap-content.
+        let uniform_page_size = if let Some(size) = self.item_main_size {
+            Some(size)
         } else if self.fill_items && vh > 0.0 {
-            child_constraints = A::with_main_exact(child_constraints, vh);
+            Some((vh - pad_before - pad_after).max(0.0))
+        } else {
+            None
+        };
+        if let Some(size) = uniform_page_size {
+            child_constraints = A::with_main_exact(child_constraints, size);
         }
         let mut placements = Vec::with_capacity(children.len());
         let mut measured: Vec<(f32, f32)> = Vec::with_capacity(children.len());
@@ -1259,13 +1279,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // `fill_items` pins every item to the viewport, so unmeasured items can be priced exactly. It
         // has to be declared, or the flat estimate is used and every position outside the measured
         // window — and so every fling that leaves it — is computed from the wrong size.
-        let uniform = if let Some(size) = self.item_main_size {
-            Some(size)
-        } else if self.fill_items && vh > 0.0 {
-            Some(vh)
-        } else {
-            None
-        };
+        let uniform = uniform_page_size;
         if cache.uniform != uniform {
             cache.set_uniform(uniform);
         }
@@ -1280,16 +1294,26 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         }
         // 内容总高：注册项实测 + 未注册项预估（供 apply_scroll_delta 算 max_offset）；
         // 含 主轴 contentPadding（对齐 Compose：max_offset = before + 内容 + after - 视口）
-        let (pad_before, pad_after) = self.content_padding;
-        // The snap offset is a PLACEMENT shift (Compose shifts the page, not the scroll target), so the
-        // content is that much longer: without it the last page could never reach its rest position.
+        // The snap offset is a PLACEMENT shift (Compose shifts the page, not the scroll target).
+        // Price spacing only BETWEEN items, then add enough trailing room for the final snap position
+        // to reach the same visual alignment as every earlier page.
         let snap_shift = self.snap_offset.max(0.0);
         let mut content_h = pad_before + pad_after + snap_shift;
         for g in 0..self.total {
             // `coverage_height`, like `prefix_height` and the window walk: `max_off` clamps an offset that
             // `prefix_height` produced, so the two have to price unmeasured items the same way or the end
             // of the list disagrees with itself by a little on every frame.
-            content_h += cache.coverage_height(g) + self.spacing;
+            content_h += cache.coverage_height(g);
+            if g + 1 < self.total {
+                content_h += self.spacing;
+            }
+        }
+        if self.snap_paging {
+            if let Some(page_size) = uniform_page_size.filter(|size| *size > 0.0) {
+                let trailing_snap_room =
+                    (vh - (pad_before + pad_after + snap_shift + page_size)).max(0.0);
+                content_h += trailing_snap_room;
+            }
         }
         self.content_height.set(content_h);
 
@@ -1358,18 +1382,18 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // either — there is nothing to page to, and nothing should move.
         // A paged list rests on an item boundary; a FIXED-size page rests wherever its size says, and
         // the spacing between items is part of the distance to the next one.
-        let page_size = self.item_main_size.unwrap_or(vh);
+        let page_size = uniform_page_size.unwrap_or(vh);
         let snap = if self.snap_paging
-            && measured.len() >= 2
+            && self.total >= 2
+            && uniform_page_size.is_some()
             && page_size > 0.0
             && measured.iter().all(|(size, _)| (size - page_size).abs() < 0.5)
         {
             Some(crate::modifier::SnapSpec {
                 step: page_size + self.spacing,
-                // Page k rests at `pad_before + k * step`: the pages are shifted by the snap offset in
-                // PLACEMENT, so the scroll positions stay on clean boundaries and the padding is part
-                // of the anchor rather than an error term.
-                anchor: pad_before,
+                // Page k is placed after `pad_before`, but its scroll snap position is `k * step`;
+                // the leading padding belongs to layout, not to the scroll state's snap anchor.
+                anchor: 0.0,
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
                 min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,
@@ -3355,5 +3379,113 @@ mod tests {
 
         list.offset.set(10.0);
         assert!(back.peek(), "a write past the boundary flips it with no executor involved");
+    }
+
+    /// A same-count data REPLACEMENT reaches the rows: the key sequence decides which item groups
+    /// exist, so keys 1..3 -> 7..9 composes fresh rows while an unchanged frame composes none.
+    ///
+    /// The key sequence is also declared as a parameter of the container (`ctx.changed(&sig)`), which
+    /// is what keeps `intervals.rebuild()` and the height-cache rebase - both inside the body -
+    /// running for a reorder that keeps the count. This test cannot see that half on its own: a list
+    /// body that re-enters still skips the unchanged item groups, so the row counter looks the same
+    /// either way. It pins the user-visible half (rows follow the data), not the declaration.
+    #[test]
+    fn a_same_count_data_swap_rebuilds_the_rows() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let state = LazyListState::new();
+        let runs = std::sync::Arc::new(AtomicUsize::new(0));
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer, items: std::sync::Arc<Vec<u64>>| {
+            let s = state.clone();
+            let r = runs.clone();
+            composer.compose(move |ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_from(items, |v| *v, move |ctx, _i, v| {
+                        r.fetch_add(1, Ordering::Relaxed);
+                        crate::components::text::Text::new(format!("Item {v}")).build(ctx);
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+
+        build(&mut composer, std::sync::Arc::new(vec![1, 2, 3]));
+        let first = runs.load(Ordering::Relaxed);
+        assert!(first > 0, "the first frame composed rows");
+        // A second frame on the SAME data settles the group: the first frame wrote the data signature
+        // and the anchor back, which dirties it exactly once.
+        build(&mut composer, std::sync::Arc::new(vec![1, 2, 3]));
+        let settled = runs.load(Ordering::Relaxed);
+        assert_eq!(
+            settled, first,
+            "an unchanged frame must SKIP the rows, not recompose them"
+        );
+        // Same count, different keys: the key sequence is a declared parameter, so this re-enters.
+        build(&mut composer, std::sync::Arc::new(vec![7, 8, 9]));
+        assert!(
+            runs.load(Ordering::Relaxed) > settled,
+            "a same-count swap (keys 1..3 -> 7..9) must re-run the rows, not skip the list"
+        );
+    }
+
+    /// `reverseLayout` flipped at ONE call site reaches the list: the direction is carried both by
+    /// the `LazyScroll` element (so the container's modifier comparison sees a change) and by the
+    /// parameter `build` declares, and the measure mirrors every placement because of it.
+    ///
+    /// The assertion is on the LAYOUT, not on the skip decision: an undeclared parameter is only
+    /// caught by the modifier comparison here, and the mirror itself is what a caller sees.
+    #[test]
+    fn flipping_reverse_at_one_call_site_mirrors_the_layout() {
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let build = |composer: &mut Composer, reverse: bool| {
+            let s = state.clone();
+            composer.compose(move |ctx| {
+                LazyColumn::new()
+                    .state(s)
+                    .reverse_layout(reverse)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .items_plain(40, |ctx, i| {
+                        crate::components::text::Text::new(format!("Item {i}"))
+                            .font_size(14.0)
+                            .modifier(Modifier::new().padding(12.0))
+                            .build(ctx);
+                    })
+                    .build(ctx);
+            });
+            composer.layout(Constraints::new(0.0, 400.0, 0.0, 600.0));
+        };
+        // The list node is the one carrying the LazyScroll element; its first child is item 0, whose
+        // content-coordinate y is what the mirrored placement moves.
+        let first_item_y = |composer: &Composer| {
+            let nodes = composer.arena_nodes();
+            let list = nodes
+                .iter()
+                .position(|node| {
+                    node.modifier.elements().iter().any(|el| {
+                        matches!(el, crate::modifier::ModifierElement::LazyScroll { .. })
+                    })
+                })
+                .expect("the list attaches a LazyScroll element");
+            let child = *nodes[list].children.first().expect("the list composed items");
+            nodes[child].position.y
+        };
+
+        build(&mut composer, false);
+        let forward = first_item_y(&composer);
+        assert!(
+            forward.abs() < 1.0,
+            "a forward list starts its first item at the top, got {forward}"
+        );
+
+        build(&mut composer, true);
+        let reversed = first_item_y(&composer);
+        assert!(
+            reversed > forward + 100.0,
+            "flipping reverseLayout must mirror the placement - the first item belongs at the bottom \
+             (forward {forward}, reversed {reversed})"
+        );
     }
 }

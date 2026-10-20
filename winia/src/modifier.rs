@@ -2700,9 +2700,10 @@ pub(crate) struct SnapSpec {
     /// in the direction of travel (Compose `calculateFinalSnappingItem`,
     /// `LazyListSnapLayoutInfoProvider.kt:139-145`).
     pub min_fling_velocity: f32,
-    /// The scroll position of snap position 0: the main-axis content padding, so the positions are
-    /// `anchor + k * step`. (The `SnapPosition` shift is a PLACEMENT offset in the list, not part of
-    /// this: Compose moves the page, not the scroll target.)
+    /// The scroll position of snap position 0: the positions are `anchor + k * step`. A pager keeps it
+    /// at 0 - its pages are placed after the content padding, which is a PLACEMENT shift, not part of
+    /// the scroll target. (The `SnapPosition` shift is the same rule: Compose moves the page, not the
+    /// scroll target.)
     pub anchor: f32,
 }
 
@@ -2843,6 +2844,13 @@ impl ScrollState {
         // Step from where a step in flight is heading, not from the live offset: a second notch
         // arriving mid-spring otherwise reads a position inside the SAME page and re-targets it.
         let mut goal = self.step_goal.lock().unwrap_or_else(|e| e.into_inner());
+        // A goal means something only while the spring that set it is still running. A drag, a fling or
+        // a programmatic jump CANCELS that animation without firing its completion callback, and an
+        // abandoned target would otherwise survive: the next notch would step from a position the list
+        // never reached, skipping a page or refusing one at the end.
+        if goal.is_some() && !crate::animation::has_animation_for_state(self.offset.state_id()) {
+            *goal = None;
+        }
         let base = goal.unwrap_or_else(|| self.offset.peek());
         let position = (base - spec.anchor) / spec.step;
         let index = if forward {
@@ -2904,6 +2912,9 @@ impl ScrollState {
         if snapping.is_none() && velocity.abs() < 1.0 {
             return;
         }
+        // A gesture-driven fling supersedes any page step in flight: whatever that step was heading for
+        // is abandoned, and the next notch has to step from wherever the fling leaves the list.
+        *self.step_goal.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.is_scroll_in_progress.set(true);
         let off = self.offset.clone();
         let limit = self.fling_limit.clone();
@@ -2950,9 +2961,11 @@ impl ScrollState {
         );
     }
 
-    /// 取消进行中的惯性滚动（手动输入/程序化跳转前调用）
+    /// Cancel an in-flight fling - called before manual input or a programmatic jump. A page step in
+    /// flight is abandoned with it, so its goal does not leak into the next notch.
     pub fn cancel_fling(&self) {
         crate::animation::cancel_animation(&self.offset);
+        *self.step_goal.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -3182,6 +3195,36 @@ mod tests {
         // A container without a snap spec never pages.
         let plain = ScrollState::new();
         assert!(!plain.snap_page(true, false));
+        crate::animation::clear_all_animations();
+    }
+
+    /// A step that is CANCELLED leaves no goal behind: the next notch steps from where the list
+    /// actually is. A drag, a fling or a programmatic jump cancels the spring without firing its
+    /// completion callback (which is the only other thing that clears the goal), so the goal is
+    /// invalidated by the absence of the animation too.
+    #[test]
+    fn a_cancelled_page_step_leaves_no_goal_behind() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        const STEP: f32 = 200.0;
+        let scroll = ScrollState::new();
+        scroll.fling_limit.set(1000.0);
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+
+        assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
+        assert_eq!(*scroll.step_goal.lock().unwrap(), Some(STEP));
+
+        // The jump/drag path: cancel the spring directly, which never runs the step's `done`.
+        crate::animation::cancel_animation(&scroll.offset);
+        assert!(!crate::animation::has_animation_for_state(scroll.offset.state_id()));
+
+        assert!(scroll.snap_page(true, false), "the next notch still steps");
+        assert_eq!(
+            *scroll.step_goal.lock().unwrap(),
+            Some(STEP),
+            "one page from the live offset, not the abandoned target (which would be 2 * STEP)"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -3640,6 +3683,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (KbEvent { .. }, KbEvent { .. }) => true,
         (PointerEvent { .. }, PointerEvent { .. }) => true,
         (VerticalScroll { state: as_ }, VerticalScroll { state: bs }) => as_.offset.state_id() == bs.offset.state_id(),
+        (LazyScroll { content_height: ac, reverse: ar }, LazyScroll { content_height: bc, reverse: br }) => {
+            ac.state_id() == bc.state_id() && ar == br
+        }
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
         // Scene tag: an equal id means the tag did not change. Without this arm the match falls through
@@ -3748,6 +3794,34 @@ mod param_eq_tests {
         let a = Modifier::new().width(200.0);
         let b = Modifier::new().width(200.0).padding(4.0);
         assert!(!a.param_eq(&b), "元素数不同必须不等");
+    }
+
+    /// Every lazy container attaches a `LazyScroll` element, so without an arm here the element fell
+    /// through to the catch-all `false` and no lazy list could ever Skip - the parameter declarations
+    /// in `LazyList::build` were inert. The element compares by the content-height channel it carries
+    /// (same list, same channel) plus the direction flag.
+    #[test]
+    fn param_eq_pairs_lazy_scroll_elements() {
+        let height = crate::runtime::state::Backchannel::new(0.0);
+        let same_channel = height.clone();
+        let another_list = crate::runtime::state::Backchannel::new(0.0);
+
+        let forward = Modifier::new().lazy_scroll(height.clone());
+        assert!(
+            forward.param_eq(&Modifier::new().lazy_scroll(same_channel)),
+            "the same content-height channel is the same element"
+        );
+        assert!(
+            !forward.param_eq(&Modifier::new().lazy_scroll(another_list)),
+            "another list's channel is another element"
+        );
+
+        // The same list, mirrored: only the flag differs, and the flag decides the render mirror.
+        let reversed = Modifier::new().lazy_scroll(height).lazy_scroll_reverse(true);
+        assert!(
+            !forward.param_eq(&reversed),
+            "the direction flag is part of the element"
+        );
     }
 
     // ── GraphicsLayer 便捷包装（alpha/rotate/scale + transformOrigin）──
