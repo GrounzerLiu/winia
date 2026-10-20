@@ -147,6 +147,70 @@ pub enum StartOffsetType {
     FastForward,
 }
 
+/// A spec with a DURATION — what a repeat loop can cycle over: `tween`, `keyframes`, `snap`.
+///
+/// Compose puts this in the type system (`DurationBasedAnimationSpec<T>`, the parameter of
+/// `repeatable` / `infiniteRepeatable`). winia accepted any `AnimationSpec` and sorted the impossible
+/// ones out at run time with a `debug_assert` plus a silent 300 ms linear fallback — a release-build
+/// surprise instead of a compile error. A spring has no cycle length and a decay has no cycle at all,
+/// so neither can be built here.
+#[derive(Clone, Debug)]
+pub enum DurationSpec {
+    Tween(TweenSpec),
+    Keyframes(KeyframesSpec),
+    Snap(SnapSpec),
+}
+
+impl From<TweenSpec> for DurationSpec {
+    fn from(spec: TweenSpec) -> Self { Self::Tween(spec) }
+}
+
+impl From<KeyframesSpec> for DurationSpec {
+    fn from(spec: KeyframesSpec) -> Self { Self::Keyframes(spec) }
+}
+
+impl From<SnapSpec> for DurationSpec {
+    fn from(spec: SnapSpec) -> Self { Self::Snap(spec) }
+}
+
+impl DurationSpec {
+    /// One cycle's length.
+    pub fn duration(&self) -> Duration {
+        match self {
+            DurationSpec::Tween(t) => t.duration,
+            DurationSpec::Keyframes(k) => k.duration,
+            DurationSpec::Snap(s) => s.delay,
+        }
+    }
+
+    /// The value at `t` in `0.0..=1.0` of a cycle. A `Snap` is already at its end value.
+    fn value_at<T: AnimatableValue>(&self, from: &T, to: &T, t: f32) -> T {
+        match self {
+            DurationSpec::Tween(tween) => from.lerp(to, tween.interpolator.interpolate(t)),
+            DurationSpec::Keyframes(keyframes) => from.lerp(to, interpolate_keyframes(&keyframes.frames, t)),
+            DurationSpec::Snap(_) => to.clone(),
+        }
+    }
+
+    /// The base curve's factor at `t`, for a loop that interpolates from/to itself.
+    fn factor(&self, t: f32) -> f32 {
+        match self {
+            DurationSpec::Tween(tween) => tween.interpolator.interpolate(t),
+            DurationSpec::Keyframes(keyframes) => interpolate_keyframes(&keyframes.frames, t),
+            DurationSpec::Snap(_) => 1.0,
+        }
+    }
+
+    /// For [`active_animations_report`].
+    fn kind(&self) -> String {
+        match self {
+            DurationSpec::Tween(t) => format!("tween({}ms)", t.duration.as_millis()),
+            DurationSpec::Keyframes(k) => format!("keyframes({}ms, {} frames)", k.duration.as_millis(), k.frames.len()),
+            DurationSpec::Snap(s) => format!("snap(delay={}ms)", s.delay.as_millis()),
+        }
+    }
+}
+
 /// An infinite repeat spec (`InfiniteRepeatableSpec`).
 ///
 /// `RepeatMode` is covered (`restart` and `reverse`), a per-cycle curve is available through
@@ -158,7 +222,7 @@ pub struct InfiniteRepeatableSpec {
     pub(crate) mode: RepeatMode,
     /// 循环周期内的取值曲线（None = 线性 from→to）；
     /// 对标 Compose `infiniteRepeatable(tween{...}/keyframes{...})`
-    pub(crate) base: Option<AnimationSpec>,
+    pub(crate) base: Option<DurationSpec>,
     pub(crate) start_offset: Duration,
     pub(crate) start_offset_type: StartOffsetType,
 }
@@ -175,7 +239,7 @@ impl InfiniteRepeatableSpec {
         Self {
             duration,
             mode: RepeatMode::Restart,
-            base: Some(AnimationSpec::Tween(tween)),
+            base: Some(DurationSpec::Tween(tween)),
             start_offset: Duration::ZERO,
             start_offset_type: StartOffsetType::Delay,
         }
@@ -189,7 +253,7 @@ impl InfiniteRepeatableSpec {
         Self {
             duration,
             mode: RepeatMode::Restart,
-            base: Some(AnimationSpec::Keyframes(KeyframesSpec { duration, frames })),
+            base: Some(DurationSpec::Keyframes(KeyframesSpec { duration, frames })),
             start_offset: Duration::ZERO,
             start_offset_type: StartOffsetType::Delay,
         }
@@ -198,8 +262,8 @@ impl InfiniteRepeatableSpec {
     /// The curve a cycle follows — Compose's `infiniteRepeatable(tween(...)/keyframes(...))`. It works in
     /// BOTH repeat modes: a `Reverse` loop mirrors its iteration time, so the return leg is this curve running
     /// backwards (Compose's `VectorizedInfiniteRepeatableSpec`), where winia used to travel back linearly.
-    pub fn with_base(mut self, base: AnimationSpec) -> Self {
-        self.base = Some(base);
+    pub fn with_base(mut self, base: impl Into<DurationSpec>) -> Self {
+        self.base = Some(base.into());
         self
     }
 
@@ -305,6 +369,20 @@ pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 's
     push_animatable_handle(state.into_animating(), target, spec);
 }
 
+/// The imperative form: a motion already heading for this exact target is REPLACED instead of
+/// deduped, so asking again with a different spec takes effect.
+///
+/// What `Animatable::animate_to` needs. Compose's `animateTo` always runs the animation it is handed
+/// — the dedup in the per-frame `animate*AsState` path exists because THAT caller pushes the same
+/// target every recomposition, and silencing a deliberate re-target is not a job it should be doing.
+pub fn push_animatable_restart<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+) {
+    push_animatable_handle_inner(state.into_animating(), target, spec, true);
+}
+
 /// [`push_animatable`] starting from an explicit velocity rather than inheriting one from a replaced
 /// animation.
 ///
@@ -367,7 +445,7 @@ pub fn push_animatable_with_velocity_and_done<
         cancel_animation_by_id(handle.state_id());
     }
     let sid = handle.state_id();
-    let spec = normalise_multi_component_decay(spec, &handle.peek());
+    let spec = normalise_target_spec(spec);
     // A type declaring `supports_spring() == false` (`SharedBounds`, say) has no per-component
     // springs to run, so a Spring is downgraded to the default Tween rather than falling into the
     // single scalar displacement that travels along the value's norm.
@@ -399,6 +477,15 @@ pub fn push_animatable_with_velocity_and_done<
 /// `push_animatable` 的 Animating-handle 入口（调用方已持有 Animating
 /// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
 pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::runtime::state::Animating<T>, target: T, spec: AnimationSpec) {
+    push_animatable_handle_inner(state, target, spec, false);
+}
+
+fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: crate::runtime::state::Animating<T>,
+    target: T,
+    spec: AnimationSpec,
+    restart: bool,
+) {
     let sid = state.state_id();
     if state.peek() == target {
         // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
@@ -409,7 +496,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
             list.iter().any(|a| a.state_id() == sid && !a.same_target(&target))
         };
-        if !conflicting {
+        if !conflicting && !restart {
             return;
         }
         // 取消旧动画后继续走注册路径：零位移动画会立即完成并精确写回 target，
@@ -417,7 +504,7 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
         cancel_animation_by_id(sid);
     }
     let inherited_velocity: RetargetVelocity;
-    let spec = normalise_multi_component_decay(spec, &state.peek());
+    let spec = normalise_target_spec(spec);
     // 同 `push_animatable_with_velocity_and_done`：只有声明不支持 Spring 的类型才降级
     let spec = if T::supports_spring() {
         spec
@@ -429,8 +516,10 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）
-        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）。
+        // The imperative path (`restart`) replaces it instead: re-targeting with a new spec is a
+        // deliberate request, and silence there is a bug, not a guard.
+        if !restart && list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
         // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
         // 新目标竞争，导致值卡在旧目标路径上）；P2-9：移除前继承旧速度
         // （Spring/Decay 被打断时新动画从当前速度继续，物理连续）
@@ -448,26 +537,26 @@ pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sy
     crate::runtime::state::wake_loop();
 }
 
-/// A `Decay` reaching the TARGET-based entry points (`push_animatable*`, which carry a target and no
-/// velocity) on a value with several components becomes `Snap`: this engine's target-based decay branch
-/// works on one scalar (`state.from.to_f32() + v0/friction*(…)`) and rebuilds the value through
-/// `AnimatableValue::from_f32`, which for `Size`, `Offset` and `Color` is a placeholder — a square, or
-/// (measured, before this guard) an opaque GREY at the old Oklab lightness, written on the first frame
-/// because the push paths supply a zero initial velocity so the decay reports itself finished at once.
+/// A `Decay` reaching a TARGET-based entry point is replaced by a 300 ms tween.
 ///
-/// A real vector fling takes a velocity OF THE VALUE'S OWN TYPE, and that path exists:
-/// `push_decay_vector(state, Offset::new(100.0, -60.0), spec)` (or
-/// `Motion::animate_decay_with_velocity`) gives every component its own decay, the way Compose's
-/// `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec: DecayAnimationSpec<T>)` does.
-/// Scalar decays (the fling/deceleration path) are untouched.
-fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, value: &T) -> AnimationSpec {
-    if matches!(spec, AnimationSpec::Decay(_)) {
-        let mut components = [0.0f32; MAX_ANIMATION_COMPONENTS];
-        if value.write_components(&mut components) > 1 {
-            return AnimationSpec::Snap(SnapSpec::default());
-        }
+/// A decay coasts from a velocity and has no target, so this shape cannot express one. It used to be
+/// run anyway with a zero initial velocity, and a decay at zero velocity reports itself finished on
+/// the first frame: a scalar then never moved at all, and a `Size`/`Offset`/`Color` was rebuilt
+/// through `AnimatableValue::from_f32` — a placeholder, i.e. a square at the origin or an opaque GREY
+/// at the old Oklab lightness. The multi-component case was special-cased to `Snap` to dodge that,
+/// which turned a fade into a jump; a tween is the honest fallback for both, because it interpolates
+/// with `lerp` (component-wise for a vector) and actually reaches the target the caller asked for.
+///
+/// A real fling takes a velocity OF THE VALUE'S OWN TYPE: `push_decay` / `push_decay_vector`
+/// (`Motion::animate_decay_with_velocity`), or the `Animatable::animate_decay` handle.
+fn normalise_target_spec(spec: AnimationSpec) -> AnimationSpec {
+    match spec {
+        AnimationSpec::Decay(_) => AnimationSpec::Tween(TweenSpec::new(
+            Duration::from_millis(300),
+            interpolator::Linear::new(),
+        )),
+        other => other,
     }
-    spec
 }
 
 /// Register a `Motion<Color>` in the global active list (called by `animate_color_as_state`)
@@ -477,7 +566,7 @@ fn normalise_multi_component_decay<T: AnimatableValue>(spec: AnimationSpec, valu
 /// Compose's `Color.VectorConverter` does. Until this, a colour spring was silently replaced by a
 /// 300 ms linear tween — the caller asked for a spring and got a different motion (measured on
 /// `Tab`'s content colour, whose `SpringSpec` never ran). A `Decay` is the one spec that still cannot
-/// run here: see `normalise_multi_component_decay`.
+/// run here: see `normalise_target_spec`.
 pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
     
     if state.peek() == target {
@@ -509,7 +598,7 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
             .unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state.state_id() != sid);
     }
-    let spec = normalise_multi_component_decay(spec, &state.peek());
+    let spec = normalise_target_spec(spec);
     let mut anim = Motion::new(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
     anim.update();
@@ -731,6 +820,29 @@ pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send
     spec: AnimationSpec,
     done: impl FnOnce(MotionEnd) + Send + 'static,
 ) {
+    push_animatable_with_result_inner(state, target, spec, done, false);
+}
+
+/// The imperative form of `push_animatable_with_result`: same-target retargets take effect (see
+/// `push_animatable_restart`).
+pub fn push_animatable_restart_with_result<
+    T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static,
+>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    done: impl FnOnce(MotionEnd) + Send + 'static,
+) {
+    push_animatable_with_result_inner(state, target, spec, done, true);
+}
+
+fn push_animatable_with_result_inner<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(
+    state: State<T>,
+    target: T,
+    spec: AnimationSpec,
+    done: impl FnOnce(MotionEnd) + Send + 'static,
+    restart: bool,
+) {
     let sid = state.state_id();
     if state.peek() == target {
         // Already at the target. Nothing to animate, so no callback fires — this entry point is for a
@@ -743,7 +855,7 @@ pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send
         // mid-flight, and a stale motion left registered keeps pulling it to the OLD target (measured
         // before this: told to stay at 0.557, the value sailed on to 0.969). `push_animatable_handle`
         // has always done this; this entry point was missing it.
-        if !has_conflicting_animation(sid, &target) {
+        if !has_conflicting_animation(sid, &target) && !restart {
             return;
         }
         cancel_animation_by_id(sid);
@@ -751,7 +863,7 @@ pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send
     // Same preparation as `push_animatable_handle`: a multi-component value cannot decay, and a motion
     // replacing a running one inherits its velocity so a retarget stays continuous.
     let inherited_velocity: RetargetVelocity;
-    let spec = normalise_multi_component_decay(spec, &state.peek());
+    let spec = normalise_target_spec(spec);
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -762,7 +874,7 @@ pub fn push_animatable_with_result<T: Clone + PartialEq + AnimatableValue + Send
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        if list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
+        if !restart && list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
         inherited_velocity = list
             .iter()
             .find(|a| a.state_id() == sid)
@@ -847,7 +959,7 @@ fn spec_kind(spec: &AnimationSpec) -> String {
                 RepeatMode::Restart => "restart",
                 RepeatMode::Reverse => "reverse",
             },
-            spec_kind(&r.base)
+            r.base.kind()
         ),
         AnimationSpec::Snap(s) => format!("snap(delay={}ms)", s.delay.as_millis()),
         AnimationSpec::Decay(d) => format!("decay(friction={:.2})", d.friction),
@@ -1564,18 +1676,10 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 }
             }
             AnimationSpec::Repeatable(spec) => {
-                // P2-10：支持任意有明确时长的 base（Tween/Keyframes）；Snap 立即跳；
-                // Spring/Decay/Repeatable 嵌套无循环长度语义 → 断言拒绝
-                let base = spec.base.as_ref();
-                let base_duration = match base {
-                    AnimationSpec::Tween(t) => t.duration,
-                    AnimationSpec::Keyframes(k) => k.duration,
-                    AnimationSpec::Snap(s) => s.delay,
-                    other => {
-                        debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
-                        Duration::from_millis(300)
-                    }
-                };
+                // The base is a `DurationSpec`, so a cycle length always exists: the impossible
+                // bases (spring, decay, a nested repeat) cannot be constructed at all.
+                let base = &spec.base;
+                let base_duration = base.duration();
                 let elapsed = now - state.start;
                 let total = base_duration.saturating_mul(spec.iterations);
                 // Compose's `initialStartOffset` (`repeatable(..., initialStartOffset = …)`): `Delay`
@@ -1607,16 +1711,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                         RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
                     };
                     // base 曲线求值（factor 反转对 Keyframes 即曲线倒放）
-                    let value = match base {
-                        AnimationSpec::Tween(tw) => state.from.lerp(&state.to, tw.interpolator.interpolate(factor)),
-                        AnimationSpec::Keyframes(kf) => state.from.lerp(&state.to, interpolate_keyframes(&kf.frames, factor)),
-                        AnimationSpec::Snap(_) => state.to.clone(),
-                        other => {
-                            debug_assert!(false, "Repeatable 仅支持 Tween/Keyframes/Snap base（收到 {other:?}）");
-                            state.from.lerp(&state.to, factor)
-                        }
-                    };
-                    (value, false)
+                    (base.value_at(&state.from, &state.to, factor), false)
                 }
             }
             AnimationSpec::Snap(spec) => {
@@ -1920,7 +2015,7 @@ fn newton_step(x: f64, f: impl Fn(f64) -> f64, f_prime: impl Fn(f64) -> f64) -> 
 /// odd ones (`if (iteration % 2 != 0) durationNanos - iterationTime`) and evaluates the base there. Mirroring
 /// the time rather than the value is what makes the return leg the same curve running backwards; interpolating
 /// the return leg linearly — what winia did — is a different motion for any eased base.
-fn loop_factor(base: Option<&AnimationSpec>, mode: RepeatMode, cycle: u32, phase: f32) -> f32 {
+fn loop_factor(base: Option<&DurationSpec>, mode: RepeatMode, cycle: u32, phase: f32) -> f32 {
     let forward = match mode {
         RepeatMode::Restart => phase,
         RepeatMode::Reverse => {
@@ -1932,9 +2027,8 @@ fn loop_factor(base: Option<&AnimationSpec>, mode: RepeatMode, cycle: u32, phase
         }
     };
     match base {
-        Some(AnimationSpec::Tween(tween)) => tween.interpolator.interpolate(forward),
-        Some(AnimationSpec::Keyframes(keyframes)) => interpolate_keyframes(&keyframes.frames, forward),
-        _ => forward,
+        Some(base) => base.factor(forward),
+        None => forward,
     }
 }
 
@@ -2188,21 +2282,10 @@ impl<T: AnimatableValue + Clone + 'static> TimedAnimation<T> {
     }
 }
 
-/// A `Repeatable`'s cycle length: a `Tween` or `Keyframes` base has one, a `Snap` jumps after its delay.
-/// A nested Spring/Decay/Repeatable has no cycle length, and the engine rejects those at push time too.
-fn base_duration_of(base: &AnimationSpec) -> Duration {
-    match base {
-        AnimationSpec::Tween(t) => t.duration,
-        AnimationSpec::Keyframes(k) => k.duration,
-        AnimationSpec::Snap(s) => s.delay,
-        other => {
-            debug_assert!(
-                false,
-                "Repeatable only has a cycle length for a Tween/Keyframes/Snap base (got {other:?})"
-            );
-            Duration::from_millis(300)
-        }
-    }
+/// A `Repeatable`'s cycle length. The type system already rules out a base without one
+/// (`DurationSpec`), so there is no fallback arm left to get wrong in release builds.
+fn base_duration_of(base: &DurationSpec) -> Duration {
+    base.duration()
 }
 
 /// The fraction of a duration that `elapsed` represents, clamped: 1.0 for a zero-length spec (a value that
@@ -2374,7 +2457,11 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
     /// Start a motion toward `target` — Compose's `animateTo`. A motion already running is replaced,
     /// inheriting its velocity (see `push_animatable`).
     pub fn animate_to(&self, target: T, spec: impl Into<AnimationSpec>) {
-        push_animatable(self.state.clone(), target, spec.into());
+        // NOT the per-frame entry point: that one dedups a same-target motion because
+        // `animate*AsState` calls it on every recomposition. A caller holding an `Animatable` is
+        // asking deliberately, so a same-target re-target with a new spec has to run (Compose's
+        // `animateTo` always does).
+        push_animatable_restart(self.state.clone(), target, spec.into());
         set_animation_bounds(self.state.state_id(), self.bounds.peek());
     }
 
@@ -2395,7 +2482,7 @@ impl<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static> Animatable<
         spec: impl Into<AnimationSpec>,
         done: impl FnOnce(MotionEnd) + Send + 'static,
     ) {
-        push_animatable_with_result(self.state.clone(), target, spec.into(), done);
+        push_animatable_restart_with_result(self.state.clone(), target, spec.into(), done);
         set_animation_bounds(self.state.state_id(), self.bounds.peek());
     }
 
@@ -2464,6 +2551,8 @@ impl ComposeCtx<'_> {
     ) -> Animatable<T> {
         let state: State<T> = self.remember(|| initial);
         let bounds = self.remember_backchannel(|| None);
+        // A motion this handle starts belongs to the slot the handle was remembered in.
+        self.own_motion(state.state_id());
         Animatable { state, bounds }
     }
 }
@@ -2827,10 +2916,9 @@ impl AnimationSpec {
     pub fn with_visibility_threshold(self, threshold: f32) -> Self {
         match self {
             AnimationSpec::Spring(spec) => AnimationSpec::Spring(SpringSpec { threshold, ..spec }),
-            AnimationSpec::Repeatable(spec) => AnimationSpec::Repeatable(RepeatableSpec {
-                base: Box::new(spec.base.with_visibility_threshold(threshold)),
-                ..spec
-            }),
+            // A repeat's base is a `DurationSpec` (tween/keyframes/snap): none of them has a
+            // visibility threshold, so there is nothing to carry here.
+            AnimationSpec::Repeatable(spec) => AnimationSpec::Repeatable(spec),
             other => other,
         }
     }
@@ -3098,7 +3186,9 @@ impl KeyframesOf {
 pub struct RepeatableSpec {
     pub iterations: u32,
     pub mode: RepeatMode,
-    pub base: Box<AnimationSpec>,
+    /// The cycle's curve. A `DurationSpec` rather than any `AnimationSpec`: a spring has no cycle
+    /// length, so the invalid combinations are unrepresentable instead of runtime-checked.
+    pub base: DurationSpec,
     /// Compose's `initialStartOffset`: `Delay` holds the first value for this long before the first
     /// cycle, `FastForward` starts that far into it. The offset applies to the FIRST cycle only.
     pub(crate) start_offset: Duration,
@@ -3125,11 +3215,11 @@ impl Default for SnapSpec {
 }
 
 impl RepeatableSpec {
-    pub fn new(iterations: u32, mode: RepeatMode, base: AnimationSpec) -> Self {
+    pub fn new(iterations: u32, mode: RepeatMode, base: impl Into<DurationSpec>) -> Self {
         Self {
             iterations,
             mode,
-            base: Box::new(base),
+            base: base.into(),
             start_offset: Duration::ZERO,
             start_offset_type: StartOffsetType::Delay,
         }
@@ -3487,34 +3577,63 @@ pub(crate) mod tests {
     }
 
     /// A `Decay` on a colour used to write an opaque grey through the scalar fallback (the fallback's
-    /// `from_f32` is a grey at the old Oklab lightness) and to do it on the first frame, because the
-    /// push path supplies a zero initial velocity and the decay then reports itself finished at once.
-    /// Multi-component decays are normalised to `Snap`, so the colour lands on the target instead.
+    /// `from_f32` is a grey at the old Oklab lightness) on the first frame, because the push path
+    /// supplies a zero initial velocity and the decay then reports itself finished at once. It is now
+    /// replaced by a tween, which mixes the two colours through `lerp` and lands on the target.
     #[test]
-    fn a_decay_on_a_colour_lands_on_the_target_not_on_a_grey() {
+    fn a_decay_on_a_colour_fades_instead_of_painting_a_grey() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         super::tests::clear_all_animations();
         let from = crate::graphics::Color::from_argb(255, 33, 150, 243);
         let to = crate::graphics::Color::from_argb(255, 244, 67, 54);
         let state = State::new(from);
         push_animatable_color(state.clone(), to, AnimationSpec::Decay(DecaySpec::default()));
+        assert!(
+            super::active_animations_report().iter().any(|l| l.contains("tween(")),
+            "a target-based decay is a tween, got {:?}",
+            super::active_animations_report()
+        );
         let grey = crate::graphics::Color::from_oklab([1.0, from.to_oklab()[1], 0.0, 0.0]);
-        let value = state.peek();
-        assert_ne!(value, grey, "the decay must not paint the placeholder grey");
-        assert_eq!(value, to, "and it lands exactly on the target");
-        assert!(!update_animations(), "nothing is left running");
+        std::thread::sleep(Duration::from_millis(120));
+        super::update_animations();
+        let mid = state.peek();
+        assert_ne!(mid, grey, "the fade must never paint the placeholder grey");
+        for _ in 0..400 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(2));
+            if !super::has_animation_for_state(state.state_id()) {
+                break;
+            }
+        }
+        assert_eq!(state.peek(), to, "and it lands exactly on the target");
     }
 
     /// The same rule for the other placeholder types: a `Size` decay used to travel along the area
-    /// norm through `from_f32` (a square at the origin).
+    /// norm through `from_f32` (a square at the origin). It now interpolates each axis and lands on
+    /// the target.
     #[test]
-    fn a_decay_on_a_size_lands_on_the_target_too() {
+    fn a_decay_on_a_size_interpolates_both_axes() {
         let _g = super::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         super::tests::clear_all_animations();
-        let state = State::new(crate::unit::Size::new(10.0, 10.0));
+        let from = crate::unit::Size::new(10.0, 10.0);
         let target = crate::unit::Size::new(80.0, 20.0);
+        let state = State::new(from);
         push_animatable(state.clone(), target, AnimationSpec::Decay(DecaySpec::default()));
-        assert_eq!(state.peek(), target, "the size snaps to the target, not to a square at the origin");
+        std::thread::sleep(Duration::from_millis(120));
+        super::update_animations();
+        let mid = state.peek();
+        assert!(
+            mid.width > from.width && mid.width < target.width && mid.height > from.height && mid.height < target.height,
+            "both axes travel between their endpoints, got {mid:?} (a placeholder square would sit at the origin)"
+        );
+        for _ in 0..400 {
+            super::update_animations();
+            std::thread::sleep(Duration::from_millis(2));
+            if !super::has_animation_for_state(state.state_id()) {
+                break;
+            }
+        }
+        assert_eq!(state.peek(), target, "and it lands on the target");
     }
 
     /// M3's three spatial tokens, pinned: one shared damping (0.9 — the slight overshoot is the point)
@@ -3731,7 +3850,7 @@ pub(crate) mod tests {
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(3, RepeatMode::Restart,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
+                TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) })));
         let mut frames = 0;
         while anim.update() && frames < 100 {
             std::thread::sleep(Duration::from_millis(10));
@@ -3749,7 +3868,7 @@ pub(crate) mod tests {
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
-                AnimationSpec::Tween(TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) }))));
+                TweenSpec { duration: Duration::from_millis(40), delay: Duration::ZERO, interpolator: std::sync::Arc::new(interpolator::Linear::new()) })));
         while anim.update() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -3956,10 +4075,10 @@ pub(crate) mod tests {
             AnimationSpec::Repeatable(RepeatableSpec::new(
                 3,
                 RepeatMode::Restart,
-                AnimationSpec::Keyframes(KeyframesSpec::new(
+                KeyframesSpec::new(
                     Duration::from_millis(50),
                     vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)],
-                )),
+                ),
             )),
         );
         let mut frames = 0;
@@ -3979,7 +4098,7 @@ pub(crate) mod tests {
         let mut anim = Motion::new(st.clone());
         anim.animate_to(
             100.0,
-            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, AnimationSpec::Snap(SnapSpec::default()))),
+            AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, SnapSpec::default())),
         );
         assert!(!anim.update(), "Snap base 应首次 update 即完成");
         assert_eq!(st.peek(), 100.0, "Snap base 完成值 = to");
@@ -4570,7 +4689,7 @@ pub(crate) mod tests {
     /// Compose's `Animatable<T>.animateDecay(initialVelocity: T, decayAnimationSpec)` runs one float
     /// decay per component (`DecayAnimationSpec<T>`, vectorized by the type's converter). Before this,
     /// a Decay reaching a multi-component value was replaced by Snap
-    /// (`normalise_multi_component_decay`), so a fling on an `Offset` never moved at all.
+    /// (`normalise_target_spec`), so a fling on an `Offset` never moved at all.
     #[test]
     fn a_vector_fling_decays_each_component_on_its_own() {
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -4683,7 +4802,7 @@ pub(crate) mod tests {
                 RepeatableSpec::new(
                     2,
                     RepeatMode::Restart,
-                    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), linear())),
+                    TweenSpec::new(Duration::from_millis(200), linear()),
                 )
                 .with_start_offset(Duration::from_millis(150), StartOffsetType::FastForward),
             ),
@@ -4704,7 +4823,7 @@ pub(crate) mod tests {
                 RepeatableSpec::new(
                     2,
                     RepeatMode::Restart,
-                    AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(200), linear())),
+                    TweenSpec::new(Duration::from_millis(200), linear()),
                 )
                 .with_start_offset(Duration::from_millis(300), StartOffsetType::Delay),
             ),
@@ -5343,7 +5462,7 @@ pub(crate) mod tests {
     fn a_reverse_loop_runs_its_curve_backwards() {
         use crate::animation::interpolator::Interpolator;
         let curve = |t: f32| interpolator::fast_out_slow_in().interpolate(t);
-        let tween = AnimationSpec::Tween(TweenSpec::new(
+        let tween = DurationSpec::Tween(TweenSpec::new(
             Duration::from_millis(400),
             Arc::new(interpolator::fast_out_slow_in()) as Arc<dyn Interpolator>,
         ));
@@ -5613,6 +5732,129 @@ mod repeated_tests {
         );
         crate::animation::clear_all_animations();
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// A slot owns the motion it started
+// ═══════════════════════════════════════════════════════════
+
+/// The imperative handle re-targets; the per-frame path keeps deduping.
+///
+/// `animate*AsState` calls its push on every recomposition, so a same-target motion there must be
+/// left alone (otherwise nothing would ever finish), and that guard used to swallow a deliberate
+/// re-target too: `Animatable::animate_to(same_value, new_spec)` was silently ignored. Compose's
+/// `animateTo` always runs what it is given.
+#[test]
+fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
+    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    clear_all_animations();
+
+    let state: State<f32> = State::new(0.0);
+    let sid = state.state_id();
+    let anim = Animatable {
+        state: state.clone(),
+        bounds: crate::runtime::state::Backchannel::new(None),
+    };
+    let fast = || AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(5), interpolator::Linear::new()));
+
+    anim.animate_to(100.0, SpringSpec { stiffness: 40.0, ..SpringSpec::default() });
+    for _ in 0..3 {
+        update_animations();
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(has_animation_for_state(sid), "the spring is running");
+    assert!(
+        active_animations_report().iter().any(|l| l.contains("spring(")),
+        "a spring is registered before the re-target"
+    );
+
+    // Per-frame path (what `animate*AsState` calls): same target, new spec - ignored on purpose.
+    push_animatable(state.clone(), 100.0, fast());
+    assert!(
+        active_animations_report().iter().any(|l| l.contains("spring(")),
+        "the per-frame path must NOT restart a motion that is already heading there"
+    );
+
+    // Imperative path: same target, new spec - the new motion runs.
+    anim.animate_to(100.0, fast());
+    assert!(
+        active_animations_report().iter().any(|l| l.contains("tween(")),
+        "animate_to must adopt the new spec, got {:?}",
+        active_animations_report()
+    );
+
+    for _ in 0..200 {
+        update_animations();
+        std::thread::sleep(Duration::from_millis(1));
+        if !has_animation_for_state(sid) {
+            break;
+        }
+    }
+    assert!(
+        (state.peek() - 100.0).abs() < 0.01,
+        "the re-targeted motion reaches the same value, got {}",
+        state.peek()
+    );
+    clear_all_animations();
+}
+
+/// A slot-owned motion dies with its slot. `animate_float_as_state` remembers a state in the slot it
+/// was called from; when the branch that composed it goes away the engine must stop ticking it
+/// (Compose's `DisposableEffect` equivalent), instead of writing to a state nobody reads until the
+/// whole Composer is dropped.
+#[test]
+fn a_slot_owned_motion_dies_with_its_slot() {
+    use crate::runtime::composer::Composer;
+    let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    clear_all_animations();
+
+    let show = State::new(true);
+    let target = State::new(1.0f32);
+    let sid = std::rc::Rc::new(std::cell::RefCell::new(None::<StateId>));
+    let mut composer = Composer::new();
+
+    let frame = |composer: &mut Composer| {
+        let show = show.clone();
+        let target = target.clone();
+        let sid = sid.clone();
+        composer.compose(move |ctx| {
+            if show.get() {
+                // The scope is what makes the slots (and their forget callbacks) belong to this
+                // branch: a bare `if` inside one compose scope would leave them in the parent slot,
+                // which is never truncated.
+                ctx.start_scope();
+                let value = ctx.animate_float_as_state(
+                    target.get(),
+                    AnimationSpec::Spring(SpringSpec::default()),
+                );
+                *sid.borrow_mut() = Some(value.state_id());
+                ctx.end_scope();
+            }
+        });
+        composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));
+    };
+
+    frame(&mut composer); // the state is created ON its target: nothing to move yet
+    let state_id = sid.borrow().expect("the branch composed");
+    assert!(
+        !has_animation_for_state(state_id),
+        "a value that starts on its target has no motion"
+    );
+
+    target.set(0.0);
+    frame(&mut composer); // now a spring runs
+    assert!(
+        has_animation_for_state(state_id),
+        "the spring registered for the slot's state"
+    );
+
+    show.set(false);
+    frame(&mut composer); // the branch is gone
+    assert!(
+        !has_animation_for_state(state_id),
+        "the slot was forgotten, so its motion must be removed from the engine"
+    );
+    clear_all_animations();
 }
 
 // ═══════════════════════════════════════════════════════════

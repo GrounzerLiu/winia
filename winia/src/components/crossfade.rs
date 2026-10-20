@@ -136,9 +136,10 @@ impl<T: Clone + PartialEq + 'static> Crossfade<T> {
         // statement position, so it cannot hand out one slot per entry.
         let core = ctx.remember_backchannel(|| VisibleSet::new(target.clone()));
         // A fade needs a spec that REACHES its target. `Decay` has none — it coasts from a velocity — so an
-        // incoming generation would sit at alpha 0 while the outgoing one never left; the engine normalises a
-        // Decay on a multi-component value the same way (`normalise_multi_component_decay`). Compose cannot
-        // express this at all: `Crossfade`'s parameter is a `FiniteAnimationSpec<Float>`.
+        // incoming generation would sit at alpha 0 while the outgoing one never left. The push paths now
+        // replace a target-based Decay with a 300 ms tween (`normalise_target_spec`), but a container that
+        // knows its own default should not lean on that fallback. Compose cannot express this at all:
+        // `Crossfade`'s parameter is a `FiniteAnimationSpec<Float>`.
         let spec = match self.spec {
             AnimationSpec::Decay(_) => default_spec(),
             ref other => other.clone(),

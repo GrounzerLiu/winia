@@ -329,6 +329,22 @@ impl<'a> ComposeCtx<'a> {
         self.composer.slot_table.remember_on_forget(slot_key, Box::new(f));
     }
 
+    /// Tie a motion to the CURRENT slot: when the slot is forgotten — the branch changed shape, the
+    /// component left the tree — the motion is removed from the engine.
+    ///
+    /// Compose expresses this with `DisposableEffect`. Without it a slot-owned animation keeps
+    /// ticking, and keeps writing to a state nobody reads, until the whole `Composer` is dropped:
+    /// a conditionally composed `animateFloatAsState` is the common case, and it used to outlive
+    /// its composable by however long the window stayed open.
+    ///
+    /// The registration is unconditional, because `next_remember_key` is a per-group counter: calling
+    /// this only on the first pass would shift every later slot key of the scope. Re-registering
+    /// REPLACES the callback at this call site's key instead of stacking (see `remember_on_forget`).
+    pub(crate) fn own_motion(&mut self, state_id: crate::runtime::state::StateId) {
+        self.composer.animation_state_ids.insert(state_id);
+        self.remember_on_forget(move || crate::animation::remove_animation_by_state(state_id));
+    }
+
     /// Remember a callable whose placed state and nodes move between hosts without changing identity.
     /// The callable is initialized once, like `remember { movableContentOf { ... } }`; read dynamic
     /// values through State or an explicit latest-value channel rather than replacing its captures.
@@ -864,7 +880,7 @@ impl<'a> ComposeCtx<'a> {
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
             crate::runtime::state::Animating::new(target.clone())
         });
-        self.composer.animation_state_ids.insert(handle.state_id());
+        self.own_motion(handle.state_id());
         crate::animation::push_animatable_with_done(
             State::from_raw(handle.as_raw().clone()),
             target,
@@ -880,7 +896,7 @@ impl<'a> ComposeCtx<'a> {
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
             crate::runtime::state::Animating::new(target)
         });
-        self.composer.animation_state_ids.insert(handle.state_id());
+        self.own_motion(handle.state_id());
         crate::animation::push_animatable_color(
             crate::runtime::state::State::from_raw(handle.as_raw().clone()),
             target,
@@ -920,7 +936,7 @@ impl<'a> ComposeCtx<'a> {
         let handle = self.composer.slot_table.remember_handle(slot_key, || {
             crate::runtime::state::Animating::new(target.clone())
         });
-        self.composer.animation_state_ids.insert(handle.state_id());
+        self.own_motion(handle.state_id());
         crate::animation::push_animatable_handle(handle.clone(), target, spec);
         handle
     }

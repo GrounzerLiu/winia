@@ -1,189 +1,163 @@
-# 动画系统 — 实现与进度
+# The animation system
 
-> ⚠ 部分内容过时（"缺失"清单与"下一步计划"已完成）。实现细节以代码为准；最新差距分析见 `docs/animation-gap-analysis.md`。
-> 更新日期：2026-07-31 · 分支：text-field
+> Rewritten from the code on 2026-10-20 (branch `v2`). The previous version of this file described a
+> tree that no longer exists: it claimed a colour spring was downgraded to a tween, a `dt` over 166 ms
+> was truncated, `AnimatedVisibility`/`Crossfade`/`animateContentSize` were missing, and
+> `SpringSpec::default()` was stiffness 1500. All four are wrong today. `animation-gap-analysis.md`
+> is a dated snapshot of the 2026-08-05 pass and is kept only as a historical record.
 
-## 一、总体架构
+## 1. Shape
 
-对标 Jetpack Compose 三层动画 API，基于本项目 `State<T>` + 事件循环驱动。
+Three layers, Compose-shaped, but push-based: there are no coroutines and no suspend point.
+
+| Layer | What it is | Where |
+| --- | --- | --- |
+| High | `animate_float_as_state`, `animate_value_as_state`, `animate_int/dp/offset/size/color_as_state` | `ComposeCtx` (`runtime/composer.rs`) |
+| Middle | `update_transition`, `remember_infinite_transition`, `remember_animatable` | `animation.rs` |
+| Engine | `Motion<T>` + the global registry; the public handle is `Animatable<T>` | `animation.rs` |
+
+A component never drives frames itself: it hands a target and a spec to a `push_*` function, the
+engine registers a motion against a state, and the render loop advances every registered motion once
+per frame with the real elapsed time. Reading the state is what makes anything recompose or repaint.
+
+## 2. The frame
 
 ```
-用户 API 层
-  animate_float_as_state / animate_color_as_state / updateTransition
-  remember_infinite_transition
-           │
-Animatable<T> 引擎（底层）
-  animate_to(target, spec) / update() / snap_to()
-           │
-AnimationSpec（动画规格）
-  Spring / Tween / Keyframes / Repeatable / Snap / InfiniteRepeatableSpec
-           │
-帧驱动（app.rs new_events）
-  update_animations() → 动画 update → State.set → notify → 重组渲染
+push_* -> ACTIVE_ANIMATIONS (Vec<Box<dyn AnimationInstance>>)
+                    |
+event loop: new_events -> update_animations() -> Motion::update -> Animating::set
+                    |                                   (notify dependents, no wake)
+                    +-- animating? ControlFlow::WaitUntil(now + frame_interval), throttled request_redraw
+                    +-- just stopped? force one more frame (the last write's request may have been skipped)
 ```
 
-## 二、已实现 ✅
+- `new_events` advances the registry and, while anything is running, switches the loop to
+  `WaitUntil` so the next frame arrives even with no input.
+- `RedrawRequested` advances it **again**: a Windows resize runs a modal loop that starves
+  `AboutToWait`, and WM_PAINT is the only event that keeps arriving, so a resize must tick there to
+  stay animated. Two ticks per frame are harmless — `Motion` integrates real time, not ticks.
+- Colour motions live in a second registry (`ACTIVE_COLOR_ANIMATIONS`) to stay type-erased-free.
 
-### 1. 值类型（AnimatableValue trait）
-- `f32` — 线性插值
-- `Color` — Oklab interpolation (`Color::to_oklab` / `from_oklab`), the four components `alpha, L, a, b`
-  Compose's `ColorVectorConverter` animates: a Spring runs one spring per component, a Tween mixes all
-  four (`animation/ColorVectorConverter.kt:33-47`)
-- `Dp` / `Sp` / `Offset` / `Size` — unit 模块类型（unit.rs）
+## 3. Values
 
-### 2. 动画规格（AnimationSpec）
-| Spec | 说明 |
-|------|------|
-| `Spring` | 物理弹簧，半隐式欧拉积分，固定 1/60s 子步 + accumulator（≤10 步） |
-| `Tween` | 补间，duration + interpolator |
-| `Keyframes` | 关键帧序列 `(progress, value, interpolator)`，段内插值 |
-| `Repeatable` | 重复 N 次（base 目前仅 Tween），Restart/Reverse 往返 |
-| `Snap` | 瞬时跳转 |
-| `InfiniteRepeatableSpec` | `restart(duration)` / `reverse(duration)` 无限循环 |
+`AnimatableValue` (`animation.rs`) is what a spec can move: `lerp`, `to_f32`/`from_f32` (a scalar
+projection), component read/write, and `supports_spring`.
 
-- `SpringSpec::default()`：damping=1.0、stiffness=1500、threshold=0.01
-- `SpringSpec::bouncy()`：damping=0.6、threshold=0.1
+| Type | Components | Spring |
+| --- | --- | --- |
+| `f32`, `i32`, `Dp`, `Sp` | 1 | one spring |
+| `Size`, `Offset` | 2 | one spring per axis |
+| `Color` | 4 (Oklab alpha, L, a, b) | one spring per component |
 
-### 3. 插值器（interpolator.rs）
-24 种预计算 bezier 插值器：`Linear`, `EaseIn/Out/InOut` (Sine, Quad, Cubic, Quart, Quint, Expo, Circ, Back, Elastic, Bounce)
+`to_f32`/`from_f32` exist only for the scalar paths (decay, a one-value spring); a vector's
+projection is a placeholder and nothing should write it back. Multi-component springs run
+`SpringLane`s, decays run `DecayLane`s.
 
-### 4. 高层 API（ComposeCtx 方法）
-- `animate_float_as_state(target, spec) -> State<f32>` — 对标 animateFloatAsState
-- `animate_color_as_state(target, spec) -> State<Color>` — 对标 animateColorAsState（Spring 自动降级 Tween）
+## 4. Specs
 
-### 5. 中层 API
-- `update_transition(target, spec, label) -> Transition` — 对标 updateTransition
-  - `transition.animate_float(ctx, target_fn, label) -> State<f32>`
-- `remember_infinite_transition() -> InfiniteTransition` — 对标 rememberInfiniteTransition
-  - `animate_float` / `animate_color`
-  - `dispose()` — **显式**取消该作用域动画（无 Drop 兜底，见已知限制）
+`AnimationSpec`: `Spring`, `Tween`, `Keyframes`, `Repeatable`, `Snap`, `Decay`.
+`DurationSpec` (`Tween`/`Keyframes`/`Snap`) is the base a repeat cycles over — the type system, not a
+runtime check, is what rules out a spring with no cycle length.
 
-### 6. 底层 API
-- `Animatable<T>` — `new / animate_to / update / snap_to`
-- 超 5s 未收敛强制 snap（防 stiffness=0 无限 busy-loop）
+| Spec | Defaults | Ends when |
+| --- | --- | --- |
+| `Spring` | damping 1.0, stiffness 200, mass 1.0, threshold 0.01 | the analytic rest check says so, **or** the Compose-style estimated duration elapses — whichever comes first; writes the exact target |
+| `Tween` | 300 ms, fast-out-slow-in | its clock; `delay` holds `from` first |
+| `Keyframes` | caller's frames | its clock; the last frame writes the exact target |
+| `Repeatable` | caller's iterations/mode | `iterations × base.duration`; `initialStartOffset` in Delay or FastForward flavour |
+| `Snap` | no delay | immediately after `delay` |
+| `Decay` | friction 4.2, threshold 0.1 | `|v0·e^(-f·t)| < threshold`; analytic, parks on the exact limit |
 
-### 7. 渲染支持（绘制层动画）
+Spring integration: semi-implicit Euler with a step capped at `min(1/60 s, 1/(4·ω₀))` (a stiff spring
+gets a shorter step to stay stable) and at most 2000 steps per call — ~33 s of a soft spring. A frame
+is allowed to be long; the cap only bounds pathological work.
 
-**统一入口**：`background` / `graphics_layer` 各只有一个方法，静态值与动画闭包自动适配
-（`impl Into<BackgroundColor>` / `impl Into<GraphicsLayerSpec>`）：
+`Decay` is the one spec with no target: it coasts from a velocity. Reaching a *target* entry point
+(`push_animatable*`, which has no velocity) it is replaced by a 300 ms tween — the old behaviour ran
+it at velocity zero, which reported itself finished on the first frame, so a scalar never moved and a
+vector was rebuilt through the placeholder projection.
 
-```rust
-// 静态（构建时固定）
-.background(Color::RED, Shape::Circle)
-.graphics_layer(GraphicsLayerParams { alpha: 0.5, ..Default::default() })
+## 5. Registration, dedup and retarget
 
-// 动画（渲染时每帧求值，零重组）——闭包内用 State::peek()
-.background(|| pulse.peek(), Shape::Circle)
-.graphics_layer(|| GraphicsLayerParams { alpha: pulse.peek(), ..Default::default() })
-```
+Two families, deliberately different:
 
-- `graphics_layer` 应用到整个节点（background + text + children）
-- alpha 用 `canvas.save_layer_alpha_f(None, alpha)`
+| Entry point | Same target, motion running |
+| --- | --- |
+| `push_animatable` / `push_animatable_handle` (what `animate*AsState` calls every recomposition) | ignored — that is what makes the per-frame call idempotent |
+| `push_animatable_restart` / `push_animatable_restart_with_result` (what `Animatable::animate_to` calls) | replaced — Compose's `animateTo` always runs what it is given |
 
-**⚠️ 使用原则**：
-- 静态绘制属性 → 传值（`Color` / `GraphicsLayerParams`）
-- 需要动画（值随帧变化）→ 传闭包，闭包内必须用 **`State::peek()`**（不注册依赖）
-- **不要**在闭包里用 `State::get()`——会注册依赖触发整树重组，破坏零重组设计
+A motion replaced mid-flight inherits the old one's velocity, **per component** (`RetargetVelocity`),
+and only `Spring`/`Decay` have a velocity to pass on: a `Tween` interrupted by a spring restarts from
+rest. `cancel_animation`/`cancel_animation_by_id` only unregister; they do not write a value or fire a
+callback.
 
-### 7.1 绘制层 vs 布局层（Compose 分层模型）
+## 6. Ends, bounds, callbacks
 
-| 属性 | 动画方式 | 触发 | 对应 API |
-|------|---------|------|---------|
-| 布局属性（size/offset/weight） | 值变→重组+重测 | `State::set()` → notify | `animate_float_as_state` 等 |
-| 绘制层属性（alpha/scale/颜色/位移） | 值变→只重绘 | `State::set_visual()`（不 notify）+ `request_redraw` | `graphics_layer(闭包)` / `background(闭包)` |
+`MotionEnd { reason, velocity }` is what a completion callback receives: `Finished`, `BoundReached`
+(a value range stopped it) or `Forced` (the engine's 5 s overrun guard, which only applies to
+`Spring`/`Decay` — they can be asymptotic; a tween's own duration is never cut).
+`Animatable::set_bounds` (`set_animation_bounds` underneath) writes the bound exactly and ends the motion, and
+a fling reports the velocity it could not use through `on_boundary`.
 
-绘制层动画链路：
-```
-动画引擎 update → state.set_visual(新值)   // 写值，不 notify → 零重组
-→ 动画引擎 request_redraw()               // 请求重绘
-→ 渲染 → background/graphics_layer 闭包执行 → peek() 读到最新值 → 绘制
-```
+## 7. Scheduling semantics
 
-### 8. 帧驱动
-- `update_animations()` / `is_animating()` — 三个全局列表（f32 / Color / 无限 Color）
-- `app.rs new_events`：每轮推进动画 → 请求所有窗口 redraw
-- `ControlFlow::Wait` + `request_redraw` 自驱动
+`State` is the default handle: writes notify dependents **and** wake the loop. The engine writes
+through `Animating<T>`: notify the dependents (recompose) but do not wake — the loop is already
+awake while anything animates. Draw-layer properties (`alpha`, scale, translation) use `Visual<T>`:
+the value is written with no notification at all and read with `peek()` at paint time, which is how
+they animate without recomposing. `Backchannel<T>` is the measure/layout write-back channel. See
+`docs/state-handles.md`.
 
-## 三、关键机制
+A value is only written when it changes (`Animating::set` dedups), so an idle or landed motion does not
+wake the tree.
 
-### Spring 物理
-半隐式欧拉积分 + 固定步长 1/60 + accumulator（≤10 子步），位移持续累积。
+## 8. Who owns a motion
 
-### 动画去重（跨列表统一）
-```
-1. state.peek() == target → 跳过
-2. has_animation_for_state(sid) → 跳过（跨三列表）
-3. 同 state 目标不同 → 移除旧动画，创建新动画
-4. 锁内只检查/收集，anim.update() 锁外执行
-```
+A motion started from a composable belongs to that slot: `animate_*_as_state`, `remember_animatable`
+and `remember_infinite_transition` register an `on_forget` cleanup, so a branch that changes shape (a
+conditionally composed animated value) takes its motion with it instead of leaving it ticking until
+the whole `Composer` is dropped. `Composer::drop` still clears everything it owns as a backstop.
 
-### 依赖精确化
-- `State::peek()` — 读取不注册依赖
-- 动画 State 依赖只来自真正读取处 → 增量重组精确到读取 slot
+## 9. Ambient API
 
-### 无限动画生命周期
-- `InfiniteTransition` 持有 `Arc<Mutex<Vec<u32>>>`（remember 持久化）
-- 显式 `dispose()` 清理（无 Drop 兜底）
+| API | What it gives |
+| --- | --- |
+| `remember_animatable(initial)` | `Animatable<T>`: `value/target/is_running/velocity/snap_to/animate_to/animate_decay/animate_to_with_result/animate_sequence/set_bounds/clear_bounds/bounds/stop` |
+| `update_transition(target, spec, label)` | a state machine whose pairs animate; `animate_float/color/dp/size/offset/value`, `create_child_transition` |
+| `remember_infinite_transition()` | `animate_float/animate_color/animate_float_preserving`; auto-disposed with its slot |
+| `AnimatedVisibility` / `AnimatedContent` / `Crossfade` / `AnimatedSize` | the container family, each in `components/` with its own tests |
+| `TimedAnimation` | a spec evaluated at an arbitrary time, with nothing registered — the hand-off / "what would 137 ms look like" query |
 
-## 四、Unit 系统（unit.rs，对标 compose.ui.unit）
+## 10. The frame clock
 
-| 类型 | 说明 |
-|------|------|
-| `Dp` / `Sp` / `Px` | 强类型单位 + `.dp()` / `.sp()` / `.px()` 扩展（f32/i32/u32） |
-| `TextUnit` | Sp/Px 统一（f32 默认 Sp），`to_logical_px()` |
-| `Offset` / `Size` / `IntOffset` / `IntSize` | 2D 向量类型 |
-| `Density` | density + font_scale（font_scale 恒 1.0，未接入系统缩放） |
-| `LOCAL_DENSITY` | CompositionLocal，覆盖 compose+layout+draw 全程（含 open_window 首次） |
+`effect::with_frame_nanos()` waits for the next frame of **any** window; `ctx.frame_clock()` gives a
+per-window clock. Both are broadcast from the render loop (`frame_tick`), and a window that is not
+rendering does not tick them — use tokio timers for wall-clock work.
 
-- `Dimension` 扩展 Dp/Px 变体 → `.size(10.dp(), 20.px())`
-- `Text`/`RichText`/`TextField` 字号支持 `.sp()` / `.px()`
+## 11. Observability and tests
 
-## 五、Demo（animation_demo.rs）
+- `active_animations_report()` — one line per live motion (`spec=`, `from`, `target`, `elapsed`,
+  `v=`, component counts). The only way to answer "who is moving this state".
+- `animation_target` / `animation_velocity` / `is_animating_state` — per-state introspection.
+- `docs/anim-trace.md` + `anim_trace.rs` — with the `anim-trace` feature and `WINIA_ANIM_TRACE=<file>`,
+  one NDJSON line per subject per frame (layout rect, painted rect, alpha in three parts).
+- `trace_flag(name)` — a cached env-var switch for per-component traces.
 
-| 节 | 内容 | 动画 |
-|----|------|------|
-| 1 | 蓝色盒子宽度 | Spring Bouncy |
-| 2 | 绿色盒子透明度/宽度 | Tween |
-| 3 | 橙色盒子 offset | updateTransition |
-| 4 | colour box | animate_color_as_state (Oklab) |
-| 5 | 呼吸圆点 | rememberInfiniteTransition |
-| 6 | 青色盒子 | Keyframes（400ms 超调） |
+Tests share the global registries, so: take `animation::tests::TEST_SERIAL`, call
+`clear_all_animations()`, drive the engine by hand (`update_animations()` in a loop with short sleeps),
+and clear again at the end. `RUST_TEST_THREADS=1` in `.cargo/config.toml` covers the rest.
 
-另有 unit_demo.rs：Dp/Px/Offset/Size/Density/TextUnit 展示。
+## 12. Known limitations
 
-## 六、单元测试（15 个动画 + 7 个 unit）
-
-动画：spring 收敛/超调/反向/dt=0、tween、keyframes 段插值/首帧边界、
-repeatable 重复/Reverse 偶数次、snap、infinite float/color、color lerp、
-remove_animation_by_state、keyframes/repeatable/snap。
-unit：dp/sp 转换、算术、扩展语法、offset/size 运算、AnimatableValue。
-
-## 七、缺失（对标 Compose）❌
-
-### 高层
-| API | 用途 | 优先级 |
-|-----|------|--------|
-| `AnimatedVisibility` | 内容出现/消失（fade/expand/shrink） | 高 |
-| `animateDpAsState` / `animateSizeAsState` / `animateOffsetAsState` | unit 类型高层 API | 中（低投入） |
-| `Crossfade` | 内容交叉淡入淡出（保留全部未淡完的代，无尺寸动画） | 中 |
-| `animateContentSize` | 尺寸变化自动动画 | 中 |
-
-### 中层
-- `updateTransition` 完整版（animate_dp/animate_color/animate_size）
-
-## 八、已知限制
-
-1. **Color Spring 降级**：颜色无单一 f32 值，Spring 自动降级 Tween
-2. **dt 超 166ms 截断**：掉帧后弹簧丢时间
-3. **dedup 忽略 spec**：同 state+同 target 不同 spec 的重启请求被忽略
-4. **动画期间无 60fps 节流**：等效 Poll，CPU 占用较高
-5. **无限动画无 Drop 兜底**：`dispose()` 需显式调用（每次 compose drop 局部变量会误清，故不能 Drop）
-6. **Repeatable 仅支持 Tween base**：其他类型 debug_assert 警告 + 回退 300ms 线性
-7. **Keyframes/Tween duration=0**：除零 NaN，靠 5s 兜底完成
-
-## 九、下一步计划
-
-1. `animateDpAsState` / `animateOffsetAsState` / `animateSizeAsState`（unit 高层 API，低成本）
-2. `AnimatedVisibility`（最常用，需布局层配合）
-3. `Crossfade` / `animateContentSize`
-4. `updateTransition` 完整版
+1. `Repeatable` needs a `DurationSpec` base. A spring has no cycle length, so this is a type-level
+   rule, not a gap — Compose's `DurationBasedAnimationSpec` says the same.
+2. The overrun guard ends a `Spring`/`Decay` at 5 s. It only fires for pathological parameters
+   (stiffness ~0, friction ~0); a spring normally ends on its estimated clock.
+3. `Decay` through a target-based push is a 300 ms tween (see §4). A real fling takes a velocity of
+   the value's own type: `push_decay`/`push_decay_vector`, or `Animatable::animate_decay`.
+4. Bounds are scalar: `set_animation_bounds` compares the scalar projection, so a multi-component
+   value cannot bound one axis.
+5. The registries are process-global. A `Composer` clears what it owns on drop and its slots clean up
+   after themselves, but two live composers share one table (that is also why tests are serial).
+6. `label` on `animate*AsState` is not carried (only `Transition` has one); it is debug-only in
+   Compose.

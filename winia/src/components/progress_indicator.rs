@@ -997,7 +997,7 @@ mod tests {
         let spec = linear_first_line_head_spec();
         assert_eq!(spec.duration, Duration::from_millis(1750));
         let frames = match &spec.base {
-            Some(crate::animation::AnimationSpec::Keyframes(kf)) => &kf.frames,
+            Some(crate::animation::DurationSpec::Keyframes(kf)) => &kf.frames,
             _ => panic!("head spec 应为 keyframes"),
         };
         assert_eq!(frames.len(), 3);
@@ -1014,7 +1014,7 @@ mod tests {
         // Compose firstLineTail：0 at 250ms → 保持段 [0, 250/1750]
         let spec = linear_first_line_tail_spec();
         let frames = match &spec.base {
-            Some(crate::animation::AnimationSpec::Keyframes(kf)) => &kf.frames,
+            Some(crate::animation::DurationSpec::Keyframes(kf)) => &kf.frames,
             _ => panic!(),
         };
         assert_eq!(frames.len(), 3);
@@ -1038,11 +1038,11 @@ mod tests {
         // 全局旋转：6000ms 线性 0→1080
         let g = circular_global_rotation_spec();
         assert_eq!(g.duration, Duration::from_millis(6000));
-        assert!(matches!(g.base, Some(crate::animation::AnimationSpec::Tween(_))));
+        assert!(matches!(g.base, Some(crate::animation::DurationSpec::Tween(_))));
         // 额外旋转：300ms 到 90°（0.25）
         let a = circular_additional_rotation_spec();
         let frames = match &a.base {
-            Some(crate::animation::AnimationSpec::Keyframes(kf)) => &kf.frames,
+            Some(crate::animation::DurationSpec::Keyframes(kf)) => &kf.frames,
             _ => panic!(),
         };
         assert_eq!(frames.len(), 8);
@@ -1063,7 +1063,7 @@ mod tests {
         // 下降段 [3000,6000ms] 起点 `0.87 at 3000 using Standard` → Standard
         let p = circular_progress_spec();
         let frames = match &p.base {
-            Some(crate::animation::AnimationSpec::Keyframes(kf)) => &kf.frames,
+            Some(crate::animation::DurationSpec::Keyframes(kf)) => &kf.frames,
             _ => panic!(),
         };
         assert_eq!(frames[1].0, 0.5);
