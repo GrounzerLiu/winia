@@ -1068,6 +1068,8 @@ impl<A: LazyAxis> LazyList<A> {
             // scrollbar 侧 pulse 点亮对 lazy 同样生效。
             scroll_pulse: state.scroll_pulse.clone(),
             snap: state.snap.clone(),
+            // The goal belongs to this assembled handle: a page step is a gesture on THIS list.
+            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。

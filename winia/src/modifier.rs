@@ -2679,6 +2679,10 @@ pub struct ScrollState {
     /// The snapping configuration, or `None` for a list that does not snap. Written back by a PAGED
     /// list's measure (`LazyList::snap_paging`) and read by [`ScrollState::fling_with_boundary`].
     pub(crate) snap: crate::runtime::state::Backchannel<Option<SnapSpec>>,
+    /// Where a page step is currently heading, if one is in flight. A second notch has to step from
+    /// the page the first one targeted: reading the live offset mid-spring lands inside the same page
+    /// and the notch is lost (four fast notches moved three pages).
+    pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
 }
 
 /// How a PAGED list's fling settles, written back by the list's measure and read by
@@ -2766,6 +2770,7 @@ impl ScrollState {
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
+            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -2832,24 +2837,37 @@ impl ScrollState {
         };
         let raw_limit = self.fling_limit.peek();
         let limit = if raw_limit.is_finite() && raw_limit >= 0.0 { raw_limit } else { f32::MAX };
-        let position = (self.offset.peek() - spec.anchor) / spec.step;
+        // Step from where a step in flight is heading, not from the live offset: a second notch
+        // arriving mid-spring otherwise reads a position inside the SAME page and re-targets it.
+        let mut goal = self.step_goal.lock().unwrap_or_else(|e| e.into_inner());
+        let base = goal.unwrap_or_else(|| self.offset.peek());
+        let position = (base - spec.anchor) / spec.step;
         let index = if forward {
             position.floor() + 1.0
         } else {
             (position.ceil() - 1.0).max(0.0)
         };
         let target = (spec.anchor + index * spec.step).clamp(0.0, limit);
-        if (target - self.offset.peek()).abs() < 0.5 {
+        if (target - base).abs() < 0.5 {
             return false;
         }
+        *goal = Some(target);
+        drop(goal);
         self.is_scroll_in_progress.set(true);
         let done = self.is_scroll_in_progress.clone();
+        let goal_cell = std::sync::Arc::clone(&self.step_goal);
         crate::animation::push_animatable_with_velocity_and_done(
             self.offset.clone(),
             target,
             snap_settle(),
             0.0,
-            move || done.set(false),
+            move || {
+                let mut goal = goal_cell.lock().unwrap_or_else(|e| e.into_inner());
+                if goal.is_some_and(|g| (g - target).abs() < 0.5) {
+                    *goal = None;
+                }
+                done.set(false);
+            },
         );
         true
     }

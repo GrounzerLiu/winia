@@ -573,6 +573,7 @@ impl LazyScrollbar {
             // The scrollbar drives its OWN drag, not the list's: it reads the list's offset but writes
             // its dragging state here, so it must not pick up the list's paging snap.
             snap: crate::runtime::state::Backchannel::new(None),
+            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Vertical, self.scroll_reverse)
             .then(self.modifier);
@@ -658,6 +659,7 @@ impl HorizontalLazyScrollbar {
             scroll_pulse: self.state.scroll_pulse.clone(),
             // As above: the scrollbar's own drag must not inherit the list's paging snap.
             snap: crate::runtime::state::Backchannel::new(None),
+            step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
         };
         let m = scrollbar_build_shared(ctx, &assembled, cfg, ScrollbarAxis::Horizontal, self.scroll_reverse)
             .then(self.modifier);
