@@ -337,9 +337,11 @@ impl<'a> ComposeCtx<'a> {
     /// a conditionally composed `animateFloatAsState` is the common case, and it used to outlive
     /// its composable by however long the window stayed open.
     ///
-    /// The registration is unconditional, because `next_remember_key` is a per-group counter: calling
-    /// this only on the first pass would shift every later slot key of the scope. Re-registering
-    /// REPLACES the callback at this call site's key instead of stacking (see `remember_on_forget`).
+    /// The registration is unconditional. The key is `mix_key(statement, n)`, where `n` counts the
+    /// `remember` calls made from that statement: registering only on the first pass would renumber
+    /// every LATER `own_motion` of the same scope, leaving stale callbacks in the slot's forget map at
+    /// keys nothing ever revisits. Re-registering is cheap and REPLACES the callback at the same key
+    /// (see `remember_on_forget`).
     pub(crate) fn own_motion(&mut self, state_id: crate::runtime::state::StateId) {
         self.composer.animation_state_ids.insert(state_id);
         self.remember_on_forget(move || crate::animation::remove_animation_by_state(state_id));

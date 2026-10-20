@@ -434,12 +434,10 @@ fn group_c(ctx: &mut ComposeCtx) {
         ctx,
         0.0,
         1.0,
-        InfiniteRepeatableSpec::reverse(Duration::from_millis(1000)).with_base(
-            AnimationSpec::Tween(TweenSpec::new(
-                Duration::from_millis(1000),
-                Arc::new(interpolator::fast_out_slow_in()) as Arc<dyn interpolator::Interpolator>,
-            )),
-        ),
+        InfiniteRepeatableSpec::reverse(Duration::from_millis(1000)).with_base(TweenSpec::new(
+            Duration::from_millis(1000),
+            Arc::new(interpolator::fast_out_slow_in()) as Arc<dyn interpolator::Interpolator>,
+        )),
     );
 
     Row::new()
@@ -714,10 +712,10 @@ fn group_e(ctx: &mut ComposeCtx) {
                             RepeatableSpec::new(
                                 3,
                                 animation::RepeatMode::Restart,
-                                AnimationSpec::Tween(TweenSpec::new(
+                                TweenSpec::new(
                                     Duration::from_millis(300),
                                     EaseOutCubic::new(),
-                                )),
+                                ),
                             )
                             .with_start_offset(
                                 Duration::from_millis(220),

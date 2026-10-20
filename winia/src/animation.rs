@@ -499,8 +499,10 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
         if !conflicting && !restart {
             return;
         }
-        // 取消旧动画后继续走注册路径：零位移动画会立即完成并精确写回 target，
+        // 取消旧动画后继续走注册路径：from == target，零位移动画的每一帧都精确写回 target，
         // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
+        // (A Spring completes on its first update; a Tween/Keyframes motion holds the value for its
+        // whole duration. The value is the target either way.)
         cancel_animation_by_id(sid);
     }
     let inherited_velocity: RetargetVelocity;
@@ -3619,14 +3621,22 @@ pub(crate) mod tests {
         let target = crate::unit::Size::new(80.0, 20.0);
         let state = State::new(from);
         push_animatable(state.clone(), target, AnimationSpec::Decay(DecaySpec::default()));
-        std::thread::sleep(Duration::from_millis(120));
-        super::update_animations();
-        let mid = state.peek();
         assert!(
-            mid.width > from.width && mid.width < target.width && mid.height > from.height && mid.height < target.height,
-            "both axes travel between their endpoints, got {mid:?} (a placeholder square would sit at the origin)"
+            super::active_animations_report().iter().any(|l| l.contains("tween(")),
+            "a target-based decay is a tween, got {:?}",
+            super::active_animations_report()
         );
+        // Every frame must stay inside the from..to box: the bug this covers wrote the PLACEHOLDER
+        // value (a square at the origin, outside the box) on the first frame. Sampling the box rather
+        // than one fixed moment keeps the test meaningful on a machine that stalls past the tween's
+        // 300 ms — a late frame is the target, which is still inside the box.
         for _ in 0..400 {
+            let v = state.peek();
+            assert!(
+                v.width >= from.width && v.width <= target.width
+                    && v.height >= from.height && v.height <= target.height,
+                "a frame left the from..to box: {v:?} (a placeholder writes the origin)"
+            );
             super::update_animations();
             std::thread::sleep(Duration::from_millis(2));
             if !super::has_animation_for_state(state.state_id()) {
@@ -5756,29 +5766,35 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
         bounds: crate::runtime::state::Backchannel::new(None),
     };
     let fast = || AnimationSpec::Tween(TweenSpec::new(Duration::from_millis(5), interpolator::Linear::new()));
+    // Only the lines that describe THIS state: another test's motion (the registries are global) must
+    // neither satisfy these assertions nor make them fail.
+    let mine = |want: &str| -> bool {
+        let needle = format!("state={sid:?}");
+        active_animations_report()
+            .into_iter()
+            .any(|l| l.contains(&needle) && l.contains(want))
+    };
 
-    anim.animate_to(100.0, SpringSpec { stiffness: 40.0, ..SpringSpec::default() });
+    // A soft spring: the test needs it still running after a few frames, with ~2 s of margin.
+    anim.animate_to(100.0, SpringSpec { stiffness: 20.0, ..SpringSpec::default() });
     for _ in 0..3 {
         update_animations();
         std::thread::sleep(Duration::from_millis(2));
     }
     assert!(has_animation_for_state(sid), "the spring is running");
-    assert!(
-        active_animations_report().iter().any(|l| l.contains("spring(")),
-        "a spring is registered before the re-target"
-    );
+    assert!(mine("spring("), "a spring is registered before the re-target");
 
     // Per-frame path (what `animate*AsState` calls): same target, new spec - ignored on purpose.
     push_animatable(state.clone(), 100.0, fast());
     assert!(
-        active_animations_report().iter().any(|l| l.contains("spring(")),
+        mine("spring("),
         "the per-frame path must NOT restart a motion that is already heading there"
     );
 
     // Imperative path: same target, new spec - the new motion runs.
     anim.animate_to(100.0, fast());
     assert!(
-        active_animations_report().iter().any(|l| l.contains("tween(")),
+        mine("tween("),
         "animate_to must adopt the new spec, got {:?}",
         active_animations_report()
     );
@@ -5796,6 +5812,19 @@ fn the_imperative_handle_retargets_while_the_per_frame_path_dedups() {
         state.peek()
     );
     clear_all_animations();
+}
+
+/// A real `#[composable]` branch for the slot-ownership test: the macro injects
+/// `start_scope`/`end_scope` around the body, which is what makes the slots (and their forget
+/// callbacks) belong to the call site instead of the parent slot.
+#[crate::composable]
+fn slot_owned_branch(
+    ctx: &mut crate::runtime::composer::ComposeCtx,
+    target: f32,
+    sid: std::rc::Rc<std::cell::RefCell<Option<StateId>>>,
+) {
+    let value = ctx.animate_float_as_state(target, AnimationSpec::Spring(SpringSpec::default()));
+    *sid.borrow_mut() = Some(value.state_id());
 }
 
 /// A slot-owned motion dies with its slot. `animate_float_as_state` remembers a state in the slot it
@@ -5819,16 +5848,9 @@ fn a_slot_owned_motion_dies_with_its_slot() {
         let sid = sid.clone();
         composer.compose(move |ctx| {
             if show.get() {
-                // The scope is what makes the slots (and their forget callbacks) belong to this
-                // branch: a bare `if` inside one compose scope would leave them in the parent slot,
-                // which is never truncated.
-                ctx.start_scope();
-                let value = ctx.animate_float_as_state(
-                    target.get(),
-                    AnimationSpec::Spring(SpringSpec::default()),
-                );
-                *sid.borrow_mut() = Some(value.state_id());
-                ctx.end_scope();
+                // A composable call, not a bare `if`: the macro's scope is what makes these slots
+                // (and their forget callbacks) belong to the branch instead of the parent slot.
+                slot_owned_branch(ctx, target.get(), sid.clone());
             }
         });
         composer.layout(crate::layout::constraints::Constraints::new(0.0, 100.0, 0.0, 100.0));

@@ -12,7 +12,7 @@ Three layers, Compose-shaped, but push-based: there are no coroutines and no sus
 
 | Layer | What it is | Where |
 | --- | --- | --- |
-| High | `animate_float_as_state`, `animate_value_as_state`, `animate_int/dp/offset/size/color_as_state` | `ComposeCtx` (`runtime/composer.rs`) |
+| High | `animate_float_as_state`, `animate_value_as_state`, `animate_int/dp/offset/size/color_as_state`, and the `_with_done` variants (`finishedListener`) | `ComposeCtx` (`runtime/composer.rs`) |
 | Middle | `update_transition`, `remember_infinite_transition`, `remember_animatable` | `animation.rs` |
 | Engine | `Motion<T>` + the global registry; the public handle is `Animatable<T>` | `animation.rs` |
 
@@ -36,7 +36,9 @@ event loop: new_events -> update_animations() -> Motion::update -> Animating::se
 - `RedrawRequested` advances it **again**: a Windows resize runs a modal loop that starves
   `AboutToWait`, and WM_PAINT is the only event that keeps arriving, so a resize must tick there to
   stay animated. Two ticks per frame are harmless — `Motion` integrates real time, not ticks.
-- Colour motions live in a second registry (`ACTIVE_COLOR_ANIMATIONS`) to stay type-erased-free.
+- Colour motions pushed by `animate_color_as_state` live in a second registry
+  (`ACTIVE_COLOR_ANIMATIONS`) so they need no type erasure. A `Color` pushed through the generic
+  `push_animatable` (or `Animatable<Color>`) lives in the main one, like any other value.
 
 ## 3. Values
 
@@ -64,7 +66,7 @@ runtime check, is what rules out a spring with no cycle length.
 | `Spring` | damping 1.0, stiffness 200, mass 1.0, threshold 0.01 | the analytic rest check says so, **or** the Compose-style estimated duration elapses — whichever comes first; writes the exact target |
 | `Tween` | 300 ms, fast-out-slow-in | its clock; `delay` holds `from` first |
 | `Keyframes` | caller's frames | its clock; the last frame writes the exact target |
-| `Repeatable` | caller's iterations/mode | `iterations × base.duration`; `initialStartOffset` in Delay or FastForward flavour |
+| `Repeatable` | caller's iterations/mode | `iterations × base.duration`; `initialStartOffset` in Delay or FastForward flavour (a Delay offset adds to the wall-clock length, a FastForward one is skipped into the first cycle) |
 | `Snap` | no delay | immediately after `delay` |
 | `Decay` | friction 4.2, threshold 0.1 | `|v0·e^(-f·t)| < threshold`; analytic, parks on the exact limit |
 
@@ -113,10 +115,17 @@ wake the tree.
 
 ## 8. Who owns a motion
 
-A motion started from a composable belongs to that slot: `animate_*_as_state`, `remember_animatable`
-and `remember_infinite_transition` register an `on_forget` cleanup, so a branch that changes shape (a
-conditionally composed animated value) takes its motion with it instead of leaving it ticking until
-the whole `Composer` is dropped. `Composer::drop` still clears everything it owns as a backstop.
+A motion started from a composable belongs to the SLOT it was started in: `animate_*_as_state`,
+`remember_animatable` and `remember_infinite_transition` register an `on_forget` cleanup, so a
+composable or container branch that leaves the tree takes its motion with it instead of leaving it
+ticking until the whole `Composer` is dropped. `Composer::drop` is the backstop.
+
+What this does NOT cover: a plain `if` that skips an `animate_*_as_state` call inside a component
+that keeps composing. winia does not emit a slot group for a Rust `if` (Compose's compiler does), so
+nothing is dropped, the callback never fires, and the motion lives until that component itself goes.
+The call sites that do this today — a conditional button/chip elevation and the FAB's — are harmless
+(that same component still reads the value), but a new conditional call site that must die with its
+branch needs a group of its own (`ctx.start_scope`, or a child composable).
 
 ## 9. Ambient API
 
@@ -145,7 +154,9 @@ rendering does not tick them — use tokio timers for wall-clock work.
 
 Tests share the global registries, so: take `animation::tests::TEST_SERIAL`, call
 `clear_all_animations()`, drive the engine by hand (`update_animations()` in a loop with short sleeps),
-and clear again at the end. `RUST_TEST_THREADS=1` in `.cargo/config.toml` covers the rest.
+and clear again at the end. The suite must run single-threaded: `RUST_TEST_THREADS=1` is set in the
+local (untracked) `.cargo/config.toml`, so anything running these tests elsewhere — CI included —
+has to set it too, or a parallel `clear_all_animations` wipes a motion mid-test.
 
 ## 12. Known limitations
 
