@@ -898,6 +898,13 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&beyond_bounds);
         let user_scroll = self.user_scroll;
         ctx.changed(&user_scroll);
+        // Spacing, padding and the item count are parameters too: they decide where content lands and
+        // how much of it exists. Only `snap_paging`/`fill_items` used to be declared, so changing the
+        // spacing on a Clean slot kept the old placement forever.
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.content_padding);
+        ctx.changed(&self.cross_padding);
+        ctx.changed(&total);
         // 数据 key 序列签名（方案 A：检测数据变化——total 变或同 total 重排/
         // 替换。签名变化 → 高度缓存按 item key 迁移到正确 index，避免 index
         // 平移导致旧高度错位）

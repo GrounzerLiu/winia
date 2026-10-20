@@ -278,8 +278,9 @@ impl<A: LazyAxis> Pager<A> {
     ) {
         let state = self.state;
         let sync = state.clone();
+        // The page count reaches the list as its item count, which the lazy list declares; declaring it
+        // here would land on this scope while the parameters are compared on the list's own group.
         let count = state.page_count;
-        ctx.changed(&count);
         // A fixed page sits at snap positions offset from the leading edge; the viewport comes from
         // the previous measure, which is stable for anything a caller would notice (a fling settles
         // long after the first frame). A page that fills the viewport always offsets by 0.
@@ -351,7 +352,11 @@ mod tests {
     use crate::layout::constraints::Constraints;
     use crate::runtime::composer::Composer;
 
-    fn compose_pager(composer: &mut Composer, state: PagerState, page_count: usize, composed: std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    fn compose_pager(
+        composer: &mut Composer,
+        state: PagerState,
+        composed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         let theme = crate::theme::ThemeColors::default_light();
         composer.compose(|ctx| {
             crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
@@ -366,7 +371,6 @@ mod tests {
                     });
             });
         });
-        let _ = page_count;
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
     }
 
@@ -374,7 +378,7 @@ mod tests {
     fn a_pager_starts_on_page_zero() {
         let state = PagerState::new(5);
         let mut composer = Composer::new();
-        compose_pager(&mut composer, state.clone(), 5, std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        compose_pager(&mut composer, state.clone(), std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
         assert_eq!(state.current_page(), 0);
         assert_eq!(state.current_page_offset_fraction(), 0.0);
         assert_eq!(state.settled_page(), 0);
@@ -385,12 +389,12 @@ mod tests {
         let state = PagerState::new(5);
         let mut composer = Composer::new();
         let composed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        compose_pager(&mut composer, state.clone(), 5, composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
         state.scroll_to_page(3, 0.0);
         // The jump applies during LAYOUT, and the page counter is derived at the end of the next
         // build (the same eventual consistency Compose has while a scroll is animating).
-        compose_pager(&mut composer, state.clone(), 5, composed.clone());
-        compose_pager(&mut composer, state.clone(), 5, composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
         assert_eq!(state.list_state().first_visible(), 3, "the jump landed on page 3");
         assert_eq!(state.current_page(), 3, "scrollToPage(3) makes page 3 current");
         assert!(state.current_page_position() >= 2.99, "position={}", state.current_page_position());
@@ -402,7 +406,7 @@ mod tests {
         let state = PagerState::new(200);
         let mut composer = Composer::new();
         let composed = std::sync::Arc::new(AtomicUsize::new(0));
-        compose_pager(&mut composer, state.clone(), 200, composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
         let n = composed.load(Ordering::Relaxed);
         assert!(n < 30, "a 200-page pager must not compose every page (composed {n})");
     }
@@ -412,10 +416,10 @@ mod tests {
         let state = PagerState::new(3);
         let mut composer = Composer::new();
         let composed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        compose_pager(&mut composer, state.clone(), 3, composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
         // Half a page into page 0: the counter is still 0 and the fraction approaches 0.5.
         state.list_state().offset.set(100.0);
-        compose_pager(&mut composer, state.clone(), 3, composed.clone());
+        compose_pager(&mut composer, state.clone(), composed.clone());
         assert!(state.current_page_offset_fraction().abs() < 0.5);
     }
 
@@ -508,15 +512,6 @@ mod tests {
             });
         });
         composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
-        let has_scroll = composer.arena_nodes().iter().any(|node| {
-            node.modifier.elements().iter().any(|el| {
-                matches!(
-                    el,
-                    crate::modifier::ModifierElement::HorizontalScroll { .. }
-                        | crate::modifier::ModifierElement::LazyScroll { .. }
-                )
-            })
-        });
         // The lazy list's own bookkeeping element stays (the measure pass needs the content height);
         // what must disappear is the wheel/drag channel.
         let has_wheel_channel = composer.arena_nodes().iter().any(|node| {
@@ -526,7 +521,6 @@ mod tests {
                 .any(|el| matches!(el, crate::modifier::ModifierElement::HorizontalScroll { .. }))
         });
         assert!(!has_wheel_channel, "userScrollEnabled=false must not attach the horizontal scroll channel");
-        let _ = has_scroll;
     }
 
     /// The snap positions stay on page boundaries even when the page is offset inside the viewport: the

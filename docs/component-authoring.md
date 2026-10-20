@@ -145,9 +145,14 @@ let modifier = Modifier::new()
     .then(self.modifier);   // the caller's last, so it can override
 ```
 
-**MUST** append `self.modifier` at the end of the component's own modifier chain. **EXCEPT** semantics:
-a role declared before `then(user_modifier)` survives a caller adding their own description, which is
-exactly why `docs/semantics.md` states that ordering as a rule.
+**MUST** append `self.modifier` at the end of the component's APPEARANCE chain. Two documented
+exceptions, both about what the component still has to add afterwards:
+
+- **semantics** - a role declared before `then(user_modifier)` survives a caller adding their own
+  description, which is why `docs/semantics.md` states that ordering as a rule.
+- **input nodes** - every clickable component appends `clickable`/ripple AFTER the caller's modifier
+  (`button.rs:898` before `:905-909`, `card.rs:457-462`, `list_item.rs:146-150`), because the
+  interaction node has to be added by the component, not by the caller.
 
 ## 3. Composition identity: the part that breaks silently
 
@@ -238,7 +243,7 @@ When the CALLER has to observe or drive the component, the component does not ow
 ```rust
 pub struct SheetState { /* handles */ }
 impl SheetState { pub fn new() -> Self; pub fn expand(&self); pub fn current_value(&self) -> SheetValue; }
-pub fn remember_sheet_state(ctx: &mut ComposeCtx) -> SheetState;  // in the same module
+pub fn remember_date_picker_state(ctx: &mut ComposeCtx) -> DatePickerState; // the real pattern
 
 BottomSheet::new().state(state.clone()).build(ctx, content);
 ```
@@ -381,7 +386,8 @@ system theme - otherwise the components keep the colours they composed with.
 
 ## 7. Slots
 
-Optional named content goes in `Option<Box<dyn FnOnce(&mut ComposeCtx) + Send>>` with a builder
+Optional named content goes in `Option<Box<dyn FnOnce(&mut ComposeCtx) + Send + Sync>>` (the shape the
+real slots use, `text_field.rs:880`) with a builder
 method per slot (`navigation_icon`, `actions`, `subtitle`). **MUST** give a slot the M3 geometry it
 has in Compose (touch slot, inset, alignment) instead of letting the content decide.
 
@@ -455,7 +461,8 @@ serialisation that only works if every animation-driving test takes it (see
 
 ## 12. Documentation
 
-Every component ships `docs/<component>.md` with these sections, in this order:
+Every NEW component ships `docs/<component>.md` with these sections, in this order (existing docs are
+converted when they are edited for another reason - 1 of 37 had all six when this was written):
 
 1. **Sources** - the Compose files it mirrors (paths in `reference/`), so the next reader can diff
    behaviour instead of guessing.
@@ -473,7 +480,9 @@ Copy this into the pull request and tick it there:
 [ ] builder struct, private fields, new() + one method per option returning Self
 [ ] #[composable] decided by section 1.2, not by habit
 [ ] every parameter that can change the content is in a ctx.changed call BEFORE the group starts
-     (enforced: components::conventions::every_container_declares_its_parameters)
+     (partly enforced: components::conventions::every_container_declares_its_parameters checks that a
+     file composing a restartable group declares at least one parameter - per FILE, so a second group
+     or a wrapper container in the same file is not covered)
 [ ] ctx.key only where a branch can change the slot layout
 [ ] ctx.remember without a nested State; the right handle shape for the kind of state
      (enforced: components::conventions::no_component_nests_a_state_in_remember)
