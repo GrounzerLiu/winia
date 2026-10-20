@@ -1192,6 +1192,28 @@ impl ApplicationHandler for AppState {
                             }).copied()
                         });
                         if let Some(target) = target {
+                            // A PAGED container moves a page per notch: a wheel delta is a small fraction of
+                            // a viewport-sized page, so scrolling by pixels and snapping afterwards returns
+                            // to where it started (a date picker's months and a pager both read as "the
+                            // wheel does nothing").
+                            let paged = {
+                                let nodes = pw.composer.arena_nodes();
+                                let only_horizontal = nodes[target]
+                                    .modifier
+                                    .vertical_scroll_state()
+                                    .is_none()
+                                    && nodes[target].modifier.horizontal_scroll_state().is_some();
+                                let (ex, ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
+                                let state = if ex != 0.0 {
+                                    nodes[target].modifier.horizontal_scroll_state()
+                                } else {
+                                    nodes[target].modifier.vertical_scroll_state()
+                                };
+                                state.filter(|s| s.snaps()).map(|s| {
+                                    s.snap_page(ey < 0.0);
+                                })
+                            };
+                            if paged.is_none() {
                             // A horizontal-only target takes the wheel's dy as dx (see the finder).
                             let (dx, dy) = {
                                 let probe = pw.composer.arena_nodes();
@@ -1237,6 +1259,7 @@ impl ApplicationHandler for AppState {
                                 if ss.snaps() {
                                     note_wheel_settle(window_id.into_raw() as u64, &ss);
                                 }
+                            }
                             }
                         }
                     }
@@ -2243,7 +2266,42 @@ impl AppState {
                         handled = consumed.x != 0.0 || consumed.y != 0.0;
                     } else if let Some(r) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
-                        if let Some(target) = find_scroll_target(nodes, r, dx, dy) {
+                        // An injected wheel follows the REAL one when the test moved the pointer:
+                        // hit-test at that position and take the first axis-matching node on the path
+                        // (including a horizontal-only container, which takes the vertical wheel).
+                        // Without the pointer it falls back to the blind search, which is what a test
+                        // that never moves the mouse has to use.
+                        let by_pointer = pw.input.last_pos.and_then(|(px, py)| {
+                            let path = crate::layout::node::hit_test_with_flights(nodes, r, pw.composer.transition_roots(), px, py);
+                            path.iter().rev().find(|&&idx| {
+                                (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
+                                    || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                                    || (dy != 0.0
+                                        && dx == 0.0
+                                        && nodes[idx].modifier.vertical_scroll_state().is_none()
+                                        && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                            }).copied()
+                        });
+                        if let Some(target) = by_pointer.or_else(|| find_scroll_target(nodes, r, dx, dy)) {
+                            // Same rule as the real wheel: a paged container moves ONE page per notch.
+                            let paged = {
+                                let nodes = pw.composer.arena_nodes();
+                                let only_horizontal = nodes[target]
+                                    .modifier
+                                    .vertical_scroll_state()
+                                    .is_none()
+                                    && nodes[target].modifier.horizontal_scroll_state().is_some();
+                                let (ex, ey) = if only_horizontal && dy != 0.0 { (dy, 0.0) } else { (dx, dy) };
+                                let state = if ex != 0.0 {
+                                    nodes[target].modifier.horizontal_scroll_state()
+                                } else {
+                                    nodes[target].modifier.vertical_scroll_state()
+                                };
+                                state.filter(|s| s.snaps()).map(|s| s.snap_page(ey < 0.0)).is_some()
+                            };
+                            if paged {
+                                handled = true;
+                            } else {
                             let consumed = dispatch_nested_scroll_delta(pw.composer.arena_nodes_mut(), r, target, crate::nested_scroll::ScrollDelta::new(dx, dy), crate::nested_scroll::NestedScrollSource::Wheel, crate::unit::Density::from_density(pw.scale_factor as f32));
                             handled = consumed.x != 0.0 || consumed.y != 0.0;
                             // An injected wheel behaves like a real one: a snapping container settles
@@ -2259,6 +2317,7 @@ impl AppState {
                                 if ss.snaps() {
                                     note_wheel_settle(window_id.into_raw() as u64, &ss);
                                 }
+                            }
                             }
                         }
                     }

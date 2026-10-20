@@ -2812,6 +2812,45 @@ impl ScrollState {
         self.snap.peek().is_some_and(|s| s.step.is_finite() && s.step > 0.0)
     }
 
+    /// Move ONE snap position forward or back, and animate there.
+    ///
+    /// A wheel notch on a paged container should move a page, not a few pixels: a viewport-sized page
+    /// is far wider than one wheel delta, so the ordinary "settle on the nearest position" returns the
+    /// list to where it started and the wheel reads as broken. Compose does not special-case this (a
+    /// wheel on a pager barely moves it); winia does, for paged containers only - `snap` is `Some` -
+    /// so a pager and a date picker move one page per notch while a plain list keeps scrolling
+    /// smoothly.
+    pub(crate) fn snap_page(&self, forward: bool) {
+        let Some(spec) = self
+            .snap
+            .peek()
+            .filter(|s| s.step.is_finite() && s.step > 0.0)
+        else {
+            return;
+        };
+        let raw_limit = self.fling_limit.peek();
+        let limit = if raw_limit.is_finite() && raw_limit >= 0.0 { raw_limit } else { f32::MAX };
+        let position = (self.offset.peek() - spec.anchor) / spec.step;
+        let index = if forward {
+            position.floor() + 1.0
+        } else {
+            (position.ceil() - 1.0).max(0.0)
+        };
+        let target = (spec.anchor + index * spec.step).clamp(0.0, limit);
+        if (target - self.offset.peek()).abs() < 0.5 {
+            return;
+        }
+        self.is_scroll_in_progress.set(true);
+        let done = self.is_scroll_in_progress.clone();
+        crate::animation::push_animatable_with_velocity_and_done(
+            self.offset.clone(),
+            target,
+            snap_settle(),
+            0.0,
+            move || done.set(false),
+        );
+    }
+
     /// 启动 fling，并在 child 撞到边界时把瞬时剩余速度交给调用方。
     ///
     /// A snapping container takes the snap branch instead of the decay: one spring, launched with the

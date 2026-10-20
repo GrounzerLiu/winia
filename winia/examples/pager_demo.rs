@@ -105,6 +105,15 @@ fn pager_demo_ui(ctx: &mut ComposeCtx) {
 
             // Dot indicator: reads current_page, so it recomposes when the counter flips.
             let current = fill_state.current_page();
+            caption(
+                ctx,
+                &format!(
+                    "page {} of {} - offset fraction {:+.2}",
+                    current,
+                    pages,
+                    fill_state.current_page_offset_fraction()
+                ),
+            );
             Row::new()
                 .modifier(Modifier::new().fill_max_width().padding_top(10.0))
                 .arrangement(Arrangement::Center)

@@ -98,6 +98,11 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
 - **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
   `scroll_to_page` and an external animation still move the pager.
+- **One wheel notch moves one page.** A wheel delta is a small fraction of a viewport-sized page, so
+  Compose's "scroll by pixels, then settle on the nearest snap position" would put the pager back
+  where it started - a wheel on a Compose pager barely moves it. winia treats a paged container's
+  wheel as a page step instead (`ScrollState::snap_page`), which also gives the date picker's months
+  the same feel. A non-paged list keeps scrolling smoothly.
 
 ## Differences from Compose
 
