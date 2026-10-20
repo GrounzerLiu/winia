@@ -3142,6 +3142,49 @@ mod tests {
         );
     }
 
+    /// `snap_page` is the wheel's page step: one call moves one snap position forward, a second call
+    /// during the spring steps from where the first is HEADING (reading the live offset would re-target
+    /// the same page), a reversed container steps the other way, and a step past the end is refused
+    /// rather than clamped into the trailing padding.
+    #[test]
+    fn a_page_step_walks_one_position_at_a_time_and_refuses_the_end() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        const STEP: f32 = 200.0;
+        let scroll = ScrollState::new();
+        // Three 200 px pages (snap positions 0/200/400) in a 200 px viewport, plus 100 px of trailing
+        // content padding: the limit is 500 while the LAST snap position is 400.
+        scroll.fling_limit.set(500.0);
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+
+        assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
+        assert_eq!(
+            *scroll.step_goal.lock().unwrap(),
+            Some(STEP),
+            "a second notch steps from where the first is heading, not from the live offset"
+        );
+        assert!(scroll.snap_page(true, false), "page 1 -> 2 starts the next step");
+        assert_eq!(*scroll.step_goal.lock().unwrap(), Some(STEP * 2.0));
+        assert!(
+            !scroll.snap_page(true, false),
+            "past the last snap position (2 * 200) the step is refused, not clamped into the 100 px of padding"
+        );
+
+        // Reverse layout mirrors the direction: a "backward" notch steps forward.
+        crate::animation::clear_all_animations();
+        let reversed = ScrollState::new();
+        reversed.fling_limit.set(1000.0);
+        reversed.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+        assert!(reversed.snap_page(false, true));
+        assert_eq!(*reversed.step_goal.lock().unwrap(), Some(STEP));
+
+        // A container without a snap spec never pages.
+        let plain = ScrollState::new();
+        assert!(!plain.snap_page(true, false));
+        crate::animation::clear_all_animations();
+    }
+
     /// The release velocity gate must not apply to a snap. This is the case that was broken: a drag
     /// carried more than halfway and then let go with the finger nearly still — under 50 px/s, and
     /// under `fling_with_boundary`'s own 1 px/s floor — reached neither the decay nor the snap, so the
