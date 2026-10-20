@@ -103,6 +103,13 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   `MinFlingVelocityDp` (400 dp/s) it settles on the nearer page, above it on the next one.
 - **`user_scroll_enabled(false)`** drops the wheel/drag channel but keeps the offset, so
   `scroll_to_page` and an external animation still move the pager.
+- **Two fling knobs are exposed**, the rest of `PagerDefaults.flingBehavior` is not.
+  `snap_positional_threshold(f32)` (`snapPositionalThreshold`, default `0.5`) is how far into the page
+  a release BELOW the fling floor has to be before it carries on: `0.3` turns a page from 30% of the
+  way, `0.9` demands almost a whole page. A flick above `MinFlingVelocityDp` still goes the way it was
+  thrown, whatever the threshold says. `snap_animation_spec(SpringSpec)` (`snapAnimationSpec`) is the
+  spring the settle runs on; the default is material3's `DefaultEffects` (stiffness 1600, damping 1.0),
+  and the wheel's page step uses the same spec, so one pager has one settle curve.
 - **One wheel NOTCH moves one page** (`ScrollState::snap_page`), which also gives the date picker's
   months the same feel; a non-paged list keeps scrolling smoothly. A notch is a discrete
   `LineDelta`; a continuous `PixelDelta` stream (a precision touchpad, a high-resolution wheel) is a
@@ -126,7 +133,9 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `beyondViewportPageCount` | `beyond_bounds` on the lazy list: the composition window is configurable. |
 | `snapPosition` (`Start/Center/End`) | A snap offset inside the step; a filled page always rests at Start, so it only shows with `PageSize::Fixed`. |
 | `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel; programmatic scrolling still works. |
-| `flingBehavior`, `pageNestedScrollConnection`, `PagerSnapDistance` | Not exposed. Snapping is the lazy list's own (one page per gesture); a replaceable fling strategy would need a trait the list does not have. |
+| `flingBehavior` — a replaceable `TargetedFlingBehavior` | Not exposed: the settle is the scroll state's own. Two of its parameters ARE knobs (`snap_positional_threshold`, `snap_animation_spec`), but substituting the behaviour would need a trait the list does not have — the state picks an animation and the frame clock runs it, a `performFling` strategy would have to drive the scroll itself. |
+| `PagerSnapDistance` (default `atMost(1)`) | Not exposed: a release moves at most one page, which IS `atMost(1)`. `snapPositionalThreshold` is `snap_positional_threshold`. |
+| `pageNestedScrollConnection` | Not exposed: the list underneath takes a `NestedScrollConnection` through `Modifier::nested_scroll`, but there is no pager-specific default. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is the content parameter instead. |
 | RTL mirrors the pages | Not mirrored: the lazy list has no layout-direction handling. |
 | The wheel takes the DOMINANT axis and is ignored by a container on the other axis (`NonTouchScrollingLogic.kt:255-264`), so a plain vertical wheel does not move a `HorizontalPager` | A vertical wheel IS routed to a horizontal PAGER (and only to one, so a vertical ancestor keeps its wheel); non-paging horizontal lists still ignore it. |
@@ -140,7 +149,13 @@ pages (the snap spec does not depend on a second composed page); a fixed page ke
 viewport is reported; a padded `Fill` page MEASURES `viewport - before - after` (asserted on the page
 node, not only on the reported size); a centred fixed pager reaches its last page; a page step
 survives the list rebuilding itself mid-spring; `user_scroll_enabled(false)` removes the scroll
-channel; the fraction stays inside `[-0.5, 0.5)`, including past the last page.
+channel; the fraction stays inside `[-0.5, 0.5)`, including past the last page; the two fling knobs
+reach the snap spec the measure writes back, the defaults are 0.5 and material3's `DefaultEffects`
+spring, and a slow release at 40% of a page turns it under `0.3` but not under the default `0.5`.
+
+`cargo test -p winia --lib positional_threshold` / `settle_spring` - the threshold decision itself
+(`snap_target` at 40% and 60%, above and below the fling floor) and that `snap_settle` returns the
+spring the spec carries.
 
 `cargo test -p winia --lib wheel` - one notch pages on its own delta; tiny `PixelDelta` events bank a
 notch before any of them pages; a notch drops travel a touchpad banked; a reversal and a pause each

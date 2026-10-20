@@ -442,6 +442,12 @@ pub struct LazyList<A: LazyAxis> {
     /// Where inside an item the list comes to rest when `snap_paging` is on: `0.0` is its leading edge,
     /// `(viewport - item) / 2.0` centres a fixed page, `viewport - item` puts it at the trailing edge.
     snap_offset: f32,
+    /// How far into the page a release has to be before it carries on to the next one, in `0.0..=1.0`
+    /// (Compose's `snapPositionalThreshold`); written back into the snap spec.
+    snap_positional_threshold: f32,
+    /// The spring a paging settle runs on (Compose's `snapAnimationSpec`); written back into the snap
+    /// spec, so the wheel's page step and a fling settle with the same curve.
+    snap_animation_spec: crate::animation::SpringSpec,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -476,6 +482,8 @@ impl<A: LazyAxis> LazyList<A> {
             beyond_bounds: LAZY_BEYOND_BOUNDS,
             user_scroll: true,
             snap_offset: 0.0,
+            snap_positional_threshold: 0.5,
+            snap_animation_spec: crate::modifier::default_snap_settle(),
         }
     }
 
@@ -529,6 +537,21 @@ impl<A: LazyAxis> LazyList<A> {
     /// snapping to a step that means nothing.
     pub fn snap_paging(mut self, enabled: bool) -> Self {
         self.snap_paging = enabled;
+        self
+    }
+
+    /// How far into a page a release has to be before it carries on to the next one, in `0.0..=1.0`
+    /// (Compose's `snapPositionalThreshold`, `0.5` by default). Only consulted under the fling floor.
+    pub fn snap_positional_threshold(mut self, threshold: f32) -> Self {
+        self.snap_positional_threshold = threshold;
+        self
+    }
+
+    /// The spring a paging settle runs on (Compose's `snapAnimationSpec`). The default is material3's
+    /// `DefaultEffects` spring; the wheel's page step uses the same spec, so the two settles of one
+    /// pager cannot drift apart.
+    pub fn snap_animation_spec(mut self, spec: crate::animation::SpringSpec) -> Self {
+        self.snap_animation_spec = spec;
         self
     }
 
@@ -905,6 +928,12 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&item_main_size);
         let snap_offset = self.snap_offset;
         ctx.changed(&snap_offset);
+        // The settle curve and the release threshold are parameters too: they reach the snap spec the
+        // measure writes back, so a Clean slot that skipped them would keep the previous feel.
+        let snap_positional_threshold = self.snap_positional_threshold;
+        ctx.changed(&snap_positional_threshold);
+        let snap_animation_spec = self.snap_animation_spec.clone();
+        ctx.changed(&snap_animation_spec);
         let beyond_bounds = self.beyond_bounds;
         ctx.changed(&beyond_bounds);
         let user_scroll = self.user_scroll;
@@ -1121,6 +1150,8 @@ impl<A: LazyAxis> LazyList<A> {
             fill_items,
             item_main_size: self.item_main_size,
             snap_offset: self.snap_offset,
+            snap_positional_threshold: self.snap_positional_threshold,
+            snap_animation_spec: self.snap_animation_spec.clone(),
             beyond_bounds: self.beyond_bounds,
             state: state.clone(),
         };
@@ -1209,6 +1240,10 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub item_main_size: Option<f32>,
     /// Where inside an item a snapping list rests (`SnapPosition`), from `snap_offset`.
     pub snap_offset: f32,
+    /// The release threshold written into the snap spec (`SnapSpec::positional_threshold`).
+    pub snap_positional_threshold: f32,
+    /// The settle spring written into the snap spec (`SnapSpec::settle`).
+    pub snap_animation_spec: crate::animation::SpringSpec,
     /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
     pub beyond_bounds: usize,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
@@ -1394,6 +1429,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
                 // Page k is placed after `pad_before`, but its scroll snap position is `k * step`;
                 // the leading padding belongs to layout, not to the scroll state's snap anchor.
                 anchor: 0.0,
+                positional_threshold: self.snap_positional_threshold,
+                settle: self.snap_animation_spec.clone(),
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
                 min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,

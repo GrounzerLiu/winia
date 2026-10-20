@@ -215,6 +215,12 @@ pub struct Pager<A: LazyAxis> {
     snap_position: SnapPosition,
     beyond_viewport_page_count: usize,
     user_scroll_enabled: bool,
+    /// Compose's `snapPositionalThreshold`: how far into a page a slow release has to be before it
+    /// carries on to the next one (`0.5` by default, i.e. "the nearer page wins").
+    snap_positional_threshold: f32,
+    /// Compose's `snapAnimationSpec`: the spring a settle runs on. material3's `DefaultEffects`
+    /// unless a caller says otherwise.
+    snap_animation_spec: crate::animation::SpringSpec,
 }
 
 /// A pager whose pages scroll horizontally (Compose's `HorizontalPager`).
@@ -247,6 +253,8 @@ impl<A: LazyAxis> Pager<A> {
             snap_position: SnapPosition::Start,
             beyond_viewport_page_count: 4,
             user_scroll_enabled: true,
+            snap_positional_threshold: 0.5,
+            snap_animation_spec: crate::modifier::default_snap_settle(),
         }
     }
 
@@ -283,6 +291,29 @@ impl<A: LazyAxis> Pager<A> {
     /// the pages are smaller than the viewport (`PageSize::Fixed`).
     pub fn snap_position(mut self, position: SnapPosition) -> Self {
         self.snap_position = position;
+        self
+    }
+
+    /// How far into a page a slow release has to be before it carries on to the next one, as a
+    /// fraction of the page in `0.0..=1.0` (Compose's `snapPositionalThreshold`, default `0.5`).
+    ///
+    /// Below the fling floor this is the only thing deciding where a released page lands: `0.3` lets
+    /// a 30% drag turn the page, `0.9` makes the pager demand almost a whole page. A flick above the
+    /// floor (`MinFlingVelocityDp`, 400 dp/s) still goes the way it was thrown.
+    pub fn snap_positional_threshold(mut self, threshold: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&threshold) && threshold.is_finite(),
+            "snap_positional_threshold must be within 0.0..=1.0, got {threshold}"
+        );
+        self.snap_positional_threshold = threshold;
+        self
+    }
+
+    /// The spring a settle runs on (Compose's `snapAnimationSpec`). The default is material3's
+    /// `DefaultEffects` (`spring(dampingRatio = 1.0, stiffness = 1600)`); the wheel's page step uses
+    /// the same spec, so both settles of one pager share one curve.
+    pub fn snap_animation_spec(mut self, spec: crate::animation::SpringSpec) -> Self {
+        self.snap_animation_spec = spec;
         self
     }
 
@@ -355,6 +386,8 @@ impl<A: LazyAxis> Pager<A> {
             .user_scroll(self.user_scroll_enabled)
             .spacing(self.page_spacing)
             .content_padding(self.content_padding, self.content_padding)
+            .snap_positional_threshold(self.snap_positional_threshold)
+            .snap_animation_spec(self.snap_animation_spec.clone())
             .reverse_layout(self.reverse)
             .modifier(self.modifier);
         list = match self.page_size {
@@ -925,5 +958,125 @@ mod tests {
             "the fraction must stay inside [-0.5, 0.5), got {}",
             state.current_page_offset_fraction()
         );
+    }
+
+    /// A pager's defaults are Compose's: `snapPositionalThreshold` 0.5, and material3's `DefaultEffects`
+    /// spring on the settle.
+    #[test]
+    fn a_pager_defaults_to_the_material_effects_settle() {
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state.clone())
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        build(&mut composer);
+        build(&mut composer);
+
+        let spec = state.list_state().snap.peek().expect("a pager snaps");
+        assert_eq!(
+            spec.positional_threshold, 0.5,
+            "snapPositionalThreshold defaults to 0.5 - the nearer page wins"
+        );
+        assert_eq!(spec.settle.stiffness, 1600.0, "material3 DefaultEffects stiffness");
+        assert_eq!(spec.settle.damping_ratio, 1.0, "and its damping ratio");
+    }
+
+    /// The two knobs reach the snap spec the measure writes back - a Clean list would otherwise keep
+    /// the previous feel.
+    #[test]
+    fn the_fling_knobs_reach_the_snap_spec() {
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state.clone())
+                        .snap_positional_threshold(0.3)
+                        .snap_animation_spec(crate::animation::SpringSpec {
+                            stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_FAST,
+                            damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_SPATIAL,
+                            ..Default::default()
+                        })
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        build(&mut composer);
+        build(&mut composer);
+
+        let spec = state.list_state().snap.peek().expect("a pager snaps");
+        assert!((spec.positional_threshold - 0.3).abs() < 1e-6, "the threshold reaches the spec");
+        assert_eq!(spec.settle.stiffness, 3800.0, "and so does the settle spring");
+        assert_eq!(spec.settle.damping_ratio, 0.9);
+    }
+
+    /// The point of the threshold: at 40% of a page, a slow release carries on with `0.3` and goes back
+    /// with the default `0.5`. Asserted on the offset a real fling settles at, not only on the spec.
+    #[test]
+    fn a_low_threshold_lets_a_slow_release_turn_the_page() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        // Release at 40% of page 0 and report where the page landed, in pages.
+        let land = |threshold: Option<f32>| -> f32 {
+            let state = PagerState::new(5);
+            let mut composer = Composer::new();
+            let theme = crate::theme::ThemeColors::default_light();
+            let build = |composer: &mut Composer| {
+                composer.compose(|ctx| {
+                    crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                        let mut pager = HorizontalPager::new(state.clone());
+                        if let Some(threshold) = threshold {
+                            pager = pager.snap_positional_threshold(threshold);
+                        }
+                        pager
+                            .modifier(Modifier::new().fill_max_width().fill_max_height())
+                            .build(ctx, |ctx, page| {
+                                crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                            });
+                    });
+                });
+                composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+            };
+            build(&mut composer);
+            build(&mut composer);
+
+            let page = state.layout_info().page_size;
+            assert!(page > 0.0, "the page size resolved");
+            state.list_state().offset.set(page * 0.4);
+            let scroll = pager_scroll_state(&composer);
+            scroll.fling(0.0);
+            for _ in 0..400 {
+                crate::animation::update_animations();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                if !crate::animation::has_animation_for_state(scroll.offset.state_id()) {
+                    break;
+                }
+            }
+            scroll.offset.peek() / page
+        };
+
+        assert!(
+            (land(Some(0.3)) - 1.0).abs() < 0.01,
+            "a 0.3 threshold turns the page from 40%"
+        );
+        assert!(land(None).abs() < 0.01, "the default 0.5 sends a 40% release back");
+
+        crate::animation::clear_all_animations();
     }
 }

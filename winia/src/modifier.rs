@@ -2692,7 +2692,7 @@ pub struct ScrollState {
 /// the spacing of the snap positions, and `min_fling_velocity` is `MinFlingVelocityDp = 400.dp`
 /// converted at the density the list composed under, which is the threshold between "settle on the
 /// nearer position" and "carry on to the next one".
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SnapSpec {
     /// Distance between two snap positions — the page size.
     pub step: f32,
@@ -2705,6 +2705,47 @@ pub(crate) struct SnapSpec {
     /// the scroll target. (The `SnapPosition` shift is the same rule: Compose moves the page, not the
     /// scroll target.)
     pub anchor: f32,
+    /// How far into the page a release has to be before it carries on to the NEXT one, as a fraction
+    /// of the step in `0.0..=1.0` (Compose's `snapPositionalThreshold`, default `0.5`). Below the
+    /// fling floor this is the only thing deciding the target, so it is what a slow drag-past-halfway
+    /// turns on; at or above it, the velocity picks the page and the threshold is not consulted.
+    pub positional_threshold: f32,
+    /// The spring the settle runs on (Compose's `snapAnimationSpec`). See [`default_snap_settle`].
+    pub settle: crate::animation::SpringSpec,
+}
+
+impl Default for SnapSpec {
+    fn default() -> Self {
+        Self {
+            step: 1.0,
+            min_fling_velocity: 400.0,
+            anchor: 0.0,
+            positional_threshold: 0.5,
+            settle: default_snap_settle(),
+        }
+    }
+}
+
+impl SnapSpec {
+    /// The settle as the animation engine wants it.
+    fn settle_spec(&self) -> crate::animation::AnimationSpec {
+        crate::animation::AnimationSpec::Spring(self.settle.clone())
+    }
+}
+
+/// The settle spring a snapping container runs unless a caller overrides it: material3 hands
+/// `snapFlingBehavior` `MotionSchemeKeyTokens.DefaultEffects` (`DatePicker.kt:744`), which resolves
+/// through `MotionScheme.kt:276` → `defaultEffectsSpec()` (`:152-156`) to
+/// `spring(dampingRatio = SpringDefaultEffectsDamping, stiffness = SpringDefaultEffectsStiffness)`,
+/// and `StandardMotionTokens.kt:22-23` puts those at **1.0 and 1600.0** (the expressive scheme is the
+/// same). This used to be foundation's `rememberSnapFlingBehavior` default
+/// (`spring(stiffness = Spring.StiffnessMediumLow)`, `SnapFlingBehavior.kt:238`), which visibly
+/// lagged the picker it was ported from.
+pub(crate) fn default_snap_settle() -> crate::animation::SpringSpec {
+    crate::animation::SpringSpec {
+        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+        ..crate::animation::SpringSpec::default()
+    }
 }
 
 /// Where a snapping fling should land, from where it started and how fast it was let go.
@@ -2718,7 +2759,7 @@ pub(crate) struct SnapSpec {
 /// pager. Clamping only to the list's end instead lets a hard flick bank thousands of pixels of decay
 /// first; on a 2412-page month list that is most of a year, and the direction ends up decided by where
 /// the decay happened to run out rather than by the gesture.
-fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
+fn snap_target(current: f32, velocity: f32, snap: &SnapSpec, limit: f32) -> f32 {
     let step = snap.step;
     // The snap positions are `k * step + offset`: with a fixed page that does not fill the viewport,
     // `offset` is how far the page sits from the leading edge (`SnapPosition.Center` is half the
@@ -2726,8 +2767,16 @@ fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
     let position = (current - snap.anchor).max(0.0);
     let lower = (position / step).floor() * step + snap.anchor; // distance to it is <= 0
     let upper = (position / step).ceil() * step + snap.anchor; // distance to it is >= 0
+    // How far the list already sits into the page it is between, `0.0` at `lower` and `1.0` at
+    // `upper`. A release under the fling floor stays on `lower` unless this has crossed the caller's
+    // positional threshold - Compose's `snapPositionalThreshold`, and the reason a slow drag can
+    // still turn a page. `0.5` reproduces the old "the nearer position wins" rule exactly.
+    let into_page = (position / step).fract();
+    // Resting ON a boundary is not "past the threshold", whatever the threshold is (0.0 would
+    // otherwise turn a page from a release that moved nothing at all).
+    let at_rest = (position - (lower - snap.anchor)).abs() < 0.5;
     let picked = if velocity.abs() < snap.min_fling_velocity {
-        if (upper - current).abs() <= (current - lower).abs() {
+        if !at_rest && into_page >= snap.positional_threshold {
             upper
         } else {
             lower
@@ -2738,29 +2787,6 @@ fn snap_target(current: f32, velocity: f32, snap: SnapSpec, limit: f32) -> f32 {
         lower
     };
     picked.clamp(0.0, limit.max(0.0))
-}
-
-/// How a snapping fling settles: `MotionSchemeKeyTokens.DefaultEffects`, the spec material3 hands
-/// `snapFlingBehavior` (`DatePicker.kt:744`).
-///
-/// Following that reference all the way down rather than stopping at it: `MotionScheme.kt:276` maps the
-/// key to `defaultEffectsSpec()`, which is `spring(dampingRatio = SpringDefaultEffectsDamping,
-/// stiffness = SpringDefaultEffectsStiffness)` (`:152-156`) — and `StandardMotionTokens.kt:22-23` puts
-/// those at **1.0 and 1600.0**. The expressive scheme is the same (`ExpressiveMotionTokens.kt:24-25`), so
-/// the value does not depend on which scheme an app selects.
-///
-/// This used to be foundation's `rememberSnapFlingBehavior` default
-/// (`spring(stiffness = Spring.StiffnessMediumLow)`, `SnapFlingBehavior.kt:238`), not material3's — the
-/// old constant (400) sits well below this one, and the settle visibly lagged the picker it was ported
-/// from. The "400" figure itself cannot be sourced from `target/compose-src` (the numeric constant lives
-/// in `androidx.compose.animation.core`, which is not mirrored — only the use site is), so it is kept
-/// here as the prior local value, not as a quoted Compose fact. `SpringSpec::default()`'s damping ratio
-/// is already 1.0, matching `SpringDefaultEffectsDamping` and Compose's `DampingRatioNoBouncy`.
-fn snap_settle() -> crate::animation::AnimationSpec {
-    crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec {
-        stiffness: 1600.0,
-        ..crate::animation::SpringSpec::default()
-    })
 }
 
 impl ScrollState {
@@ -2878,7 +2904,7 @@ impl ScrollState {
         crate::animation::push_animatable_with_velocity_and_done(
             self.offset.clone(),
             target,
-            snap_settle(),
+            spec.settle_spec(),
             0.0,
             move || {
                 let mut goal = goal_cell.lock().unwrap_or_else(|e| e.into_inner());
@@ -2930,12 +2956,12 @@ impl ScrollState {
         // the gesture's momentum into it. Ending phase one first would both overshoot the target and
         // visibly stop the list before the second animation moves it again.
         if let Some(snap) = snapping {
-            let target = snap_target(off.peek(), velocity, snap, limit.peek());
+            let target = snap_target(off.peek(), velocity, &snap, limit.peek());
             let settle = done_flag.clone();
             crate::animation::push_animatable_with_velocity_and_done(
                 off,
                 target,
-                snap_settle(),
+                snap.settle_spec(),
                 velocity,
                 move || settle.set(false),
             );
@@ -3069,13 +3095,13 @@ mod tests {
     fn a_snapping_fling_moves_at_most_one_page() {
         const STEP: f32 = 336.0;
         const MIN_FLING: f32 = 400.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING, anchor: 0.0 };
+        let snap = SnapSpec { step: STEP, min_fling_velocity: MIN_FLING, ..Default::default() };
         let limit = STEP * 10.0;
 
         // Anywhere inside a page, any velocity: the answer is one of the two neighbours, never further.
         for offset in [0.0f32, 1.0, 100.0, 167.9, 168.1, 335.0] {
             for velocity in [-9000.0f32, -MIN_FLING, -MIN_FLING + 1.0, 0.0, MIN_FLING, MIN_FLING - 1.0, 9000.0] {
-                let target = snap_target(offset, velocity, snap, limit);
+                let target = snap_target(offset, velocity, &snap, limit);
                 assert!(
                     (target - offset).abs() <= STEP + 0.5,
                     "offset {offset} at velocity {velocity} moved {} — more than one page",
@@ -3091,14 +3117,64 @@ mod tests {
 
         // A hard flick goes the way the gesture went; a slow one settles on the CLOSER page — which is
         // how a small push returns the picker to the month it started on.
-        assert_eq!(snap_target(100.0, 9000.0, snap, limit), STEP, "hard forward -> next page");
-        assert_eq!(snap_target(100.0, -9000.0, snap, limit), 0.0, "hard back -> previous page");
-        assert_eq!(snap_target(100.0, 10.0, snap, limit), 0.0, "a nudge -> the nearer page");
-        assert_eq!(snap_target(300.0, 10.0, snap, limit), STEP, "a nudge past halfway -> the next");
+        assert_eq!(snap_target(100.0, 9000.0, &snap, limit), STEP, "hard forward -> next page");
+        assert_eq!(snap_target(100.0, -9000.0, &snap, limit), 0.0, "hard back -> previous page");
+        assert_eq!(snap_target(100.0, 10.0, &snap, limit), 0.0, "a nudge -> the nearer page");
+        assert_eq!(snap_target(300.0, 10.0, &snap, limit), STEP, "a nudge past halfway -> the next");
 
         // And the ends of the list hold.
-        assert_eq!(snap_target(0.0, -9000.0, snap, limit), 0.0);
-        assert_eq!(snap_target(limit, 9000.0, snap, limit), limit);
+        assert_eq!(snap_target(0.0, -9000.0, &snap, limit), 0.0);
+        assert_eq!(snap_target(limit, 9000.0, &snap, limit), limit);
+    }
+
+    /// `positional_threshold` is Compose's `snapPositionalThreshold`: under the fling floor it is the
+    /// ONLY thing deciding the target, so 0.3 lets a slow drag turn the page from 30% while the
+    /// default 0.5 still sends it back. Above the floor the velocity decides and the knob is not
+    /// consulted.
+    #[test]
+    fn the_positional_threshold_decides_a_slow_release() {
+        const STEP: f32 = 200.0;
+        let mut snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
+        let limit = STEP * 5.0;
+
+        assert_eq!(snap_target(80.0, 0.0, &snap, limit), 0.0, "0.5 at 40% of the page: back");
+        assert_eq!(snap_target(120.0, 0.0, &snap, limit), STEP, "0.5 at 60%: on to the next page");
+
+        snap.positional_threshold = 0.3;
+        assert_eq!(snap_target(80.0, 0.0, &snap, limit), STEP, "0.3 at 40%: already carried on");
+
+        snap.positional_threshold = 0.9;
+        assert_eq!(snap_target(120.0, 0.0, &snap, limit), 0.0, "0.9 at 60%: still not enough");
+        snap.positional_threshold = 0.0;
+        assert_eq!(
+            snap_target(0.0, 0.0, &snap, limit),
+            0.0,
+            "a release resting on a boundary never turns a page, not even at threshold 0"
+        );
+        assert_eq!(
+            snap_target(120.0, 9000.0, &snap, limit),
+            STEP,
+            "above the fling floor the velocity decides, whatever the threshold says"
+        );
+        assert_eq!(snap_target(120.0, -9000.0, &snap, limit), 0.0);
+    }
+
+    /// A caller can settle on its own spring; the default is material3's `DefaultEffects`.
+    #[test]
+    fn the_settle_spring_is_the_one_the_spec_carries() {
+        let custom = crate::animation::SpringSpec {
+            stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_FAST,
+            damping_ratio: crate::animation::SpringSpec::DAMPING_RATIO_SPATIAL,
+            ..Default::default()
+        };
+        let snap = SnapSpec { settle: custom.clone(), ..Default::default() };
+        match snap.settle_spec() {
+            crate::animation::AnimationSpec::Spring(spec) => {
+                assert_eq!(spec.stiffness, 3800.0);
+                assert_eq!(spec.damping_ratio, 0.9);
+            }
+            other => panic!("a settle is a spring, got {other:?}"),
+        }
     }
 
     /// The snap spec's spring is material3's `DefaultEffects`, not foundation's default. This looks
@@ -3107,7 +3183,8 @@ mod tests {
     /// pins what this repo uses, not the size of the gap.)
     #[test]
     fn the_snap_spring_is_material3s_default_effects() {
-        match snap_settle() {
+        // What every snapping container settles on unless a caller supplies its own spec.
+        match SnapSpec::default().settle_spec() {
             crate::animation::AnimationSpec::Spring(spec) => {
                 assert_eq!(spec.stiffness, 1600.0, "material3's DefaultEffects stiffness");
                 assert_eq!(
@@ -3130,7 +3207,7 @@ mod tests {
         const STEP: f32 = 336.0;
         let scroll = ScrollState::new();
         scroll.fling_limit.set(STEP * 10.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
         scroll.offset.set(100.0);
 
         scroll.fling(4000.0);
@@ -3169,7 +3246,7 @@ mod tests {
         // Three 200 px pages (snap positions 0/200/400) in a 200 px viewport, plus 100 px of trailing
         // content padding: the limit is 500 while the LAST snap position is 400.
         scroll.fling_limit.set(500.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
 
         assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
         assert_eq!(
@@ -3188,7 +3265,7 @@ mod tests {
         crate::animation::clear_all_animations();
         let reversed = ScrollState::new();
         reversed.fling_limit.set(1000.0);
-        reversed.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+        reversed.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
         assert!(reversed.snap_page(false, true));
         assert_eq!(*reversed.step_goal.lock().unwrap(), Some(STEP));
 
@@ -3210,7 +3287,7 @@ mod tests {
         const STEP: f32 = 200.0;
         let scroll = ScrollState::new();
         scroll.fling_limit.set(1000.0);
-        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }));
+        scroll.snap.set(Some(SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }));
 
         assert!(scroll.snap_page(true, false), "page 0 -> 1 starts a step");
         assert_eq!(*scroll.step_goal.lock().unwrap(), Some(STEP));
@@ -3248,11 +3325,11 @@ mod tests {
         crate::animation::clear_all_animations();
 
         const STEP: f32 = 336.0;
-        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 };
+        let snap = SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() };
         let settle = |offset: f32, velocity: f32| {
             let scroll = ScrollState::new();
             scroll.fling_limit.set(STEP * 10.0);
-            scroll.snap.set(Some(snap));
+            scroll.snap.set(Some(snap.clone()));
             scroll.offset.set(offset);
             scroll.fling(velocity);
             let mut frames = 0;

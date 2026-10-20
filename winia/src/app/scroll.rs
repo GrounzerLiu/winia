@@ -488,7 +488,7 @@ mod release_velocity_floor_tests {
     }
 
     fn snap_spec() -> SnapSpec {
-        SnapSpec { step: STEP, min_fling_velocity: 400.0, anchor: 0.0 }
+        SnapSpec { step: STEP, min_fling_velocity: 400.0, ..Default::default() }
     }
 
     /// A paged list released below the 50 px/s floor still flings — because its whole motion is the

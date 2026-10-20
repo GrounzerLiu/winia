@@ -4566,7 +4566,7 @@ mod wheel_paging_tests {
     fn paging_state() -> ScrollState {
         let state = ScrollState::new();
         state.fling_limit.set(PAGE * 9.0);
-        state.snap.set(Some(SnapSpec { step: PAGE, min_fling_velocity: 400.0, anchor: 0.0 }));
+        state.snap.set(Some(SnapSpec { step: PAGE, min_fling_velocity: 400.0, ..Default::default() }));
         state
     }
 
