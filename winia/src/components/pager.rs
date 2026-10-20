@@ -37,6 +37,8 @@ pub struct PagerState {
     current_page_offset_fraction: State<f32>,
     target_page: State<usize>,
     settled_page: State<usize>,
+    /// The page size along the main axis, as the builder resolved it (the viewport for `Fill`).
+    page_size: State<f32>,
 }
 
 impl PagerState {
@@ -48,6 +50,7 @@ impl PagerState {
             current_page_offset_fraction: State::new(0.0),
             target_page: State::new(0),
             settled_page: State::new(0),
+            page_size: State::new(0.0),
         }
     }
 
@@ -131,6 +134,35 @@ impl PagerState {
     }
 }
 
+/// How a page is sized along the main axis (Compose's `PageSize`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageSize {
+    /// The page fills the viewport, which is what makes a page boundary a snap position.
+    Fill,
+    /// The page is this many pixels along the main axis, and the viewport shows more than one.
+    Fixed(f32),
+}
+
+/// Where inside the viewport a page comes to rest (Compose's `SnapPosition`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapPosition {
+    Start,
+    Center,
+    End,
+}
+
+/// The pager's geometry, as of the last measure (Compose's `PagerLayoutInfo`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PagerLayoutInfo {
+    pub page_count: usize,
+    /// The viewport size along the main axis.
+    pub viewport_size: f32,
+    /// The page size along the main axis (the viewport when `PageSize::Fill`).
+    pub page_size: f32,
+    pub current_page: usize,
+    pub current_page_offset_fraction: f32,
+}
+
 /// A pager along one axis. [`HorizontalPager`] and [`VerticalPager`] are the two.
 pub struct Pager<A: LazyAxis> {
     axis: PhantomData<A>,
@@ -139,6 +171,10 @@ pub struct Pager<A: LazyAxis> {
     content_padding: f32,
     page_spacing: f32,
     reverse: bool,
+    page_size: PageSize,
+    snap_position: SnapPosition,
+    beyond_viewport_page_count: usize,
+    user_scroll_enabled: bool,
     content: Option<Box<dyn Fn(&mut ComposeCtx, usize) + Send + Sync>>,
 }
 
@@ -168,6 +204,10 @@ impl<A: LazyAxis> Pager<A> {
             content_padding: 0.0,
             page_spacing: 0.0,
             reverse: false,
+            page_size: PageSize::Fill,
+            snap_position: SnapPosition::Start,
+            beyond_viewport_page_count: 4,
+            user_scroll_enabled: true,
             content: None,
         }
     }
@@ -201,6 +241,31 @@ impl<A: LazyAxis> Pager<A> {
         self
     }
 
+    /// How a page is sized (`PageSize`), `PageSize::Fill` by default.
+    pub fn page_size(mut self, size: PageSize) -> Self {
+        self.page_size = size;
+        self
+    }
+
+    /// Where a page rests inside the viewport (`SnapPosition`), `Start` by default. Only visible when
+    /// the pages are smaller than the viewport (`PageSize::Fixed`).
+    pub fn snap_position(mut self, position: SnapPosition) -> Self {
+        self.snap_position = position;
+        self
+    }
+
+    /// How many pages beyond the viewport compose (`beyondViewportPageCount`).
+    pub fn beyond_viewport_page_count(mut self, pages: usize) -> Self {
+        self.beyond_viewport_page_count = pages;
+        self
+    }
+
+    /// Whether the pager reacts to wheel and drag input (Compose's `userScrollEnabled`).
+    pub fn user_scroll_enabled(mut self, enabled: bool) -> Self {
+        self.user_scroll_enabled = enabled;
+        self
+    }
+
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx) {
         let state = self.state;
@@ -210,15 +275,37 @@ impl<A: LazyAxis> Pager<A> {
             .expect("Pager needs content: pager.content(|ctx, page| ..)");
         let count = state.page_count;
         ctx.changed(&count);
-        LazyList::<A>::new_list()
+        // A fixed page sits at snap positions offset from the leading edge; the viewport comes from
+        // the previous measure, which is stable for anything a caller would notice (a fling settles
+        // long after the first frame). A page that fills the viewport always offsets by 0.
+        let viewport = state.list.viewport_main_size();
+        let page_size = match self.page_size {
+            PageSize::Fill => viewport,
+            PageSize::Fixed(size) => size,
+        };
+        if state.page_size.peek() != page_size {
+            state.page_size.set(page_size);
+        }
+        let snap_offset = match self.snap_position {
+            SnapPosition::Start => 0.0,
+            SnapPosition::Center => ((viewport - page_size) / 2.0).max(0.0),
+            SnapPosition::End => (viewport - page_size).max(0.0),
+        };
+        let mut list = LazyList::<A>::new_list()
             .state(state.list.clone())
-            .fill_items(true)
             .snap_paging(true)
+            .snap_offset(snap_offset)
+            .beyond_bounds(self.beyond_viewport_page_count)
+            .user_scroll(self.user_scroll_enabled)
             .spacing(self.page_spacing)
             .content_padding(self.content_padding, self.content_padding)
             .reverse_layout(self.reverse)
-            .modifier(self.modifier)
-            .items(count, |page| page as u64, move |ctx, page| content(ctx, page))
+            .modifier(self.modifier);
+        list = match self.page_size {
+            PageSize::Fill => list.fill_items(true),
+            PageSize::Fixed(size) => list.item_main_size(size),
+        };
+        list.items(count, |page| page as u64, move |ctx, page| content(ctx, page))
             .build(ctx);
         sync.sync_from_list();
     }
@@ -229,6 +316,19 @@ impl PagerState {
     /// `current_page as f32 + current_page_offset_fraction` - the continuous page position.
     pub fn current_page_position(&self) -> f32 {
         self.current_page() as f32 + self.current_page_offset_fraction()
+    }
+
+    /// The pager's geometry as of the last measure (`PagerLayoutInfo`).
+    pub fn layout_info(&self) -> PagerLayoutInfo {
+        let viewport_size = self.list.viewport_main_size();
+        let page_size = self.page_size.peek();
+        PagerLayoutInfo {
+            page_count: self.page_count,
+            viewport_size,
+            page_size,
+            current_page: self.current_page(),
+            current_page_offset_fraction: self.current_page_offset_fraction(),
+        }
     }
 }
 
@@ -305,5 +405,116 @@ mod tests {
         state.list_state().offset.set(100.0);
         compose_pager(&mut composer, state.clone(), 3, composed.clone());
         assert!(state.current_page_offset_fraction().abs() < 0.5);
+    }
+
+    #[test]
+    fn a_fixed_page_is_the_size_it_was_given() {
+        let state = PagerState::new(9);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let s = state.clone();
+                HorizontalPager::new(s)
+                    .page_size(PageSize::Fixed(120.0))
+                    .snap_position(SnapPosition::Center)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .content(|ctx, page| {
+                        crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                    })
+                    .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let s = state.clone();
+                HorizontalPager::new(s)
+                    .page_size(PageSize::Fixed(120.0))
+                    .snap_position(SnapPosition::Center)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .content(|ctx, page| {
+                        crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                    })
+                    .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 400.0));
+        let info = state.layout_info();
+        assert_eq!(info.page_size, 120.0, "a fixed page keeps its size");
+        assert_eq!(info.viewport_size, 300.0);
+        assert_eq!(info.page_count, 9);
+    }
+
+    #[test]
+    fn a_restricted_window_composes_fewer_pages() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut counts = Vec::new();
+        for beyond in [0usize, 4] {
+            let state = PagerState::new(200);
+            let mut composer = Composer::new();
+            let theme = crate::theme::ThemeColors::default_light();
+            let composed = std::sync::Arc::new(AtomicUsize::new(0));
+            let c = composed.clone();
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let s = state.clone();
+                    HorizontalPager::new(s)
+                        .beyond_viewport_page_count(beyond)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .content(move |ctx, page| {
+                            c.fetch_add(1, Ordering::Relaxed);
+                            crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                        })
+                        .build(ctx);
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+            counts.push(composed.load(Ordering::Relaxed));
+        }
+        assert!(
+            counts[0] < counts[1],
+            "beyondViewportPageCount=0 must compose fewer pages than 4 (got {:?})",
+            counts
+        );
+    }
+
+    #[test]
+    fn user_scroll_disabled_drops_the_scroll_channel() {
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let s = state.clone();
+                HorizontalPager::new(s)
+                    .user_scroll_enabled(false)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .content(|ctx, page| {
+                        crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                    })
+                    .build(ctx);
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        let has_scroll = composer.arena_nodes().iter().any(|node| {
+            node.modifier.elements().iter().any(|el| {
+                matches!(
+                    el,
+                    crate::modifier::ModifierElement::HorizontalScroll { .. }
+                        | crate::modifier::ModifierElement::LazyScroll { .. }
+                )
+            })
+        });
+        // The lazy list's own bookkeeping element stays (the measure pass needs the content height);
+        // what must disappear is the wheel/drag channel.
+        let has_wheel_channel = composer.arena_nodes().iter().any(|node| {
+            node.modifier
+                .elements()
+                .iter()
+                .any(|el| matches!(el, crate::modifier::ModifierElement::HorizontalScroll { .. }))
+        });
+        assert!(!has_wheel_channel, "userScrollEnabled=false must not attach the horizontal scroll channel");
+        let _ = has_scroll;
     }
 }

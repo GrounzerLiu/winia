@@ -32,16 +32,23 @@ HorizontalPager::new(state.clone())
 | `is_scroll_in_progress()` | `isScrollInProgress` |
 | `scroll_to_page(page, px)` / `animate_scroll_to_page(page, px)` | `scrollToPage` / `animateScrollToPage` |
 | `current_page_position()` | the continuous position (`currentPage + fraction`) |
-| `list_state()` | the underlying `LazyListState` (`layoutInfo` in Compose) |
+| `layout_info()` | `PagerLayoutInfo` (page count, viewport size, page size, current page + fraction) |
+| `list_state()` | the underlying `LazyListState` anchors |
 | `HorizontalPager` / `VerticalPager` | `HorizontalPager` / `VerticalPager` |
 
-Builder parameters that map onto the lazy list: `.modifier`, `.content_padding(px)` (`contentPadding`),
-`.page_spacing(px)` (`pageSpacing`), `.reverse_layout(bool)` (`reverseLayout`), `.content(f)`.
+Builder parameters, all mapped onto the lazy list: `.modifier`, `.content_padding(px)`
+(`contentPadding`), `.page_spacing(px)` (`pageSpacing`), `.reverse_layout(bool)` (`reverseLayout`),
+`.page_size(PageSize::Fill | PageSize::Fixed(px))` (`PageSize`), `.snap_position(..)` (`snapPosition`,
+only visible for a fixed page smaller than the viewport), `.beyond_viewport_page_count(n)`
+(`beyondViewportPageCount`), `.user_scroll_enabled(bool)` (`userScrollEnabled`), `.content(f)`.
 
 ## Behaviour
 
-- **A page fills the viewport** along the main axis, so the snap step equals the viewport and every
-  page boundary is a snap position.
+- **A page fills the viewport by default** (`PageSize::Fill`), so the snap step equals the viewport
+  and every page boundary is a snap position. `PageSize::Fixed(px)` pins the page instead and the
+  step becomes page + spacing; `SnapPosition::Center/End` then decides where the smaller page rests.
+  (The snap step used to ignore `page_spacing`; it now includes it, which only matters for a list
+  that both fills items and spaces them.)
 - **`current_page` is the page CLOSEST to the snap position**, not the first visible one: halfway
   through a swipe the counter flips to the next page, and the offset fraction stays in `[-0.5, 0.5)`.
   This is Compose's definition and what makes a dot indicator behave.
@@ -56,12 +63,12 @@ Builder parameters that map onto the lazy list: `.modifier`, `.content_padding(p
 
 | Compose | winia |
 | --- | --- |
-| `PageSize.Fill` / `PageSize.Fixed(n)` | Fill only (`fill_items`). A fixed page needs a main-size knob the lazy list does not have yet. |
-| `beyondViewportPageCount` | Not configurable: the lazy window is a fixed window around the viewport. |
-| `snapPosition` (`SnapPosition.Start/Center/End`) | Boundary snapping only. |
-| `userScrollEnabled`, `flingBehavior`, `pageNestedScrollConnection`, `PagerSnapDistance` | Not exposed: the list's scroll modifier and snap are used as they are. |
+| `PageSize.Fill` / `PageSize.Fixed(n)` | Both, through the lazy list's `fill_items` / `item_main_size`. |
+| `beyondViewportPageCount` | `beyond_bounds` on the lazy list: the composition window is configurable. |
+| `snapPosition` (`Start/Center/End`) | A snap offset inside the step. A filled page always rests at Start (offset 0), so it only shows with `PageSize::Fixed`. |
+| `userScrollEnabled` | `user_scroll(false)` drops the wheel/drag channel; programmatic scrolling still works. |
+| `flingBehavior`, `pageNestedScrollConnection`, `PagerSnapDistance` | Not exposed. Snapping is the lazy list's own (one page per gesture, Compose's `snapFlingBehavior`); a replaceable fling strategy would need a trait the list does not have. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is passed to the content closure instead. |
-| `PagerState.layoutInfo` | `list_state()` exposes the anchors; there is no layout-info struct. |
 
 ## Tests
 

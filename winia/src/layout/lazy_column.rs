@@ -420,6 +420,17 @@ pub struct LazyList<A: LazyAxis> {
     /// Every item fills the viewport along the main axis (`fillParentMaxWidth` / `fillParentMaxHeight`).
     /// Off by default, where items wrap to their content.
     fill_items: bool,
+    /// Pin every item's main size to this instead of the viewport (`Pager` with `PageSize.Fixed`). A
+    /// fixed page does not fill the viewport, so the snap step is this size plus the spacing.
+    item_main_size: Option<f32>,
+    /// How many items beyond the viewport the composition window covers on each side
+    /// (`beyondViewportPageCount`). Defaults to `LAZY_BEYOND_BOUNDS`.
+    beyond_bounds: usize,
+    /// Whether the list reacts to wheel/drag input. `false` keeps programmatic scrolling working.
+    user_scroll: bool,
+    /// Where inside an item the list comes to rest when `snap_paging` is on: `0.0` is its leading edge,
+    /// `(viewport - item) / 2.0` centres a fixed page, `viewport - item` puts it at the trailing edge.
+    snap_offset: f32,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -450,6 +461,10 @@ impl<A: LazyAxis> LazyList<A> {
             reverse: false,
             snap_paging: false,
             fill_items: false,
+            item_main_size: None,
+            beyond_bounds: LAZY_BEYOND_BOUNDS,
+            user_scroll: true,
+            snap_offset: 0.0,
         }
     }
 
@@ -503,6 +518,30 @@ impl<A: LazyAxis> LazyList<A> {
     /// snapping to a step that means nothing.
     pub fn snap_paging(mut self, enabled: bool) -> Self {
         self.snap_paging = enabled;
+        self
+    }
+
+    /// Pin every item's main size instead of filling the viewport (`PageSize.Fixed`).
+    pub fn item_main_size(mut self, size: f32) -> Self {
+        self.item_main_size = Some(size);
+        self
+    }
+
+    /// How many items beyond the viewport the composition window covers (`beyondViewportPageCount`).
+    pub fn beyond_bounds(mut self, items: usize) -> Self {
+        self.beyond_bounds = items;
+        self
+    }
+
+    /// Whether the list reacts to wheel and drag input; `false` keeps programmatic scrolling working.
+    pub fn user_scroll(mut self, enabled: bool) -> Self {
+        self.user_scroll = enabled;
+        self
+    }
+
+    /// Where inside an item a snapping list comes to rest (`SnapPosition`).
+    pub fn snap_offset(mut self, offset: f32) -> Self {
+        self.snap_offset = offset;
         self
     }
 
@@ -798,8 +837,9 @@ pub(crate) fn visible_range(
     viewport_h: f32,
     spacing: f32,
     total: usize,
+    beyond: usize,
 ) -> (usize, usize) {
-    let start = first_index.saturating_sub(LAZY_BEYOND_BOUNDS);
+    let start = first_index.saturating_sub(beyond);
     let mut end = first_index;
     let mut acc = first_offset;
     while end < total && acc < viewport_h {
@@ -809,7 +849,7 @@ pub(crate) fn visible_range(
         acc += cache.coverage_height(end) + spacing;
         end += 1;
     }
-    let end = (end + LAZY_BEYOND_BOUNDS).min(total);
+    let end = (end + beyond).min(total);
     (start, end)
 }
 
@@ -940,7 +980,7 @@ impl<A: LazyAxis> LazyList<A> {
         let viewport_h = viewport.get().max(1.0);
         let (mut start, end) = visible_range(
             &cache_ref, first_index, first_item_offset,
-            viewport_h, self.spacing, total,
+            viewport_h, self.spacing, total, self.beyond_bounds,
         );
 
         // sticky header 回溯（对齐 Compose：钉住的 header 即使自然位置远在视口
@@ -1038,12 +1078,19 @@ impl<A: LazyAxis> LazyList<A> {
             reverse: self.reverse,
             snap_paging,
             fill_items,
+            item_main_size: self.item_main_size,
+            snap_offset: self.snap_offset,
+            beyond_bounds: self.beyond_bounds,
             state: state.clone(),
         };
-        let m = Modifier::new()
-            .fill_max_width()
-            .fill_max_height()
-            .then(A::scroll(scroll))
+        // `userScroll(false)` drops the wheel/drag channel but keeps the offset itself, so
+        // `scroll_to_page` and an external animation still move the list.
+        let user_scroll = self.user_scroll;
+        let mut base = Modifier::new().fill_max_width().fill_max_height();
+        if user_scroll {
+            base = base.then(A::scroll(scroll));
+        }
+        let m = base
             .lazy_scroll(content_height.clone())
             .lazy_scroll_reverse(self.reverse);
         let m = m.then(self.modifier);
@@ -1117,6 +1164,12 @@ pub(crate) struct LazyListPolicy<A: LazyAxis> {
     pub snap_paging: bool,
     /// Every item fills the viewport along the main axis (`fillParentMax*`), from `fill_items`.
     pub fill_items: bool,
+    /// Pin every item's main size (`PageSize.Fixed`), taking precedence over `fill_items`.
+    pub item_main_size: Option<f32>,
+    /// Where inside an item a snapping list rests (`SnapPosition`), from `snap_offset`.
+    pub snap_offset: f32,
+    /// Items composed beyond the viewport on each side (`beyondViewportPageCount`).
+    pub beyond_bounds: usize,
     pub state: LazyListState,  // 派生锚点回写（测量后精确值）
 }
 
@@ -1158,7 +1211,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         let mut child_constraints = A::child_constraints(constraints);
         let cross_max = A::cross_max(&child_constraints);
         child_constraints = A::with_cross_max(child_constraints, (cross_max - cb - ca).max(0.0));
-        if self.fill_items && vh > 0.0 {
+        if let Some(size) = self.item_main_size {
+            // A fixed page: the item does not fill the viewport, it is a set size.
+            child_constraints = A::with_main_exact(child_constraints, size);
+        } else if self.fill_items && vh > 0.0 {
             child_constraints = A::with_main_exact(child_constraints, vh);
         }
         let mut placements = Vec::with_capacity(children.len());
@@ -1263,13 +1319,17 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // this frame's composition window, so unequal items are caught and snapping turns itself off
         // rather than snapping to a step that means nothing. Fewer than two items is no snapping
         // either — there is nothing to page to, and nothing should move.
+        // A paged list rests on an item boundary; a FIXED-size page rests wherever its size says, and
+        // the spacing between items is part of the distance to the next one.
+        let page_size = self.item_main_size.unwrap_or(vh);
         let snap = if self.snap_paging
             && measured.len() >= 2
-            && vh > 0.0
-            && measured.iter().all(|(size, _)| (size - vh).abs() < 0.5)
+            && page_size > 0.0
+            && measured.iter().all(|(size, _)| (size - page_size).abs() < 0.5)
         {
             Some(crate::modifier::SnapSpec {
-                step: vh,
+                step: page_size + self.spacing,
+                offset: self.snap_offset,
                 // Compose's `MinFlingVelocityDp = 400.dp`, in px at the density this list lays out
                 // under — below it a fling settles back on the page it started from.
                 min_fling_velocity: 400.0 * crate::runtime::density::current_density().density,
@@ -1308,7 +1368,8 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // changed": a frame where the viewport is unchanged and the window still covers asks for
         // nothing, so a scrolling frame stays at one compose+layout pass.
         {
-            let (need_start, need_end) = visible_range(&cache, real_first, real_off, vh, self.spacing, self.total);
+            let (need_start, need_end) =
+                visible_range(&cache, real_first, real_off, vh, self.spacing, self.total, self.beyond_bounds);
             // `globals` is the composed window in registration order (sticky items are appended last,
             // so min/max — not first/last — give the range).
             let composed_start = self.globals.iter().copied().min().unwrap_or(usize::MAX);
@@ -1540,11 +1601,11 @@ mod tests {
         let mut c = ItemHeightCache::default();
         for i in 0..100 { c.record(i, 50.0); }
         // 锚点项 5，偏移 0，视口 200 → 可见 4 项（200/50）+ 预取 4 = end≈9
-        let (s, e) = visible_range(&c, 5, 0.0, 200.0, 0.0, 100);
+        let (s, e) = visible_range(&c, 5, 0.0, 200.0, 0.0, 100, LAZY_BEYOND_BOUNDS);
         assert_eq!(s, 1, "start = 5 - 预取 4");
         assert!(e >= 9 && e <= 13, "end 覆盖视口 + 预取，实际 {e}");
         // 视口很大时 end 到 total
-        let (_, e2) = visible_range(&c, 5, 0.0, 99999.0, 0.0, 100);
+        let (_, e2) = visible_range(&c, 5, 0.0, 99999.0, 0.0, 100, LAZY_BEYOND_BOUNDS);
         assert_eq!(e2, 100);
     }
 
