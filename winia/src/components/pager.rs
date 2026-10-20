@@ -38,6 +38,10 @@ pub struct PagerState {
     settled_page: State<usize>,
     /// The page size along the main axis, as the builder resolved it (the viewport for `Fill`).
     page_size: State<f32>,
+    /// The spacing and the leading content padding the list was built with: the derive reads them as
+    /// States so a builder change re-derives instead of freezing the first frame's values.
+    spacing: State<f32>,
+    pad_before: State<f32>,
 }
 
 impl PagerState {
@@ -50,6 +54,8 @@ impl PagerState {
             target_page: State::new(0),
             settled_page: State::new(0),
             page_size: State::new(0.0),
+            spacing: State::new(0.0),
+            pad_before: State::new(0.0),
         }
     }
 
@@ -286,13 +292,19 @@ impl<A: LazyAxis> Pager<A> {
         // long after the first frame). A page that fills the viewport always offsets by 0.
         let viewport = state.list.viewport_main_size();
         let page_size = match self.page_size {
-            PageSize::Fill => viewport.max(1.0),
+            PageSize::Fill => viewport,
             PageSize::Fixed(size) => size,
         };
         let page_spacing = self.page_spacing;
         let content_padding = self.content_padding;
         if state.page_size.peek() != page_size {
             state.page_size.set(page_size);
+        }
+        if state.spacing.peek() != self.page_spacing {
+            state.spacing.set(self.page_spacing);
+        }
+        if state.pad_before.peek() != self.content_padding {
+            state.pad_before.set(self.content_padding);
         }
         let snap_offset = match self.snap_position {
             SnapPosition::Start => 0.0,
@@ -315,12 +327,24 @@ impl<A: LazyAxis> Pager<A> {
         };
         list.items(count, |page| page as u64, move |ctx, page| content(ctx, page))
             .build(ctx);
-        // Derived from the anchors this pass observed, published at the END of it: a `State` write
-        // during composition would let a sibling composed later in the same pass see the new page
-        // while one composed earlier still sees the old one. The write schedules the pass that makes
-        // the counter visible, which is the same one-frame step Compose has.
-        crate::effect::side_effect(ctx, move || {
-            sync.sync_from_list(page_size, page_spacing, content_padding)
+        // The counter has to follow the list WHILE it scrolls, and this call site does not re-run for
+        // that (the inner list group re-enters, not the pager's build) - which is why a build-time
+        // derive left the dots on the old page during a wheel or a slow drag. `remember_derived_state`
+        // subscribes to the offset directly, so the two States move on every scroll frame; Compose's
+        // `currentPageOffsetFraction` is continuous for the same reason.
+        let mirror = state.clone();
+        let _position = crate::flow::remember_derived_state(ctx, move || {
+            // Read through `get()`, not the captured builder values: the derive is remembered once, so
+            // a captured size would freeze the first frame's answer (page size is 0 until the first
+            // measure). These are States, so a change re-derives.
+            let page_size = mirror.page_size.get();
+            let spacing = mirror.spacing.get();
+            let pad_before = mirror.pad_before.get();
+            mirror.sync_from_list(page_size, spacing, pad_before);
+            (
+                mirror.current_page.peek(),
+                mirror.current_page_offset_fraction.peek(),
+            )
         });
     }
 }
@@ -559,6 +583,56 @@ mod tests {
         assert!(
             state.current_page_offset_fraction().abs() < 1e-3,
             "and the fraction is 0 at rest, got {}",
+            state.current_page_offset_fraction()
+        );
+    }
+
+    /// The user's bug: while the list scrolls by something OTHER than this call site re-running, the
+    /// counter has to follow. Writing the offset directly is exactly that shape - no compose happens -
+    /// so this pins the derive being a subscription and not a build-time computation.
+    #[test]
+    fn the_counter_follows_a_scroll_that_never_recomposes_the_pager() {
+        let state = PagerState::new(9);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let s = state.clone();
+                HorizontalPager::new(s)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .build(ctx, |ctx, page| {
+                        crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        // A second pass: the page size is resolved from the viewport the FIRST measure wrote.
+        composer.compose(|ctx| {
+            crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                let s = state.clone();
+                HorizontalPager::new(s)
+                    .modifier(Modifier::new().fill_max_width().fill_max_height())
+                    .build(ctx, |ctx, page| {
+                        crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                    });
+            });
+        });
+        composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        assert_eq!(state.current_page(), 0);
+
+        // Two whole pages of scroll, written like the wheel does it: no compose call in between.
+        let step = state.layout_info().page_size;
+        assert!(step > 0.0, "the first measure resolved the page size");
+        state.list_state().offset.set(step * 2.0);
+
+        assert_eq!(
+            state.current_page(),
+            2,
+            "the counter must follow the offset without this command re-composing"
+        );
+        assert!(
+            state.current_page_offset_fraction().abs() < 1e-3,
+            "and land on the boundary exactly, got {}",
             state.current_page_offset_fraction()
         );
     }

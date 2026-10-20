@@ -1117,9 +1117,29 @@ impl ApplicationHandler for AppState {
                             path.iter().rev().find(|&&idx| {
                                 (dy != 0.0 && nodes[idx].modifier.vertical_scroll_state().is_some())
                                     || (dx != 0.0 && nodes[idx].modifier.horizontal_scroll_state().is_some())
+                                    // A container that only scrolls horizontally still takes a vertical
+                                    // wheel: Compose routes the wheel to the axis the container has,
+                                    // which is why a wheel scrolls a HorizontalPager. Without this a
+                                    // pager ignored the wheel while a drag worked.
+                                    || (dy != 0.0
+                                        && dx == 0.0
+                                        && nodes[idx].modifier.vertical_scroll_state().is_none()
+                                        && nodes[idx].modifier.horizontal_scroll_state().is_some())
                             }).copied()
                         });
                         if let Some(target) = target {
+                            // A horizontal-only target takes the wheel's dy as dx (see the finder).
+                            let (dx, dy) = {
+                                let probe = pw.composer.arena_nodes();
+                                let only_horizontal =
+                                    probe[target].modifier.vertical_scroll_state().is_none()
+                                        && probe[target].modifier.horizontal_scroll_state().is_some();
+                                if only_horizontal && dy != 0.0 {
+                                    (dy, 0.0)
+                                } else {
+                                    (dx, dy)
+                                }
+                            };
                             // P1-3：命中但消费为 0（顶/底继续滚）→ 触发目标的
                             // scroll_pulse（scrollbar 侧以脉冲点亮 fade，给用户
                             // "到底了"的反馈；M3/CMP 同行为）。offset 无变化时
@@ -1137,6 +1157,22 @@ impl ApplicationHandler for AppState {
                             if dx != 0.0 && consumed.x == 0.0 {
                                 if let Some(ss) = nodes[target].modifier.horizontal_scroll_state() {
                                     ss.scroll_pulse.update(|v| *v = v.wrapping_add(1));
+                                }
+                            }
+                            // A snapping container settles after WHEEL input too, not only after a
+                            // drag release: Compose runs the fling behavior when a scroll session
+                            // ends, and a pager's snap fling behavior lands on the nearest page.
+                            // Without this the wheel left the list between two pages while a drag
+                            // release (which goes through `fling`) snapped.
+                            let settle = if dx != 0.0 {
+                                nodes[target].modifier.horizontal_scroll_state()
+                            } else {
+                                nodes[target].modifier.vertical_scroll_state()
+                            };
+                            if let Some(ss) = settle {
+                                if ss.snaps() {
+                                    // Velocity 0: the NEAREST snap position, not the next one.
+                                    ss.fling(0.0);
                                 }
                             }
                         }
