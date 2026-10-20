@@ -109,6 +109,9 @@ pub struct LazyListState {
     ///
     /// 同 crate 的 scrollbar.rs 可见（scrollbar 侧读，content = limit + viewport）。
     pub(crate) fling_limit: crate::runtime::state::Backchannel<f32>,
+    /// The viewport's main-axis size from the last measure: what a pager needs to turn a pixel offset
+    /// into a page fraction. `0.0` until the first measure.
+    pub(crate) viewport_main: crate::runtime::state::Backchannel<f32>,
     /// 滚动活动脉冲（P1-3：边界滚轮点亮用——与 ScrollState.scroll_pulse 同语义；
     /// lazy 的 ScrollState 是 build 期拼装（offset/is_scrolling/fling_limit 三
     /// clone），pulse 必须挂在这里才跨帧稳定；拼装时 clone 进去；同 crate
@@ -140,6 +143,7 @@ impl LazyListState {
             known_total: crate::runtime::state::State::new(usize::MAX),
             jump_request: crate::runtime::state::State::new(None),
             fling_limit: crate::runtime::state::Backchannel::new(f32::MAX),
+            viewport_main: crate::runtime::state::Backchannel::new(0.0),
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             is_scrolling: crate::runtime::state::State::new(false),
@@ -153,6 +157,13 @@ impl LazyListState {
 
     /// 当前第一个可见项偏移
     pub fn offset(&self) -> f32 { self.offset.get() }
+
+    /// How far the first visible item has been scrolled past, in pixels (`0.0` = its leading edge is
+    /// at the viewport edge).
+    pub fn first_visible_offset(&self) -> f32 { self.first_visible_offset.get() }
+
+    /// The viewport size along the main axis, as of the last measure (`0.0` before the first one).
+    pub fn viewport_main_size(&self) -> f32 { self.viewport_main.get() }
 
     /// Whether there is content past the last visible item (Compose
     /// `LazyListState.canScrollForward`). Asked from the pixel offset against the measured limit, so
@@ -427,7 +438,7 @@ impl LazyList<crate::layout::axis::HorizontalAxis> {
 }
 
 impl<A: LazyAxis> LazyList<A> {
-    fn new_list() -> Self {
+    pub(crate) fn new_list() -> Self {
         Self {
             axis: PhantomData,
             state: None,
@@ -1243,6 +1254,10 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
         // fling 极限回写（输入路径 ScrollState::fling + 程序化 LazyListState::fling）
         self.fling_limit.set(max_off);
         self.state.fling_limit.set(max_off);
+        // The viewport is what a pager divides a pixel offset by; write it beside the limit.
+        if self.state.viewport_main.peek() != vh {
+            self.state.viewport_main.set(vh);
+        }
         // Paging snap step, written back so a finished fling knows where to land. Only given when
         // every measured item is exactly the viewport's main size: `measured` covers every item in
         // this frame's composition window, so unequal items are caught and snapping turns itself off

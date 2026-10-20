@@ -150,6 +150,7 @@ pub mod prelude {
         TOP_APP_BAR_LARGE_FLEXIBLE_HEIGHT, TOP_APP_BAR_LARGE_FLEXIBLE_SUBTITLE_HEIGHT,
         TOP_APP_BAR_HORIZONTAL_PADDING, Scaffold, ScaffoldContentPadding, ScaffoldFabPosition,
         SCAFFOLD_FAB_MARGIN, NavigationBar, NavigationBarItem, NavigationBarColors, NavigationBarItemColors,
+        HorizontalPager, PagerState, VerticalPager,
         ShortNavigationBar, ShortNavigationBarItem, ShortNavigationBarArrangement, NavigationSuiteScaffold,
         NavigationSuite, NavigationSuiteType, NavigationSuiteScaffoldLayout,
         NavigationSuiteScaffoldState,

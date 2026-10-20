@@ -55,6 +55,9 @@ pub mod navigation_suite;
 pub mod short_navigation_bar;
 pub mod search_bar;
 pub mod draw_scope;
+pub mod pager;
+
+pub use pager::{HorizontalPager, Pager, PagerState, VerticalPager};
 
 pub use draw_scope::{draw_behind, draw_with_content, Canvas, DrawScope, TextMetrics};
 
