@@ -450,6 +450,8 @@ pub struct LazyList<A: LazyAxis> {
     snap_animation_spec: crate::animation::SpringSpec,
     /// How many pages one fling may carry (Compose's `PagerSnapDistance.atMost`), at least one.
     snap_max_pages: usize,
+    /// The fling strategy the assembled scroll state runs with (`None` = the built-in snapping one).
+    fling_behavior: Option<std::sync::Arc<dyn crate::fling::FlingBehavior>>,
 }
 
 /// 垂直懒列表（对标 Compose `LazyColumn`）
@@ -487,6 +489,7 @@ impl<A: LazyAxis> LazyList<A> {
             snap_positional_threshold: 0.5,
             snap_animation_spec: crate::modifier::default_snap_settle(),
             snap_max_pages: 1,
+            fling_behavior: None,
         }
     }
 
@@ -562,6 +565,16 @@ impl<A: LazyAxis> LazyList<A> {
     /// default `1` is Compose's own: one gesture moves at most one page.
     pub fn snap_max_pages(mut self, pages: usize) -> Self {
         self.snap_max_pages = pages.max(1);
+        self
+    }
+
+    /// The strategy this list flings with (see [`crate::fling`]). `None` keeps the built-in one: a
+    /// paging list settles on a boundary, anything else decays.
+    pub fn fling_behavior(
+        mut self,
+        behavior: std::sync::Arc<dyn crate::fling::FlingBehavior>,
+    ) -> Self {
+        self.fling_behavior = Some(behavior);
         self
     }
 
@@ -946,6 +959,13 @@ impl<A: LazyAxis> LazyList<A> {
         ctx.changed(&snap_animation_spec);
         let snap_max_pages = self.snap_max_pages;
         ctx.changed(&snap_max_pages);
+        // The strategy has no value equality worth comparing; its IDENTITY is the parameter. Swapping
+        // the object at one call site re-enters, handing the same one down does not.
+        let fling_behavior_id = self
+            .fling_behavior
+            .as_ref()
+            .map(|behavior| std::sync::Arc::as_ptr(behavior) as *const () as usize);
+        ctx.changed(&fling_behavior_id);
         let beyond_bounds = self.beyond_bounds;
         ctx.changed(&beyond_bounds);
         let user_scroll = self.user_scroll;
@@ -1124,6 +1144,7 @@ impl<A: LazyAxis> LazyList<A> {
             snap: state.snap.clone(),
             // Keep the in-flight page target with the list, not with this per-build adapter.
             step_goal: state.step_goal.clone(),
+            fling_behavior: self.fling_behavior.clone(),
         };
         // 注册顺序：普通项在前、sticky header 在后（子节点渲染顺序 = 注册顺序，
         // 后者画在最上层——钉住的 header 需盖住从它下面滑过的内容）。

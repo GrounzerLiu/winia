@@ -526,7 +526,7 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
 ///
 /// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
 /// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecaySpec {
     /// 摩擦系数（越大停得越快；对标 Compose 默认 4.2）
     pub friction: f32,

@@ -51,7 +51,8 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 (`beyondViewportPageCount`), `.user_scroll_enabled(bool)` (`userScrollEnabled`),
 `.snap_positional_threshold(f32)` (`snapPositionalThreshold`), `.snap_animation_spec(SpringSpec)`
 (`snapAnimationSpec`), `.max_pages_per_fling(n)` (`PagerSnapDistance.atMost(n)`),
-`.page_nested_scroll_connection(conn)` (`pageNestedScrollConnection`). The content is a
+`.page_nested_scroll_connection(conn)` (`pageNestedScrollConnection`), `.fling_behavior(behavior)`
+(`flingBehavior`, see [fling-behavior.md](fling-behavior.md)). The content is a
 `build(ctx, |ctx, page| ...)` parameter, the `Fn(&mut ComposeCtx, T)` shape `docs/component-authoring.md`
 1.3 reserves for a container that hands its content a scope value.
 
@@ -119,6 +120,11 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   than the one page it was thrown toward, and capped by this number. So `1` is exactly the old
   one-page-per-gesture rule, and `3` lets a hard flick cross a gallery in one motion. The wheel is NOT
   affected: a notch is still one page.
+- **`fling_behavior(behavior)`** replaces the strategy a release runs through entirely (Compose's
+  `flingBehavior`). The built-in one is what the three knobs above configure; a custom strategy is
+  asked once per release and answers with a `FlingPlan` — a spring to somewhere, momentum, or nothing
+  — which the frame clock executes. See [fling-behavior.md](fling-behavior.md) for the trait, the
+  contracts and what a strategy cannot do (drive the scroll per frame).
 - **One wheel NOTCH moves one page** (`ScrollState::snap_page`), which also gives the date picker's
   months the same feel; a non-paged list keeps scrolling smoothly. A notch is a discrete
   `LineDelta`; a continuous `PixelDelta` stream (a precision touchpad, a high-resolution wheel) is a
@@ -142,7 +148,7 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `beyondViewportPageCount` | `beyond_bounds` on the lazy list: the composition window is configurable. |
 | `snapPosition` (`Start/Center/End`) | A snap offset inside the step; a filled page always rests at Start, so it only shows with `PageSize::Fixed`. |
 | `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel; programmatic scrolling still works. |
-| `flingBehavior` — a replaceable `TargetedFlingBehavior` | Not exposed: the settle is the scroll state's own. Two of its parameters ARE knobs (`snap_positional_threshold`, `snap_animation_spec`), but substituting the behaviour would need a trait the list does not have — the state picks an animation and the frame clock runs it, a `performFling` strategy would have to drive the scroll itself. |
+| `flingBehavior` — a replaceable `TargetedFlingBehavior` | `fling_behavior(behavior)`, over the plan-shaped trait in [fling-behavior.md](fling-behavior.md): the strategy returns the motion (target + curve, momentum, or nothing) and the frame clock runs it. It cannot drive the scroll per frame the way Compose's suspending `performFling` does. |
 | `PagerSnapDistance` (default `atMost(1)`) | `max_pages_per_fling(n)`; the default `1` matches Compose's, and unlike Compose there is no `0` ("no fling at all") — turn user scrolling off instead. |
 | `pageNestedScrollConnection` | A hook: `page_nested_scroll_connection(conn)` attaches the caller's `NestedScrollConnection` to the pager's list. Compose's DEFAULT connection (a nested pre-scroll past the pager's end turns a page) is not ported. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is the content parameter instead. |
@@ -162,7 +168,9 @@ channel; the fraction stays inside `[-0.5, 0.5)`, including past the last page; 
 reach the snap spec the measure writes back, the defaults are 0.5 and material3's `DefaultEffects`
 spring, a slow release at 40% of a page turns it under `0.3` but not under the default `0.5`, a
 4000 px/s flick lands one page out by default and three with `max_pages_per_fling(3)`, and a caller's
-nested-scroll connection rides on the list's modifier while a default pager attaches none.
+nested-scroll connection rides on the list's modifier while a default pager attaches none, and a
+pager hands a custom `fling_behavior` to the list's scroll state — a release then lands where the
+strategy says instead of on a page boundary.
 
 `cargo test -p winia --lib positional_threshold` / `settle_spring` - the threshold decision itself
 (`snap_target` at 40% and 60%, above and below the fling floor) and that `snap_settle` returns the

@@ -56,6 +56,8 @@ pub mod components;
 pub mod text;
 pub mod render;
 pub mod animation;
+/// The fling strategy: what a release turns into (Compose's `FlingBehavior` / `TargetedFlingBehavior`).
+pub mod fling;
 pub mod nested_scroll;
 pub mod nav;
 pub mod semantics;
@@ -254,5 +256,6 @@ pub mod prelude {
         animate_int_as_state, animate_value_as_state, cancel_animation, Animatable, DecaySpec,
         exponential_decay, push_decay, push_decay_vector,
     };
+    pub use crate::fling::{FlingBehavior, FlingContext, FlingPlan, SnapFlingBehavior, SnapInfo};
     pub use std::time::Duration;
 }

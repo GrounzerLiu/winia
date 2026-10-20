@@ -227,6 +227,9 @@ pub struct Pager<A: LazyAxis> {
     /// ancestor/descendant can observe (and consume) the pager's drags and flings.
     page_nested_scroll_connection:
         Option<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>>,
+    /// Compose's `flingBehavior`: the strategy a release runs through. `None` is the built-in
+    /// [`SnapFlingBehavior`](crate::fling::SnapFlingBehavior).
+    fling_behavior: Option<std::sync::Arc<dyn crate::fling::FlingBehavior>>,
 }
 
 /// A pager whose pages scroll horizontally (Compose's `HorizontalPager`).
@@ -263,6 +266,7 @@ impl<A: LazyAxis> Pager<A> {
             snap_animation_spec: crate::modifier::default_snap_settle(),
             max_pages_per_fling: 1,
             page_nested_scroll_connection: None,
+            fling_behavior: None,
         }
     }
 
@@ -331,6 +335,17 @@ impl<A: LazyAxis> Pager<A> {
     pub fn max_pages_per_fling(mut self, pages: usize) -> Self {
         assert!(pages >= 1, "max_pages_per_fling must be at least 1, got {pages}");
         self.max_pages_per_fling = pages;
+        self
+    }
+
+    /// The strategy this pager's releases run through (Compose's `flingBehavior`).
+    ///
+    /// The built-in one settles a release on a page boundary; a custom strategy is asked once per
+    /// release and answers with a [`FlingPlan`](crate::fling::FlingPlan) — a spring to somewhere, free
+    /// momentum, or nothing — which the frame clock executes. It runs inside winia's push-based
+    /// animation model, so a strategy DESCRIBES the motion; it cannot drive the scroll per frame.
+    pub fn fling_behavior(mut self, behavior: impl crate::fling::FlingBehavior + 'static) -> Self {
+        self.fling_behavior = Some(std::sync::Arc::new(behavior));
         self
     }
 
@@ -427,6 +442,9 @@ impl<A: LazyAxis> Pager<A> {
                 Some(connection) => self.modifier.then(Modifier::new().nested_scroll_arc(connection)),
                 None => self.modifier,
             });
+        if let Some(behavior) = self.fling_behavior.clone() {
+            list = list.fling_behavior(behavior);
+        }
         list = match self.page_size {
             PageSize::Fill => list.fill_items(true),
             PageSize::Fixed(size) => list.item_main_size(size),
@@ -1191,6 +1209,79 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             crate::nested_scroll::ScrollDelta::ZERO
         }
+    }
+
+    /// `fling_behavior` reaches the scroll state the frame assembles, and the strategy decides where a
+    /// release lands: a pager with a custom strategy is not bound by page boundaries at all.
+    #[test]
+    fn a_pager_hands_its_fling_behavior_to_the_list() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct LandOnLast;
+        impl crate::fling::FlingBehavior for LandOnLast {
+            fn plan(&self, fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::spring(
+                    fling.limit,
+                    crate::animation::SpringSpec {
+                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        let state = PagerState::new(4);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer, with_behavior: bool| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    let mut pager = HorizontalPager::new(state.clone());
+                    if with_behavior {
+                        pager = pager.fling_behavior(LandOnLast);
+                    }
+                    pager
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {page}")).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+
+        build(&mut composer, false);
+        build(&mut composer, false);
+        assert!(
+            pager_scroll_state(&composer).fling_behavior.is_none(),
+            "the built-in strategy is the default"
+        );
+
+        build(&mut composer, true);
+        build(&mut composer, true);
+        let scroll = pager_scroll_state(&composer);
+        assert!(
+            scroll.fling_behavior.is_some(),
+            "the pager handed its strategy to the list's scroll state"
+        );
+        let limit = state.list_state().fling_limit.peek();
+        assert!(limit > 0.0, "the list measured a limit");
+        scroll.fling(50.0);
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert!(
+            (scroll.offset.peek() - limit).abs() < 1.0,
+            "the custom strategy landed at the end of the list ({}), not on a page boundary",
+            scroll.offset.peek()
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Compose's `pageNestedScrollConnection` is a hook: the caller's connection rides on the list's own

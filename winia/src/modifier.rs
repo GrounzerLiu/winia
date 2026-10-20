@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::ops::Range;
 use std::fmt::{self, Debug};
 use std::sync::atomic::{AtomicU64, Ordering};
+use crate::fling::FlingBehavior as _;
 use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 use crate::input::{KbEvent, PointerEvent};
 use crate::layout::{Dimension, IntrinsicSize, SizeValue};
@@ -2692,12 +2693,12 @@ pub struct ScrollState {
     /// the page the first one targeted: reading the live offset mid-spring lands inside the same page
     /// and the notch is lost (four fast notches moved three pages).
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    /// The strategy this container flings with, or `None` for the built-in
+    /// [`SnapFlingBehavior`](crate::fling::SnapFlingBehavior): a paged container settles on a page,
+    /// anything else decays. A component assembles this from its own builder parameter; a caller
+    /// holding a bare `ScrollState` can set it directly.
+    pub fling_behavior: Option<std::sync::Arc<dyn crate::fling::FlingBehavior>>,
 }
-
-/// The friction every fling in this tree decays with: `lazy_column.rs`, `top_app_bar.rs` and the
-/// scroll state all pass 4.2 to `exponential_decay`. A page estimate has to use the same number as the
-/// decay that would run, or "how far would this flick carry" answers a different question.
-const FLING_FRICTION: f32 = 4.2;
 
 /// How a PAGED list's fling settles, written back by the list's measure and read by
 /// [`ScrollState::fling_with_boundary`].
@@ -2749,6 +2750,18 @@ impl SnapSpec {
     fn settle_spec(&self) -> crate::animation::AnimationSpec {
         crate::animation::AnimationSpec::Spring(self.settle.clone())
     }
+
+    /// This spec as a fling strategy sees it.
+    pub(crate) fn info(&self) -> crate::fling::SnapInfo {
+        crate::fling::SnapInfo {
+            step: self.step,
+            anchor: self.anchor,
+            min_fling_velocity: self.min_fling_velocity,
+            positional_threshold: self.positional_threshold,
+            settle: self.settle.clone(),
+            max_pages_per_fling: self.max_pages_per_fling,
+        }
+    }
 }
 
 /// The settle spring a snapping container runs unless a caller overrides it: material3 hands
@@ -2766,55 +2779,12 @@ pub(crate) fn default_snap_settle() -> crate::animation::SpringSpec {
     }
 }
 
-/// Where a snapping fling should land, from where it started and how fast it was let go.
-///
-/// Compose's `calculateSnapOffset` for a list whose items are all one `step` wide
-/// (`LazyListSnapLayoutInfoProvider.kt:66-100`) plus `calculateFinalOffset` (`SnapFlingBehavior.kt:436-467`):
-/// the two candidates are the snap positions bracketing the current offset, and which of them wins is
-/// decided by the velocity alone — the nearer one below the threshold, otherwise the one ahead.
-///
-/// **One gesture moves at most one page, however hard it was flicked.** That ceiling IS the feel of a
-/// pager. Clamping only to the list's end instead lets a hard flick bank thousands of pixels of decay
-/// first; on a 2412-page month list that is most of a year, and the direction ends up decided by where
-/// the decay happened to run out rather than by the gesture.
+/// The landing position of a snapping fling — the math lives in [`crate::fling::snap_target`], which is
+/// also what `SnapFlingBehavior` plans with, so a test here and a running pager cannot disagree. This
+/// wrapper only exists to keep the unit tests below working against a `SnapSpec`.
+#[cfg(test)]
 fn snap_target(current: f32, velocity: f32, snap: &SnapSpec, limit: f32) -> f32 {
-    let step = snap.step;
-    // The snap positions are `k * step + offset`: with a fixed page that does not fill the viewport,
-    // `offset` is how far the page sits from the leading edge (`SnapPosition.Center` is half the
-    // leftover space). A page that fills the viewport has offset 0 and this is the old behaviour.
-    let position = (current - snap.anchor).max(0.0);
-    let lower = (position / step).floor() * step + snap.anchor; // distance to it is <= 0
-    let upper = (position / step).ceil() * step + snap.anchor; // distance to it is >= 0
-    // How far the list already sits into the page it is between, `0.0` at `lower` and `1.0` at
-    // `upper`. A release under the fling floor stays on `lower` unless this has crossed the caller's
-    // positional threshold - Compose's `snapPositionalThreshold`, and the reason a slow drag can
-    // still turn a page. `0.5` reproduces the old "the nearer position wins" rule exactly.
-    let into_page = (position / step).fract();
-    // Resting ON a boundary is not "past the threshold", whatever the threshold is (0.0 would
-    // otherwise turn a page from a release that moved nothing at all).
-    let at_rest = (position - (lower - snap.anchor)).abs() < 0.5;
-    let picked = if velocity.abs() < snap.min_fling_velocity {
-        if !at_rest && into_page >= snap.positional_threshold {
-            upper
-        } else {
-            lower
-        }
-    } else {
-        // A flick above the floor: the page the release starts in, plus as many pages as the fling
-        // would carry on its own - estimated from the decay's asymptote, rounded to whole pages,
-        // never fewer than the one page it was thrown toward, and capped by the caller's ceiling
-        // (Compose's `PagerSnapDistance.atMost`). `1` reproduces the old one-page-per-gesture rule
-        // exactly; a bigger cap is what makes a hard flick cross a gallery in one motion.
-        let start = lower - snap.anchor;
-        let carried = (crate::animation::DecaySpec::default()
-            .target_value(velocity.abs()) / step)
-            .round()
-            .max(1.0);
-        let pages = carried.min(snap.max_pages_per_fling.max(1) as f32) * step;
-        let target = if velocity > 0.0 { start + pages } else { (start - pages).max(0.0) };
-        target + snap.anchor
-    };
-    picked.clamp(0.0, limit.max(0.0))
+    crate::fling::snap_target(current, velocity, &snap.info(), limit)
 }
 
 impl ScrollState {
@@ -2826,6 +2796,7 @@ impl ScrollState {
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            fling_behavior: None,
         }
     }
 
@@ -2974,45 +2945,63 @@ impl ScrollState {
         let limit = self.fling_limit.clone();
         let done_flag = self.is_scroll_in_progress.clone();
 
-        // A snapping fling is ONE animation, not a decay followed by a settle — that is the whole
-        // point of Compose zeroing `calculateApproachOffset` for material3 (`DatePicker.kt:749-753`):
-        // with the approach offset at zero, `tryApproach` returns without animating at all
-        // (`SnapFlingBehavior.kt:165-176`) and the whole motion is the snap spring, launched with the
-        // FLING's velocity (`:150-158`).
-        //
-        // So there is no free decay to run: the target comes from the velocity, and the spring carries
-        // the gesture's momentum into it. Ending phase one first would both overshoot the target and
-        // visibly stop the list before the second animation moves it again.
-        if let Some(snap) = snapping {
-            let target = snap_target(off.peek(), velocity, &snap, limit.peek());
-            let settle = done_flag.clone();
-            crate::animation::push_animatable_with_velocity_and_done(
-                off,
-                target,
-                snap.settle_spec(),
-                velocity,
-                move || settle.set(false),
-            );
-            return;
-        }
-
-        crate::animation::push_fling_with_boundary(
-            off.clone(),
+        // The strategy decides what this release turns into. `None` means the built-in one, which is
+        // the behaviour this method had before the trait existed: a paged container settles on a page
+        // boundary with ONE spring (launched with the gesture's velocity, so the momentum is carried
+        // into the settle - Compose zeroes `calculateApproachOffset` for material3, `DatePicker.kt:749-753`,
+        // and `tryApproach` then animates nothing, `SnapFlingBehavior.kt:165-176`), and anything else
+        // keeps its momentum as a decay.
+        let context = crate::fling::FlingContext {
+            offset: off.peek(),
             velocity,
-            crate::animation::exponential_decay(FLING_FRICTION),
-            {
-                let limit = limit.clone();
-                move |o| {
-                    // The limit IS the truth here: `f32::MAX` while the layout has not measured the content
-                    // yet, `0` when the content fits and this container cannot move.
-                    o.clamp(0.0, limit.peek())
-                }
-            },
-            on_boundary,
-            move || {
-                done_flag.set(false);
-            },
-        );
+            limit: limit.peek(),
+            snap: self.snap.peek().map(|snap| snap.info()),
+            density: crate::runtime::density::current_density().density,
+        };
+        let plan = match &self.fling_behavior {
+            Some(behavior) => behavior.plan(context),
+            None => crate::fling::SnapFlingBehavior.plan(context),
+        };
+
+        match plan {
+            crate::fling::FlingPlan::Spring { target, spec } => {
+                // A strategy may aim past the content on purpose (a "bounce past the end" plan); the
+                // container's own limit is still what the value is allowed to reach.
+                let target = target.clamp(0.0, limit.peek().max(0.0));
+                let settle = done_flag.clone();
+                crate::animation::push_animatable_with_velocity_and_done(
+                    off,
+                    target,
+                    crate::animation::AnimationSpec::Spring(spec),
+                    velocity,
+                    move || settle.set(false),
+                );
+            }
+            crate::fling::FlingPlan::Decay { spec } => {
+                crate::animation::push_fling_with_boundary(
+                    off.clone(),
+                    velocity,
+                    spec,
+                    {
+                        let limit = limit.clone();
+                        move |o| {
+                            // The limit IS the truth here: `f32::MAX` while the layout has not measured
+                            // the content yet, `0` when the content fits and this container cannot move.
+                            o.clamp(0.0, limit.peek())
+                        }
+                    },
+                    on_boundary,
+                    move || {
+                        done_flag.set(false);
+                    },
+                );
+            }
+            crate::fling::FlingPlan::None => {
+                // Nothing to run: a release the strategy declined. Clearing the flag here is what a
+                // caller's "is this container scrolling" check would otherwise miss.
+                self.is_scroll_in_progress.set(false);
+            }
+        }
     }
 
     /// Cancel an in-flight fling - called before manual input or a programmatic jump. A page step in
@@ -3437,6 +3426,115 @@ mod tests {
             !crate::animation::has_animation_for_state(plain.offset.state_id()),
             "an unsnapped container still ignores a sub-1 px/s release instead of decaying from it"
         );
+    }
+
+    /// A container with a custom strategy runs ITS plan, not the built-in one: the release lands
+    /// wherever the strategy says, with the spring it named.
+    #[test]
+    fn a_custom_fling_behavior_decides_where_the_release_lands() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct LandOnLast;
+        impl crate::fling::FlingBehavior for LandOnLast {
+            fn plan(&self, fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                // A stiff spring, so the test measures the TARGET rather than how long a soft one
+                // takes to crawl its last unit (the default is stiffness 200).
+                crate::fling::FlingPlan::spring(
+                    fling.limit,
+                    crate::animation::SpringSpec {
+                        stiffness: crate::animation::SpringSpec::STIFFNESS_EFFECTS_DEFAULT,
+                        ..Default::default()
+                    },
+                )
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(600.0);
+        scroll.fling_behavior = Some(std::sync::Arc::new(LandOnLast));
+        scroll.fling(120.0);
+        // Break on the flag the assertion reads, not on the animation table: a spring one threshold
+        // away from its target is still running for a while, and the two conditions are not the same
+        // instant.
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        assert!(
+            !scroll.is_scroll_in_progress.peek(),
+            "the strategy's motion must report finished (offset {})",
+            scroll.offset.get()
+        );
+        assert!(
+            (scroll.offset.get() - 600.0).abs() < 0.5,
+            "the strategy chose the end of the list; the built-in would have decayed ~29 px, got {}",
+            scroll.offset.get()
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    /// A strategy may also decline: `FlingPlan::None` starts no animation and leaves the flag down, so
+    /// the container does not sit there claiming to be scrolling.
+    #[test]
+    fn a_strategy_that_declines_starts_no_animation() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct Nothing;
+        impl crate::fling::FlingBehavior for Nothing {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::None
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(600.0);
+        scroll.fling_behavior = Some(std::sync::Arc::new(Nothing));
+        scroll.fling(900.0);
+        assert!(!crate::animation::has_animation_for_state(scroll.offset.state_id()));
+        assert_eq!(scroll.offset.get(), 0.0, "nothing moved");
+        assert!(!scroll.is_scroll_in_progress.peek(), "and nothing claims to be moving");
+    }
+
+    /// A strategy can hand the release back to momentum with its OWN decay: the plan's spec is what
+    /// runs, not the built-in friction.
+    #[test]
+    fn a_strategy_can_choose_the_momentum_instead_of_a_snap() {
+        let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        crate::animation::clear_all_animations();
+
+        #[derive(Debug)]
+        struct SlowMomentum;
+        impl crate::fling::FlingBehavior for SlowMomentum {
+            fn plan(&self, _fling: crate::fling::FlingContext) -> crate::fling::FlingPlan {
+                crate::fling::FlingPlan::decay(crate::animation::DecaySpec::new(10.0, 0.1))
+            }
+        }
+
+        let mut scroll = ScrollState::new();
+        scroll.fling_limit.set(10_000.0);
+        scroll.fling_behavior = Some(std::sync::Arc::new(SlowMomentum));
+        scroll.fling(500.0);
+        for _ in 0..800 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            if !scroll.is_scroll_in_progress.peek() {
+                break;
+            }
+        }
+        // v0 / friction = 500 / 10 = 50 px, against ~119 px at the tree's own 4.2.
+        assert!(
+            (scroll.offset.get() - 50.0).abs() < 5.0,
+            "the plan's decay carried it ~50 px, got {}",
+            scroll.offset.get()
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Without a snap spec the fling is the plain decay it always was — the snap is opt-in, so every
