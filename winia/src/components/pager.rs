@@ -36,6 +36,9 @@ pub struct PagerState {
     current_page_offset_fraction: State<f32>,
     target_page: State<usize>,
     settled_page: State<usize>,
+    /// A stable identity for this handle: the derive is keyed by it, so swapping the state a call site
+    /// passes rebuilds the derive instead of keeping the first one forever.
+    identity: u64,
     /// The page size along the main axis, as the builder resolved it (the viewport for `Fill`).
     page_size: State<f32>,
     /// The builder's page-size SPEC (`None` = Fill): the derive reads the spec, not a captured value,
@@ -47,10 +50,13 @@ pub struct PagerState {
     pad_before: State<f32>,
 }
 
+static NEXT_PAGER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl PagerState {
     pub fn new(page_count: usize) -> Self {
         Self {
             page_count,
+            identity: NEXT_PAGER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             list: LazyListState::new(),
             current_page: State::new(0),
             current_page_offset_fraction: State::new(0.0),
@@ -125,9 +131,8 @@ impl PagerState {
 
     /// Recompute the page-shaped view from the list's scroll offset.
     ///
-    /// Called by the builder once the list has composed; every write compares first, so a pager that
-    /// did not move does not wake its readers (a `State::set` with an equal value is already deduped,
-    /// but the fraction is a float and this keeps the intent visible).
+    /// Called by the derived subscription on every scroll tick; the four writes go out in one
+    /// `write_batch`, so a synchronous observer never sees the new page next to the old fraction.
     fn sync_from_list(&self, page_size: f32, spacing: f32, pad_before: f32) {
         // Pages are PLACED at `pad_before + k * step + snap_shift`, and the snap positions are
         // `pad_before + k * step`, so the scroll offset divided by the step gives the page position
@@ -137,19 +142,31 @@ impl PagerState {
         if step <= 0.0 {
             return;
         }
-        let position = (self.list.offset() - pad_before) / step;
+        // The first snap position is at `pad_before`, so a scroll of 0 is BEFORE it - clamp instead of
+        // reporting a negative fraction on the first frame (`-pad/step`), which is what a padded pager
+        // used to show.
+        let position = ((self.list.offset() - pad_before) / step).max(0.0);
         let last = self.page_count.saturating_sub(1) as f32;
         let rounded = position.round().clamp(0.0, last);
         let current = rounded as usize;
         // `round()` puts the rest position at an integer, so the fraction is in [-0.5, 0.5): half a
         // page into a swipe the counter flips, which is Compose's definition.
         let fraction = (position - rounded).clamp(-0.5, 0.5);
-        self.current_page.set(current);
-        self.current_page_offset_fraction.set(fraction);
-        self.target_page.set(current);
-        if !self.list.is_scrolling() {
-            self.settled_page.set(current);
-        }
+        // One batch: a synchronous observer (another derive, a `State::changes` collector) woken by the
+        // first write would otherwise read the new page with the previous frame's fraction. Compose
+        // publishes both in one measure result.
+        let settled = !self.list.is_scrolling();
+        crate::runtime::state::write_batch(|| {
+            self.current_page.set(current);
+            self.current_page_offset_fraction.set(fraction);
+            // `target_page` is the page a programmatic scroll is HEADING to (Compose derives it from
+            // the target until the scroll ends); resetting it on every tick erased what
+            // `animate_scroll_to_page` had just asked for.
+            if settled {
+                self.target_page.set(current);
+                self.settled_page.set(current);
+            }
+        });
     }
 }
 
@@ -287,7 +304,6 @@ impl<A: LazyAxis> Pager<A> {
         content: impl Fn(&mut ComposeCtx, usize) + Send + Sync + 'static,
     ) {
         let state = self.state;
-        let sync = state.clone();
         // The page count reaches the list as its item count, which the lazy list declares; declaring it
         // here would land on this scope while the parameters are compared on the list's own group.
         let count = state.page_count;
@@ -302,9 +318,12 @@ impl<A: LazyAxis> Pager<A> {
         if state.page_size_spec.peek() != page_size_spec {
             state.page_size_spec.set(page_size_spec);
         }
+        // Compose subtracts the content padding from the page size (`PagerMeasurePolicy.kt:122-147`):
+        // a Fill page is `viewport - before - after`, or the page is placed at `before` and clipped by
+        // the padding it was supposed to sit inside.
         let page_size = match page_size_spec {
             Some(size) => size,
-            None => viewport,
+            None => (viewport - self.content_padding - self.content_padding).max(0.0),
         };
         let page_spacing = self.page_spacing;
         let content_padding = self.content_padding;
@@ -316,6 +335,11 @@ impl<A: LazyAxis> Pager<A> {
         }
         if state.pad_before.peek() != self.content_padding {
             state.pad_before.set(self.content_padding);
+        }
+        // A padded pager starts at its first snap position, not at 0 (which is `pad_before` before it):
+        // Compose places the first page at the content padding and calls that the start.
+        if self.content_padding > 0.0 && state.list.offset.peek() < self.content_padding {
+            state.list.offset.set(self.content_padding);
         }
         let snap_offset = match self.snap_position {
             SnapPosition::Start => 0.0,
@@ -345,7 +369,11 @@ impl<A: LazyAxis> Pager<A> {
         // `currentPageOffsetFraction` is continuous for the same reason.
         let mirror = state.clone();
         let list = state.list.clone();
-        let _position = crate::flow::remember_derived_state(ctx, move || {
+        // `remember_derived_state` keeps the FIRST closure it was given, so a caller that swaps the
+        // `PagerState` it passes at one call site would keep deriving from the old one. Keying the scope
+        // by the state's identity rebuilds the derive when the state changes.
+        let state_id = state.identity;
+        let _position = ctx.key(state_id, |ctx| crate::flow::remember_derived_state(ctx, move || {
             // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
             // value would freeze the first frame's answer - and the first frame's viewport is 0, which
             // is exactly why the counter never moved (step 0 -> early return, forever).
@@ -360,7 +388,7 @@ impl<A: LazyAxis> Pager<A> {
                 mirror.current_page.peek(),
                 mirror.current_page_offset_fraction.peek(),
             )
-        });
+        }));
     }
 }
 
@@ -649,6 +677,77 @@ mod tests {
             state.current_page_offset_fraction().abs() < 1e-3,
             "and land on the boundary exactly, got {}",
             state.current_page_offset_fraction()
+        );
+    }
+
+    /// A padded pager starts AT its first snap position: the fraction is 0 on the first frame, not
+    /// `-pad/step`, and the page is not clipped by the padding it sits inside.
+    #[test]
+    fn a_padded_pager_starts_on_its_first_snap_position() {
+        let state = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer, state: PagerState| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state)
+                        .content_padding(16.0)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        build(&mut composer, state.clone());
+        build(&mut composer, state.clone());
+        assert_eq!(state.current_page(), 0);
+        assert!(
+            state.current_page_offset_fraction().abs() < 1e-3,
+            "a padded pager rests on fraction 0, got {}",
+            state.current_page_offset_fraction()
+        );
+        let info = state.layout_info();
+        assert!(
+            (info.page_size - 268.0).abs() < 0.5,
+            "a Fill page is viewport - before - after (300 - 16 - 16), got {}",
+            info.page_size
+        );
+    }
+
+    /// A different `PagerState` at the same call site must be followed: the derive is keyed by the
+    /// state's identity, not remembered across the swap.
+    #[test]
+    fn swapping_the_state_at_one_call_site_follows_the_new_state() {
+        let first = PagerState::new(5);
+        let second = PagerState::new(5);
+        let mut composer = Composer::new();
+        let theme = crate::theme::ThemeColors::default_light();
+        let build = |composer: &mut Composer, state: PagerState| {
+            composer.compose(|ctx| {
+                crate::theme::WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    HorizontalPager::new(state)
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .build(ctx, |ctx, page| {
+                            crate::components::text::Text::new(format!("Page {}", page)).build(ctx);
+                        });
+                });
+            });
+            composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        };
+        build(&mut composer, first.clone());
+        build(&mut composer, first.clone());
+        // Swap the state at the same call site and scroll the NEW one.
+        build(&mut composer, second.clone());
+        build(&mut composer, second.clone());
+        let step = second.layout_info().page_size;
+        assert!(step > 0.0, "the new state resolved its page size");
+        second.list_state().offset.set(step * 2.0);
+        assert_eq!(
+            second.current_page(),
+            2,
+            "the derive moved to the new state"
         );
     }
 }

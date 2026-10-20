@@ -210,6 +210,14 @@ The same trap in a different shape: a `State::get()` inside a container whose bo
 group makes THAT group a dependent, which is usually what you want - but only if the read happens
 there rather than in the caller.
 
+The framework's invalidation is deliberately one level deep (`composer.rs`, and
+`docs/key-system-design.md` section 2): a write marks the slot that read it plus its direct children
+when the reader is a scope. So a state read two groups above the consumer reaches the intermediate
+group but not the consumer's own - the consumer has to read it itself, or the intermediate has to
+`mark_subtree_dirty`. And `ctx.changed` is only available for a value the container compares
+(`PartialEq + Clone`), which a content closure is not: a container with no comparable parameter
+cannot take the value at all, so reading it inside the consuming group is the only local fix.
+
 **The failure it prevents:** an undeclared parameter does not cause a stale frame twice - it causes a
 Clean slot to Skip past the change forever, and it looks exactly like a broken state notification. The
 `ctx.changed` contract is stated in `winia/src/runtime/composer.rs` (`ComposeCtx::changed`) and

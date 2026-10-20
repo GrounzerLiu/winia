@@ -6,7 +6,9 @@ One full-viewport page at a time, with snapping: Compose's `HorizontalPager` / `
 
 `reference/compose/foundation-1.13.0-beta01/commonMain/androidx/compose/foundation/pager/` -
 `Pager.kt` (the two builders), `PagerState.kt` (currentPage / settledPage / targetPage /
-currentPageOffsetFraction / scrollToPage / animateScrollToPage), `PageSize.kt` (Fill / Fixed).
+currentPageOffsetFraction / scrollToPage / animateScrollToPage), `PageSize.kt` (Fill / Fixed),
+`PagerMeasure.kt` (how the counter is computed), plus
+`gestures/snapping/SnapPosition.kt` for the page placement shift.
 
 winia does not add a second layout engine for this: a page is a lazy item that fills the viewport, and
 paging is the lazy list's snap. The pieces that already existed are
@@ -37,7 +39,7 @@ modifier attaches (`.horizontal_scroll` / `.vertical_scroll`) and which dimensio
 | `current_page()` / `current_page_offset_fraction()` | `currentPage` / `currentPageOffsetFraction` |
 | `target_page()` / `settled_page()` | `targetPage` / `settledPage` |
 | `is_scroll_in_progress()` | `isScrollInProgress` |
-| `scroll_to_page(page, px)` / `animate_scroll_to_page(page, px)` | `scrollToPage` / `animateScrollToPage` |
+| `scroll_to_page(page, fraction)` / `animate_scroll_to_page(page, fraction)` | `scrollToPage` / `animateScrollToPage` |
 | `current_page_position()` | the continuous position (`currentPage + fraction`) |
 | `layout_info()` | `PagerLayoutInfo`: page count, viewport size, page size, current page + fraction |
 | `list_state()` | the underlying `LazyListState` anchors |
@@ -61,7 +63,7 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   `SnapPosition.position()` does): every item is placed `Start`=0 / `Center`=(viewport-page)/2 /
   `End`=viewport-page pixels further along the main axis, and the snap positions stay on clean page
   boundaries `pad_before + k * step`. That is why a centred fixed page rests exactly on a boundary,
-  and why the first page cannot be centred (the scroll clamps at 0).
+  so a centred page of ANY index, including the first, rests at fraction 0.
 - **The content is that much longer** (`content_h` includes the shift), so the LAST page can reach
   its rest position too.
 - **`content_padding`** is main-axis padding before the first page and after the last;
@@ -88,10 +90,12 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
   does (`0.0` = the rest position, `1.0` = a whole page past it), converted with the page size the
   last frame resolved. `target_page` is the page a programmatic scroll asked for; the derive resets
   it to the settled page once the scroll comes to rest.
-- **The counter is derived and published at the end of the pass** (`side_effect`): it is recomputed
-  from the anchors the pass observed, so a programmatic `scroll_to_page` (which lands during LAYOUT)
-  shows up on the next frame - the same eventual consistency Compose has while a scroll animates. A
-  caller that needs the value immediately should read `list_state().first_visible()`.
+- **The counter is a derived subscription** (`remember_derived_state` over the list's offset, page
+  size, spacing and padding, all States): it moves on every scroll tick, whatever moved the list - a
+  drag, a fling, the wheel, a programmatic jump. A programmatic `scroll_to_page` lands during LAYOUT,
+  so the counter picks it up on the next frame; a caller that needs the value immediately should read
+  `list_state().first_visible()`. The four counter States go out in one `write_batch`, so a
+  synchronous observer never sees the new page next to the old fraction.
 - **Only a window of pages composes** (`beyond_viewport_page_count`, Compose's
   `beyondViewportPageCount`), so a 200-page pager composes a handful.
 - **One gesture moves at most one page**, because the snap is the lazy list's own: below
@@ -113,7 +117,7 @@ only visible for a fixed page smaller than the viewport), `.beyond_viewport_page
 | `PageSize.Fill` / `PageSize.Fixed(n)` | Both, through the lazy list's `fill_items` / `item_main_size`. |
 | `beyondViewportPageCount` | `beyond_bounds` on the lazy list: the composition window is configurable. |
 | `snapPosition` (`Start/Center/End`) | A snap offset inside the step; a filled page always rests at Start, so it only shows with `PageSize::Fixed`. |
-| `userScrollEnabled` | `user_scroll(false)` drops the wheel/drag channel; programmatic scrolling still works. |
+| `userScrollEnabled` | `user_scroll_enabled(false)` drops the wheel/drag channel; programmatic scrolling still works. |
 | `flingBehavior`, `pageNestedScrollConnection`, `PagerSnapDistance` | Not exposed. Snapping is the lazy list's own (one page per gesture); a replaceable fling strategy would need a trait the list does not have. |
 | `PagerScope` (`this.currentPage` inside content) | The page index is the content parameter instead. |
 | RTL mirrors the pages | Not mirrored: the lazy list has no layout-direction handling. |
