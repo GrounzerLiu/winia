@@ -113,7 +113,48 @@ they animate without recomposing. `Backchannel<T>` is the measure/layout write-b
 A value is only written when it changes (`Animating::set` dedups), so an idle or landed motion does not
 wake the tree.
 
-## 8. Who owns a motion
+## 8. Where a value goes: composition, layout, or paint
+
+An animation is a `State<T>` the engine writes every frame. What decides its cost is WHERE that
+value is read — the same `State<f32>` can drive any of the three.
+
+| Read at | Hand it to | Per frame | Cost |
+| --- | --- | --- | --- |
+| **Composition** — a component parameter, a structural branch | `state.get()` | the reading composable re-runs | highest |
+| **Layout** — size, padding, offset, min/max | `size`/`width`/`height` take `impl Into<SizeValue>`; `offset`/`padding`/`min`/`max` take `impl Into<Dimension>` — either accepts `State<f32>`, `Animating<f32>`, `DerivedValue<f32>` or a closure | the node is measured again (its subtree with it) | medium |
+| **Paint** — alpha, scale, translation, colour | `graphics_layer(closure)` / `background(closure)`, read with `peek()` at draw time | the node is painted again; nothing is measured or composed | lowest |
+
+The middle row is what `Dimension::Dynamic` is FOR. A layout length is a `Dimension`, and its
+`Dynamic` form holds a closure that runs **during measure**; a `State::get()` there registers a
+LAYOUT dependency on the node being measured, so a change marks that node layout-dirty and measures
+it again — no recomposition, and no bypass through the composition (see `docs/state-handles.md` §3
+for which handle the framework issues, and `docs/architecture-audit.md` for the two-phase
+`layout_deps` → `layout_dirty_keys` machinery).
+
+The same animated offset, written three ways:
+
+```rust
+// Layout: the node MOVES in the layout, so anything that depends on the position follows.
+let dy = ctx.animate_float_as_state(target_y, spring);
+Modifier::new().offset(0.0, dy);          // State<f32> -> Dimension::Dynamic
+
+// Paint: a visual shift only - re-painted, never re-measured.
+let dx = ctx.animate_float_as_state(target_x, spring);
+Modifier::new().graphics_layer(move || GraphicsLayerParams {
+    translation_x: dx.peek(), ..Default::default()
+});
+
+// Composition: the value takes part in the structure, so something has to re-run.
+let alpha = ctx.animate_float_as_state(target_alpha, spring);
+if alpha.get() > 0.0 { /* ... */ }
+```
+
+`Fill`, `Auto` and `Intrinsic` are NOT lengths — they are SIZE MODES, a decision about how a node
+uses the space it was offered. There is no "0.37 of a Fill", so they are never evaluated per frame;
+a mode that changes over time is a recomposition decision (`SizeValue::Fill` or `SizeValue::Auto`
+chosen in the composition from a `State<bool>`).
+
+## 9. Who owns a motion
 
 A motion started from a composable belongs to the SLOT it was started in: `animate_*_as_state`,
 `remember_animatable` and `remember_infinite_transition` register an `on_forget` cleanup, so a
@@ -127,7 +168,7 @@ The call sites that do this today — a conditional button/chip elevation and th
 (that same component still reads the value), but a new conditional call site that must die with its
 branch needs a group of its own (`ctx.start_scope`, or a child composable).
 
-## 9. Ambient API
+## 10. Ambient API
 
 | API | What it gives |
 | --- | --- |
@@ -137,13 +178,13 @@ branch needs a group of its own (`ctx.start_scope`, or a child composable).
 | `AnimatedVisibility` / `AnimatedContent` / `Crossfade` / `AnimatedSize` | the container family, each in `components/` with its own tests |
 | `TimedAnimation` | a spec evaluated at an arbitrary time, with nothing registered — the hand-off / "what would 137 ms look like" query |
 
-## 10. The frame clock
+## 11. The frame clock
 
 `effect::with_frame_nanos()` waits for the next frame of **any** window; `ctx.frame_clock()` gives a
 per-window clock. Both are broadcast from the render loop (`frame_tick`), and a window that is not
 rendering does not tick them — use tokio timers for wall-clock work.
 
-## 11. Observability and tests
+## 12. Observability and tests
 
 - `active_animations_report()` — one line per live motion (`spec=`, `from`, `target`, `elapsed`,
   `v=`, component counts). The only way to answer "who is moving this state".
@@ -176,7 +217,7 @@ must run single-threaded — `RUST_TEST_THREADS=1` is set in the local (untracke
 so anything running these tests elsewhere (CI included) has to set it too, or a parallel
 `clear_all_animations` wipes a motion mid-test.
 
-## 12. Known limitations
+## 13. Known limitations
 
 1. `Repeatable` needs a `DurationSpec` base. A spring has no cycle length, so this is a type-level
    rule, not a gap — Compose's `DurationBasedAnimationSpec` says the same.
