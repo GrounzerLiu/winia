@@ -2347,6 +2347,123 @@ mod tests {
         assert_eq!(size.width, 70.0, "动态 min 值变化后重测取新值");
     }
 
+    // ── size ranges（Compose widthIn/heightIn/sizeIn 与 required*In）──
+
+    #[test]
+    fn width_in_intersects_the_target_with_the_incoming_range() {
+        // Target [300, 500] into incoming [0, 200]: the incoming maximum wins.
+        let m = Modifier::new().width_in(300.0, 500.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size.width, 200.0);
+    }
+
+    #[test]
+    fn width_in_raises_the_minimum_and_lets_the_child_choose() {
+        let m = Modifier::new().width_in(100.0, 300.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
+        assert_eq!(size.width, 100.0, "an empty leaf sits at the minimum, not the maximum");
+    }
+
+    #[test]
+    fn size_in_sets_both_axes_in_one_node() {
+        let m = Modifier::new().size_in(80.0, 40.0, 200.0, 90.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!((size.width, size.height), (80.0, 40.0));
+    }
+
+    #[test]
+    fn required_size_in_ignores_the_incoming_maximum() {
+        let m = Modifier::new().required_width_in(300.0, 400.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 300.0, "the required minimum wins over the incoming max");
+    }
+
+    #[test]
+    fn size_ranges_resolve_by_chain_order() {
+        let measure = |m: Modifier| {
+            let mut nodes = vec![LayoutNode::leaf(m)];
+            let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 1000.0, 0.0, 100.0));
+            size.width
+        };
+        assert_eq!(
+            measure(Modifier::new().width_in(0.0, 200.0).width_in(300.0, 400.0)),
+            200.0,
+            "the outer range wins: the inner one is clipped into it"
+        );
+        assert_eq!(
+            measure(Modifier::new().width_in(300.0, 400.0).width_in(0.0, 200.0)),
+            300.0,
+            "and the reverse is 300"
+        );
+    }
+
+    #[test]
+    fn default_min_size_only_applies_where_the_incoming_minimum_is_zero() {
+        let m = Modifier::new().default_min_size(58.0, 40.0);
+        let mut nodes = vec![LayoutNode::leaf(m.clone())];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 300.0, 0.0, 300.0));
+        assert_eq!((size.width, size.height), (58.0, 40.0), "the default floor applies");
+
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(80.0, 300.0, 0.0, 300.0));
+        assert_eq!(size.width, 80.0, "a caller's minimum overrides the default");
+    }
+
+    #[test]
+    fn fill_max_width_fraction_takes_that_share_of_the_maximum() {
+        let m = Modifier::new().fill_max_width_fraction(0.5);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 200.0, 0.0, 100.0));
+        assert_eq!(size.width, 100.0);
+    }
+
+    // ── wrapContent（Compose wrapContentSize/Width/Height）──
+
+    #[test]
+    fn wrap_content_size_centres_the_leaf_content_in_the_minimum_box() {
+        // Chain order matters: the wrap is OUTER, so it relaxes the range before `size` applies.
+        let m = Modifier::new()
+            .wrap_content_size(ContentAlignment::CENTER, false)
+            .size(20.0, 20.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(100.0, 100.0, 100.0, 100.0));
+        assert_eq!((size.width, size.height), (100.0, 100.0));
+        assert_eq!(nodes[0].content_box_override, Some((40.0, 40.0, 20.0, 20.0)));
+    }
+
+    #[test]
+    fn wrap_content_size_unbounded_lets_the_content_overflow_the_maximum() {
+        let m = Modifier::new()
+            .wrap_content_size(ContentAlignment::CENTER, true)
+            .size(200.0, 20.0);
+        let mut nodes = vec![LayoutNode::leaf(m)];
+        let (size, _) = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 100.0, 0.0, 100.0));
+        assert_eq!(size.width, 100.0, "the wrapper is coerced back into the incoming range");
+        assert_eq!(
+            nodes[0].content_box_override,
+            Some((-50.0, 0.0, 200.0, 20.0)),
+            "the content overflows symmetrically"
+        );
+    }
+
+    #[test]
+    fn wrap_content_size_centres_a_child() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().wrap_content_size(ContentAlignment::CENTER, false), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(20.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(100.0, 100.0, 100.0, 100.0));
+        assert_eq!((size.width, size.height), (100.0, 100.0));
+        assert_eq!((nodes[1].position.x, nodes[1].position.y), (40.0, 40.0));
+    }
+
     // ── maxWidth / maxHeight（Compose widthIn/heightIn 的另一半）──
 
     #[test]
@@ -3143,30 +3260,188 @@ fn measure_node_inner(
     // 应用 modifier 中的 Layout 约束（使用查询方法）
     let mut inner_constraints = constraints;
 
-    // 应用 Size 元素（静态/动态单轴独立解析——布局属性动画用 State/闭包，
-    // 测量时求值并注册依赖到本节点）
+    // Size-shaping steps come first, in CHAIN ORDER — Compose's rule, because each Compose
+    // modifier is its own node that `constrain`s what the node before it produced. That is what
+    // decides a conflict: `.widthIn(max = 200).widthIn(min = 300)` is 200 while the reverse is 300.
+    // The walk also covers `size`/`requiredSize`/`fillMax*`, so a `wrapContent` relaxes the range
+    // for whatever it wraps, wherever the chain spells it.
     //
-    // The requested size is CLAMPED into the incoming range, not written over it — Compose's
-    // `Modifier.size`/`width`/`height` are `enforceIncoming = true`: `SizeNode.measure` builds
-    // `Constraints.fixed(w, h)` and runs `constraints.constrain(targetConstraints)` on it, so a
-    // request wider than the parent allows comes out at the parent's maximum rather than overflowing
-    // it, and one narrower than the parent's minimum comes out at the minimum. `required_size` is the
-    // escape hatch for the other semantics and keeps writing over the range (see below).
-    if let Some((sw, sh)) = nodes[idx].modifier.resolved_size() {
-        if let Some(w) = sw {
-            let w = inner_constraints.constrain_width(w);
-            inner_constraints = inner_constraints.tighten_width(w);
-        }
-        if let Some(h) = sh {
-            let h = inner_constraints.constrain_height(h);
-            inner_constraints = inner_constraints.tighten_height(h);
+    //   `Size` — `size`/`width`/`height` (enforceIncoming): the requested axis is clamped into the
+    //   current range and then fixes both bounds. `RequiredSize` writes over the range.
+    //   `Fill` — Compose's `FillNode`: a bounded maximum becomes `max * fraction` (rounded).
+    //   `MinWidth`/`MaxWidth` — `widthIn(min = …)` / `widthIn(max = …)`.
+    //   `SizeIn` — ONE node, both bounds against the same input range; `enforce_incoming` separates
+    //   `sizeIn` from `required*In` (`Size.kt:846-888`).
+    //   `DefaultMin` — `defaultMinSize`, only where the incoming minimum is 0.
+    //   `Wrap` — `wrapContent*`: relax the minimum (and maximum when unbounded) and remember the
+    //   range for the post-measure wrapper.
+    use crate::modifier::SizeStep;
+    struct WrapStep {
+        align: crate::layout::ContentAlignment,
+        min_width: f32,
+        min_height: f32,
+        max_width: f32,
+        max_height: f32,
+    }
+    let mut wrap_steps: Vec<WrapStep> = Vec::new();
+    for step in nodes[idx].modifier.size_steps() {
+        match step {
+            SizeStep::Size { width, height } => {
+                // Compose SizeNode (enforceIncoming): the request is clamped into the current
+                // range and then fixes it.
+                if let Some(v) = width {
+                    let w = inner_constraints.constrain_width(v);
+                    inner_constraints = inner_constraints.tighten_width(w);
+                }
+                if let Some(v) = height {
+                    let h = inner_constraints.constrain_height(v);
+                    inner_constraints = inner_constraints.tighten_height(h);
+                }
+            }
+            SizeStep::RequiredSize { width, height } => {
+                // enforceIncoming = false: the numeric axes write over the range.
+                if let Some(v) = width {
+                    inner_constraints.min_width = v;
+                    inner_constraints.max_width = v;
+                }
+                if let Some(v) = height {
+                    inner_constraints.min_height = v;
+                    inner_constraints.max_height = v;
+                }
+            }
+            SizeStep::Fill { width, height } => {
+                // Compose FillNode: a bounded maximum becomes a fixed size at max * fraction; an
+                // unbounded maximum leaves the content alone.
+                if let Some(fraction) = width {
+                    if inner_constraints.max_width < f32::MAX {
+                        let w = (inner_constraints.max_width * fraction)
+                            .round()
+                            .clamp(inner_constraints.min_width, inner_constraints.max_width);
+                        inner_constraints.min_width = w;
+                        inner_constraints.max_width = w;
+                    }
+                }
+                if let Some(fraction) = height {
+                    if inner_constraints.max_height < f32::MAX {
+                        let h = (inner_constraints.max_height * fraction)
+                            .round()
+                            .clamp(inner_constraints.min_height, inner_constraints.max_height);
+                        inner_constraints.min_height = h;
+                        inner_constraints.max_height = h;
+                    }
+                }
+            }
+            SizeStep::MinWidth(v) => {
+                inner_constraints.min_width =
+                    v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            }
+            SizeStep::MaxWidth(v) => {
+                inner_constraints.max_width =
+                    v.clamp(inner_constraints.min_width, inner_constraints.max_width);
+            }
+            SizeStep::MinHeight(v) => {
+                inner_constraints.min_height =
+                    v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+            }
+            SizeStep::MaxHeight(v) => {
+                inner_constraints.max_height =
+                    v.clamp(inner_constraints.min_height, inner_constraints.max_height);
+            }
+            SizeStep::SizeIn {
+                min_width,
+                min_height,
+                max_width,
+                max_height,
+                enforce_incoming,
+            } => {
+                // Compose resolves a range into a target Constraints first: a specified max is
+                // itself, an unspecified one is Infinity; a specified min is clamped into [0, max]
+                // (`Size.kt:808-844`).
+                let target_max_w = max_width.unwrap_or(f32::MAX);
+                let target_min_w = min_width.map(|v| v.clamp(0.0, target_max_w)).unwrap_or(0.0);
+                let target_max_h = max_height.unwrap_or(f32::MAX);
+                let target_min_h = min_height.map(|v| v.clamp(0.0, target_max_h)).unwrap_or(0.0);
+                let (lo_w, hi_w) = (inner_constraints.min_width, inner_constraints.max_width);
+                let (lo_h, hi_h) = (inner_constraints.min_height, inner_constraints.max_height);
+                if enforce_incoming {
+                    // `constraints.constrain(target)`: the target range intersected with the
+                    // incoming one — the incoming range always wins where it is tighter.
+                    inner_constraints.min_width = target_min_w.clamp(lo_w, hi_w);
+                    inner_constraints.max_width = target_max_w.clamp(lo_w, hi_w);
+                    inner_constraints.min_height = target_min_h.clamp(lo_h, hi_h);
+                    inner_constraints.max_height = target_max_h.clamp(lo_h, hi_h);
+                } else {
+                    // `required*In`: a specified bound ignores incoming; the other end still
+                    // respects it (`Size.kt:854-883`).
+                    inner_constraints.min_width = if min_width.is_some() {
+                        target_min_w
+                    } else {
+                        lo_w.min(target_max_w)
+                    };
+                    inner_constraints.max_width = if max_width.is_some() {
+                        target_max_w
+                    } else {
+                        hi_w.max(target_min_w)
+                    };
+                    inner_constraints.min_height = if min_height.is_some() {
+                        target_min_h
+                    } else {
+                        lo_h.min(target_max_h)
+                    };
+                    inner_constraints.max_height = if max_height.is_some() {
+                        target_max_h
+                    } else {
+                        hi_h.max(target_min_h)
+                    };
+                }
+            }
+            SizeStep::DefaultMin {
+                min_width,
+                min_height,
+            } => {
+                if let Some(v) = min_width {
+                    if inner_constraints.min_width == 0.0 {
+                        inner_constraints.min_width = v.clamp(0.0, inner_constraints.max_width);
+                    }
+                }
+                if let Some(v) = min_height {
+                    if inner_constraints.min_height == 0.0 {
+                        inner_constraints.min_height = v.clamp(0.0, inner_constraints.max_height);
+                    }
+                }
+            }
+            SizeStep::Wrap {
+                width,
+                height,
+                align,
+                unbounded,
+            } => {
+                wrap_steps.push(WrapStep {
+                    align,
+                    min_width: inner_constraints.min_width,
+                    min_height: inner_constraints.min_height,
+                    max_width: inner_constraints.max_width,
+                    max_height: inner_constraints.max_height,
+                });
+                if width {
+                    inner_constraints.min_width = 0.0;
+                    if unbounded {
+                        inner_constraints.max_width = f32::MAX;
+                    }
+                }
+                if height {
+                    inner_constraints.min_height = 0.0;
+                    if unbounded {
+                        inner_constraints.max_height = f32::MAX;
+                    }
+                }
+            }
         }
     }
 
-    // 开放布局节点 A 型（exp/modifier-node）：resolved_size 之后串行变换约束。
-    // 位置语义 = 链中 size 之后、min/required/padding 之前（后续 min/required
-    // 仍可覆盖 node 的变换，链序直觉保持）。动态值在 transform 内求值
-    // （measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
+    // 开放布局节点 A 型（exp/modifier-node）：在尺寸步骤之后串行变换约束。
+    // 位置语义 = 链中 size/min/max/fill/wrap 之后，intrinsic/padding 之前；动态值在
+    // transform 内求值（measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
     // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
@@ -3177,44 +3452,6 @@ fn measure_node_inner(
         };
     for t in &layout_transforms {
         inner_constraints = t.transform(inner_constraints);
-    }
-
-    // Min/max sizes (MinWidth/MinHeight/MaxWidth/MaxHeight — Compose's widthIn/heightIn), replayed
-    // in CHAIN ORDER because that is what decides a conflict in Compose.
-    //
-    // Each Compose modifier is its own node whose constraints are `constrain`ed into what the node
-    // before it produced, so every node's range is a sub-range of its input's and the OUTER call
-    // wins: `.widthIn(max = 200).widthIn(min = 300)` is 200 while the reverse is 300. A min lowers
-    // to the current max and a max rises to the current min, which is that same nesting expressed
-    // as one pass; the clamp also keeps `Constraints` consistent, since `constrain_width`/
-    // `constrain_height` are `f32::clamp` and panic when min > max.
-    for (is_width, is_min, v) in nodes[idx].modifier.min_max_steps() {
-        if is_width {
-            if is_min {
-                inner_constraints.min_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
-            } else {
-                inner_constraints.max_width = v.clamp(inner_constraints.min_width, inner_constraints.max_width);
-            }
-        } else if is_min {
-            inner_constraints.min_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
-        } else {
-            inner_constraints.max_height = v.clamp(inner_constraints.min_height, inner_constraints.max_height);
-        }
-    }
-
-    // 强制尺寸（requiredSize——忽略 incoming 收缩，允许溢出：
-    // min/max 直接覆盖 incoming，Compose enforceIncoming=false 语义）。
-    // ⚠ 必须在 resolved_size **之后**执行：否则 size() 的 tighten 会反超
-    // required（链序反转——Compose requiredSize 固定大小最终胜出）。
-    if let Some((rw, rh)) = nodes[idx].modifier.required_size_constraint() {
-        if let Some(w) = rw {
-            inner_constraints.min_width = w;
-            inner_constraints.max_width = w;
-        }
-        if let Some(h) = rh {
-            inner_constraints.min_height = h;
-            inner_constraints.max_height = h;
-        }
     }
 
     // Step 1 (a fixed `Size`) used to be applied here as well, reading `Modifier::fixed_size()`.
@@ -3293,17 +3530,10 @@ fn measure_node_inner(
         }
     }
 
-    // 3. 应用 FillMax 约束（在 scroll 修改 max 之前，保存 viewport 约束）
+    // 3. Save the viewport before the scroll step rewrites the maximum. `fillMax*` has already
+    // been applied in the size walk above, at its chain position (`FillNode`, `Size.kt:713-746`).
     let viewport_height = inner_constraints.max_height;
     let viewport_width = inner_constraints.max_width;
-    if nodes[idx].modifier.is_fill_max_width() {
-        inner_constraints.min_width = inner_constraints.max_width;
-    }
-    if nodes[idx].modifier.is_fill_max_height() {
-        if inner_constraints.max_height < f32::MAX {
-            inner_constraints.min_height = inner_constraints.max_height;
-        }
-    }
 
     // 4. 检查 scroll 修饰符——给子节点无限约束
     if nodes[idx].modifier.vertical_scroll_state().is_some() {
@@ -3621,6 +3851,47 @@ fn measure_node_inner(
         nodes[idx].measured_size = outer_size;
         (outer_size, Vec::new())
     };
+
+    // ── `Modifier::wrapContent*` ──
+    //
+    // The content was measured without the incoming minimum (and, when unbounded, without the
+    // maximum). Compose's `WrapContentNode` then reports the content coerced back into the incoming
+    // range and places it inside that box by `align` (`Size.kt:1024-1061`). Steps apply from the
+    // innermost out — the last one recorded wraps everything measured before it.
+    for wrap in wrap_steps.iter().rev() {
+        let content = result.0;
+        let wrapper = Size::new(
+            content.width.clamp(wrap.min_width, wrap.max_width),
+            content.height.clamp(wrap.min_height, wrap.max_height),
+        );
+        let (dx, dy) = wrap
+            .align
+            .anchor(content, wrapper, nodes[idx].layout_direction);
+        if dx != 0.0 || dy != 0.0 {
+            if nodes[idx].children.is_empty() {
+                let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
+                let rtl = nodes[idx].layout_direction == LayoutDirection::Rtl;
+                let left = if rtl { pad_e } else { pad_s };
+                nodes[idx].content_box_override = Some((
+                    left + dx,
+                    pad_t + dy,
+                    (content.width - pad_s - pad_e).max(0.0),
+                    (content.height - pad_t - pad_b).max(0.0),
+                ));
+            } else {
+                let kids = nodes[idx].children.clone();
+                for c in kids {
+                    nodes[c].position.x += dx;
+                    nodes[c].position.y += dy;
+                }
+            }
+            for (line, value) in nodes[idx].alignment_lines.iter_mut() {
+                *value += if line.horizontal { dy } else { dx };
+            }
+        }
+        result.0 = wrapper;
+        nodes[idx].measured_size = wrapper;
+    }
 
     // ── Caller-declared alignment lines (`Modifier::alignment_line`) ──
     //

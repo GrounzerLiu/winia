@@ -330,8 +330,8 @@ landed; §1-§4 stay the specification it was written against.
 ### 8.3 The modifier chain is inverted, not read
 
 The pipeline order in `measure_node_inner` is the specification, and the probe replays it on the
-modifier chain instead of the node: `resolved_size` → `min_max_steps` → `required_size_constraint` →
-padding. The min/max pair is replayed in CHAIN ORDER, which is what decides a conflict in Compose —
+modifier chain instead of the node: `size_steps` (size/fill/ranges/wrap in chain order) → open
+layout nodes → intrinsic requests → padding → scroll. The min/max pair is replayed in CHAIN ORDER, which is what decides a conflict in Compose —
 each modifier node constrains into what the node before it produced, so the outer call wins
 (`.max_width(200).min_width(300)` measures 200, the reverse 300; this used to be a recorded
 "the min always wins" deviation). Consequences that the tests pin:

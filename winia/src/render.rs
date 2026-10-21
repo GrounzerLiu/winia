@@ -1599,10 +1599,10 @@ fn render_pass1(
                         if dh.is_fixed() { ch = dh.to_logical_px(); }
                     }
                 }
-                ModifierElement::FillMaxWidth | ModifierElement::FillMaxSize => {
-                    cw = w; // measured width = parent max width
+                ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. } => {
+                    cw = w; // measured width = the filled share of the parent max width
                 }
-                ModifierElement::FillMaxHeight => {
+                ModifierElement::FillMaxHeight { .. } => {
                     ch = h;
                 }
                 _ => {}

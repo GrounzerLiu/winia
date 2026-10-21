@@ -234,6 +234,42 @@ pub enum ModifierNode {
 ///
 /// 按类别分为 Layout / Draw / Input 三类。
 /// 用 enum 而非 trait object，便于后续 Layout 系统分类提取。
+/// One resolved size-shaping step, in chain order — see [`Modifier::size_steps`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SizeStep {
+    /// A `Size` element: resolved fixed axes. `None` is Auto/Intrinsic — those say nothing here
+    /// (an intrinsic axis is resolved after the walk, by `intrinsic_*_request`).
+    Size { width: Option<f32>, height: Option<f32> },
+    /// A `RequiredSize` element: resolved numeric axes; the intrinsic overloads are handled later.
+    RequiredSize { width: Option<f32>, height: Option<f32> },
+    /// A `fillMax*` element, applied where it stands: the share of the CURRENT maximum.
+    Fill { width: Option<f32>, height: Option<f32> },
+    MinWidth(f32),
+    MaxWidth(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    /// A resolved `SizeIn`; `None` is Compose's `Dp.Unspecified`.
+    SizeIn {
+        min_width: Option<f32>,
+        min_height: Option<f32>,
+        max_width: Option<f32>,
+        max_height: Option<f32>,
+        enforce_incoming: bool,
+    },
+    /// `defaultMinSize` — the minimum applies only where the incoming one is 0.
+    DefaultMin {
+        min_width: Option<f32>,
+        min_height: Option<f32>,
+    },
+    /// `wrapContent*` — relax the incoming minimum (and max when unbounded) for what follows.
+    Wrap {
+        width: bool,
+        height: bool,
+        align: crate::layout::ContentAlignment,
+        unbounded: bool,
+    },
+}
+
 #[derive(Clone)]
 pub(crate) enum ModifierElement {
     // ── Layout 类 ──
@@ -250,7 +286,7 @@ pub(crate) enum ModifierElement {
     /// above the min. Supports a dynamic value.
     ///
     /// A min and a max on the same axis may conflict; which one wins is Compose's chain-order rule,
-    /// replayed by [`Modifier::min_max_steps`] — the max written first yields the max, the min
+    /// replayed by [`Modifier::size_steps`] — the max written first yields the max, the min
     /// written first yields the min.
     MaxWidth { value: Dimension },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
@@ -262,12 +298,36 @@ pub(crate) enum ModifierElement {
         end: Dimension,
         bottom: Dimension,
     },
-    /// 填满最大宽度
-    FillMaxWidth,
-    /// 填满最大高度
-    FillMaxHeight,
-    /// 填满最大尺寸
-    FillMaxSize,
+    /// Fill the incoming maximum width — Compose `fillMaxWidth`. `fraction < 1` takes that share
+    /// of the maximum; an unbounded maximum is a no-op (Compose's `FillNode`).
+    FillMaxWidth { fraction: f32 },
+    /// Fill the incoming maximum height (see `FillMaxWidth` for the fraction rules).
+    FillMaxHeight { fraction: f32 },
+    /// Fill the incoming maximum on both axes.
+    FillMaxSize { fraction: f32 },
+    /// A size RANGE on one or both axes — Compose's `widthIn`/`heightIn`/`sizeIn`
+    /// (`enforce_incoming = true`) and `requiredWidthIn`/`requiredSizeIn` (`false`). Bounds are
+    /// resolved during measure, so a `Dimension::Dynamic` animates through layout.
+    SizeIn {
+        min_width: Option<Dimension>,
+        min_height: Option<Dimension>,
+        max_width: Option<Dimension>,
+        max_height: Option<Dimension>,
+        enforce_incoming: bool,
+    },
+    /// Compose's `defaultMinSize`: a minimum that applies only where the incoming minimum is 0.
+    DefaultMinSize {
+        min_width: Option<Dimension>,
+        min_height: Option<Dimension>,
+    },
+    /// Compose's `wrapContentWidth`/`wrapContentHeight`/`wrapContentSize`: measure without the
+    /// incoming minimum (and maximum, when `unbounded`) and align the content inside the resulting box.
+    WrapContent {
+        width: bool,
+        height: bool,
+        align: crate::layout::ContentAlignment,
+        unbounded: bool,
+    },
     /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
     /// 对标 Compose `Modifier.offset`；值支持动态——动画可作用于 offset）
     Offset { x: Dimension, y: Dimension },
@@ -842,7 +902,144 @@ impl Modifier {
 
     /// 宽度填满可用空间
     pub fn fill_max_width(self) -> Self {
-        self.push(ModifierElement::FillMaxWidth)
+        self.push(ModifierElement::FillMaxWidth { fraction: 1.0 })
+    }
+
+    /// Compose `fillMaxWidth(fraction)`: take that share of the incoming maximum. An unbounded
+    /// maximum leaves the content untouched.
+    pub fn fill_max_width_fraction(self, fraction: f32) -> Self {
+        self.push(ModifierElement::FillMaxWidth { fraction })
+    }
+
+    /// A width RANGE — Compose's `Modifier.widthIn(min, max)`: the content is constrained into
+    /// `[min, max]` as far as the incoming constraints allow (they win where they are tighter).
+    /// One element, so its two bounds are applied together — unlike `min_width(..).max_width(..)`,
+    /// which are two nodes and resolve by chain order.
+    pub fn width_in(self, min: impl Into<Dimension>, max: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: Some(min.into()),
+            min_height: None,
+            max_width: Some(max.into()),
+            max_height: None,
+            enforce_incoming: true,
+        })
+    }
+
+    /// A height RANGE — Compose's `Modifier.heightIn(min, max)`; see [`width_in`](Self::width_in).
+    pub fn height_in(self, min: impl Into<Dimension>, max: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: None,
+            min_height: Some(min.into()),
+            max_width: None,
+            max_height: Some(max.into()),
+            enforce_incoming: true,
+        })
+    }
+
+    /// Both axes in one node — Compose's `Modifier.sizeIn(minWidth, minHeight, maxWidth, maxHeight)`.
+    pub fn size_in(
+        self,
+        min_width: impl Into<Dimension>,
+        min_height: impl Into<Dimension>,
+        max_width: impl Into<Dimension>,
+        max_height: impl Into<Dimension>,
+    ) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: Some(min_width.into()),
+            min_height: Some(min_height.into()),
+            max_width: Some(max_width.into()),
+            max_height: Some(max_height.into()),
+            enforce_incoming: true,
+        })
+    }
+
+    /// Width range that IGNORES incoming constraints — Compose's `requiredWidthIn(min, max)`.
+    /// The incoming range still decides any bound this one leaves unspecified.
+    pub fn required_width_in(self, min: impl Into<Dimension>, max: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: Some(min.into()),
+            min_height: None,
+            max_width: Some(max.into()),
+            max_height: None,
+            enforce_incoming: false,
+        })
+    }
+
+    /// Height range that ignores incoming constraints — Compose's `requiredHeightIn(min, max)`.
+    pub fn required_height_in(self, min: impl Into<Dimension>, max: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: None,
+            min_height: Some(min.into()),
+            max_width: None,
+            max_height: Some(max.into()),
+            enforce_incoming: false,
+        })
+    }
+
+    /// The four-bound escape hatch — Compose's `requiredSizeIn`.
+    pub fn required_size_in(
+        self,
+        min_width: impl Into<Dimension>,
+        min_height: impl Into<Dimension>,
+        max_width: impl Into<Dimension>,
+        max_height: impl Into<Dimension>,
+    ) -> Self {
+        self.push(ModifierElement::SizeIn {
+            min_width: Some(min_width.into()),
+            min_height: Some(min_height.into()),
+            max_width: Some(max_width.into()),
+            max_height: Some(max_height.into()),
+            enforce_incoming: false,
+        })
+    }
+
+    /// A minimum that only applies where the incoming minimum is 0 — Compose's
+    /// `defaultMinSize`: a component's own floor that a caller can lower from outside.
+    pub fn default_min_size(
+        self,
+        min_width: impl Into<Dimension>,
+        min_height: impl Into<Dimension>,
+    ) -> Self {
+        self.push(ModifierElement::DefaultMinSize {
+            min_width: Some(min_width.into()),
+            min_height: Some(min_height.into()),
+        })
+    }
+
+    /// Measure without the incoming minimum width (and, with `unbounded`, without the incoming
+    /// maximum), then align the content inside the resulting box — Compose's
+    /// `Modifier.wrapContentWidth(align, unbounded)`.
+    pub fn wrap_content_width(self, align: crate::layout::Alignment, unbounded: bool) -> Self {
+        self.push(ModifierElement::WrapContent {
+            width: true,
+            height: false,
+            align: crate::layout::ContentAlignment::new(align, crate::layout::Alignment::Center),
+            unbounded,
+        })
+    }
+
+    /// The height twin of [`wrap_content_width`](Self::wrap_content_width).
+    pub fn wrap_content_height(self, align: crate::layout::Alignment, unbounded: bool) -> Self {
+        self.push(ModifierElement::WrapContent {
+            width: false,
+            height: true,
+            align: crate::layout::ContentAlignment::new(crate::layout::Alignment::Center, align),
+            unbounded,
+        })
+    }
+
+    /// Both axes — Compose's `Modifier.wrapContentSize(align, unbounded)`.
+    pub fn wrap_content_size(
+        self,
+        align: crate::layout::ContentAlignment,
+        unbounded: bool,
+    ) -> Self {
+        self.push(ModifierElement::WrapContent {
+            width: true,
+            height: true,
+            align,
+            unbounded,
+        })
     }
 
     /// 最小宽度（对标 Compose `Modifier.widthIn(min = ...)`）——提升布局
@@ -871,12 +1068,22 @@ impl Modifier {
 
     /// 高度填满可用空间
     pub fn fill_max_height(self) -> Self {
-        self.push(ModifierElement::FillMaxHeight)
+        self.push(ModifierElement::FillMaxHeight { fraction: 1.0 })
+    }
+
+    /// Compose `fillMaxHeight(fraction)`; see [`fill_max_width_fraction`](Self::fill_max_width_fraction).
+    pub fn fill_max_height_fraction(self, fraction: f32) -> Self {
+        self.push(ModifierElement::FillMaxHeight { fraction })
     }
 
     /// 宽高填满可用空间
     pub fn fill_max_size(self) -> Self {
-        self.push(ModifierElement::FillMaxSize)
+        self.push(ModifierElement::FillMaxSize { fraction: 1.0 })
+    }
+
+    /// Compose `fillMaxSize(fraction)`.
+    pub fn fill_max_size_fraction(self, fraction: f32) -> Self {
+        self.push(ModifierElement::FillMaxSize { fraction })
     }
 
     /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
@@ -2083,26 +2290,83 @@ impl Modifier {
         out
     }
 
-    /// The min/max size elements in CHAIN ORDER, as `(is_width, is_min, value)`.
+    /// The size-shaping elements in CHAIN ORDER: min/max nodes, the range nodes
+    /// (`widthIn`/`sizeIn`/`required*In`) and `wrapContent`.
     ///
-    /// Compose nests one node per call and `constrain`s each node's target constraints into what it
-    /// was handed (`Size.kt`: `SizeNode.targetConstraints`), so every node's output range is a
-    /// sub-range of its input's and the OUTER call decides a conflict:
-    /// `.widthIn(max = 200.dp).widthIn(min = 300.dp)` measures 200, the reverse measures 300.
-    /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
-    /// and collapse that away, so the measure pipeline replays the order with this instead.
-    pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
+    /// Compose nests one layout node per call and feeds each one the constraints the previous one
+    /// produced, so every node's output range is a sub-range of its input's and the OUTER call
+    /// decides a conflict: `.widthIn(max = 200.dp).widthIn(min = 300.dp)` measures 200, the reverse
+    /// measures 300. [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan
+    /// position-independently and collapse that away, so the measure pipeline replays the order with
+    /// this instead. Dimensions are resolved here, during measure, so a `Dimension::Dynamic` registers
+    /// its layout dependency and animates through layout.
+    pub(crate) fn size_steps(&self) -> Vec<SizeStep> {
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
+        let opt = |d: &Option<Dimension>| d.as_ref().map(resolve);
         let mut out = Vec::new();
         for el in &self.elements {
-            let (is_width, is_min, value) = match el {
-                ModifierElement::MinWidth { value } => (true, true, value),
-                ModifierElement::MaxWidth { value } => (true, false, value),
-                ModifierElement::MinHeight { value } => (false, true, value),
-                ModifierElement::MaxHeight { value } => (false, false, value),
-                _ => continue,
-            };
-            out.push((is_width, is_min, resolve(value)));
+            match el {
+                ModifierElement::Size { width, height } => {
+                    let (w, h) = (width.to_logical_px(), height.to_logical_px());
+                    if w.is_some() || h.is_some() {
+                        out.push(SizeStep::Size { width: w, height: h });
+                    }
+                }
+                ModifierElement::RequiredSize { width, height } => {
+                    let w = width.as_ref().and_then(|v| v.to_logical_px());
+                    let h = height.as_ref().and_then(|v| v.to_logical_px());
+                    if w.is_some() || h.is_some() {
+                        out.push(SizeStep::RequiredSize { width: w, height: h });
+                    }
+                }
+                ModifierElement::FillMaxWidth { fraction } => out.push(SizeStep::Fill {
+                    width: Some(*fraction),
+                    height: None,
+                }),
+                ModifierElement::FillMaxHeight { fraction } => out.push(SizeStep::Fill {
+                    width: None,
+                    height: Some(*fraction),
+                }),
+                ModifierElement::FillMaxSize { fraction } => out.push(SizeStep::Fill {
+                    width: Some(*fraction),
+                    height: Some(*fraction),
+                }),
+                ModifierElement::MinWidth { value } => out.push(SizeStep::MinWidth(resolve(value))),
+                ModifierElement::MaxWidth { value } => out.push(SizeStep::MaxWidth(resolve(value))),
+                ModifierElement::MinHeight { value } => out.push(SizeStep::MinHeight(resolve(value))),
+                ModifierElement::MaxHeight { value } => out.push(SizeStep::MaxHeight(resolve(value))),
+                ModifierElement::SizeIn {
+                    min_width,
+                    min_height,
+                    max_width,
+                    max_height,
+                    enforce_incoming,
+                } => out.push(SizeStep::SizeIn {
+                    min_width: opt(min_width),
+                    min_height: opt(min_height),
+                    max_width: opt(max_width),
+                    max_height: opt(max_height),
+                    enforce_incoming: *enforce_incoming,
+                }),
+                ModifierElement::DefaultMinSize { min_width, min_height } => {
+                    out.push(SizeStep::DefaultMin {
+                        min_width: opt(min_width),
+                        min_height: opt(min_height),
+                    })
+                }
+                ModifierElement::WrapContent {
+                    width,
+                    height,
+                    align,
+                    unbounded,
+                } => out.push(SizeStep::Wrap {
+                    width: *width,
+                    height: *height,
+                    align: *align,
+                    unbounded: *unbounded,
+                }),
+                _ => {}
+            }
         }
         out
     }
@@ -2126,16 +2390,18 @@ impl Modifier {
     /// 是否填满最大宽度
     pub fn is_fill_max_width(&self) -> bool {
         self.elements.iter().any(|el| matches!(el,
-            ModifierElement::FillMaxWidth | ModifierElement::FillMaxSize
+            ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. }
         ))
     }
+
 
     /// 是否填满最大高度
     pub fn is_fill_max_height(&self) -> bool {
         self.elements.iter().any(|el| matches!(el,
-            ModifierElement::FillMaxHeight | ModifierElement::FillMaxSize
+            ModifierElement::FillMaxHeight { .. } | ModifierElement::FillMaxSize { .. }
         ))
     }
+
 
     /// 垂直滚动状态（如果有 VerticalScroll modifier）
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
@@ -2577,9 +2843,29 @@ impl Debug for ModifierElement {
                 .field("end", end)
                 .field("bottom", bottom)
                 .finish(),
-            Self::FillMaxWidth => f.write_str("FillMaxWidth"),
-            Self::FillMaxHeight => f.write_str("FillMaxHeight"),
-            Self::FillMaxSize => f.write_str("FillMaxSize"),
+            Self::FillMaxWidth { fraction } => f.debug_struct("FillMaxWidth").field("fraction", fraction).finish(),
+            Self::FillMaxHeight { fraction } => f.debug_struct("FillMaxHeight").field("fraction", fraction).finish(),
+            Self::FillMaxSize { fraction } => f.debug_struct("FillMaxSize").field("fraction", fraction).finish(),
+            Self::SizeIn { min_width, min_height, max_width, max_height, enforce_incoming } => f
+                .debug_struct("SizeIn")
+                .field("min_width", min_width)
+                .field("min_height", min_height)
+                .field("max_width", max_width)
+                .field("max_height", max_height)
+                .field("enforce_incoming", enforce_incoming)
+                .finish(),
+            Self::DefaultMinSize { min_width, min_height } => f
+                .debug_struct("DefaultMinSize")
+                .field("min_width", min_width)
+                .field("min_height", min_height)
+                .finish(),
+            Self::WrapContent { width, height, align, unbounded } => f
+                .debug_struct("WrapContent")
+                .field("width", width)
+                .field("height", height)
+                .field("align", align)
+                .field("unbounded", unbounded)
+                .finish(),
             Self::Offset { x, y } => f.debug_struct("Offset").field("x", x).field("y", y).finish(),
             Self::AbsoluteOffset { x, y } => f.debug_struct("AbsoluteOffset").field("x", x).field("y", y).finish(),
             Self::AlignSelf { alignment } => f.debug_struct("AlignSelf").field("alignment", alignment).finish(),
@@ -4093,9 +4379,26 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         ) => {
             dimension_eq(as_, bs) && dimension_eq(at, bt) && dimension_eq(ae, be) && dimension_eq(ab, bb)
         }
-        (FillMaxWidth, FillMaxWidth) => true,
-        (FillMaxHeight, FillMaxHeight) => true,
-        (FillMaxSize, FillMaxSize) => true,
+        (FillMaxWidth { fraction: af }, FillMaxWidth { fraction: bf }) => af == bf,
+        (FillMaxHeight { fraction: af }, FillMaxHeight { fraction: bf }) => af == bf,
+        (FillMaxSize { fraction: af }, FillMaxSize { fraction: bf }) => af == bf,
+        (
+            SizeIn { min_width: amw, min_height: amh, max_width: axw, max_height: axh, enforce_incoming: ae },
+            SizeIn { min_width: bmw, min_height: bmh, max_width: bxw, max_height: bxh, enforce_incoming: be },
+        ) => {
+            opt_dimension_eq(amw, bmw)
+                && opt_dimension_eq(amh, bmh)
+                && opt_dimension_eq(axw, bxw)
+                && opt_dimension_eq(axh, bxh)
+                && ae == be
+        }
+        (DefaultMinSize { min_width: amw, min_height: amh }, DefaultMinSize { min_width: bmw, min_height: bmh }) => {
+            opt_dimension_eq(amw, bmw) && opt_dimension_eq(amh, bmh)
+        }
+        (
+            WrapContent { width: aw, height: ah, align: aa, unbounded: au },
+            WrapContent { width: bw, height: bh, align: ba, unbounded: bu },
+        ) => aw == bw && ah == bh && aa == ba && au == bu,
         (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
         (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
@@ -4350,6 +4653,33 @@ mod param_eq_tests {
     /// the parameter comparison keeps the static/dynamic distinction the old two variants encoded.
     /// The ripple colour is a carrier: a state-driven one is read per paint, and the parameter
     /// comparison keeps "changed static" and "two dynamics" apart.
+    #[test]
+    fn param_eq_compares_the_size_range_elements() {
+        let a = Modifier::new().width_in(10.0, 20.0);
+        assert!(a.param_eq(&Modifier::new().width_in(10.0, 20.0)));
+        assert!(!a.param_eq(&Modifier::new().width_in(10.0, 21.0)));
+        assert!(
+            !Modifier::new().required_width_in(10.0, 20.0).param_eq(&a),
+            "enforce_incoming is part of the parameter"
+        );
+        let wrap = Modifier::new().wrap_content_size(crate::layout::ContentAlignment::CENTER, false);
+        assert!(wrap.param_eq(&Modifier::new().wrap_content_size(
+            crate::layout::ContentAlignment::CENTER,
+            false
+        )));
+        assert!(!wrap.param_eq(&Modifier::new().wrap_content_size(
+            crate::layout::ContentAlignment::CENTER,
+            true
+        )));
+        assert!(
+            !Modifier::new().fill_max_width().param_eq(&Modifier::new().fill_max_width_fraction(0.5)),
+            "a fraction change must re-enter"
+        );
+        assert!(Modifier::new()
+            .default_min_size(10.0, 20.0)
+            .param_eq(&Modifier::new().default_min_size(10.0, 20.0)));
+    }
+
     #[test]
     fn a_ripple_colour_can_be_dynamic() {
         use crate::runtime::state::State;

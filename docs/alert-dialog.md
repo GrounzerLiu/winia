@@ -145,7 +145,7 @@ Measured in the tests' 800x600 window with a 2000px text: without the weight the
 `280x600` with the action row at `y=576, h=0`; with it, `y=536, h=40`.
 
 When a min and a max conflict the winner is Compose's chain-order rule, replayed by
-`Modifier::min_max_steps`: each Compose modifier is its own node and constrains into what the node
+`Modifier::size_steps`: each Compose modifier is its own node and constrains into what the node
 before it produced, so `.max_width(200).min_width(300)` measures 200 while the reverse measures
 300. This used to be a recorded deviation — "the min always wins", which is CSS's precedence and
 matches only the second order — and the clamp is what keeps `Constraints` consistent either way
