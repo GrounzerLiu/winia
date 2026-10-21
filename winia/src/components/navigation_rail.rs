@@ -137,23 +137,10 @@ const WIDE_START_INDICATOR_V_PADDING: f32 = 16.0;
 
 /// 窗口避让尺寸（对标 androidx WindowInsets 的桌面简化版）。
 ///
-/// 桌面平台默认全零（无系统栏叠加）。未来 Android 支持或自定义窗口装饰
-/// （自绘标题栏模拟状态栏）时，由平台层填充真实系统栏尺寸后传入
-/// [NavigationRail::window_insets]。应用顺序对齐 androidx：
-/// insets padding 在最外层，rail 自身垂直 padding 在其内。
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct WindowInsets {
-    pub left: f32,
-    pub top: f32,
-    pub right: f32,
-    pub bottom: f32,
-}
-
-impl WindowInsets {
-    pub fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self { left, top, right, bottom }
-    }
-}
+/// 桌面平台默认全零（无系统栏叠加）。自定义窗口装饰（自绘标题栏模拟状态栏）或平台后端填充
+/// 真实系统栏尺寸后传入 [NavigationRail::window_insets]；insets padding 在最外层，rail 自身
+/// 垂直 padding 在其内。The foundation type is [`crate::insets::Insets`].
+pub use crate::insets::Insets as WindowInsets;
 
 // ── 颜色 ──
 

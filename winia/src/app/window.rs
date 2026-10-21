@@ -13,9 +13,17 @@ const WINDOW_KEY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
 /// 无宏覆盖会触发稳定 key panic）
 #[composable]
 fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) {
-    // 内容铺满窗口，不做默认留白（Scaffold 等全屏页面需要 edge-to-edge）。
-    Column::new().build(ctx, |ctx| {
-        content(ctx);
+    // Each window owns its inset controller: the custom decoration (or the platform backend) writes
+    // the window's status-bar/navigation-bar/IME insets into it, and the inset-padding modifiers read
+    // them at measure time.
+    let insets = ctx
+        .remember(|| crate::insets::WindowInsetsController::new())
+        .get();
+    crate::insets::LOCAL_WINDOW_INSETS.provides(insets, || {
+        // 内容铺满窗口，不做默认留白（Scaffold 等全屏页面需要 edge-to-edge）。
+        Column::new().build(ctx, |ctx| {
+            content(ctx);
+        });
     });
 }
 

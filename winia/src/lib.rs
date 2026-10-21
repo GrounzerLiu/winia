@@ -58,6 +58,7 @@ pub mod render;
 pub mod animation;
 /// The fling strategy: what a release turns into (Compose's `FlingBehavior` / `TargetedFlingBehavior`).
 pub mod fling;
+pub mod insets;
 pub mod overscroll;
 pub mod nested_scroll;
 pub mod nav;
@@ -225,6 +226,7 @@ pub mod prelude {
     };
     pub use crate::{app_root, compose, composable, composable_keyed, keyed_stmt, run_app};
     pub use crate::components::rich_text::RichText;
+    pub use crate::components::{PullToRefreshBox, PullToRefreshState};
     // The overlay runtime: a popup and a dialog.
     pub use crate::overlay::{Dialog, OverlayAnimSpec, Popup, PopupPosition};
     // …and the menu built on it, which is a component.
@@ -246,6 +248,7 @@ pub mod prelude {
     pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
     pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
+    pub use crate::insets::{Insets, InsetsKind, WindowInsetsController};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{

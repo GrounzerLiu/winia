@@ -337,6 +337,17 @@ pub(crate) enum ModifierElement {
         end: Dimension,
         bottom: Dimension,
     },
+    /// Padding equal to a part of the window's insets (Compose's windowInsetsPadding). The applied
+    /// insets are consumed for the subtree, so a nested call pads by nothing.
+    WindowInsetsPadding {
+        kind: crate::insets::InsetsKind,
+        controller: crate::insets::WindowInsetsController,
+    },
+    /// Consume a part of the window's insets without padding (Compose's consumeWindowInsets).
+    ConsumeWindowInsets {
+        kind: crate::insets::InsetsKind,
+        controller: crate::insets::WindowInsetsController,
+    },
     /// Fill the incoming maximum width — Compose `fillMaxWidth`. `fraction < 1` takes that share
     /// of the maximum; an unbounded maximum is a no-op (Compose's `FillNode`).
     FillMaxWidth { fraction: f32 },
@@ -1289,6 +1300,80 @@ impl Modifier {
     ///
     /// The padding is capped by the incoming maximum on that axis, and `before` wins when both cannot
     /// fit (Compose's contract, `:44-55`).
+    /// Compose's `Modifier.windowInsetsPadding(insets)`: pad by the window's current insets of this
+    /// kind, resolved at measure time (an inset change re-measures only the nodes that asked), and
+    /// consume them for the subtree.
+    pub fn window_insets_padding(self, kind: crate::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::WindowInsetsPadding {
+            kind,
+            controller: crate::insets::current(),
+        })
+    }
+
+    /// Compose's `Modifier.consumeWindowInsets(insets)`: mark the insets consumed for the subtree
+    /// without padding by them.
+    pub fn consume_window_insets(self, kind: crate::insets::InsetsKind) -> Self {
+        self.push(ModifierElement::ConsumeWindowInsets {
+            kind,
+            controller: crate::insets::current(),
+        })
+    }
+
+    /// Compose's `Modifier.statusBarsPadding()`.
+    pub fn status_bars_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::StatusBars)
+    }
+
+    /// Compose's `Modifier.navigationBarsPadding()`.
+    pub fn navigation_bars_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::NavigationBars)
+    }
+
+    /// Compose's `Modifier.systemBarsPadding()`.
+    pub fn system_bars_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::SystemBars)
+    }
+
+    /// Compose's `Modifier.imePadding()`.
+    pub fn ime_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::Ime)
+    }
+
+    /// Compose's `Modifier.displayCutoutPadding()`.
+    pub fn display_cutout_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::DisplayCutout)
+    }
+
+    /// Compose's `Modifier.systemGesturesPadding()`.
+    pub fn system_gestures_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::SystemGestures)
+    }
+
+    /// Compose's `Modifier.tappableElementPadding()`.
+    pub fn tappable_element_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::TappableElements)
+    }
+
+    /// Compose's `Modifier.safeDrawingPadding()`.
+    pub fn safe_drawing_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::SafeDrawing)
+    }
+
+    /// Compose's `Modifier.safeGesturesPadding()`.
+    pub fn safe_gestures_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::SafeGestures)
+    }
+
+    /// Compose's `Modifier.safeContentPadding()`.
+    pub fn safe_content_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::SafeContent)
+    }
+
+    /// Compose's `Modifier.mandatorySystemGesturesPadding()`.
+    pub fn mandatory_system_gestures_padding(self) -> Self {
+        self.window_insets_padding(crate::insets::InsetsKind::MandatorySystemGestures)
+    }
+
     pub fn padding_from(
         self,
         line: crate::layout::AlignmentLine,
@@ -2493,6 +2578,36 @@ impl Modifier {
     }
 
     /// 水平方向 padding——返回 (start, end)（各自独立，非对称时不同）
+    /// The window-inset padding elements on this chain, in order.
+    pub(crate) fn inset_padding_steps(
+        &self,
+    ) -> Vec<(crate::insets::InsetsKind, crate::insets::WindowInsetsController)> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::WindowInsetsPadding { kind, controller } => {
+                    Some((*kind, controller.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The consume-only inset elements on this chain, in order.
+    pub(crate) fn inset_consume_steps(
+        &self,
+    ) -> Vec<(crate::insets::InsetsKind, crate::insets::WindowInsetsController)> {
+        self.elements
+            .iter()
+            .filter_map(|el| match el {
+                ModifierElement::ConsumeWindowInsets { kind, controller } => {
+                    Some((*kind, controller.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn get_padding_horizontal(&self) -> (f32, f32) {
         let (s, _, e, _) = self.get_padding_sides();
         (s, e)
@@ -3136,6 +3251,12 @@ impl Debug for ModifierElement {
             Self::MinHeight { value } => f.debug_struct("MinHeight").field("value", value).finish(),
             Self::MaxWidth { value } => f.debug_struct("MaxWidth").field("value", value).finish(),
             Self::MaxHeight { value } => f.debug_struct("MaxHeight").field("value", value).finish(),
+            Self::WindowInsetsPadding { kind, .. } => {
+                f.debug_tuple("WindowInsetsPadding").field(kind).finish()
+            }
+            Self::ConsumeWindowInsets { kind, .. } => {
+                f.debug_tuple("ConsumeWindowInsets").field(kind).finish()
+            }
             Self::PaddingSides { start, top, end, bottom } => f
                 .debug_struct("PaddingSides")
                 .field("start", start)
@@ -4702,6 +4823,14 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (MinHeight { value: av }, MinHeight { value: bv }) => dimension_eq(av, bv),
         (MaxWidth { value: av }, MaxWidth { value: bv }) => dimension_eq(av, bv),
         (MaxHeight { value: av }, MaxHeight { value: bv }) => dimension_eq(av, bv),
+        (
+            WindowInsetsPadding { kind: ak, controller: ac },
+            WindowInsetsPadding { kind: bk, controller: bc },
+        ) => ak == bk && ac.same(bc),
+        (
+            ConsumeWindowInsets { kind: ak, controller: ac },
+            ConsumeWindowInsets { kind: bk, controller: bc },
+        ) => ak == bk && ac.same(bc),
         (
             PaddingSides { start: as_, top: at, end: ae, bottom: ab },
             PaddingSides { start: bs, top: bt, end: be, bottom: bb },

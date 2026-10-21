@@ -2601,6 +2601,46 @@ mod tests {
         assert_eq!((nodes[1].position.x, nodes[1].position.y), (40.0, 40.0));
     }
 
+    #[test]
+    fn inset_padding_consumes_for_the_subtree() {
+        use crate::insets::{Insets, WindowInsets};
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let controller = crate::insets::current();
+        controller.set(WindowInsets {
+            status_bars: Insets::new(0.0, 24.0, 0.0, 0.0),
+            navigation_bars: Insets::new(0.0, 0.0, 0.0, 48.0),
+            ..Default::default()
+        });
+
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().system_bars_padding(), Some(0)),
+            LayoutNode::leaf(Modifier::new().navigation_bars_padding().size(10.0, 10.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(
+            size,
+            Size::new(10.0, 82.0),
+            "the outer systemBars pads top 24 + bottom 48; the inner navigationBars is consumed"
+        );
+
+        // Consume-only: the inner padding must not reappear.
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new().consume_window_insets(crate::insets::InsetsKind::NavigationBars),
+                Some(0),
+            ),
+            LayoutNode::leaf(Modifier::new().navigation_bars_padding().size(10.0, 10.0)),
+        ];
+        nodes[0].children = vec![1];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
+        assert_eq!(size, Size::new(10.0, 10.0), "consumed insets pad by zero");
+        controller.set(WindowInsets::default());
+    }
+
     // ── position callbacks (Compose onPlaced / onGloballyPositioned) ──
 
     #[test]
@@ -3819,8 +3859,26 @@ fn measure_node_inner(
     }
 
     // 2. 应用 padding
-    let (pad_start, pad_end) = nodes[idx].modifier.get_padding_horizontal();
-    let (pad_top, pad_bottom) = nodes[idx].modifier.get_padding_vertical();
+    let (mut pad_start, mut pad_end) = nodes[idx].modifier.get_padding_horizontal();
+    let (mut pad_top, mut pad_bottom) = nodes[idx].modifier.get_padding_vertical();
+    // Window-inset padding is resolved HERE, at measure time: the controller's state read registers a
+    // layout dependency (so an inset change re-measures just these nodes), and the insets it applies
+    // are consumed for the subtree. Consume-only elements mark them without padding.
+    let mut inset_consumed = crate::insets::consumed();
+    for (kind, controller) in nodes[idx].modifier.inset_padding_steps() {
+        let window = controller.state().get();
+        let value = crate::insets::remaining(kind, window, inset_consumed);
+        pad_start += value.left;
+        pad_end += value.right;
+        pad_top += value.top;
+        pad_bottom += value.bottom;
+        inset_consumed = crate::insets::consume(kind, window, inset_consumed);
+    }
+    for (kind, controller) in nodes[idx].modifier.inset_consume_steps() {
+        let window = controller.state().get();
+        inset_consumed = crate::insets::consume(kind, window, inset_consumed);
+    }
+    let _inset_guard = crate::insets::ConsumeScope::enter(inset_consumed);
     let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
     if pad_x > 0.0 || pad_y > 0.0 {
