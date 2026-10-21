@@ -14,6 +14,7 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
+pub use layer::{CompositingStrategy, RenderEffect};
 
 pub mod brush;
 pub mod color;

@@ -1138,7 +1138,12 @@ fn render_pass1(
     let gl_saved = if let Some(gl) = gl_params {
         let has_filter = gl.color_filter.is_some();
         let has_alpha = gl.alpha < 1.0;
-        if has_filter || has_alpha {
+        let has_effect = gl.render_effect.is_some();
+        // `Offscreen` forces the layer even when nothing else needs one (blend modes and group
+        // opacity need a real offscreen); `ModulateAlpha` has no per-draw equivalent in winia, so it
+        // takes the same path as `Auto`.
+        let offscreen = gl.compositing == crate::graphics::CompositingStrategy::Offscreen;
+        if has_filter || has_alpha || has_effect || offscreen {
             let mut paint = skia_safe::Paint::default();
             if let Some(cf) = &gl.color_filter {
                 if let Some(filter) = to_skia_color_filter(cf) {
@@ -1147,6 +1152,18 @@ fn render_pass1(
             }
             if has_alpha {
                 paint.set_alpha_f(gl.alpha.clamp(0.0, 1.0));
+            }
+            if let Some(crate::graphics::RenderEffect::Blur { radius }) = &gl.render_effect {
+                if *radius > 0.0 {
+                    if let Some(filter) = skia_safe::image_filters::blur(
+                        (*radius, *radius),
+                        skia_safe::TileMode::Clamp,
+                        None,
+                        None,
+                    ) {
+                        paint.set_image_filter(filter);
+                    }
+                }
             }
             canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default().paint(&paint));
         } else {
@@ -1679,6 +1696,15 @@ fn render_pass1(
         }
     }
 
+    // Inner shadow: painted ABOVE the content (Compose's appearance draws it after the shape fill
+    // and its children) and clipped to the shape.
+    for el in node.modifier.elements() {
+        if let ModifierElement::InnerShadow { shape, color, blur, offset_x, offset_y } = el {
+            let shape = shape.eval();
+            draw_inner_shadow(canvas, paint_rect, &shape, color, *blur, *offset_x, *offset_y);
+        }
+    }
+
     // Ripple indication — above content, inside shape/scroll clipping. `paint_rect`, so the ripple
     // matches the container that was painted: a node grown to the 48 dp touch target paints its 40 dp
     // container, and a ripple spanning the node would spill outside it.
@@ -2078,6 +2104,79 @@ fn draw_background(canvas: &Canvas, rect: Rect, color: &crate::graphics::Color, 
 
 /// Fill `shape` inside `rect` with an already prepared paint — the one place the shape set is turned
 /// into a draw call, shared by solid backgrounds and brushes.
+/// The rounded rect a shape normalises to inside `rect` — the path form of [`paint_shape`].
+fn shape_rrect(rect: Rect, shape: &crate::graphics::Shape) -> RRect {
+    match shape {
+        crate::graphics::Shape::Rectangle => RRect::new_rect_xy(rect, 0.0, 0.0),
+        crate::graphics::Shape::RoundedRect { corner_radius } => {
+            RRect::new_rect_xy(rect, *corner_radius, *corner_radius)
+        }
+        crate::graphics::Shape::PillToRounded { corner_radius, t } => {
+            let percent = rect.width().min(rect.height()) / 2.0;
+            let r = percent + (*corner_radius - percent) * *t;
+            RRect::new_rect_xy(rect, r, r)
+        }
+        crate::graphics::Shape::TopRoundedRect { radius } => RRect::new_rect_radii(
+            rect,
+            &[
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(*radius, *radius),
+                skia_safe::Vector::new(0.0, 0.0),
+                skia_safe::Vector::new(0.0, 0.0),
+            ],
+        ),
+        crate::graphics::Shape::RightRoundedRect { radius } => rrect_right_rounded(rect, *radius),
+        crate::graphics::Shape::LeftRoundedRect { radius } => rrect_left_rounded(rect, *radius),
+        crate::graphics::Shape::Corners { top_left, top_right, bottom_right, bottom_left } => {
+            rrect_corners(rect, *top_left, *top_right, *bottom_right, *bottom_left)
+        }
+        crate::graphics::Shape::Pill | crate::graphics::Shape::Circle => {
+            let r = rect.width().min(rect.height()) / 2.0;
+            RRect::new_rect_xy(rect, r, r)
+        }
+    }
+}
+
+fn shape_path(rect: Rect, shape: &crate::graphics::Shape) -> skia_safe::Path {
+    skia_safe::Path::rrect(&shape_rrect(rect, shape), skia_safe::PathDirection::CW)
+}
+
+/// Compose's inner shadow: a rim INSIDE the shape, made from the box minus the offset shape.
+///
+/// The box is filled into an offscreen layer, then the offset shape is erased with `DstOut` and a
+/// blurred mask filter — what remains is soft on the inner edge and exact on the outer one, because
+/// the whole layer is clipped to the shape. `blur` is the mask's sigma in logical pixels.
+fn draw_inner_shadow(
+    canvas: &Canvas,
+    rect: Rect,
+    shape: &crate::graphics::Shape,
+    color: &crate::graphics::Color,
+    blur: f32,
+    offset_x: f32,
+    offset_y: f32,
+) {
+    let path = shape_path(rect, shape);
+    let cut = shape_path(rect, shape).with_offset(skia_safe::Vector::new(offset_x, offset_y));
+    canvas.save();
+    canvas.clip_path(&path, None, Some(true));
+    canvas.save_layer(&skia_safe::canvas::SaveLayerRec::default());
+    let mut fill = Paint::default();
+    fill.set_anti_alias(true);
+    fill.set_color4f(Color4f::from(color), None);
+    canvas.draw_rect(rect, &fill);
+    let mut erase = Paint::default();
+    erase.set_anti_alias(true);
+    erase.set_blend_mode(BlendMode::DstOut);
+    if blur > 0.0 {
+        if let Some(filter) = skia_safe::MaskFilter::blur(skia_safe::BlurStyle::Normal, blur, None) {
+            erase.set_mask_filter(filter);
+        }
+    }
+    canvas.draw_path(&cut, &erase);
+    canvas.restore();
+    canvas.restore();
+}
+
 fn paint_shape(canvas: &Canvas, rect: Rect, paint: &Paint, shape: &crate::graphics::Shape) {
     match shape {
         crate::graphics::Shape::Rectangle => { canvas.draw_rect(rect, paint); }
@@ -2924,6 +3023,73 @@ mod tests {
             corner_alpha(&mut surface),
             0,
             "a rounded shape leaves the corner transparent"
+        );
+    }
+
+
+    #[test]
+    fn an_inner_shadow_darkens_the_inside_edge() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        let rect = skia_safe::Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let mut bg = skia_safe::Paint::default();
+        bg.set_color(skia_safe::Color::WHITE);
+        canvas.draw_rect(rect, &bg);
+        let color = crate::graphics::Color::from_argb(255, 0, 0, 0);
+        draw_inner_shadow(
+            canvas,
+            rect,
+            &crate::graphics::Shape::Rectangle,
+            &color,
+            6.0,
+            0.0,
+            0.0,
+        );
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let at = |x: usize, y: usize| px[y * 100 + x];
+        let center = at(50, 50);
+        let edge = at(1, 50);
+        assert!(
+            center[0] > 240 && center[1] > 240 && center[2] > 240,
+            "the middle stays white: {center:?}"
+        );
+        assert!(
+            edge[0] < 240 || edge[1] < 240 || edge[2] < 240,
+            "the rim is darkened: {edge:?}"
+        );
+    }
+
+    #[test]
+    fn a_render_effect_blurs_the_layer_content() {
+        let params = crate::graphics::GraphicsLayerParams::default();
+        assert_eq!(params.compositing, crate::graphics::CompositingStrategy::Auto);
+        assert!(params.render_effect.is_none());
+
+        let modifier = crate::modifier::Modifier::new()
+            .graphics_layer(|| crate::graphics::GraphicsLayerParams {
+                render_effect: Some(crate::graphics::RenderEffect::Blur { radius: 8.0 }),
+                ..Default::default()
+            })
+            .background(
+                crate::graphics::Color::from_argb(255, 255, 0, 0),
+                crate::graphics::Shape::Rectangle,
+            );
+        let mut node = LayoutNode::leaf(modifier);
+        node.measured_size = crate::unit::Size::new(60.0, 60.0);
+        let nodes = vec![node];
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        render(&nodes, 0, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // BGRA: a hard red box has green 0 at x = 2; the blur blends it toward white.
+        let g = px[30 * 100 + 2][1];
+        assert!(
+            g > 10 && g < 245,
+            "the layer edge is a blend, not a hard boundary (g = {g})"
         );
     }
 

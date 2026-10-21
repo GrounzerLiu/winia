@@ -49,6 +49,37 @@ pub struct GraphicsLayerParams {
     /// 颜色滤镜（对标 Compose graphicsLayer `colorFilter`——渲染期 saveLayer
     /// paint 挂 color filter，层内所有内容被染色；Text/Icon 用 `Tint` 做动态颜色动画）
     pub color_filter: Option<ColorFilter>,
+    /// How the layer is composited — Compose's `compositingStrategy`. winia supports `Auto` (the
+    /// layer appears only when alpha/filter/effect need one) and `Offscreen` (always composite
+    /// through an offscreen layer, which is what blend modes and group opacity need). `ModulateAlpha`
+    /// is accepted for API parity and behaves like `Auto`: winia has no per-draw alpha modulation.
+    pub compositing: CompositingStrategy,
+    /// A render effect applied to the whole layer — Compose's `renderEffect`. Only blur is ported.
+    pub render_effect: Option<RenderEffect>,
+}
+
+/// Compose's `CompositingStrategy` — see [`GraphicsLayerParams::compositing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompositingStrategy {
+    #[default]
+    Auto,
+    /// Always draw through an offscreen layer.
+    Offscreen,
+    /// Apply alpha per draw instead of compositing a layer; winia treats it like `Auto`.
+    ModulateAlpha,
+}
+
+/// Compose's `RenderEffect`, reduced to what winia's Skia path can apply to a layer today.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RenderEffect {
+    /// Gaussian blur, sigma in logical pixels.
+    Blur { radius: f32 },
+}
+
+impl RenderEffect {
+    pub fn blur(radius: f32) -> Self {
+        Self::Blur { radius }
+    }
 }
 
 impl Default for GraphicsLayerParams {
@@ -65,6 +96,8 @@ impl Default for GraphicsLayerParams {
             ambient_shadow_color: DEFAULT_AMBIENT_SHADOW_COLOR,
             spot_shadow_color: DEFAULT_SPOT_SHADOW_COLOR,
             color_filter: None,
+            compositing: CompositingStrategy::Auto,
+            render_effect: None,
         }
     }
 }

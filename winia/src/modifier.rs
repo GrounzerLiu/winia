@@ -87,6 +87,45 @@ use crate::graphics::{
 /// Ordering (measured): nodes paint uniformly at the background layer (after the enum
 /// chain), with no chain-order interleaving. For above-content painting use
 /// [`DrawWrapNode::draw_after`].
+/// What a [`Modifier::draw_with_cache`] build closure sees: the inputs that invalidate its cache.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawCacheScope {
+    pub width: f32,
+    pub height: f32,
+    pub density: f32,
+}
+
+/// The node behind `draw_with_cache`: rebuilds its cache when the drawn size or density changes,
+/// then hands the cached value to the draw closure on every paint — Compose's `drawWithCache`.
+struct DrawCacheNode<C> {
+    build: std::sync::Arc<dyn Fn(DrawCacheScope) -> C + Send + Sync>,
+    draw: std::sync::Arc<dyn Fn(&C, &skia_safe::Canvas, skia_safe::Rect) + Send + Sync>,
+    cache: std::sync::Mutex<Option<(DrawCacheScope, C)>>,
+}
+
+impl<C> std::fmt::Debug for DrawCacheNode<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DrawCacheNode")
+    }
+}
+
+impl<C: Send + Sync + 'static> DrawNode for DrawCacheNode<C> {
+    fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
+        let scope = DrawCacheScope {
+            width: rect.width(),
+            height: rect.height(),
+            density: crate::runtime::density::current_density().density,
+        };
+        let mut cache = self.cache.lock().expect("draw cache");
+        let rebuild = cache.as_ref().map(|(cached, _)| *cached != scope).unwrap_or(true);
+        if rebuild {
+            *cache = Some((scope, (self.build)(scope)));
+        }
+        let (_, value) = cache.as_ref().expect("just built");
+        (self.draw)(value, canvas, rect);
+    }
+}
+
 pub trait DrawNode: std::fmt::Debug + Send + Sync {
     fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect);
     /// Skip fingerprint MUST rule (P1-3): nodes with params MUST override, covering
@@ -592,6 +631,14 @@ pub(crate) enum ModifierElement {
     AnimateItem,
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
+    /// Compose's inner shadow: a rim drawn inside the shape, above the content.
+    InnerShadow {
+        shape: crate::graphics::Dyn<Shape>,
+        color: Color,
+        blur: f32,
+        offset_x: f32,
+        offset_y: f32,
+    },
     /// Compose's `clipScrollableContainer(orientation)`: the main axis is clipped to the container,
     /// the cross axis keeps 30 dp of slack so a shadow there is not cut off.
     ClipScrollableContainer { vertical: bool },
@@ -711,6 +758,21 @@ impl Modifier {
     /// Append a draw node (renders at the background layer, after the enum chain).
     pub fn draw_node(self, node: impl DrawNode + 'static) -> Self {
         self.push_node(ModifierNode::Draw(std::sync::Arc::new(node)))
+    }
+
+    /// Compose's `Modifier.drawWithCache`: `build` runs once per (size, density) and `draw` receives
+    /// the cached value on every paint. What the cache is for: a Skia shader, a paragraph, a
+    /// geometry path — anything whose construction should not repeat 60 times a second.
+    pub fn draw_with_cache<C: Send + Sync + 'static>(
+        self,
+        build: impl Fn(DrawCacheScope) -> C + Send + Sync + 'static,
+        draw: impl Fn(&C, &skia_safe::Canvas, skia_safe::Rect) + Send + Sync + 'static,
+    ) -> Self {
+        self.draw_node(DrawCacheNode {
+            build: std::sync::Arc::new(build),
+            draw: std::sync::Arc::new(draw),
+            cache: std::sync::Mutex::new(None),
+        })
     }
 
     /// Append a wrapping draw node (before at the background layer, after above
@@ -2327,6 +2389,26 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         })
     }
 
+    /// Compose's inner shadow: a rim inside `shape`, painted above the content. `blur` is the mask's
+    /// sigma in logical pixels; `offset` moves the cut-out shape, which is what puts the shadow on
+    /// one side.
+    pub fn inner_shadow(
+        self,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
+        color: Color,
+        blur: f32,
+        offset_x: f32,
+        offset_y: f32,
+    ) -> Self {
+        self.push(ModifierElement::InnerShadow {
+            shape: shape.into(),
+            color,
+            blur,
+            offset_x,
+            offset_y,
+        })
+    }
+
     /// Compose's `Modifier.overscroll(effect)`: the delta a scroll container cannot consume (it is
     /// at the start or the end) is pulled into the effect instead of falling through to an ancestor,
     /// which translates the content and returns with a short spring.
@@ -3154,6 +3236,12 @@ impl Debug for ModifierElement {
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
             Self::AnimateItem => f.write_str("AnimateItem"),
+            Self::InnerShadow { shape, color, blur, .. } => f
+                .debug_struct("InnerShadow")
+                .field("shape", shape)
+                .field("color", color)
+                .field("blur", blur)
+                .finish(),
             Self::PointerHoverIcon { icon, override_descendants } => f
                 .debug_struct("PointerHoverIcon")
                 .field("icon", icon)
@@ -4753,6 +4841,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (NestedScroll { .. }, NestedScroll { .. }) => true,
         (AnimateItem, AnimateItem) => true,
         (
+            InnerShadow { shape: as_, color: ac, blur: ab, offset_x: ax, offset_y: ay },
+            InnerShadow { shape: bs, color: bc, blur: bb, offset_x: bx, offset_y: by },
+        ) => as_.same_parameter(bs) && ac == bc && ab == bb && ax == bx && ay == by,
+        (
             ClipScrollableContainer { vertical: a },
             ClipScrollableContainer { vertical: b },
         ) => a == b,
@@ -4960,6 +5052,38 @@ mod param_eq_tests {
         let b = OverscrollEffect::new();
         assert!(Modifier::new().overscroll(&a).param_eq(&Modifier::new().overscroll(&a)));
         assert!(!Modifier::new().overscroll(&a).param_eq(&Modifier::new().overscroll(&b)));
+    }
+
+    #[test]
+    fn draw_with_cache_rebuilds_only_when_the_size_changes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let builds = std::sync::Arc::new(AtomicUsize::new(0));
+        let draws = std::sync::Arc::new(AtomicUsize::new(0));
+        let (b, d) = (builds.clone(), draws.clone());
+        let m = Modifier::new().draw_with_cache(
+            move |scope| {
+                b.fetch_add(1, Ordering::Relaxed);
+                DrawCacheScope {
+                    width: scope.width,
+                    height: scope.height,
+                    density: scope.density,
+                }
+            },
+            move |cached, _canvas, _rect| {
+                d.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(cached.width + cached.height, cached.width + cached.height);
+            },
+        );
+        let node = m.draw_nodes().next().expect("one draw node").clone();
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let canvas = surface.canvas();
+        let rect = skia_safe::Rect::from_xywh(0.0, 0.0, 60.0, 40.0);
+        node.draw(canvas, rect);
+        node.draw(canvas, rect);
+        assert_eq!(builds.load(Ordering::Relaxed), 1, "same size reuses the cache");
+        assert_eq!(draws.load(Ordering::Relaxed), 2, "draw runs every paint");
+        node.draw(canvas, skia_safe::Rect::from_xywh(0.0, 0.0, 30.0, 30.0));
+        assert_eq!(builds.load(Ordering::Relaxed), 2, "a size change rebuilds");
     }
 
     #[test]
