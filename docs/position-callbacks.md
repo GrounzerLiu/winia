@@ -10,8 +10,12 @@ foundation/material modules), and `foundation/relocation/BringIntoViewRequester.
 
 `GlobalPosition { x, y, width, height }` — window coordinates in logical pixels. `x`/`y` include the
 scroll offsets of every scrolling ancestor (the same arithmetic as the renderer's `translate(-offset)`
-and `transition::abs_rect_upward`). Compose hands a `LayoutCoordinates`; winia exposes the placed box
-plus `position()`, `size()`, `right()`, `bottom()`, `rect()`. There is no coordinate-tree navigation
+and `transition::abs_rect_upward`). An overlay composer starts from its layer origin
+(`Composer::screen_origin`), and that origin is part of the change gate: the callback re-fires with
+window coordinates when the layer moves. A NEW layer's first layout runs before positioning has
+computed the origin, so that first report is layer-local; once positioned, the origin change makes
+the callback fire again. Compose hands a `LayoutCoordinates`; winia exposes the placed box plus
+`position()`, `size()`, `right()`, `bottom()`, `rect()`. There is no coordinate-tree navigation
 (parent/child lookup) in this version.
 
 ## When it fires

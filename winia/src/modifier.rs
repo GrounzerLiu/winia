@@ -300,6 +300,10 @@ pub(crate) enum SizeStep {
         min_width: Option<f32>,
         min_height: Option<f32>,
     },
+    /// A `width/height(IntrinsicSize)` request, kept in chain order so the measure pipeline can
+    /// snapshot the constraints the request saw. A `fillMax` outside the request tightens those
+    /// constraints (and the intrinsic answer honours them); a `fillMax` inside it does not.
+    Intrinsic { width: bool, height: bool },
     /// `wrapContent*` — relax the incoming minimum (and max when unbounded) for what follows.
     Wrap {
         width: bool,
@@ -2701,12 +2705,22 @@ impl Modifier {
         for el in &self.elements {
             match el {
                 ModifierElement::Size { width, height } => {
+                    let iw = matches!(width, SizeValue::Intrinsic(_));
+                    let ih = matches!(height, SizeValue::Intrinsic(_));
+                    if iw || ih {
+                        out.push(SizeStep::Intrinsic { width: iw, height: ih });
+                    }
                     let (w, h) = (width.to_logical_px(), height.to_logical_px());
                     if w.is_some() || h.is_some() {
                         out.push(SizeStep::Size { width: w, height: h });
                     }
                 }
                 ModifierElement::RequiredSize { width, height } => {
+                    let iw = matches!(width.as_ref(), Some(SizeValue::Intrinsic(_)));
+                    let ih = matches!(height.as_ref(), Some(SizeValue::Intrinsic(_)));
+                    if iw || ih {
+                        out.push(SizeStep::Intrinsic { width: iw, height: ih });
+                    }
                     let w = width.as_ref().and_then(|v| v.to_logical_px());
                     let h = height.as_ref().and_then(|v| v.to_logical_px());
                     if w.is_some() || h.is_some() {
@@ -2787,7 +2801,6 @@ impl Modifier {
             ModifierElement::FillMaxWidth { .. } | ModifierElement::FillMaxSize { .. }
         ))
     }
-
 
     /// 是否填满最大高度
     pub fn is_fill_max_height(&self) -> bool {

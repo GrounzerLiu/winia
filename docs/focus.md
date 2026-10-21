@@ -15,7 +15,11 @@ Marks a subtree as one traversal group. Tab still visits the group's focusable c
 but the group REMEMBERS the child that had focus when focus left it. When Tab (or Shift+Tab) enters
 the group at its boundary — the first focusable child going forward, the last going backwards — the
 remembered child is restored instead. Memory is updated by every focus change inside the group,
-including a click (a programmatic focus request goes through the same path).
+including a click (a programmatic focus request goes through the same path). With NESTED groups the
+OUTERMOST group at the boundary restores first: Compose enters a group through its active child, and
+every ancestor group records the deepest focused id, so the outer memory already points inside any
+nested group. (Consulting only the nearest group lost that memory as soon as focus moved outside the
+inner group but stayed inside the outer one.)
 
 What it does not do: Compose's `focusProperties { next/previous = … }` overrides for custom
 traversal graphs, and focus-group hints for platform bridges. Neither is ported.

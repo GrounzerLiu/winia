@@ -37,8 +37,16 @@ native title bar and plays Android's status-bar role:
 4. a platform backend can push the full set at once with WindowInsetsController::set when the OS
    reports real values (Android, or a future winit inset event).
 
-The controller is a per-window State: writing it during composition is idempotent, and writing it
-from a button handler or a position callback schedules the frame that applies the new padding.
+The controller is a per-window State, so writing it is idempotent and a write from an event handler
+schedules the frame that applies the new padding. The free `set_status_bars` / `set_navigation_bars`
+/ `set_ime` helpers resolve the ENCLOSING controller from the composition-local stack, so they only
+target the window while composition is running; a button handler or position callback runs outside
+that stack and would silently write the process-wide fallback controller instead. Capture the
+controller during composition and keep it for the handler:
+
+    let insets = winia::insets::current();          // while composing
+    Button::new().on_click(move || insets.set_ime_insets(Insets::new(0.0, 0.0, 0.0, 240.0)))
+
 NavigationRail's WindowInsets is now the same foundation Insets type.
 
 ## PullToRefreshBox

@@ -62,6 +62,15 @@ impl OverscrollEffect {
         let next = (current + leftover).clamp(-MAX_PULL, MAX_PULL);
         let absorbed = next - current;
         if absorbed == 0.0 {
+            // At the cap the value cannot move, but the finger is still pulling: re-arm the return
+            // so the rubber-band does not start shrinking under it. Re-arming without a new pull
+            // would let the 60 ms timer fire while the gesture is still live.
+            let still_pulling = (current >= MAX_PULL && leftover > 0.0)
+                || (current <= -MAX_PULL && leftover < 0.0);
+            if still_pulling {
+                crate::animation::cancel_animation_by_id(self.value.state_id());
+                self.arm_return();
+            }
             return 0.0;
         }
         // Take the value over from any return already in flight, then set the new pull and re-arm
@@ -148,7 +157,10 @@ mod tests {
         );
         assert_eq!(state.offset.peek(), 200.0, "the offset stays clamped");
         assert_eq!(effect.stretch(), 10.0, "the leftover is the pull");
-        assert!(consumed.y > 0.0, "the gesture is consumed, not passed to an ancestor");
+        assert_eq!(
+            consumed.y, -10.0,
+            "the gesture is consumed in the DELTA's direction, so no ancestor sees it"
+        );
         crate::animation::clear_all_animations();
     }
 
@@ -169,7 +181,37 @@ mod tests {
         );
         assert_eq!(state.offset.peek(), 0.0);
         assert_eq!(effect.stretch(), -10.0);
-        assert!(consumed.y < 0.0);
+        assert_eq!(consumed.y, 10.0, "the pull is consumed in the gesture's direction");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn at_the_cap_a_live_gesture_rearms_the_return() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let effect = OverscrollEffect::new();
+        assert_eq!(effect.pull(MAX_PULL), MAX_PULL);
+        clock.advance(std::time::Duration::from_millis(50));
+        crate::animation::update_animations();
+        assert_eq!(effect.stretch(), MAX_PULL, "the 60 ms delay has not elapsed yet");
+
+        // Still pulling at the cap: this must restart the delay instead of letting the first
+        // one fire, or the rubber-band would shrink under a finger that never left the screen.
+        assert_eq!(effect.pull(10.0), 0.0, "the cap absorbs nothing more");
+        clock.advance(std::time::Duration::from_millis(50));
+        crate::animation::update_animations();
+        assert_eq!(
+            effect.stretch(),
+            MAX_PULL,
+            "the re-armed delay keeps the pull while the gesture is live"
+        );
+
+        clock.advance(std::time::Duration::from_millis(400));
+        crate::animation::update_animations();
+        assert!(
+            effect.stretch() < MAX_PULL,
+            "after the gesture stops the return runs"
+        );
         crate::animation::clear_all_animations();
     }
 }

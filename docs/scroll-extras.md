@@ -17,10 +17,14 @@ rubber-band:
 
 - `apply_scroll_delta` computes the unclamped target and the leftover past the start/end, feeds the
   leftover into `OverscrollEffect::pull`, and counts it as CONSUMED — so the gesture does not fall
-  through to an ancestor scroll container (`app/scroll.rs`);
+  through to an ancestor scroll container (`app/scroll.rs`). The pull is measured in offset space
+  while the consumed delta points the other way, so the absorbed amount is SUBTRACTED from the
+  consumed delta; adding it would tell the ancestor the gesture went the other way, twice as far;
 - the renderer translates the content by the accumulated pull along the scroll axis;
 - every pull re-arms a 60 ms-delayed 220 ms tween back to 0, so releasing returns the content and
-  rapid input keeps the tension.
+  rapid input keeps the tension. A pull that arrives while the 120 px cap is already reached re-arms
+  the delay too (the value does not move), so a finger held at the cap does not see the return start
+  underneath it.
 
 Deliberate scope: the content SHIFTS past the edge (there is no content scaling and no platform
 glow), the pull is capped at 120 logical px, and containers with `reverseLayout` skip the effect

@@ -324,7 +324,11 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             let leftover = raw - new;
             if leftover != 0.0 && !node.scroll_reverse {
                 if let Some(effect) = node.modifier.overscroll_effect() {
-                    consumed.y += effect.pull(leftover);
+                    // `pull` returns the absorbed amount in OFFSET space; `consumed` is in DELTA
+                    // space, and the two point opposite ways (`consumed = current - new`,
+                    // `leftover = raw - new`). Adding it would tell the nested-scroll ancestors the
+                    // gesture went the other way, twice as far.
+                    consumed.y -= effect.pull(leftover);
                 }
             }
             }
@@ -372,7 +376,7 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             let leftover = raw - new;
             if leftover != 0.0 && !node.scroll_reverse {
                 if let Some(effect) = node.modifier.overscroll_effect() {
-                    consumed.x += effect.pull(leftover);
+                    consumed.x -= effect.pull(leftover);
                 }
             }
         }
@@ -433,6 +437,64 @@ mod nested_scroll_chain_tests {
         }
         fn on_pre_fling(&self, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
         fn on_post_fling(&self, _: ScrollVelocity, _: ScrollVelocity) -> ScrollVelocity { ScrollVelocity::default() }
+    }
+
+    #[test]
+    fn an_overscrolled_target_reaches_its_ancestor_with_nothing_left() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::animation::clear_all_animations();
+        struct PostTap(std::sync::Arc<std::sync::Mutex<ScrollDelta>>);
+        impl NestedScrollConnection for PostTap {
+            fn on_post_scroll(
+                &self,
+                _child_consumed: ScrollDelta,
+                available: ScrollDelta,
+                _source: NestedScrollSource,
+            ) -> ScrollDelta {
+                *self.0.lock().unwrap() = available;
+                ScrollDelta::ZERO
+            }
+        }
+        let mailbox = std::sync::Arc::new(std::sync::Mutex::new(ScrollDelta::ZERO));
+        let effect = crate::overscroll::OverscrollEffect::new();
+        let scroll = ScrollState::new();
+        scroll.offset.set(200.0); // at the end of a 300-content / 100-viewport list
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .nested_scroll(PostTap(mailbox.clone()))
+                    .size(400.0, 400.0),
+            ),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .overscroll(&effect)
+                    .size(100.0, 100.0),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(400.0, 400.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].scroll_viewport_height = 100.0;
+        nodes[1].scroll_content_height = 300.0;
+        nodes[0].children.push(1);
+
+        let consumed = dispatch_nested_scroll_delta(
+            &mut nodes,
+            0,
+            1,
+            ScrollDelta::new(0.0, -10.0),
+            NestedScrollSource::Drag,
+            crate::unit::Density::from_density(1.0),
+        );
+        assert_eq!(consumed.y, -10.0, "the whole gesture is accounted for");
+        assert_eq!(effect.stretch(), 10.0, "and it became the rubber-band pull");
+        assert_eq!(
+            mailbox.lock().unwrap().y, 0.0,
+            "the ancestor must not see the absorbed pull (nor its opposite)"
+        );
+        crate::animation::clear_all_animations();
     }
 
     #[test]

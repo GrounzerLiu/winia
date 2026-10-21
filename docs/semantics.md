@@ -78,7 +78,7 @@ is Compose's distinction too.
 | `SemanticsActions` incl. `SetProgress`, `ScrollBy`, `SetText` | click only | Each action needs a platform pattern behind it (UIA invoke / range value); click is the one wired end to end. |
 | `customActions` | `SemanticsConfig::custom_action(label, f)` — listed on the tree node and invokable | The Windows bridge still exposes only Invoke: UIA has no generic custom-action pattern. |
 | Collections (`collectionInfo`, `indexForKey`), `heading`, `traversalIndex` | absent | Same reason. |
-| `clearAndSetSemantics` | `Modifier::clear_and_set_semantics(config)` — replaces the declaration and hides the subtree | Implemented; an empty block hides the node (Compose's "invisible to the user"). |
+| `clearAndSetSemantics` | `Modifier::clear_and_set_semantics(config)` — replaces the declaration and hides the subtree | Implemented; an empty block hides the node (Compose's "invisible to the user"). The clickable flag is still taken from the modifier chain (Compose would drop it unless the block declares its own onClick action, which winia's config cannot express yet). |
 | `ContentDescription` and `Text` are separate properties | one `name` | One field until a consumer needs the distinction, which is what a screen reader's Name property resolves to anyway. |
 | Semantics merge during composition into a `SemanticsConfiguration` | merged at read time from the modifier chain | winia's modifier is plain data read per query; nothing has to be kept in sync. |
 

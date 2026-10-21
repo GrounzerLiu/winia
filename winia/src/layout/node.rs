@@ -1320,6 +1320,89 @@ pub fn max_child_intrinsic(
 /// Inverts this node's own modifier chain in the order [`measure_node_inner`] applies it, then asks
 /// the content. `other` is the value on the axis that is NOT queried; some leaves (text) need it in
 /// order to answer at all.
+/// The offset `wrapContent*` shifts its content by. Only the axes the modifier names are aligned:
+/// Compose's `wrapContentWidth` callback returns `IntOffset(align.align(...), 0)` and the height
+/// form mirrors it, so a single-axis wrap must not centre the other axis.
+fn wrap_alignment_offset(
+    align: crate::layout::ContentAlignment,
+    content: crate::unit::Size,
+    wrapper: crate::unit::Size,
+    direction: crate::layout::LayoutDirection,
+    width: bool,
+    height: bool,
+) -> (f32, f32) {
+    let (mut dx, mut dy) = align.anchor(content, wrapper, direction);
+    if !width {
+        dx = 0.0;
+    }
+    if !height {
+        dy = 0.0;
+    }
+    (dx, dy)
+}
+
+/// The box range an intrinsic answer is clamped into, replayed in CHAIN ORDER from the innermost
+/// modifier outward: Compose nests one layout node per call, so each call constrains the answer the
+/// inner one produced. `fillMax` and `wrapContent` do not override the intrinsic methods upstream
+/// (they are measure-time acts), so they are skipped; `size`/`requiredSize` pin both ends,
+/// `sizeIn` clamps both, and the min/max family (including `defaultMinSize`) moves one side.
+fn intrinsic_axis_range(m: &crate::modifier::Modifier, horizontal: bool) -> (f32, f32) {
+    let mut lo = 0.0f32;
+    let mut hi = f32::MAX;
+    for step in m.size_steps().iter().rev() {
+        match *step {
+            crate::modifier::SizeStep::Size { width, height }
+            | crate::modifier::SizeStep::RequiredSize { width, height } => {
+                if let Some(v) = if horizontal { width } else { height } {
+                    lo = v;
+                    hi = v;
+                }
+            }
+            crate::modifier::SizeStep::MinWidth(v) if horizontal => {
+                lo = lo.max(v);
+                hi = hi.max(v);
+            }
+            crate::modifier::SizeStep::MaxWidth(v) if horizontal => {
+                lo = lo.min(v);
+                hi = hi.min(v);
+            }
+            crate::modifier::SizeStep::MinHeight(v) if !horizontal => {
+                lo = lo.max(v);
+                hi = hi.max(v);
+            }
+            crate::modifier::SizeStep::MaxHeight(v) if !horizontal => {
+                lo = lo.min(v);
+                hi = hi.min(v);
+            }
+            crate::modifier::SizeStep::SizeIn {
+                min_width,
+                min_height,
+                max_width,
+                max_height,
+                ..
+            } => {
+                let (min, max) = if horizontal {
+                    (min_width, max_width)
+                } else {
+                    (min_height, max_height)
+                };
+                let tmax = max.unwrap_or(f32::MAX).max(0.0);
+                let tmin = min.unwrap_or(0.0).clamp(0.0, tmax);
+                lo = lo.clamp(tmin, tmax);
+                hi = hi.clamp(tmin, tmax);
+            }
+            crate::modifier::SizeStep::DefaultMin { min_width, min_height } => {
+                if let Some(v) = if horizontal { min_width } else { min_height } {
+                    lo = lo.max(v);
+                    hi = hi.max(v);
+                }
+            }
+            _ => {}
+        }
+    }
+    (lo, hi)
+}
+
 pub(crate) fn intrinsic_size_of(
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -1329,24 +1412,33 @@ pub(crate) fn intrinsic_size_of(
 ) -> f32 {
     let horizontal = query.is_width();
     // Read the whole chain in one borrow and let it go: the content query needs `nodes` mutably.
-    let (fixed, min_axis, max_axis, required, pad_axis, pad_other, intrinsic_request, scrolled) = {
+    let (
+        lo,
+        hi,
+        pad_axis,
+        pad_other,
+        intrinsic_request,
+        other_axis_scrolled,
+    ) = {
         let m = &nodes[idx].modifier;
+        let (lo, hi) = intrinsic_axis_range(m, horizontal);
         let (pad_x, pad_y) = m.get_padding_values();
-        let (min_w, min_h) = m.min_size_constraint();
-        let (max_w, max_h) = m.max_size_constraint();
+        // Compose's Scroll intrinsic block unbounds the axis that SCROLLS when it is asked about
+        // the OTHER axis (a vertical scroller answers a width query with an infinite height).
+        // Querying the scrolled axis itself keeps the offered cross-axis size, or a wrapped text
+        // would answer the height of one long line.
+        let other_axis_scrolled = if horizontal {
+            m.vertical_scroll_state().is_some()
+        } else {
+            m.horizontal_scroll_state().is_some()
+        };
         (
-            m.resolved_size().map(|(w, h)| if horizontal { w } else { h }).flatten(),
-            if horizontal { min_w } else { min_h },
-            if horizontal { max_w } else { max_h },
-            m.required_size_constraint().and_then(|(w, h)| if horizontal { w } else { h }),
+            lo,
+            hi,
             if horizontal { pad_x } else { pad_y },
             if horizontal { pad_y } else { pad_x },
             if horizontal { m.intrinsic_width_request() } else { m.intrinsic_height_request() },
-            if horizontal {
-                m.horizontal_scroll_state().is_some()
-            } else {
-                m.vertical_scroll_state().is_some()
-            },
+            other_axis_scrolled,
         )
     };
 
@@ -1357,24 +1449,6 @@ pub(crate) fn intrinsic_size_of(
     // `width`. Measured before this: a child whose intrinsic height equals the width it is given
     // answered 100 for an outer width of 100 with 10 of horizontal padding (correct: 80).
     let other = (other - pad_other).max(0.0);
-
-    // The queried axis's own numeric range, in the pipeline's order: size → sizeIn(min) →
-    // sizeIn(max) → requiredSize (a hard override that may leave the incoming range on purpose).
-    let (mut lo, mut hi) = (0.0f32, f32::MAX);
-    if let Some(v) = fixed {
-        lo = v;
-        hi = v;
-    }
-    if let Some(v) = min_axis {
-        lo = lo.max(v).min(hi);
-    }
-    if let Some(v) = max_axis {
-        hi = hi.min(v).max(lo);
-    }
-    if let Some(v) = required {
-        lo = v;
-        hi = v;
-    }
 
     // A fixed axis needs no measurement, and it is also the node's own size: the pipeline tightens
     // the node to it BEFORE padding is offset, so `size(100).padding(8)` measures 100, not 116.
@@ -1399,9 +1473,9 @@ pub(crate) fn intrinsic_size_of(
         // `Modifier.width/height(IntrinsicSize)`: this axis IS the content's measurement, at the
         // extreme the modifier declares.
         content_intrinsic(nodes, policies, idx, declared, other)
-    } else if scrolled {
-        // A scroller reports its content's intrinsic size along the scrolled axis: the content is
-        // asked with the cross axis unbounded (Compose's `Scroll` intrinsic block does the same).
+    } else if other_axis_scrolled {
+        // Asking a scroller about its CROSS axis: the scrolling axis is unbounded, so the content
+        // is not squeezed by the current scroll extent (Compose's `Scroll` intrinsic block).
         content_intrinsic(nodes, policies, idx, query, f32::MAX)
     } else {
         content_intrinsic(nodes, policies, idx, query, other)
@@ -1488,7 +1562,12 @@ fn leaf_intrinsic(nodes: &mut Vec<LayoutNode>, idx: usize, query: IntrinsicQuery
         // Rich text has no intrinsic accessor (inline drawables need the layout pass); answer with
         // the height it takes at the asked width, which is what its own measure would produce.
         let layout_width = if query.is_width() { f32::MAX } else { other };
+        // The probe must not become the render cache: keep the paragraph that was there and put it
+        // back afterwards (the plain-text leaf builds through `build_text_paragraph` and never
+        // caches; rich text measures through the caching entry point, so restore explicitly).
+        let saved = nodes[idx].cached_paragraph.borrow_mut().take();
         let size = measure_and_cache_richtext(&nodes[idx], layout_width);
+        *nodes[idx].cached_paragraph.borrow_mut() = saved;
         return if query.is_width() { size.width } else { size.height };
     }
     if nodes[idx].has_image_content {
@@ -1939,10 +2018,15 @@ pub(crate) type PositionCallback = std::sync::Arc<dyn Fn(GlobalPosition) + Send 
 pub(crate) fn collect_position_callbacks(
     nodes: &mut [LayoutNode],
     root: usize,
+    origin: (f32, f32),
 ) -> (Vec<(PositionCallback, GlobalPosition)>, Vec<(PositionCallback, GlobalPosition)>) {
     let mut placed = Vec::new();
     let mut global = Vec::new();
-    collect_position_callbacks_at(nodes, root, 0.0, 0.0, &mut placed, &mut global);
+    // The composer origin is the walk's starting point, so the box stored by the change gate is
+    // already in WINDOW space: an overlay whose layer origin changes counts as a move and re-fires
+    // the callback (adding the origin after the gate would leave a static layer reporting local
+    // coordinates forever).
+    collect_position_callbacks_at(nodes, root, origin.0, origin.1, &mut placed, &mut global);
     (placed, global)
 }
 
@@ -2607,6 +2691,15 @@ mod tests {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let controller = crate::insets::current();
+        // Reset on Drop, not at the end of the body: a failing assertion must not leave system
+        // insets behind for every later test in this process.
+        struct ResetInsets(crate::insets::WindowInsetsController);
+        impl Drop for ResetInsets {
+            fn drop(&mut self) {
+                self.0.set(WindowInsets::default());
+            }
+        }
+        let _reset = ResetInsets(controller.clone());
         controller.set(WindowInsets {
             status_bars: Insets::new(0.0, 24.0, 0.0, 0.0),
             navigation_bars: Insets::new(0.0, 0.0, 0.0, 48.0),
@@ -2638,7 +2731,6 @@ mod tests {
         nodes[0].children = vec![1];
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 200.0, 0.0, 200.0));
         assert_eq!(size, Size::new(10.0, 10.0), "consumed insets pad by zero");
-        controller.set(WindowInsets::default());
     }
 
     // ── position callbacks (Compose onPlaced / onGloballyPositioned) ──
@@ -2662,7 +2754,7 @@ mod tests {
         nodes[1].position = Offset::new(10.0, 20.0);
         nodes[1].measured_size = Size::new(30.0, 40.0);
 
-        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0, (0.0, 0.0));
         for (callback, position) in placed_cb {
             callback(position);
         }
@@ -2674,12 +2766,12 @@ mod tests {
         assert_eq!(*global.lock().unwrap(), vec![expected]);
 
         // The box did not change: neither callback fires again.
-        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0, (0.0, 0.0));
         assert!(placed_cb.is_empty() && global_cb.is_empty());
 
         // A moved child reports its new box.
         nodes[1].position = Offset::new(15.0, 25.0);
-        let (placed_cb, _) = collect_position_callbacks(&mut nodes, 0);
+        let (placed_cb, _) = collect_position_callbacks(&mut nodes, 0, (0.0, 0.0));
         for (callback, position) in placed_cb {
             callback(position);
         }
@@ -2706,7 +2798,7 @@ mod tests {
         nodes[0].measured_size = Size::new(100.0, 100.0);
         nodes[1].position = Offset::new(0.0, 30.0);
         nodes[1].measured_size = Size::new(10.0, 10.0);
-        let (_, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        let (_, global_cb) = collect_position_callbacks(&mut nodes, 0, (0.0, 0.0));
         for (callback, position) in global_cb {
             callback(position);
         }
@@ -3211,32 +3303,34 @@ fn restore_focus_group_memory(
     backwards: bool,
 ) -> u64 {
     let Some(path) = path_to_id(nodes, root, candidate) else { return candidate };
-    let Some(&group) = path
-        .iter()
-        .rev()
-        .find(|&&i| nodes[i].modifier.is_focus_group())
-    else {
-        return candidate;
-    };
-    let Some(memory) = nodes[group].focus_group_memory else { return candidate };
-    if !ids.contains(&memory) {
-        return candidate;
+    // OUTERMOST group first: Compose enters a group through its ACTIVE child, and every ancestor
+    // group records the deepest focused id, so the outer group's memory already points inside any
+    // nested group. Consulting only the NEAREST group loses that memory the moment focus moves
+    // outside the nested group but stays inside the outer one.
+    for &group in path.iter() {
+        if !nodes[group].modifier.is_focus_group() {
+            continue;
+        }
+        let first = ids
+            .iter()
+            .copied()
+            .find(|id| path_to_id(nodes, group, *id).is_some());
+        let last = ids
+            .iter()
+            .rev()
+            .copied()
+            .find(|id| path_to_id(nodes, group, *id).is_some());
+        let at_boundary = if backwards { Some(candidate) == last } else { Some(candidate) == first };
+        if !at_boundary {
+            continue;
+        }
+        if let Some(memory) = nodes[group].focus_group_memory {
+            if ids.contains(&memory) {
+                return memory;
+            }
+        }
     }
-    let first = ids
-        .iter()
-        .copied()
-        .find(|id| path_to_id(nodes, group, *id).is_some());
-    let last = ids
-        .iter()
-        .rev()
-        .copied()
-        .find(|id| path_to_id(nodes, group, *id).is_some());
-    let at_boundary = if backwards { Some(candidate) == last } else { Some(candidate) == first };
-    if at_boundary {
-        memory
-    } else {
-        candidate
-    }
+    candidate
 }
 
 /// 移动到下一个可聚焦节点，返回是否成功
@@ -3341,15 +3435,26 @@ pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64)
 /// 点击时聚焦指定节点（target 为 arena 索引）
 // ── FocusRequester 全局注册表 ──
 
+/// Focus exactly this node id, refusing WITHOUT touching the current focus when the node is
+/// missing or declares `focusProperties { canFocus = false }`. Clearing first and discovering the
+/// refusal afterwards used to drop the user's focus and leave `focused_id` pointing at a node that
+/// was not actually focused.
+pub fn focus_node_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64) -> bool {
+    let allowed = path_to_id(nodes, root, target_id)
+        .and_then(|path| path.last().copied())
+        .is_some_and(|target| nodes[target].modifier.focus_can_focus() != Some(false));
+    if !allowed {
+        return false;
+    }
+    clear_focus(nodes, root);
+    set_focus_by_id(nodes, root, target_id)
+}
+
 /// 通过 FocusRequester ID 设置焦点
 pub fn focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, focus_requester_id: u64) -> bool {
-    let target_id = find_node_id_by_focus_requester(nodes, root, focus_requester_id);
-    if let Some(id) = target_id {
-        clear_focus(nodes, root);
-        set_focus_by_id(nodes, root, id);
-        true
-    } else {
-        false
+    match find_node_id_by_focus_requester(nodes, root, focus_requester_id) {
+        Some(id) => focus_node_by_id(nodes, root, id),
+        None => false,
     }
 }
 
@@ -3636,12 +3741,22 @@ fn measure_node_inner(
     use crate::modifier::SizeStep;
     struct WrapStep {
         align: crate::layout::ContentAlignment,
+        /// Which axes the wrap node actually aligns. `wrap_content_width` fixes the horizontal
+        /// alignment and leaves the vertical offset at 0 (Compose's alignmentCallback returns
+        /// `IntOffset(align.align(...), 0)`); the height form mirrors it.
+        width: bool,
+        height: bool,
         min_width: f32,
         min_height: f32,
         max_width: f32,
         max_height: f32,
     }
     let mut wrap_steps: Vec<WrapStep> = Vec::new();
+    // The constraints an `width/height(IntrinsicSize)` request saw at its chain position. A fill
+    // OUTSIDE the request has already tightened them (the request honours them); a fill INSIDE has
+    // not (the request decides first, the fill then fills the tight result).
+    let mut intrinsic_incoming_width: Option<(f32, f32)> = None;
+    let mut intrinsic_incoming_height: Option<(f32, f32)> = None;
     for step in nodes[idx].modifier.size_steps() {
         match step {
             SizeStep::Size { width, height } => {
@@ -3689,6 +3804,18 @@ fn measure_node_inner(
                     }
                 }
             }
+            SizeStep::Intrinsic { width, height } => {
+                // The request helper returns the OUTERMOST intrinsic element, so keep the FIRST
+                // snapshot: a later (inner) request would otherwise be the one the clamp uses.
+                if width && intrinsic_incoming_width.is_none() {
+                    intrinsic_incoming_width =
+                        Some((inner_constraints.min_width, inner_constraints.max_width));
+                }
+                if height && intrinsic_incoming_height.is_none() {
+                    intrinsic_incoming_height =
+                        Some((inner_constraints.min_height, inner_constraints.max_height));
+                }
+            }
             SizeStep::MinWidth(v) => {
                 inner_constraints.min_width =
                     v.clamp(inner_constraints.min_width, inner_constraints.max_width);
@@ -3715,9 +3842,11 @@ fn measure_node_inner(
                 // Compose resolves a range into a target Constraints first: a specified max is
                 // itself, an unspecified one is Infinity; a specified min is clamped into [0, max]
                 // (`Size.kt:808-844`).
-                let target_max_w = max_width.unwrap_or(f32::MAX);
+                // A negative max is coerced to 0 first (Compose's `fastCoerceAtLeast(0)`); feeding
+                // it straight into `clamp` would panic on its `min <= max` assertion during measure.
+                let target_max_w = max_width.unwrap_or(f32::MAX).max(0.0);
                 let target_min_w = min_width.map(|v| v.clamp(0.0, target_max_w)).unwrap_or(0.0);
-                let target_max_h = max_height.unwrap_or(f32::MAX);
+                let target_max_h = max_height.unwrap_or(f32::MAX).max(0.0);
                 let target_min_h = min_height.map(|v| v.clamp(0.0, target_max_h)).unwrap_or(0.0);
                 let (lo_w, hi_w) = (inner_constraints.min_width, inner_constraints.max_width);
                 let (lo_h, hi_h) = (inner_constraints.min_height, inner_constraints.max_height);
@@ -3776,6 +3905,8 @@ fn measure_node_inner(
             } => {
                 wrap_steps.push(WrapStep {
                     align,
+                    width,
+                    height,
                     min_width: inner_constraints.min_width,
                     min_height: inner_constraints.min_height,
                     max_width: inner_constraints.max_width,
@@ -3827,35 +3958,30 @@ fn measure_node_inner(
     // 位置必须在 padding offset **之前**：管线是"先定节点尺寸，再把 padding 偏移进内层"，
     // 所以这里收紧的是节点自身（含 padding）的尺寸。
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_width_request() {
-        // 同轴上的 `fillMaxWidth` 压过这个请求：Compose 的语义是
-        // `constraints.constrain(fixedWidth(intrinsic))`，而被锚点强制宽度的菜单走到这里时
-        // min == max == 锚点宽（`ExposedDropdownMenu.kt:201-213` 强制 `minWidth = maxWidth =
-        // menuWidth`），constrain 于是覆盖固有值。管线第 3 步才应用 fillMax（在本步之后），
-        // 所以这里必须自己认账——否则 `width(IntrinsicSize.Max)` 会先把节点收到内容宽度，
-        // fillMax 再把 min 抬到那个已经收窄的 max 上，等宽菜单就变成内容宽度而不是锚点宽度。
-        let filled =
-            nodes[idx].modifier.is_fill_max_width() && inner_constraints.max_width < f32::MAX;
-        if !filled {
-            let other = inner_constraints.max_height;
-            let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
-            if enforce_incoming {
-                w = inner_constraints.constrain_width(w);
-            }
-            inner_constraints = inner_constraints.tighten_width(w);
+        // The constraints the request saw at ITS chain position decide the clamp: a fill outside
+        // has already tightened them (Compose's IntrinsicWidthNode measures under those), while a
+        // fill inside has not (FillNode forwards the intrinsic answer, so the request decides
+        // first and the inner fill then fills the tight result).
+        let other = inner_constraints.max_height;
+        let mut w = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_width(size), other);
+        if enforce_incoming {
+            w = match intrinsic_incoming_width {
+                Some((lo, hi)) => w.clamp(lo, hi),
+                None => inner_constraints.constrain_width(w),
+            };
         }
+        inner_constraints = inner_constraints.tighten_width(w);
     }
     if let Some((size, enforce_incoming)) = nodes[idx].modifier.intrinsic_height_request() {
-        let filled =
-            nodes[idx].modifier.is_fill_max_height() && inner_constraints.max_height < f32::MAX;
-        if !filled {
-            let other = inner_constraints.max_width;
-            let mut h =
-                intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
-            if enforce_incoming {
-                h = inner_constraints.constrain_height(h);
-            }
-            inner_constraints = inner_constraints.tighten_height(h);
+        let other = inner_constraints.max_width;
+        let mut h = intrinsic_size_of(nodes, policies, idx, IntrinsicQuery::for_height(size), other);
+        if enforce_incoming {
+            h = match intrinsic_incoming_height {
+                Some((lo, hi)) => h.clamp(lo, hi),
+                None => inner_constraints.constrain_height(h),
+            };
         }
+        inner_constraints = inner_constraints.tighten_height(h);
     }
 
     // 2. 应用 padding
@@ -4240,9 +4366,14 @@ fn measure_node_inner(
             content.width.clamp(wrap.min_width, wrap.max_width),
             content.height.clamp(wrap.min_height, wrap.max_height),
         );
-        let (dx, dy) = wrap
-            .align
-            .anchor(content, wrapper, nodes[idx].layout_direction);
+        let (dx, dy) = wrap_alignment_offset(
+            wrap.align,
+            content,
+            wrapper,
+            nodes[idx].layout_direction,
+            wrap.width,
+            wrap.height,
+        );
         if dx != 0.0 || dy != 0.0 {
             if nodes[idx].children.is_empty() {
                 let (pad_s, pad_t, pad_e, pad_b) = nodes[idx].modifier.get_padding_sides();
@@ -5226,6 +5357,175 @@ mod intrinsic_tests {
         );
     }
 
+    #[test]
+    fn an_intrinsic_probe_answers_through_a_size_range() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width_in(100.0, 300.0), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            100.0,
+            "sizeIn lifts the intrinsic answer to the declared minimum (Compose clamps it)"
+        );
+    }
+
+    #[test]
+    fn an_intrinsic_range_resolves_by_chain_order() {
+        let mut max_outer = vec![
+            LayoutNode::new(
+                Modifier::new().max_width(200.0).min_width(300.0),
+                Some(0),
+            ),
+            text_leaf("New file"),
+        ];
+        max_outer[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        assert_eq!(
+            intrinsic_size_of(&mut max_outer, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            200.0,
+            "the outer max wins a conflict, exactly as it does in measure"
+        );
+
+        let mut min_outer = vec![
+            LayoutNode::new(
+                Modifier::new().min_width(300.0).max_width(200.0),
+                Some(0),
+            ),
+            text_leaf("New file"),
+        ];
+        min_outer[0].children = vec![1];
+        assert_eq!(
+            intrinsic_size_of(&mut min_outer, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            300.0,
+            "the reverse chain puts the min outside"
+        );
+    }
+
+    #[test]
+    fn default_min_size_applies_to_an_intrinsic_probe() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().default_min_size(112.0, 0.0), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        assert_eq!(
+            intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, f32::MAX),
+            112.0,
+            "UnspecifiedConstraintsNode coerces the intrinsic answer up to its minimum"
+        );
+    }
+
+    #[test]
+    fn a_fill_inside_an_intrinsic_request_does_not_pin_the_axis() {
+        let expected =
+            intrinsic_size_of(&mut vec![text_leaf("New file")], &[], 0, IntrinsicQuery::MaxWidth, 200.0);
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new().width(IntrinsicSize::Max).fill_max_width(),
+                Some(0),
+            ),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) = measure_node(
+            &mut nodes,
+            &policies,
+            0,
+            Constraints::new(0.0, 300.0, 0.0, 200.0),
+        );
+        assert_eq!(
+            size.width, expected,
+            "the inner fill fills the intrinsic width; only a fill OUTSIDE the request pins the incoming max"
+        );
+        assert!(size.width < 300.0);
+    }
+
+    #[test]
+    fn a_single_axis_wrap_does_not_center_the_other_axis() {
+        // wrapContentWidth: the horizontal alignment applies, the vertical one is hard-coded to 0
+        // by Compose's alignmentCallback even when the content is taller than the wrapper.
+        let (dx, dy) = wrap_alignment_offset(
+            ContentAlignment::new(Alignment::Center, Alignment::Center),
+            Size::new(40.0, 500.0),
+            Size::new(60.0, 300.0),
+            LayoutDirection::Ltr,
+            true,
+            false,
+        );
+        assert_eq!(dx, 10.0);
+        assert_eq!(
+            dy, 0.0,
+            "wrapContentWidth must leave the vertical offset at 0"
+        );
+
+        // wrapContentHeight mirrors it: the vertical alignment applies, the horizontal is 0.
+        let (dx, dy) = wrap_alignment_offset(
+            ContentAlignment::new(Alignment::Center, Alignment::End),
+            Size::new(60.0, 40.0),
+            Size::new(100.0, 300.0),
+            LayoutDirection::Ltr,
+            false,
+            true,
+        );
+        assert_eq!(dx, 0.0, "wrapContentHeight must leave the horizontal offset at 0");
+        assert_eq!(dy, 260.0);
+
+        // Both axes included: the usual centring.
+        let (dx, dy) = wrap_alignment_offset(
+            ContentAlignment::new(Alignment::Center, Alignment::Center),
+            Size::new(40.0, 500.0),
+            Size::new(60.0, 300.0),
+            LayoutDirection::Ltr,
+            true,
+            true,
+        );
+        assert_eq!((dx, dy), (10.0, -100.0));
+    }
+
+    #[test]
+    fn a_negative_size_range_max_is_coerced_to_zero() {
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().width_in(0.0, -1.0), Some(0)),
+            text_leaf("New file"),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(RowLayout::new())];
+        let (size, _) = measure_node(
+            &mut nodes,
+            &policies,
+            0,
+            Constraints::new(0.0, 300.0, 0.0, 200.0),
+        );
+        assert_eq!(size.width, 0.0, "Compose coerces a negative max to 0 instead of panicking");
+    }
+
+    #[test]
+    fn an_intrinsic_probe_does_not_write_the_rich_text_render_cache() {
+        let modifier = Modifier::new().push(crate::modifier::ModifierElement::RichTextContent {
+            content: "New file".to_string(),
+            drawables: Vec::new(),
+            drawable_ranges: Vec::new(),
+            spans: Vec::new(),
+        });
+        let mut nodes = vec![LayoutNode::leaf(modifier)];
+        assert!(nodes[0].has_richtext_content);
+        let _ = intrinsic_size_of(&mut nodes, &[], 0, IntrinsicQuery::MaxWidth, 400.0);
+        assert!(
+            nodes[0].cached_paragraph.borrow().is_none(),
+            "the probe must not leave its paragraph in the render cache"
+        );
+        let _ = measure_node(&mut nodes, &[], 0, Constraints::new(0.0, 400.0, 0.0, 400.0));
+        assert!(
+            nodes[0].cached_paragraph.borrow().is_some(),
+            "a real measure is what caches the paragraph"
+        );
+    }
+
     /// The trap the menu's old hand-written column had to work around: a label carrying `weight(1f)` has no
     /// width of its own, so a container that just measures it with an unbounded axis gets the CONSTRAINT back
     /// (measured at the time: an icon menu's items jumped from 112 to the 280 maximum). Row/Column price
@@ -5415,29 +5715,43 @@ mod intrinsic_tests {
     }
 
     #[test]
-    fn a_scrolled_axis_asks_its_content_with_the_cross_axis_unbounded() {
-        // Compose's `Scroll` intrinsic block answers with the content's own measurement
-        // (`foundation/Scroll.kt:478-500`), so a scroller keeps reporting a content-sized box.
+    fn a_scrolled_axis_keeps_the_given_cross_axis() {
+        // Compose's `Scroll` intrinsic block unbounds the axis that SCROLLS only when the query is
+        // about the OTHER axis: `minIntrinsicHeight(width) = child.minIntrinsicHeight(width)` for a
+        // vertical scroller (`foundation/Scroll.kt:497-515`). Unbounding the query axis instead
+        // reports one long line for a wrapped text.
+        const LONG: &str = "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu";
         let mut nodes = vec![
             LayoutNode::new(
                 Modifier::new().vertical_scroll(crate::modifier::ScrollState::new()),
                 Some(0),
             ),
-            text_leaf("Alpha"),
+            text_leaf(LONG),
         ];
         nodes[0].children = vec![1];
         let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(ColumnLayout::new())];
-        let content_height = intrinsic_size_of(
-            &mut vec![text_leaf("Alpha")],
+        let at_120 = intrinsic_size_of(
+            &mut vec![text_leaf(LONG)],
+            &[],
+            0,
+            IntrinsicQuery::MaxHeight,
+            120.0,
+        );
+        let one_line = intrinsic_size_of(
+            &mut vec![text_leaf(LONG)],
             &[],
             0,
             IntrinsicQuery::MaxHeight,
             f32::MAX,
         );
+        assert!(
+            at_120 > one_line,
+            "the fixture must actually wrap at 120 ({at_120} vs one line {one_line})"
+        );
         assert_eq!(
             intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 120.0),
-            content_height,
-            "the scrolled axis reports the content, not the viewport"
+            at_120,
+            "a vertical scroller answers a height query at the GIVEN width"
         );
     }
 
@@ -5586,6 +5900,35 @@ mod intrinsic_tests {
     }
 
     #[test]
+    fn a_programmatic_request_to_a_non_focusable_node_keeps_the_old_focus() {
+        let good = crate::modifier::FocusRequester::new();
+        let bad = crate::modifier::FocusRequester::new();
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::leaf(Modifier::new().focusable().focus_requester(good.clone())),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .focusable()
+                    .focus_requester(bad.clone())
+                    .focus_properties_can_focus(false),
+            ),
+        ];
+        nodes[0].children = vec![1, 2];
+        assert!(focus_by_id(&mut nodes, 0, good.id()));
+        assert!(nodes[1].focused);
+
+        assert!(
+            !focus_by_id(&mut nodes, 0, bad.id()),
+            "a canFocus = false target refuses the request"
+        );
+        assert!(
+            nodes[1].focused,
+            "refusing must not clear the focus the user already had"
+        );
+        assert!(!nodes[2].focused);
+    }
+
+    #[test]
     fn a_focus_group_restores_its_last_focused_child() {
         // Focus order: A, B, [group: C, D], E.
         let mut nodes = vec![
@@ -5621,6 +5964,49 @@ mod intrinsic_tests {
             Some(5),
             "re-entering the group restores its active child"
         );
+    }
+
+    #[test]
+    fn a_nested_focus_group_restores_the_outer_active_child() {
+        // Tree: root { outer G( inner H(A, B), C ), D }. Focus order: A, B, C, D.
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),          // 0 root
+            LayoutNode::new(Modifier::new().focus_group(), Some(1)), // 1 outer G
+            LayoutNode::new(Modifier::new().focus_group(), Some(2)), // 2 inner H
+            LayoutNode::leaf(Modifier::new().focusable()),      // 3 A
+            LayoutNode::leaf(Modifier::new().focusable()),      // 4 B
+            LayoutNode::leaf(Modifier::new().focusable()),      // 5 C
+            LayoutNode::leaf(Modifier::new().focusable()),      // 6 D
+        ];
+        nodes[0].children = vec![1, 6];
+        nodes[1].children = vec![2, 5];
+        nodes[2].children = vec![3, 4];
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.id = i as u64;
+        }
+
+        // Focus B (inside the inner group), then C (outside it, inside the outer group): the outer
+        // group's active child becomes C while the inner group still remembers B.
+        assert!(focus_node_by_id(&mut nodes, 0, 4));
+        assert!(focus_node_by_id(&mut nodes, 0, 5));
+        assert_eq!(nodes[1].focus_group_memory, Some(5));
+        assert_eq!(nodes[2].focus_group_memory, Some(4));
+
+        // Tab out to D, then wrap to A, the first focusable of the OUTER group. Entering that group
+        // restores ITS active child C; using the nearest (inner) group would wrongly land on B.
+        assert!(focus_node_by_id(&mut nodes, 0, 6));
+        assert!(focus_next(&mut nodes, 0));
+        assert_eq!(
+            get_focus_id(&nodes, 0),
+            Some(5),
+            "the outer group's memory (C) wins over the inner group's stale B"
+        );
+
+        // Backwards: from D, Shift+Tab lands on the outer group's LAST focusable C, and the same
+        // outer-first rule applies.
+        assert!(focus_node_by_id(&mut nodes, 0, 6));
+        assert!(focus_prev(&mut nodes, 0));
+        assert_eq!(get_focus_id(&nodes, 0), Some(5));
     }
 
     #[test]

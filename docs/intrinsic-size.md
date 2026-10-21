@@ -330,11 +330,14 @@ landed; §1-§4 stay the specification it was written against.
 ### 8.3 The modifier chain is inverted, not read
 
 The pipeline order in `measure_node_inner` is the specification, and the probe replays it on the
-modifier chain instead of the node: `size_steps` (size/fill/ranges/wrap in chain order) → open
-layout nodes → intrinsic requests → padding → scroll. The min/max pair is replayed in CHAIN ORDER, which is what decides a conflict in Compose —
-each modifier node constrains into what the node before it produced, so the outer call wins
-(`.max_width(200).min_width(300)` measures 200, the reverse 300; this used to be a recorded
-"the min always wins" deviation). Consequences that the tests pin:
+modifier chain instead of the node. The box range comes from folding `size_steps()` from the
+INNERMOST element outward — Compose nests one layout node per call, so each call constrains the
+answer the inner one produced. `size`/`requiredSize` pin both ends, `sizeIn` clamps both ends into
+its target range, and the min/max family (including `defaultMinSize`) moves one end; `fillMax` and
+`wrapContent` are skipped because neither node overrides the intrinsic methods upstream. This is
+what decides a conflict in Compose — the outer call wins (`.max_width(200).min_width(300)` answers
+200, the reverse 300; this used to be a recorded "the min always wins" deviation). Consequences that
+the tests pin:
 
 - A fixed axis short-circuits: a node whose axis is fixed returns that value **without** padding,
   because the pipeline tightens the node's own box before the padding offset is pushed inward.
@@ -344,12 +347,16 @@ each modifier node constrains into what the node before it produced, so the oute
   Compose's padding node offsets the constraints before the child answers
   (`Padding.kt:449`); measured before the fix: a `padding_horizontal(10)` node under a height query
   asked its content at the outer width 100 instead of 80, so a wrapping child answered the wrong height.
-- `fill_max` is deliberately ignored when answering intrinsics, matching Compose's `FillNode`
-  (`Size.kt:689`), which does not override the intrinsic methods either.
-- A scroll modifier on the queried axis forwards with `other = f32::MAX`, mirroring
-  `foundation/Scroll.kt:478-500`.
-- `size`/`width`/`height(IntrinsicSize)` clamp the answer to the incoming constraint
-  (`enforceIncoming = true`, `Intrinsic.kt:34-49`); the `required*` forms do not.
+- `fill_max` is ignored when answering intrinsics, matching Compose's `FillNode` (`Size.kt:689`),
+  which does not override the intrinsic methods either. The MEASURE pipeline still distinguishes
+  position: it snapshots the constraints the intrinsic request saw in the chain, so a fill OUTSIDE
+  the request pins the axis (the request honours the tightened incoming range) while a fill INSIDE
+  it does not (the request decides first, then the inner fill fills the tight result).
+- A scroll modifier forwards with `other = f32::MAX` only when the OTHER axis is the scrolled one
+  (a vertical scroller answers a width query with an unbounded height, and a height query at the
+  given width), mirroring `foundation/Scroll.kt:497-515`.
+- `size`/`width`/`height(IntrinsicSize)` clamp the answer to the constraints the request saw at its
+  chain position (`enforceIncoming = true`, `Intrinsic.kt:34-49`); the `required*` forms do not.
 - `size`/`width`/`height(IntrinsicSize)` also NORMALIZE both of that axis's queries to the extreme it
   declares: `IntrinsicWidthNode.minIntrinsicWidth` and `.maxIntrinsicWidth` both forward to
   `maxIntrinsicWidth` for `IntrinsicSize.Max` (the height node mirrors it, `Intrinsic.kt:192-204` and
@@ -384,9 +391,10 @@ four methods, so the query never enters the approximation at all.
   given width — winia has no height-parameterised text path, so the query is answered at the width the
   parent offers rather than by a height-keyed cache (§7). The probe builds the paragraph through
   `build_text_paragraph` and does **not** touch the render paragraph cache; a test pins that.
-- Rich text measures through `measure_and_cache_richtext` at the queried width, images report their
-  intrinsic size (min = max), and a plain leaf answers 0 — the fixed-axis case short-circuits before it
-  matters.
+- Rich text measures through `measure_and_cache_richtext` at the queried width and then RESTORES
+  the paragraph that was in `cached_paragraph`, so the probe still leaves no render state behind;
+  a rich-text cache-hygiene test pins it. Images report their intrinsic size (min = max), and a plain
+  leaf answers 0 — the fixed-axis case short-circuits before it matters.
 - A policy whose `subcomposes()` is true is never probed: it reports its last measured size on that
   axis. Compose has no intrinsic scope that could compose, and winia's probes run outside the frame's
   compose step.

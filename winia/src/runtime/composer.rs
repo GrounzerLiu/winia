@@ -3961,8 +3961,14 @@ impl Composer {
             .iter()
             .any(|node| node.modifier.has_position_callbacks());
         if has_positions {
-            let (placed, global) =
-                crate::layout::node::collect_position_callbacks(&mut self.arena.nodes, root);
+            // The collector starts at this composer's origin, so its change gate stores WINDOW-space
+            // boxes: an overlay layer whose origin moves re-fires the callback instead of reporting
+            // local coordinates until its own box changes.
+            let (placed, global) = crate::layout::node::collect_position_callbacks(
+                &mut self.arena.nodes,
+                root,
+                self.screen_origin,
+            );
             for (callback, position) in placed {
                 callback(position);
             }
@@ -4142,6 +4148,38 @@ impl Drop for Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn position_callbacks_add_the_overlay_origin() {
+        // An overlay composer is painted under its layer origin; a callback inside it must still
+        // report window coordinates, or an anchored menu measures itself against the wrong point.
+        // The origin is part of the change gate: when a layer moves, the callback fires again with
+        // the new window-space box even though the layer-local box did not change.
+        let mut composer = Composer::new();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(f32, f32)>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let write = seen.clone();
+        composer.compose(move |ctx| {
+            let key = ctx.next_key();
+            let modifier = Modifier::new()
+                .size(50.0, 20.0)
+                .on_globally_positioned(move |position| {
+                    write.lock().unwrap().push((position.x, position.y));
+                });
+            ctx.start_leaf(key, modifier);
+            ctx.end_node();
+        });
+        let constraints = crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0);
+        composer.screen_origin = (0.0, 0.0);
+        composer.layout(constraints);
+        composer.screen_origin = (40.0, 25.0);
+        composer.layout(constraints);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(0.0, 0.0), (40.0, 25.0)],
+            "the origin change must re-fire with window coordinates"
+        );
+    }
 
     /// A group with NO declared parameters and NOTHING read inside its body Skips on the next frame.
     ///

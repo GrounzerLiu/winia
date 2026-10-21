@@ -107,7 +107,62 @@ struct PullConnection {
     on_refresh: Arc<dyn Fn() + Send + Sync>,
 }
 
+impl PullConnection {
+    /// Arms the delayed return to rest. Re-armed on every delta of a short pull; the protocol has
+    /// no release event, so "the input stopped" is the only signal a settle can key on.
+    fn settle_back(&self) {
+        crate::animation::push_animatable(
+            self.state.offset.clone(),
+            0.0,
+            crate::animation::AnimationSpec::Tween(
+                crate::animation::TweenSpec::new(
+                    std::time::Duration::from_millis(200),
+                    crate::animation::interpolator::EaseOutCubic::new(),
+                )
+                .delay(std::time::Duration::from_millis(120)),
+            ),
+        );
+    }
+}
+
 impl NestedScrollConnection for PullConnection {
+    /// Swiping UP retracts the pull BEFORE the inner list scrolls down (Compose's
+    /// PullToRefreshNestedScrollConnection.onPreScroll). Without this the child consumes the upward
+    /// delta first, so a short pull leaves the indicator stuck above a list that has started to move.
+    fn on_pre_scroll(
+        &self,
+        available: ScrollDelta,
+        source: NestedScrollSource,
+    ) -> ScrollDelta {
+        if source != NestedScrollSource::Drag || self.state.refreshing.load(Ordering::Relaxed) {
+            return ScrollDelta::ZERO;
+        }
+        let dy = available.y;
+        if dy >= 0.0 {
+            return ScrollDelta::ZERO; // downward deltas are the post-scroll pull
+        }
+        let current = self.state.offset.peek();
+        if current <= 0.0 {
+            return ScrollDelta::ZERO;
+        }
+        let next = (current + dy * RESISTANCE).clamp(0.0, MAX_PULL);
+        let consumed = (next - current) / RESISTANCE;
+        if consumed == 0.0 {
+            return ScrollDelta::ZERO;
+        }
+        crate::animation::cancel_animation(&self.state.offset);
+        self.state.offset.set(next);
+        self.state
+            .progress
+            .set((next / PULL_THRESHOLD).clamp(0.0, 1.0));
+        // The retract cancelled the settle that the last downward delta armed; without re-arming,
+        // a pull released halfway (below the threshold) would stay where it is forever.
+        if next < PULL_THRESHOLD {
+            self.settle_back();
+        }
+        ScrollDelta::new(0.0, consumed)
+    }
+
     fn on_post_scroll(
         &self,
         _child_consumed: ScrollDelta,
@@ -137,14 +192,7 @@ impl NestedScrollConnection for PullConnection {
             (self.on_refresh)();
         } else if next < PULL_THRESHOLD {
             // Re-armed on every delta; a pause means the drag ended and the content settles back.
-            crate::animation::push_animatable(
-                self.state.offset.clone(),
-                0.0,
-                AnimationSpec::Tween(
-                    TweenSpec::new(Duration::from_millis(200), EaseOutCubic::new())
-                        .delay(Duration::from_millis(120)),
-                ),
-            );
+            self.settle_back();
         }
         ScrollDelta::new(0.0, consumed)
     }
@@ -257,7 +305,10 @@ impl PullToRefreshBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::node::LayoutNode;
+    use crate::modifier::{Modifier, ScrollState};
     use crate::nested_scroll::{NestedScrollSource, ScrollDelta};
+    use crate::unit::Size;
     use std::sync::atomic::AtomicUsize;
 
     fn connection() -> (PullConnection, PullToRefreshState, Arc<AtomicUsize>) {
@@ -318,13 +369,138 @@ mod tests {
         assert!(!state.is_triggered());
         assert_eq!(hits.load(Ordering::Relaxed), 0);
 
-        let retract = connection.on_post_scroll(
-            ScrollDelta::ZERO,
+        // An upward drag is handled BEFORE the child scrolls (Compose's onPreScroll): after a short
+        // pull, the first 40 px go to the pull and only the rest reaches the list.
+        let retract = connection.on_pre_scroll(
             ScrollDelta::new(0.0, -80.0),
             NestedScrollSource::Drag,
         );
         assert_eq!(retract.y, -40.0, "only what the pull still has is consumed");
         assert_eq!(state.pull_offset(), 0.0);
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn a_partial_retract_settles_back() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let (connection, state, _) = connection();
+        connection.on_post_scroll(
+            ScrollDelta::ZERO,
+            ScrollDelta::new(0.0, 40.0),
+            NestedScrollSource::Drag,
+        );
+        assert_eq!(state.pull_offset(), 20.0);
+
+        // Retract only part of the pull: the pre-scroll cancels the settle armed by the post
+        // delta, so it has to arm a new one (the protocol has no release event).
+        let retracted =
+            connection.on_pre_scroll(ScrollDelta::new(0.0, -20.0), NestedScrollSource::Drag);
+        assert_eq!(retracted.y, -20.0);
+        assert_eq!(state.pull_offset(), 10.0);
+
+        clock.advance(std::time::Duration::from_millis(150));
+        for _ in 0..40 {
+            clock.advance(std::time::Duration::from_millis(16));
+            crate::animation::update_animations();
+        }
+        assert!(
+            state.pull_offset().abs() < 0.5,
+            "a partial retract must still settle back"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn an_upward_drag_retracts_the_pull_before_the_list_moves() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::animation::clear_all_animations();
+        let (connection, state, _) = connection();
+        state.offset.set(20.0); // a short pull is on screen
+
+        let scroll = ScrollState::new();
+        let mut nodes = vec![
+            LayoutNode::leaf(
+                Modifier::new()
+                    .nested_scroll(connection)
+                    .size(400.0, 400.0),
+            ),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .vertical_scroll(scroll.clone())
+                    .size(100.0, 100.0),
+            ),
+        ];
+        nodes[0].measured_size = Size::new(400.0, 400.0);
+        nodes[1].measured_size = Size::new(100.0, 100.0);
+        nodes[1].scroll_viewport_height = 100.0;
+        nodes[1].scroll_content_height = 300.0;
+        nodes[0].children.push(1);
+
+        let consumed = crate::app::scroll::dispatch_nested_scroll_delta(
+            &mut nodes,
+            0,
+            1,
+            ScrollDelta::new(0.0, -80.0),
+            NestedScrollSource::Drag,
+            crate::unit::Density::from_density(1.0),
+        );
+        assert!(consumed.y < 0.0);
+        assert_eq!(state.pull_offset(), 0.0, "the pull retracts first");
+        assert!(
+            scroll.offset.peek() > 0.0,
+            "only the delta left after the retract scrolls the list"
+        );
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn flipping_is_refreshing_reenters_the_box() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::animation::clear_all_animations();
+        // LoadingIndicator's indeterminate form starts a LaunchedEffect, which needs a runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _rt = rt.enter();
+        let refreshing = crate::runtime::state::State::new(false);
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let build = |composer: &mut crate::runtime::composer::Composer| {
+            let r = refreshing.clone();
+            let theme = theme.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(theme, ctx, move |ctx| {
+                    PullToRefreshBox::new(r.get(), || {})
+                        .build(ctx, |ctx| {
+                            crate::components::text::Text::new("row").build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 320.0, 0.0, 480.0));
+        };
+        build(&mut composer);
+        build(&mut composer);
+        let baseline = composer.compose_entered_count;
+        assert_eq!(composer.compose_dirty_count, 0, "a settled frame dirties nothing");
+        build(&mut composer);
+        assert_eq!(
+            (composer.compose_entered_count, composer.compose_dirty_count),
+            (baseline, 0),
+            "the settled baseline must be stable"
+        );
+
+        refreshing.set(true);
+        build(&mut composer);
+        assert!(
+            composer.compose_entered_count > baseline,
+            "is_refreshing is a declared parameter: the box must re-enter to swap its indicator"
+        );
         crate::animation::clear_all_animations();
     }
 

@@ -166,6 +166,16 @@ fn build_gl_3d_matrix(
 /// GraphicsLayer shadow：使用 Skia `SkShadowUtils::draw_shadow` 绘制真正的
 /// ambient + spot 阴影。elevation 是 Compose 语义的 Z 高度，不再手工换算
 /// blur radius 或 spot offset；光源参数集中在这里，便于后续校准平台差异。
+/// Whether the layer needs an offscreen `save_layer`: a colour filter, alpha, a render effect, or
+/// `CompositingStrategy::Offscreen` (blend modes and group opacity need a real offscreen).
+/// `ModulateAlpha` has no per-draw equivalent in winia, so it takes the `Auto` path.
+fn graphics_layer_needs_layer(gl: &crate::graphics::GraphicsLayerParams) -> bool {
+    gl.color_filter.is_some()
+        || gl.alpha < 1.0
+        || gl.render_effect.is_some()
+        || gl.compositing == crate::graphics::CompositingStrategy::Offscreen
+}
+
 fn draw_elevation_shadow(
     canvas: &Canvas,
     rect: Rect,
@@ -1136,14 +1146,8 @@ fn render_pass1(
         }
     }
     let gl_saved = if let Some(gl) = gl_params {
-        let has_filter = gl.color_filter.is_some();
         let has_alpha = gl.alpha < 1.0;
-        let has_effect = gl.render_effect.is_some();
-        // `Offscreen` forces the layer even when nothing else needs one (blend modes and group
-        // opacity need a real offscreen); `ModulateAlpha` has no per-draw equivalent in winia, so it
-        // takes the same path as `Auto`.
-        let offscreen = gl.compositing == crate::graphics::CompositingStrategy::Offscreen;
-        if has_filter || has_alpha || has_effect || offscreen {
+        if graphics_layer_needs_layer(&gl) {
             let mut paint = skia_safe::Paint::default();
             if let Some(cf) = &gl.color_filter {
                 if let Some(filter) = to_skia_color_filter(cf) {
@@ -3091,6 +3095,66 @@ mod tests {
             g > 10 && g < 245,
             "the layer edge is a blend, not a hard boundary (g = {g})"
         );
+    }
+
+    #[test]
+    fn clip_scrollable_container_keeps_cross_axis_slack_and_clips_the_main_axis() {
+        let state = crate::modifier::ScrollState::new();
+        let child = {
+            let mut node = LayoutNode::leaf(crate::modifier::Modifier::new().background(
+                crate::graphics::Color::from_argb(255, 255, 0, 0),
+                crate::graphics::Shape::Rectangle,
+            ));
+            node.position = crate::unit::Offset::new(50.0, 10.0);
+            node.measured_size = crate::unit::Size::new(200.0, 200.0);
+            node
+        };
+        let mut parent = LayoutNode::new(
+            crate::modifier::Modifier::new()
+                .size(100.0, 100.0)
+                .vertical_scroll(state)
+                .clip_scrollable_container(crate::overscroll::Orientation::Vertical),
+            Some(0),
+        );
+        parent.measured_size = crate::unit::Size::new(100.0, 100.0);
+        parent.scroll_viewport_height = 100.0;
+        parent.children = vec![1];
+        let nodes = vec![parent, child];
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 200)).unwrap();
+        let canvas = surface.canvas();
+        canvas.clear(skia_safe::Color::WHITE);
+        render(&nodes, 0, canvas);
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        // The child paints 50..250 horizontally. The main (vertical) axis clip stops at y = 100;
+        // the cross axis keeps 30 dp of slack, so x = 105 is still painted.
+        assert!(
+            px[50 * 200 + 105][1] < 128,
+            "the cross axis keeps the 30 dp shadow slack"
+        );
+        assert!(
+            px[105 * 200 + 50][1] > 200,
+            "the main axis is still cut at the viewport"
+        );
+    }
+
+    #[test]
+    fn offscreen_compositing_forces_a_layer_by_itself() {
+        let mut gl = crate::graphics::GraphicsLayerParams::default();
+        assert!(!graphics_layer_needs_layer(&gl));
+        gl.compositing = crate::graphics::CompositingStrategy::Offscreen;
+        assert!(
+            graphics_layer_needs_layer(&gl),
+            "Offscreen composites even at alpha 1 and with no filter"
+        );
+        gl.compositing = crate::graphics::CompositingStrategy::ModulateAlpha;
+        assert!(
+            !graphics_layer_needs_layer(&gl),
+            "ModulateAlpha has no per-draw equivalent in winia"
+        );
+        gl.alpha = 0.5;
+        assert!(graphics_layer_needs_layer(&gl), "alpha still needs a layer");
     }
 
     #[test]

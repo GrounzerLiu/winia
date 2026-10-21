@@ -104,6 +104,17 @@ pub(crate) struct ItemAnimation {
     pub last_frame: u64,
 }
 
+/// How many placement passes a key survives after it leaves the window before its animation state
+/// is dropped. The map is keyed by item key, so a feed of ever-new keys would otherwise grow without
+/// bound; an item that comes back after this window starts from a fresh slot anyway.
+const ITEM_ANIMATION_RETENTION_FRAMES: u64 = 240;
+
+fn retain_recent_items(anims: &mut ItemAnimations, frame: u64) {
+    anims
+        .items
+        .retain(|_, item| frame.saturating_sub(item.last_frame) <= ITEM_ANIMATION_RETENTION_FRAMES);
+}
+
 /// Lazy 列表滚动状态（winia 像素模型 + 派生锚点）
 ///
 /// 滚动输入走 winia 现有通道：`ScrollState.offset`（像素总偏移，挂 vertical_scroll）。
@@ -1670,6 +1681,7 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
             item.last_frame = frame;
             nodes[c].item_anim = Some((item.offset.clone(), A::VERTICAL));
         }
+        retain_recent_items(&mut anims, frame);
     }
 }
 
@@ -3693,10 +3705,30 @@ mod tests {
     }
 
     #[test]
+    fn item_animations_forget_keys_that_have_been_gone_for_a_while() {
+        let mut anims = ItemAnimations::default();
+        anims.frame = 10_000;
+        for (key, last_frame) in [(1u64, 9_999u64), (2u64, 100u64)] {
+            anims.items.insert(
+                key,
+                ItemAnimation {
+                    offset: crate::runtime::state::State::new(0.0),
+                    last_main: 0.0,
+                    last_frame,
+                },
+            );
+        }
+        retain_recent_items(&mut anims, 10_000);
+        assert!(anims.items.contains_key(&1), "a just-seen item keeps its animation");
+        assert!(
+            !anims.items.contains_key(&2),
+            "a key that left long ago is dropped instead of growing the map forever"
+        );
+    }
+
+    #[test]
     fn animate_item_springs_a_shifted_item_from_its_old_slot() {
-        let _guard = crate::animation::tests::TEST_SERIAL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (_guard, clock) = crate::animation::tests::serial_clock();
         crate::animation::clear_all_animations();
         let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
         let state = LazyListState::new();
@@ -3757,6 +3789,20 @@ mod tests {
         assert!(
             shifted.iter().any(|value| *value < 0.0),
             "an item pushed down starts above its new slot"
+        );
+        // The offset must SPRING back to 0; without the animation registration it would stay at
+        // the old slot forever, and the earlier assertions cannot tell the two apart.
+        for _ in 0..40 {
+            clock.advance(std::time::Duration::from_millis(16));
+            crate::animation::update_animations();
+        }
+        assert!(
+            composer
+                .arena_nodes()
+                .iter()
+                .filter_map(|n| n.item_anim.as_ref())
+                .all(|(offset, _)| offset.peek().abs() < 0.5),
+            "the placement spring settles on the new slot"
         );
         crate::animation::clear_all_animations();
     }

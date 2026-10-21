@@ -792,6 +792,30 @@ impl PerWindow {
     /// call it, because a second copy of the rule silently goes stale (it did: the debug copy kept
     /// walking the main tree after this rule changed, so a UI test driving Tab over the debug server
     /// measured the copy, not the framework).
+    /// Restore the focus that `focused_slot_key` identifies after a recomposition.
+    ///
+    /// A node that can no longer take focus (or disappeared) must also have the arena flags cleared:
+    /// setting only `focused_id`/the slot to None leaves the tree with a focus ring and a
+    /// semantics "focused" node that the window does not know about.
+    fn restore_focus_by_slot_key(&mut self) {
+        let Some(slot_key) = self.focused_slot_key else { return };
+        let Some(r) = self.composer.layout_root_idx() else { return };
+        let nodes = self.composer.arena_nodes_mut();
+        let restored = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot_key)
+            .map(|new_id| (new_id, crate::layout::node::focus_node_by_id(nodes, r, new_id)));
+        match restored {
+            Some((new_id, true)) => {
+                self.focused_id = Some(new_id);
+                debug_log!("[focus] restored by slot_key id={}", new_id);
+            }
+            _ => {
+                crate::layout::node::clear_focus(nodes, r);
+                self.focused_id = None;
+                self.focused_slot_key = None;
+            }
+        }
+    }
+
     fn tab_move_focus(&mut self, shift: bool) {
         if let Some(i) = keyboard_scope(self) {
             let (new_id, new_slot, want_ime) = {
@@ -827,6 +851,87 @@ impl PerWindow {
             self.focused_slot_key = new_slot;
             self.apply_ime_for_focus(new_id);
         }
+    }
+
+    /// Focus one node id from UIA / any non-keyboard entry point: same bookkeeping as Tab (the
+    /// single-focus invariant, `focused_id`/`focused_slot_key` and IME), and the target's arena is
+    /// resolved (main first, then overlays topmost-first) instead of always assuming the page.
+    fn focus_by_node_id(&mut self, node_id: u64) -> bool {
+        if let Some(root) = self.composer.layout_root_idx() {
+            let (ok, slot) = {
+                let nodes = self.composer.arena_nodes_mut();
+                let ok = crate::layout::node::focus_node_by_id(nodes, root, node_id);
+                let slot = if ok {
+                    crate::layout::node::find_node_by_id(nodes, root, node_id)
+                        .map(|idx| nodes[idx].slot_key)
+                } else {
+                    None
+                };
+                (ok, slot)
+            };
+            if ok {
+                self.focused_id = Some(node_id);
+                self.focused_slot_key = slot;
+                for ov in self.overlay.layers.iter_mut() {
+                    if ov.focused_id.is_some() {
+                        if let Some(r) = ov.composer.layout_root_idx() {
+                            crate::layout::node::clear_focus(ov.composer.arena_nodes_mut(), r);
+                        }
+                        ov.focused_id = None;
+                        ov.focused_slot_key = None;
+                    }
+                }
+                self.apply_ime_for_focus(Some(node_id));
+                return true;
+            }
+        }
+        for i in (0..self.overlay.layers.len()).rev() {
+            let Some(root) = self.overlay.layers[i].composer.layout_root_idx() else {
+                continue;
+            };
+            let (ok, slot, want_ime) = {
+                let ov = &mut self.overlay.layers[i];
+                let nodes = ov.composer.arena_nodes_mut();
+                let ok = crate::layout::node::focus_node_by_id(nodes, root, node_id);
+                let idx = if ok {
+                    crate::layout::node::find_node_by_id(nodes, root, node_id)
+                } else {
+                    None
+                };
+                let slot = idx.map(|j| nodes[j].slot_key);
+                let want = idx
+                    .map(|j| node_or_descendant_wants_ime(nodes, j))
+                    .unwrap_or(false);
+                (ok, slot, want)
+            };
+            if ok {
+                self.overlay.layers[i].focused_id = Some(node_id);
+                self.overlay.layers[i].focused_slot_key = slot;
+                if let Some(r) = self.composer.layout_root_idx() {
+                    crate::layout::node::clear_focus(self.composer.arena_nodes_mut(), r);
+                }
+                self.focused_id = None;
+                self.focused_slot_key = None;
+                for j in 0..self.overlay.layers.len() {
+                    if j == i || self.overlay.layers[j].focused_id.is_none() {
+                        continue;
+                    }
+                    if let Some(r) = self.overlay.layers[j].composer.layout_root_idx() {
+                        crate::layout::node::clear_focus(
+                            self.overlay.layers[j].composer.arena_nodes_mut(),
+                            r,
+                        );
+                    }
+                    self.overlay.layers[j].focused_id = None;
+                    self.overlay.layers[j].focused_slot_key = None;
+                }
+                if let Some(ref sw) = self.skia_window {
+                    set_ime_enabled(sw, want_ime);
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// 方向键移动焦点（对标 Compose Desktop 方向导航）——
@@ -934,20 +1039,7 @@ impl PerWindow {
                 (self.content)(ctx);
             });
             any_composed |= did_compose;
-            if let Some(slot_key) = self.focused_slot_key {
-                if let Some(r) = self.composer.layout_root_idx() {
-                    let nodes = self.composer.arena_nodes_mut();
-                    if let Some(new_id) = crate::layout::node::find_node_id_by_slot_key(nodes, r, slot_key) {
-                        crate::layout::node::clear_focus(nodes, r);
-                        crate::layout::node::set_focus_by_id(nodes, r, new_id);
-                        self.focused_id = Some(new_id);
-                            debug_log!("[focus] restored by slot_key id={}", new_id);
-                    } else {
-                        self.focused_id = None;
-                        self.focused_slot_key = None;
-                    }
-                }
-            }
+            self.restore_focus_by_slot_key();
             // 如果在 compose 期间又有新 notify 入队，需要再处理一次
             if !did_compose && !self.composer.has_pending_states() {
                 break;
@@ -2191,14 +2283,8 @@ impl AppState {
                     }
                 }
                 crate::semantics::UiAction::Focus(node_id) => {
-                    // Read the root first: the arena is borrowed mutably by the call.
-                    let root = pw.composer.layout_root_idx();
-                    if let Some(root) = root {
-                        let nodes = pw.composer.arena_nodes_mut();
-                        crate::layout::node::set_focus_by_id(nodes, root, node_id);
-                    }
-                    if let Some(ref sw) = pw.skia_window {
-                        set_ime_enabled(&sw, false);
+                    if !pw.focus_by_node_id(node_id) {
+                        log::debug!("[accessibility] focus: node {node_id} cannot take focus");
                     }
                 }
             }
@@ -4283,6 +4369,217 @@ mod key_node_dual_track_tests {
             is_meta_pressed: false,
             repeat: false,
         }
+    }
+
+    #[test]
+    fn focus_by_node_id_updates_the_window_bookkeeping_and_refuses_the_unfocusable() {
+        let theme = ThemeColors::default_light();
+        let mut pw = PerWindow::new(Box::new(|_| {}), 300.0, 200.0, theme);
+        pw.content = Box::new(|ctx| {
+            // A container groups the three Texts into one tree the layout root can reach.
+            crate::layout::Column::new().build(ctx, |ctx| {
+                for label in ["A", "B"] {
+                    crate::components::Text::new(label)
+                        .modifier(Modifier::new().focusable())
+                        .build(ctx);
+                }
+                crate::components::Text::new("C")
+                    .modifier(
+                        Modifier::new()
+                            .focusable()
+                            .focus_properties_can_focus(false),
+                    )
+                    .build(ctx);
+            });
+        });
+        let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+        pw.composer.recompose(|ctx| content(ctx));
+        pw.content = content;
+        pw.composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+
+        let (a_id, b_id, c_id, a_slot) = {
+            let root = pw.composer.layout_root_idx().expect("layout root");
+            let nodes = pw.composer.arena_nodes();
+            let mut focusable = Vec::new();
+            crate::layout::node::collect_focusable_ids(nodes, root, &mut focusable);
+            assert_eq!(focusable.len(), 2, "canFocus = false keeps C out of the walk");
+            let c = nodes
+                .iter()
+                .find(|node| node.modifier.focus_can_focus() == Some(false))
+                .expect("C exists")
+                .id;
+            let a_slot = nodes
+                .iter()
+                .find(|node| node.id == focusable[0])
+                .map(|node| node.slot_key);
+            (focusable[0], focusable[1], c, a_slot)
+        };
+
+        assert!(pw.focus_by_node_id(a_id), "A is focusable");
+        assert_eq!(pw.focused_id, Some(a_id));
+        assert_eq!(pw.focused_slot_key, a_slot, "the slot key follows the id");
+
+        // The UIA path and the debug protocol both land here: a refused target must not disturb
+        // the focus the user already has.
+        assert!(!pw.focus_by_node_id(c_id), "C is not focusable");
+        assert_eq!(pw.focused_id, Some(a_id));
+        assert!(!pw.focus_by_node_id(999_999), "a missing id is refused");
+
+        assert!(pw.focus_by_node_id(b_id));
+        assert_eq!(pw.focused_id, Some(b_id));
+        let root = pw.composer.layout_root_idx().unwrap();
+        assert_eq!(
+            crate::layout::node::get_focus_id(pw.composer.arena_nodes(), root),
+            Some(b_id),
+            "the arena focus agrees with the bookkeeping"
+        );
+    }
+
+    #[test]
+    fn a_refused_slot_restore_clears_the_stale_focus_flags() {
+        let theme = ThemeColors::default_light();
+        let mut pw = PerWindow::new(Box::new(|_| {}), 300.0, 200.0, theme);
+        pw.content = Box::new(|ctx| {
+            crate::layout::Column::new().build(ctx, |ctx| {
+                for unfocusable in [false, true] {
+                    let key = ctx.next_key();
+                    let modifier = if unfocusable {
+                        Modifier::new()
+                            .focusable()
+                            .focus_properties_can_focus(false)
+                    } else {
+                        Modifier::new().focusable()
+                    };
+                    ctx.start_leaf(key, modifier);
+                    ctx.end_node();
+                }
+            });
+        });
+        let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+        pw.composer.recompose(|ctx| content(ctx));
+        pw.content = content;
+        pw.composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+
+        let (a_id, refused_slot) = {
+            let root = pw.composer.layout_root_idx().expect("layout root");
+            let nodes = pw.composer.arena_nodes();
+            let mut focusable = Vec::new();
+            crate::layout::node::collect_focusable_ids(nodes, root, &mut focusable);
+            let a_id = focusable[0];
+            let refused = nodes
+                .iter()
+                .find(|node| node.modifier.focus_can_focus() == Some(false))
+                .expect("the canFocus = false leaf exists");
+            (a_id, refused.slot_key)
+        };
+
+        // The slot still resolves, but its node no longer accepts focus. The failure branch must
+        // clear the tree flags, not only the window fields.
+        assert!(pw.focus_by_node_id(a_id));
+        pw.focused_slot_key = Some(refused_slot);
+        pw.restore_focus_by_slot_key();
+        assert_eq!(pw.focused_id, None);
+        assert_eq!(pw.focused_slot_key, None);
+        let root = pw.composer.layout_root_idx().unwrap();
+        assert_eq!(
+            crate::layout::node::get_focus_id(pw.composer.arena_nodes(), root),
+            None,
+            "the arena must not keep a focused node the window has forgotten"
+        );
+
+        // The other failure path: the slot is gone entirely.
+        assert!(pw.focus_by_node_id(a_id));
+        pw.focused_slot_key = Some(u64::MAX);
+        pw.restore_focus_by_slot_key();
+        assert_eq!(pw.focused_id, None);
+        assert_eq!(pw.focused_slot_key, None);
+        assert_eq!(
+            crate::layout::node::get_focus_id(pw.composer.arena_nodes(), root),
+            None
+        );
+    }
+
+    #[test]
+    fn focus_by_node_id_can_reach_an_overlay_arena() {
+        let theme = ThemeColors::default_light();
+        let mut pw = PerWindow::new(Box::new(|_| {}), 300.0, 200.0, theme);
+        pw.content = Box::new(|ctx| {
+            crate::layout::Column::new().build(ctx, |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().focusable());
+                ctx.end_node();
+            });
+        });
+        let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
+        pw.composer.recompose(|ctx| content(ctx));
+        pw.content = content;
+        pw.composer.layout(Constraints::new(0.0, 300.0, 0.0, 200.0));
+        let main_id = {
+            let root = pw.composer.layout_root_idx().unwrap();
+            let nodes = pw.composer.arena_nodes();
+            let mut focusable = Vec::new();
+            crate::layout::node::collect_focusable_ids(nodes, root, &mut focusable);
+            focusable[0]
+        };
+        assert!(pw.focus_by_node_id(main_id));
+
+        // A second composer stands in for an overlay layer: UIA hands the node id of the focused
+        // semantics tree, which may live there.
+        let mut overlay = crate::runtime::composer::Composer::new();
+        overlay.compose(|ctx| {
+            crate::layout::Column::new().build(ctx, |ctx| {
+                let key = ctx.next_key();
+                ctx.start_leaf(key, Modifier::new().focusable());
+                ctx.end_node();
+            });
+        });
+        overlay.layout(Constraints::new(0.0, 200.0, 0.0, 200.0));
+        let overlay_id = {
+            let root = overlay.layout_root_idx().unwrap();
+            let nodes = overlay.arena_nodes();
+            let mut focusable = Vec::new();
+            crate::layout::node::collect_focusable_ids(nodes, root, &mut focusable);
+            focusable[0]
+        };
+        let desc = crate::overlay::OverlayDesc {
+            id: crate::overlay::next_overlay_id(),
+            anchor_slot: None,
+            direction: None,
+            position: crate::overlay::PopupPosition::Center,
+            offset: (0.0, 0.0),
+            anchor_slide: None,
+            modal: false,
+            focus_scope: false,
+            dismiss_on_outside: false,
+            dismiss_on_back_press: false,
+            dismiss_defers_to_content: false,
+            click_passthrough: false,
+            on_dismiss: None,
+            fit_around_anchor: false,
+            match_anchor_width: false,
+            enter_anim: None,
+            exit_anim: None,
+            content: Box::new(|_| {}),
+            local_snapshot: Vec::new(),
+        };
+        pw.overlay.layers.push(
+            crate::app::overlay_host::OverlayWindow::new_with_composer(desc, overlay),
+        );
+
+        assert!(
+            pw.focus_by_node_id(overlay_id),
+            "the overlay arena must be searched too"
+        );
+        assert_eq!(pw.focused_id, None, "overlay focus clears the page");
+        assert_eq!(pw.focused_slot_key, None);
+        assert_eq!(pw.overlay.layers[0].focused_id, Some(overlay_id));
+        assert!(pw.overlay.layers[0].focused_slot_key.is_some());
+        let root = pw.composer.layout_root_idx().unwrap();
+        assert_eq!(
+            crate::layout::node::get_focus_id(pw.composer.arena_nodes(), root),
+            None,
+            "the page arena loses focus when the overlay takes it"
+        );
     }
 
     #[test]
