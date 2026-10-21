@@ -220,6 +220,47 @@ impl SemanticsState {
 // Declaration
 // ═══════════════════════════════════════════════════════════
 
+/// One named action beyond the primary click — Compose's `CustomAccessibilityAction`.
+///
+/// The closure is runtime state (rebuilt every composition), so equality compares the LABEL: two
+/// declarations that offer the same action name are the same parameter, exactly like a click
+/// callback.
+#[derive(Clone)]
+pub struct SemanticsAction {
+    label: String,
+    action: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl SemanticsAction {
+    pub fn new(label: impl Into<String>, action: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            label: label.into(),
+            action: std::sync::Arc::new(action),
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Run the action — what a platform bridge calls when the user invokes this item.
+    pub fn invoke(&self) {
+        (self.action)();
+    }
+}
+
+impl std::fmt::Debug for SemanticsAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticsAction").field("label", &self.label).finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SemanticsAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label
+    }
+}
+
 /// What a node declares about itself, carried by `Modifier::semantics`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SemanticsConfig {
@@ -232,6 +273,8 @@ pub struct SemanticsConfig {
     /// buttons, tabs), not a selectable thing itself. A reader announces the group as a collection and lets the
     /// user move inside it, which is why the flag has to survive on the tree rather than being folded away.
     selectable_group: bool,
+    /// Named actions beyond click — Compose's `customActions`.
+    custom_actions: Vec<SemanticsAction>,
 }
 
 impl SemanticsConfig {
@@ -310,6 +353,24 @@ impl SemanticsConfig {
         self.live_region
     }
 
+    /// Add a named action beyond the primary click — Compose's `customActions` in the semantics
+    /// block. A platform bridge lists the labels and calls [`SemanticsAction::invoke`].
+    pub fn custom_action(
+        mut self,
+        label: impl Into<String>,
+        action: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        let label = label.into();
+        if !self.custom_actions.iter().any(|a| a.label == label) {
+            self.custom_actions.push(SemanticsAction::new(label, action));
+        }
+        self
+    }
+
+    pub fn custom_actions(&self) -> &[SemanticsAction] {
+        &self.custom_actions
+    }
+
     /// Fill every field this config leaves open from `fallback` — how a caller's declaration is
     /// folded into the one the component already made: what the caller sets wins, and what it does
     /// not mention keeps the component's value, so adding a content description does not wipe the
@@ -326,6 +387,17 @@ impl SemanticsConfig {
             live_region: self.live_region.max(fallback.live_region),
             // And a group is a group: `false` is the default, so a `true` from either side stands.
             selectable_group: self.selectable_group || fallback.selectable_group,
+            // Actions accumulate, deduped by label: the caller's declaration adds to the
+            // component's, and declaring the same label again keeps the first closure.
+            custom_actions: {
+                let mut actions = self.custom_actions;
+                for action in fallback.custom_actions {
+                    if !actions.iter().any(|a| a.label == action.label) {
+                        actions.push(action);
+                    }
+                }
+                actions
+            },
         }
     }
 }
@@ -354,6 +426,8 @@ pub struct SemanticsNode {
     pub role: Option<SemanticsRole>,
     pub name: Option<String>,
     pub state: SemanticsState,
+    /// Named actions beyond click — Compose's `customActions`; the primary click is `clickable`.
+    pub actions: Vec<SemanticsAction>,
     /// Whether this element has a click action (a `clickable`/click node in its modifier chain).
     pub clickable: bool,
     pub focused: bool,
@@ -659,6 +733,37 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
     let bounds = (x, y, node.measured_size.width, node.measured_size.height);
 
     let clickable = node.modifier.on_click().is_some() || node.modifier.node_click().is_some();
+
+    // `clearAndSetSemantics`: the block REPLACES this node's declaration and cuts the whole subtree
+    // out of the tree. A block that declares nothing leaves the node out too (Compose's
+    // "invisible to the user"), which is why the name comes only from the block — never from the
+    // text the clear was meant to suppress.
+    if let Some(clear) = node.modifier.clear_and_set_semantics_config() {
+        let declared = clear.role_value().is_some()
+            || clear.content_description_value().is_some()
+            || !clear.state_value().is_unspecified()
+            || clear.merges_descendants()
+            || clear.is_selectable_group()
+            || clear.live_region_mode() != LiveRegionMode::Off
+            || !clear.custom_actions().is_empty();
+        if declared {
+            out.push(SemanticsNode {
+                node_id: node.id,
+                role: clear.role_value(),
+                name: clear.content_description_value().map(str::to_string),
+                state: clear.state_value(),
+                actions: clear.custom_actions().to_vec(),
+                clickable,
+                focused: node.focused,
+                live_region: clear.live_region_mode(),
+                selectable_group: clear.is_selectable_group(),
+                bounds,
+                children: Vec::new(),
+            });
+        }
+        return;
+    }
+
     let declared_name = config
         .content_description_value()
         .map(str::to_string)
@@ -686,11 +791,21 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             .reduce(|merged, next| next.or(merged))
             .unwrap_or_default();
         let absorbed_role = absorbed.iter().find_map(|child| child.role);
+        // Actions accumulate across the claimed subtree, deduped by label (same rule as `or`).
+        let mut actions = config.custom_actions().to_vec();
+        for child in &absorbed {
+            for action in &child.actions {
+                if !actions.iter().any(|a| a.label() == action.label()) {
+                    actions.push(action.clone());
+                }
+            }
+        }
         out.push(SemanticsNode {
             node_id: node.id,
             role: config.role_value().or(absorbed_role),
             name: declared_name.or_else(|| joined_name(&absorbed)),
             state: config.state_value().or(absorbed_state),
+            actions,
             clickable: clickable || absorbed.iter().any(|child| child.clickable),
             focused: node.focused,
             // An absorbed live region stays live: a snackbar wrapping its message is one element, and
@@ -724,6 +839,7 @@ fn collect(nodes: &[LayoutNode], idx: usize, parent_x: f32, parent_y: f32, out: 
             role,
             name: declared_name,
             state: config.state_value(),
+            actions: config.custom_actions().to_vec(),
             clickable,
             focused: node.focused,
             live_region: config.live_region_mode(),
@@ -862,8 +978,14 @@ fn node_json(node: &SemanticsNode, out: &mut String) {
         // snapshot unparseable, which reads from the debug channel as no answer at all.
         state.push(format!("\"error\":{}", json_string(message)));
     }
+    let actions = node
+        .actions
+        .iter()
+        .map(|action| json_string(action.label()))
+        .collect::<Vec<_>>()
+        .join(",");
     out.push_str(&format!(
-        "{{{}}},\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
+        "{{{}}},\"actions\":[{actions}],\"clickable\":{},\"focused\":{},\"liveRegion\":{},\"selectableGroup\":{},\"bounds\":[{x:.0},{y:.0},{w:.0},{h:.0}],\"children\":[",
         state.join(","),
         node.clickable,
         node.focused,
@@ -1027,6 +1149,7 @@ mod tests {
                 role: Some(SemanticsRole::Dialog),
                 name: Some("Confirm".into()),
                 state: SemanticsState::new(),
+                actions: Vec::new(),
                 clickable: false,
                 focused: false,
                 live_region: LiveRegionMode::Off,
@@ -1406,5 +1529,70 @@ mod tests {
             .or(SemanticsState::new().selected(true).expanded(true));
         assert_eq!(merged.selected_value(), Some(false));
         assert_eq!(merged.expanded_value(), Some(true));
+    }
+
+    // ── clearAndSetSemantics and custom actions ──
+
+    #[test]
+    fn clear_and_set_semantics_replaces_the_declaration_and_hides_the_subtree() {
+        let mut nodes = vec![
+            LayoutNode::new(
+                crate::modifier::Modifier::new().clear_and_set_semantics(
+                    SemanticsConfig::new()
+                        .role(SemanticsRole::Button)
+                        .content_description("Save"),
+                ),
+                Some(0),
+            ),
+            LayoutNode::leaf(crate::modifier::Modifier::new().semantics(
+                SemanticsConfig::new().content_description("Child"),
+            )),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].measured_size = crate::unit::Size::new(50.0, 20.0);
+        let tree = semantics_tree(&nodes, 0);
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name.as_deref(), Some("Save"));
+        assert_eq!(tree[0].role, Some(SemanticsRole::Button));
+        assert!(tree[0].children.is_empty(), "the subtree is hidden");
+        assert!(tree[0].actions.is_empty());
+    }
+
+    #[test]
+    fn an_empty_clear_and_set_semantics_hides_the_node() {
+        let mut nodes = vec![
+            LayoutNode::new(
+                crate::modifier::Modifier::new()
+                    .clear_and_set_semantics(SemanticsConfig::new()),
+                Some(0),
+            ),
+            LayoutNode::leaf(crate::modifier::Modifier::new().semantics(
+                SemanticsConfig::new().content_description("Child"),
+            )),
+        ];
+        nodes[0].children = vec![1];
+        assert!(
+            semantics_tree(&nodes, 0).is_empty(),
+            "a clear block that declares nothing makes the node invisible"
+        );
+    }
+
+    #[test]
+    fn custom_actions_are_listed_and_invokable() {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let h = hits.clone();
+        let mut nodes = vec![LayoutNode::leaf(crate::modifier::Modifier::new().semantics(
+            SemanticsConfig::new()
+                .content_description("Item")
+                .custom_action("Delete", move || {
+                    h.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }),
+        ))];
+        nodes[0].measured_size = crate::unit::Size::new(10.0, 10.0);
+        let tree = semantics_tree(&nodes, 0);
+        let labels: Vec<&str> = tree[0].actions.iter().map(|a| a.label()).collect();
+        assert_eq!(labels, vec!["Delete"]);
+        tree[0].actions[0].invoke();
+        assert_eq!(hits.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }

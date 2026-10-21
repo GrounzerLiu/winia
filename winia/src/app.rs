@@ -590,6 +590,18 @@ impl PerWindow {
     /// overlay arenas): without it, overlay inputs never report is_focused() —
     /// no cursor, no blink, no focused colors. Tracks (overlay id, slot); called
     /// after layout_overlays (slot resolution needs overlay layout done).
+    /// Deliver `on_focus_changed` callbacks after this frame's focus sync (main tree + overlays).
+    fn dispatch_focus_changed(&mut self) {
+        if let Some(root) = self.composer.layout_root_idx() {
+            crate::layout::node::dispatch_focus_changed(self.composer.arena_nodes_mut(), root);
+        }
+        for ov in self.overlay.layers.iter_mut() {
+            if let Some(root) = ov.composer.layout_root_idx() {
+                crate::layout::node::dispatch_focus_changed(ov.composer.arena_nodes_mut(), root);
+            }
+        }
+    }
+
     fn sync_overlay_focus_interaction(&mut self) {
         let cur: Option<(u64, u64)> = (0..self.overlay.layers.len()).rev().find_map(|i| {
             let ov = &self.overlay.layers[i];
@@ -1029,6 +1041,7 @@ impl PerWindow {
         claim_keyboard_for_overlay(self);
         // Overlay focus interaction sync (needs overlay layout for slot resolve).
         self.sync_overlay_focus_interaction();
+        self.dispatch_focus_changed();
         // Cross-composer Tier1 flights (Phase 4): match stashed sources with
         // overlay counterparts, drive active Tier1, free unmatched stashes.
         // Main composer first by convention (Tier1 flights live in its map).

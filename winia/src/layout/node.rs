@@ -505,6 +505,11 @@ pub struct LayoutNode {
     /// The last `(x, y, width, height)` reported to this node's position callbacks, in window
     /// coordinates. `None` means "never reported", so the first placement always fires.
     pub(crate) last_global_position: Option<(f32, f32, f32, f32)>,
+    /// The focus flag last delivered to this node's `on_focus_changed` callbacks. Starts `false`, so
+    /// gaining focus fires `true` and only a real change fires `false`.
+    pub(crate) focus_reported: bool,
+    /// For a focus-group node: the descendant that had focus when the group was last left.
+    pub(crate) focus_group_memory: Option<u64>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
     pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
@@ -704,6 +709,8 @@ impl LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
             last_global_position: None,
+            focus_reported: false,
+            focus_group_memory: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -797,6 +804,8 @@ impl Default for LayoutNode {
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
             last_global_position: None,
+            focus_reported: false,
+            focus_group_memory: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -3120,7 +3129,69 @@ pub fn find_node_by_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<usi
 }
 
 pub fn has_focusable_modifier(node: &LayoutNode) -> bool {
-    node.modifier.elements().iter().any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }))
+    let focusable = node
+        .modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(el, crate::modifier::ModifierElement::Focusable { .. }));
+    // `focusProperties { canFocus = false }` keeps an otherwise focusable node out of every focus
+    // path — search AND a programmatic request (the request is checked in `set_focus_by_id`).
+    focusable && node.modifier.focus_can_focus() != Some(false)
+}
+
+/// The root-to-node index path for `id`, if the node is in this arena.
+fn path_to_id(nodes: &[LayoutNode], root: usize, id: u64) -> Option<Vec<usize>> {
+    if nodes[root].id == id {
+        return Some(vec![root]);
+    }
+    for c in nodes[root].children.clone() {
+        if let Some(mut path) = path_to_id(nodes, c, id) {
+            path.insert(0, root);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// The id Tab should land on when it ENTERS a focus group at its boundary.
+///
+/// Compose's `focusGroup()` remembers the active child: a group entered from the first (or last,
+/// when tabbing backwards) focusable restores that memory instead. Moving WITHIN the group is left
+/// alone — only the boundary candidate is substituted.
+fn restore_focus_group_memory(
+    nodes: &[LayoutNode],
+    root: usize,
+    ids: &[u64],
+    candidate: u64,
+    backwards: bool,
+) -> u64 {
+    let Some(path) = path_to_id(nodes, root, candidate) else { return candidate };
+    let Some(&group) = path
+        .iter()
+        .rev()
+        .find(|&&i| nodes[i].modifier.is_focus_group())
+    else {
+        return candidate;
+    };
+    let Some(memory) = nodes[group].focus_group_memory else { return candidate };
+    if !ids.contains(&memory) {
+        return candidate;
+    }
+    let first = ids
+        .iter()
+        .copied()
+        .find(|id| path_to_id(nodes, group, *id).is_some());
+    let last = ids
+        .iter()
+        .rev()
+        .copied()
+        .find(|id| path_to_id(nodes, group, *id).is_some());
+    let at_boundary = if backwards { Some(candidate) == last } else { Some(candidate) == first };
+    if at_boundary {
+        memory
+    } else {
+        candidate
+    }
 }
 
 /// 移动到下一个可聚焦节点，返回是否成功
@@ -3138,8 +3209,9 @@ pub fn focus_next(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
         Some(i) if i + 1 < ids.len() => i + 1,
         _ => 0,
     };
+    let next_id = restore_focus_group_memory(nodes, root, &ids, ids[next], false);
     clear_focus(nodes, root);
-    set_focus_by_id(nodes, root, ids[next]);
+    set_focus_by_id(nodes, root, next_id);
     true
 }
 
@@ -3158,9 +3230,42 @@ pub fn focus_prev(nodes: &mut Vec<LayoutNode>, root: usize) -> bool {
         Some(0) | None => ids.len() - 1,
         Some(i) => i - 1,
     };
+    let prev_id = restore_focus_group_memory(nodes, root, &ids, ids[prev], true);
     clear_focus(nodes, root);
-    set_focus_by_id(nodes, root, ids[prev]);
+    set_focus_by_id(nodes, root, prev_id);
     true
+}
+
+/// Deliver `on_focus_changed` callbacks for every node whose focus flag changed.
+///
+/// Runs after the frame's focus sync (main tree and each overlay), so a change from Tab, an arrow
+/// key, a click or the focused node being removed is delivered once, with the final flag.
+pub fn dispatch_focus_changed(nodes: &mut [LayoutNode], root: usize) {
+    let mut calls: Vec<(std::sync::Arc<dyn Fn(bool) + Send + Sync>, bool)> = Vec::new();
+    collect_focus_changes(nodes, root, &mut calls);
+    for (callback, focused) in calls {
+        callback(focused);
+    }
+}
+
+fn collect_focus_changes(
+    nodes: &mut [LayoutNode],
+    idx: usize,
+    out: &mut Vec<(std::sync::Arc<dyn Fn(bool) + Send + Sync>, bool)>,
+) {
+    let focused = nodes[idx].focused;
+    if focused != nodes[idx].focus_reported {
+        nodes[idx].focus_reported = focused;
+        for el in nodes[idx].modifier.elements() {
+            if let crate::modifier::ModifierElement::OnFocusChanged { callback } = el {
+                out.push((callback.clone(), focused));
+            }
+        }
+    }
+    let children = nodes[idx].children.clone();
+    for c in children {
+        collect_focus_changes(nodes, c, out);
+    }
 }
 
 pub fn clear_focus(nodes: &mut Vec<LayoutNode>, root: usize) {
@@ -3172,17 +3277,20 @@ pub fn clear_focus(nodes: &mut Vec<LayoutNode>, root: usize) {
 }
 
 pub fn set_focus_by_id(nodes: &mut Vec<LayoutNode>, root: usize, target_id: u64) -> bool {
-    if nodes[root].id == target_id {
-        nodes[root].focused = true;
-        return true;
+    let Some(path) = path_to_id(nodes, root, target_id) else { return false };
+    let Some(&target) = path.last() else { return false };
+    // `focusProperties { canFocus = false }`: a programmatic request is refused too.
+    if nodes[target].modifier.focus_can_focus() == Some(false) {
+        return false;
     }
-    let children = nodes[root].children.clone();
-    for c in children {
-        if set_focus_by_id(nodes, c, target_id) {
-            return true;
+    nodes[target].focused = true;
+    // Record the active child of every focus group on the path, so re-entering restores it.
+    for &idx in &path[..path.len().saturating_sub(1)] {
+        if nodes[idx].modifier.is_focus_group() {
+            nodes[idx].focus_group_memory = Some(target_id);
         }
     }
-    false
+    true
 }
 
 /// 点击时聚焦指定节点（target 为 arena 索引）
@@ -5394,5 +5502,91 @@ mod intrinsic_tests {
             nodes[root].minimum_interactive_content.is_none(),
             "a half-declared pair is not a box to paint"
         );
+    }
+
+    // ── focus groups, focus properties, on_focus_changed ──
+
+    #[test]
+    fn focus_properties_can_focus_false_is_not_focusable() {
+        let m = Modifier::new().focusable().focus_properties_can_focus(false);
+        assert!(!has_focusable_modifier(&LayoutNode::leaf(m)));
+
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::leaf(Modifier::new().focusable()),
+            LayoutNode::leaf(Modifier::new().focusable().focus_properties_can_focus(false)),
+        ];
+        nodes[0].children = vec![1, 2];
+        let mut ids = Vec::new();
+        collect_focusable_ids(&nodes, 0, &mut ids);
+        assert_eq!(ids.len(), 1, "canFocus = false keeps the node out of the focus walk");
+    }
+
+    #[test]
+    fn a_focus_group_restores_its_last_focused_child() {
+        // Focus order: A, B, [group: C, D], E.
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::leaf(Modifier::new().focusable()),
+            LayoutNode::leaf(Modifier::new().focusable()),
+            LayoutNode::new(Modifier::new().focus_group(), Some(1)),
+            LayoutNode::leaf(Modifier::new().focusable()),
+            LayoutNode::leaf(Modifier::new().focusable()),
+            LayoutNode::leaf(Modifier::new().focusable()),
+        ];
+        nodes[0].children = vec![1, 2, 3, 6];
+        nodes[3].children = vec![4, 5];
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.id = i as u64;
+        }
+
+        // Focus D directly: the group remembers it.
+        assert!(set_focus_by_id(&mut nodes, 0, 5));
+        assert_eq!(nodes[3].focus_group_memory, Some(5));
+
+        // Tab out to E, wrap to A, B, and enter the group at its first child C - the boundary
+        // restores the group's active child D instead.
+        assert!(focus_next(&mut nodes, 0));
+        assert_eq!(get_focus_id(&nodes, 0), Some(6));
+        assert!(focus_next(&mut nodes, 0));
+        assert_eq!(get_focus_id(&nodes, 0), Some(1));
+        assert!(focus_next(&mut nodes, 0));
+        assert_eq!(get_focus_id(&nodes, 0), Some(2));
+        assert!(focus_next(&mut nodes, 0));
+        assert_eq!(
+            get_focus_id(&nodes, 0),
+            Some(5),
+            "re-entering the group restores its active child"
+        );
+    }
+
+    #[test]
+    fn on_focus_changed_reports_gain_and_loss() {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<bool>>> = Default::default();
+        let s = seen.clone();
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .focusable()
+                    .on_focus_changed(move |focused| s.lock().unwrap().push(focused)),
+            ),
+        ];
+        nodes[0].children = vec![1];
+        for (i, node) in nodes.iter_mut().enumerate() {
+            node.id = i as u64;
+        }
+
+        // The initial "not focused" state is not a change: nothing has been reported yet.
+        dispatch_focus_changed(&mut nodes, 0);
+        assert!(seen.lock().unwrap().is_empty());
+
+        assert!(set_focus_by_id(&mut nodes, 0, 1));
+        dispatch_focus_changed(&mut nodes, 0);
+        assert_eq!(*seen.lock().unwrap(), vec![true]);
+
+        clear_focus(&mut nodes, 0);
+        dispatch_focus_changed(&mut nodes, 0);
+        assert_eq!(*seen.lock().unwrap(), vec![true, false]);
     }
 }

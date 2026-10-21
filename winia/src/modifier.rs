@@ -401,6 +401,16 @@ pub(crate) enum ModifierElement {
     /// `crate::semantics`. A node with this element still does layout as usual; the element exists
     /// only to be read (like `TestTag`), so it is a no-op for layout, drawing and input.
     Semantics(crate::semantics::SemanticsConfig),
+    /// Compose's `clearAndSetSemantics`: REPLACES this node's declaration and hides its whole
+    /// subtree from the semantics tree.
+    ClearAndSetSemantics(crate::semantics::SemanticsConfig),
+    /// Compose's `focusGroup()`: the node is a traversal group that remembers which child had focus.
+    FocusGroup,
+    /// Compose's `focusProperties { canFocus = … }` — the part that gates focus eligibility.
+    FocusProperties { can_focus: Option<bool> },
+    /// Compose's `onFocusChanged`: the callback receives `true` when the node gains focus, `false`
+    /// when it loses it. Dispatched when the flag changes, including a loss caused by removal.
+    OnFocusChanged { callback: std::sync::Arc<dyn Fn(bool) + Send + Sync> },
     /// 布局方向——本节点 padding start/end 的解析方向；Row/Column 组件
     /// 优先读自身此元素（其次 CompositionLocal 全局方向）。
     /// ⚠ 当前**不**向子树继承（对标 Compose 的子树级方向用
@@ -1341,6 +1351,34 @@ impl Modifier {
         self.push(ModifierElement::Semantics(config))
     }
 
+    /// Compose's `clearAndSetSemantics { … }`: replace this node's semantics with `config` and hide
+    /// its entire subtree from the semantics tree. A config that declares nothing makes the node
+    /// (and its subtree) invisible to accessibility, which is the Compose contract.
+    pub fn clear_and_set_semantics(self, config: crate::semantics::SemanticsConfig) -> Self {
+        self.push(ModifierElement::ClearAndSetSemantics(config))
+    }
+
+    /// Compose's `focusGroup()`: Tab treats this subtree as one group and remembers which child was
+    /// focused, so re-entering the group restores that child.
+    pub fn focus_group(self) -> Self {
+        self.push(ModifierElement::FocusGroup)
+    }
+
+    /// Compose's `focusProperties { canFocus = … }`: `false` keeps the node out of focus search
+    /// (Tab, arrow keys and programmatic focus requests) even when it carries `focusable`.
+    pub fn focus_properties_can_focus(self, can_focus: bool) -> Self {
+        self.push(ModifierElement::FocusProperties {
+            can_focus: Some(can_focus),
+        })
+    }
+
+    /// Compose's `onFocusChanged { … }`: `true` when this node gains focus, `false` when it loses it.
+    pub fn on_focus_changed(self, callback: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.push(ModifierElement::OnFocusChanged {
+            callback: std::sync::Arc::new(callback),
+        })
+    }
+
     /// Compose's `Modifier.selectableGroup()`
     /// (`foundation/selection/SelectableGroup.kt:30`): one line, `semantics { selectableGroup() }`. Wrap a
     /// group of selectable children (radio buttons, tabs) so a reader announces them as a collection whose
@@ -1361,6 +1399,27 @@ impl Modifier {
             .fold(crate::semantics::SemanticsConfig::default(), |merged, config| {
                 config.clone().or(merged)
             })
+    }
+
+    /// Whether this chain carries `clearAndSetSemantics`; the measure/report side reads the config.
+    pub fn clear_and_set_semantics_config(&self) -> Option<&crate::semantics::SemanticsConfig> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::ClearAndSetSemantics(config) => Some(config),
+            _ => None,
+        })
+    }
+
+    /// Whether this node is a focus traversal group.
+    pub fn is_focus_group(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::FocusGroup))
+    }
+
+    /// `focusProperties { canFocus }` — `None` when the chain does not say.
+    pub fn focus_can_focus(&self) -> Option<bool> {
+        self.elements.iter().rev().find_map(|el| match el {
+            ModifierElement::FocusProperties { can_focus } => *can_focus,
+            _ => None,
+        })
     }
 
     /// 布局方向——本节点 padding start/end 解析 + Row/Column 容器布局方向。
@@ -3000,6 +3059,14 @@ impl Debug for ModifierElement {
             Self::BringIntoViewRequester { .. } => f.write_str("BringIntoViewRequester"),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::Semantics(config) => f.debug_tuple("Semantics").field(config).finish(),
+            Self::ClearAndSetSemantics(config) => {
+                f.debug_tuple("ClearAndSetSemantics").field(config).finish()
+            }
+            Self::FocusGroup => f.write_str("FocusGroup"),
+            Self::FocusProperties { can_focus } => {
+                f.debug_struct("FocusProperties").field("can_focus", can_focus).finish()
+            }
+            Self::OnFocusChanged { .. } => f.write_str("OnFocusChanged"),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
             Self::ZIndex(z) => f.debug_tuple("ZIndex").field(z).finish(),
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
@@ -4531,6 +4598,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         // Semantics carries visible state (a tab's selection): a change must re-enter the node.
         (Semantics(a), Semantics(b)) => a == b,
+        (ClearAndSetSemantics(a), ClearAndSetSemantics(b)) => a == b,
+        // A focus group is a flag; the changed-focus callback is rebuilt every composition (same rule
+        // as the other observation callbacks).
+        (FocusGroup, FocusGroup) => true,
+        (FocusProperties { can_focus: a }, FocusProperties { can_focus: b }) => a == b,
+        (OnFocusChanged { .. }, OnFocusChanged { .. }) => true,
         (LayoutDirection(ad), LayoutDirection(bd)) => ad == bd,
         (ZIndex(az), ZIndex(bz)) => az == bz,
         // Shared-element marker: only scope + key + kind decide Skip. `z_index`
