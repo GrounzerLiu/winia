@@ -46,9 +46,9 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                     .background(highlight(30), Shape::rounded(4.0))
                                     .padding(6.0))
                                 .build(ctx, |ctx| {
-                                    Text::new("Top").font_size(12.0).modifier(Modifier::new().size(Dimension::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
-                                    Text::new("Middle").font_size(12.0).modifier(Modifier::new().size(Dimension::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
-                                    Text::new("Bottom").font_size(12.0).modifier(Modifier::new().size(Dimension::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
+                                    Text::new("Top").font_size(12.0).modifier(Modifier::new().size(SizeValue::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
+                                    Text::new("Middle").font_size(12.0).modifier(Modifier::new().size(SizeValue::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
+                                    Text::new("Bottom").font_size(12.0).modifier(Modifier::new().size(SizeValue::Fill, 20.0).background(Color::from_argb(180, 180, 180, 200), Shape::rounded(3.0)).padding(2.0)).build(ctx);
                                 });
 
                             // ── 2. Row 基础 ──
@@ -240,7 +240,7 @@ fn layout_demo_ui(ctx: &mut ComposeCtx) {
                                 .build(ctx);
 
                             Stack::new()
-                                .modifier(Modifier::new().size(Dimension::Fill, 60.0).background(Color::from_argb(20, 100, 100, 200), Shape::rounded(6.0)))
+                                .modifier(Modifier::new().size(SizeValue::Fill, 60.0).background(Color::from_argb(20, 100, 100, 200), Shape::rounded(6.0)))
                                 .build(ctx, |ctx| {
                                     // 底层（先 build → 先绘制）
                                     Text::new("Behind").font_size(12.0)

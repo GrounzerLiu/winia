@@ -242,7 +242,7 @@ pub fn then(mut self, other: Modifier) -> Self {
 
 - `Modifier::param_eq`（modifier.rs:2524-2543）+ `element_param_eq`（modifier.rs:2545-2628）+ `size_value_eq`（modifier.rs:2660-2667），供 `start_restartable_group` 的 Skip 判定。
 - 规则：**数值/枚举/字符串/颜色参数精确比较**；**闭包类元素视为相同**——背景色/点击回调/GL 动态参数/滚动状态/富文本样式（每次 build 重建的闭包无法比较，精确比会破坏 Skip——列表每行永不 Skip）。
-- 语义：数值参数变化 → 不等 → Enter（content 重跑）；闭包参数变化 → 相同 → Skip（保持）。动态尺寸（SizeValue::Dynamic）视为相同——布局期 layout_dep 每帧重测已覆盖。交互源身份参与判定（换源需重入捕获新源，modifier.rs:2598）。
+- Semantics: a numeric parameter that changes compares unequal (Enter, the content reruns); a closure parameter compares equal (Skip). A dynamic length (`Dimension::Dynamic`) is treated as the same parameter — the layout dependency re-measures every frame anyway. Interaction-source identity takes part in the comparison (a new source has to re-enter to capture it; `modifier.rs`).
 
 ---
 

@@ -63,7 +63,7 @@ snapshot replayed in `layout_overlays`), but `current_shared_scope()` must be re
 | commit | what |
 |---|---|
 | `642b9a5` | `SearchBarState.progress` + `content_progress`; `drive_expansion()` pushing the Compose specs through `animation::push_animatable`; `collapsed_size` reported by `Modifier::on_size_changed` (the `onGloballyPositioned` counterpart); morph arithmetic as pure functions (`expansion_lerp` / `expansion_size` / `expansion_corner_radius` / `expansion_shape` / `expansion_vertical_padding`) |
-| `4e2aefc` | the panel's width AND height come from the morph (`Modifier::size(SizeValue::Dynamic, ...)`) instead of `fill_max_size`; the panel's overlay-level animation dropped from `expand_fade` (which scaled it a second time) to a plain content fade |
+| `4e2aefc` | the panel's width AND height come from the morph (`Modifier::size(Dimension::Dynamic, ...)`) instead of `fill_max_size`; the panel's overlay-level animation dropped from `expand_fade` (which scaled it a second time) to a plain content fade |
 | `bcd3bb2` | sawtooth fix (below) + content fade split onto its own clock |
 | `47b3da5` | `Dialog` gained `position`/`offset`/`anchor_slot` (it was hard-coded to `Center`); `anchor_slide` positioning |
 | `0f58516` | the slide moved to BOTH axes |

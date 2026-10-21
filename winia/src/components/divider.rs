@@ -110,7 +110,7 @@ impl Divider {
         // Framework CustomDraw receives the NODE rect (padding not applied);
         // user modifier padding (M3 inset/middle-inset variants) shrinks the content
         // area. Snapshot padding here into plain f32 (build 期求值——Divider 的
-        // inset padding 为静态值；动态 padding（SizeValue::Dynamic）快照一次，
+        // inset padding 为静态值；动态 padding（Dimension::Dynamic）快照一次，
         // 后续变化不更新绘制。静态值变化经 param_eq 精确比 → Enter 重建重算。
         // 存 Modifier 进 node 涉 Debug/key，故解耦为四个 f32）。
         let (pad_s, pad_t, pad_e, pad_b) = self.modifier.get_padding_sides();

@@ -769,9 +769,9 @@ mod tests {
             })
     }
 
-    fn fixed(v: &SizeValue) -> Option<f32> {
+    fn fixed(v: &Dimension) -> Option<f32> {
         match v {
-            SizeValue::Static(Dimension::Fixed(dp)) => Some(*dp),
+            Dimension::Fixed(dp) => Some(*dp),
             _ => None,
         }
     }
@@ -789,21 +789,11 @@ mod tests {
             .expect("the chip paints a container")
     }
 
-    /// The horizontal padding the chip asks for, (start, end).
+    /// The horizontal padding the chip asks for, (start, end) — the resolved sums, so it does not
+    /// depend on which sides an element happens to leave at zero.
     fn padding_of(composer: &Composer, idx: usize) -> (Option<f32>, Option<f32>) {
-        let mut start = None;
-        let mut end = None;
-        for el in composer.arena_nodes()[idx].modifier.elements() {
-            if let crate::modifier::ModifierElement::PaddingSides { start: s, end: e, .. } = el {
-                if let Some(v) = fixed(s) {
-                    start = Some(v);
-                }
-                if let Some(v) = fixed(e) {
-                    end = Some(v);
-                }
-            }
-        }
-        (start, end)
+        let (s, _, e, _) = composer.arena_nodes()[idx].modifier.get_padding_sides();
+        (Some(s), Some(e))
     }
 
     fn label(text: &'static str) -> impl FnOnce(&mut ComposeCtx) + Send + Sync + 'static {

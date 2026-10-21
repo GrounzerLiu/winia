@@ -756,7 +756,7 @@ impl SplitButtonPart {
             SplitButtonRole::Trailing => start_pad,
         };
         // A DYNAMIC value, not a number. `Modifier::offset` is a layout input, and winia's contract for an
-        // animated layout value is a closure the LAYOUT phase evaluates (`SizeValue::Dynamic`,
+        // animated layout value is a closure the LAYOUT phase evaluates (`Dimension::Dynamic`,
         // `modifier.rs:3548-3557`: "动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖"): the read
         // inside it registers a layout dependency, so the node is re-measured on every animation tick
         // without being recomposed. Handing over a static number reads the animation during COMPOSITION,
@@ -765,7 +765,7 @@ impl SplitButtonPart {
         // live fixture: -2 while unselected, -2 four hundred milliseconds after the menu opened, 0 only
         // after a pointer move (the report "the icon only moves when the mouse moves over it").
         let optical_shift = self.optical_shift;
-        let shift_value = crate::layout::SizeValue::Dynamic(Arc::new(move || {
+        let shift_value = crate::layout::Dimension::Dynamic(Arc::new(move || {
             if !optical_shift {
                 return 0.0;
             }

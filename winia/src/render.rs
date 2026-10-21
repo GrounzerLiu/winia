@@ -1589,10 +1589,10 @@ fn render_pass1(
         for el in node.modifier.elements() {
             match el {
                 ModifierElement::Size { width, height } => {
-                    if let crate::layout::SizeValue::Static(dw) = width {
+                    if let crate::layout::SizeValue::Length(dw) = width {
                         if dw.is_fixed() { cw = dw.to_logical_px(); }
                     }
-                    if let crate::layout::SizeValue::Static(dh) = height {
+                    if let crate::layout::SizeValue::Length(dh) = height {
                         if dh.is_fixed() { ch = dh.to_logical_px(); }
                     }
                 }

@@ -89,7 +89,7 @@ upgrade (`Visual -> Reactive`) is framework-internal. `update` gains dedup
 `Modifier` dynamic channels stop accepting arbitrary closures:
 
 ```rust
-// modifier.rs — SizeValue::Dynamic / AxisValue / BackgroundColor closures
+// modifier.rs — Dimension::Dynamic / AxisValue / BackgroundColor closures
 // today accept any `Fn() -> f32` (a captured `get()` mis-registers the dep).
 // New rule: only `&Visual<T>`-derived peek closures construct dynamic channels,
 // so draw-phase reads cannot subscribe by construction.

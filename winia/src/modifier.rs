@@ -202,7 +202,7 @@ pub trait KeyNode: std::fmt::Debug + Send + Sync {
 /// 布局节点 A 型：约束变换（对标 Compose LayoutModifier）。
 /// 输入 incoming 约束，输出给下一环节的约束。多个 A 型 node 按挂载序串行。
 /// 插入点 = resolved_size 之后、padding 之前（与现有链序同，见 measure_node）。
-/// 动态值在此求值（measure 期读 State 注册布局依赖——与 SizeValue::Dynamic 同）。
+/// 动态值在此求值（measure 期读 State 注册布局依赖——与 Dimension::Dynamic 同）。
 ///
 /// 纯度 MUST（P1-6）：`transform` MUST 为“key 参数 + State::get”的纯函数——
 /// 禁止读外部可变（Atomic/时钟/RefCell/全局）。常量折叠按 incoming 缓存，
@@ -240,9 +240,9 @@ pub(crate) enum ModifierElement {
     Size { width: SizeValue, height: SizeValue },
     /// 最小宽度（对标 Compose `Modifier.widthIn(min=...)`——仅提升 incoming
     /// min 约束；宽度超限时被 max 夹住；支持动态值——动画可作用于 min）
-    MinWidth { value: SizeValue },
+    MinWidth { value: Dimension },
     /// 最小高度（对标 Compose `Modifier.heightIn(min=...)`）
-    MinHeight { value: SizeValue },
+    MinHeight { value: Dimension },
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — lowers the incoming max
     /// constraint, so content that would be wider is constrained to it, and is then held at or
     /// above the min. Supports a dynamic value.
@@ -250,15 +250,15 @@ pub(crate) enum ModifierElement {
     /// A min and a max on the same axis may conflict; which one wins is Compose's chain-order rule,
     /// replayed by [`Modifier::min_max_steps`] — the max written first yields the max, the min
     /// written first yields the min.
-    MaxWidth { value: SizeValue },
+    MaxWidth { value: Dimension },
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`)
-    MaxHeight { value: SizeValue },
+    MaxHeight { value: Dimension },
     /// 四边 padding（每边独立，支持动态 SizeValue——动画可作用于 padding）
     PaddingSides {
-        start: SizeValue,
-        top: SizeValue,
-        end: SizeValue,
-        bottom: SizeValue,
+        start: Dimension,
+        top: Dimension,
+        end: Dimension,
+        bottom: Dimension,
     },
     /// 填满最大宽度
     FillMaxWidth,
@@ -268,9 +268,9 @@ pub(crate) enum ModifierElement {
     FillMaxSize,
     /// 位置偏移（不影响布局尺寸，仅移动绘制位置；RTL 下 x 镜像——
     /// 对标 Compose `Modifier.offset`；值支持动态——动画可作用于 offset）
-    Offset { x: SizeValue, y: SizeValue },
+    Offset { x: Dimension, y: Dimension },
     /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）
-    AbsoluteOffset { x: SizeValue, y: SizeValue },
+    AbsoluteOffset { x: Dimension, y: Dimension },
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
     AlignSelf { alignment: crate::layout::Alignment },
     /// Align this child by one of its own alignment lines instead of by its edge (Compose's
@@ -721,21 +721,21 @@ impl Modifier {
         // 使用 Auto 占位高度，表示不约束
         self.push(ModifierElement::Size {
             width: w.into(),
-            height: SizeValue::Static(Dimension::Auto),
+            height: SizeValue::Auto,
         })
     }
 
     /// 仅设置高度（支持动态：`State<f32>`/`DerivedValue`/闭包——measure 时读）
     pub fn height(self, h: impl Into<SizeValue>) -> Self {
         self.push(ModifierElement::Size {
-            width: SizeValue::Static(Dimension::Auto),
+            width: SizeValue::Auto,
             height: h.into(),
         })
     }
 
     /// 四边等距 padding（支持动态：`State<f32>`/`DerivedValue`/闭包——
     /// 动画可作用于 padding，对标 Compose `animateDpAsState` + `padding`）
-    pub fn padding(self, all: impl Into<SizeValue>) -> Self {
+    pub fn padding(self, all: impl Into<Dimension>) -> Self {
         let v = all.into();
         self.push(ModifierElement::PaddingSides {
             start: v.clone(),
@@ -746,63 +746,63 @@ impl Modifier {
     }
 
     /// 水平方向 padding（start + end）
-    pub fn padding_horizontal(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_horizontal(self, value: impl Into<Dimension>) -> Self {
         let v = value.into();
         self.push(ModifierElement::PaddingSides {
             start: v.clone(),
-            top: SizeValue::Static(Dimension::Auto),
+            top: Dimension::Fixed(0.0),
             end: v,
-            bottom: SizeValue::Static(Dimension::Auto),
+            bottom: Dimension::Fixed(0.0),
         })
     }
 
     /// 垂直方向 padding（top + bottom）
-    pub fn padding_vertical(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_vertical(self, value: impl Into<Dimension>) -> Self {
         let v = value.into();
         self.push(ModifierElement::PaddingSides {
-            start: SizeValue::Static(Dimension::Auto),
+            start: Dimension::Fixed(0.0),
             top: v.clone(),
-            end: SizeValue::Static(Dimension::Auto),
+            end: Dimension::Fixed(0.0),
             bottom: v,
         })
     }
 
     /// 起始边（左）padding——单边，支持动态
-    pub fn padding_start(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_start(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::PaddingSides {
             start: value.into(),
-            top: SizeValue::Static(Dimension::Auto),
-            end: SizeValue::Static(Dimension::Auto),
-            bottom: SizeValue::Static(Dimension::Auto),
+            top: Dimension::Fixed(0.0),
+            end: Dimension::Fixed(0.0),
+            bottom: Dimension::Fixed(0.0),
         })
     }
 
     /// 末尾边（右）padding——单边，支持动态
-    pub fn padding_end(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_end(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::PaddingSides {
-            start: SizeValue::Static(Dimension::Auto),
-            top: SizeValue::Static(Dimension::Auto),
+            start: Dimension::Fixed(0.0),
+            top: Dimension::Fixed(0.0),
             end: value.into(),
-            bottom: SizeValue::Static(Dimension::Auto),
+            bottom: Dimension::Fixed(0.0),
         })
     }
 
     /// 顶部 padding——单边，支持动态
-    pub fn padding_top(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_top(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::PaddingSides {
-            start: SizeValue::Static(Dimension::Auto),
+            start: Dimension::Fixed(0.0),
             top: value.into(),
-            end: SizeValue::Static(Dimension::Auto),
-            bottom: SizeValue::Static(Dimension::Auto),
+            end: Dimension::Fixed(0.0),
+            bottom: Dimension::Fixed(0.0),
         })
     }
 
     /// 底部 padding——单边，支持动态
-    pub fn padding_bottom(self, value: impl Into<SizeValue>) -> Self {
+    pub fn padding_bottom(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::PaddingSides {
-            start: SizeValue::Static(Dimension::Auto),
-            top: SizeValue::Static(Dimension::Auto),
-            end: SizeValue::Static(Dimension::Auto),
+            start: Dimension::Fixed(0.0),
+            top: Dimension::Fixed(0.0),
+            end: Dimension::Fixed(0.0),
             bottom: value.into(),
         })
     }
@@ -813,10 +813,10 @@ impl Modifier {
     /// 与其它 padding 方法可叠加（累积）。
     pub fn padding_sides(
         self,
-        start: impl Into<SizeValue>,
-        top: impl Into<SizeValue>,
-        end: impl Into<SizeValue>,
-        bottom: impl Into<SizeValue>,
+        start: impl Into<Dimension>,
+        top: impl Into<Dimension>,
+        end: impl Into<Dimension>,
+        bottom: impl Into<Dimension>,
     ) -> Self {
         self.push(ModifierElement::PaddingSides {
             start: start.into(),
@@ -833,25 +833,25 @@ impl Modifier {
 
     /// 最小宽度（对标 Compose `Modifier.widthIn(min = ...)`）——提升布局
     /// 最小约束，内容不足时撑到该宽度；受父 max 约束夹住。支持动态值。
-    pub fn min_width(self, value: impl Into<SizeValue>) -> Self {
+    pub fn min_width(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::MinWidth { value: value.into() })
     }
 
     /// 最小高度（对标 Compose `Modifier.heightIn(min = ...)`）
-    pub fn min_height(self, value: impl Into<SizeValue>) -> Self {
+    pub fn min_height(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::MinHeight { value: value.into() })
     }
 
     /// Maximum width (Compose `Modifier.widthIn(max = ...)`) — content that would be wider
     /// is constrained to it. A minimum above it wins, as in Compose's `sizeIn`. Supports a
     /// dynamic value, so an animation can drive the cap.
-    pub fn max_width(self, value: impl Into<SizeValue>) -> Self {
+    pub fn max_width(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::MaxWidth { value: value.into() })
     }
 
     /// Maximum height (Compose `Modifier.heightIn(max = ...)`; a conflicting min resolves by chain
     /// order, see [`Self::max_width`])
-    pub fn max_height(self, value: impl Into<SizeValue>) -> Self {
+    pub fn max_height(self, value: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::MaxHeight { value: value.into() })
     }
 
@@ -869,7 +869,7 @@ impl Modifier {
     /// 合并式 offset：若链上已有 Offset 元素则更新其 x/y 分量，否则 push 新的。
     /// 这样 `.offset_x(a).offset_y(b)` 得到一个 `Offset{a,b}`（而非两个 Offset——
     /// get_offset 只取第一个，连用会静默丢分量）。对齐 `merge_graphics_layer` 模式。
-    fn merge_offset(mut self, x: Option<SizeValue>, y: Option<SizeValue>) -> Self {
+    fn merge_offset(mut self, x: Option<Dimension>, y: Option<Dimension>) -> Self {
         let mut elements = std::mem::take(&mut self.elements);
         if let Some(el) = elements.iter_mut().find(|e| matches!(e, ModifierElement::Offset { .. })) {
             if let ModifierElement::Offset { x: ex, y: ey } = el {
@@ -878,8 +878,8 @@ impl Modifier {
             }
         } else {
             elements.push(ModifierElement::Offset {
-                x: x.unwrap_or(SizeValue::Static(Dimension::Fixed(0.0))),
-                y: y.unwrap_or(SizeValue::Static(Dimension::Fixed(0.0))),
+                x: x.unwrap_or(Dimension::Fixed(0.0)),
+                y: y.unwrap_or(Dimension::Fixed(0.0)),
             });
         }
         self.elements = elements;
@@ -888,35 +888,35 @@ impl Modifier {
 
     /// 对标 Compose `Modifier.offset`）。
     /// 值支持动态（`State`/`DerivedValue`/闭包——动画可作用于 offset）。
-    pub fn offset(self, x: impl Into<SizeValue>, y: impl Into<SizeValue>) -> Self {
+    pub fn offset(self, x: impl Into<Dimension>, y: impl Into<Dimension>) -> Self {
         // 已有 Offset（如前面 offset_x）时合并分量，而非再 push 一个
         self.merge_offset(Some(x.into()), Some(y.into()))
     }
 
     /// 仅 x 方向偏移（RTL 下镜像）。与 `offset_y` 连用合并为单个 Offset 元素。
-    pub fn offset_x(self, x: impl Into<SizeValue>) -> Self {
+    pub fn offset_x(self, x: impl Into<Dimension>) -> Self {
         self.merge_offset(Some(x.into()), None)
     }
 
     /// 仅 y 方向偏移（不受 RTL 影响——垂直方向）。与 `offset_x` 连用合并为单个 Offset 元素。
-    pub fn offset_y(self, y: impl Into<SizeValue>) -> Self {
+    pub fn offset_y(self, y: impl Into<Dimension>) -> Self {
         self.merge_offset(None, Some(y.into()))
     }
 
     /// 绝对偏移（RTL 下**不**镜像——对标 Compose `Modifier.absoluteOffset`）。
     /// 值支持动态。
-    pub fn absolute_offset(self, x: impl Into<SizeValue>, y: impl Into<SizeValue>) -> Self {
+    pub fn absolute_offset(self, x: impl Into<Dimension>, y: impl Into<Dimension>) -> Self {
         self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: y.into() })
     }
 
     /// 仅 x 方向绝对偏移（RTL 下不镜像）
-    pub fn absolute_offset_x(self, x: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: SizeValue::Static(Dimension::Fixed(0.0)) })
+    pub fn absolute_offset_x(self, x: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::AbsoluteOffset { x: x.into(), y: Dimension::Fixed(0.0) })
     }
 
     /// 仅 y 方向绝对偏移
-    pub fn absolute_offset_y(self, y: impl Into<SizeValue>) -> Self {
-        self.push(ModifierElement::AbsoluteOffset { x: SizeValue::Static(Dimension::Fixed(0.0)), y: y.into() })
+    pub fn absolute_offset_y(self, y: impl Into<Dimension>) -> Self {
+        self.push(ModifierElement::AbsoluteOffset { x: Dimension::Fixed(0.0), y: y.into() })
     }
 
     /// 子节点在父容器中的交叉轴对齐（覆盖父容器的默认对齐）
@@ -1856,15 +1856,7 @@ impl Modifier {
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
         use crate::unit::{Dp};
         use crate::runtime::density::current_density;
-        let resolve = |sv: &SizeValue| -> f32 {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(current_density()),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
-                SizeValue::Dynamic(f) => f(),
-                SizeValue::Intrinsic(_) => 0.0,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let (mut s, mut t, mut e, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for el in &self.elements {
             if let ModifierElement::PaddingSides { start, top, end, bottom } = el {
@@ -1898,8 +1890,8 @@ impl Modifier {
     /// 固定尺寸（从 Size modifier 提取）
     pub fn fixed_size(&self) -> Option<(Dimension, Dimension)> {
         for el in &self.elements {
-            if let ModifierElement::Size { width: SizeValue::Static(w), height: SizeValue::Static(h) } = el {
-                return Some((*w, *h));
+            if let ModifierElement::Size { width: SizeValue::Length(w), height: SizeValue::Length(h) } = el {
+                return Some((w.clone(), h.clone()));
             }
         }
         None
@@ -1918,10 +1910,10 @@ impl Modifier {
             if let ModifierElement::Size { width, height } = el {
                 let resolve = |sv: &SizeValue| -> Option<f32> {
                     match sv {
-                        SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
-                        SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                        SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
-                        SizeValue::Dynamic(f) => Some(f()),
+                        SizeValue::Length(Dimension::Fixed(v)) | SizeValue::Length(Dimension::Dp(Dp(v))) => Some(*v),
+                        SizeValue::Length(Dimension::Px(p)) => Some(p.to_logical(current_density())),
+                        SizeValue::Auto | SizeValue::Fill => None,
+                        SizeValue::Length(Dimension::Dynamic(f)) => Some(f()),
                         // An intrinsic request carries no number: it is resolved by the measure
                         // pipeline (`layout::node`), which fixes the axis to the content's
                         // measurement. Numeric consumers see it as "this axis says nothing".
@@ -1944,24 +1936,12 @@ impl Modifier {
     pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
         use crate::unit::{Dp};
         use crate::runtime::density::current_density;
-        let resolve = |sv: &SizeValue| -> Option<f32> {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
-                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
-                SizeValue::Dynamic(f) => Some(f()),
-                SizeValue::Intrinsic(_) => None,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = (None, None);
         for el in &self.elements {
             match el {
-                ModifierElement::MinWidth { value } => {
-                    if let Some(v) = resolve(value) { out.0 = Some(v); }
-                }
-                ModifierElement::MinHeight { value } => {
-                    if let Some(v) = resolve(value) { out.1 = Some(v); }
-                }
+                ModifierElement::MinWidth { value } => out.0 = Some(resolve(value)),
+                ModifierElement::MinHeight { value } => out.1 = Some(resolve(value)),
                 _ => {}
             }
         }
@@ -1979,15 +1959,7 @@ impl Modifier {
     pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
         use crate::unit::{Dp};
         use crate::runtime::density::current_density;
-        let resolve = |sv: &SizeValue| -> Option<f32> {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
-                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
-                SizeValue::Dynamic(f) => Some(f()),
-                SizeValue::Intrinsic(_) => None,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = Vec::new();
         for el in &self.elements {
             let (is_width, is_min, value) = match el {
@@ -1997,9 +1969,7 @@ impl Modifier {
                 ModifierElement::MaxHeight { value } => (false, false, value),
                 _ => continue,
             };
-            if let Some(v) = resolve(value) {
-                out.push((is_width, is_min, v));
-            }
+            out.push((is_width, is_min, resolve(value)));
         }
         out
     }
@@ -2010,24 +1980,12 @@ impl Modifier {
     pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
         use crate::unit::{Dp};
         use crate::runtime::density::current_density;
-        let resolve = |sv: &SizeValue| -> Option<f32> {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
-                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
-                SizeValue::Dynamic(f) => Some(f()),
-                SizeValue::Intrinsic(_) => None,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = (None, None);
         for el in &self.elements {
             match el {
-                ModifierElement::MaxWidth { value } => {
-                    if let Some(v) = resolve(value) { out.0 = Some(v); }
-                }
-                ModifierElement::MaxHeight { value } => {
-                    if let Some(v) = resolve(value) { out.1 = Some(v); }
-                }
+                ModifierElement::MaxWidth { value } => out.0 = Some(resolve(value)),
+                ModifierElement::MaxHeight { value } => out.1 = Some(resolve(value)),
                 _ => {}
             }
         }
@@ -2149,18 +2107,14 @@ impl Modifier {
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
         use crate::unit::{Dp};
         use crate::runtime::density::current_density;
-        let resolve = |sv: &SizeValue| -> Option<f32> {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(Dp(v))) => Some(*v),
-                SizeValue::Static(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => None,
-                SizeValue::Dynamic(f) => Some(f()),
-                SizeValue::Intrinsic(_) => None,
-            }
-        };
+        // A required size is a SIZE: `requiredWidth(IntrinsicSize)` is a real Compose overload, so
+        // the layout modes stay, and only a numeric axis is reported here.
         self.elements.iter().find_map(|el| {
             if let ModifierElement::RequiredSize { width, height } = el {
-                Some((width.as_ref().and_then(resolve), height.as_ref().and_then(resolve)))
+                Some((
+                    width.as_ref().and_then(|v| v.to_logical_px()),
+                    height.as_ref().and_then(|v| v.to_logical_px()),
+                ))
             } else {
                 None
             }
@@ -2442,15 +2396,7 @@ impl Modifier {
     /// 位置偏移（如果有 Offset modifier）
     /// 普通偏移（RTL 下 x 镜像）——动态值在此求值（measure 期读 State 注册布局依赖）
     pub fn get_offset(&self) -> Option<(f32, f32)> {
-        let resolve = |sv: &SizeValue| -> f32 {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
-                SizeValue::Dynamic(f) => f(),
-                SizeValue::Intrinsic(_) => 0.0,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         for el in &self.elements {
             if let ModifierElement::Offset { x, y } = el {
                 return Some((resolve(x), resolve(y)));
@@ -2461,15 +2407,7 @@ impl Modifier {
 
     /// 绝对偏移（RTL 下不镜像）——动态值求值同 `get_offset`
     pub fn get_absolute_offset(&self) -> Option<(f32, f32)> {
-        let resolve = |sv: &SizeValue| -> f32 {
-            match sv {
-                SizeValue::Static(Dimension::Fixed(v)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(v))) => *v,
-                SizeValue::Static(Dimension::Px(p)) => p.to_logical(crate::runtime::density::current_density()),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => 0.0,
-                SizeValue::Dynamic(f) => f(),
-                SizeValue::Intrinsic(_) => 0.0,
-            }
-        };
+        let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         for el in &self.elements {
             if let ModifierElement::AbsoluteOffset { x, y } = el {
                 return Some((resolve(x), resolve(y)));
@@ -3886,11 +3824,36 @@ mod tests {
         assert_eq!(m.get_absolute_offset(), Some((3.0, 4.0)));
     }
 
+
+    /// Padding and offset are LENGTHS: they accept a state (resolve per call, register a layout
+    /// dependency when read during layout) and they can no longer be handed a layout MODE — a
+    /// `Fill` has no meaning for an offset, and this is where the old `Dimension::Fill` silently
+    /// resolved to 0.
+    #[test]
+    fn padding_and_offset_take_lengths_and_track_their_state() {
+        use crate::runtime::state::State;
+        let pad = State::new(4.0f32);
+        let off = State::new(1.0f32);
+        let m = Modifier::new().padding(pad.clone()).offset(off.clone(), 0.0);
+
+        assert_eq!(m.get_padding_sides(), (4.0, 4.0, 4.0, 4.0));
+        assert_eq!(m.get_offset(), Some((1.0, 0.0)));
+
+        pad.set(9.0);
+        off.set(-3.0);
+        assert_eq!(
+            m.get_padding_sides(),
+            (9.0, 9.0, 9.0, 9.0),
+            "a padding resolves the value it was given, not a copy taken at build time"
+        );
+        assert_eq!(m.get_offset(), Some((-3.0, 0.0)));
+    }
+
     #[test]
     fn test_dimension_conversions() {
         let m = Modifier::new()
-            .size(100.0, Dimension::Fill) // f32 → Dimension::Fixed, Dimension::Fill
-            .width(Dimension::Auto)
+            .size(100.0, crate::layout::SizeValue::Fill) // f32 → Length(Fixed), Fill
+            .width(crate::layout::SizeValue::Auto)
             .height(50.0);
 
         let elements = m.elements();
@@ -3899,9 +3862,8 @@ mod tests {
         match &elements[0] {
             ModifierElement::Size { width, height } => {
                 match (width, height) {
-                    (crate::layout::SizeValue::Static(w), crate::layout::SizeValue::Static(h)) => {
+                    (crate::layout::SizeValue::Length(w), crate::layout::SizeValue::Fill) => {
                         assert_eq!(*w, Dimension::Fixed(100.0));
-                        assert_eq!(*h, Dimension::Fill);
                     }
                     _ => panic!("expected static size"),
                 }
@@ -3954,7 +3916,7 @@ impl Modifier {
     ///
     /// 近似语义：modifier 的**数值参数**变化（width/padding/颜色等）→ 不等 →
     /// Enter（content 重跑）；闭包参数变化（回调重设）→ 相同 → Skip（保持）。
-    /// 注意：动画驱动的动态尺寸（SizeValue::Dynamic）视为相同——布局期
+    /// 注意：动画驱动的动态尺寸（Dimension::Dynamic）视为相同——布局期
     /// layout_dep 每帧重测已覆盖，无需 Enter。
     pub(crate) fn param_eq(&self, other: &Modifier) -> bool {
         if self.elements.len() != other.elements.len() {
@@ -3985,21 +3947,21 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Size { width: aw, height: ah }, Size { width: bw, height: bh }) => {
             size_value_eq(aw, bw) && size_value_eq(ah, bh)
         }
-        (MinWidth { value: av }, MinWidth { value: bv }) => size_value_eq(av, bv),
-        (MinHeight { value: av }, MinHeight { value: bv }) => size_value_eq(av, bv),
-        (MaxWidth { value: av }, MaxWidth { value: bv }) => size_value_eq(av, bv),
-        (MaxHeight { value: av }, MaxHeight { value: bv }) => size_value_eq(av, bv),
+        (MinWidth { value: av }, MinWidth { value: bv }) => dimension_eq(av, bv),
+        (MinHeight { value: av }, MinHeight { value: bv }) => dimension_eq(av, bv),
+        (MaxWidth { value: av }, MaxWidth { value: bv }) => dimension_eq(av, bv),
+        (MaxHeight { value: av }, MaxHeight { value: bv }) => dimension_eq(av, bv),
         (
             PaddingSides { start: as_, top: at, end: ae, bottom: ab },
             PaddingSides { start: bs, top: bt, end: be, bottom: bb },
         ) => {
-            size_value_eq(as_, bs) && size_value_eq(at, bt) && size_value_eq(ae, be) && size_value_eq(ab, bb)
+            dimension_eq(as_, bs) && dimension_eq(at, bt) && dimension_eq(ae, be) && dimension_eq(ab, bb)
         }
         (FillMaxWidth, FillMaxWidth) => true,
         (FillMaxHeight, FillMaxHeight) => true,
         (FillMaxSize, FillMaxSize) => true,
-        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
-        (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => size_value_eq(ax, bx) && size_value_eq(ay, by),
+        (Offset { x: ax, y: ay }, Offset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
+        (AbsoluteOffset { x: ax, y: ay }, AbsoluteOffset { x: bx, y: by }) => dimension_eq(ax, bx) && dimension_eq(ay, by),
         (AlignSelf { alignment: aa }, AlignSelf { alignment: ba }) => aa == ba,
         (AlignBy { line: a }, AlignBy { line: b }) => a == b,
         (LayoutWeight { weight: aw, fill: af }, LayoutWeight { weight: bw, fill: bf }) => aw == bw && af == bf,
@@ -4144,11 +4106,28 @@ fn opt_size_value_eq(a: &Option<SizeValue>, b: &Option<SizeValue>) -> bool {
     }
 }
 
+/// Two lengths are the same parameter when both are dynamic (the layout dependency carries the
+/// number) or when the static forms are equal.
+fn dimension_eq(a: &Dimension, b: &Dimension) -> bool {
+    if a.is_dynamic() && b.is_dynamic() { true } else { a == b }
+}
+
+fn opt_dimension_eq(a: &Option<Dimension>, b: &Option<Dimension>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => dimension_eq(a, b),
+        _ => false,
+    }
+}
+
 fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
     match (a, b) {
-        (SizeValue::Static(ad), SizeValue::Static(bd)) => ad == bd,
-        // 动态尺寸（动画 State/闭包）视为相同——布局期 layout_dep 已覆盖
-        (SizeValue::Dynamic(_), SizeValue::Dynamic(_)) => true,
+        // A dynamic length is a parameter, not a value: the layout dependency carries the number, so
+        // two of them are the same request. Static lengths compare structurally.
+        (SizeValue::Length(ad), SizeValue::Length(bd)) => dimension_eq(ad, bd),
+        // The layout modes are parameters too: two fills are the same request.
+        (SizeValue::Fill, SizeValue::Fill) => true,
+        (SizeValue::Auto, SizeValue::Auto) => true,
         // An intrinsic request is a parameter, not a value: compare which measurement is asked for.
         (SizeValue::Intrinsic(as_), SizeValue::Intrinsic(bs)) => as_ == bs,
         _ => false,
@@ -5093,7 +5072,7 @@ mod node_track_tests {
     fn node_track_layout_node_state_driven_remeasures() {
         use crate::runtime::composer::Composer;
         use crate::runtime::state::State;
-        // 动态值在 transform 内 get → 注册布局依赖 → set 后重测（与 SizeValue::Dynamic 同）
+        // 动态值在 transform 内 get → 注册布局依赖 → set 后重测（与 Dimension::Dynamic 同）
         #[derive(Debug)]
         struct DynMinNode {
             s: State<f32>,
@@ -5150,7 +5129,7 @@ mod node_track_tests {
             crate::render::draw_background_for_node(canvas, rect, &c, &Shape::Rectangle);
         }
         fn node_key(&self) -> String {
-            // 值走 State，不进 key（同 SizeValue::Dynamic/Background color_fn 语义——
+            // 值走 State，不进 key（同 Dimension::Dynamic/Background color_fn 语义——
             // 闭包重建不触发 Enter，值变化走依赖/重绘通道）
             "teststatefulbg".to_string()
         }

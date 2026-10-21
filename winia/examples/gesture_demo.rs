@@ -5,7 +5,7 @@ use letclone::clone;
 use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier};
-use winia::layout::{Dimension};
+use winia::layout::SizeValue;
 use winia::input::{PointerEvent, PointerEventType};
 use winia::graphics::{Color};
 use winia::components::text::Text;
@@ -80,7 +80,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     .modifier(
                         Modifier::new()
                             .padding(12.0)
-                            .size(200.0, Dimension::Auto)
+                            .size(200.0, SizeValue::Auto)
                             .background(Color::from_argb(60, 200, 200, 80), winia::graphics::Shape::rounded(6.0))
                             .on_pointer_event({
                                 clone!(last, drag);
@@ -116,7 +116,7 @@ fn gesture_ui(ctx: &mut ComposeCtx) {
                     .modifier(
                         Modifier::new()
                             .padding(12.0)
-                            .size(240.0, Dimension::Auto)
+                            .size(240.0, SizeValue::Auto)
                             .background(Color::from_argb(80, 156, 39, 176), winia::graphics::Shape::rounded(6.0))
                             .on_press({ clone!(tap_info); move |p: (f32, f32)| {
                                 tap_info.set(format!("press at ({:.0},{:.0})", p.0, p.1));

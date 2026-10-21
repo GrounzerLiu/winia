@@ -733,7 +733,7 @@ impl SearchBar {
                             .shape(expansion_shape(shape_prog.get()))
                             .color(container)
                             .modifier(Modifier::new().size(
-                                SizeValue::Dynamic(std::sync::Arc::new({
+                                SizeValue::dynamic(std::sync::Arc::new({
                                     let p = size_prog.clone();
                                     let c = collapsed.clone();
                                     move || {
@@ -741,7 +741,7 @@ impl SearchBar {
                                         expansion_size((c.get().0, c.get().1), full, p.get()).0
                                     }
                                 })),
-                                SizeValue::Dynamic(std::sync::Arc::new({
+                                SizeValue::dynamic(std::sync::Arc::new({
                                     let p = size_prog;
                                     let c = collapsed;
                                     move || {
@@ -757,7 +757,7 @@ impl SearchBar {
                                 let p = prog.clone();
                                 crate::layout::components::Column::new()
                                     .modifier(Modifier::new().padding_vertical(
-                                        SizeValue::Dynamic(std::sync::Arc::new(move || {
+                                        crate::layout::Dimension::Dynamic(std::sync::Arc::new(move || {
                                             expansion_vertical_padding(p.get())
                                         })),
                                     ))
@@ -1287,7 +1287,7 @@ mod tests {
 
     /// The expanded container's SHAPE must follow `progress` during the animation, not only the size.
     ///
-    /// The size is safe by construction — it is a `SizeValue::Dynamic` closure that the layout pass calls
+    /// The size is safe by construction — it is a `Dimension::Dynamic` closure that the layout pass calls
     /// every frame. The shape is not: `expansion_shape(progress.get())` reads the state during COMPOSITION,
     /// and the panel body sits in a `start_restartable_group` that only re-enters when its declared
     /// parameters change. If the body does not re-run while the animation advances, the radius stays at the

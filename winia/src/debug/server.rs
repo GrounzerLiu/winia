@@ -602,14 +602,12 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
                 .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
                 .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
         ModifierElement::PaddingSides { start, top, end, bottom } => {
-            use crate::layout::{Dimension, SizeValue};
+            use crate::layout::Dimension;
             // 四边求值（Debug 场景：显示累积/动态标记）
-            let sv = |v: &SizeValue| match v {
-                SizeValue::Static(Dimension::Fixed(x)) | SizeValue::Static(Dimension::Dp(crate::unit::Dp(x))) => format!("{x}"),
-                SizeValue::Static(Dimension::Auto) | SizeValue::Static(Dimension::Fill) => "0".to_string(),
-                SizeValue::Static(Dimension::Px(p)) => format!("{:.0}", p.to_logical(crate::runtime::density::current_density())),
-                SizeValue::Dynamic(_) => "<dyn>".to_string(),
-                SizeValue::Intrinsic(s) => format!("intrinsic({:?})", s),
+            let sv = |v: &Dimension| match v {
+                Dimension::Fixed(x) | Dimension::Dp(crate::unit::Dp(x)) => format!("{x}"),
+                Dimension::Px(p) => format!("{:.0}", p.to_logical(crate::runtime::density::current_density())),
+                Dimension::Dynamic(_) => "<dyn>".to_string(),
             };
             Some(format!(
                 "pad({},{},{},{})",

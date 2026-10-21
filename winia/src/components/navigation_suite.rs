@@ -810,7 +810,7 @@ impl NavigationSuiteScaffold {
                                 // `layoutHeight - h - 16 - navigationHeight * animationProgress`
                                 // (`:461-468`), so as the bar slides away it comes down to 16dp from the
                                 // bottom edge and goes back up with the bar.
-                                    SizeValue::Dynamic(Arc::new(move || {
+                                    crate::layout::Dimension::Dynamic(Arc::new(move || {
                                         -(PRIMARY_ACTION_PADDING
                                             + NAVIGATION_BAR_HEIGHT * anim.get().clamp(0.0, 1.0))
                                     })),

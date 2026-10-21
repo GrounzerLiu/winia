@@ -2414,7 +2414,7 @@ mod tests {
     #[test]
     fn max_width_dynamic_state() {
         // A dynamic cap is re-resolved on re-measure, like the min counterpart's. (The
-        // dependency registration happens in the same `SizeValue::Dynamic` path; this test pins
+        // dependency registration happens in the same `Dimension::Dynamic` path; this test pins
         // the re-resolution, not the registration — it marks the nodes dirty itself.)
         use crate::runtime::state::State;
         let s = State::new(200.0);
@@ -2432,6 +2432,35 @@ mod tests {
         nodes[1].layout_dirty = true;
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
         assert_eq!(size.width, 300.0, "动态 max 值变化后重测取新值");
+    }
+
+
+    /// A dynamic PADDING is a length like any other: it is resolved during measure, so a state that
+    /// changes re-measures the node without a recomposition. (Same mechanism as `max_width`: the
+    /// closure's read registers the layout dependency; this pins the re-resolution.)
+    #[test]
+    fn dynamic_padding_is_re_resolved_on_re_measure() {
+        use crate::runtime::state::State;
+        let pad = State::new(4.0f32);
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().padding(pad.clone()), Some(0)),
+            LayoutNode::leaf(Modifier::new().size(100.0, 20.0)),
+        ];
+        nodes[0].children = vec![1];
+        let policies: Vec<Box<dyn crate::layout::node::MeasurePolicy>> =
+            vec![Box::new(crate::layout::box_layout::BoxLayout::new())];
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!((size.width, size.height), (108.0, 28.0), "4 px on every side");
+
+        pad.set(10.0);
+        nodes[0].layout_dirty = true;
+        nodes[1].layout_dirty = true;
+        let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(0.0, 1000.0, 0.0, 1000.0));
+        assert_eq!(
+            (size.width, size.height),
+            (120.0, 40.0),
+            "10 px on every side after the value changed"
+        );
     }
 
     // ── test_tag ──
@@ -3137,7 +3166,7 @@ fn measure_node_inner(
     // 开放布局节点 A 型（exp/modifier-node）：resolved_size 之后串行变换约束。
     // 位置语义 = 链中 size 之后、min/required/padding 之前（后续 min/required
     // 仍可覆盖 node 的变换，链序直觉保持）。动态值在 transform 内求值
-    // （measure 期 State::get 注册布局依赖——与 SizeValue::Dynamic 同机制）。
+    // （measure 期 State::get 注册布局依赖——与 Dimension::Dynamic 同机制）。
     // Arc 克隆出链表避免借用冲突（nodes[idx] 不可变借用与后续可变写冲突）。
     // P2-2：无 node 时早退（全树每节点每次 measure 省一次 collect 分配）。
     let layout_transforms: Vec<std::sync::Arc<dyn crate::modifier::LayoutModifierNode>> =
@@ -3738,20 +3767,7 @@ fn measure_node_inner(
             let declared = nodes[idx]
                 .modifier
                 .fixed_size()
-                .and_then(|(w, h)| {
-                    let real =
-                        |d: crate::layout::Dimension| {
-                            !matches!(
-                                d,
-                                crate::layout::Dimension::Auto | crate::layout::Dimension::Fill
-                            )
-                        };
-                    if real(w) && real(h) {
-                        Some((w.to_logical_px(), h.to_logical_px()))
-                    } else {
-                        None
-                    }
-                });
+                .map(|(w, h)| (w.to_logical_px(), h.to_logical_px()));
             if let Some((content_w, content_h)) = declared {
                 nodes[idx].minimum_interactive_content = Some((content_w, content_h));
             }

@@ -78,7 +78,7 @@ routes, and the route decides whether the value is read once or every frame:
   on the frame after the tap, then `(3, 3)` as it settles — the intermediate values are visible, so the
   shape travels toward the checked one instead of snapping to it.
 - The OFFSET is a LAYOUT input, and an animated layout value has to be handed over as
-  `SizeValue::Dynamic` — winia evaluates that during layout and registers a layout dependency
+  `Dimension::Dynamic` — winia evaluates that during layout and registers a layout dependency
   (`modifier.rs:62-68`; `composer.rs:2862-2870`, layout deps re-measure without recomposing). A static
   number is read during composition instead, so the layout keeps the offset it had until some unrelated
   event forces a frame. Measured on the live fixture, trailing half, menu opening: `-2 dp` while

@@ -1228,16 +1228,16 @@ mod tests {
     }
 
     /// The layout half of the snackbar's placement: an `absolute_offset` whose value is computed AT LAYOUT
-    /// TIME (a closure, the same `SizeValue::Dynamic` path the snackbar uses) must move the NODE, not merely
+    /// TIME (a closure, the same `Dimension::Dynamic` path the snackbar uses) must move the NODE, not merely
     /// the number the build computed. Written while chasing the demo, where the rule's `y=528` and the drawn
     /// card disagreed by ~90 px: this says whether the offset reaches the arena at all.
     ///
     /// A CHARACTERISATION test, not a discriminator: `Modifier::get_absolute_offset` already resolved
-    /// `SizeValue::Dynamic(f) => f()` before any of the sheet commits (`winia/src/modifier.rs`), so no revert of
+    /// `Dimension::Dynamic(f) => f()` before any of the sheet commits (`winia/src/modifier.rs`), so no revert of
     /// theirs can fail it. It pins the behaviour the snackbar's rule depends on, nothing more.
     #[test]
     fn a_layout_time_absolute_offset_moves_the_node() {
-        fn placed_with(offset: crate::layout::sizing::SizeValue) -> f32 {
+        fn placed_with(offset: crate::layout::sizing::Dimension) -> f32 {
             let mut c = Composer::new();
             let mut slot = Some(offset);
             c.compose(move |ctx| {
@@ -1265,7 +1265,7 @@ mod tests {
 
         assert_eq!(placed_with(300.0f32.into()), 300.0, "a literal offset moves the node");
         assert_eq!(
-            placed_with(crate::layout::sizing::SizeValue::Dynamic(std::sync::Arc::new(|| 200.0))),
+            placed_with(crate::layout::sizing::Dimension::Dynamic(std::sync::Arc::new(|| 200.0))),
             200.0,
             "and so does one computed at layout time"
         );
@@ -1493,7 +1493,7 @@ mod tests {
                 n.modifier.elements().iter().any(|el| match el {
                     crate::modifier::ModifierElement::Size { width, height } => {
                         let fixed = |v: &crate::layout::sizing::SizeValue| match v {
-                            crate::layout::sizing::SizeValue::Static(
+                            crate::layout::sizing::SizeValue::Length(
                                 crate::layout::sizing::Dimension::Fixed(px),
                             ) => *px,
                             _ => f32::NAN,
@@ -1541,7 +1541,7 @@ mod tests {
                 n.modifier.elements().iter().any(|el| match el {
                     crate::modifier::ModifierElement::Size { width, height } => {
                         let fixed = |v: &crate::layout::sizing::SizeValue| match v {
-                            crate::layout::sizing::SizeValue::Static(
+                            crate::layout::sizing::SizeValue::Length(
                                 crate::layout::sizing::Dimension::Fixed(px),
                             ) => *px,
                             _ => f32::NAN,

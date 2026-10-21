@@ -14,7 +14,7 @@ use crate::composable;
 use crate::runtime::composer::ComposeCtx;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
-use crate::layout::{SizeValue};
+use crate::layout::Dimension;
 use crate::graphics::{Shape};
 use crate::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
@@ -475,7 +475,7 @@ impl ButtonDefaults {
     /// 默认内容 padding `(start, top, end, bottom)`——Button 系 24/8/24/8，
     /// Text 按钮 12/8/12/8（对标 `ButtonDefaults.ContentPadding` /
     /// `TextButtonContentPadding`）；`SizeValue`——支持动画
-    pub fn content_padding(style: ButtonStyle) -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+    pub fn content_padding(style: ButtonStyle) -> (Dimension, Dimension, Dimension, Dimension) {
         match style {
             ButtonStyle::Text => (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into()),
             _ => (24.0.into(), 8.0.into(), 24.0.into(), 8.0.into()),
@@ -496,13 +496,13 @@ impl ButtonDefaults {
 
     /// 带图标的 Button 内容 padding（对标 `ButtonDefaults.ButtonWithIconContentPadding`：
     /// 左 16 / 右 24——图标贴近边缘，文字保持标准右边距）
-    pub fn button_with_icon_content_padding() -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+    pub fn button_with_icon_content_padding() -> (Dimension, Dimension, Dimension, Dimension) {
         (16.0.into(), 8.0.into(), 24.0.into(), 8.0.into())
     }
 
     /// 带图标的 Text 按钮内容 padding（对标
     /// `ButtonDefaults.TextButtonWithIconContentPadding`：左 12 / 右 16）
-    pub fn text_button_with_icon_content_padding() -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+    pub fn text_button_with_icon_content_padding() -> (Dimension, Dimension, Dimension, Dimension) {
         (12.0.into(), 8.0.into(), 16.0.into(), 8.0.into())
     }
 
@@ -511,7 +511,7 @@ impl ButtonDefaults {
     pub fn content_padding_for(
         size: ButtonSize,
         style: ButtonStyle,
-    ) -> (SizeValue, SizeValue, SizeValue, SizeValue) {
+    ) -> (Dimension, Dimension, Dimension, Dimension) {
         if style == ButtonStyle::Text {
             return (12.0.into(), 8.0.into(), 12.0.into(), 8.0.into());
         }
@@ -557,10 +557,10 @@ pub struct Button {
     shape: Shape,
     /// 内容 padding (start, top, end, bottom)——None = 按 style 默认；
     /// `SizeValue` 支持动态（动画 State/闭包——measure 期求值，只重测不重组）
-    content_padding: Option<(SizeValue, SizeValue, SizeValue, SizeValue)>,
+    content_padding: Option<(Dimension, Dimension, Dimension, Dimension)>,
     /// 最小尺寸覆盖（None = ButtonDefaults MinWidth/MinHeight；支持动画）
-    min_width: Option<SizeValue>,
-    min_height: Option<SizeValue>,
+    min_width: Option<Dimension>,
+    min_height: Option<Dimension>,
     /// 边框（None = 按 style 默认——Outlined 有 1px 主题色边框，其余无）
     border: Option<ButtonBorder>,
     /// 尺寸变体（默认 Small）
@@ -666,7 +666,7 @@ impl Button {
     /// 设置内容 padding (start, top, end, bottom)——不设置则按 style 取
     /// [`ButtonDefaults::content_padding`]；每边支持动态 `SizeValue`
     /// （`&State<f32>` / `State<f32>` / 闭包——动画可作用于内边距）
-    pub fn content_padding<A: Into<SizeValue>, B: Into<SizeValue>, C: Into<SizeValue>, D: Into<SizeValue>>(
+    pub fn content_padding<A: Into<Dimension>, B: Into<Dimension>, C: Into<Dimension>, D: Into<Dimension>>(
         mut self,
         padding: (A, B, C, D),
     ) -> Self {
@@ -681,7 +681,7 @@ impl Button {
 
     /// 覆盖默认最小宽度（对标 material3 内部 `defaultMinSize(MinWidth, MinHeight)`——
     /// 默认 58/40，用户可经此或 `Modifier::min_width` 覆盖；支持动态 `SizeValue`）
-    pub fn min_size<A: Into<SizeValue>, B: Into<SizeValue>>(
+    pub fn min_size<A: Into<Dimension>, B: Into<Dimension>>(
         mut self,
         min_width: A,
         min_height: B,
@@ -971,10 +971,10 @@ impl Button {
     pub fn get_colors(&self) -> Option<ButtonColors> { self.colors }
     pub fn get_elevation(&self) -> Option<ButtonElevation> { self.elevation }
     pub fn get_shape(&self) -> Shape { self.shape }
-    pub fn get_content_padding(&self) -> Option<&(SizeValue, SizeValue, SizeValue, SizeValue)> {
+    pub fn get_content_padding(&self) -> Option<&(Dimension, Dimension, Dimension, Dimension)> {
         self.content_padding.as_ref()
     }
-    pub fn get_min_size(&self) -> (Option<SizeValue>, Option<SizeValue>) {
+    pub fn get_min_size(&self) -> (Option<Dimension>, Option<Dimension>) {
         (self.min_width.clone(), self.min_height.clone())
     }
     pub fn get_border(&self) -> Option<ButtonBorder> { self.border }
@@ -1032,16 +1032,16 @@ mod tests {
         assert_eq!(ButtonDefaults::button_elevation(), ButtonElevation::default_elevation());
         assert_eq!(ButtonDefaults::elevated_button_elevation(), ButtonElevation::elevated());
         let p = ButtonDefaults::content_padding(ButtonStyle::Filled);
-        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
-        assert!(matches!(p.1, SizeValue::Static(crate::layout::Dimension::Fixed(8.0))));
+        assert!(matches!(p.0, crate::layout::Dimension::Fixed(24.0)));
+        assert!(matches!(p.1, crate::layout::Dimension::Fixed(8.0)));
         let p = ButtonDefaults::content_padding(ButtonStyle::Text);
-        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
+        assert!(matches!(p.0, crate::layout::Dimension::Fixed(12.0)));
         let icon = ButtonDefaults::button_with_icon_content_padding();
-        assert!(matches!(icon.0, SizeValue::Static(crate::layout::Dimension::Fixed(16.0))));
-        assert!(matches!(icon.2, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
+        assert!(matches!(icon.0, crate::layout::Dimension::Fixed(16.0)));
+        assert!(matches!(icon.2, crate::layout::Dimension::Fixed(24.0)));
         let text_icon = ButtonDefaults::text_button_with_icon_content_padding();
-        assert!(matches!(text_icon.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
-        assert!(matches!(text_icon.2, SizeValue::Static(crate::layout::Dimension::Fixed(16.0))));
+        assert!(matches!(text_icon.0, crate::layout::Dimension::Fixed(12.0)));
+        assert!(matches!(text_icon.2, crate::layout::Dimension::Fixed(16.0)));
     }
 
     #[test]
@@ -1106,10 +1106,10 @@ mod tests {
             .content_padding((&pad, 4.0, &pad, 4.0))
             .min_size(&pad, 40.0);
         let (p, (mw, mh)) = (btn.get_content_padding().unwrap(), btn.get_min_size());
-        assert!(matches!(&p.0, SizeValue::Dynamic(_)), "State 引用 → 动态（动画可驱动）");
-        assert!(matches!(&p.1, SizeValue::Static(_)));
-        assert!(matches!(&mw.unwrap(), SizeValue::Dynamic(_)));
-        assert!(matches!(&mh.unwrap(), SizeValue::Static(_)));
+        assert!(matches!(&p.0, Dimension::Dynamic(_)), "State 引用 → 动态（动画可驱动）");
+        assert!(matches!(&p.1, Dimension::Fixed(_)));
+        assert!(matches!(&mw.unwrap(), Dimension::Dynamic(_)));
+        assert!(matches!(&mh.unwrap(), Dimension::Fixed(_)));
     }
 
     #[test]
@@ -1171,9 +1171,9 @@ mod tests {
         assert_eq!(ButtonSize::XLarge.icon_label_space(), 16.0);
         // content_padding_for：按尺寸水平 padding、Text 固定 12
         let p = ButtonDefaults::content_padding_for(ButtonSize::Medium, ButtonStyle::Filled);
-        assert!(matches!(p.0, SizeValue::Static(crate::layout::Dimension::Fixed(24.0))));
+        assert!(matches!(p.0, crate::layout::Dimension::Fixed(24.0)));
         let pt = ButtonDefaults::content_padding_for(ButtonSize::XLarge, ButtonStyle::Text);
-        assert!(matches!(pt.0, SizeValue::Static(crate::layout::Dimension::Fixed(12.0))));
+        assert!(matches!(pt.0, crate::layout::Dimension::Fixed(12.0)));
     }
 
     #[test]

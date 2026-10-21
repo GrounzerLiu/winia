@@ -1,24 +1,145 @@
-//! The sizing vocabulary the layout and the modifier chain share: a static `Dimension`,
-//! the dynamic `SizeValue` that evaluates per frame, and `IntrinsicSize`.
+//! The sizing vocabulary the layout and the modifier chain share.
+//!
+//! Two types, two jobs:
+//! - [`Dimension`] is a LENGTH. It always resolves to logical pixels: `Fixed`, `Dp`, `Px`, or
+//!   `Dynamic` (a closure evaluated during layout — how a layout-property animation drives size,
+//!   offset or padding without recomposing). Anything that needs "a number of logical pixels" takes
+//!   one, so `Fill` and `Auto` cannot appear where they would mean nothing.
+//! - [`SizeValue`] is HOW a node is sized: a length, or `Fill` / `Auto` / one of the content's own
+//!   intrinsic measurements.
 
 use std::sync::Arc;
 
-/// 尺寸值，用于 Modifier 和 Layout
+/// A length — always resolvable to logical pixels.
 ///
-/// 支持多种单位：`Fixed(f32)`（逻辑像素）、`Dp`（密度无关，== 逻辑像素）、
-/// `Px`（物理像素，需 Density 转换）、`Fill`、`Auto`。
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `Dynamic` is what makes layout-property animation work: the closure is called during
+/// measure/layout, so a `State<f32>` read there registers a LAYOUT dependency — the node re-measures
+/// every frame without the composition running again.
+#[derive(Clone)]
 pub enum Dimension {
-    /// 固定逻辑像素值
+    /// Fixed logical pixels.
     Fixed(f32),
-    /// 密度无关像素（本项目 1dp == 1 逻辑像素，无需转换）
+    /// Density-independent pixels (1dp == 1 logical pixel in this project, no conversion).
     Dp(crate::unit::Dp),
-    /// 物理像素（需 Density 转逻辑像素）
+    /// Physical pixels, converted through the ambient density.
     Px(crate::unit::Px),
-    /// 填满可用空间
-    Fill,
-    /// 自适应内容大小
-    Auto,
+    /// Evaluated during layout; the read registers a layout dependency on the enclosing node.
+    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
+}
+
+impl Dimension {
+    pub fn is_fixed(&self) -> bool {
+        !matches!(self, Dimension::Dynamic(_))
+    }
+
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Dimension::Dynamic(_))
+    }
+
+    /// Resolve to logical pixels. `Px` reads the ambient density; `Dynamic` evaluates its closure
+    /// (during layout that read is what subscribes the node to the value).
+    pub fn to_logical_px(&self) -> f32 {
+        match self {
+            Dimension::Fixed(v) => *v,
+            Dimension::Dp(d) => d.value(),
+            Dimension::Px(p) => p.to_logical(crate::runtime::density::current_density()),
+            Dimension::Dynamic(f) => f(),
+        }
+    }
+}
+
+/// Values compare structurally for the static forms and by IDENTITY for a closure: two closures are
+/// the same length only when they are the same closure object.
+impl std::fmt::Debug for Dimension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dimension::Fixed(v) => write!(f, "fixed({v})"),
+            Dimension::Dp(d) => write!(f, "dp({})", d.value()),
+            Dimension::Px(p) => write!(f, "px({})", p.0),
+            Dimension::Dynamic(_) => write!(f, "<dynamic>"),
+        }
+    }
+}
+
+impl PartialEq for Dimension {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Dimension::Fixed(a), Dimension::Fixed(b)) => a == b,
+            (Dimension::Dp(a), Dimension::Dp(b)) => a == b,
+            (Dimension::Px(a), Dimension::Px(b)) => a == b,
+            (Dimension::Dynamic(a), Dimension::Dynamic(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl From<f32> for Dimension {
+    fn from(v: f32) -> Self { Dimension::Fixed(v) }
+}
+
+impl From<crate::unit::Dp> for Dimension {
+    fn from(d: crate::unit::Dp) -> Self { Dimension::Dp(d) }
+}
+
+impl From<crate::unit::Px> for Dimension {
+    fn from(p: crate::unit::Px) -> Self { Dimension::Px(p) }
+}
+
+impl From<crate::runtime::state::State<f32>> for Dimension {
+    fn from(s: crate::runtime::state::State<f32>) -> Self {
+        Dimension::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<crate::runtime::state::Animating<f32>> for Dimension {
+    fn from(s: crate::runtime::state::Animating<f32>) -> Self {
+        Dimension::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<crate::runtime::state::DerivedValue<f32>> for Dimension {
+    fn from(d: crate::runtime::state::DerivedValue<f32>) -> Self {
+        Dimension::Dynamic(Arc::new(move || d.get()))
+    }
+}
+
+impl From<&crate::runtime::state::State<f32>> for Dimension {
+    fn from(s: &crate::runtime::state::State<f32>) -> Self {
+        let s = s.clone();
+        Dimension::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<&crate::runtime::state::Animating<f32>> for Dimension {
+    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
+        let s = s.clone();
+        Dimension::Dynamic(Arc::new(move || s.get()))
+    }
+}
+
+impl From<&crate::runtime::state::DerivedValue<f32>> for Dimension {
+    fn from(d: &crate::runtime::state::DerivedValue<f32>) -> Self {
+        let d = d.clone();
+        Dimension::Dynamic(Arc::new(move || d.get()))
+    }
+}
+
+impl From<&crate::runtime::state::State<crate::unit::Dp>> for Dimension {
+    fn from(s: &crate::runtime::state::State<crate::unit::Dp>) -> Self {
+        let s = s.clone();
+        Dimension::Dynamic(Arc::new(move || s.get().value()))
+    }
+}
+
+impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for Dimension {
+    fn from(s: &crate::runtime::state::Animating<crate::unit::Dp>) -> Self {
+        let s = s.clone();
+        Dimension::Dynamic(Arc::new(move || s.get().value()))
+    }
+}
+
+impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for Dimension {
+    fn from(f: F) -> Self { Dimension::Dynamic(Arc::new(f)) }
 }
 
 /// Which of the content's intrinsic measurements a size modifier asks for — Compose's
@@ -41,59 +162,123 @@ pub enum IntrinsicSize {
     Max,
 }
 
-/// 尺寸值：静态 `Dimension` 或动态求值（布局属性动画用）。
+/// How a node is sized: a [`Dimension`], or a layout mode that only a SIZE can have.
 ///
-/// `size()` 统一入口——传 `f32`/`Dimension`（静态）或 `State<f32>`/闭包（动态）：
-/// - `.size(50.0, 24.0)` 静态
-/// - `.size(&scale, 24.0)` 动画（State 直接传，测量时 `get()` 注册依赖到本节点）
-/// - `.size(|| scale.get() * 2.0, 24.0)` 复杂表达式（闭包）
+/// `Fill` and `Auto` live here rather than in `Dimension` on purpose: an offset or a padding has no
+/// "fill the remaining space", and putting them in the length type made those positions accept a
+/// value that silently resolved to 0.
 pub enum SizeValue {
-    Static(Dimension),
-    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
-    /// Size this axis to one of the content's own intrinsic measurements instead of to the
-    /// incoming space — Compose's `Modifier.width/height(IntrinsicSize)`.
+    Length(Dimension),
+    /// Take all the space the incoming constraints offer.
+    Fill,
+    /// Size to the content.
+    Auto,
+    /// Size to one of the content's own intrinsic measurements.
     Intrinsic(IntrinsicSize),
 }
 
+impl SizeValue {
+    /// A per-frame length, from a closure someone already boxed.
+    pub fn dynamic(f: Arc<dyn Fn() -> f32 + Send + Sync>) -> Self {
+        SizeValue::Length(Dimension::Dynamic(f))
+    }
+
+    /// The length this value carries, if it is one.
+    pub fn as_length(&self) -> Option<&Dimension> {
+        match self {
+            SizeValue::Length(d) => Some(d),
+            _ => None,
+        }
+    }
+
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, SizeValue::Length(d) if d.is_dynamic())
+    }
+
+    /// Resolve a length; `None` for the layout modes, which only a measure pass can resolve.
+    pub fn to_logical_px(&self) -> Option<f32> {
+        self.as_length().map(|d| d.to_logical_px())
+    }
+}
+
 impl From<Dimension> for SizeValue {
-    fn from(d: Dimension) -> Self { SizeValue::Static(d) }
+    fn from(d: Dimension) -> Self { SizeValue::Length(d) }
 }
 
 impl From<f32> for SizeValue {
-    fn from(v: f32) -> Self { SizeValue::Static(Dimension::Fixed(v)) }
+    fn from(v: f32) -> Self { SizeValue::Length(Dimension::Fixed(v)) }
 }
 
 impl From<crate::unit::Dp> for SizeValue {
-    fn from(v: crate::unit::Dp) -> Self { SizeValue::Static(Dimension::Dp(v)) }
+    fn from(v: crate::unit::Dp) -> Self { SizeValue::Length(Dimension::Dp(v)) }
 }
 
 impl From<crate::unit::Px> for SizeValue {
-    fn from(v: crate::unit::Px) -> Self { SizeValue::Static(Dimension::Px(v)) }
+    fn from(v: crate::unit::Px) -> Self { SizeValue::Length(Dimension::Px(v)) }
 }
 
 impl From<crate::runtime::state::State<f32>> for SizeValue {
     fn from(s: crate::runtime::state::State<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
+        SizeValue::Length(Dimension::from(s))
     }
 }
 
 impl From<crate::runtime::state::Animating<f32>> for SizeValue {
     fn from(s: crate::runtime::state::Animating<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || s.get()))
+        SizeValue::Length(Dimension::from(s))
     }
 }
 
 impl From<crate::runtime::state::DerivedValue<f32>> for SizeValue {
     fn from(d: crate::runtime::state::DerivedValue<f32>) -> Self {
-        SizeValue::Dynamic(Arc::new(move || d.get()))
+        SizeValue::Length(Dimension::from(d))
     }
+}
+
+impl From<&crate::runtime::state::State<f32>> for SizeValue {
+    fn from(s: &crate::runtime::state::State<f32>) -> Self {
+        SizeValue::Length(Dimension::from(s))
+    }
+}
+
+impl From<&crate::runtime::state::Animating<f32>> for SizeValue {
+    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
+        SizeValue::Length(Dimension::from(s))
+    }
+}
+
+impl From<&crate::runtime::state::DerivedValue<f32>> for SizeValue {
+    fn from(d: &crate::runtime::state::DerivedValue<f32>) -> Self {
+        SizeValue::Length(Dimension::from(d))
+    }
+}
+
+impl From<&crate::runtime::state::State<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::runtime::state::State<crate::unit::Dp>) -> Self {
+        SizeValue::Length(Dimension::from(s))
+    }
+}
+
+impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
+    fn from(s: &crate::runtime::state::Animating<crate::unit::Dp>) -> Self {
+        SizeValue::Length(Dimension::from(s))
+    }
+}
+
+impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
+    fn from(f: F) -> Self { SizeValue::Length(Dimension::Dynamic(Arc::new(f))) }
+}
+
+impl From<IntrinsicSize> for SizeValue {
+    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
 }
 
 impl Clone for SizeValue {
     fn clone(&self) -> Self {
         match self {
-            SizeValue::Static(d) => SizeValue::Static(*d),
-            SizeValue::Dynamic(f) => SizeValue::Dynamic(f.clone()),
+            SizeValue::Length(d) => SizeValue::Length(d.clone()),
+            SizeValue::Fill => SizeValue::Fill,
+            SizeValue::Auto => SizeValue::Auto,
             SizeValue::Intrinsic(s) => SizeValue::Intrinsic(*s),
         }
     }
@@ -102,92 +287,24 @@ impl Clone for SizeValue {
 impl std::fmt::Debug for SizeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SizeValue::Static(d) => write!(f, "{:?}", d),
-            SizeValue::Dynamic(_) => write!(f, "<dynamic>"),
-            SizeValue::Intrinsic(s) => write!(f, "intrinsic({:?})", s),
+            SizeValue::Length(d) => write!(f, "{d:?}"),
+            SizeValue::Fill => write!(f, "fill"),
+            SizeValue::Auto => write!(f, "auto"),
+            SizeValue::Intrinsic(s) => write!(f, "intrinsic({s:?})"),
         }
     }
 }
 
-impl From<IntrinsicSize> for SizeValue {
-    fn from(s: IntrinsicSize) -> Self { SizeValue::Intrinsic(s) }
-}
-
-impl Dimension {
-    pub fn is_fixed(&self) -> bool {
-        matches!(self, Dimension::Fixed(_) | Dimension::Dp(_) | Dimension::Px(_))
-    }
-
-    pub fn is_fill(&self) -> bool {
-        matches!(self, Dimension::Fill)
-    }
-
-    /// 解析为逻辑像素（Px 需要 Density，Dp/Fixed 直接是逻辑像素）
-    pub fn to_logical_px(&self) -> f32 {
-        match self {
-            Dimension::Fixed(v) => *v,
-            Dimension::Dp(d) => d.value(),
-            Dimension::Px(p) => p.to_logical(crate::runtime::density::current_density()),
-            Dimension::Fill | Dimension::Auto => 0.0,
+impl PartialEq for SizeValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SizeValue::Length(a), SizeValue::Length(b)) => a == b,
+            (SizeValue::Fill, SizeValue::Fill) => true,
+            (SizeValue::Auto, SizeValue::Auto) => true,
+            (SizeValue::Intrinsic(a), SizeValue::Intrinsic(b)) => a == b,
+            _ => false,
         }
     }
-}
-
-impl From<f32> for Dimension {
-    fn from(v: f32) -> Self {
-        Dimension::Fixed(v)
-    }
-}
-
-impl From<crate::unit::Dp> for Dimension {
-    fn from(d: crate::unit::Dp) -> Self {
-        Dimension::Dp(d)
-    }
-}
-
-impl From<crate::unit::Px> for Dimension {
-    fn from(p: crate::unit::Px) -> Self {
-        Dimension::Px(p)
-    }
-}
-
-impl From<&crate::runtime::state::State<f32>> for SizeValue {
-    fn from(s: &crate::runtime::state::State<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::Animating<f32>> for SizeValue {
-    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::DerivedValue<f32>> for SizeValue {
-    fn from(d: &crate::runtime::state::DerivedValue<f32>) -> Self {
-        let d = d.clone();
-        SizeValue::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-impl From<&crate::runtime::state::State<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::runtime::state::State<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl From<&crate::runtime::state::Animating<crate::unit::Dp>> for SizeValue {
-    fn from(s: &crate::runtime::state::Animating<crate::unit::Dp>) -> Self {
-        let s = s.clone();
-        SizeValue::Dynamic(Arc::new(move || s.get().value()))
-    }
-}
-
-impl<F: Fn() -> f32 + Send + Sync + 'static> From<F> for SizeValue {
-    fn from(f: F) -> Self { SizeValue::Dynamic(Arc::new(f)) }
 }
 
 #[cfg(test)]
@@ -205,5 +322,16 @@ mod tests {
             assert_eq!(Dimension::Px(crate::unit::Px(20.0)).to_logical_px(), 10.0); // 20px / 2.0
             assert_eq!(Dimension::Fixed(8.0).to_logical_px(), 8.0);
         });
+    }
+
+    /// A dynamic length is evaluated at resolve time, and it is a LENGTH — not a size mode.
+    #[test]
+    fn a_dynamic_dimension_resolves_and_is_a_length() {
+        let v = crate::runtime::state::State::new(12.5f32);
+        let d = Dimension::from(&v);
+        assert!(d.is_dynamic());
+        assert_eq!(d.to_logical_px(), 12.5);
+        let s = SizeValue::from(d);
+        assert_eq!(s.to_logical_px(), Some(12.5));
     }
 }
