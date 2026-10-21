@@ -1193,7 +1193,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::Border { width: w, .. } = el {
-                    width = *w;
+                    width = w.to_logical_px();
                 }
             }
         }

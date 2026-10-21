@@ -502,9 +502,10 @@ fn render_modifier_element<'a>(
                 // `rect`, not the node: the outline belongs to the container, which is smaller than the
                 // node once `minimum_interactive_size` grew the node to the touch target.
                 let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
+                let w = width.to_logical_px();
                 match morph_radii {
-                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, *width, color, r),
-                    None => draw_border(canvas, bx, by, bw, bh, *width, color, shape),
+                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, w, color, r),
+                    None => draw_border(canvas, bx, by, bw, bh, w, color, shape),
                 }
             }
             None
@@ -513,9 +514,10 @@ fn render_modifier_element<'a>(
             let color = (color_fn)();
             if *last_background != Some((color, shape.clone())) {
                 let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
+                let w = width.to_logical_px();
                 match morph_radii {
-                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, *width, &color, r),
-                    None => draw_border(canvas, bx, by, bw, bh, *width, &color, shape),
+                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, w, &color, r),
+                    None => draw_border(canvas, bx, by, bw, bh, w, &color, shape),
                 }
             }
             None

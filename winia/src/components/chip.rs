@@ -764,7 +764,7 @@ mod tests {
             .elements()
             .iter()
             .find_map(|el| match el {
-                crate::modifier::ModifierElement::Border { width, color, .. } => Some((*width, *color)),
+                crate::modifier::ModifierElement::Border { width, color, .. } => Some((width.to_logical_px(), *color)),
                 _ => None,
             })
     }

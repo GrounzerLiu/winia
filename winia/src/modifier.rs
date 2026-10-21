@@ -359,8 +359,8 @@ pub(crate) enum ModifierElement {
         shape: Shape,
     },
     /// 边框
-    Border { width: f32, color: Color, shape: Shape },
-    BorderDynamic { width: f32, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
+    Border { width: Dimension, color: Color, shape: Shape },
+    BorderDynamic { width: Dimension, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
     /// 裁剪
     Clip { shape: Shape },
     /// 内容模糊（GPU 原生，零回读）
@@ -1305,9 +1305,9 @@ impl Modifier {
     }
 
     /// 设置边框
-    pub fn border(self, width: f32, color: Color, shape: impl Into<Shape>) -> Self {
+    pub fn border(self, width: impl Into<Dimension>, color: Color, shape: impl Into<Shape>) -> Self {
         self.push(ModifierElement::Border {
-            width,
+            width: width.into(),
             color,
             shape: shape.into(),
         })
@@ -1317,12 +1317,12 @@ impl Modifier {
     /// 供颜色过渡动画使用；`peek()` 读取动画值）
     pub fn border_dynamic(
         self,
-        width: f32,
+        width: impl Into<Dimension>,
         color_fn: impl Fn() -> Color + Send + Sync + 'static,
         shape: impl Into<Shape>,
     ) -> Self {
         self.push(ModifierElement::BorderDynamic {
-            width,
+            width: width.into(),
             color_fn: Arc::new(color_fn),
             shape: shape.into(),
         })
@@ -3829,6 +3829,36 @@ mod tests {
     /// dependency when read during layout) and they can no longer be handed a layout MODE — a
     /// `Fill` has no meaning for an offset, and this is where the old `Dimension::Fill` silently
     /// resolved to 0.
+
+    /// A border WIDTH is a length: a literal, a `Dp`, or a state resolved at paint time. The width is
+    /// read while the border is drawn, so a dynamic one animates without re-measuring the node.
+    #[test]
+    fn a_border_width_can_be_a_length_or_a_state() {
+        use crate::runtime::state::State;
+        let color = Color::from_argb(255, 0, 0, 0);
+        let width_of = |m: &Modifier| -> f32 {
+            m.elements()
+                .iter()
+                .find_map(|el| match el {
+                    ModifierElement::Border { width, .. } => Some(width.to_logical_px()),
+                    _ => None,
+                })
+                .expect("the chain has a border")
+        };
+
+        let w = State::new(1.0f32);
+        let m = Modifier::new().border(w.clone(), color, Shape::Rectangle);
+        assert_eq!(width_of(&m), 1.0);
+        w.set(3.0);
+        assert_eq!(width_of(&m), 3.0, "a dynamic width resolves the current value");
+
+        // Two dynamic widths are the same parameter: the value is read at paint time, and the
+        // dependency belongs to the state, not to the element.
+        let a = Modifier::new().border(State::new(1.0f32), color, Shape::Rectangle);
+        let b = Modifier::new().border(State::new(2.0f32), color, Shape::Rectangle);
+        assert!(a.param_eq(&b), "a dynamic width is a parameter, not a value");
+    }
+
     #[test]
     fn padding_and_offset_take_lengths_and_track_their_state() {
         use crate::runtime::state::State;
@@ -4001,11 +4031,11 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
         (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
-            aw == bw && ac == bc && as_ == bs
+            dimension_eq(aw, bw) && ac == bc && as_ == bs
         }
         // 动态颜色视为相同（渲染期求值——动画不触发 Enter）
         (BorderDynamic { width: aw, shape: as_, .. }, BorderDynamic { width: bw, shape: bs, .. }) => {
-            aw == bw && as_ == bs
+            dimension_eq(aw, bw) && as_ == bs
         }
         (Clip { shape: as_ }, Clip { shape: bs }) => as_ == bs,
         (Blur { radius: ar }, Blur { radius: br }) => ar == br,
