@@ -1033,7 +1033,7 @@ mod tests {
                 _ => None,
             })
             .expect("ripple 节点应有 ripple");
-        assert_eq!(*ripple, Some(Shape::Pill));
+        assert_eq!(ripple.as_ref().map(|s| s.eval()), Some(Shape::Pill));
         // The background is a dynamic colour: at progress = 1 it is the full-alpha indicator colour.
         let theme = crate::theme::ThemeColors::default_light();
         let background = indicator

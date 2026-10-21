@@ -85,6 +85,7 @@ macro_rules! dyn_from_value {
 dyn_from_value!(f32);
 dyn_from_value!(crate::graphics::Color);
 dyn_from_value!(crate::graphics::Brush);
+dyn_from_value!(crate::graphics::Shape);
 dyn_from_value!(crate::graphics::GraphicsLayerParams);
 
 /// The state forms of one instantiation: a `State`/`Animating`/`DerivedValue` reads through `get()`,
@@ -123,6 +124,7 @@ macro_rules! dyn_from_state {
 dyn_from_state!(f32);
 dyn_from_state!(crate::graphics::Color);
 dyn_from_state!(crate::graphics::Brush);
+dyn_from_state!(crate::graphics::Shape);
 
 impl From<crate::runtime::state::Animating<f32>> for Dyn<f32> {
     fn from(s: crate::runtime::state::Animating<f32>) -> Self {
@@ -181,5 +183,22 @@ mod tests {
         assert!(!literal.same_parameter(&a), "and the comparison is symmetric");
         assert!(literal.same_parameter(&Dyn::from(1.0f32)));
         assert!(!literal.same_parameter(&Dyn::from(2.0f32)));
+    }
+
+    /// A shape carrier: inline when literal, live when driven by a state.
+    #[test]
+    fn a_shape_carrier_follows_its_state() {
+        use crate::graphics::Shape;
+        let s = State::new(Shape::rounded(4.0));
+        let d = Dyn::from(&s);
+        assert!(d.is_dynamic());
+        assert_eq!(d.eval(), Shape::rounded(4.0));
+        s.set(Shape::rounded(8.0));
+        assert_eq!(d.eval(), Shape::rounded(8.0));
+
+        let literal: Dyn<Shape> = Shape::Rectangle.into();
+        assert!(matches!(literal, Dyn::Static(_)));
+        assert!(!literal.same_parameter(&d), "a literal and a state are different requests");
+        assert!(d.same_parameter(&Dyn::from(&State::new(Shape::rounded(1.0)))));
     }
 }

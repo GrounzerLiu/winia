@@ -1438,7 +1438,7 @@ mod tests {
                 .and_then(|node| {
                     node.modifier.elements().iter().find_map(|el| match el {
                         crate::modifier::ModifierElement::Background { shape, .. } => {
-                            Some(shape.clone())
+                            Some(shape.eval())
                         }
                         _ => None,
                     })

@@ -577,7 +577,7 @@ mod tests {
             .elements()
             .iter()
             .find_map(|el| match el {
-                crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                crate::modifier::ModifierElement::Background { shape, .. } => Some(shape.eval()),
                 _ => None,
             })
             .expect("the extended FAB paints a background");

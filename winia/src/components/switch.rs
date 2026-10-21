@@ -662,7 +662,7 @@ mod tests {
                 .iter()
                 .find_map(|n| {
                     let circle_bg = n.modifier.elements().iter().any(|el| {
-                        matches!(el, ModifierElement::Background { shape: Shape::Circle, .. })
+                        matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle))
                     });
                     circle_bg.then_some(n.measured_size.width)
                 })
@@ -949,7 +949,7 @@ mod tests {
                 .modifier
                 .elements()
                 .iter()
-                .any(|el| matches!(el, ModifierElement::Background { shape: Shape::Circle, .. }));
+                .any(|el| matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle)));
             if has_circle_bg {
                 circle_size = node.measured_size.width;
             }
@@ -1049,7 +1049,7 @@ mod tests {
                 match el {
                     ModifierElement::TextContent { content, .. } => text = content.clone(),
                     ModifierElement::Ripple { .. } => container_x = node.position.x,
-                    ModifierElement::Background { shape: Shape::Circle, .. } => {
+                    ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle) => {
                         circle_size = node.measured_size.width;
                     }
                     _ => {}
@@ -1179,7 +1179,7 @@ mod tests {
         let mut text_has = false;
         for node in nodes {
             for el in node.modifier.elements() {
-                if matches!(el, ModifierElement::Background { shape: Shape::Circle, .. }) {
+                if matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle)) {
                     circle_id = node.id;
                 }
                 if matches!(el, ModifierElement::BorderDynamic { .. }) {
@@ -1380,7 +1380,7 @@ mod tests {
             let mut has_circle_bg = false;
             let mut has_border = false;
             for el in node.modifier.elements() {
-                if matches!(el, ModifierElement::Background { shape: Shape::Circle, .. }) {
+                if matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle)) {
                     has_circle_bg = true;
                 }
                 if matches!(el, ModifierElement::BorderDynamic { .. }) {

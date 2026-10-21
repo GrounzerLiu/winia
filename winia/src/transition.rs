@@ -824,9 +824,16 @@ pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
             | ModifierElement::Clip { shape } => Some(shape),
             _ => None,
         })
+        .map(|shape| shape.eval())
         .is_some_and(|s| matches!(s, Shape::Pill | Shape::Circle | Shape::PillToRounded { .. }))
 }
 
+/// The radii a shape normalizes to, for a shared-element flight.
+///
+/// A flight CAPTURES these when it takes its endpoints (the detach and the target setup), so a
+/// dynamic shape is read once at that moment and the flight then interpolates stable radii. The
+/// alternative — re-evaluating per frame — would move the flight's target while the flight runs,
+/// because the underlying shape keeps animating under its own clock.
 pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4] {
     let shape = modifier.elements().iter().rev().find_map(|el| match el {
         ModifierElement::Background { shape, .. }
@@ -834,15 +841,16 @@ pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4
         | ModifierElement::BorderDynamic { shape, .. }
         | ModifierElement::Clip { shape } => Some(shape),
         _ => None,
-    });
+    })
+    .map(|shape| shape.eval());
     match shape {
         None => [0.0; 4],
         Some(Shape::Rectangle) => [0.0; 4],
-        Some(Shape::RoundedRect { corner_radius }) => [*corner_radius; 4],
-        Some(Shape::TopRoundedRect { radius }) => [*radius, *radius, 0.0, 0.0],
+        Some(Shape::RoundedRect { corner_radius }) => [corner_radius; 4],
+        Some(Shape::TopRoundedRect { radius }) => [radius, radius, 0.0, 0.0],
         // Corner order matches `RRect::new_rect_radii`: UL, UR, LR, LL.
-        Some(Shape::RightRoundedRect { radius }) => [0.0, *radius, *radius, 0.0],
-        Some(Shape::LeftRoundedRect { radius }) => [*radius, 0.0, 0.0, *radius],
+        Some(Shape::RightRoundedRect { radius }) => [0.0, radius, radius, 0.0],
+        Some(Shape::LeftRoundedRect { radius }) => [radius, 0.0, 0.0, radius],
         // A pill part-way to a fixed radius — a shared element flight carries the same shape the
         // renderer paints, and here the box IS known, so the percent end resolves exactly.
         Some(Shape::PillToRounded { corner_radius, t }) => {
@@ -853,7 +861,7 @@ pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4
         // Already per-corner: Compose's (top-start, top-end, bottom-end, bottom-start) in geometric
         // corners, which is the same order as `RRect::new_rect_radii`.
         Some(Shape::Corners { top_left, top_right, bottom_right, bottom_left }) => {
-            [*top_left, *top_right, *bottom_right, *bottom_left]
+            [top_left, top_right, bottom_right, bottom_left]
         }
         Some(Shape::Pill) | Some(Shape::Circle) => {
             let m = w.min(h) / 2.0;

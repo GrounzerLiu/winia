@@ -349,23 +349,23 @@ pub(crate) enum ModifierElement {
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
-    Shadow { params: ShadowParams, shape: Shape, clip: bool },
+    Shadow { params: ShadowParams, shape: crate::graphics::Dyn<Shape>, clip: bool },
 
     // ── Draw 类 ──
     /// Background colour + shape. The colour is a [`Dyn`](crate::graphics::Dyn): a literal is stored
     /// inline, a closure is evaluated per paint.
-    Background { color: crate::graphics::Dyn<Color>, shape: Shape },
+    Background { color: crate::graphics::Dyn<Color>, shape: crate::graphics::Dyn<Shape> },
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
         brush: crate::graphics::Dyn<crate::graphics::Brush>,
-        shape: Shape,
+        shape: crate::graphics::Dyn<Shape>,
     },
     /// 边框
-    Border { width: Dimension, color: Color, shape: Shape },
-    BorderDynamic { width: Dimension, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
+    Border { width: Dimension, color: Color, shape: crate::graphics::Dyn<Shape> },
+    BorderDynamic { width: Dimension, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: crate::graphics::Dyn<Shape> },
     /// 裁剪
-    Clip { shape: Shape },
+    Clip { shape: crate::graphics::Dyn<Shape> },
     /// 内容模糊（GPU 原生，零回读）
     Blur { radius: f32 },
     /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
@@ -375,7 +375,7 @@ pub(crate) enum ModifierElement {
     /// 状态过渡动画由后续迭代接入。
     TextFieldVisual {
         variant: crate::text::field::TextFieldVariant,
-        shape: Shape,
+        shape: crate::graphics::Dyn<Shape>,
         colors: crate::text::field::TextFieldColors,
         enabled: bool,
         /// material3's `readOnly`, carried here because the RENDER needs it: material3 draws its caret as
@@ -451,7 +451,7 @@ pub(crate) enum ModifierElement {
         source: MutableInteractionSource,
         color: Color,
         bounded: bool,
-        shape: Option<Shape>,
+        shape: Option<crate::graphics::Dyn<Shape>>,
         /// The BACKGROUND state layer's diameter when it is fixed (Compose's `ripple(bounded, radius)` names a
         /// radius; material3's checkbox and radio pass `StateLayerSize`, 40 dp). `None` = derive it from the
         /// node's diagonal, which is this framework's original behaviour.
@@ -1166,7 +1166,7 @@ impl Modifier {
     pub fn shadow(
         self,
         elevation: f32,
-        shape: impl Into<Shape>,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
         clip: bool,
         color: Color,
     ) -> Self {
@@ -1174,13 +1174,24 @@ impl Modifier {
             return self;
         }
         let shape = shape.into();
-        self.merge_graphics_layer(move |p| {
+        let place = move |p: &mut GraphicsLayerParams, shape: Shape| {
             p.shadow_elevation = elevation;
             p.shadow_shape = Some(shape);
             p.clip = clip;
             p.ambient_shadow_color = color;
             p.spot_shadow_color = color;
-        })
+        };
+        // A dynamic shape has to be read at paint time; a static one is applied now, which keeps the
+        // layer a plain value instead of a closure.
+        if shape.is_dynamic() {
+            self.merge_graphics_layer_per_paint(move |p| {
+                let shape = shape.eval();
+                place(p, shape);
+            })
+        } else {
+            let value = shape.eval();
+            self.merge_graphics_layer(move |p| place(p, value))
+        }
     }
 
     /// `shadow(elevation)`——便捷版（默认形状/黑色/自动 clip）
@@ -1191,7 +1202,7 @@ impl Modifier {
     /// `drop_shadow(shape, params)`（对标 Compose `Modifier.dropShadow`）——
     /// 完全自定义单层阴影（radius/spread/offset/color/alpha）。多个
     /// drop_shadow 可叠加（多阴影，Compose vararg 语义）。
-    pub fn drop_shadow(self, shape: impl Into<Shape>, params: ShadowParams) -> Self {
+    pub fn drop_shadow(self, shape: impl Into<crate::graphics::Dyn<Shape>>, params: ShadowParams) -> Self {
         self.push(ModifierElement::Shadow {
             params,
             shape: shape.into(),
@@ -1222,7 +1233,7 @@ impl Modifier {
     /// **原则**：静态绘制属性传 `Color`；需要动画（颜色随帧变化）时传闭包，
     /// 闭包内用 `State::peek()` 读取动画值（不要用 `get()`——会注册依赖触发重组）。
     /// 动画值由 `Visual::set` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
-    pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<Shape>) -> Self {
+    pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
         self.push(ModifierElement::Background {
             color: color.into(),
             shape: shape.into(),
@@ -1245,7 +1256,7 @@ impl Modifier {
     pub fn background_brush(
         self,
         brush: impl Into<crate::graphics::BrushSource>,
-        shape: impl Into<Shape>,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
     ) -> Self {
         self.push(ModifierElement::BackgroundBrush {
             brush: brush.into(),
@@ -1315,7 +1326,7 @@ impl Modifier {
         self,
         width: impl Into<Dimension>,
         color: impl Into<crate::graphics::BorderColor>,
-        shape: impl Into<Shape>,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
     ) -> Self {
         let width = width.into();
         let shape = shape.into();
@@ -1330,7 +1341,7 @@ impl Modifier {
     }
 
     /// 设置裁剪形状
-    pub fn clip(self, shape: impl Into<Shape>) -> Self {
+    pub fn clip(self, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
         self.push(ModifierElement::Clip {
             shape: shape.into(),
         })
@@ -1350,7 +1361,7 @@ impl Modifier {
     pub fn text_field_visual(
         self,
         variant: crate::text::field::TextFieldVariant,
-        shape: Shape,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
         colors: crate::text::field::TextFieldColors,
         enabled: bool,
         read_only: bool,
@@ -1362,7 +1373,7 @@ impl Modifier {
     ) -> Self {
         self.push(ModifierElement::TextFieldVisual {
             variant,
-            shape,
+            shape: shape.into(),
             colors,
             enabled,
             read_only,
@@ -1511,13 +1522,13 @@ impl Modifier {
         source: &MutableInteractionSource,
         color: Color,
         bounded: bool,
-        shape: Shape,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
     ) -> Self {
         self.push(ModifierElement::Ripple {
             source: source.clone(),
             color,
             bounded,
-            shape: Some(shape),
+            shape: Some(shape.into()),
             state_layer_diameter: None,
         })
     }
@@ -1714,9 +1725,14 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     }
 
     /// 图层阴影形状（对标 Compose `graphicsLayer.shape`——默认矩形）
-    pub fn shadow_shape(self, shape: impl Into<Shape>) -> Self {
+    pub fn shadow_shape(self, shape: impl Into<crate::graphics::Dyn<Shape>>) -> Self {
         let shape = shape.into();
-        self.merge_graphics_layer(move |p| p.shadow_shape = Some(shape.clone()))
+        if shape.is_dynamic() {
+            self.merge_graphics_layer_per_paint(move |p| p.shadow_shape = Some(shape.eval()))
+        } else {
+            let value = shape.eval();
+            self.merge_graphics_layer(move |p| p.shadow_shape = Some(value))
+        }
     }
 
     /// 图层环境光阴影颜色（对标 Compose `ambientShadowColor`）。
@@ -1765,6 +1781,51 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
             f(&mut p);
             elements.push(ModifierElement::GraphicsLayer {
                 params: crate::graphics::Dyn::Static(p),
+            });
+        }
+        self.elements = elements;
+        self
+    }
+
+    /// Like [`merge_graphics_layer`](Self::merge_graphics_layer), but the mutator runs on EVERY paint:
+    /// the element always becomes (or stays) a dynamic layer. Use it when the mutator reads something
+    /// that changes per frame (a dynamic shape); a static value keeps the plain form and its no-alloc
+    /// path.
+    fn merge_graphics_layer_per_paint(
+        mut self,
+        f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static,
+    ) -> Self {
+        let f = Arc::new(f);
+        let mut elements = std::mem::take(&mut self.elements);
+        if let Some(el) = elements
+            .iter_mut()
+            .find(|e| matches!(e, ModifierElement::GraphicsLayer { .. }))
+        {
+            if let ModifierElement::GraphicsLayer { params } = el {
+                let old = params.clone();
+                let f = f.clone();
+                *params = match old {
+                    crate::graphics::Dyn::Static(base) => {
+                        crate::graphics::Dyn::Dynamic(Arc::new(move || {
+                            let mut p = base.clone();
+                            f(&mut p);
+                            p
+                        }))
+                    }
+                    crate::graphics::Dyn::Dynamic(g) => crate::graphics::Dyn::Dynamic(Arc::new(move || {
+                        let mut p = g();
+                        f(&mut p);
+                        p
+                    })),
+                };
+            }
+        } else {
+            elements.push(ModifierElement::GraphicsLayer {
+                params: crate::graphics::Dyn::Dynamic(Arc::new(move || {
+                    let mut p = GraphicsLayerParams::default();
+                    f(&mut p);
+                    p
+                })),
             });
         }
         self.elements = elements;
@@ -3996,7 +4057,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // Same rule as the colour background: a dynamic brush is a parameter, a changed STATIC brush
         // re-enters (otherwise the node keeps painting the old gradient), and the shape is part of it.
         (BackgroundBrush { brush: abrush, shape: ashape }, BackgroundBrush { brush: bbrush, shape: bshape }) => {
-            abrush.same_parameter(bbrush) && ashape == bshape
+            abrush.same_parameter(bbrush) && ashape.same_parameter(bshape)
         }
         // Semantics carries visible state (a tab's selection): a change must re-enter the node.
         (Semantics(a), Semantics(b)) => a == b,
@@ -4017,21 +4078,21 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             SharedScopeOverlay { scope_id: b_id, z_index: b_z },
         ) => a_id == b_id && a_z == b_z,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
-            ap == bp && as_ == bs && ac == bc
+            ap == bp && as_.same_parameter(bs) && ac == bc
         }
         // A dynamic colour is a parameter (it is read at paint time); a static one that CHANGES has to
         // re-enter, or the node keeps painting the old colour.
         (Background { color: ac, shape: as_ }, Background { color: bc, shape: bs }) => {
-            ac.same_parameter(bc) && as_ == bs
+            ac.same_parameter(bc) && as_.same_parameter(bs)
         }
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
-            dimension_eq(aw, bw) && ac == bc && as_ == bs
+            dimension_eq(aw, bw) && ac == bc && as_.same_parameter(bs)
         }
         // 动态颜色视为相同（渲染期求值——动画不触发 Enter）
         (BorderDynamic { width: aw, shape: as_, .. }, BorderDynamic { width: bw, shape: bs, .. }) => {
-            dimension_eq(aw, bw) && as_ == bs
+            dimension_eq(aw, bw) && as_.same_parameter(bs)
         }
-        (Clip { shape: as_ }, Clip { shape: bs }) => as_ == bs,
+        (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
         (Blur { radius: ar }, Blur { radius: br }) => ar == br,
         (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar == br,
         (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh },
@@ -4058,7 +4119,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (
             Ripple { source: as_, color: ac, bounded: abc, shape: ash, state_layer_diameter: asl },
             Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, state_layer_diameter: bsl },
-        ) => as_ == bs && ac == bc && abc == bbc && ash == bsh && asl == bsl,
+        ) => as_ == bs && ac == bc && abc == bbc && opt_shape_eq(ash, bsh) && asl == bsl,
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
          ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {
@@ -4145,6 +4206,17 @@ fn opt_dimension_eq(a: &Option<Dimension>, b: &Option<Dimension>) -> bool {
     }
 }
 
+fn opt_shape_eq(
+    a: &Option<crate::graphics::Dyn<Shape>>,
+    b: &Option<crate::graphics::Dyn<Shape>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.same_parameter(b),
+        _ => false,
+    }
+}
+
 fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
     a.same_parameter(b)
 }
@@ -4195,6 +4267,27 @@ mod param_eq_tests {
         let d1 = Modifier::new().background_brush(&s1, Shape::rounded(8.0));
         let d2 = Modifier::new().background_brush(&s2, Shape::rounded(8.0));
         assert!(d1.param_eq(&d2), "two dynamic brushes are the same request");
+        assert!(!a.param_eq(&d1), "a literal turning into a state is a change");
+    }
+
+
+    /// A shape is a `Dyn<Shape>`: a changed STATIC shape re-enters, two dynamic shapes are the same
+    /// request, and a literal turning into a state is a change.
+    #[test]
+    fn param_eq_compares_a_static_shape() {
+        use crate::runtime::state::State;
+        let red = Color::from_argb(255, 255, 0, 0);
+        let a = Modifier::new().background(red, Shape::rounded(4.0));
+        let b = Modifier::new().background(red, Shape::rounded(8.0));
+        assert!(!a.param_eq(&b), "a changed static shape must re-enter");
+        let same = Modifier::new().background(red, Shape::rounded(4.0));
+        assert!(a.param_eq(&same));
+
+        let s1 = State::new(Shape::rounded(4.0));
+        let s2 = State::new(Shape::rounded(8.0));
+        let d1 = Modifier::new().background(red, &s1);
+        let d2 = Modifier::new().background(red, &s2);
+        assert!(d1.param_eq(&d2), "two dynamic shapes are the same request");
         assert!(!a.param_eq(&d1), "a literal turning into a state is a change");
     }
 

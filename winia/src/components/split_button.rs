@@ -1211,7 +1211,7 @@ mod tests {
             .elements()
             .iter()
             .filter_map(|el| match el {
-                crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                crate::modifier::ModifierElement::Background { shape, .. } => Some(shape.eval()),
                 _ => None,
             })
             .collect()

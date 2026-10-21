@@ -455,8 +455,11 @@ fn render_modifier_element<'a>(
 ) -> Option<TextParams<'a>> {
     match el {
         ModifierElement::Background { color: bg, shape } => {
+            // Evaluated ONCE per element per paint: the morph path, the fill and the border-merge
+            // bookkeeping all see the same shape.
+            let shape = shape.eval();
             let color = bg.eval();
-            *last_background = Some((color, shape.clone()));
+            *last_background = Some((color, shape));
             match morph_radii {
                 Some(r) => {
                     let mut paint = skia_safe::Paint::default();
@@ -470,11 +473,12 @@ fn render_modifier_element<'a>(
                         &paint,
                     );
                 }
-                None => draw_background(canvas, rect, &color, shape),
+                None => draw_background(canvas, rect, &color, &shape),
             }
             None
         }
         ModifierElement::BackgroundBrush { brush: brush_spec, shape } => {
+            let shape = shape.eval();
             // The brush is resolved here, at paint time, which is what lets a dynamic value read
             // animated state per frame. `last_background` is deliberately NOT set: the border-merge
             // optimization below compares colors, and a gradient is not one.
@@ -490,34 +494,36 @@ fn render_modifier_element<'a>(
                         &paint,
                     );
                 }
-                None => draw_brush(canvas, rect, &brush, shape),
+                None => draw_brush(canvas, rect, &brush, &shape),
             }
             None
         }
         ModifierElement::Border { width, color, shape } => {
+            let shape = shape.eval();
             // When the border's colour and shape both equal the container's, collapse it into the fill
             // (M3 `drawBox` semantics): stroking a translucent colour over that same fill blends it
             // twice, and the border reads visibly darker than the interior.
-            if *last_background != Some((*color, shape.clone())) {
+            if *last_background != Some((*color, shape)) {
                 // `rect`, not the node: the outline belongs to the container, which is smaller than the
                 // node once `minimum_interactive_size` grew the node to the touch target.
                 let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
                 let w = width.to_logical_px();
                 match morph_radii {
                     Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, w, color, r),
-                    None => draw_border(canvas, bx, by, bw, bh, w, color, shape),
+                    None => draw_border(canvas, bx, by, bw, bh, w, color, &shape),
                 }
             }
             None
         }
         ModifierElement::BorderDynamic { width, color_fn, shape } => {
+            let shape = shape.eval();
             let color = (color_fn)();
-            if *last_background != Some((color, shape.clone())) {
+            if *last_background != Some((color, shape)) {
                 let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
                 let w = width.to_logical_px();
                 match morph_radii {
                     Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, w, &color, r),
-                    None => draw_border(canvas, bx, by, bw, bh, w, &color, shape),
+                    None => draw_border(canvas, bx, by, bw, bh, w, &color, &shape),
                 }
             }
             None
@@ -1219,7 +1225,8 @@ fn render_pass1(
     // 阴影画在背景之上 → 卡片被压暗（绿卡 ×(1-0.43)≈0.6——实测 bug）
     for el in node.modifier.elements() {
         if let ModifierElement::Shadow { params, shape, .. } = el {
-            draw_shadow_layer(canvas, rect, shape, params);
+            let shape = shape.eval();
+            draw_shadow_layer(canvas, rect, &shape, params);
         }
     }
 
@@ -1232,11 +1239,11 @@ fn render_pass1(
                 blur_radius = Some(*radius);
             }
             ModifierElement::Clip { shape } => {
-                clip_shape = Some(shape.clone());
+                clip_shape = Some(shape.eval());
             }
             ModifierElement::Shadow { shape, clip, .. } => {
                 if *clip {
-                    clip_shape = Some(shape.clone());
+                    clip_shape = Some(shape.eval());
                 }
             }
             ModifierElement::VerticalScroll { state } => {
@@ -1284,7 +1291,8 @@ fn render_pass1(
                     })
                 } else { None };
                 let focus_p = focus_progress.peek();
-                draw_text_field_container(canvas, container_rect, variant, shape, colors, &indicator_color.peek(), focus_p, cutout);
+                let shape = shape.eval();
+                draw_text_field_container(canvas, container_rect, variant, &shape, colors, &indicator_color.peek(), focus_p, cutout);
                 // 支持文本：容器底部外侧 4dp
                 if let Some(sv) = supporting {
                     draw_text_field_aux_text(
@@ -1574,9 +1582,9 @@ fn render_pass1(
             | ModifierElement::BackgroundBrush { shape, .. }
             | ModifierElement::Border { shape, .. }
             | ModifierElement::BorderDynamic { shape, .. }
-            | ModifierElement::Clip { shape } => Some(*shape),
+            | ModifierElement::Clip { shape } => Some(shape),
             _ => None,
-        }).unwrap_or(crate::graphics::Shape::Rectangle);
+        }).map(|shape| shape.eval()).unwrap_or(crate::graphics::Shape::Rectangle);
         // `paint_rect`, not `rect`: the ring hugs the container. Drawing the container's rounded shape on
         // the (possibly grown) node box put a squircle outside the control on the two smallest sizes.
         draw_focus(canvas, paint_rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
@@ -1723,14 +1731,12 @@ fn draw_ripple(
         // Background/Border 推断（通用 clickable + ripple 保持可用）
         let mut clipped = false;
         if *bounded {
-            let clip_shape = (*shape).or_else(|| {
+            let clip_shape = shape.clone().map(|shape| shape.eval()).or_else(|| {
                 node.modifier.elements().iter().rev().find_map(|el| match el {
                     ModifierElement::Background { shape, .. }
                     | ModifierElement::BackgroundBrush { shape, .. }
                     | ModifierElement::Border { shape, .. }
-                    | ModifierElement::BorderDynamic { shape, .. } => {
-                        Some(*shape)
-                    }
+                    | ModifierElement::BorderDynamic { shape, .. } => Some(shape.eval()),
                     _ => None,
                 })
             });
@@ -2812,6 +2818,44 @@ mod tests {
         assert!((bdy - top as f32).abs() < 1e-3, "translate 场景像素精确对齐：{bdy} vs {top}");
     }
     use crate::graphics::GraphicsLayerParams;
+
+
+    /// A dynamic SHAPE is evaluated per paint: the same element paints a full rectangle and, after
+    /// the state changes, a rounded box whose corner is transparent.
+    #[test]
+    fn a_dynamic_shape_changes_what_the_background_paints() {
+        use crate::graphics::{Color, Shape};
+        use crate::runtime::state::State;
+        let shape_state = State::new(Shape::Rectangle);
+        let color = Color::from_argb(255, 255, 0, 0);
+        let modifier = crate::modifier::Modifier::new().background(color, &shape_state);
+        let el = &modifier.elements()[0];
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let rect = skia_safe::Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let paint = |surface: &mut skia_safe::Surface| {
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let mut last_background = None;
+            render_modifier_element(canvas, el, rect, &mut last_background, None);
+        };
+        // (2,2) of a 100x100 box: inside a rectangle, outside a 40 px rounded corner.
+        let corner_alpha = |surface: &mut skia_safe::Surface| -> u8 {
+            let pm = surface.peek_pixels().expect("pixmap");
+            let pixels: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            pixels[2 * 100 + 2][3]
+        };
+
+        paint(&mut surface);
+        assert!(corner_alpha(&mut surface) > 0, "a rectangle background paints the corner");
+
+        shape_state.set(Shape::rounded(40.0));
+        paint(&mut surface);
+        assert_eq!(
+            corner_alpha(&mut surface),
+            0,
+            "a rounded shape leaves the corner transparent"
+        );
+    }
 
     #[test]
     fn test_gl_3d_matrix_none_without_3d() {

@@ -122,7 +122,7 @@ value is read — the same `State<f32>` can drive any of the three.
 | --- | --- | --- | --- |
 | **Composition** — a component parameter, a structural branch | `state.get()` | the reading composable re-runs | highest |
 | **Layout** — size, padding, offset, min/max | `size`/`width`/`height` take `impl Into<SizeValue>`; `offset`/`padding`/`min`/`max` take `impl Into<Dimension>` — either accepts `State<f32>`, `Animating<f32>`, `DerivedValue<f32>` or a closure | the node is measured again (its subtree with it) | medium |
-| **Paint** — alpha, scale, translation, colour, border width | `graphics_layer(closure)` / `background(closure)` / a `Dimension` on `border`, all read at draw time (`peek()` for a closure) | the node is painted again; nothing is measured or composed | lowest |
+| **Paint** — alpha, scale, translation, colour, shape, border width | `graphics_layer(closure)` / `background(closure)` / `Dyn<Shape>` on background/border/clip / a `Dimension` on `border`, all read at draw time (`peek()` for a closure) | the node is painted again; nothing is measured or composed | lowest |
 
 Every read in the paint row uses `peek()`. Paint runs with the dependency tracker off
 (`DEP_MODE::None`), so `get()` would do the same thing today — and would attach the dependency to

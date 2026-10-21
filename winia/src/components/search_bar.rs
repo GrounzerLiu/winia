@@ -1334,11 +1334,11 @@ mod tests {
             'walk: while let Some(i) = queue.pop_front() {
                 for el in nodes[i].modifier.elements() {
                     if let crate::modifier::ModifierElement::Clip { shape } = el {
-                        found = match shape {
+                        found = match shape.eval() {
                             crate::graphics::Shape::RoundedRect { corner_radius }
-                                if *corner_radius > 0.5 =>
+                                if corner_radius > 0.5 =>
                             {
-                                Some(*corner_radius)
+                                Some(corner_radius)
                             }
                             _ => None,
                         };

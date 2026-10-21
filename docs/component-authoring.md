@@ -183,9 +183,11 @@ Rules that follow:
   (`graphics_layer`, `background`, `border`) reads with `peek()` for that reason.
 - **One carrier, many names.** `AxisValue`, `BackgroundColor`, `BorderColor`, `BrushSource` and
   `GraphicsLayerSpec` are aliases of `graphics::Dyn<T>` (`Dyn<f32>`, `Dyn<Color>`, `Dyn<Brush>`,
-  `Dyn<GraphicsLayerParams>`). `eval()` and `same_parameter()` therefore have exactly one
-  implementation, and a static value is stored inline — a constant background or layer parameter
-  allocates no closure.
+  `Dyn<GraphicsLayerParams>`). Shape-carrying modifiers (`background`, `border`, `clip`, `shadow`,
+  `drop_shadow`, `background_brush`, `ripple_with_shape`) take `impl Into<Dyn<Shape>>` directly.
+  `eval()` and `same_parameter()` therefore have exactly one implementation, and a static value is
+  stored inline — a constant background or layer parameter allocates no closure. A paint-time value
+  read inside one of those modifiers uses `peek()` (see the phase bullet above).
 - **Teach `element_param_eq` the new parameter.** A dynamic value is a PARAMETER, not a value: it
   must compare equal to another dynamic one (`same_parameter` on `Dimension` / `SizeValue` / `AxisValue`), or the
   component re-enters on every frame and can never Skip.

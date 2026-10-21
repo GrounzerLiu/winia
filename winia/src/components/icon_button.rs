@@ -905,7 +905,7 @@ mod tests {
         let radius = |composer: &crate::runtime::composer::Composer| -> f32 {
             let painted = composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                    crate::modifier::ModifierElement::Background { shape, .. } => Some(shape.eval()),
                     _ => None,
                 })
             });

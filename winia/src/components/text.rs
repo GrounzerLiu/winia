@@ -113,7 +113,11 @@ impl Text {
     pub fn style(mut self, style: TextStyle) -> Self { self.style = Some(style); self }
 
     /// 设置背景色和形状（委托到 Modifier::background）
-    pub fn background(mut self, color: Color, shape: impl Into<crate::graphics::Shape>) -> Self {
+    pub fn background(
+        mut self,
+        color: Color,
+        shape: impl Into<crate::graphics::Dyn<crate::graphics::Shape>>,
+    ) -> Self {
         self.modifier = self.modifier.background(color, shape);
         self
     }

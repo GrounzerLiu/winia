@@ -786,30 +786,40 @@ impl Button {
             crate::animation::AnimationSpec::Spring(crate::animation::SpringSpec::effects_default()),
         );
         let pressed_radius = self.size_variant.pressed_container_radius();
-        let shape = match self.shape {
+        // The press morph is a PAINT-time value: the closures read the animated progress with
+        // `peek()`, so pressing no longer recomposes the button every frame. ONE carrier is handed to
+        // the background, the border, the ripple and the shadow, so they all read the same t.
+        let shape: crate::graphics::Dyn<Shape> = match self.shape {
             // A percent-50 corner can only be resolved against the box it paints into, so the
             // transition itself carries both ends: `PillToRounded { t: 0.0 }` IS the pill. The
             // two ENDS still return the plain shapes — a button that never pressed should carry
             // the very shape the caller asked for, not the transition resting at its start.
             Shape::Pill | Shape::Circle => {
-                let t = press_progress.get();
-                if t <= 0.0 {
-                    self.shape
-                } else if t >= 1.0 {
-                    Shape::rounded(pressed_radius)
-                } else {
-                    Shape::PillToRounded {
-                        corner_radius: pressed_radius,
-                        t,
+                let base = self.shape;
+                let p = press_progress.clone();
+                crate::graphics::Dyn::Dynamic(std::sync::Arc::new(move || {
+                    let t = p.peek();
+                    if t <= 0.0 {
+                        base
+                    } else if t >= 1.0 {
+                        Shape::rounded(pressed_radius)
+                    } else {
+                        Shape::PillToRounded {
+                            corner_radius: pressed_radius,
+                            t,
+                        }
                     }
-                }
+                }))
             }
             // A fixed radius interpolates directly.
-            Shape::RoundedRect { corner_radius } => Shape::rounded(
-                corner_radius + (pressed_radius - corner_radius) * press_progress.get(),
-            ),
+            Shape::RoundedRect { corner_radius } => {
+                let p = press_progress.clone();
+                crate::graphics::Dyn::Dynamic(std::sync::Arc::new(move || {
+                    Shape::rounded(corner_radius + (pressed_radius - corner_radius) * p.peek())
+                }))
+            }
             // Per-corner, top-only and rectangle shapes have nothing to interpolate.
-            other => other,
+            other => crate::graphics::Dyn::Static(other),
         };
         let (pad_s, pad_t, pad_e, pad_b) = self.content_padding.unwrap_or_else(|| {
             if self.size_named {
@@ -846,13 +856,13 @@ impl Button {
         // and clips nothing.
         modifier = match self.style {
             ButtonStyle::Filled | ButtonStyle::Elevated | ButtonStyle::Tonal => {
-                modifier.background(container, shape)
+                modifier.background(container, shape.clone())
             }
             ButtonStyle::Outlined => modifier,
             ButtonStyle::Text => modifier.border(
                 0.0,
                 crate::graphics::Color::from_argb(0, 0, 0, 0),
-                shape,
+                shape.clone(),
             ),
         };
         // 边框：显式 border 优先，否则 Outlined 默认 1px outline 色
@@ -871,15 +881,16 @@ impl Button {
             }
         });
         if let Some(b) = border {
-            modifier = modifier.border(b.width, b.color, shape);
+            modifier = modifier.border(b.width, b.color, shape.clone());
         }
 
         // 阴影渲染走 graphics_layer 动态闭包（shadow_elevation 每帧读取动画值——
         // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Button shape）
         if let Some(anim) = elevation_anim {
+            let shape = shape.clone();
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
                 shadow_elevation: anim.peek(),
-                shadow_shape: Some(shape),
+                shadow_shape: Some(shape.eval()),
                 ..Default::default()
             });
         }
@@ -1602,7 +1613,7 @@ mod tests {
                 .iter()
                 .find_map(|node| {
                     node.modifier.elements().iter().find_map(|el| match el {
-                        crate::modifier::ModifierElement::Background { shape, .. } => Some(*shape),
+                        crate::modifier::ModifierElement::Background { shape, .. } => Some(shape.eval()),
                         _ => None,
                     })
                 })
@@ -1658,6 +1669,69 @@ mod tests {
             Shape::rounded(8.0),
             "and it arrives at Small's PressedContainerShape (CornerSmall = 8)"
         );
+    }
+
+
+    /// The press morph is PAINTED, not composed: an animation tick must not dirty a single slot of
+    /// the button. Before the shape became a paint-time value, the shape closure read the progress
+    /// with `get()` during composition, so every frame of the spring re-entered the button.
+    #[test]
+    fn the_press_morph_does_not_recompose_the_button() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let source = MutableInteractionSource::new();
+        let src = source.clone();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            let src = src.clone();
+            let theme = theme.clone();
+            composer.compose(move |ctx| {
+                crate::theme::WiniaTheme::with_theme(theme, ctx, |ctx| {
+                    Button::new()
+                        .interaction_source(src.clone())
+                        .on_click(|| {})
+                        .build(ctx, |ctx| {
+                            crate::components::text::Text::new("Save").build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+
+        // Settle: a frame with no pending change composes no dirty slot.
+        build(&mut composer);
+        build(&mut composer);
+        assert_eq!(
+            composer.compose_dirty_count, 0,
+            "a settled frame enters nothing (got {})",
+            composer.compose_dirty_count
+        );
+
+        // The press itself is a change, so exactly this one frame enters the button.
+        source.emit_press();
+        build(&mut composer);
+        assert!(
+            composer.compose_dirty_count > 0,
+            "the press dirty the button once"
+        );
+        build(&mut composer);
+
+        // Tick the spring. A composition-time reader of the morph would dirty a slot here; a paint-time
+        // one leaves the composition alone.
+        let mut worst = 0;
+        for _ in 0..30 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+            worst = worst.max(composer.compose_dirty_count);
+        }
+        assert_eq!(
+            worst, 0,
+            "no animation tick may re-enter the button (worst frame entered {worst} slot(s))"
+        );
+        crate::animation::clear_all_animations();
     }
 
     // ── component stylings ──
