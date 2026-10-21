@@ -91,7 +91,7 @@ fn render_pass1(nodes, root_idx, idx, canvas, parent_x, parent_y) {
 3. `TextFieldVisual`：M3 Filled/Outlined 容器 + supporting 文本 + Outlined label 缺口 cutout（render.rs:713-758；cutout 定位用节点绝对坐标而非 parent_x——用错缺口画偏）。
 4. `CustomDraw` 闭包 `f(canvas, rect)`（render.rs:760-762）。
 5. `DrawIcon` / `ImageContent` 画在 **padding 内缩的内容区域**（render.rs:763-780）。
-6. `render_modifier_element`（render.rs:289-330）：Background/Border/BorderDynamic/TextContent。
+6. `render_modifier_element`（render.rs）：Background/BackgroundBrush/Border/TextContent。
    - **Background**：`color_fn()` 渲染期求值；记录 `*last_background = Some((color, shape))`。
    - **Border**：`if *last_background != Some((*color, shape))` 才画描边——**决策+原因**：边框色与形状等于容器时合并为纯填充（M3 drawBox 语义），半透明同色叠 stroke 会双重混合、边框明显深于内部。
 

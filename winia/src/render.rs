@@ -500,25 +500,13 @@ fn render_modifier_element<'a>(
         }
         ModifierElement::Border { width, color, shape } => {
             let shape = shape.eval();
+            let color = color.eval();
             // When the border's colour and shape both equal the container's, collapse it into the fill
             // (M3 `drawBox` semantics): stroking a translucent colour over that same fill blends it
             // twice, and the border reads visibly darker than the interior.
-            if *last_background != Some((*color, shape)) {
+            if *last_background != Some((color, shape)) {
                 // `rect`, not the node: the outline belongs to the container, which is smaller than the
                 // node once `minimum_interactive_size` grew the node to the touch target.
-                let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
-                let w = width.to_logical_px();
-                match morph_radii {
-                    Some(r) => draw_border_morphed(canvas, bx, by, bw, bh, w, color, r),
-                    None => draw_border(canvas, bx, by, bw, bh, w, color, &shape),
-                }
-            }
-            None
-        }
-        ModifierElement::BorderDynamic { width, color_fn, shape } => {
-            let shape = shape.eval();
-            let color = (color_fn)();
-            if *last_background != Some((color, shape)) {
                 let (bx, by, bw, bh) = (rect.x(), rect.y(), rect.width(), rect.height());
                 let w = width.to_logical_px();
                 match morph_radii {
@@ -1581,7 +1569,6 @@ fn render_pass1(
             ModifierElement::Background { shape, .. }
             | ModifierElement::BackgroundBrush { shape, .. }
             | ModifierElement::Border { shape, .. }
-            | ModifierElement::BorderDynamic { shape, .. }
             | ModifierElement::Clip { shape } => Some(shape),
             _ => None,
         }).map(|shape| shape.eval()).unwrap_or(crate::graphics::Shape::Rectangle);
@@ -1735,8 +1722,7 @@ fn draw_ripple(
                 node.modifier.elements().iter().rev().find_map(|el| match el {
                     ModifierElement::Background { shape, .. }
                     | ModifierElement::BackgroundBrush { shape, .. }
-                    | ModifierElement::Border { shape, .. }
-                    | ModifierElement::BorderDynamic { shape, .. } => Some(shape.eval()),
+                    | ModifierElement::Border { shape, .. } => Some(shape.eval()),
                     _ => None,
                 })
             });
@@ -2819,6 +2805,37 @@ mod tests {
     }
     use crate::graphics::GraphicsLayerParams;
 
+
+    /// The border's colour is a carrier too: a state-driven border repaints without recomposing.
+    #[test]
+    fn a_dynamic_border_colour_is_read_at_paint() {
+        use crate::graphics::{Color, Shape};
+        use crate::runtime::state::State;
+        let state = State::new(Color::from_argb(255, 255, 0, 0));
+        let modifier = crate::modifier::Modifier::new().border(4.0, &state, Shape::Rectangle);
+        let el = &modifier.elements()[0];
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).unwrap();
+        let rect = skia_safe::Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let paint = |surface: &mut skia_safe::Surface| {
+            let canvas = surface.canvas();
+            canvas.clear(skia_safe::Color::TRANSPARENT);
+            let mut last_background = None;
+            render_modifier_element(canvas, el, rect, &mut last_background, None);
+        };
+        // A 4 px stroke centred on the edge covers y in 0..4, so (50, 1) is fully inside it.
+        let top_pixel = |surface: &mut skia_safe::Surface| -> [u8; 4] {
+            let pm = surface.peek_pixels().expect("pixmap");
+            let pixels: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+            pixels[100 + 50]
+        };
+
+        // `raster_n32_premul` stores BGRA on this platform, so red reads as [0, 0, 255].
+        paint(&mut surface);
+        assert_eq!(top_pixel(&mut surface), [0, 0, 255, 255]);
+        state.set(Color::from_argb(255, 0, 128, 0));
+        paint(&mut surface);
+        assert_eq!(top_pixel(&mut surface), [0, 128, 0, 255]);
+    }
 
     /// A dynamic SHAPE is evaluated per paint: the same element paints a full rectangle and, after
     /// the state changes, a rounded box whose corner is transparent.

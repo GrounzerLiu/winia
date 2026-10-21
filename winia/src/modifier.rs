@@ -361,9 +361,13 @@ pub(crate) enum ModifierElement {
         brush: crate::graphics::Dyn<crate::graphics::Brush>,
         shape: crate::graphics::Dyn<Shape>,
     },
-    /// 边框
-    Border { width: Dimension, color: Color, shape: crate::graphics::Dyn<Shape> },
-    BorderDynamic { width: Dimension, color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: crate::graphics::Dyn<Shape> },
+    /// A border stroke. The colour and the shape are carriers: a literal is inline, a state or a
+    /// closure is read at paint time. One element covers both - there is no `BorderDynamic` anymore.
+    Border {
+        width: Dimension,
+        color: crate::graphics::Dyn<Color>,
+        shape: crate::graphics::Dyn<Shape>,
+    },
     /// 裁剪
     Clip { shape: crate::graphics::Dyn<Shape> },
     /// 内容模糊（GPU 原生，零回读）
@@ -1317,27 +1321,22 @@ impl Modifier {
     }
 
     /// 设置边框。颜色可以是一个 `Color`，也可以是渲染期求值的闭包/状态
-    /// （`impl Into<BorderColor>`）——静态颜色走 `Border` 元素，闭包走 `BorderDynamic`
-    /// （绘制期每帧求值，配合 `peek()` 做颜色过渡）。
+    /// （`impl Into<BorderColor>`）——同一个元素存载体：静态值内联，闭包在绘制期求值
+    /// （配合 `peek()` 做颜色过渡）。
     ///
-    /// One signature for both: the variant decides the element, so a static colour that changes still
-    /// re-enters the node while a dynamic one is a parameter read at paint time.
+    /// One element for both: a changed STATIC colour is a changed parameter (the node re-enters),
+    /// while a dynamic one is a parameter read at paint time.
     pub fn border(
         self,
         width: impl Into<Dimension>,
         color: impl Into<crate::graphics::BorderColor>,
         shape: impl Into<crate::graphics::Dyn<Shape>>,
     ) -> Self {
-        let width = width.into();
-        let shape = shape.into();
-        match color.into() {
-            crate::graphics::BorderColor::Static(color) => {
-                self.push(ModifierElement::Border { width, color, shape })
-            }
-            crate::graphics::BorderColor::Dynamic(color_fn) => {
-                self.push(ModifierElement::BorderDynamic { width, color_fn, shape })
-            }
-        }
+        self.push(ModifierElement::Border {
+            width: width.into(),
+            color: color.into(),
+            shape: shape.into(),
+        })
     }
 
     /// 设置裁剪形状
@@ -2556,11 +2555,6 @@ impl Debug for ModifierElement {
                 f.debug_struct("BackgroundBrush").field("shape", shape).finish()
             }
             Self::Border { width, color, shape } => f.debug_struct("Border").field("width", width).field("color", color).field("shape", shape).finish(),
-            Self::BorderDynamic { width, shape, .. } => f
-                .debug_struct("BorderDynamic")
-                .field("width", width)
-                .field("shape", shape)
-                .finish(),
             Self::Clip { shape } => f.debug_struct("Clip").field("shape", shape).finish(),
             Self::TextContent { content, font_size, .. } => f
                 .debug_struct("TextContent")
@@ -4085,12 +4079,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Background { color: ac, shape: as_ }, Background { color: bc, shape: bs }) => {
             ac.same_parameter(bc) && as_.same_parameter(bs)
         }
+        // The colour is a carrier too: a changed STATIC colour re-enters, a dynamic one is a
+        // parameter read at paint.
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
-            dimension_eq(aw, bw) && ac == bc && as_.same_parameter(bs)
-        }
-        // 动态颜色视为相同（渲染期求值——动画不触发 Enter）
-        (BorderDynamic { width: aw, shape: as_, .. }, BorderDynamic { width: bw, shape: bs, .. }) => {
-            dimension_eq(aw, bw) && as_.same_parameter(bs)
+            dimension_eq(aw, bw) && ac.same_parameter(bc) && as_.same_parameter(bs)
         }
         (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
         (Blur { radius: ar }, Blur { radius: br }) => ar == br,
@@ -4294,6 +4286,34 @@ mod param_eq_tests {
     /// A background colour is now a `Dyn`: two DYNAMIC colours are the same parameter (the value is
     /// read at paint time), while a changed STATIC colour has to re-enter — otherwise the node keeps
     /// painting the old colour.
+    /// One `Border` element now carries a `Dyn<Color>`: a state-driven colour is read per paint, and
+    /// the parameter comparison keeps the static/dynamic distinction the old two variants encoded.
+    #[test]
+    fn a_border_colour_can_be_dynamic() {
+        use crate::runtime::state::State;
+        let red = Color::from_argb(255, 255, 0, 0);
+        let green = Color::from_argb(255, 0, 128, 0);
+        let state = State::new(red);
+        let m = Modifier::new().border(2.0, &state, Shape::rounded(8.0));
+        let ModifierElement::Border { color, .. } = &m.elements()[0] else {
+            panic!("a border is one element");
+        };
+        assert!(color.is_dynamic());
+        assert_eq!(color.eval(), red);
+        state.set(green);
+        assert_eq!(color.eval(), green);
+
+        let a = Modifier::new().border(2.0, red, Shape::rounded(8.0));
+        let b = Modifier::new().border(2.0, green, Shape::rounded(8.0));
+        assert!(!a.param_eq(&b), "a changed static border colour must re-enter");
+        assert!(a.param_eq(&Modifier::new().border(2.0, red, Shape::rounded(8.0))));
+        assert!(
+            m.param_eq(&Modifier::new().border(2.0, &state, Shape::rounded(8.0))),
+            "two dynamic borders are the same request"
+        );
+        assert!(!a.param_eq(&m), "a literal turning into a state is a change");
+    }
+
     #[test]
     fn param_eq_compares_a_static_background_colour() {
         use crate::runtime::state::State;

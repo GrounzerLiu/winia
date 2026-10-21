@@ -136,9 +136,8 @@ pub type BackgroundColor = super::Dyn<Color>;
 
 /// The border colour — the same carrier as the background's.
 ///
-/// `border()` still picks the cheap `Border` element for a static colour (whose change must re-enter
-/// the node) and `BorderDynamic` for a closure (whose colour is a parameter read at paint time); the
-/// variant carries that decision.
+/// The `Border` element stores it directly: a literal is inline (a changed value is a changed
+/// parameter, so the node re-enters), a state or closure is a parameter read at paint time.
 pub type BorderColor = super::Dyn<Color>;
 
 /// The graphics-layer parameters: a literal, or a value evaluated per paint.

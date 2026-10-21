@@ -1182,7 +1182,7 @@ mod tests {
                 if matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle)) {
                     circle_id = node.id;
                 }
-                if matches!(el, ModifierElement::BorderDynamic { .. }) {
+                if matches!(el, ModifierElement::Border { color, .. } if color.is_dynamic()) {
                     track_id = node.id;
                 }
                 if matches!(el, ModifierElement::TextContent { .. }) {
@@ -1383,7 +1383,7 @@ mod tests {
                 if matches!(el, ModifierElement::Background { shape, .. } if matches!(shape.eval(), Shape::Circle)) {
                     has_circle_bg = true;
                 }
-                if matches!(el, ModifierElement::BorderDynamic { .. }) {
+                if matches!(el, ModifierElement::Border { color, .. } if color.is_dynamic()) {
                     has_border = true;
                 }
             }

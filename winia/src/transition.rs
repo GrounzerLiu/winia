@@ -820,7 +820,6 @@ pub(crate) fn shared_shape_radius_is_auto(modifier: &Modifier) -> bool {
         .find_map(|el| match el {
             ModifierElement::Background { shape, .. }
             | ModifierElement::Border { shape, .. }
-            | ModifierElement::BorderDynamic { shape, .. }
             | ModifierElement::Clip { shape } => Some(shape),
             _ => None,
         })
@@ -838,7 +837,6 @@ pub(crate) fn shared_shape_radii(modifier: &Modifier, w: f32, h: f32) -> [f32; 4
     let shape = modifier.elements().iter().rev().find_map(|el| match el {
         ModifierElement::Background { shape, .. }
         | ModifierElement::Border { shape, .. }
-        | ModifierElement::BorderDynamic { shape, .. }
         | ModifierElement::Clip { shape } => Some(shape),
         _ => None,
     })
