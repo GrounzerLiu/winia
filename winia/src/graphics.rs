@@ -56,11 +56,15 @@ impl AxisValue {
         }
     }
 
+    /// Whether two values are the same PARAMETER, for the element comparison: two statics compare by
+    /// value, two dynamics are the same request (the number is read at draw time and carried by the
+    /// layout/draw dependency). A static turning into a dynamic — or back — is a DIFFERENT request:
+    /// treating it as equal would Skip the node and keep drawing the stale literal forever.
     fn static_eq(&self, other: &AxisValue) -> bool {
         match (self, other) {
             (AxisValue::Static(a), AxisValue::Static(b)) => a == b,
-            // 动态值视为相等（渲染期求值——动画不触发重组/Skip）
-            _ => true,
+            (AxisValue::Dynamic(_), AxisValue::Dynamic(_)) => true,
+            _ => false,
         }
     }
 }
@@ -660,6 +664,24 @@ pub(crate) fn content_scale_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// The element comparison treats two dynamic axes as the same parameter, but a literal turning
+    /// into a state (or back) as a CHANGE: Skip would otherwise keep drawing the stale literal.
+    #[test]
+    fn axis_value_equality_separates_parameters_from_values() {
+        use crate::runtime::state::State;
+        let a = SymbolAxes { wght: AxisValue::from(&State::new(400.0f32)), ..Default::default() };
+        let b = SymbolAxes { wght: AxisValue::from(&State::new(700.0f32)), ..Default::default() };
+        assert_eq!(a, b, "two dynamic axes are the same parameter");
+
+        let literal = SymbolAxes { wght: AxisValue::from(400.0f32), ..Default::default() };
+        assert_ne!(literal, a, "a literal and a state are different requests");
+        assert_ne!(a, literal, "and the comparison is symmetric");
+
+        let same_literal = SymbolAxes { wght: AxisValue::from(400.0f32), ..Default::default() };
+        assert_eq!(literal, same_literal, "two equal literals are equal");
+    }
 
     #[test]
     fn wrap_svg_path_is_valid_document() {
