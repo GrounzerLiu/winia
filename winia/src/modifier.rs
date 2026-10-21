@@ -587,8 +587,17 @@ pub(crate) enum ModifierElement {
     /// Lazy 列表内容高度标记（LazyColumn 用——apply_scroll_delta 计算 max_offset；
     /// 节点自身高度是视口，内容总高由测量回写到此 State）
     LazyScroll { content_height: crate::runtime::state::Backchannel<f32>, reverse: bool },
+    /// Compose's `LazyItemScope.animateItem()`: a marker the lazy list reads. The list springs the
+    /// item from its previous slot to the new one when the data reorders. Inert outside a lazy list.
+    AnimateItem,
     /// 水平滚动
     HorizontalScroll { state: ScrollState, reverse: bool },
+    /// Compose's `clipScrollableContainer(orientation)`: the main axis is clipped to the container,
+    /// the cross axis keeps 30 dp of slack so a shadow there is not cut off.
+    ClipScrollableContainer { vertical: bool },
+    /// Compose's `overscroll(effect)`: the container absorbs the delta it cannot scroll into the
+    /// effect instead of letting it fall through.
+    Overscroll { effect: crate::overscroll::OverscrollEffect },
     /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
@@ -2301,7 +2310,32 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self
     }
 
+    /// Compose's `LazyItemScope.animateItem()`: place this on the item's root. When the lazy list
+    /// reorders its data, the item springs from the slot it used to occupy to the new one (keyed by
+    /// the item key). Outside a lazy list the marker does nothing.
+    pub fn animate_item(self) -> Self {
+        self.push(ModifierElement::AnimateItem)
+    }
+
     /// 绑定嵌套滚动连接。连接会在 descendant scrollable 的 pre/post 阶段被调度。
+    /// Compose's `clipScrollableContainer(orientation)`: clip the scroll container on its SCROLL
+    /// axis while leaving 30 dp of room on the cross axis, so a shadow drawn there survives.
+    /// winia always clips its scroll viewport; this modifier makes the clip cross-axis aware.
+    pub fn clip_scrollable_container(self, orientation: crate::overscroll::Orientation) -> Self {
+        self.push(ModifierElement::ClipScrollableContainer {
+            vertical: orientation == crate::overscroll::Orientation::Vertical,
+        })
+    }
+
+    /// Compose's `Modifier.overscroll(effect)`: the delta a scroll container cannot consume (it is
+    /// at the start or the end) is pulled into the effect instead of falling through to an ancestor,
+    /// which translates the content and returns with a short spring.
+    pub fn overscroll(self, effect: &crate::overscroll::OverscrollEffect) -> Self {
+        self.push(ModifierElement::Overscroll {
+            effect: effect.clone(),
+        })
+    }
+
     pub fn nested_scroll(self, connection: impl crate::nested_scroll::NestedScrollConnection + 'static) -> Self {
         self.push(ModifierElement::NestedScroll { connection: Arc::new(connection) })
     }
@@ -2567,6 +2601,27 @@ impl Modifier {
 
 
     /// 垂直滚动状态（如果有 VerticalScroll modifier）
+    /// The orientation declared by `clipScrollableContainer`, if the chain carries it.
+    pub fn clip_scrollable_vertical(&self) -> Option<bool> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::ClipScrollableContainer { vertical } => Some(*vertical),
+            _ => None,
+        })
+    }
+
+    /// The overscroll effect attached to this chain, if any.
+    pub fn overscroll_effect(&self) -> Option<&crate::overscroll::OverscrollEffect> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::Overscroll { effect } => Some(effect),
+            _ => None,
+        })
+    }
+
+    /// Whether the lazy layout should animate this item's placement.
+    pub fn has_animate_item(&self) -> bool {
+        self.elements.iter().any(|el| matches!(el, ModifierElement::AnimateItem))
+    }
+
     pub fn vertical_scroll_state(&self) -> Option<&ScrollState> {
         for el in &self.elements {
             if let ModifierElement::VerticalScroll { state } = el {
@@ -3098,6 +3153,7 @@ impl Debug for ModifierElement {
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
+            Self::AnimateItem => f.write_str("AnimateItem"),
             Self::PointerHoverIcon { icon, override_descendants } => f
                 .debug_struct("PointerHoverIcon")
                 .field("icon", icon)
@@ -3126,6 +3182,11 @@ Self::DrawIcon { .. } => f.write_str("DrawIcon"),
             Self::LazyScroll { .. } => f.write_str("LazyScroll(<state>)"),
             Self::HorizontalScroll { .. } => f.write_str("HorizontalScroll(<state>)"),
             Self::NestedScroll { .. } => f.write_str("NestedScroll(<connection>)"),
+            Self::ClipScrollableContainer { vertical } => f
+                .debug_struct("ClipScrollableContainer")
+                .field("vertical", vertical)
+                .finish(),
+            Self::Overscroll { .. } => f.write_str("Overscroll"),
             Self::GraphicsLayer { .. } => f.debug_struct("GraphicsLayer").finish(),
             Self::Blur { radius } => f.debug_struct("Blur").field("radius", radius).finish(),
             Self::BackdropBlur { radius } => f.debug_struct("BackdropBlur").field("radius", radius).finish(),
@@ -4690,6 +4751,12 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
+        (AnimateItem, AnimateItem) => true,
+        (
+            ClipScrollableContainer { vertical: a },
+            ClipScrollableContainer { vertical: b },
+        ) => a == b,
+        (Overscroll { effect: a }, Overscroll { effect: b }) => a.same(b),
         // Observation callbacks are rebuilt every composition; identity is the parameter (same rule
         // as Clickable's callback). Without these arms a chain carrying one could never Skip.
         (OnSizeChanged { .. }, OnSizeChanged { .. }) => true,
@@ -4878,6 +4945,21 @@ mod param_eq_tests {
         assert!(Modifier::new()
             .default_min_size(10.0, 20.0)
             .param_eq(&Modifier::new().default_min_size(10.0, 20.0)));
+    }
+
+    #[test]
+    fn clip_scrollable_container_and_overscroll_are_parameters() {
+        use crate::overscroll::{Orientation, OverscrollEffect};
+        let vertical = Modifier::new().clip_scrollable_container(Orientation::Vertical);
+        assert_eq!(vertical.clip_scrollable_vertical(), Some(true));
+        let horizontal = Modifier::new().clip_scrollable_container(Orientation::Horizontal);
+        assert_eq!(horizontal.clip_scrollable_vertical(), Some(false));
+        assert!(!vertical.param_eq(&horizontal));
+
+        let a = OverscrollEffect::new();
+        let b = OverscrollEffect::new();
+        assert!(Modifier::new().overscroll(&a).param_eq(&Modifier::new().overscroll(&a)));
+        assert!(!Modifier::new().overscroll(&a).param_eq(&Modifier::new().overscroll(&b)));
     }
 
     #[test]

@@ -510,6 +510,9 @@ pub struct LayoutNode {
     pub(crate) focus_reported: bool,
     /// For a focus-group node: the descendant that had focus when the group was last left.
     pub(crate) focus_group_memory: Option<u64>,
+    /// Per-item placement animation from the lazy layout: the paint offset state and whether the
+    /// list scrolls vertically (the axis the offset applies to).
+    pub(crate) item_anim: Option<(crate::runtime::state::State<f32>, bool)>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
     pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
@@ -711,6 +714,7 @@ impl LayoutNode {
             last_global_position: None,
             focus_reported: false,
             focus_group_memory: None,
+            item_anim: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -806,6 +810,7 @@ impl Default for LayoutNode {
             last_global_position: None,
             focus_reported: false,
             focus_group_memory: None,
+            item_anim: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),

@@ -314,9 +314,19 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                 node.measured_size.height
             };
             let max_offset = (content_h - visible_h).max(0.0);
-            let new = (current - dy).clamp(0.0, max_offset);
+            let raw = current - dy;
+            let new = raw.clamp(0.0, max_offset);
             state.offset.set(new);
             consumed.y = current - new;
+            // Overscroll: the delta past the edge is absorbed by the effect instead of falling
+            // through to an ancestor. `reverse` mirrors the offset, so a signed pull would point
+            // the wrong way — those containers skip it.
+            let leftover = raw - new;
+            if leftover != 0.0 && !node.scroll_reverse {
+                if let Some(effect) = node.modifier.overscroll_effect() {
+                    consumed.y += effect.pull(leftover);
+                }
+            }
             }
         }
         // 水平滚动（LazyRow/横向 scroll 容器）——与垂直对称：dx 正 = 内容左移
@@ -351,13 +361,20 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             let max_offset = (content_w - visible_w).max(0.0);
             // ⚠ reverse（RTL）滚动：render 端 offset 语义被镜像（offset 0 = 内容末端），
             // 手势 delta 方向也需镜像——否则拖动方向反（用户实测 bug）。垂直同理见上。
-            let new = if node.scroll_reverse {
-                (current + dx).clamp(0.0, max_offset)
+            let raw = if node.scroll_reverse {
+                current + dx
             } else {
-                (current - dx).clamp(0.0, max_offset)
+                current - dx
             };
+            let new = raw.clamp(0.0, max_offset);
             state.offset.set(new);
             consumed.x = current - new;
+            let leftover = raw - new;
+            if leftover != 0.0 && !node.scroll_reverse {
+                if let Some(effect) = node.modifier.overscroll_effect() {
+                    consumed.x += effect.pull(leftover);
+                }
+            }
         }
         }
     }

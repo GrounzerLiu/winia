@@ -58,6 +58,7 @@ pub mod render;
 pub mod animation;
 /// The fling strategy: what a release turns into (Compose's `FlingBehavior` / `TargetedFlingBehavior`).
 pub mod fling;
+pub mod overscroll;
 pub mod nested_scroll;
 pub mod nav;
 pub mod semantics;

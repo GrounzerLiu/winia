@@ -830,6 +830,21 @@ fn render_pass1(
     let h = content_box.height;
     if w <= 0.0 || h <= 0.0 { return; }
 
+    // Lazy item placement animation (Compose's `animateItem`): the item is painted where it WAS, and
+    // the offset springs to 0 as the layout settles. Applied around everything the node paints.
+    let item_anim = node.item_anim.clone();
+    if item_anim.is_some() {
+        canvas.save();
+    }
+    if let Some((offset, vertical)) = &item_anim {
+        let offset = offset.peek();
+        if *vertical {
+            canvas.translate((0.0, offset));
+        } else {
+            canvas.translate((offset, 0.0));
+        }
+    }
+
     let rect = Rect::new(x, y, x + w, y + h);
 
     // The box this node's OWN content occupies: `rect` minus whatever its
@@ -1618,9 +1633,32 @@ fn render_pass1(
         if node.scroll_viewport_width > 0.0 {
             cw = node.scroll_viewport_width;
         }
-        let clip_rect = Rect::new(x, y, x + cw, y + ch);
-        let dx = -scroll_offset_h.unwrap_or(0.0);
-        let dy = -scroll_offset_v.unwrap_or(0.0);
+        let mut clip_rect = Rect::new(x, y, x + cw, y + ch);
+        // Compose's `clipScrollableContainer`: the main axis is clipped to the container, the cross
+        // axis keeps MAX_SUPPORTED_ELEVATION (30 dp) so a shadow drawn on that axis is not cut.
+        if let Some(vertical) = node.modifier.clip_scrollable_vertical() {
+            let slack = 30.0 * crate::runtime::density::current_density().density;
+            clip_rect = if vertical {
+                Rect::new(x - slack, y, x + cw + slack, y + ch)
+            } else {
+                Rect::new(x, y - slack, x + cw, y + ch + slack)
+            };
+        }
+        let mut dx = -scroll_offset_h.unwrap_or(0.0);
+        let mut dy = -scroll_offset_v.unwrap_or(0.0);
+        // Overscroll pulls the content past the edge; the clip above keeps it inside the viewport,
+        // so the pull reads as the content shifting and the gap it is pulled from.
+        if let Some(effect) = node.modifier.overscroll_effect() {
+            if !node.scroll_reverse {
+                let pull = effect.stretch();
+                if scroll_offset_v.is_some() {
+                    dy -= pull;
+                }
+                if scroll_offset_h.is_some() {
+                    dx -= pull;
+                }
+            }
+        }
         canvas.save();
         canvas.clip_rect(clip_rect, None, Some(false));
         canvas.translate((dx, dy));
@@ -1684,6 +1722,9 @@ fn render_pass1(
         canvas.restore();
     }
     if tf_saved {
+        canvas.restore();
+    }
+    if item_anim.is_some() {
         canvas.restore();
     }
 }

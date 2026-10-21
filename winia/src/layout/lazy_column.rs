@@ -50,9 +50,13 @@ pub trait LazyAxis: super::axis::Axis {
     /// The scroll modifier, per axis (vertical / horizontal)
     #[doc(hidden)]
     fn scroll(state: crate::modifier::ScrollState) -> Modifier;
+    /// Whether this axis scrolls vertically — the direction an item's placement animates in.
+    #[doc(hidden)]
+    const VERTICAL: bool;
 }
 
 impl LazyAxis for crate::layout::axis::VerticalAxis {
+    const VERTICAL: bool = true;
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: c.max_width, min_height: 0.0, max_height: f32::MAX }
     }
@@ -68,6 +72,7 @@ impl LazyAxis for crate::layout::axis::VerticalAxis {
 }
 
 impl LazyAxis for crate::layout::axis::HorizontalAxis {
+    const VERTICAL: bool = false;
     fn child_constraints(c: Constraints) -> Constraints {
         Constraints { min_width: 0.0, max_width: f32::MAX, min_height: 0.0, max_height: c.max_height }
     }
@@ -80,6 +85,23 @@ impl LazyAxis for crate::layout::axis::HorizontalAxis {
     fn scroll(state: crate::modifier::ScrollState) -> Modifier {
         Modifier::new().horizontal_scroll(state)
     }
+}
+
+/// Per-item placement animations, keyed by the item key. Shared by every layout of the list.
+#[derive(Debug, Default)]
+pub(crate) struct ItemAnimations {
+    /// Incremented once per `place`; an item seen on the PREVIOUS frame animates its move, an item
+    /// that was away resets instead of springing from a stale slot.
+    pub frame: u64,
+    pub items: std::collections::HashMap<u64, ItemAnimation>,
+}
+
+/// One animated item's current paint offset and the slot it occupied last frame.
+#[derive(Debug)]
+pub(crate) struct ItemAnimation {
+    pub offset: crate::runtime::state::State<f32>,
+    pub last_main: f32,
+    pub last_frame: u64,
 }
 
 /// Lazy 列表滚动状态（winia 像素模型 + 派生锚点）
@@ -136,6 +158,8 @@ pub struct LazyListState {
     /// The in-flight wheel page target, shared by every ScrollState assembled for this list.
     /// Recomposition must not erase it while the spring is still moving.
     pub(crate) step_goal: std::sync::Arc<std::sync::Mutex<Option<f32>>>,
+    /// Per-item placement animations (keyed by item key), shared with the measure policy.
+    pub(crate) item_animations: std::sync::Arc<std::sync::Mutex<ItemAnimations>>,
     /// 派生：第一个可见项索引（每次 build 后更新）
     pub first_visible_index: crate::runtime::state::State<usize>,
     /// 派生：第一个可见项的偏移（正 = 该项向上滚出多少）
@@ -154,6 +178,7 @@ impl LazyListState {
             scroll_pulse: crate::runtime::state::State::new(0),
             snap: crate::runtime::state::Backchannel::new(None),
             step_goal: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            item_animations: std::sync::Arc::new(std::sync::Mutex::new(ItemAnimations::default())),
             is_scrolling: crate::runtime::state::State::new(false),
             first_visible_index: crate::runtime::state::State::new(0),
             first_visible_offset: crate::runtime::state::State::new(0.0),
@@ -1580,9 +1605,70 @@ impl<A: LazyAxis> crate::layout::node::MeasurePolicy for LazyListPolicy<A> {
     }
 
     fn place(&self, nodes: &mut Vec<crate::layout::node::LayoutNode>, children: &[usize], placements: &[crate::layout::node::Placement]) {
+        /// Whether any node in this item's subtree asks for placement animation (`animateItem`).
+        fn subtree_has_animate_item(nodes: &[crate::layout::node::LayoutNode], idx: usize) -> bool {
+            if nodes[idx].modifier.has_animate_item() {
+                return true;
+            }
+            nodes[idx]
+                .children
+                .iter()
+                .any(|&c| subtree_has_animate_item(nodes, c))
+        }
+        // Placement animations (Compose's `animateItem`): an item whose key occupied a different
+        // main-axis slot on the PREVIOUS frame starts at the old slot and springs to the new one.
+        // Items that were away (not placed last frame) reset instead of springing from a stale slot.
+        // The map is keyed by the item key, so the animation survives the node recycling the lazy
+        // window does.
+        let mut anims = self
+            .state
+            .item_animations
+            .lock()
+            .expect("lazy item animations");
+        anims.frame += 1;
+        let frame = anims.frame;
         for (i, &c) in children.iter().enumerate() {
+            // The marker sits on the item's ROOT content, and the lazy list registers a wrapper
+            // group node per item — so the animation belongs to the wrapper and the marker is looked
+            // for in its subtree.
+            let animate = subtree_has_animate_item(nodes, c);
             nodes[c].position = placements[i].position;
             nodes[c].measured_size = placements[i].size;
+            nodes[c].item_anim = None;
+            if !animate {
+                continue;
+            }
+            let global = self.globals.get(i).copied().unwrap_or(i);
+            let key = self.keys.get(global).copied().unwrap_or(global as u64);
+            let main = A::main_size(crate::unit::Size::new(
+                nodes[c].position.x,
+                nodes[c].position.y,
+            ));
+            let item = anims.items.entry(key).or_insert_with(|| ItemAnimation {
+                offset: crate::runtime::state::State::new(0.0),
+                last_main: main,
+                last_frame: frame,
+            });
+            if item.last_frame + 1 == frame {
+                let delta = item.last_main - main;
+                if delta.abs() > 0.5 {
+                    crate::animation::cancel_animation(&item.offset);
+                    item.offset.set(delta);
+                    crate::animation::push_animatable_restart(
+                        item.offset.clone(),
+                        0.0,
+                        crate::animation::AnimationSpec::Spring(
+                            crate::animation::SpringSpec::default(),
+                        ),
+                    );
+                }
+            } else {
+                // Away for a frame (or new): no stale spring.
+                item.offset.set(0.0);
+            }
+            item.last_main = main;
+            item.last_frame = frame;
+            nodes[c].item_anim = Some((item.offset.clone(), A::VERTICAL));
         }
     }
 }
@@ -3604,5 +3690,74 @@ mod tests {
             "flipping reverseLayout must mirror the placement - the first item belongs at the bottom \
              (forward {forward}, reversed {reversed})"
         );
+    }
+
+    #[test]
+    fn animate_item_springs_a_shifted_item_from_its_old_slot() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::animation::clear_all_animations();
+        let theme = crate::theme::ThemeColors::light_from_seed(0x6750A4);
+        let state = LazyListState::new();
+        let mut composer = Composer::new();
+        let mut build = |composer: &mut Composer, items: Arc<Vec<u64>>| {
+            let s = state.clone();
+            let scene = move |ctx: &mut crate::runtime::composer::ComposeCtx| {
+                let s = s.clone();
+                let items = items.clone();
+                let theme = theme.clone();
+                crate::theme::WiniaTheme::with_theme(theme, ctx, move |ctx| {
+                    LazyColumn::new()
+                        .state(s.clone())
+                        .modifier(Modifier::new().fill_max_width().fill_max_height())
+                        .items_from(items, |v: &u64| *v, |ctx, _i, v| {
+                            crate::components::text::Text::new(format!("Item {v}"))
+                                .modifier(Modifier::new().animate_item().height(48.0))
+                                .build(ctx);
+                        })
+                        .build(ctx);
+                });
+            };
+            for _ in 0..6 {
+                composer.compose(&scene);
+                composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 600.0));
+                if !crate::runtime::composer::take_compose_after_layout() {
+                    break;
+                }
+            }
+        };
+
+        build(&mut composer, Arc::new((0..20).collect()));
+        assert!(
+            composer
+                .arena_nodes()
+                .iter()
+                .filter_map(|n| n.item_anim.as_ref())
+                .all(|(offset, _)| offset.peek().abs() < 0.5),
+            "nothing has moved yet, so nothing animates"
+        );
+
+        // Insert a key in the middle: the items below it move down by one row, and their placement
+        // animation starts at the slot they used to occupy.
+        let mut items: Vec<u64> = (0..10).collect();
+        items.push(999);
+        items.extend(10..20);
+        build(&mut composer, Arc::new(items));
+        let shifted: Vec<f32> = composer
+            .arena_nodes()
+            .iter()
+            .filter_map(|n| n.item_anim.as_ref().map(|(offset, _)| offset.peek()))
+            .filter(|value| value.abs() > 0.5)
+            .collect();
+        assert!(
+            !shifted.is_empty(),
+            "items below the insert start their animation from the old slot"
+        );
+        assert!(
+            shifted.iter().any(|value| *value < 0.0),
+            "an item pushed down starts above its new slot"
+        );
+        crate::animation::clear_all_animations();
     }
 }
