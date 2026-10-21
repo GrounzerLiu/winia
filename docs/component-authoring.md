@@ -154,6 +154,38 @@ exceptions, both about what the component still has to add afterwards:
   (`button.rs:898` before `:905-909`, `card.rs:457-462`, `list_item.rs:146-150`), because the
   interaction node has to be added by the component, not by the caller.
 
+### 2.4 An animatable parameter: pick the carrier by the phase that reads it
+
+"Make this animatable" is not one decision. The value has to be read in the phase that consumes it,
+and that phase fixes the type:
+
+| The parameter is | Take | Because |
+| --- | --- | --- |
+| a layout LENGTH - size, padding, offset, spacing, border width | `impl Into<Dimension>` | read during measure (a border's width during paint), so a literal, a `State<f32>`, an `Animating<f32>` or a closure all work, and the animation costs a re-measure (or a repaint) instead of a recomposition |
+| a SIZE MODE - fill / auto / intrinsic | `impl Into<SizeValue>` | not a number: changing it is a composition decision, so it cannot be evaluated per frame |
+| a PAINT scalar - alpha, scale, rotation, a variable-font axis | `impl Into<AxisValue>` (see `Icon::wght`) | read while painting; `Dimension` would drag it through layout and re-measure for a number layout never uses |
+| a PAINT colour or shape | the closure form the modifier already carries (`background(closure)`, `border_dynamic(\|\| colour)`) | evaluated at draw time |
+| a value that decides STRUCTURE | a plain parameter; the caller reads a `State` and recomposes | only a composition can change the tree |
+
+Rules that follow:
+
+- **Prefer one `Into` parameter to a `*_dynamic` overload.** `Icon::wght(impl Into<AxisValue>)`
+  takes a literal, a state and a closure through one signature. `border_dynamic` exists because its
+  static sibling had already shipped; for new API one parameter that accepts both is smaller and
+  harder to misuse.
+- **Read it in the consuming phase, with `peek()`.** A `Dimension` is read during measure, an
+  `AxisValue`/closure during paint. A `get()` in the composition turns the animation into a
+  recomposition per frame - exactly the cost the parameter was meant to avoid.
+- **Teach `element_param_eq` the new parameter.** A dynamic value is a PARAMETER, not a value: it
+  must compare equal to another dynamic one (`dimension_eq`, `AxisValue::static_eq`), or the
+  component re-enters on every frame and can never Skip.
+- **Test the pair, not the number.** Setting the state and asserting the element resolves the new
+  value catches "frozen at build time"; asserting that two dynamic values compare equal catches
+  "Skip broken". `modifier.rs`'s border-width and padding tests are the two shapes.
+- **Not every number should animate.** A policy value - a touch-target floor, a padding derived from
+  the measured content - stays static; making it dynamic invents a state the component cannot
+  sensibly consume.
+
 ## 3. Composition identity: the part that breaks silently
 
 ### 3.1 Free keys, explicit keys
@@ -505,6 +537,9 @@ Copy this into the pull request and tick it there:
 [ ] ctx.key only where a branch can change the slot layout
 [ ] ctx.remember without a nested State; the right handle shape for the kind of state
      (enforced: components::conventions::no_component_nests_a_state_in_remember)
+[ ] a parameter that should animate takes the carrier its consuming phase reads - Dimension for a
+     length, AxisValue / a closure for a paint value, NEVER Dimension for a draw-only number - and a
+     dynamic value compares equal in element_param_eq
 [ ] no rt.spawn in a component - effect hooks own spawning
      (enforced: components::conventions::no_component_spawns_its_own_task)
 [ ] hoisted state + remember_x_state when the caller must drive it
