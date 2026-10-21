@@ -202,6 +202,25 @@ Rules that follow:
   the measured content - stays static; making it dynamic invents a state the component cannot
   sensibly consume.
 
+
+### 2.5 Carrier API migration (v2)
+
+Paint-time parameters became `Dyn<T>` carriers across the v2 work. Call sites that pass literals
+keep compiling; code that names the old types needs the carrier form, and `Tint` is no longer
+`Copy`.
+
+| Before | After |
+| --- | --- |
+| `IconSpec { tint: Option<Color> }` | `IconSpec { tint: Option<Dyn<Color>> }` |
+| `Tint::Color(Color)`, `Tint: Copy` | `Tint::Color(Dyn<Color>)`, `Tint: Clone` |
+| `Image::get_color_filter() -> Option<&ColorFilter>` | `-> Option<ColorFilter>` (the evaluated value) |
+| `Modifier::image_content(.., alpha: f32, color_filter: Option<ColorFilter>, ..)` | `alpha: impl Into<Dyn<f32>>`, `color_filter: Option<Dyn<ColorFilter>>` |
+| `Modifier::ripple(.., color: Color, ..)`, `ripple_with_shape`, `ripple_with_state_layer_size(.., diameter: f32)` | `Into<Dyn<Color>>` / `Into<Dyn<f32>>` |
+| `Modifier::blur(f32)`, `backdrop_blur(f32)` | `impl Into<Dyn<f32>>` |
+| `Modifier::drop_shadow(shape, ShadowParams)` | `shape: Into<Dyn<Shape>>`, `params: Into<Dyn<ShadowParams>>` |
+| `Modifier::alpha/rotate/rotation_x/rotation_y/camera_distance/shadow_elevation(f32)`, `scale(f32, f32)`, `ambient_shadow_color/spot_shadow_color(Color)` | `Into<Dyn<f32>>` / `Into<Dyn<Color>>` |
+| `ModifierElement::BorderDynamic` | deleted; `Border.color: Dyn<Color>` |
+
 ## 3. Composition identity: the part that breaks silently
 
 ### 3.1 Free keys, explicit keys

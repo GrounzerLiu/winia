@@ -848,9 +848,9 @@ impl Button {
         // The Text style's shape, carried without a clip:
         //
         // The Text style has neither a background nor a border to carry its shape, and the ripple plus the
-        // focus ring both infer that shape from the chain (`render.rs:1460-1467`). It used a `clip` for that —
+        // focus ring both infer that shape from the chain (`render_pass1`'s focus-shape inference). It used a `clip` for that —
         // but a clip also CUTS everything drawn around the box, and the ring is stroked OUTSIDE the node's rect
-        // (`render.rs:2209-2213`). So a Text button lost its ring while the styles whose shape comes from a
+        // (`render::draw_focus`). So a Text button lost its ring while the styles whose shape comes from a
         // Background or a Border kept theirs — visible side by side on the demo, where `Button::outlined()`
         // shows a ring and `Button::text()` showed none. A zero-width transparent border states the same shape
         // and clips nothing.
@@ -1700,36 +1700,48 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
         };
 
-        // Settle: a frame with no pending change composes no dirty slot.
+        // Settle. The theme provider re-enters on every pass (it has no comparable parameters and no
+        // reusable node), so the basline enter count is not zero - what this test pins is that a tick
+        // adds no enter BEYOND that baseline and dirties no slot.
         build(&mut composer);
+        build(&mut composer);
+        let baseline_entered = composer.compose_entered_count;
+        assert_eq!(composer.compose_dirty_count, 0, "a settled frame dirties nothing");
         build(&mut composer);
         assert_eq!(
-            composer.compose_dirty_count, 0,
-            "a settled frame enters nothing (got {})",
-            composer.compose_dirty_count
+            (composer.compose_entered_count, composer.compose_dirty_count),
+            (baseline_entered, 0),
+            "the settled baseline must be stable"
         );
 
-        // The press itself is a change, so exactly this one frame enters the button.
+        // The press retargets the animated values. The BODY runs every build (the parent composes it),
+        // but the group itself may legitimately Skip: the morph is carried as a Dyn and the new
+        // modifier is applied on Skip. What must hold is that the press leaves an animation running;
+        // the ticks below then prove it is painted, not composed.
         source.emit_press();
         build(&mut composer);
-        assert!(
-            composer.compose_dirty_count > 0,
-            "the press dirty the button once"
-        );
         build(&mut composer);
+        assert!(
+            crate::animation::is_animating(),
+            "the press must leave an animation running, or the ticks below prove nothing"
+        );
 
-        // Tick the spring. A composition-time reader of the morph would dirty a slot here; a paint-time
-        // one leaves the composition alone.
-        let mut worst = 0;
+        // Tick the spring. A composition-time reader of the morph would enter the group here; a
+        // paint-time one leaves the composition alone.
+        let (mut worst_entered, mut worst_dirty, mut saw_animation) = (0, 0, false);
         for _ in 0..30 {
-            crate::animation::update_animations();
+            saw_animation |= crate::animation::update_animations();
             std::thread::sleep(std::time::Duration::from_millis(2));
             build(&mut composer);
-            worst = worst.max(composer.compose_dirty_count);
+            worst_entered = worst_entered.max(composer.compose_entered_count);
+            worst_dirty = worst_dirty.max(composer.compose_dirty_count);
         }
+        assert!(saw_animation, "the ticks must actually advance an animation");
         assert_eq!(
-            worst, 0,
-            "no animation tick may re-enter the button (worst frame entered {worst} slot(s))"
+            (worst_entered, worst_dirty),
+            (baseline_entered, 0),
+            "no animation tick may re-enter the button beyond the provider baseline \
+             (worst frame: entered {worst_entered}, dirty {worst_dirty})"
         );
         crate::animation::clear_all_animations();
     }

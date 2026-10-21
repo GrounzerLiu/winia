@@ -2691,6 +2691,11 @@ pub struct Composer {
     pub(crate) compose_clean_count: usize,
     #[cfg(test)]
     pub(crate) compose_dirty_count: usize,
+    /// Test-only: how many RESTARTABLE GROUPS actually re-entered this pass (dirty OR parameter
+    /// change). Unlike `compose_dirty_count`, this counts a parameter-driven Enter of a Clean slot -
+    /// the probe a "no recomposition" test needs.
+    #[cfg(test)]
+    pub(crate) compose_entered_count: usize,
     /// 重组总次数（vsync 研究——单次渲染内多次 compose 的观测）
     pub(crate) compose_count: u64,
     /// Shared-element flights (Phase 2): active flights by id (Tier-0
@@ -2831,6 +2836,8 @@ impl Composer {
             compose_clean_count: 0,
             #[cfg(test)]
             compose_dirty_count: 0,
+            #[cfg(test)]
+            compose_entered_count: 0,
             compose_count: 0,
         }
     }
@@ -3137,6 +3144,7 @@ impl Composer {
         // Enter 重新执行 content；Skip 保留上帧子树的读取集合。
         if !is_skip {
             self.entered_compose_keys.insert(key);
+            #[cfg(test)] { self.compose_entered_count += 1; }
         }
         // 写入本帧参数（在 is_skip 比较之后——比较用上帧 slot.params）
         // 仅当 pending 非空（有 changed 声明）；空则保留上帧 params（replay stub 场景）
@@ -3501,7 +3509,7 @@ impl Composer {
         let mut compose_runtime_transaction = ComposeRuntimeTransaction::new(self);
         let _adaptive_context = crate::layout::adaptive::enter_context(self.adaptive.clone());
         let mut dependency_transaction = ComposeDependencyTransaction::new(self);
-        #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; }
+        #[cfg(test)] { self.compose_clean_count = 0; self.compose_dirty_count = 0; self.compose_entered_count = 0; }
         self.compose_count += 1;
         // Movable content is composed once per composition, so the table needs to know which
         // composition this is.

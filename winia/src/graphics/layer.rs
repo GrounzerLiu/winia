@@ -4,7 +4,6 @@
 //! Data only: which of these reach the renderer, and how, is the renderer's business.
 
 use super::{Color, ColorFilter, Shape};
-use std::sync::Arc;
 
 // Skia's native shadow utility consumes the alpha directly. These values match
 // the low-opacity ambient/spot defaults used by Skia's shadow examples.

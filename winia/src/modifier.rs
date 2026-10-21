@@ -1993,8 +1993,6 @@ impl Modifier {
     }
 
     pub fn get_padding_sides(&self) -> (f32, f32, f32, f32) {
-        use crate::unit::{Dp};
-        use crate::runtime::density::current_density;
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let (mut s, mut t, mut e, mut b) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
         for el in &self.elements {
@@ -2073,8 +2071,6 @@ impl Modifier {
     /// 该轴无最小约束。动态值在布局期求值（State::get 注册 layout_dep——
     /// 动画可驱动 min 尺寸，只重测不重组）。
     pub fn min_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{Dp};
-        use crate::runtime::density::current_density;
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = (None, None);
         for el in &self.elements {
@@ -2096,8 +2092,6 @@ impl Modifier {
     /// [`Self::min_size_constraint`] and [`Self::max_size_constraint`] scan position-independently
     /// and collapse that away, so the measure pipeline replays the order with this instead.
     pub fn min_max_steps(&self) -> Vec<(bool, bool, f32)> {
-        use crate::unit::{Dp};
-        use crate::runtime::density::current_density;
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = Vec::new();
         for el in &self.elements {
@@ -2117,8 +2111,6 @@ impl Modifier {
     /// axis with no cap. Dynamic values are evaluated during layout (a `State::get` registers
     /// a layout dependency, so an animation can drive the cap without recomposing).
     pub fn max_size_constraint(&self) -> (Option<f32>, Option<f32>) {
-        use crate::unit::{Dp};
-        use crate::runtime::density::current_density;
         let resolve = |d: &Dimension| -> f32 { d.to_logical_px() };
         let mut out = (None, None);
         for el in &self.elements {
@@ -2244,8 +2236,6 @@ impl Modifier {
     /// pipeline together with `Modifier::width/height(IntrinsicSize)` — see
     /// [`Modifier::intrinsic_width_request`].
     pub fn required_size_constraint(&self) -> Option<(Option<f32>, Option<f32>)> {
-        use crate::unit::{Dp};
-        use crate::runtime::density::current_density;
         // A required size is a SIZE: `requiredWidth(IntrinsicSize)` is a real Compose overload, so
         // the layout modes stay, and only a numeric axis is reported here.
         self.elements.iter().find_map(|el| {

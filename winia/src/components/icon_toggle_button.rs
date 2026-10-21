@@ -789,24 +789,41 @@ mod tests {
 
         build(&mut composer);
         build(&mut composer);
-        assert_eq!(composer.compose_dirty_count, 0, "a settled frame enters nothing");
+        let baseline_entered = composer.compose_entered_count;
+        assert_eq!(composer.compose_dirty_count, 0, "a settled frame dirties nothing");
+        build(&mut composer);
+        assert_eq!(
+            (composer.compose_entered_count, composer.compose_dirty_count),
+            (baseline_entered, 0),
+            "the settled baseline must be stable"
+        );
 
-        // The switch rebuilds the group (its key carries `checked`), so the dirty count is not the
-        // probe for this frame - the probe is that the animation ticks that FOLLOW it enter nothing.
+        // The switch retargets the container fade, the ripple colour and the shape morph. The BODY runs
+        // every build (the parent composes it), and the group may legitimately Skip because those
+        // values are carried as Dyns and the new modifier is applied on Skip. The probe is therefore
+        // the ticks below: they must start an animation and enter no group beyond the provider baseline.
         checked.update(|c| *c = true);
         build(&mut composer);
         build(&mut composer);
+        assert!(
+            crate::animation::is_animating(),
+            "the switch must leave an animation running, or the ticks below prove nothing"
+        );
 
-        let mut worst = 0;
+        let (mut worst_entered, mut worst_dirty, mut saw_animation) = (0, 0, false);
         for _ in 0..30 {
-            crate::animation::update_animations();
+            saw_animation |= crate::animation::update_animations();
             std::thread::sleep(std::time::Duration::from_millis(2));
             build(&mut composer);
-            worst = worst.max(composer.compose_dirty_count);
+            worst_entered = worst_entered.max(composer.compose_entered_count);
+            worst_dirty = worst_dirty.max(composer.compose_dirty_count);
         }
+        assert!(saw_animation, "the ticks must actually advance an animation");
         assert_eq!(
-            worst, 0,
-            "the container fade, the ripple colour and the shape morph are painted (worst frame entered {worst})"
+            (worst_entered, worst_dirty),
+            (baseline_entered, 0),
+            "the container fade, the ripple colour and the shape morph are painted, not composed \
+             (worst frame: entered {worst_entered}, dirty {worst_dirty})"
         );
         crate::animation::clear_all_animations();
     }

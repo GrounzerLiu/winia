@@ -6,7 +6,11 @@
 //! `DrawIcon`/`DrawImage` elements) and `render.rs` (the drawing itself) had to name a component to
 //! describe what they were drawing.
 
-use crate::runtime::state::State;
+#[cfg(any(
+    feature = "material-symbols-outlined",
+    feature = "material-symbols-rounded",
+    feature = "material-symbols-sharp"
+))]
 use parking_lot::Mutex;
 use std::sync::Arc;
 pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
@@ -27,7 +31,6 @@ pub use layer::{
 pub use shape::Shape;
 
 use skia_safe::{svg, Rect};
-use std::fmt;
 use std::time::{Duration, Instant};
 use std::sync::LazyLock;
 use std::cell::RefCell;

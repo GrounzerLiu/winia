@@ -26,7 +26,7 @@ pub enum Tint {
     /// Tints the single-colour sources — `SvgPath`, `Svg` and `Symbol` — with the current content colour;
     /// `File` keeps its own colours.
     ///
-    /// The tint is a layer-wide `SrcIn` filter (`render.rs:558-563`), so an SVG *document* carrying several
+    /// The tint is applied as an `SrcIn` blend while the icon is drawn (`render::draw_icon`), so an SVG *document* carrying several
     /// fills is flattened to one colour and nothing reports it. Compose behaves the same way and warns about
     /// it in `Icon`'s KDoc; use `Tint::None` when the artwork is meant to be multi-coloured.
     Auto,
