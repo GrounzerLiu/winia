@@ -154,6 +154,50 @@ impl Default for ContentAlignment {
     }
 }
 
+/// A node's placed box in window coordinates — what `Modifier::on_globally_positioned` /
+/// `on_placed` hand their callback.
+///
+/// The origin is the window's top-left in logical pixels and includes the scroll offsets of every
+/// scrolling ancestor (the renderer translates them at paint time; the callback reports what the user
+/// sees). Compose's equivalent is `LayoutCoordinates`; winia exposes the part a callback can use today
+/// (position + size), not the coordinate-tree navigation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlobalPosition {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl GlobalPosition {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self { x, y, width, height }
+    }
+
+    /// Top-left corner, in window coordinates.
+    pub fn position(&self) -> Offset {
+        Offset::new(self.x, self.y)
+    }
+
+    /// The placed size.
+    pub fn size(&self) -> Size {
+        Size::new(self.width, self.height)
+    }
+
+    pub fn right(&self) -> f32 {
+        self.x + self.width
+    }
+
+    pub fn bottom(&self) -> f32 {
+        self.y + self.height
+    }
+
+    /// `(x, y, width, height)`, the shape the layout code keeps internally.
+    pub fn rect(&self) -> (f32, f32, f32, f32) {
+        (self.x, self.y, self.width, self.height)
+    }
+}
+
 /// 检查 modifier 中是否包含 TextContent
 pub(crate) fn modifier_has_text(modifier: &Modifier) -> bool {
     modifier.elements().iter().any(|el| matches!(el, ModifierElement::TextContent { .. }))
@@ -458,6 +502,9 @@ pub struct LayoutNode {
     pub(crate) scroll_content_width: f32,
     /// 父节点 ID（键盘事件冒泡用，由 add_child 设置）
     pub(crate) parent_id: Option<u64>,
+    /// The last `(x, y, width, height)` reported to this node's position callbacks, in window
+    /// coordinates. `None` means "never reported", so the first placement always fires.
+    pub(crate) last_global_position: Option<(f32, f32, f32, f32)>,
     /// CompositionLocal 作用域内的 SelectionRegistrar（Text 节点存引用）
     pub(crate) registrar: std::cell::RefCell<Option<crate::text::selection::SelectionRegistrar>>,
     /// 文本光标 x 偏移（TextField 用，render 根据 focused 画竖线）
@@ -656,6 +703,7 @@ impl LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
+            last_global_position: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -748,6 +796,7 @@ impl Default for LayoutNode {
             slot_key: 0,
             cached_paragraph: std::cell::RefCell::new(None),
             scroll_viewport_height: 0.0, scroll_viewport_width: 0.0, scroll_content_height: 0.0, scroll_content_width: 0.0, scroll_reverse: false, parent_id: None,
+            last_global_position: None,
             registrar: std::cell::RefCell::new(None),
             cursor_x: std::cell::Cell::new(0.0),
             cursor_height: std::cell::Cell::new(0.0),
@@ -1845,7 +1894,9 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
     let mut dx = 0.0;
     let mut dy = 0.0;
     if let Some(state) = node.modifier.vertical_scroll_state() {
-        dy += state.offset.get();
+        // `peek`: this is a pure geometry read (hit test, absolute-rect arithmetic, position
+        // callbacks) — it must never subscribe its caller to the offset.
+        dy += state.offset.peek();
     }
     if let Some(state) = node.modifier.horizontal_scroll_state() {
         dx += if node.scroll_reverse {
@@ -1853,12 +1904,84 @@ pub(crate) fn scroll_offset_for_node(node: &LayoutNode) -> (f32, f32) {
             //（content_w 首帧可能未回写为 0，此时退化为 -offset→max(0)=0，
             // 与 render 首帧行为一致）
             let content_w = if node.scroll_content_width > 0.0 { node.scroll_content_width } else { 0.0 };
-            (content_w - node.scroll_viewport_width - state.offset.get()).max(0.0)
+            (content_w - node.scroll_viewport_width - state.offset.peek()).max(0.0)
         } else {
-            state.offset.get()
+            state.offset.peek()
         };
     }
     (dx, dy)
+}
+
+/// A node position callback — `Modifier::on_globally_positioned` / `on_placed`.
+pub(crate) type PositionCallback = std::sync::Arc<dyn Fn(GlobalPosition) + Send + Sync>;
+
+/// Walk the tree in place order and collect the position callbacks that must fire, as
+/// `(on_placed, on_globally_positioned)`.
+///
+/// Both are CHANGE-gated: winia has no separate placement pass (placement happens inside measure and
+/// a folded node is not re-placed), so "the box moved or resized" is the observable event. The
+/// absolute box includes every ancestor's scroll offset, because that is what the renderer's
+/// `translate(-offset)` produces on screen — the same arithmetic as `abs_rect_upward`.
+pub(crate) fn collect_position_callbacks(
+    nodes: &mut [LayoutNode],
+    root: usize,
+) -> (Vec<(PositionCallback, GlobalPosition)>, Vec<(PositionCallback, GlobalPosition)>) {
+    let mut placed = Vec::new();
+    let mut global = Vec::new();
+    collect_position_callbacks_at(nodes, root, 0.0, 0.0, &mut placed, &mut global);
+    (placed, global)
+}
+
+fn collect_position_callbacks_at(
+    nodes: &mut [LayoutNode],
+    idx: usize,
+    x: f32,
+    y: f32,
+    placed: &mut Vec<(PositionCallback, GlobalPosition)>,
+    global: &mut Vec<(PositionCallback, GlobalPosition)>,
+) {
+    let position = GlobalPosition::new(
+        x,
+        y,
+        nodes[idx].measured_size.width,
+        nodes[idx].measured_size.height,
+    );
+    let rect = position.rect();
+    let has_callbacks = nodes[idx]
+        .modifier
+        .elements()
+        .iter()
+        .any(|el| matches!(
+            el,
+            crate::modifier::ModifierElement::OnPlaced { .. }
+                | crate::modifier::ModifierElement::OnGloballyPositioned { .. }
+        ));
+    if has_callbacks {
+        if nodes[idx].last_global_position != Some(rect) {
+            nodes[idx].last_global_position = Some(rect);
+            for el in nodes[idx].modifier.elements() {
+                match el {
+                    crate::modifier::ModifierElement::OnPlaced { callback } => {
+                        placed.push((callback.clone(), position));
+                    }
+                    crate::modifier::ModifierElement::OnGloballyPositioned { callback } => {
+                        global.push((callback.clone(), position));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    } else {
+        // A node WITHOUT callbacks forgets its last box, so a callback attached later fires on its
+        // first placement even when the box never moved.
+        nodes[idx].last_global_position = None;
+    }
+    let (sx, sy) = scroll_offset_for_node(&nodes[idx]);
+    let children = nodes[idx].children.clone();
+    for child in children {
+        let (px, py) = (nodes[child].position.x, nodes[child].position.y);
+        collect_position_callbacks_at(nodes, child, x + px - sx, y + py - sy, placed, global);
+    }
 }
 
 /// 场景坐标 → 目标节点的本地坐标（相对节点左上角）。
@@ -2462,6 +2585,88 @@ mod tests {
         let (size, _) = measure_node(&mut nodes, &policies, 0, Constraints::new(100.0, 100.0, 100.0, 100.0));
         assert_eq!((size.width, size.height), (100.0, 100.0));
         assert_eq!((nodes[1].position.x, nodes[1].position.y), (40.0, 40.0));
+    }
+
+    // ── position callbacks (Compose onPlaced / onGloballyPositioned) ──
+
+    #[test]
+    fn position_callbacks_report_the_global_box_once_per_change() {
+        use std::sync::{Arc, Mutex};
+        let placed: Arc<Mutex<Vec<GlobalPosition>>> = Arc::new(Mutex::new(Vec::new()));
+        let global: Arc<Mutex<Vec<GlobalPosition>>> = Arc::new(Mutex::new(Vec::new()));
+        let (p, g) = (placed.clone(), global.clone());
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new(), Some(0)),
+            LayoutNode::leaf(
+                Modifier::new()
+                    .on_placed(move |pos| p.lock().unwrap().push(pos))
+                    .on_globally_positioned(move |pos| g.lock().unwrap().push(pos)),
+            ),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[1].position = Offset::new(10.0, 20.0);
+        nodes[1].measured_size = Size::new(30.0, 40.0);
+
+        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        for (callback, position) in placed_cb {
+            callback(position);
+        }
+        for (callback, position) in global_cb {
+            callback(position);
+        }
+        let expected = GlobalPosition::new(10.0, 20.0, 30.0, 40.0);
+        assert_eq!(*placed.lock().unwrap(), vec![expected]);
+        assert_eq!(*global.lock().unwrap(), vec![expected]);
+
+        // The box did not change: neither callback fires again.
+        let (placed_cb, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        assert!(placed_cb.is_empty() && global_cb.is_empty());
+
+        // A moved child reports its new box.
+        nodes[1].position = Offset::new(15.0, 25.0);
+        let (placed_cb, _) = collect_position_callbacks(&mut nodes, 0);
+        for (callback, position) in placed_cb {
+            callback(position);
+        }
+        assert_eq!(
+            placed.lock().unwrap().last(),
+            Some(&GlobalPosition::new(15.0, 25.0, 30.0, 40.0))
+        );
+    }
+
+    #[test]
+    fn a_scroll_offset_is_part_of_the_global_position() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<GlobalPosition>>> = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        let scroll = crate::modifier::ScrollState::new();
+        scroll.offset.set(7.0);
+        let mut nodes = vec![
+            LayoutNode::new(Modifier::new().vertical_scroll(scroll), Some(0)),
+            LayoutNode::leaf(Modifier::new().on_globally_positioned(move |pos| {
+                s.lock().unwrap().push(pos)
+            })),
+        ];
+        nodes[0].children = vec![1];
+        nodes[0].measured_size = Size::new(100.0, 100.0);
+        nodes[1].position = Offset::new(0.0, 30.0);
+        nodes[1].measured_size = Size::new(10.0, 10.0);
+        let (_, global_cb) = collect_position_callbacks(&mut nodes, 0);
+        for (callback, position) in global_cb {
+            callback(position);
+        }
+        assert_eq!(seen.lock().unwrap().first().map(|p| p.y), Some(23.0), "30 - 7");
+    }
+
+    #[test]
+    fn layout_id_is_queryable_on_the_chain_and_in_the_arena() {
+        let m = Modifier::new().layout_id("field");
+        assert_eq!(m.layout_id_value(), Some("field"));
+        let mut composer = crate::runtime::composer::Composer::new();
+        composer.arena_nodes_mut().push(LayoutNode::leaf(m));
+        assert_eq!(composer.find_by_layout_id("field"), Some(0));
+        assert_eq!(composer.find_by_layout_id("other"), None);
     }
 
     // ── maxWidth / maxHeight（Compose widthIn/heightIn 的另一半）──

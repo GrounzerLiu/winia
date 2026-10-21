@@ -573,11 +573,16 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let pos_y = if node.position.y.is_finite() { node.position.y } else { 0.0 };
     let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
     let size_h = if node.measured_size.height.is_finite() { node.measured_size.height } else { 0.0 };
+    let layout_id = match node.modifier.layout_id_value() {
+        Some(id) => format!("\"{}\"", id.replace('\\', "\\\\").replace('"', "\\\"")),
+        None => "null".into(),
+    };
     out.push_str(&format!(
-        r#"{indent}{{"id":{},"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","tag":{},"focused":{},"children":["#,
+        r#"{indent}{{"id":{},"pos":[{pos_x:.0},{pos_y:.0}],"size":[{size_w:.0},{size_h:.0}],"mod":"{}","tag":{},"layoutId":{},"focused":{},"children":["#,
         node.id,
         mod_desc,
         node.modifier.get_test_tag().map(|t| format!("\"{}\"", t)).unwrap_or_else(|| "null".into()),
+        layout_id,
         node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {

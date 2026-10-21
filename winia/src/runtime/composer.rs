@@ -3945,6 +3945,47 @@ impl Composer {
         // before this point drops the guard and rolls back partial subscriptions.
         dependency_frame.commit();
         layout_transaction.commit();
+        self.dispatch_layout_callbacks();
+    }
+
+    /// Fire the position callbacks whose box changed this pass, then serve bring-into-view requests.
+    ///
+    /// Runs AFTER the dependency frame and the layout transaction commit, so a callback that writes a
+    /// State schedules the next frame instead of being recorded as a layout dependency.
+    fn dispatch_layout_callbacks(&mut self) {
+        let Some(root) = self.arena.root else { return };
+        // Cheap guard: most trees use neither feature, and the guarded work is a full tree walk.
+        let has_positions = self
+            .arena
+            .nodes
+            .iter()
+            .any(|node| node.modifier.has_position_callbacks());
+        if has_positions {
+            let (placed, global) =
+                crate::layout::node::collect_position_callbacks(&mut self.arena.nodes, root);
+            for (callback, position) in placed {
+                callback(position);
+            }
+            for (callback, position) in global {
+                callback(position);
+            }
+        }
+        let has_requests = self
+            .arena
+            .nodes
+            .iter()
+            .any(|node| node.modifier.has_bring_into_view_requester());
+        if has_requests {
+            crate::layout::relocation::process_bring_into_view(&mut self.arena.nodes, root);
+        }
+    }
+
+    /// The index of the node carrying `Modifier::layout_id(id)`, if there is one.
+    pub fn find_by_layout_id(&self, id: &str) -> Option<usize> {
+        self.arena
+            .nodes
+            .iter()
+            .position(|node| node.modifier.layout_id_value() == Some(id))
     }
 
     /// 请求重组（由 State 变化触发）。

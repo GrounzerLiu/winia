@@ -385,6 +385,15 @@ pub(crate) enum ModifierElement {
     /// 尺寸上报（对标 Compose `Modifier.onSizeChanged`）——节点测量完成后
     /// 以逻辑像素回调 (width, height)；元素内部去重，尺寸未变化不重复回调
     OnSizeChanged { callback: std::sync::Arc<dyn Fn(f32, f32) + Send + Sync> },
+    /// Fires with the placed box, in window coordinates, when it changes — Compose's
+    /// `onGloballyPositioned`. Delivered after `OnPlaced` for the same pass.
+    OnGloballyPositioned { callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync> },
+    /// Compose's `onPlaced`: the same box, delivered before the `OnGloballyPositioned` callbacks.
+    OnPlaced { callback: std::sync::Arc<dyn Fn(crate::layout::GlobalPosition) + Send + Sync> },
+    /// Compose's `layoutId`: a tag for this layout node, visible in the debug tree.
+    LayoutId { id: std::sync::Arc<str> },
+    /// Compose's `bringIntoViewRequester`: this node's requests are served after the layout pass.
+    BringIntoViewRequester { requester: crate::layout::BringIntoViewRequester },
     /// 测试标记（对标 Compose `Modifier.testTag`——UI 测试定位；
     /// 调试树 JSON 暴露 tag 字段）
     TestTag { tag: String },
@@ -1884,6 +1893,73 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         }
     }
 
+    /// Compose's `Modifier.onGloballyPositioned`: the callback receives the node's placed box in
+    /// window coordinates (scroll offsets included) whenever that box changes.
+    pub fn on_globally_positioned(
+        self,
+        callback: impl Fn(crate::layout::GlobalPosition) + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::OnGloballyPositioned {
+            callback: std::sync::Arc::new(callback),
+        })
+    }
+
+    /// Compose's `Modifier.onPlaced`: the same box, delivered before the `on_globally_positioned`
+    /// callbacks of the same pass.
+    pub fn on_placed(
+        self,
+        callback: impl Fn(crate::layout::GlobalPosition) + Send + Sync + 'static,
+    ) -> Self {
+        self.push(ModifierElement::OnPlaced {
+            callback: std::sync::Arc::new(callback),
+        })
+    }
+
+    /// Compose's `Modifier.layoutId`: a tag for this layout node (debug tree and
+    /// [`Composer::find_by_layout_id`](crate::runtime::composer::Composer::find_by_layout_id)).
+    pub fn layout_id(self, id: impl Into<std::sync::Arc<str>>) -> Self {
+        self.push(ModifierElement::LayoutId { id: id.into() })
+    }
+
+    /// Compose's `Modifier.bringIntoViewRequester`: attach the handle to this node. A request made
+    /// through it scrolls the nearest scrolling ancestors so the node is visible.
+    pub fn bring_into_view_requester(
+        self,
+        requester: &crate::layout::BringIntoViewRequester,
+    ) -> Self {
+        // Subscribe the enclosing group to the request counter: a request then wakes a frame even
+        // when nothing else changed, which is what gets the post-layout pass to serve it.
+        requester.subscribe();
+        self.push(ModifierElement::BringIntoViewRequester {
+            requester: requester.clone(),
+        })
+    }
+
+    /// Whether this chain carries an `on_globally_positioned` / `on_placed` callback.
+    pub(crate) fn has_position_callbacks(&self) -> bool {
+        self.elements.iter().any(|el| {
+            matches!(
+                el,
+                ModifierElement::OnGloballyPositioned { .. } | ModifierElement::OnPlaced { .. }
+            )
+        })
+    }
+
+    /// Whether this chain carries a bring-into-view requester (requests may be queued on it).
+    pub(crate) fn has_bring_into_view_requester(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|el| matches!(el, ModifierElement::BringIntoViewRequester { .. }))
+    }
+
+    /// The chain's `layout_id`, if one was declared.
+    pub fn layout_id_value(&self) -> Option<&str> {
+        self.elements.iter().find_map(|el| match el {
+            ModifierElement::LayoutId { id } => Some(&**id),
+            _ => None,
+        })
+    }
+
     /// `alpha(a)`（对标 Compose `Modifier.alpha`）——透明度便捷包装：
     /// `a != 1.0` 时应用 `graphicsLayer(alpha = a, clip = true)`（**alpha<1
     /// 隐式裁剪到 bounds**——Compose 语义）。已存在 GraphicsLayer 元素时
@@ -2890,6 +2966,10 @@ impl Debug for ModifierElement {
                 .field("height", height)
                 .finish(),
             Self::OnSizeChanged { .. } => f.write_str("OnSizeChanged"),
+            Self::OnGloballyPositioned { .. } => f.write_str("OnGloballyPositioned"),
+            Self::OnPlaced { .. } => f.write_str("OnPlaced"),
+            Self::LayoutId { id } => f.debug_struct("LayoutId").field("id", id).finish(),
+            Self::BringIntoViewRequester { .. } => f.write_str("BringIntoViewRequester"),
             Self::TestTag { tag } => f.debug_struct("TestTag").field("tag", tag).finish(),
             Self::Semantics(config) => f.debug_tuple("Semantics").field(config).finish(),
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
@@ -4500,6 +4580,16 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         }
         (HorizontalScroll { state: as_, reverse: ar }, HorizontalScroll { state: bs, reverse: br }) => as_.offset.state_id() == bs.offset.state_id() && ar == br,
         (NestedScroll { .. }, NestedScroll { .. }) => true,
+        // Observation callbacks are rebuilt every composition; identity is the parameter (same rule
+        // as Clickable's callback). Without these arms a chain carrying one could never Skip.
+        (OnSizeChanged { .. }, OnSizeChanged { .. }) => true,
+        (OnGloballyPositioned { .. }, OnGloballyPositioned { .. }) => true,
+        (OnPlaced { .. }, OnPlaced { .. }) => true,
+        (LayoutId { id: a }, LayoutId { id: b }) => a == b,
+        (
+            BringIntoViewRequester { requester: a },
+            BringIntoViewRequester { requester: b },
+        ) => a.same(b),
         // Scene tag: an equal id means the tag did not change. Without this arm the match falls through
         // to `_ => false`, so any modifier chain carrying a `SceneTag` could NEVER Skip — measured
         // consequence: the nav's transition-layer wrapper (which carries one) re-composed and re-measured
