@@ -993,7 +993,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    resolved_tint = spec.tint;
+                    resolved_tint = spec.tint.as_ref().map(|t| t.eval());
                 }
             }
         }

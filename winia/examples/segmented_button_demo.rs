@@ -100,7 +100,7 @@ fn segmented_button_demo(ctx: &mut ComposeCtx) {
                     .inactive_icon(|ctx| {
                         Icon::svg_path(CIRCLE_ICON_PATH)
                             .size(10.0)
-                            .tint(Tint::Color(label_color()))
+                            .tint(label_color())
                             .build(ctx);
                     })
                     .build(ctx, |ctx| {

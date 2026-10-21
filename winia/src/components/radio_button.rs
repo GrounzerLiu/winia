@@ -723,7 +723,7 @@ mod tests {
                 .any(|el| matches!(el, crate::modifier::ModifierElement::Ripple { .. }));
             let state_layer = node.modifier.elements().iter().find_map(|el| match el {
                 crate::modifier::ModifierElement::Ripple { state_layer_diameter, .. } => {
-                    *state_layer_diameter
+                    state_layer_diameter.as_ref().map(|d| d.eval())
                 }
                 _ => None,
             });

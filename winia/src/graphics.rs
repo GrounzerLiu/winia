@@ -216,7 +216,9 @@ pub(crate) fn wrap_svg_path(data: &str, fill_type: PathFillType) -> String {
 #[derive(Debug, Clone)]
 pub struct IconSpec {
     pub source: IconSource,
-    pub tint: Option<Color>,
+    /// The resolved tint. A literal is stored inline; a state or closure is read at paint time, so a
+    /// glyph can follow an animated colour without recomposing.
+    pub tint: Option<Dyn<Color>>,
     pub auto_mirror: bool,
     pub axes: SymbolAxes,
 }
@@ -224,9 +226,22 @@ pub struct IconSpec {
 impl PartialEq for IconSpec {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
-            && self.tint == other.tint
+            && option_same_parameter(&self.tint, &other.tint)
             && self.auto_mirror == other.auto_mirror
             && self.axes == other.axes
+    }
+}
+
+/// Option lifted Dyn::same_parameter — the comparison every element that stores an optional carrier
+/// needs (a literal-vs-state difference is a CHANGE; two states are the same request).
+pub(crate) fn option_same_parameter<T: PartialEq>(
+    a: &Option<Dyn<T>>,
+    b: &Option<Dyn<T>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.same_parameter(b),
+        _ => false,
     }
 }
 

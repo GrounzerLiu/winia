@@ -96,8 +96,8 @@ pub struct Image {
     modifier: Modifier,
     alignment: ImageAlignment,
     content_scale: ContentScale,
-    alpha: f32,
-    color_filter: Option<ColorFilter>,
+    alpha: crate::graphics::Dyn<f32>,
+    color_filter: Option<crate::graphics::Dyn<ColorFilter>>,
     filter_quality: FilterQuality,
     /// The accessible description. `build` publishes it as an `Image` semantics node; an image without one
     /// stays out of the tree entirely, which is Compose's decorative case.
@@ -112,7 +112,7 @@ impl Image {
             modifier: Modifier::new(),
             alignment: ImageAlignment::Center,
             content_scale: ContentScale::Fit,
-            alpha: 1.0,
+            alpha: crate::graphics::Dyn::Static(1.0),
             color_filter: None,
             filter_quality: FilterQuality::Low,
             content_description: None,
@@ -148,15 +148,15 @@ impl Image {
     }
 
     /// 整体透明度（默认 1.0——对标 Compose `alpha`）
-    pub fn alpha(mut self, alpha: f32) -> Self {
-        self.alpha = alpha;
+    pub fn alpha(mut self, alpha: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        self.alpha = alpha.into();
         self
     }
 
     /// 颜色滤镜（默认无——对标 Compose `colorFilter`：Tint 染色/
     /// Matrix 矩阵/Lighting 光照）
-    pub fn color_filter(mut self, filter: ColorFilter) -> Self {
-        self.color_filter = Some(filter);
+    pub fn color_filter(mut self, filter: impl Into<crate::graphics::Dyn<ColorFilter>>) -> Self {
+        self.color_filter = Some(filter.into());
         self
     }
 
@@ -206,8 +206,10 @@ impl Image {
     pub fn get_source(&self) -> &IconSource { &self.source }
     pub fn get_content_scale(&self) -> ContentScale { self.content_scale }
     pub fn get_alignment(&self) -> ImageAlignment { self.alignment }
-    pub fn get_alpha(&self) -> f32 { self.alpha }
-    pub fn get_color_filter(&self) -> Option<&ColorFilter> { self.color_filter.as_ref() }
+    pub fn get_alpha(&self) -> f32 { self.alpha.eval() }
+    pub fn get_color_filter(&self) -> Option<ColorFilter> {
+        self.color_filter.as_ref().map(|filter| filter.eval())
+    }
     pub fn get_filter_quality(&self) -> FilterQuality { self.filter_quality }
     pub fn get_modifier(&self) -> &Modifier { &self.modifier }
 }
@@ -237,7 +239,10 @@ mod tests {
         let img = Image::file("a.png")
             .color_filter(ColorFilter::Tint { color: Color::RED, blend_mode: BlendMode::SrcIn })
             .filter_quality(FilterQuality::High);
-        assert!(matches!(img.get_color_filter(), Some(ColorFilter::Tint { color: c, blend_mode: b }) if *c == Color::RED && *b == BlendMode::SrcIn));
+        assert!(matches!(
+            img.get_color_filter(),
+            Some(ColorFilter::Tint { color, blend_mode }) if color == Color::RED && blend_mode == BlendMode::SrcIn
+        ));
         assert_eq!(img.get_filter_quality(), FilterQuality::High);
 
         let gray = ColorFilter::Matrix([
@@ -247,8 +252,8 @@ mod tests {
             0.0, 0.0, 0.0, 1.0, 0.0,
         ]);
         let img2 = Image::file("a.png").color_filter(gray.clone());
-        assert_eq!(img2.get_color_filter(), Some(&gray));
-        assert_ne!(img.get_color_filter(), Some(&gray), "Tint 与 Matrix 是不同滤镜");
+        assert_eq!(img2.get_color_filter(), Some(gray.clone()));
+        assert_ne!(img.get_color_filter(), Some(gray), "Tint 与 Matrix 是不同滤镜");
     }
 
     #[test]

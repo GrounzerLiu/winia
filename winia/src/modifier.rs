@@ -349,7 +349,11 @@ pub(crate) enum ModifierElement {
     /// 阴影（对标 Compose `Modifier.shadow`——elevation 模糊 + 内容裁剪）
     /// 阴影（对标 Compose `Modifier.shadow`——单层参数；elevation 便捷版
     /// 展开为 ambient+spot 两层元素）
-    Shadow { params: ShadowParams, shape: crate::graphics::Dyn<Shape>, clip: bool },
+    Shadow {
+        params: crate::graphics::Dyn<ShadowParams>,
+        shape: crate::graphics::Dyn<Shape>,
+        clip: bool,
+    },
 
     // ── Draw 类 ──
     /// Background colour + shape. The colour is a [`Dyn`](crate::graphics::Dyn): a literal is stored
@@ -370,10 +374,10 @@ pub(crate) enum ModifierElement {
     },
     /// 裁剪
     Clip { shape: crate::graphics::Dyn<Shape> },
-    /// 内容模糊（GPU 原生，零回读）
-    Blur { radius: f32 },
-    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）
-    BackdropBlur { radius: f32 },
+    /// 内容模糊（GPU 原生，零回读）。The radius is a carrier: a state or closure is read per paint.
+    Blur { radius: crate::graphics::Dyn<f32> },
+    /// 背景模糊（毛玻璃，单 snapshot 多节点共享）。Carrier radius, same as `Blur`.
+    BackdropBlur { radius: crate::graphics::Dyn<f32> },
     /// 文本输入框容器视觉（TextField 组件——M3 Filled/Outlined 容器：    /// 背景/指示线/边框/label/支持文本）。组合期解析全部视觉状态
     /// （enabled/focused/is_error/label 悬浮），渲染期静态绘制——
     /// 状态过渡动画由后续迭代接入。
@@ -453,13 +457,14 @@ pub(crate) enum ModifierElement {
     /// Outlined/Text 无背景元素时也能正确裁剪）；None 则从 Background/Border 推断。
     Ripple {
         source: MutableInteractionSource,
-        color: Color,
+        /// The ripple colour — a literal, a state or a closure read per paint.
+        color: crate::graphics::Dyn<Color>,
         bounded: bool,
         shape: Option<crate::graphics::Dyn<Shape>>,
         /// The BACKGROUND state layer's diameter when it is fixed (Compose's `ripple(bounded, radius)` names a
         /// radius; material3's checkbox and radio pass `StateLayerSize`, 40 dp). `None` = derive it from the
         /// node's diagonal, which is this framework's original behaviour.
-        state_layer_diameter: Option<f32>,
+        state_layer_diameter: Option<crate::graphics::Dyn<f32>>,
     },
     /// 图标绘制（Icon 组件内部使用）——source/tint/autoMirror/可变轴
     CustomDraw { f: Arc<dyn Fn(&skia_safe::Canvas, skia_safe::Rect) + Send + Sync> },
@@ -472,8 +477,10 @@ pub(crate) enum ModifierElement {
         source: crate::graphics::IconSource,
         content_scale: crate::graphics::ContentScale,
         alignment: crate::graphics::ImageAlignment,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
+        /// Image opacity — a literal, a state or a closure read per paint (a fade-in image).
+        alpha: crate::graphics::Dyn<f32>,
+        /// Optional colour filter — a literal or a paint-time carrier.
+        color_filter: Option<crate::graphics::Dyn<ColorFilter>>,
         filter_quality: FilterQuality,
     },
     /// 焦点请求器 ID（与 FocusRequester 关联）
@@ -1206,9 +1213,13 @@ impl Modifier {
     /// `drop_shadow(shape, params)`（对标 Compose `Modifier.dropShadow`）——
     /// 完全自定义单层阴影（radius/spread/offset/color/alpha）。多个
     /// drop_shadow 可叠加（多阴影，Compose vararg 语义）。
-    pub fn drop_shadow(self, shape: impl Into<crate::graphics::Dyn<Shape>>, params: ShadowParams) -> Self {
+    pub fn drop_shadow(
+        self,
+        shape: impl Into<crate::graphics::Dyn<Shape>>,
+        params: impl Into<crate::graphics::Dyn<ShadowParams>>,
+    ) -> Self {
         self.push(ModifierElement::Shadow {
-            params,
+            params: params.into(),
             shape: shape.into(),
             clip: false,
         })
@@ -1347,13 +1358,13 @@ impl Modifier {
     }
 
     /// 内容模糊（GPU saveLayer，零回读）
-    pub fn blur(self, radius: f32) -> Self {
-        self.push(ModifierElement::Blur { radius })
+    pub fn blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        self.push(ModifierElement::Blur { radius: radius.into() })
     }
 
     /// 背景模糊（毛玻璃）——渲染期在节点内容绘制前即时 snapshot+blur
-    pub fn backdrop_blur(self, radius: f32) -> Self {
-        self.push(ModifierElement::BackdropBlur { radius })
+    pub fn backdrop_blur(self, radius: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        self.push(ModifierElement::BackdropBlur { radius: radius.into() })
     }
 
     /// 文本输入框容器视觉（TextField 组件内部使用——M3 容器绘制参数）
@@ -1482,10 +1493,15 @@ impl Modifier {
     /// 水波纹指示（对标 Compose `indication` + Material ripple）。
     /// `bounded=true` 时裁剪到节点形状（默认）；`color` 为波纹颜色
     /// （Material 用 content 色——Button 已自动附加，通用 clickable 可手动加）。
-    pub fn ripple(self, source: &MutableInteractionSource, color: Color, bounded: bool) -> Self {
+    pub fn ripple(
+        self,
+        source: &MutableInteractionSource,
+        color: impl Into<crate::graphics::Dyn<Color>>,
+        bounded: bool,
+    ) -> Self {
         self.push(ModifierElement::Ripple {
             source: source.clone(),
-            color,
+            color: color.into(),
             bounded,
             shape: None,
             state_layer_diameter: None,
@@ -1500,16 +1516,16 @@ impl Modifier {
     pub fn ripple_with_state_layer_size(
         self,
         source: &MutableInteractionSource,
-        color: Color,
+        color: impl Into<crate::graphics::Dyn<Color>>,
         bounded: bool,
-        diameter: f32,
+        diameter: impl Into<crate::graphics::Dyn<f32>>,
     ) -> Self {
         self.push(ModifierElement::Ripple {
             source: source.clone(),
-            color,
+            color: color.into(),
             bounded,
             shape: None,
-            state_layer_diameter: Some(diameter),
+            state_layer_diameter: Some(diameter.into()),
         })
     }
 
@@ -1519,13 +1535,13 @@ impl Modifier {
     pub fn ripple_with_shape(
         self,
         source: &MutableInteractionSource,
-        color: Color,
+        color: impl Into<crate::graphics::Dyn<Color>>,
         bounded: bool,
         shape: impl Into<crate::graphics::Dyn<Shape>>,
     ) -> Self {
         self.push(ModifierElement::Ripple {
             source: source.clone(),
-            color,
+            color: color.into(),
             bounded,
             shape: Some(shape.into()),
             state_layer_diameter: None,
@@ -1556,11 +1572,18 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         source: crate::graphics::IconSource,
         content_scale: crate::graphics::ContentScale,
         alignment: crate::graphics::ImageAlignment,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
+        alpha: impl Into<crate::graphics::Dyn<f32>>,
+        color_filter: Option<crate::graphics::Dyn<ColorFilter>>,
         filter_quality: FilterQuality,
     ) -> Self {
-        self.push(ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality })
+        self.push(ModifierElement::ImageContent {
+            source,
+            content_scale,
+            alignment,
+            alpha: alpha.into(),
+            color_filter,
+            filter_quality,
+        })
     }
 
     /// 图片固有尺寸（位图像素尺寸 / SVG viewBox）——测量期调用
@@ -1658,69 +1681,87 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// `a != 1.0` 时应用 `graphicsLayer(alpha = a, clip = true)`（**alpha<1
     /// 隐式裁剪到 bounds**——Compose 语义）。已存在 GraphicsLayer 元素时
     /// **合并**（alpha 相乘 + 开 clip）而非叠加嵌套层。
-    pub fn alpha(self, alpha: f32) -> Self {
-        if alpha == 1.0 {
+    pub fn alpha(self, alpha: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        let alpha = alpha.into();
+        if !alpha.is_dynamic() && alpha.eval() == 1.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| {
-            p.alpha *= alpha;
+        self.merge_layer_f32(alpha, |p, a| {
+            p.alpha *= a;
             p.clip = true;
         })
     }
 
     /// `rotate(degrees)`（对标 Compose `Modifier.rotate`）——绕**中心**
     /// 顺时针旋转（默认 transformOrigin=Center）。`degrees != 0` 才应用。
-    pub fn rotate(self, degrees: f32) -> Self {
-        if degrees == 0.0 {
+    pub fn rotate(self, degrees: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        let degrees = degrees.into();
+        if !degrees.is_dynamic() && degrees.eval() == 0.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| p.rotation_z += degrees)
+        self.merge_layer_f32(degrees, |p, d| p.rotation_z += d)
     }
 
     /// `scale(sx, sy)`（对标 Compose `Modifier.scale`）——绕**中心**缩放。
     /// 非 1 才应用。
-    pub fn scale(self, sx: f32, sy: f32) -> Self {
-        if sx == 1.0 && sy == 1.0 {
+    pub fn scale(
+        self,
+        sx: impl Into<crate::graphics::Dyn<f32>>,
+        sy: impl Into<crate::graphics::Dyn<f32>>,
+    ) -> Self {
+        let (sx, sy) = (sx.into(), sy.into());
+        if !sx.is_dynamic() && !sy.is_dynamic() && sx.eval() == 1.0 && sy.eval() == 1.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| {
-            p.scale_x *= sx;
-            p.scale_y *= sy;
-        })
+        if sx.is_dynamic() || sy.is_dynamic() {
+            self.merge_graphics_layer_per_paint(move |p| {
+                p.scale_x *= sx.eval();
+                p.scale_y *= sy.eval();
+            })
+        } else {
+            let (x, y) = (sx.eval(), sy.eval());
+            self.merge_graphics_layer(move |p| {
+                p.scale_x *= x;
+                p.scale_y *= y;
+            })
+        }
     }
 
     /// `rotationX(degrees)`（对标 Compose `Modifier.rotationX`）——绕 X 轴
     /// 3D 旋转（带 cameraDistance 透视；绕 transformOrigin）。`degrees != 0`
     /// 才应用。
-    pub fn rotation_x(self, degrees: f32) -> Self {
-        if degrees == 0.0 {
+    pub fn rotation_x(self, degrees: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        let degrees = degrees.into();
+        if !degrees.is_dynamic() && degrees.eval() == 0.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| p.rotation_x += degrees)
+        self.merge_layer_f32(degrees, |p, d| p.rotation_x += d)
     }
 
     /// `rotationY(degrees)`（对标 Compose `Modifier.rotationY`）——绕 Y 轴
     /// 3D 旋转（带 cameraDistance 透视；绕 transformOrigin）。
-    pub fn rotation_y(self, degrees: f32) -> Self {
-        if degrees == 0.0 {
+    pub fn rotation_y(self, degrees: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        let degrees = degrees.into();
+        if !degrees.is_dynamic() && degrees.eval() == 0.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| p.rotation_y += degrees)
+        self.merge_layer_f32(degrees, |p, d| p.rotation_y += d)
     }
 
     /// `cameraDistance(distance)`（对标 Compose `Modifier.cameraDistance`）——
     /// 3D 旋转的相机距离（逻辑 px；越大透视越平，Compose 默认 8.dp）。
-    pub fn camera_distance(self, distance: f32) -> Self {
-        self.merge_graphics_layer(move |p| p.camera_distance = distance)
+    pub fn camera_distance(self, distance: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        self.merge_layer_f32(distance.into(), |p, d| p.camera_distance = d)
     }
 
     /// `shadowElevation(elevation)`（对标 Compose `graphicsLayer.shadowElevation`）——
     /// 图层阴影高度（逻辑 px；>0 时在图层内容后画 ambient+spot 阴影）。
-    pub fn shadow_elevation(self, elevation: f32) -> Self {
-        if elevation <= 0.0 {
+    pub fn shadow_elevation(self, elevation: impl Into<crate::graphics::Dyn<f32>>) -> Self {
+        let elevation = elevation.into();
+        if !elevation.is_dynamic() && elevation.eval() <= 0.0 {
             return self;
         }
-        self.merge_graphics_layer(move |p| p.shadow_elevation = elevation)
+        self.merge_layer_f32(elevation, |p, e| p.shadow_elevation = e)
     }
 
     /// 图层阴影形状（对标 Compose `graphicsLayer.shape`——默认矩形）
@@ -1735,13 +1776,13 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     }
 
     /// 图层环境光阴影颜色（对标 Compose `ambientShadowColor`）。
-    pub fn ambient_shadow_color(self, color: Color) -> Self {
-        self.merge_graphics_layer(move |p| p.ambient_shadow_color = color)
+    pub fn ambient_shadow_color(self, color: impl Into<crate::graphics::Dyn<Color>>) -> Self {
+        self.merge_layer_color(color.into(), |p, c| p.ambient_shadow_color = c)
     }
 
     /// 图层投射光阴影颜色（对标 Compose `spotShadowColor`）。
-    pub fn spot_shadow_color(self, color: Color) -> Self {
-        self.merge_graphics_layer(move |p| p.spot_shadow_color = color)
+    pub fn spot_shadow_color(self, color: impl Into<crate::graphics::Dyn<Color>>) -> Self {
+        self.merge_layer_color(color.into(), |p, c| p.spot_shadow_color = c)
     }
 
     /// 便捷包装合并：已有 GraphicsLayer 元素 → 在其参数上叠加；否则 push 新元素。
@@ -1784,6 +1825,35 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         }
         self.elements = elements;
         self
+    }
+
+    /// Merge one scalar layer parameter that may be read per paint: a dynamic carrier takes the
+    /// per-paint path, a literal is applied now (and keeps the plain, allocation-free value).
+    fn merge_layer_f32(
+        self,
+        value: crate::graphics::Dyn<f32>,
+        apply: impl Fn(&mut GraphicsLayerParams, f32) + Send + Sync + 'static,
+    ) -> Self {
+        if value.is_dynamic() {
+            self.merge_graphics_layer_per_paint(move |p| apply(p, value.eval()))
+        } else {
+            let v = value.eval();
+            self.merge_graphics_layer(move |p| apply(p, v))
+        }
+    }
+
+    /// The colour twin of [`merge_layer_f32`](Self::merge_layer_f32).
+    fn merge_layer_color(
+        self,
+        value: crate::graphics::Dyn<Color>,
+        apply: impl Fn(&mut GraphicsLayerParams, Color) + Send + Sync + 'static,
+    ) -> Self {
+        if value.is_dynamic() {
+            self.merge_graphics_layer_per_paint(move |p| apply(p, value.eval()))
+        } else {
+            let v = value.eval();
+            self.merge_graphics_layer(move |p| apply(p, v))
+        }
     }
 
     /// Like [`merge_graphics_layer`](Self::merge_graphics_layer), but the mutator runs on EVERY paint:
@@ -2435,7 +2505,7 @@ impl Modifier {
     /// 背景模糊半径（渲染期在节点内容绘制前即时处理）
     pub fn backdrop_blur_radius(&self) -> Option<f32> {
         self.elements.iter().find_map(|el| {
-            if let ModifierElement::BackdropBlur { radius } = el { Some(*radius) } else { None }
+            if let ModifierElement::BackdropBlur { radius } = el { Some(radius.eval()) } else { None }
         })
     }
 
@@ -2549,7 +2619,7 @@ impl Debug for ModifierElement {
             Self::LayoutDirection(d) => f.debug_tuple("LayoutDirection").field(d).finish(),
             Self::ZIndex(z) => f.debug_tuple("ZIndex").field(z).finish(),
             Self::TextFieldSlot { role } => f.debug_struct("TextFieldSlot").field("role", role).finish(),
-            Self::Shadow { params, .. } => f.debug_struct("Shadow").field("radius", &params.radius).field("spread", &params.spread).finish(),
+            Self::Shadow { params, .. } => f.debug_struct("Shadow").field("params", params).finish(),
             Self::Background { .. } => f.debug_struct("Background").finish(),
             Self::BackgroundBrush { shape, .. } => {
                 f.debug_struct("BackgroundBrush").field("shape", shape).finish()
@@ -4072,7 +4142,7 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             SharedScopeOverlay { scope_id: b_id, z_index: b_z },
         ) => a_id == b_id && a_z == b_z,
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
-            ap == bp && as_.same_parameter(bs) && ac == bc
+            ap.same_parameter(bp) && as_.same_parameter(bs) && ac == bc
         }
         // A dynamic colour is a parameter (it is read at paint time); a static one that CHANGES has to
         // re-enter, or the node keeps painting the old colour.
@@ -4085,8 +4155,8 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             dimension_eq(aw, bw) && ac.same_parameter(bc) && as_.same_parameter(bs)
         }
         (Clip { shape: as_ }, Clip { shape: bs }) => as_.same_parameter(bs),
-        (Blur { radius: ar }, Blur { radius: br }) => ar == br,
-        (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar == br,
+        (Blur { radius: ar }, Blur { radius: br }) => ar.same_parameter(br),
+        (BackdropBlur { radius: ar }, BackdropBlur { radius: br }) => ar.same_parameter(br),
         (TextContent { content: ac, font_size: af, color: acol, font_weight: afw, font_style: afs, max_lines: am, align: aa, overflow: ao, soft_wrap: asw, letter_spacing: als, line_height: alh },
          TextContent { content: bc, font_size: bf, color: bcol, font_weight: bfw, font_style: bfs, max_lines: bm, align: ba, overflow: bo, soft_wrap: bsw, letter_spacing: bls, line_height: blh }) => {
             ac == bc && af == bf && acol == bcol && afw == bfw && afs == bfs && am == bm && aa == ba && ao == bo && asw == bsw && als == bls && alh == blh
@@ -4111,11 +4181,22 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (
             Ripple { source: as_, color: ac, bounded: abc, shape: ash, state_layer_diameter: asl },
             Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, state_layer_diameter: bsl },
-        ) => as_ == bs && ac == bc && abc == bbc && opt_shape_eq(ash, bsh) && asl == bsl,
+        ) => {
+            as_ == bs
+                && ac.same_parameter(bc)
+                && abc == bbc
+                && crate::graphics::option_same_parameter(ash, bsh)
+                && crate::graphics::option_same_parameter(asl, bsl)
+        }
         (DrawIcon { spec: a }, DrawIcon { spec: b }) => a == b,
         (ImageContent { source: a, content_scale: as_, alignment: aa, alpha: aal, color_filter: acf, filter_quality: afq },
          ImageContent { source: b, content_scale: bs, alignment: ba, alpha: bal, color_filter: bcf, filter_quality: bfq }) => {
-            a == b && as_ == bs && aa == ba && aal == bal && acf == bcf && afq == bfq
+            a == b
+                && as_ == bs
+                && aa == ba
+                && aal.same_parameter(bal)
+                && crate::graphics::option_same_parameter(acf, bcf)
+                && afq == bfq
         }
         (FocusRequesterId { id: ai }, FocusRequesterId { id: bi }) => ai == bi,
         (KbEvent { .. }, KbEvent { .. }) => true,
@@ -4194,17 +4275,6 @@ fn opt_dimension_eq(a: &Option<Dimension>, b: &Option<Dimension>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => dimension_eq(a, b),
-        _ => false,
-    }
-}
-
-fn opt_shape_eq(
-    a: &Option<crate::graphics::Dyn<Shape>>,
-    b: &Option<crate::graphics::Dyn<Shape>>,
-) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => a.same_parameter(b),
         _ => false,
     }
 }
@@ -4288,6 +4358,91 @@ mod param_eq_tests {
     /// painting the old colour.
     /// One `Border` element now carries a `Dyn<Color>`: a state-driven colour is read per paint, and
     /// the parameter comparison keeps the static/dynamic distinction the old two variants encoded.
+    /// The ripple colour is a carrier: a state-driven one is read per paint, and the parameter
+    /// comparison keeps "changed static" and "two dynamics" apart.
+    #[test]
+    fn a_ripple_colour_can_be_dynamic() {
+        use crate::runtime::state::State;
+        let red = Color::from_argb(255, 255, 0, 0);
+        let green = Color::from_argb(255, 0, 128, 0);
+        let state = State::new(red);
+        let source = MutableInteractionSource::new();
+        let m = Modifier::new().ripple(&source, &state, true);
+        let ModifierElement::Ripple { color, state_layer_diameter, .. } = &m.elements()[0] else {
+            panic!("a ripple is one element");
+        };
+        assert!(color.is_dynamic());
+        assert_eq!(color.eval(), red);
+        state.set(green);
+        assert_eq!(color.eval(), green);
+        assert!(state_layer_diameter.is_none());
+
+        let a = Modifier::new().ripple(&source, red, true);
+        let b = Modifier::new().ripple(&source, green, true);
+        assert!(!a.param_eq(&b), "a changed static ripple colour must re-enter");
+        let other = State::new(red);
+        assert!(
+            Modifier::new().ripple(&source, &state, true)
+                .param_eq(&Modifier::new().ripple(&source, &other, true)),
+            "two dynamic ripple colours are the same request"
+        );
+        assert!(!a.param_eq(&m), "a literal turning into a state is a change");
+    }
+
+    /// The paint-time carriers added on top of Shape/Border: image alpha, blur radius, drop-shadow
+    /// params and the layer convenience methods all read their state at eval, not at build.
+    #[test]
+    fn paint_time_carriers_read_their_states() {
+        use crate::runtime::state::State;
+
+        let alpha = State::new(0.5f32);
+        let m = Modifier::new().image_content(
+            crate::graphics::IconSource::svg_path("M0 0h1z"),
+            crate::graphics::ContentScale::Fit,
+            crate::graphics::ImageAlignment::Center,
+            &alpha,
+            None,
+            FilterQuality::Low,
+        );
+        let ModifierElement::ImageContent { alpha: a, .. } = &m.elements()[0] else {
+            panic!("an image is one element");
+        };
+        assert!(a.is_dynamic());
+        assert_eq!(a.eval(), 0.5);
+        alpha.set(0.25);
+        assert_eq!(a.eval(), 0.25);
+
+        let blur = State::new(4.0f32);
+        let m = Modifier::new().blur(&blur);
+        let ModifierElement::Blur { radius } = &m.elements()[0] else {
+            panic!("blur is one element");
+        };
+        assert!(radius.is_dynamic());
+        blur.set(8.0);
+        assert_eq!(radius.eval(), 8.0);
+
+        let shadow = State::new(ShadowParams::new(2.0, 0.0, 1.0, Color::BLACK, 0.3));
+        let m = Modifier::new().drop_shadow(Shape::Rectangle, &shadow);
+        let ModifierElement::Shadow { params, .. } = &m.elements()[0] else {
+            panic!("a drop shadow is one element");
+        };
+        assert!(params.is_dynamic());
+        shadow.set(ShadowParams::new(4.0, 0.0, 2.0, Color::BLACK, 0.2));
+        assert_eq!(params.eval().radius, 4.0);
+
+        let layer = State::new(0.5f32);
+        let m = Modifier::new().alpha(&layer);
+        let ModifierElement::GraphicsLayer { params } = &m.elements()[0] else {
+            panic!("alpha is a layer");
+        };
+        assert!(params.is_dynamic());
+        assert_eq!(params.eval().alpha, 0.5);
+        assert!(params.eval().clip, "alpha < 1 clips to bounds");
+        layer.set(0.25);
+        assert_eq!(params.eval().alpha, 0.25);
+        assert!(!m.param_eq(&Modifier::new().alpha(0.5f32)), "a state is not a literal");
+    }
+
     #[test]
     fn a_border_colour_can_be_dynamic() {
         use crate::runtime::state::State;
@@ -4493,7 +4648,7 @@ mod param_eq_tests {
             ShadowParams { radius: 6.0, spread: 2.0, offset_x: 3.0, offset_y: 5.0, color: Color::from_argb(255, 50, 50, 50), alpha: 0.6 },
         );
         let p = m.elements().iter().find_map(|el| {
-            if let ModifierElement::Shadow { params, .. } = el { Some(*params) } else { None }
+            if let ModifierElement::Shadow { params, .. } = el { Some(params.eval()) } else { None }
         }).unwrap();
         assert_eq!(p.radius, 6.0);
         assert_eq!(p.spread, 2.0);

@@ -87,6 +87,8 @@ dyn_from_value!(crate::graphics::Color);
 dyn_from_value!(crate::graphics::Brush);
 dyn_from_value!(crate::graphics::Shape);
 dyn_from_value!(crate::graphics::GraphicsLayerParams);
+dyn_from_value!(crate::graphics::ColorFilter);
+dyn_from_value!(crate::graphics::ShadowParams);
 
 /// The state forms of one instantiation: a `State`/`Animating`/`DerivedValue` reads through `get()`,
 /// which is correct at the point the closure runs (paint reads it untracked, but the dependency that
@@ -125,6 +127,8 @@ dyn_from_state!(f32);
 dyn_from_state!(crate::graphics::Color);
 dyn_from_state!(crate::graphics::Brush);
 dyn_from_state!(crate::graphics::Shape);
+dyn_from_state!(crate::graphics::ColorFilter);
+dyn_from_state!(crate::graphics::ShadowParams);
 
 impl From<crate::runtime::state::Animating<f32>> for Dyn<f32> {
     fn from(s: crate::runtime::state::Animating<f32>) -> Self {

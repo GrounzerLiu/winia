@@ -540,6 +540,9 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
         canvas.scale((-1.0, 1.0));
         canvas.translate((-c.x, -c.y));
     }
+    // Evaluated once per paint: the bitmap filter, the SVG tint and the symbol colour all read the
+    // same value, and a dynamic tint costs no recomposition.
+    let tint = spec.tint.as_ref().map(|t| t.eval());
     match &spec.source {
         IconSource::SvgPath { .. } | IconSource::Svg(_) | IconSource::File(_) => {
             if let Some(decoded) = decoded_icon(&spec.source) {
@@ -549,7 +552,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                         let src = Rect::new(0.0, 0.0, *width, *height);
                         let mut paint = Paint::default();
                         paint.set_anti_alias(true);
-                        if let Some(tint) = spec.tint {
+                        if let Some(tint) = tint {
                             if let Some(filter) =
                                 skia_safe::color_filters::blend(skia_color(tint), BlendMode::SrcIn)
                             {
@@ -567,7 +570,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                         );
                     }
                     DecodedIcon::Svg { dom, width, height } => {
-                        let cf = spec.tint.map(|c| crate::graphics::ColorFilter::Tint {
+                        let cf = tint.map(|c| crate::graphics::ColorFilter::Tint {
                             color: c,
                             blend_mode: crate::graphics::BlendMode::SrcIn,
                         });
@@ -589,7 +592,7 @@ fn draw_icon(canvas: &Canvas, rect: Rect, direction: LayoutDirection, spec: &Ico
                     let y = rect.top + (rect.height() - size) / 2.0 + size;
                     let mut paint = Paint::default();
                     paint.set_anti_alias(true);
-                    paint.set_color(skia_color(spec.tint.unwrap_or(crate::graphics::Color::BLACK)));
+                    paint.set_color(skia_color(tint.unwrap_or(crate::graphics::Color::BLACK)));
                     canvas.draw_text_blob(&blob, (x, y), &paint);
                 }
             }
@@ -1214,7 +1217,8 @@ fn render_pass1(
     for el in node.modifier.elements() {
         if let ModifierElement::Shadow { params, shape, .. } = el {
             let shape = shape.eval();
-            draw_shadow_layer(canvas, rect, &shape, params);
+            let params = params.eval();
+            draw_shadow_layer(canvas, rect, &shape, &params);
         }
     }
 
@@ -1224,7 +1228,7 @@ fn render_pass1(
     for el in node.modifier.elements() {
         match el {
             ModifierElement::Blur { radius } => {
-                blur_radius = Some(*radius);
+                blur_radius = Some(radius.eval());
             }
             ModifierElement::Clip { shape } => {
                 clip_shape = Some(shape.eval());
@@ -1307,13 +1311,15 @@ fn render_pass1(
             }
             // 图片（Image 组件）：ContentScale + 对齐 + alpha + colorFilter + filterQuality
             ModifierElement::ImageContent { source, content_scale, alignment, alpha, color_filter, filter_quality } => {
+                let alpha = alpha.eval();
+                let color_filter = color_filter.as_ref().map(|filter| filter.eval());
                 draw_image_content(
                     canvas,
                     Rect::new(content_x, content_y, content_x + content_w, content_y + content_h),
                     source,
                     *content_scale,
                     *alignment,
-                    *alpha,
+                    alpha,
                     color_filter.as_ref(),
                     *filter_quality,
                     node.layout_direction,
@@ -1703,6 +1709,9 @@ fn draw_ripple(
 ) {
     for el in node.modifier.elements() {
         let ModifierElement::Ripple { source, color, bounded, shape, state_layer_diameter } = el else { continue };
+        // The colour and the halo diameter are carriers: evaluated once for this paint, then shared by
+        // the background layer and every spreading foreground layer.
+        let color = color.eval();
 
         let diagonal = (w * w + h * h).sqrt();
         // The BACKGROUND state layer is winia's own two-layer model: a circle at the node's centre whose
@@ -1710,7 +1719,10 @@ fn draw_ripple(
         // which material3's checkbox and radio use for their 40 dp `StateLayerSize`, smaller than their 48 dp
         // node). The spreading FOREGROUND layer is unaffected by it: its radius always grows to the node's
         // diagonal, so a press near a corner still covers the control.
-        let layer_radius = state_layer_diameter.map(|d| d / 2.0).unwrap_or(diagonal / 2.0);
+        let layer_radius = state_layer_diameter
+            .as_ref()
+            .map(|d| d.eval() / 2.0)
+            .unwrap_or(diagonal / 2.0);
         let rect = Rect::new(x, y, x + w, y + h);
 
         // bounded：裁剪到波纹形状——显式 shape（Button 传入容器 shape——

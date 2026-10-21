@@ -21,7 +21,7 @@ use std::sync::Arc;
 // Tint（三态：Auto 单色源染主题色 / 多色源不染；可显式覆盖）
 // ─────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Tint {
     /// Tints the single-colour sources — `SvgPath`, `Svg` and `Symbol` — with the current content colour;
     /// `File` keeps its own colours.
@@ -30,21 +30,51 @@ pub enum Tint {
     /// fills is flattened to one colour and nothing reports it. Compose behaves the same way and warns about
     /// it in `Icon`'s KDoc; use `Tint::None` when the artwork is meant to be multi-coloured.
     Auto,
-    Color(Color),
+    /// An explicit tint — a literal, a state or a closure. A dynamic one is read at paint time, so a glyph
+    /// follows the colour without the icon recomposing.
+    Color(crate::graphics::Dyn<Color>),
     None,
 }
 
 impl From<Color> for Tint {
     fn from(c: Color) -> Self {
-        Tint::Color(c)
+        Tint::Color(crate::graphics::Dyn::Static(c))
     }
 }
 
 impl From<Option<Color>> for Tint {
     fn from(o: Option<Color>) -> Self {
         match o {
-            Some(c) => Tint::Color(c),
+            Some(c) => Tint::Color(crate::graphics::Dyn::Static(c)),
             None => Tint::None,
+        }
+    }
+}
+
+impl From<crate::graphics::Dyn<Color>> for Tint {
+    fn from(c: crate::graphics::Dyn<Color>) -> Self {
+        Tint::Color(c)
+    }
+}
+
+impl From<crate::runtime::state::State<Color>> for Tint {
+    fn from(s: crate::runtime::state::State<Color>) -> Self {
+        Tint::Color(crate::graphics::Dyn::from(&s))
+    }
+}
+
+impl From<&crate::runtime::state::State<Color>> for Tint {
+    fn from(s: &crate::runtime::state::State<Color>) -> Self {
+        Tint::Color(crate::graphics::Dyn::from(s))
+    }
+}
+
+impl PartialEq for Tint {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Tint::Auto, Tint::Auto) | (Tint::None, Tint::None) => true,
+            (Tint::Color(a), Tint::Color(b)) => a.same_parameter(b),
+            _ => false,
         }
     }
 }
@@ -53,11 +83,16 @@ impl Tint {
     /// `Auto` tints the single-colour sources with the current content colour and leaves `File` alone.
     /// `None` means "leave the source as it is" — except for a glyph, which has no colour of its own
     /// (`IconSource::carries_no_colour`), where that would paint it BLACK and vanish on a dark surface.
-    fn resolve(self, source: &IconSource, default_content: Color) -> Option<Color> {
+    fn resolve(
+        self,
+        source: &IconSource,
+        default_content: Color,
+    ) -> Option<crate::graphics::Dyn<Color>> {
+        use crate::graphics::Dyn;
         match self {
-            Tint::Auto => source.default_tinted().then_some(default_content),
+            Tint::Auto => source.default_tinted().then_some(Dyn::Static(default_content)),
             Tint::Color(c) => Some(c),
-            Tint::None => source.carries_no_colour().then_some(default_content),
+            Tint::None => source.carries_no_colour().then_some(Dyn::Static(default_content)),
         }
     }
 }
@@ -257,11 +292,67 @@ mod tests {
     fn tint_auto_resolves_by_source() {
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let path_src = IconSource::svg_path("M0 0h1z");
-        assert_eq!(Tint::Auto.resolve(&path_src, theme.on_surface), Some(theme.on_surface));
+        assert_eq!(
+            Tint::Auto.resolve(&path_src, theme.on_surface).map(|t| t.eval()),
+            Some(theme.on_surface)
+        );
         let file_src = IconSource::file("logo.png");
-        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface), None, "a file keeps its own colours");
-        assert_eq!(Tint::None.resolve(&path_src, theme.on_surface), None);
-        assert_eq!(Tint::Color(Color::RED).resolve(&file_src, theme.on_surface), Some(Color::RED));
+        assert_eq!(Tint::Auto.resolve(&file_src, theme.on_surface).map(|t| t.eval()), None, "a file keeps its own colours");
+        assert_eq!(Tint::None.resolve(&path_src, theme.on_surface).map(|t| t.eval()), None);
+        assert_eq!(
+            Tint::Color(Color::RED.into()).resolve(&file_src, theme.on_surface).map(|t| t.eval()),
+            Some(Color::RED)
+        );
+    }
+
+
+    /// A state-driven tint is a PARAMETER read at paint: one painted spec follows the state, and two
+    /// specs backed by states compare equal (changing the state is not a new request).
+    #[test]
+    fn a_state_driven_tint_is_read_at_paint() {
+        use crate::runtime::composer::Composer;
+        use crate::runtime::state::State;
+
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let tint = State::new(Color::RED);
+        let mut composer = Composer::new();
+        composer.compose(|ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                Icon::svg_path("M0 0h1v1z").tint(&tint).build(ctx);
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+
+        let painted = |composer: &Composer| -> crate::graphics::Dyn<Color> {
+            composer
+                .arena_nodes()
+                .iter()
+                .find_map(|node| {
+                    node.modifier.elements().iter().find_map(|el| match el {
+                        crate::modifier::ModifierElement::DrawIcon { spec } => spec.tint.clone(),
+                        _ => None,
+                    })
+                })
+                .expect("the icon paints a tint")
+        };
+
+        let spec = painted(&composer);
+        assert!(spec.is_dynamic(), "an Icon::tint(&state) is a paint-time carrier");
+        assert_eq!(spec.eval(), Color::RED);
+        tint.set(Color::BLUE);
+        assert_eq!(spec.eval(), Color::BLUE, "the SAME element reads the new value");
+        assert_eq!(painted(&composer).eval(), Color::BLUE);
+
+        // Two specs backed by the same kind of request are the same parameter; a literal is not.
+        let build = |tint: Option<crate::graphics::Dyn<Color>>| IconSpec {
+            source: IconSource::svg_path("M0 0h1z"),
+            tint,
+            auto_mirror: false,
+            axes: SymbolAxes::default(),
+        };
+        let same_kind = build(Some(crate::graphics::Dyn::from(&State::new(Color::GREEN))));
+        assert_eq!(build(Some(crate::graphics::Dyn::from(&tint))), same_kind);
+        assert_ne!(build(Some(Color::RED.into())), same_kind);
     }
 
     /// A changed tint must reach the painted spec, and repainting unchanged must keep it. NOT a test of Skip:
@@ -287,7 +378,9 @@ mod tests {
         let painted_tint = |composer: &Composer| -> Option<Color> {
             composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::DrawIcon { spec } => spec.tint,
+                    crate::modifier::ModifierElement::DrawIcon { spec } => {
+                        spec.tint.as_ref().map(|t| t.eval())
+                    }
                     _ => None,
                 })
             })

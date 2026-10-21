@@ -304,22 +304,21 @@ impl IconToggleButton {
         } else {
             crate::animation::AnimationSpec::Snap(crate::animation::SnapSpec::default())
         };
-        let container = ctx.animate_color_as_state(container, colour_spec.clone()).get();
-        // The RIPPLE keeps the animated content colour: it is painted, read per frame by `draw_ripple`, so
-        // it can follow the fade. The GLYPH cannot — its tint is captured at build time, which is the note
-        // below.
-        let ripple_color = ctx.animate_color_as_state(content_color, colour_spec).get();
+        // The container and the ripple colour are PAINT-time values: the states are handed to the
+        // background and to the ripple, whose drawers peek them per frame, so the fade costs no
+        // recomposition. (`Icon`'s tint can also take a state now — see `Tint::Color` — when a caller
+        // wants the glyph to follow a colour it owns.)
+        let container = ctx.animate_color_as_state(container, colour_spec.clone());
+        let ripple_color = ctx.animate_color_as_state(content_color, colour_spec);
 
-        // The CONTENT colour is deliberately NOT animated, and this is the one thing to keep in mind here.
-        // `Icon`'s tint is resolved at build time, and a `Crossfade` generation only rebuilds its content
-        // when its own slot parameters change (`crossfade.rs`, the `ctx.changed(&value)` in the generation
-        // loop) — so a glyph built on the first frame of a colour animation captures the colour it is
-        // LEAVING and keeps it for good. Measured: a Filled button switched to checked went on painting its
-        // glyph in `on_surface_variant` (68, 71, 78) instead of `on_primary`.
-        //
-        // Handing each generation its own resting colour is also what gives the ICON its transition: the
-        // outgoing glyph fades out in the old colour while the incoming one arrives in the new one. The
-        // container still animates, so the surface moves smoothly underneath either way.
+        // The CONTENT colour this button PROVIDES is still a resting colour per generation: a
+        // `Crossfade` generation only rebuilds its content when its own slot parameters change
+        // (`crossfade.rs`, the `ctx.changed(&value)` in the generation loop), and the content is the
+        // caller's closure, so the button cannot hand it a live colour. What the caller gets is the
+        // starting generation's colour and the arriving one's, and the crossfade is what makes the
+        // colour change read as a transition. Measured before this comment was written: a Filled button
+        // switched to checked kept painting its glyph in `on_surface_variant` (68, 71, 78) instead of
+        // `on_primary` when the content colour was not per generation.
 
         // The THREE shapes a toggle morphs between, in upstream's precedence: PRESSED beats CHECKED
         // beats resting (`shapeByInteraction`, `material3/IconButton.kt:1622-1638`). Upstream's
@@ -335,8 +334,10 @@ impl IconToggleButton {
         //
         // `Shape::Circle` carries no radius to interpolate, hence the arithmetic. An explicit shape is
         // pinned and skips the morph entirely, which is upstream's `isStatic` early-out.
-        let shape = match self.shape {
-            Some(explicit) => explicit,
+        // The shape morph is a paint-time value too: the radius state is peeked inside the carrier, so
+        // the corner interpolates without recomposing the button on every frame of the spring.
+        let shape: crate::graphics::Dyn<Shape> = match self.shape {
+            Some(explicit) => crate::graphics::Dyn::Static(explicit),
             None => {
                 let round = size / 2.0;
                 let target = if interaction.state(self.enabled).pressed {
@@ -349,7 +350,7 @@ impl IconToggleButton {
                 };
                 let radius =
                     ctx.animate_float_as_state(target, crate::components::icon_button::shape_morph_spec());
-                Shape::rounded(radius.get())
+                crate::graphics::Dyn::Dynamic(Arc::new(move || Shape::rounded(radius.peek())))
             }
         };
 
@@ -361,8 +362,8 @@ impl IconToggleButton {
         let mut modifier = Modifier::new()
             .minimum_interactive_component_size()
             .size(size, size)
-            .clip(shape)
-            .background(container, shape);
+            .clip(shape.clone())
+            .background(&container, shape.clone());
         let border = self.border.or_else(|| {
             if self.style == IconButtonStyle::Outlined {
                 IconToggleButtonDefaults::outlined_border(
@@ -376,7 +377,7 @@ impl IconToggleButton {
             }
         });
         if let Some(b) = border {
-            modifier = modifier.border(b.width, b.color, shape);
+            modifier = modifier.border(b.width, b.color, shape.clone());
         }
         modifier = modifier.then(self.modifier);
 
@@ -386,7 +387,7 @@ impl IconToggleButton {
                 let checked = self.checked;
                 modifier = modifier
                     .clickable_with_source(&interaction, move || cb(!checked))
-                    .ripple_with_shape(&interaction, ripple_color, true, shape);
+                    .ripple_with_shape(&interaction, &ripple_color, true, shape);
             }
         }
 
@@ -746,7 +747,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    tints.push(spec.tint);
+                    tints.push(spec.tint.as_ref().map(|t| t.eval()));
                 }
             }
         }
@@ -761,6 +762,53 @@ mod tests {
                 "every generation's icon takes the checked content colour"
             );
         }
+    }
+
+    /// The checked fade and the shape morph are PAINT-time values: after the switch itself has
+    /// recomposed the button once, ticking the animations must not enter a single slot.
+    #[test]
+    fn the_checked_fade_does_not_recompose_the_button() {
+        let _guard = crate::animation::tests::TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let checked = crate::runtime::state::State::new(false);
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut build = |composer: &mut crate::runtime::composer::Composer| {
+            composer.compose(|ctx| {
+                WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                    IconToggleButton::filled(checked.get())
+                        .on_checked_change(|_| {})
+                        .build(ctx, |ctx| {
+                            crate::components::icon::Icon::svg_path("M0 0h1v1z").build(ctx);
+                        });
+                });
+            });
+            composer.layout(crate::layout::Constraints::new(0.0, 200.0, 0.0, 200.0));
+        };
+
+        build(&mut composer);
+        build(&mut composer);
+        assert_eq!(composer.compose_dirty_count, 0, "a settled frame enters nothing");
+
+        // The switch rebuilds the group (its key carries `checked`), so the dirty count is not the
+        // probe for this frame - the probe is that the animation ticks that FOLLOW it enter nothing.
+        checked.update(|c| *c = true);
+        build(&mut composer);
+        build(&mut composer);
+
+        let mut worst = 0;
+        for _ in 0..30 {
+            crate::animation::update_animations();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            build(&mut composer);
+            worst = worst.max(composer.compose_dirty_count);
+        }
+        assert_eq!(
+            worst, 0,
+            "the container fade, the ripple colour and the shape morph are painted (worst frame entered {worst})"
+        );
+        crate::animation::clear_all_animations();
     }
 
     /// Switching `checked` must move the glyph to the checked colour. This is the case the "starts checked"
@@ -799,7 +847,9 @@ mod tests {
                 .iter()
                 .flat_map(|node| {
                     node.modifier.elements().iter().filter_map(|el| match el {
-                        crate::modifier::ModifierElement::DrawIcon { spec } => Some(spec.tint),
+                        crate::modifier::ModifierElement::DrawIcon { spec } => {
+                            Some(spec.tint.as_ref().map(|t| t.eval()))
+                        }
                         _ => None,
                     })
                 })
@@ -921,7 +971,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    tint = spec.tint;
+                    tint = spec.tint.as_ref().map(|t| t.eval());
                 }
             }
         }

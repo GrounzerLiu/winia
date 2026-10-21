@@ -668,7 +668,7 @@ mod tests {
             });
             let state_layer = checkout.modifier.elements().iter().find_map(|el| match el {
                 crate::modifier::ModifierElement::Ripple { state_layer_diameter, .. } => {
-                    *state_layer_diameter
+                    state_layer_diameter.as_ref().map(|d| d.eval())
                 }
                 _ => None,
             });
@@ -873,7 +873,11 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    assert_eq!(spec.tint, Some(theme.on_primary), "勾号 tint = OnPrimary");
+                    assert_eq!(
+                        spec.tint.as_ref().map(|t| t.eval()),
+                        Some(theme.on_primary),
+                        "勾号 tint = OnPrimary"
+                    );
                     count += 1;
                 }
             }

@@ -1467,7 +1467,7 @@ mod tests {
         for node in composer.arena_nodes() {
             for el in node.modifier.elements() {
                 if let crate::modifier::ModifierElement::DrawIcon { spec } = el {
-                    tint = spec.tint;
+                    tint = spec.tint.as_ref().map(|t| t.eval());
                 }
             }
         }
