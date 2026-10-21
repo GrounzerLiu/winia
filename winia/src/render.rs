@@ -474,11 +474,11 @@ fn render_modifier_element<'a>(
             }
             None
         }
-        ModifierElement::BackgroundBrush { brush_fn, shape } => {
-            // The brush is resolved here, at paint time, which is what lets a closure read animated
-            // state per frame. `last_background` is deliberately NOT set: the border-merge
+        ModifierElement::BackgroundBrush { brush: brush_spec, shape } => {
+            // The brush is resolved here, at paint time, which is what lets a dynamic value read
+            // animated state per frame. `last_background` is deliberately NOT set: the border-merge
             // optimization below compares colors, and a gradient is not one.
-            let brush = (brush_fn)();
+            let brush = brush_spec.eval();
             match morph_radii {
                 Some(r) => {
                     let Some(paint) = brush_paint(&brush, rect) else { return None };

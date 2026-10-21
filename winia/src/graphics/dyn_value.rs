@@ -84,6 +84,7 @@ macro_rules! dyn_from_value {
 
 dyn_from_value!(f32);
 dyn_from_value!(crate::graphics::Color);
+dyn_from_value!(crate::graphics::Brush);
 dyn_from_value!(crate::graphics::GraphicsLayerParams);
 
 /// The state forms of one instantiation: a `State`/`Animating`/`DerivedValue` reads through `get()`,
@@ -121,6 +122,7 @@ macro_rules! dyn_from_state {
 
 dyn_from_state!(f32);
 dyn_from_state!(crate::graphics::Color);
+dyn_from_state!(crate::graphics::Brush);
 
 impl From<crate::runtime::state::Animating<f32>> for Dyn<f32> {
     fn from(s: crate::runtime::state::Animating<f32>) -> Self {

@@ -181,8 +181,8 @@ Rules that follow:
   subcompose during measure), `get()` would attach the dependency to whatever slot happens to be
   active and recompose for a frame that changed nothing. Every draw closure in this repo
   (`graphics_layer`, `background`, `border`) reads with `peek()` for that reason.
-- **One carrier, many names.** `AxisValue`, `BackgroundColor`, `BorderColor` and
-  `GraphicsLayerSpec` are aliases of `graphics::Dyn<T>` (`Dyn<f32>`, `Dyn<Color>`,
+- **One carrier, many names.** `AxisValue`, `BackgroundColor`, `BorderColor`, `BrushSource` and
+  `GraphicsLayerSpec` are aliases of `graphics::Dyn<T>` (`Dyn<f32>`, `Dyn<Color>`, `Dyn<Brush>`,
   `Dyn<GraphicsLayerParams>`). `eval()` and `same_parameter()` therefore have exactly one
   implementation, and a static value is stored inline — a constant background or layer parameter
   allocates no closure.

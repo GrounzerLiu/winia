@@ -358,7 +358,7 @@ pub(crate) enum ModifierElement {
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
-        brush_fn: Arc<dyn Fn() -> crate::graphics::Brush + Send + Sync>,
+        brush: crate::graphics::Dyn<crate::graphics::Brush>,
         shape: Shape,
     },
     /// 边框
@@ -1247,9 +1247,8 @@ impl Modifier {
         brush: impl Into<crate::graphics::BrushSource>,
         shape: impl Into<Shape>,
     ) -> Self {
-        let source = brush.into();
         self.push(ModifierElement::BackgroundBrush {
-            brush_fn: source.0,
+            brush: brush.into(),
             shape: shape.into(),
         })
     }
@@ -3994,10 +3993,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
             opt_size_value_eq(aw, bw) && opt_size_value_eq(ah, bh)
         }
         (TestTag { tag: at }, TestTag { tag: bt }) => at == bt,
-        // As with `Background`, the closure is not comparable — but the shape is, and a shape change
-        // has to re-enter the node (it changes the fill's geometry).
-        (BackgroundBrush { shape: ashape, .. }, BackgroundBrush { shape: bshape, .. }) => {
-            ashape == bshape
+        // Same rule as the colour background: a dynamic brush is a parameter, a changed STATIC brush
+        // re-enters (otherwise the node keeps painting the old gradient), and the shape is part of it.
+        (BackgroundBrush { brush: abrush, shape: ashape }, BackgroundBrush { brush: bbrush, shape: bshape }) => {
+            abrush.same_parameter(bbrush) && ashape == bshape
         }
         // Semantics carries visible state (a tab's selection): a change must re-enter the node.
         (Semantics(a), Semantics(b)) => a == b,
@@ -4173,6 +4172,30 @@ mod param_eq_tests {
         assert!(!a.param_eq(&b), "width 200 vs 360 必须不等");
         let c = Modifier::new().width(200.0);
         assert!(a.param_eq(&c), "width 相同必须相等");
+    }
+
+
+    /// A brush is a `Dyn<Brush>`: a changed STATIC gradient re-enters (otherwise the old gradient
+    /// keeps being painted), two dynamic ones are the same request, and the shape is still compared.
+    #[test]
+    fn param_eq_compares_a_static_brush() {
+        use crate::graphics::Brush;
+        use crate::runtime::state::State;
+        let red = Color::from_argb(255, 255, 0, 0);
+        let blue = Color::from_argb(255, 0, 0, 255);
+
+        let a = Modifier::new().background_brush(Brush::solid(red), Shape::rounded(8.0));
+        let b = Modifier::new().background_brush(Brush::solid(blue), Shape::rounded(8.0));
+        assert!(!a.param_eq(&b), "a changed static brush must re-enter");
+        let same = Modifier::new().background_brush(Brush::solid(red), Shape::rounded(8.0));
+        assert!(a.param_eq(&same), "the same brush is the same parameter");
+
+        let s1 = State::new(Brush::solid(red));
+        let s2 = State::new(Brush::solid(blue));
+        let d1 = Modifier::new().background_brush(&s1, Shape::rounded(8.0));
+        let d2 = Modifier::new().background_brush(&s2, Shape::rounded(8.0));
+        assert!(d1.param_eq(&d2), "two dynamic brushes are the same request");
+        assert!(!a.param_eq(&d1), "a literal turning into a state is a change");
     }
 
     /// A background colour is now a `Dyn`: two DYNAMIC colours are the same parameter (the value is

@@ -249,27 +249,12 @@ impl GradientBrush {
 
 // ── the modifier-facing source ──
 
-/// What `Modifier::background_brush` accepts: a [`Brush`], or a closure returning one for a gradient
-/// that follows animated state. Mirrors `BackgroundColor`'s handling of animated colors.
-pub struct BrushSource(pub(crate) std::sync::Arc<dyn Fn() -> Brush + Send + Sync>);
-
-impl From<Brush> for BrushSource {
-    fn from(brush: Brush) -> Self {
-        BrushSource(std::sync::Arc::new(move || brush.clone()))
-    }
-}
-
-impl<F: Fn() -> Brush + Send + Sync + 'static> From<F> for BrushSource {
-    fn from(f: F) -> Self {
-        BrushSource(std::sync::Arc::new(f))
-    }
-}
-
-impl std::fmt::Debug for BrushSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("BrushSource(<dynamic>)")
-    }
-}
+/// What `Modifier::background_brush` accepts: a [`Brush`], or a value evaluated per paint for a
+/// gradient that follows animated state.
+///
+/// An alias of [`Dyn`](super::Dyn), like the colour and layer carriers: a static brush is stored inline
+/// (no closure), and the element comparison can tell a changed static brush from a dynamic one.
+pub type BrushSource = super::Dyn<Brush>;
 
 #[cfg(test)]
 mod tests {
@@ -348,7 +333,8 @@ mod tests {
     fn a_source_accepts_a_value_or_a_closure() {
         // Both forms have to coexist for `background_brush` to be one method.
         let from_value: BrushSource = Brush::solid(red()).into();
-        assert_eq!((from_value.0)(), Brush::Solid(red()));
+        assert_eq!(from_value.eval(), Brush::Solid(red()));
+        assert!(matches!(from_value, super::super::Dyn::Static(_)), "a value stays inline");
 
         let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag_in = flag.clone();
@@ -360,8 +346,8 @@ mod tests {
             }
         })
         .into();
-        assert_eq!((from_closure.0)(), Brush::Solid(red()), "the closure is re-read each time");
+        assert_eq!(from_closure.eval(), Brush::Solid(red()), "the closure is re-read each time");
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
-        assert_eq!((from_closure.0)(), Brush::Solid(blue()));
+        assert_eq!(from_closure.eval(), Brush::Solid(blue()));
     }
 }
