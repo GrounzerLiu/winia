@@ -65,13 +65,15 @@ use crate::graphics::{
 //
 // 有状态节点（StatefulNode 约定）：node 本身不持有组合期 State（remember
 // 必须在 `#[composable] build` 内调用——宏语句 key 上下文要求）。约定：
-// 组件 build 内 `ctx.remember(...)` 建 State → clone 进 node（State 是 Arc
-// 包装，Clone 廉价）→ build 期 get 注册 compose/layout 依赖，绘制期 peek 求值。
+// A component builds a State with `ctx.remember(...)`, clones it into the node (a State is an Arc
+// wrapper, so the clone is cheap), reads it with `get()` at build time to register the
+// compose/layout dependency, and evaluates it with `peek()` at paint time.
 //
-// ⚠ 绘制期 get 不注册依赖（render 已出依赖帧，DEP_MODE=None——与枚举
-// Background color_fn 完全一致）。状态驱动重绘靠 build 期 get（值变化 →
-// 重组 → 新 node → 重绘）或动画 Animating 写 + request_redraw。node 无特殊
-// 通道，老实跟枚举一致（实测验证，见 node_track_stateful_draw_follows_state）。
+// A paint-time `get()` registers nothing (the dependency frame is gone by then: DEP_MODE is None -
+// the same rule the draw-layer elements follow). Repaint comes from the build-time `get()` (a change
+// recomposes -> new node -> repaint) or from an animation writing through `Animating` and requesting
+// a redraw. The node has no private channel; it follows the elements (see
+// `node_track_stateful_draw_follows_state`).
 // 例：`let src = ctx.remember(|| MutableInteractionSource::new()).get();`
 //     `Modifier::new().click_node(MyClick { source: src.clone() })`。
 // 状态生命周期跟组合槽走（remember 语义），node 只是"行为 + 状态引用"
@@ -350,8 +352,9 @@ pub(crate) enum ModifierElement {
     Shadow { params: ShadowParams, shape: Shape, clip: bool },
 
     // ── Draw 类 ──
-    /// 背景色 + 形状（color_fn 渲染时求值——静态色或动画闭包统一为闭包）
-    Background { color_fn: Arc<dyn Fn() -> Color + Send + Sync>, shape: Shape },
+    /// Background colour + shape. The colour is a [`Dyn`](crate::graphics::Dyn): a literal is stored
+    /// inline, a closure is evaluated per paint.
+    Background { color: crate::graphics::Dyn<Color>, shape: Shape },
     /// A gradient or brush fill. Separate from `Background` because a brush is not a color: it needs a
     /// shader, and its geometry is resolved against the node's bounds at paint time.
     BackgroundBrush {
@@ -493,7 +496,7 @@ pub(crate) enum ModifierElement {
     /// 嵌套滚动连接（祖先可在 child 前后部分消费 delta/velocity）。
     NestedScroll { connection: Arc<dyn crate::nested_scroll::NestedScrollConnection> },
     /// 图形层变换（scale/alpha/rotation/translation——只触发重绘，不触发布局）
-    GraphicsLayer { params_fn: Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync> },
+    GraphicsLayer { params: crate::graphics::Dyn<GraphicsLayerParams> },
     /// 共享元素转场标记（components::shared_transition——纯数据标记：配对身份 + 变形规格；
     /// 组合期注册端点（Phase 2），渲染期忽略（`_ =>` 兜底）。bounds 不进
     /// modifier——飞行是 render-phase 行为，bounds 变化永不强制 Enter）
@@ -1220,9 +1223,8 @@ impl Modifier {
     /// 闭包内用 `State::peek()` 读取动画值（不要用 `get()`——会注册依赖触发重组）。
     /// 动画值由 `Visual::set` 写入（不 notify），配合动画引擎每帧 `request_redraw` 实现零重组。
     pub fn background(self, color: impl Into<BackgroundColor>, shape: impl Into<Shape>) -> Self {
-        let bg = color.into();
         self.push(ModifierElement::Background {
-            color_fn: bg.0,
+            color: color.into(),
             shape: shape.into(),
         })
     }
@@ -1609,9 +1611,8 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
     /// **原则**：与 `background` 相同——静态传值，动画传闭包（`peek()` 读取，
     /// 配合 `Visual::set` 零重组）。仅影响绘制层，不触发布局。
     pub fn graphics_layer(self, params: impl Into<GraphicsLayerSpec>) -> Self {
-        let spec = params.into();
         self.push(ModifierElement::GraphicsLayer {
-            params_fn: spec.0,
+            params: params.into(),
         })
     }
 
@@ -1729,8 +1730,11 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
         self.merge_graphics_layer(move |p| p.spot_shadow_color = color)
     }
 
-    /// 便捷包装合并：已有 GraphicsLayer 元素 → 包装其 params_fn（叠加）；
-    /// 否则 push 新元素。
+    /// 便捷包装合并：已有 GraphicsLayer 元素 → 在其参数上叠加；否则 push 新元素。
+    ///
+    /// A static parameter set stays static (the mutator is applied now, at build time); a dynamic one
+    /// stays a closure (the mutator runs inside it, per paint). The mutators here only assign captured
+    /// values, so this loses no dynamism.
     fn merge_graphics_layer(mut self, f: impl Fn(&mut GraphicsLayerParams) + Send + Sync + 'static) -> Self {
         let f = Arc::new(f);
         // mem::take 取出 elements（空 Vec 占位）——局部修改后再放回，
@@ -1740,22 +1744,28 @@ pub fn draw_icon(self, spec: crate::graphics::IconSpec) -> Self {
             .iter_mut()
             .find(|e| matches!(e, ModifierElement::GraphicsLayer { .. }))
         {
-            if let ModifierElement::GraphicsLayer { params_fn } = el {
-                let old = params_fn.clone();
+            if let ModifierElement::GraphicsLayer { params } = el {
+                let old = params.clone();
                 let f = f.clone();
-                *params_fn = Arc::new(move || {
-                    let mut p = (old)();
-                    f(&mut p);
-                    p
-                });
+                *params = match old {
+                    crate::graphics::Dyn::Static(mut p) => {
+                        f(&mut p);
+                        crate::graphics::Dyn::Static(p)
+                    }
+                    crate::graphics::Dyn::Dynamic(g) => {
+                        crate::graphics::Dyn::Dynamic(Arc::new(move || {
+                            let mut p = g();
+                            f(&mut p);
+                            p
+                        }))
+                    }
+                };
             }
         } else {
+            let mut p = GraphicsLayerParams::default();
+            f(&mut p);
             elements.push(ModifierElement::GraphicsLayer {
-                params_fn: Arc::new(move || {
-                    let mut p = GraphicsLayerParams::default();
-                    f(&mut p);
-                    p
-                }),
+                params: crate::graphics::Dyn::Static(p),
             });
         }
         self.elements = elements;
@@ -2352,8 +2362,8 @@ impl Modifier {
     pub fn graphics_layer_params(&self) -> Option<GraphicsLayerParams> {
         let mut merged = None;
         for el in self.elements.iter() {
-            let ModifierElement::GraphicsLayer { params_fn } = el else { continue };
-            let next = (params_fn)();
+            let ModifierElement::GraphicsLayer { params } = el else { continue };
+            let next = params.eval();
             if let Some(current) = &mut merged {
                 merge_graphics_params(current, next);
             } else {
@@ -2584,27 +2594,6 @@ impl SupportingVisual {
     }
 }
 
-
-impl<F: Fn() -> Color + Send + Sync + 'static> From<F> for BackgroundColor {
-    fn from(f: F) -> Self {
-        Self(Arc::new(f))
-    }
-}
-
-
-impl From<&crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: &crate::runtime::state::DerivedValue<Color>) -> Self {
-        let d = d.clone();
-        Self(Arc::new(move || d.get()))
-    }
-}
-
-
-impl<F: Fn() -> GraphicsLayerParams + Send + Sync + 'static> From<F> for GraphicsLayerSpec {
-    fn from(f: F) -> Self {
-        Self(Arc::new(f))
-    }
-}
 
 /// 滚动状态，对齐 Compose ScrollState
 #[derive(Debug, Clone)]
@@ -4031,8 +4020,11 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (Shadow { params: ap, shape: as_, clip: ac }, Shadow { params: bp, shape: bs, clip: bc }) => {
             ap == bp && as_ == bs && ac == bc
         }
-        // 背景色闭包视为相同（渲染期求值——动画颜色不触发 Enter）
-        (Background { shape: as_, .. }, Background { shape: bs, .. }) => as_ == bs,
+        // A dynamic colour is a parameter (it is read at paint time); a static one that CHANGES has to
+        // re-enter, or the node keeps painting the old colour.
+        (Background { color: ac, shape: as_ }, Background { color: bc, shape: bs }) => {
+            ac.same_parameter(bc) && as_ == bs
+        }
         (Border { width: aw, color: ac, shape: as_ }, Border { width: bw, color: bc, shape: bs }) => {
             dimension_eq(aw, bw) && ac == bc && as_ == bs
         }
@@ -4092,7 +4084,9 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         // running): a Skip reuses the previous frame's closures, and the tag alone cannot see them.
         (SceneTag { id: a }, SceneTag { id: b }) => a == b,
         // 图形层动态参数视为相同（渲染期求值——动画不触发 Enter）
-        (GraphicsLayer { .. }, GraphicsLayer { .. }) => true,
+        // Same rule as the background: static parameters compare by value, dynamic ones are the same
+        // request, and a static set that changes re-enters.
+        (GraphicsLayer { params: ap }, GraphicsLayer { params: bp }) => ap.same_parameter(bp),
         _ => false,
     }
 }
@@ -4181,12 +4175,27 @@ mod param_eq_tests {
         assert!(a.param_eq(&c), "width 相同必须相等");
     }
 
+    /// A background colour is now a `Dyn`: two DYNAMIC colours are the same parameter (the value is
+    /// read at paint time), while a changed STATIC colour has to re-enter — otherwise the node keeps
+    /// painting the old colour.
     #[test]
-    fn param_eq_ignores_closure_elements() {
-        let a = Modifier::new().width(200.0).background(Color::from_argb(255, 66, 133, 244), Shape::rounded(8.0));
-        let b = Modifier::new().width(200.0).background(Color::from_argb(255, 76, 175, 80), Shape::rounded(8.0));
-        // 背景色闭包视为相同（渲染期求值）——宽度相同 → 相等
-        assert!(a.param_eq(&b), "闭包元素（背景色）应视为相同");
+    fn param_eq_compares_a_static_background_colour() {
+        use crate::runtime::state::State;
+        let blue = Color::from_argb(255, 66, 133, 244);
+        let green = Color::from_argb(255, 76, 175, 80);
+        let a = Modifier::new().width(200.0).background(blue, Shape::rounded(8.0));
+        let b = Modifier::new().width(200.0).background(green, Shape::rounded(8.0));
+        assert!(!a.param_eq(&b), "a changed static colour must re-enter");
+
+        let same = Modifier::new().width(200.0).background(blue, Shape::rounded(8.0));
+        assert!(a.param_eq(&same), "the same colour is the same parameter");
+
+        let s1 = State::new(blue);
+        let s2 = State::new(green);
+        let d1 = Modifier::new().width(200.0).background(&s1, Shape::rounded(8.0));
+        let d2 = Modifier::new().width(200.0).background(&s2, Shape::rounded(8.0));
+        assert!(d1.param_eq(&d2), "two dynamic colours are the same request");
+        assert!(!a.param_eq(&d1), "a literal turning into a state is a change");
     }
 
     #[test]
@@ -5130,14 +5139,15 @@ mod node_track_tests {
         );
     }
 
-    /// 有状态节点约定验证：DrawNode 持有 remember 建的 State（Arc 克隆），
-    /// 绘制期 get 求值（与 Background color_fn 同语义——渲染期求值，值变化由
-    /// 外部 Visual 写/notify 驱动重绘；依赖注册发生在 build 期闭包捕获时）。
+    /// The stateful-draw-node contract: a DrawNode holds a `remember`ed State (an Arc clone) and
+    /// evaluates it at paint time - the same rule `Background`'s colour follows. The value change that
+    /// repaints comes from an external `Visual`/notification, or from a build-time `get()` when the
+    /// node was created.
     ///
-    /// 教训（实测）：渲染期（render_pass1）已出依赖帧（take_deps 后 DEP_MODE=None），
-    /// 此处 get 不注册依赖——与枚举 Background color_fn 完全一致（它同样在渲染期
-    /// 求值、同样不注册）。状态驱动重绘靠：build 期闭包捕获 State（get 注册 compose
-    /// 依赖）或动画引擎 Animating 写 + request_redraw。node 无特殊通道，老实跟枚举一致。
+    /// The lesson (measured): by render time the dependency frame is gone
+    /// (`take_deps`/render_pass1 leaves `DEP_MODE = None`), so a `get()` here registers nothing -
+    /// exactly like a dynamic background. Repaint is driven by a build-time `get()` or by the
+    /// animation engine writing through `Animating` and requesting a redraw.
     #[derive(Debug)]
     struct TestStatefulBgNode {
         color_state: crate::runtime::state::State<Color>,
@@ -5145,14 +5155,15 @@ mod node_track_tests {
 
     impl DrawNode for TestStatefulBgNode {
         fn draw(&self, canvas: &skia_safe::Canvas, rect: skia_safe::Rect) {
-            // 渲染期求值（同 Background color_fn）——用 peek 避免误导（get 亦可，
-            // 但帧外无依赖帧，注册无效；peek 语义诚实）。
+            // Evaluated at paint time (the same rule as `Background`): `peek()` states the intent -
+            // a `get()` here would be inert, because there is no dependency frame outside a pass.
             let c = self.color_state.peek();
             crate::render::draw_background_for_node(canvas, rect, &c, &Shape::Rectangle);
         }
         fn node_key(&self) -> String {
-            // 值走 State，不进 key（同 Dimension::Dynamic/Background color_fn 语义——
-            // 闭包重建不触发 Enter，值变化走依赖/重绘通道）
+            // The value rides the State, not the key (the same rule as `Dimension::Dynamic` or a
+            // dynamic background: a rebuilt closure does not force Enter; a value change goes through
+            // the dependency or a repaint).
             "teststatefulbg".to_string()
         }
     }

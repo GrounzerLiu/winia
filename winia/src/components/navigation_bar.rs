@@ -1034,18 +1034,18 @@ mod tests {
             })
             .expect("ripple 节点应有 ripple");
         assert_eq!(*ripple, Some(Shape::Pill));
-        // 背景为动态闭包：progress=1 时输出全 alpha 指示器色
+        // The background is a dynamic colour: at progress = 1 it is the full-alpha indicator colour.
         let theme = crate::theme::ThemeColors::default_light();
-        let color_fn = indicator
+        let background = indicator
             .modifier
             .elements()
             .iter()
             .find_map(|el| match el {
-                crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn),
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.clone()),
                 _ => None,
             })
-            .expect("彩色指示器应有动态背景");
-        assert_eq!(color_fn(), theme.secondary_container);
+            .expect("the coloured indicator has a dynamic background");
+        assert_eq!(background.eval(), theme.secondary_container);
         // 职责分离：ripple 节点无背景、胶囊节点无 ripple
         assert!(ripple_node.modifier.elements().iter().all(|el| !matches!(
             el,

@@ -862,11 +862,11 @@ mod tests {
         }
         fn walk(nodes: &[LayoutNode], idx: usize, out: &mut Vec<(f32, f32)>) {
             for el in nodes[idx].modifier.elements() {
-                if let crate::modifier::ModifierElement::GraphicsLayer { params_fn } = el {
+                if let crate::modifier::ModifierElement::GraphicsLayer { params } = el {
                     let mut widths = Vec::new();
                     leaves(nodes, idx, &mut widths);
                     if let Some(w) = widths.first() {
-                        out.push((*w, (params_fn)().alpha));
+                        out.push((*w, params.eval().alpha));
                     }
                 }
             }

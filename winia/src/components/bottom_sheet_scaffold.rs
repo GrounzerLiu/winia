@@ -1557,7 +1557,7 @@ mod tests {
             .elements()
             .iter()
             .find_map(|el| match el {
-                crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                 _ => None,
             })
             .expect("the bar paints a background");
@@ -1779,7 +1779,7 @@ mod tests {
                         return None;
                     }
                     node.modifier.elements().iter().find_map(|el| match el {
-                        crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                        crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                         _ => None,
                     })
                 })

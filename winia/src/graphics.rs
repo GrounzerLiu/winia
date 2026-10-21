@@ -13,10 +13,12 @@ pub(crate) use layer::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 
 pub mod brush;
 pub mod color;
+pub mod dyn_value;
 pub mod layer;
 pub mod shape;
 
 pub use brush::{Brush, BrushSource, BrushTile, GradientBrush};
+pub use dyn_value::Dyn;
 pub use color::{skia_color, BlendMode, Color, ColorFilter, FilterQuality};
 pub use layer::{
     BackgroundColor, BorderColor, GraphicsLayerParams, GraphicsLayerSpec, ShadowParams,
@@ -39,86 +41,15 @@ pub enum PathFillType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 可变轴值（静态 / 动态——动画只重绘不重组，与 SizeValue 同一模式）
+// Variable-font axes
 // ─────────────────────────────────────────────────────────────────────────
 
-/// 可变字体轴取值：静态 f32 或动态（`&State<f32>` / 闭包，渲染期求值）
-#[derive(Clone)]
-pub enum AxisValue {
-    Static(f32),
-    Dynamic(Arc<dyn Fn() -> f32 + Send + Sync>),
-}
-
-impl AxisValue {
-    pub fn eval(&self) -> f32 {
-        match self {
-            AxisValue::Static(v) => *v,
-            AxisValue::Dynamic(f) => f(),
-        }
-    }
-
-    /// Whether two values are the same PARAMETER, for the element comparison: two statics compare by
-    /// value, two dynamics are the same request (the number is read at draw time and carried by the
-    /// layout/draw dependency). A static turning into a dynamic — or back — is a DIFFERENT request:
-    /// treating it as equal would Skip the node and keep drawing the stale literal forever.
-    pub fn same_parameter(&self, other: &AxisValue) -> bool {
-        match (self, other) {
-            (AxisValue::Static(a), AxisValue::Static(b)) => a == b,
-            (AxisValue::Dynamic(_), AxisValue::Dynamic(_)) => true,
-            _ => false,
-        }
-    }
-}
-
-impl fmt::Debug for AxisValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AxisValue::Static(v) => f.debug_tuple("Static").field(v).finish(),
-            AxisValue::Dynamic(_) => f.write_str("Dynamic(..)"),
-        }
-    }
-}
-
-impl From<f32> for AxisValue {
-    fn from(v: f32) -> Self {
-        AxisValue::Static(v)
-    }
-}
-
-impl From<&State<f32>> for AxisValue {
-    fn from(s: &State<f32>) -> Self {
-        let s = s.clone();
-        AxisValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<State<f32>> for AxisValue {
-    fn from(s: State<f32>) -> Self {
-        AxisValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::Animating<f32>> for AxisValue {
-    fn from(s: &crate::runtime::state::Animating<f32>) -> Self {
-        let s = s.clone();
-        AxisValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::runtime::state::Animating<f32>> for AxisValue {
-    fn from(s: crate::runtime::state::Animating<f32>) -> Self {
-        AxisValue::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl<F> From<F> for AxisValue
-where
-    F: Fn() -> f32 + Send + Sync + 'static,
-{
-    fn from(f: F) -> Self {
-        AxisValue::Dynamic(Arc::new(f))
-    }
-}
+/// A variable-font axis value: a literal, or a value evaluated per paint (a state or a closure).
+///
+/// An alias of [`Dyn`] rather than its own enum, so the "static or per-frame" rules — `eval` at
+/// paint time, `same_parameter` for the element comparison — exist once. `AxisValue::Static(..)`
+/// keeps working through the alias.
+pub type AxisValue = Dyn<f32>;
 
 /// Material Symbols 可变轴（官方范围）：
 /// FILL 0..=1、GRAD -50..=200、opsz 20..=48、wght 100..=700

@@ -128,74 +128,18 @@ impl Default for TransformOrigin {
     }
 }
 
-/// 背景色规格：静态 `Color` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<BackgroundColor>` 统一 `background()` 入口——传 `Color` 或闭包均可。
-pub struct BackgroundColor(pub(crate) Arc<dyn Fn() -> Color + Send + Sync>);
-
-impl From<Color> for BackgroundColor {
-    fn from(color: Color) -> Self {
-        Self(Arc::new(move || color))
-    }
-}
-
-impl From<crate::runtime::state::DerivedValue<Color>> for BackgroundColor {
-    fn from(d: crate::runtime::state::DerivedValue<Color>) -> Self {
-        Self(Arc::new(move || d.get()))
-    }
-}
-
-/// 边框颜色：静态 `Color` 或渲染期求值的闭包。
+/// The background colour: a literal, or a value evaluated per paint.
 ///
-/// An ENUM rather than a closure newtype (unlike `BackgroundColor`): `border()` picks the element by
-/// the variant, so a static colour keeps the cheap `Border` element - whose colour change has to
-/// re-enter the node - while a closure becomes `BorderDynamic`, whose colour is a parameter read at
-/// paint time.
-#[derive(Clone)]
-pub enum BorderColor {
-    Static(Color),
-    Dynamic(Arc<dyn Fn() -> Color + Send + Sync>),
-}
+/// An alias of [`Dyn`](super::Dyn) so the "static or per-frame" rules exist once; the static form
+/// stores the colour inline (a constant background allocates nothing).
+pub type BackgroundColor = super::Dyn<Color>;
 
-impl From<Color> for BorderColor {
-    fn from(color: Color) -> Self {
-        BorderColor::Static(color)
-    }
-}
+/// The border colour — the same carrier as the background's.
+///
+/// `border()` still picks the cheap `Border` element for a static colour (whose change must re-enter
+/// the node) and `BorderDynamic` for a closure (whose colour is a parameter read at paint time); the
+/// variant carries that decision.
+pub type BorderColor = super::Dyn<Color>;
 
-impl<F> From<F> for BorderColor
-where
-    F: Fn() -> Color + Send + Sync + 'static,
-{
-    fn from(f: F) -> Self {
-        BorderColor::Dynamic(Arc::new(f))
-    }
-}
-
-impl From<crate::runtime::state::State<Color>> for BorderColor {
-    fn from(s: crate::runtime::state::State<Color>) -> Self {
-        BorderColor::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<&crate::runtime::state::State<Color>> for BorderColor {
-    fn from(s: &crate::runtime::state::State<Color>) -> Self {
-        let s = s.clone();
-        BorderColor::Dynamic(Arc::new(move || s.get()))
-    }
-}
-
-impl From<crate::runtime::state::DerivedValue<Color>> for BorderColor {
-    fn from(d: crate::runtime::state::DerivedValue<Color>) -> Self {
-        BorderColor::Dynamic(Arc::new(move || d.get()))
-    }
-}
-
-/// 图形层规格：静态 `GraphicsLayerParams` 或动态闭包（渲染时每帧求值）。
-/// 通过 `impl Into<GraphicsLayerSpec>` 统一 `graphics_layer()` 入口。
-pub struct GraphicsLayerSpec(pub(crate) Arc<dyn Fn() -> GraphicsLayerParams + Send + Sync>);
-
-impl From<GraphicsLayerParams> for GraphicsLayerSpec {
-    fn from(params: GraphicsLayerParams) -> Self {
-        Self(Arc::new(move || params.clone()))
-    }
-}
+/// The graphics-layer parameters: a literal, or a value evaluated per paint.
+pub type GraphicsLayerSpec = super::Dyn<GraphicsLayerParams>;

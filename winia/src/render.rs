@@ -454,8 +454,8 @@ fn render_modifier_element<'a>(
     morph_radii: Option<[(f32, f32); 4]>,
 ) -> Option<TextParams<'a>> {
     match el {
-        ModifierElement::Background { color_fn, shape } => {
-            let color = (color_fn)();
+        ModifierElement::Background { color: bg, shape } => {
+            let color = bg.eval();
             *last_background = Some((color, shape.clone()));
             match morph_radii {
                 Some(r) => {

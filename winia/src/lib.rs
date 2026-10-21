@@ -111,7 +111,7 @@ pub mod prelude {
     };
     pub use crate::graphics::{Brush, BrushTile};
     pub use crate::graphics::{
-        AxisValue, ContentScale, IconSource, ImageAlignment, PathFillType, SymbolAxes,
+        AxisValue, ContentScale, Dyn, IconSource, ImageAlignment, PathFillType, SymbolAxes,
     };
     pub use crate::modifier::{Modifier, FocusRequester, ScrollState};
     pub use crate::layout::{Dimension, SizeValue};

@@ -716,8 +716,8 @@ mod tests {
         let painted_shadow = |composer: &crate::runtime::composer::Composer| -> Option<f32> {
             composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })

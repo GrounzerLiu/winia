@@ -680,9 +680,9 @@ fn build_chip(
     content: impl FnOnce(&mut ComposeCtx),
 ) {
     let key = ctx.next_key();
-    // ⚠ background 接受动态闭包（`impl Fn() -> Color`）——渲染期每帧求值
-    // color_fn()：动画 tick 推进 State + request_redraw → 渲染读最新插值。
-    // 若传 bg_anim.get() 的**值**则冻结在 build 时（动画不显示）。
+    // The background accepts a dynamic colour (`impl Into<BackgroundColor>`) evaluated per paint:
+    // an animation tick advances the State and requests a redraw, so the renderer reads the latest
+    // interpolated value. Passing `bg_anim.get()` — the VALUE — would freeze it at build time.
     let bg = container_anim.clone();
     let mut m = Modifier::new()
         .min_height(ChipDefaults::HEIGHT)
@@ -783,7 +783,7 @@ mod tests {
             .elements()
             .iter()
             .find_map(|el| match el {
-                crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                 _ => None,
             })
             .expect("the chip paints a container")
@@ -982,8 +982,8 @@ mod tests {
             .iter()
             .find_map(|n| {
                 n.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })

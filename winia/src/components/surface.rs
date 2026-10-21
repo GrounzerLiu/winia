@@ -342,7 +342,7 @@ mod tests {
 
     /// Compose a surface under `theme` (and optionally with the tonal toggle) and return the colour its
     /// background modifier actually resolves to — the painted value, read through the same
-    /// `Background { color_fn }` the renderer evaluates (`render.rs:436`).
+    /// `Background { color }`, which the renderer evaluates (`render.rs`).
     fn painted_background(
         theme: ThemeColors,
         tonal_enabled: bool,
@@ -362,7 +362,7 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                     _ => None,
                 })
             })
@@ -394,7 +394,7 @@ mod tests {
             .iter()
             .filter_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                     _ => None,
                 })
             })

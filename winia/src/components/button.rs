@@ -1308,8 +1308,8 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
             composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })
@@ -1349,8 +1349,8 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })
@@ -1393,8 +1393,8 @@ mod tests {
             composer.layout(crate::layout::Constraints::new(0.0, 400.0, 0.0, 400.0));
             composer.arena_nodes().iter().find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })
@@ -1433,8 +1433,8 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::GraphicsLayer { params_fn } => {
-                        Some((params_fn)().shadow_elevation)
+                    crate::modifier::ModifierElement::GraphicsLayer { params } => {
+                        Some(params.eval().shadow_elevation)
                     }
                     _ => None,
                 })
@@ -1789,7 +1789,7 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                     _ => None,
                 })
             })
@@ -1825,7 +1825,7 @@ mod tests {
             .iter()
             .find_map(|node| {
                 node.modifier.elements().iter().find_map(|el| match el {
-                    crate::modifier::ModifierElement::Background { color_fn, .. } => Some(color_fn()),
+                    crate::modifier::ModifierElement::Background { color, .. } => Some(color.eval()),
                     _ => None,
                 })
             })
