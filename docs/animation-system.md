@@ -122,7 +122,7 @@ value is read — the same `State<f32>` can drive any of the three.
 | --- | --- | --- | --- |
 | **Composition** — a component parameter, a structural branch | `state.get()` | the reading composable re-runs | highest |
 | **Layout** — size, padding, offset, min/max | `size`/`width`/`height` take `impl Into<SizeValue>`; `offset`/`padding`/`min`/`max` take `impl Into<Dimension>` — either accepts `State<f32>`, `Animating<f32>`, `DerivedValue<f32>` or a closure | the node is measured again (its subtree with it) | medium |
-| **Paint** — alpha, scale, translation, colour, border width | `graphics_layer(closure)` / `background(closure)` / a `Dimension` on `border`/`border_dynamic`, all read at draw time (`peek()` for a closure) | the node is painted again; nothing is measured or composed | lowest |
+| **Paint** — alpha, scale, translation, colour, border width | `graphics_layer(closure)` / `background(closure)` / a `Dimension` on `border`, all read at draw time (`peek()` for a closure) | the node is painted again; nothing is measured or composed | lowest |
 
 The middle row is what `Dimension::Dynamic` is FOR. A layout length is a `Dimension`, and its
 `Dynamic` form holds a closure that runs **during measure**; a `State::get()` there registers a
@@ -149,10 +149,12 @@ let alpha = ctx.animate_float_as_state(target_alpha, spring);
 if alpha.get() > 0.0 { /* ... */ }
 ```
 
-`Fill`, `Auto` and `Intrinsic` are NOT lengths — they are SIZE MODES, a decision about how a node
-uses the space it was offered. There is no "0.37 of a Fill", so they are never evaluated per frame;
-a mode that changes over time is a recomposition decision (`SizeValue::Fill` or `SizeValue::Auto`
-chosen in the composition from a `State<bool>`).
+`Auto` and `Intrinsic` are NOT lengths — they are SIZE MODES, a decision about how a node uses the
+space it was offered. There is no "0.37 of an Auto", so they are never evaluated per frame; a mode
+that changes over time is a recomposition decision (chosen in the composition from a `State<bool>`).
+`Fill` is not a `SizeValue` at all: it is `fill_max_width`/`fill_max_height`/`fill_max_size`, because
+filling has to reach the measure step that tightens the axis to the incoming maximum (with a
+scroll-viewport fallback when the max is infinite) — which a plain size value cannot.
 
 ## 9. Who owns a motion
 

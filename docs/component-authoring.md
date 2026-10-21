@@ -162,17 +162,17 @@ and that phase fixes the type:
 | The parameter is | Take | Because |
 | --- | --- | --- |
 | a layout LENGTH - size, padding, offset, spacing, border width | `impl Into<Dimension>` | read during measure (a border's width during paint), so a literal, a `State<f32>`, an `Animating<f32>` or a closure all work, and the animation costs a re-measure (or a repaint) instead of a recomposition |
-| a SIZE MODE - fill / auto / intrinsic | `impl Into<SizeValue>` | not a number: changing it is a composition decision, so it cannot be evaluated per frame |
+| a SIZE MODE - auto / intrinsic (a fill is `fill_max_*`, not a size value) | `impl Into<SizeValue>` | not a number: changing it is a composition decision, so it cannot be evaluated per frame |
 | a PAINT scalar - alpha, scale, rotation, a variable-font axis | `impl Into<AxisValue>` (see `Icon::wght`) | read while painting; `Dimension` would drag it through layout and re-measure for a number layout never uses |
-| a PAINT colour or shape | the closure form the modifier already carries (`background(closure)`, `border_dynamic(\|\| colour)`) | evaluated at draw time |
+| a PAINT colour or shape | the closure form the modifier already carries (`background(closure)`, `border(width, \|\| colour, shape)`) | evaluated at draw time |
 | a value that decides STRUCTURE | a plain parameter; the caller reads a `State` and recomposes | only a composition can change the tree |
 
 Rules that follow:
 
-- **Prefer one `Into` parameter to a `*_dynamic` overload.** `Icon::wght(impl Into<AxisValue>)`
-  takes a literal, a state and a closure through one signature. `border_dynamic` exists because its
-  static sibling had already shipped; for new API one parameter that accepts both is smaller and
-  harder to misuse.
+- **Prefer one `Into` parameter to a `*_dynamic` overload.** `Icon::wght(impl Into<AxisValue>)` and
+  `Modifier::border(width, color: impl Into<BorderColor>, shape)` each take a literal, a state and a
+  closure through one signature. A pair of methods - a static builder plus a `*_dynamic` twin -
+  doubles the surface, and only one of the pair tends to get maintained.
 - **Read it in the consuming phase, with `peek()`.** A `Dimension` is read during measure, an
   `AxisValue`/closure during paint. A `get()` in the composition turns the animation into a
   recomposition per frame - exactly the cost the parameter was meant to avoid.

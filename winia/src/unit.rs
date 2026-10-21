@@ -480,9 +480,9 @@ mod tests {
         // Dp/Px → Dimension（供 .size() 消费）
         use crate::layout::Dimension;
         let d: Dimension = 10.dp().into();
-        assert_eq!(d, Dimension::Dp(Dp(10.0)));
+        assert!(d.same_parameter(&Dimension::Dp(Dp(10.0))));
         let p: Dimension = 20.px().into();
-        assert_eq!(p, Dimension::Px(Px(20.0)));
+        assert!(p.same_parameter(&Dimension::Px(Px(20.0))));
 
         // `Dimension::to_logical_px` needs the ambient density, so its assertion lives beside it
         // in `layout/sizing.rs` rather than here.

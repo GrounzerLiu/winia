@@ -271,7 +271,7 @@ fn rich_text_demo_ui(ctx: &mut ComposeCtx) {
     Stack::new()
         .modifier(Modifier::new().fill_max_width().background(theme_colors.surface_container, Shape::rounded(8.0)))
         .build(ctx, |ctx| {
-            Text::new("").modifier(Modifier::new().size(4.0, SizeValue::Fill).background(Color::from_argb(255, 33, 150, 243), Shape::rounded(2.0))).build(ctx);
+            Text::new("").modifier(Modifier::new().width(4.0).fill_max_height().background(Color::from_argb(255, 33, 150, 243), Shape::rounded(2.0))).build(ctx);
             Column::new().modifier(Modifier::new().fill_max_size().padding(14.0)).build(ctx, |ctx| {
                 RichText::new().build(ctx, |x| {
                     x.image(info()); x.text("  ");

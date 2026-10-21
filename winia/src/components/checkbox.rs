@@ -397,7 +397,7 @@ fn checkbox_impl(
             let visual = Modifier::new()
                 .size(CHECKBOX_SIZE, CHECKBOX_SIZE)
                 .background(move || box_color_anim.peek(), shape)
-                .border_dynamic(
+                .border(
                     CHECKBOX_STROKE_WIDTH,
                     move || border_color_anim.peek(),
                     shape,

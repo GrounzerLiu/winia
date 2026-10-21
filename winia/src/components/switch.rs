@@ -320,7 +320,7 @@ impl Switch {
         let mut modifier = Modifier::new()
             .size(SWITCH_TRACK_WIDTH, SWITCH_TRACK_HEIGHT)
             .background(move || track_color_anim.peek(), track_shape)
-            .border_dynamic(
+            .border(
                 SWITCH_TRACK_OUTLINE_WIDTH,
                 move || border_color_anim.peek(),
                 track_shape,

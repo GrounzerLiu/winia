@@ -62,7 +62,7 @@ Selected/Unselected Hover/Focus/Pressed IconColor 与静态色同值，Compose
 
 - 组合结构：外层 40×40 节点（clip Circle 供焦点环推断形状）→
   `clickable_with_source` + unbounded ripple → 内层 20×20 视觉节点
-  （`border_dynamic` 2dp Circle = 圆环描边）。
+  (`border` with a 2dp Circle stroke = the ring).
 - 选中内点：10×10 叶子节点（`background` Circle 实心圆），
   `graphics_layer` scale 0↔1 动画。与 Compose 的
   `animateDpAsState(dotRadius) + drawCircle(Fill)`（半径 0→5dp 线性动画）

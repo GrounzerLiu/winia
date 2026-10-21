@@ -40,7 +40,7 @@ fn text_demo_ui(ctx: &mut ComposeCtx) {
     let scroll_state = ctx.remember(|| ScrollState::new()).get();
 
     Column::new()
-        .modifier(Modifier::new().size(SizeValue::Fill, 700.0).padding(16.0).vertical_scroll(scroll_state))
+        .modifier(Modifier::new().fill_max_width().height(700.0).padding(16.0).vertical_scroll(scroll_state))
         .spacing(8.0)
         .build(ctx, |ctx| {
             // ── 1. 基础文字 + 字号 ──

@@ -244,13 +244,13 @@ fn radio_button_impl(
     ) {
         GroupStatus::Skip => {}
         GroupStatus::Enter => {
-            // 视觉 20×20：圆环（border_dynamic 2dp Circle 描边——外圈中径
+            // Visual 20×20: the ring (a 2dp Circle border - the outer circle's centre-line
             // (20-2)/2 = 9dp，与 Compose drawCircle(radius = IconSize/2 -
             // strokeWidth/2, Stroke) 一致）+ 内点（background 实心圆）。
             let ring_color = color_anim.clone();
             let visual = Modifier::new()
                 .size(RADIO_BUTTON_SIZE, RADIO_BUTTON_SIZE)
-                .border_dynamic(
+                .border(
                     RADIO_STROKE_WIDTH,
                     move || ring_color.peek(),
                     Shape::Circle,

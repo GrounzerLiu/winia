@@ -61,13 +61,20 @@ impl std::fmt::Debug for Dimension {
     }
 }
 
-impl PartialEq for Dimension {
-    fn eq(&self, other: &Self) -> bool {
+impl Dimension {
+    /// Whether two lengths are the same PARAMETER, for the element comparison: the static forms must
+    /// be equal, and two dynamic forms are the same request — the number is read during layout and
+    /// carried by the layout dependency. A static turning into a dynamic (or back) is a CHANGE.
+    ///
+    /// A named method rather than `PartialEq` on purpose: for a dynamic length there is no honest
+    /// `==` (two closures cannot be compared by value), and a pointer comparison would make a
+    /// rebuilt closure look like a new parameter every frame.
+    pub fn same_parameter(&self, other: &Dimension) -> bool {
         match (self, other) {
             (Dimension::Fixed(a), Dimension::Fixed(b)) => a == b,
             (Dimension::Dp(a), Dimension::Dp(b)) => a == b,
             (Dimension::Px(a), Dimension::Px(b)) => a == b,
-            (Dimension::Dynamic(a), Dimension::Dynamic(b)) => Arc::ptr_eq(a, b),
+            (Dimension::Dynamic(_), Dimension::Dynamic(_)) => true,
             _ => false,
         }
     }
@@ -164,13 +171,16 @@ pub enum IntrinsicSize {
 
 /// How a node is sized: a [`Dimension`], or a layout mode that only a SIZE can have.
 ///
-/// `Fill` and `Auto` live here rather than in `Dimension` on purpose: an offset or a padding has no
-/// "fill the remaining space", and putting them in the length type made those positions accept a
-/// value that silently resolved to 0.
+/// The modes live here rather than in `Dimension` on purpose: an offset or a padding has no "size to
+/// the content", and putting them in the length type made those positions accept a value that
+/// silently resolved to 0.
+///
+/// `Fill` is deliberately NOT a variant: a fill has to reach the measure step that tightens the axis
+/// to the incoming maximum (and the scroll-viewport fallback for an infinite max), which
+/// `fill_max_width`/`fill_max_height`/`fill_max_size` do and a plain size value cannot. A
+/// `SizeValue::Fill` used to exist and did nothing - `size(Fill, 24.0)` measured to the content width.
 pub enum SizeValue {
     Length(Dimension),
-    /// Take all the space the incoming constraints offer.
-    Fill,
     /// Size to the content.
     Auto,
     /// Size to one of the content's own intrinsic measurements.
@@ -277,7 +287,6 @@ impl Clone for SizeValue {
     fn clone(&self) -> Self {
         match self {
             SizeValue::Length(d) => SizeValue::Length(d.clone()),
-            SizeValue::Fill => SizeValue::Fill,
             SizeValue::Auto => SizeValue::Auto,
             SizeValue::Intrinsic(s) => SizeValue::Intrinsic(*s),
         }
@@ -288,18 +297,18 @@ impl std::fmt::Debug for SizeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SizeValue::Length(d) => write!(f, "{d:?}"),
-            SizeValue::Fill => write!(f, "fill"),
             SizeValue::Auto => write!(f, "auto"),
             SizeValue::Intrinsic(s) => write!(f, "intrinsic({s:?})"),
         }
     }
 }
 
-impl PartialEq for SizeValue {
-    fn eq(&self, other: &Self) -> bool {
+impl SizeValue {
+    /// The same rule as [`Dimension::same_parameter`], one level up: the same mode twice is the same
+    /// request, two lengths defer to the length, and a mode against a length is a change.
+    pub fn same_parameter(&self, other: &SizeValue) -> bool {
         match (self, other) {
-            (SizeValue::Length(a), SizeValue::Length(b)) => a == b,
-            (SizeValue::Fill, SizeValue::Fill) => true,
+            (SizeValue::Length(a), SizeValue::Length(b)) => a.same_parameter(b),
             (SizeValue::Auto, SizeValue::Auto) => true,
             (SizeValue::Intrinsic(a), SizeValue::Intrinsic(b)) => a == b,
             _ => false,

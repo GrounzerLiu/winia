@@ -1304,28 +1304,28 @@ impl Modifier {
         })
     }
 
-    /// 设置边框
-    pub fn border(self, width: impl Into<Dimension>, color: Color, shape: impl Into<Shape>) -> Self {
-        self.push(ModifierElement::Border {
-            width: width.into(),
-            color,
-            shape: shape.into(),
-        })
-    }
-
-    /// 动态颜色边框（对标 background 的动态闭包语义——渲染期每帧求值，
-    /// 供颜色过渡动画使用；`peek()` 读取动画值）
-    pub fn border_dynamic(
+    /// 设置边框。颜色可以是一个 `Color`，也可以是渲染期求值的闭包/状态
+    /// （`impl Into<BorderColor>`）——静态颜色走 `Border` 元素，闭包走 `BorderDynamic`
+    /// （绘制期每帧求值，配合 `peek()` 做颜色过渡）。
+    ///
+    /// One signature for both: the variant decides the element, so a static colour that changes still
+    /// re-enters the node while a dynamic one is a parameter read at paint time.
+    pub fn border(
         self,
         width: impl Into<Dimension>,
-        color_fn: impl Fn() -> Color + Send + Sync + 'static,
+        color: impl Into<crate::graphics::BorderColor>,
         shape: impl Into<Shape>,
     ) -> Self {
-        self.push(ModifierElement::BorderDynamic {
-            width: width.into(),
-            color_fn: Arc::new(color_fn),
-            shape: shape.into(),
-        })
+        let width = width.into();
+        let shape = shape.into();
+        match color.into() {
+            crate::graphics::BorderColor::Static(color) => {
+                self.push(ModifierElement::Border { width, color, shape })
+            }
+            crate::graphics::BorderColor::Dynamic(color_fn) => {
+                self.push(ModifierElement::BorderDynamic { width, color_fn, shape })
+            }
+        }
     }
 
     /// 设置裁剪形状
@@ -1912,7 +1912,7 @@ impl Modifier {
                     match sv {
                         SizeValue::Length(Dimension::Fixed(v)) | SizeValue::Length(Dimension::Dp(Dp(v))) => Some(*v),
                         SizeValue::Length(Dimension::Px(p)) => Some(p.to_logical(current_density())),
-                        SizeValue::Auto | SizeValue::Fill => None,
+                        SizeValue::Auto => None,
                         SizeValue::Length(Dimension::Dynamic(f)) => Some(f()),
                         // An intrinsic request carries no number: it is resolved by the measure
                         // pipeline (`layout::node`), which fixes the axis to the content's
@@ -3881,24 +3881,27 @@ mod tests {
 
     #[test]
     fn test_dimension_conversions() {
+        use crate::layout::SizeValue;
         let m = Modifier::new()
-            .size(100.0, crate::layout::SizeValue::Fill) // f32 → Length(Fixed), Fill
-            .width(crate::layout::SizeValue::Auto)
-            .height(50.0);
+            .size(100.0, 20.0)      // f32 -> Length(Fixed)
+            .width(SizeValue::Auto);
 
         let elements = m.elements();
-        assert_eq!(elements.len(), 3);
-        // 第一个是 Size { width: Fixed(100), height: Fill }
+        assert_eq!(elements.len(), 2);
         match &elements[0] {
             ModifierElement::Size { width, height } => {
-                match (width, height) {
-                    (crate::layout::SizeValue::Length(w), crate::layout::SizeValue::Fill) => {
-                        assert_eq!(*w, Dimension::Fixed(100.0));
-                    }
-                    _ => panic!("expected static size"),
-                }
+                assert!(width.same_parameter(&SizeValue::from(100.0f32)));
+                assert!(height.same_parameter(&SizeValue::from(20.0f32)));
             }
             _ => panic!("expected Size"),
+        }
+        // `width()` leaves the other axis on `Auto`; there is no `Fill` size mode any more (a fill is
+        // `fill_max_width`, which the measure implements).
+        match &elements[1] {
+            ModifierElement::Size { width, .. } => {
+                assert!(matches!(width, SizeValue::Auto), "width(Auto) is the Auto mode");
+            }
+            _ => panic!("expected a second Size element"),
         }
     }
 
@@ -4136,10 +4139,9 @@ fn opt_size_value_eq(a: &Option<SizeValue>, b: &Option<SizeValue>) -> bool {
     }
 }
 
-/// Two lengths are the same parameter when both are dynamic (the layout dependency carries the
-/// number) or when the static forms are equal.
+/// Two lengths are the same parameter — see [`Dimension::same_parameter`].
 fn dimension_eq(a: &Dimension, b: &Dimension) -> bool {
-    if a.is_dynamic() && b.is_dynamic() { true } else { a == b }
+    a.same_parameter(b)
 }
 
 fn opt_dimension_eq(a: &Option<Dimension>, b: &Option<Dimension>) -> bool {
@@ -4151,17 +4153,7 @@ fn opt_dimension_eq(a: &Option<Dimension>, b: &Option<Dimension>) -> bool {
 }
 
 fn size_value_eq(a: &SizeValue, b: &SizeValue) -> bool {
-    match (a, b) {
-        // A dynamic length is a parameter, not a value: the layout dependency carries the number, so
-        // two of them are the same request. Static lengths compare structurally.
-        (SizeValue::Length(ad), SizeValue::Length(bd)) => dimension_eq(ad, bd),
-        // The layout modes are parameters too: two fills are the same request.
-        (SizeValue::Fill, SizeValue::Fill) => true,
-        (SizeValue::Auto, SizeValue::Auto) => true,
-        // An intrinsic request is a parameter, not a value: compare which measurement is asked for.
-        (SizeValue::Intrinsic(as_), SizeValue::Intrinsic(bs)) => as_ == bs,
-        _ => false,
-    }
+    a.same_parameter(b)
 }
 
 /// Open-node Skip fingerprint (type + params).

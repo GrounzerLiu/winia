@@ -201,7 +201,7 @@ pub fn then(mut self, other: Modifier) -> Self {
 ### 4. Draw Modifier（modifier.rs:896-1055）
 
 - `background(color|closure, shape)`：经 `BackgroundColor` 包装（modifier.rs:2080-2105）统一静态 Color 与闭包；**动画原则**（modifier.rs:913-915）：闭包内用 `State::peek()` 读取动画值（`get()` 会注册依赖触发重组），配合 `set_visual`（不 notify）每帧 request_redraw 实现零重组。
-- `border`、`border_dynamic`（动态色闭包）。
+- `border` (its colour may be a closure, evaluated per paint).
 - `clip(shape)`、`blur(radius)`（GPU saveLayer 零回读）、`backdrop_blur(radius)`（毛玻璃，单 snapshot 多节点共享）。
 - `text_content/text_content_full`（Text/TextField 共用 SSOT）、`text_field_visual`、`text_field_offset_mapping`。
 - 阴影：`shadow(elevation,…)`（展开 ambient+spot 两层，见 render 章节）、`drop_shadow(shape, params)`（完全自定义单层，可叠加 = Compose vararg 语义）。

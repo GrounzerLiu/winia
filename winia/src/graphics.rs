@@ -19,7 +19,8 @@ pub mod shape;
 pub use brush::{Brush, BrushSource, BrushTile, GradientBrush};
 pub use color::{skia_color, BlendMode, Color, ColorFilter, FilterQuality};
 pub use layer::{
-    BackgroundColor, GraphicsLayerParams, GraphicsLayerSpec, ShadowParams, TransformOrigin,
+    BackgroundColor, BorderColor, GraphicsLayerParams, GraphicsLayerSpec, ShadowParams,
+    TransformOrigin,
 };
 pub use shape::Shape;
 
@@ -60,7 +61,7 @@ impl AxisValue {
     /// value, two dynamics are the same request (the number is read at draw time and carried by the
     /// layout/draw dependency). A static turning into a dynamic — or back — is a DIFFERENT request:
     /// treating it as equal would Skip the node and keep drawing the stale literal forever.
-    fn static_eq(&self, other: &AxisValue) -> bool {
+    pub fn same_parameter(&self, other: &AxisValue) -> bool {
         match (self, other) {
             (AxisValue::Static(a), AxisValue::Static(b)) => a == b,
             (AxisValue::Dynamic(_), AxisValue::Dynamic(_)) => true,
@@ -147,10 +148,10 @@ impl Default for SymbolAxes {
 
 impl PartialEq for SymbolAxes {
     fn eq(&self, other: &Self) -> bool {
-        self.fill.static_eq(&other.fill)
-            && self.grad.static_eq(&other.grad)
-            && self.opsz.static_eq(&other.opsz)
-            && self.wght.static_eq(&other.wght)
+        self.fill.same_parameter(&other.fill)
+            && self.grad.same_parameter(&other.grad)
+            && self.opsz.same_parameter(&other.opsz)
+            && self.wght.same_parameter(&other.wght)
     }
 }
 
