@@ -520,6 +520,9 @@ pub(crate) struct PerWindow {
     /// 容器与内部 Button 等可同时 hover；修复前只存最内层 → 嵌套 hoverable
     /// 外层收不到 Enter（Tooltip 锚点挂 hoverable 时内部 Button 抢走事件））
     hovered_slots: std::collections::HashSet<u64>,
+    /// The cursor currently applied to the window — `set_cursor` is a platform call, so it is
+    /// only made when the hovered node asks for something different.
+    cursor_icon: crate::input::PointerIcon,
     /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
     pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
@@ -546,7 +549,7 @@ impl PerWindow {
         // A window built without a `Window` node: its palette is whatever the caller passed, so the intent
         // is that palette (nothing to follow), and its type scale is the default.
         let theme = WindowThemeState::from_theme(theme);
-        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), pressed_interaction: None, focused_interaction_slot: None }
+        PerWindow { composer: Composer::new(), skia_window: None, width, height, scale_factor: 1.0, focused_id: None, content, window_size_state: std::cell::RefCell::new(None), window_size_backchannel: std::cell::RefCell::new(None), on_close: None, created_id: None, saveable_key: None, theme, focused_slot_key: None, input: GestureState::default(), wheel: WheelPager::default(), overlay: OverlayHost::default(), clock: FrameClock::default(), modifiers: Default::default(), hovered_slots: std::collections::HashSet::new(), cursor_icon: crate::input::PointerIcon::DEFAULT, pressed_interaction: None, focused_interaction_slot: None }
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
@@ -1628,6 +1631,7 @@ impl ApplicationHandler for AppState {
                     exit_hover_at(pw, old);
                 }
                 pw.input.last_pos = None;
+                update_cursor(pw, crate::input::PointerIcon::DEFAULT);
             }
             WindowEvent::ModifiersChanged(m) => {
                 pw.modifiers = m.state();
@@ -2839,6 +2843,41 @@ fn release_pressed_interaction(pw: &mut PerWindow) {
 /// （对标 Compose hoverable：每个 hoverable 独立收到 Enter/Exit；修复前只
 /// 发射最内层——嵌套 hoverable（如 Tooltip 锚点容器 + 内部 Button）外层
 /// 收不到 Enter → Tooltip 不显示）。节点移除时自动补 Exit。
+/// The cursor a hit path asks for: the deepest `pointer_hover_icon`, unless an ancestor with
+/// `override_descendants` wins — Compose Desktop's `PointerHoverIconModifierNode` rule.
+fn pointer_icon_for_path(
+    nodes: &[LayoutNode],
+    path: &[usize],
+) -> crate::input::PointerIcon {
+    let mut nearest: Option<crate::input::PointerIcon> = None;
+    // Leaf first: the innermost icon is the nearest one, and the first override wins over
+    // everything below it.
+    for &idx in path.iter().rev() {
+        for el in nodes[idx].modifier.elements().iter().rev() {
+            if let crate::modifier::ModifierElement::PointerHoverIcon { icon, override_descendants } = el {
+                if *override_descendants {
+                    return *icon;
+                }
+                if nearest.is_none() {
+                    nearest = Some(*icon);
+                }
+            }
+        }
+    }
+    nearest.unwrap_or_default()
+}
+
+/// Apply a cursor to the window, skipping the platform call when it is already the current one.
+fn update_cursor(pw: &mut PerWindow, icon: crate::input::PointerIcon) {
+    if pw.cursor_icon == icon {
+        return;
+    }
+    pw.cursor_icon = icon;
+    if let Some(sw) = pw.skia_window.as_ref() {
+        sw.set_cursor(winit::cursor::Cursor::Icon(icon.cursor_icon()));
+    }
+}
+
 fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     // overlay 优先：指针在 overlay 内容上 → 只更新 overlay 的 hover，
     // 同时主树 + **其他 overlay** 全部退出 hover（overlay 盖住下层——
@@ -2859,6 +2898,24 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
                 overlay_exit_hover_at(&mut pw.overlay.layers[j], slot);
             }
         }
+        let icon = {
+            let ov = &pw.overlay.layers[i];
+            match ov.composer.layout_root_idx() {
+                Some(root) => {
+                    let nodes = ov.composer.arena_nodes();
+                    let path = hit_test_with_flights(
+                        nodes,
+                        root,
+                        ov.composer.transition_roots(),
+                        local.0,
+                        local.1,
+                    );
+                    pointer_icon_for_path(nodes, &path)
+                }
+                None => crate::input::PointerIcon::DEFAULT,
+            }
+        };
+        update_cursor(pw, icon);
         return;
     }
     // 未命中任何 overlay：主树 hover 更新 + 所有 overlay hover 全清
@@ -2870,15 +2927,17 @@ fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
     }
     // 当前路径上所有 hoverable 的 (slot, interaction)
-    let hit: Vec<(u64, crate::interaction::MutableInteractionSource)> = {
+    let (hit, icon): (Vec<(u64, crate::interaction::MutableInteractionSource)>, crate::input::PointerIcon) = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
-        path.iter()
+        let hit = path.iter()
             .filter(|&&i| nodes[i].modifier.has_hoverable())
             .filter_map(|&i| nodes[i].modifier.hoverable_interaction().map(|s| (nodes[i].slot_key, s.clone())))
-            .collect()
+            .collect();
+        (hit, pointer_icon_for_path(nodes, &path))
     };
+    update_cursor(pw, icon);
     let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
     // 仍在 hover 的：跳过（已 enter）
     // 新进入：emit enter + 记录
@@ -4940,4 +4999,78 @@ mod wheel_paging_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pointer_icon_tests {
+    use super::*;
+    use crate::input::PointerIcon;
+    use crate::layout::node::LayoutNode;
+    use crate::modifier::Modifier;
+
+    fn tree(leaf: Modifier, parent: Modifier) -> Vec<LayoutNode> {
+        let mut parent_node = LayoutNode::new(parent, Some(0));
+        parent_node.children = vec![1];
+        vec![parent_node, LayoutNode::leaf(leaf)]
+    }
+
+    #[test]
+    fn the_deepest_icon_wins() {
+        let nodes = tree(
+            Modifier::new().pointer_hover_icon(PointerIcon::HAND),
+            Modifier::new().pointer_hover_icon(PointerIcon::TEXT),
+        );
+        assert_eq!(pointer_icon_for_path(&nodes, &[0, 1]), PointerIcon::HAND);
+    }
+
+    #[test]
+    fn an_override_ancestor_beats_a_descendant() {
+        let nodes = tree(
+            Modifier::new().pointer_hover_icon(PointerIcon::HAND),
+            Modifier::new().pointer_hover_icon_override_descendants(PointerIcon::TEXT),
+        );
+        assert_eq!(pointer_icon_for_path(&nodes, &[0, 1]), PointerIcon::TEXT);
+    }
+
+    #[test]
+    fn the_first_override_from_the_leaf_wins() {
+        // Three levels: leaf HAND, middle override TEXT, root WAIT. Walking up from the leaf, the
+        // middle override is met first and stops the search.
+        let mut nodes = vec![
+            LayoutNode::new(
+                Modifier::new()
+                    .pointer_hover_icon(PointerIcon::WAIT)
+                    .pointer_hover_icon_override_descendants(PointerIcon::WAIT),
+                Some(0),
+            ),
+            LayoutNode::new(
+                Modifier::new().pointer_hover_icon_override_descendants(PointerIcon::TEXT),
+                Some(1),
+            ),
+            LayoutNode::leaf(Modifier::new().pointer_hover_icon(PointerIcon::HAND)),
+        ];
+        nodes[0].children = vec![1];
+        nodes[1].children = vec![2];
+        assert_eq!(pointer_icon_for_path(&nodes, &[0, 1, 2]), PointerIcon::TEXT);
+    }
+
+    #[test]
+    fn no_icon_means_default() {
+        let nodes = tree(Modifier::new(), Modifier::new());
+        assert_eq!(pointer_icon_for_path(&nodes, &[0, 1]), PointerIcon::DEFAULT);
+    }
+
+    #[test]
+    fn the_icon_is_part_of_the_element_parameter() {
+        assert!(Modifier::new()
+            .pointer_hover_icon(PointerIcon::HAND)
+            .param_eq(&Modifier::new().pointer_hover_icon(PointerIcon::HAND)));
+        assert!(!Modifier::new()
+            .pointer_hover_icon(PointerIcon::HAND)
+            .param_eq(&Modifier::new().pointer_hover_icon(PointerIcon::TEXT)));
+        assert!(!Modifier::new()
+            .pointer_hover_icon(PointerIcon::HAND)
+            .param_eq(&Modifier::new().pointer_hover_icon_override_descendants(PointerIcon::HAND)));
+    }
+}
+
 

@@ -520,6 +520,12 @@ pub(crate) enum ModifierElement {
     Focusable { interaction: Option<MutableInteractionSource> },
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
     Hoverable { interaction: MutableInteractionSource },
+    /// The cursor this node asks for while hovered — Compose Desktop's `pointerHoverIcon`.
+    /// `override_descendants` makes this node's icon win over any icon on a descendant.
+    PointerHoverIcon {
+        icon: crate::input::PointerIcon,
+        override_descendants: bool,
+    },
     /// 水波纹指示（对标 Compose indication/ripple）——按下时从按压点扩散的
     /// 径向渐变圆，释放后淡出；渲染期按时间计算，无额外动画状态。
     /// `shape = Some` 时波纹裁剪到该形状（Button 传入容器 shape——
@@ -1699,6 +1705,28 @@ impl Modifier {
     /// 标记为可获焦点并绑定交互源——焦点变化自动发射 Focus/Unfocus
     pub fn focusable_with_source(self, source: &MutableInteractionSource) -> Self {
         self.push(ModifierElement::Focusable { interaction: Some(source.clone()) })
+    }
+
+    /// Compose Desktop's `Modifier.pointerHoverIcon(icon)`: while the pointer is over this node
+    /// (or its descendants), the window's cursor is `icon`. A closer descendant setting its own
+    /// icon wins; see [`pointer_hover_icon_override_descendants`](Self::pointer_hover_icon_override_descendants).
+    pub fn pointer_hover_icon(self, icon: impl Into<crate::input::PointerIcon>) -> Self {
+        self.push(ModifierElement::PointerHoverIcon {
+            icon: icon.into(),
+            override_descendants: false,
+        })
+    }
+
+    /// Compose Desktop's `pointerHoverIcon(icon, overrideDescendants = true)`: this node's icon
+    /// wins over any `pointer_hover_icon` set by a descendant.
+    pub fn pointer_hover_icon_override_descendants(
+        self,
+        icon: impl Into<crate::input::PointerIcon>,
+    ) -> Self {
+        self.push(ModifierElement::PointerHoverIcon {
+            icon: icon.into(),
+            override_descendants: true,
+        })
     }
 
     /// 悬停——指针进入/离开自动发射 Hover Enter/Exit（对标 Compose hoverable）
@@ -3003,6 +3031,11 @@ impl Debug for ModifierElement {
             Self::DragOnCancel { .. } => f.write_str("DragOnCancel(<fn>)"),
             Self::Focusable { .. } => f.write_str("Focusable"),
             Self::Hoverable { .. } => f.write_str("Hoverable"),
+            Self::PointerHoverIcon { icon, override_descendants } => f
+                .debug_struct("PointerHoverIcon")
+                .field("icon", icon)
+                .field("override_descendants", override_descendants)
+                .finish(),
             Self::Ripple { color, bounded, .. } => f
                 .debug_struct("Ripple")
                 .field("color", color)
@@ -4551,6 +4584,10 @@ fn element_param_eq(a: &ModifierElement, b: &ModifierElement) -> bool {
         (DragOnCancel { .. }, DragOnCancel { .. }) => true,
         (Focusable { interaction: ai }, Focusable { interaction: bi }) => ai == bi,
         (Hoverable { interaction: ai }, Hoverable { interaction: bi }) => ai == bi,
+        (
+            PointerHoverIcon { icon: ai, override_descendants: ao },
+            PointerHoverIcon { icon: bi, override_descendants: bo },
+        ) => ai == bi && ao == bo,
         (
             Ripple { source: as_, color: ac, bounded: abc, shape: ash, state_layer_diameter: asl },
             Ripple { source: bs, color: bc, bounded: bbc, shape: bsh, state_layer_diameter: bsl },
