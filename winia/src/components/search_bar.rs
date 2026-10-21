@@ -795,7 +795,7 @@ impl SearchBar {
                                         crate::layout::components::Column::new()
                                             .modifier(Modifier::new().graphics_layer(move || {
                                                 crate::graphics::GraphicsLayerParams {
-                                                    alpha: cp.get(),
+                                                    alpha: cp.peek(),
                                                     ..Default::default()
                                                 }
                                             }))

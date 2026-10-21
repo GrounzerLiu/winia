@@ -106,6 +106,13 @@ pub fn animated_size(v: &Visual<f32>) -> SizeValue
 | Measure/layout write-back slots (`fling_limit`, `content_height`, `track_width`, `last_scroll`, …) | `Backchannel<T>` | write-back lands next frame, never triggers |
 | `Modifier::graphics_layer` / draw closures | `Visual`-only captures | enforced by constructor signatures, not comments |
 
+A draw closure reads its value with `peek()`, never `get()`. Paint runs with the dependency tracker
+off (`DEP_MODE::None`), so the two happen to be equivalent today — but `get()` would register
+against whatever slot is active if a paint pass ever ran inside a compose/layout transaction (a
+snapshot, a preview, a subcompose during measure). `get()` belongs in the composition (where it IS
+the dependency making `animate*AsState` work) and in a measure-time layout value (where it is the
+layout dependency); a paint closure uses `peek()`.
+
 ## 4. Full call-site audit (`winia/src`, 151 write sites)
 
 Counts from `grep -E "\.set_silent\(|\.set_no_wake\(|\.set_visual\(|\.update\("`

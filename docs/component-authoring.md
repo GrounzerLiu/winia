@@ -173,11 +173,16 @@ Rules that follow:
   `Modifier::border(width, color: impl Into<BorderColor>, shape)` each take a literal, a state and a
   closure through one signature. A pair of methods - a static builder plus a `*_dynamic` twin -
   doubles the surface, and only one of the pair tends to get maintained.
-- **Read it in the consuming phase, with `peek()`.** A `Dimension` is read during measure, an
-  `AxisValue`/closure during paint. A `get()` in the composition turns the animation into a
-  recomposition per frame - exactly the cost the parameter was meant to avoid.
+- **Read it in the consuming phase, and read it UNTRACKED there.** A `Dimension` is read during
+  measure with `get()` - that read IS the layout dependency, and dropping it would freeze the value.
+  A closure evaluated at paint time must use `peek()`: paint runs with the dependency tracker off
+  (`DEP_MODE` is `None`), so `get()` registers nothing today. That is the difference between a rule
+  and a coincidence - the day a paint pass runs inside a transaction (a snapshot, a preview, a
+  subcompose during measure), `get()` would attach the dependency to whatever slot happens to be
+  active and recompose for a frame that changed nothing. Every draw closure in this repo
+  (`graphics_layer`, `background`, `border`) reads with `peek()` for that reason.
 - **Teach `element_param_eq` the new parameter.** A dynamic value is a PARAMETER, not a value: it
-  must compare equal to another dynamic one (`dimension_eq`, `AxisValue::static_eq`), or the
+  must compare equal to another dynamic one (`same_parameter` on `Dimension` / `SizeValue` / `AxisValue`), or the
   component re-enters on every frame and can never Skip.
 - **Test the pair, not the number.** Setting the state and asserting the element resolves the new
   value catches "frozen at build time"; asserting that two dynamic values compare equal catches

@@ -686,7 +686,7 @@ fn build_chip(
     let bg = container_anim.clone();
     let mut m = Modifier::new()
         .min_height(ChipDefaults::HEIGHT)
-        .background(move || bg.get(), shape);
+        .background(move || bg.peek(), shape);
     // ⚠ 有填充色（selected/secondaryContainer 等）时边框必须消失（M3 语义）——
     // border_width=0 时**不挂** border modifier（挂 0 宽线仍会绘制、可见）
     if border_width > 0.0 {
@@ -695,7 +695,7 @@ fn build_chip(
     // 阴影走 graphics_layer 动态闭包：渲染期每帧读动画值，形状跟随 chip shape。
     if let Some(anim) = elevation_anim {
         m = m.graphics_layer(move || crate::graphics::GraphicsLayerParams {
-            shadow_elevation: anim.get(),
+            shadow_elevation: anim.peek(),
             shadow_shape: Some(shape),
             ..Default::default()
         });

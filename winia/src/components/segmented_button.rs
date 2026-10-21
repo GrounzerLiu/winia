@@ -651,7 +651,7 @@ impl SegmentedButton {
                         let p = if crossfade {
                             1.0
                         } else if shown {
-                            layer.get().clamp(0.0, 1.0)
+                            layer.peek().clamp(0.0, 1.0)
                         } else {
                             0.0
                         };

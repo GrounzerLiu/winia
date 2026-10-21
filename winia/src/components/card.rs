@@ -447,7 +447,7 @@ impl Card {
         // 渲染期求值不触发重组；对标 Compose 层阴影语义；形状跟随 Card shape）
         if let Some(anim) = elevation_anim {
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
-                shadow_elevation: anim.get(),
+                shadow_elevation: anim.peek(),
                 shadow_shape: Some(shape),
                 ..Default::default()
             });

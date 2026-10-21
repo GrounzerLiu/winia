@@ -1843,8 +1843,8 @@ fn draw_ripple(
         // graphics_layer 变换都已作用在画布上，波纹视觉位置自动跟随节点
         // （按下后滚动/变换动画中不脱离按钮）。
         for layer in source.ripple_layers() {
-            let progress = layer.progress.get();
-            let opacity = layer.opacity.get();
+            let progress = layer.progress.peek();
+            let opacity = layer.opacity.peek();
             // Foreground radius = the background layer's diameter x progress, i.e. the foreground grows until
             // it fills the background circle; the clip above then holds it there. With a derived halo that
             // diameter is the node's diagonal (the original behaviour), with a named 40 dp halo it is 40 dp.

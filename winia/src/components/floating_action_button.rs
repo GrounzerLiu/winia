@@ -427,7 +427,7 @@ impl FloatingActionButton {
             .background(container, shape);
         if let Some(anim) = elevation_anim {
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
-                shadow_elevation: anim.get(),
+                shadow_elevation: anim.peek(),
                 shadow_shape: Some(shape),
                 ..Default::default()
             });
@@ -1464,7 +1464,7 @@ impl ExtendedFloatingActionButton {
         let mut modifier = Modifier::new().background(container, shape);
         if let Some(anim) = elevation_anim {
             modifier = modifier.graphics_layer(move || crate::graphics::GraphicsLayerParams {
-                shadow_elevation: anim.get(),
+                shadow_elevation: anim.peek(),
                 shadow_shape: Some(shape),
                 ..Default::default()
             });

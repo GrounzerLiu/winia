@@ -275,8 +275,8 @@ fn radio_button_impl(
                             .size(RADIO_DOT_SIZE - RADIO_STROKE_WIDTH, RADIO_DOT_SIZE - RADIO_STROKE_WIDTH)
                             .background(move || c.peek(), Shape::Circle)
                             .graphics_layer(move || GraphicsLayerParams {
-                                scale_x: scale.get(),
-                                scale_y: scale.get(),
+                                scale_x: scale.peek(),
+                                scale_y: scale.peek(),
                                 ..Default::default()
                             }),
                     );

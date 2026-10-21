@@ -91,10 +91,10 @@ fn graphics_layer_ui(ctx: &mut ComposeCtx) {
                         .graphics_layer({
                             clone!(rx, ry, cam, elev);
                             move || GraphicsLayerParams {
-                                rotation_x: rx.get(),
-                                rotation_y: ry.get(),
-                                camera_distance: cam.get(),
-                                shadow_elevation: elev.get(),
+                                rotation_x: rx.peek(),
+                                rotation_y: ry.peek(),
+                                camera_distance: cam.peek(),
+                                shadow_elevation: elev.peek(),
                                 shadow_shape: Some(Shape::rounded(14.0)),
                                 ..Default::default()
                             }

@@ -416,8 +416,8 @@ fn checkbox_impl(
                         .size(CHECKBOX_SIZE)
                         .tint(check_color)
                         .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
-                            scale_x: scale.get(),
-                            scale_y: scale.get(),
+                            scale_x: scale.peek(),
+                            scale_y: scale.peek(),
                             ..Default::default()
                         }))
                         .build(ctx);
@@ -427,8 +427,8 @@ fn checkbox_impl(
                         .size(CHECKBOX_SIZE)
                         .tint(check_color)
                         .modifier(Modifier::new().graphics_layer(move || GraphicsLayerParams {
-                            scale_x: scale.get(),
-                            scale_y: scale.get(),
+                            scale_x: scale.peek(),
+                            scale_y: scale.peek(),
                             ..Default::default()
                         }))
                         .build(ctx);

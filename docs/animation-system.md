@@ -124,6 +124,12 @@ value is read — the same `State<f32>` can drive any of the three.
 | **Layout** — size, padding, offset, min/max | `size`/`width`/`height` take `impl Into<SizeValue>`; `offset`/`padding`/`min`/`max` take `impl Into<Dimension>` — either accepts `State<f32>`, `Animating<f32>`, `DerivedValue<f32>` or a closure | the node is measured again (its subtree with it) | medium |
 | **Paint** — alpha, scale, translation, colour, border width | `graphics_layer(closure)` / `background(closure)` / a `Dimension` on `border`, all read at draw time (`peek()` for a closure) | the node is painted again; nothing is measured or composed | lowest |
 
+Every read in the paint row uses `peek()`. Paint runs with the dependency tracker off
+(`DEP_MODE::None`), so `get()` would do the same thing today — and would attach the dependency to
+whatever slot is active the moment a paint pass ran inside a compose/layout transaction (a snapshot,
+a preview). The composition row is the opposite: there `get()` IS the dependency that drives the
+recomposition, and the layout row's `Dimension` read registers the layout dependency.
+
 The middle row is what `Dimension::Dynamic` is FOR. A layout length is a `Dimension`, and its
 `Dynamic` form holds a closure that runs **during measure**; a `State::get()` there registers a
 LAYOUT dependency on the node being measured, so a change marks that node layout-dirty and measures
