@@ -1,31 +1,35 @@
-//! 手势状态机——对标 Compose `detectTapGestures` / `detectDragGestures`。
+//! Gesture state machine — mirrors Compose `detectTapGestures` / `detectDragGestures`.
 //!
-//! 纯逻辑（不依赖 winit/skia）：app.rs 把 pointer down/move/up 事件喂进来，
-//! 状态机输出 `GestureAction`（tap / double-tap / long-press / drag 系列），
-//! 由 app.rs 执行对应的 Modifier 回调。
+//! Pure logic (no winit/skia dependency): app.rs feeds pointer down/move/up events in, the state
+//! machine outputs a `GestureAction` (tap / double-tap / long-press / drag family), and app.rs runs
+//! the matching Modifier callback.
 //!
-//! 语义（对齐 Compose）：
-//! - **touch slop**：按下后移动超过阈值才判定为拖拽（tap 取消）
-//! - **双击**：两次 tap 间隔 < 300ms 且位置差 < 50px → double-tap
-//! - **延迟 tap**（Compose 语义）：节点注册 onDoubleTap 时，onTap 延迟到双击
-//!   窗口结束（300ms）再触发；窗口内第二次按下同节点 → 取消第一次 tap（只发
-//!   DoubleTap）；超时或按下其他节点 → 补发 Tap。`PendingTap` 承载该状态。
-//! - **长按**：down 持续到 500ms 且未超过 slop → 在**到点当下**触发（对齐 Compose
-//!   `detectTapGestures`：`onLongPress` 在按住期间到达，不等抬手）。由事件循环轮询
-//!   `poll_long_press` 驱动，`WaitUntil` 保证 idle 时也会在那个时刻醒来；抬手只是
-//!   结束手势，不会再发一次长按，也不再发 tap。
-//! - **drag capture**：drag 开始后事件跟随手势节点（指针移出组件仍接收）
-//! - 拖拽增量 delta = 当前位置 - 上次位置
+//! Semantics (aligned with Compose):
+//! - **touch slop**: after the press, only movement past the threshold counts as a drag (and the
+//!   tap is cancelled)
+//! - **double tap**: two taps less than 300ms apart and less than 50px apart → double-tap
+//! - **deferred tap** (Compose semantics): when a node registers onDoubleTap, onTap is delayed
+//!   until the double-tap window (300ms) closes; a second press on the same node inside the window
+//!   cancels the first tap (only DoubleTap is sent); on timeout, or on a press of another node,
+//!   the Tap is sent late. `PendingTap` carries that state.
+//! - **long press**: a down held for 500ms without passing the slop fires **at its deadline**
+//!   (matching Compose `detectTapGestures`: `onLongPress` arrives during the press, not on
+//!   release). The event loop drives it by polling `poll_long_press`, and `WaitUntil` makes it wake
+//!   at that moment even when idle; releasing only ends the gesture — it sends neither a second
+//!   long press nor a tap.
+//! - **drag capture**: once a drag starts, events follow the gesture's node (they keep arriving
+//!   even when the pointer leaves the component)
+//! - drag delta = current position - previous position
 
 use std::time::Instant;
 
-/// 触摸滑动阈值（逻辑像素）——超过即判定为拖拽/取消 tap
+/// Touch slop threshold (logical pixels) — past it the gesture counts as a drag and the tap is cancelled.
 pub(crate) const TOUCH_SLOP: f32 = 8.0;
-/// 双击时间窗（毫秒）
+/// Double-tap time window (milliseconds).
 pub(crate) const DOUBLE_TAP_TIMEOUT_MS: u128 = 300;
-/// 双击位置容差（逻辑像素）
+/// Double-tap position tolerance (logical pixels).
 pub(crate) const DOUBLE_TAP_SLOP: f32 = 50.0;
-/// 长按判定时长（毫秒）
+/// Long-press duration (milliseconds).
 pub(crate) const LONG_PRESS_TIMEOUT_MS: u128 = 500;
 /// The same timeout as a `Duration`, which is what the deadline arithmetic wants.
 pub(crate) const LONG_PRESS_TIMEOUT: std::time::Duration =
@@ -61,49 +65,50 @@ impl ScrollAxis {
     }
 }
 
-/// 手势状态机输出动作
+/// The action a gesture state machine outputs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum GestureAction {
-    /// 按下（down 立即触发）
+    /// Press (fires immediately on down).
     Press((f32, f32)),
-    /// 点按（up 且未移动超过 slop 且时长 < 长按阈值）
+    /// Tap (up, without moving past the slop and before the long-press threshold).
     Tap((f32, f32)),
-    /// 双击（第二次 tap 命中时间/位置窗）
+    /// Double tap (the second tap landed inside the time/position window).
     DoubleTap((f32, f32)),
-    /// 长按（down 持续超阈值且未移动）
+    /// Long press (down held past the threshold without moving).
     LongPress((f32, f32)),
-    /// 拖拽开始（首次超过 slop）
+    /// Drag start (the first move past the slop).
     DragStart((f32, f32)),
-    /// 拖拽移动（当前位置, 增量）
+    /// Drag move (current position, delta).
     DragMove((f32, f32), (f32, f32)),
-    /// 拖拽结束（up）
+    /// Drag end (up).
     DragEnd,
-    /// 拖拽取消（cancel——up 前被系统打断）
+    /// Drag cancelled (cancel — the system interrupted before up).
     #[allow(dead_code)] // reserved: the winit side does not deliver the cancel event yet
     DragCancel,
-    /// 无动作（事件被消费但不产生回调）
+    /// No action (the event was consumed but produces no callback).
     None,
 }
 
-/// 手势跟踪状态——每轮 down 创建，up/cancel 销毁
+/// Gesture tracking state — created on every down, destroyed on up/cancel.
 pub(crate) struct GestureTracker {
-    /// 手势节点 id（回调路由目标）。跟踪器构造时由被跟踪的节点给出，是它代表谁的身份；
-    /// 目前没有读者，保留以免丢掉调用方已经交出来的信息。
+    /// The gesture node's id (the routing target for callbacks). The tracked node supplies it at
+    /// construction, so this is who the tracker represents; nothing reads it yet, but keeping it
+    /// avoids discarding information the caller already handed over.
     #[allow(dead_code)]
     pub(crate) node_id: u64,
-    /// 按下位置
+    /// Press position.
     down_pos: (f32, f32),
-    /// 上一次 move 位置
+    /// Previous move position.
     last_pos: (f32, f32),
-    /// 按下时刻
+    /// Press time.
     down_time: Instant,
-    /// 是否超过 touch slop（tap 已取消）
+    /// Whether the touch slop has been passed (the tap is cancelled).
     slop_passed: bool,
-    /// 拖拽是否已开始（on_drag_start 只触发一次）
+    /// Whether the drag has started (on_drag_start fires only once).
     dragging: bool,
-    /// 该节点是否声明了 drag 回调（决定 slop 后走 drag 还是静默取消 tap）
+    /// Whether this node declared a drag callback (decides whether crossing the slop starts a drag or silently cancels the tap).
     has_drag: bool,
-    /// 双击状态：上一次 tap 的时刻/位置
+    /// Double-tap state: time/position of the previous tap.
     last_tap_time: Option<Instant>,
     last_tap_pos: Option<(f32, f32)>,
     /// Has this gesture's long press already fired? It fires AT the deadline now, so the release must
@@ -111,22 +116,23 @@ pub(crate) struct GestureTracker {
     long_press_fired: bool,
 }
 
-/// 延迟 tap（节点注册 `on_double_tap` 时——Compose `detectTapGestures` 语义）。
-/// on_up 判定为 Tap 后不立即触发，挂到 PerWindow；双击窗口内第二次 down
-/// 命中同节点 → 取消（不补发）；超时 → 补发；其他节点按下不影响（保留到
-/// deadline 由事件循环补发——Compose 各 pointerInput 的延迟 onTap 相互独立）。
+/// A deferred tap (when the node registered `on_double_tap` — Compose `detectTapGestures` semantics).
+/// Once on_up decides Tap it is not fired immediately but parked on the PerWindow; a second down on
+/// the same node inside the double-tap window cancels it (nothing is sent late); a timeout sends it
+/// late; a press on another node does not affect it (it stays until the deadline and the event loop
+/// sends it — Compose's deferred onTaps for separate pointerInputs are independent of each other).
 #[derive(Clone)]
 pub(crate) struct PendingTap {
-    /// 手势节点 slot_key（跨重组稳定——补发时按当前布局树解析节点）
+    /// Gesture node slot_key (stable across recomposition — the node is resolved from the current layout tree when the tap is sent late).
     pub(crate) slot_key: u64,
-    /// 手势节点 id（同节点判定——窗口内第二次 down 是否取消第一次 tap）
+    /// Gesture node id (same-node check — whether a second down inside the window cancels the first tap).
     pub(crate) node_id: u64,
-    /// 第一次 tap 的场景坐标（补发时换算组件本地坐标）
+    /// Scene coordinates of the first tap (converted to component-local coordinates when sent late).
     pub(crate) pos: (f32, f32),
     /// Arena the tap was recorded in: `None` = the main tree, `Some(overlay id)` = that popup's
     /// layer. The tap has to be re-fired there, and `pos` is layer-local for a popup.
     pub(crate) overlay_id: Option<u64>,
-    /// 补发截止时刻（now + DOUBLE_TAP_TIMEOUT_MS）
+    /// The deadline to send it by (now + DOUBLE_TAP_TIMEOUT_MS).
     pub(crate) deadline: std::time::Instant,
 }
 
@@ -143,18 +149,18 @@ impl PendingTap {
     }
 }
 
-/// 新 down 对单个 pending tap 的处置（纯逻辑——app.rs 消费，便于单测）
+/// How a new down disposes of a single pending tap (pure logic — consumed by app.rs, easy to unit-test).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PendingTapAction {
-    /// 已超时：补发第一次 tap
+    /// Already timed out: send the first tap late.
     Fire,
-    /// 双击窗口内同节点第二次按下：取消（等 up 判定双击，只发 DoubleTap）
+    /// A second press on the same node inside the double-tap window: cancel (wait for up to decide the double tap, sending only DoubleTap).
     Cancel,
-    /// 其他节点按下：保留（等 deadline 补发——不提前也不取消）
+    /// A press on another node: keep (wait for the deadline to send it late — neither early nor cancelled).
     Keep,
 }
 
-/// 单个 pending tap 在"新的 down 到来"时的处置规则。
+/// How a single pending tap is disposed of when a "new down arrives".
 pub(crate) fn pending_tap_on_down(
     t: &PendingTap,
     now: std::time::Instant,
@@ -209,7 +215,7 @@ impl GestureTracker {
         Some(GestureAction::LongPress(self.down_pos))
     }
 
-    /// 指针移动——返回动作（drag 系列或 None）。
+    /// Pointer moved — returns an action (the drag family, or None).
     ///
     /// `allow_drag` gates *starting* the drag only: an inner component whose axis is still being
     /// arbitrated (see `ScrollAxis`) cancels the tap as usual once the touch slop is crossed, but
@@ -238,7 +244,7 @@ impl GestureTracker {
         GestureAction::None
     }
 
-    /// 指针释放——返回动作（tap 系列 / drag-end / None）
+    /// Pointer released — returns an action (tap family / drag-end / None).
     pub(crate) fn on_up(&mut self) -> GestureAction {
         if self.dragging {
             return GestureAction::DragEnd;
@@ -249,10 +255,10 @@ impl GestureTracker {
             return GestureAction::None;
         }
         if self.slop_passed {
-            // 移动过但未拖拽（无 drag 回调）——静默
+            // Moved, but never dragged (no drag callback) — silently.
             return GestureAction::None;
         }
-        // 未移动：长按 or tap or double-tap
+        // Did not move: long press, tap, or double tap.
         let held = self.down_time.elapsed().as_millis();
         if held >= LONG_PRESS_TIMEOUT_MS {
             // The deadline passed but the sweep has not run yet (the loop was busy, or the release and
@@ -261,27 +267,28 @@ impl GestureTracker {
             self.long_press_fired = true;
             return GestureAction::LongPress(self.down_pos);
         }
-        // 双击检测：上次 tap 在时间窗内且位置接近
+        // Double-tap detection: the previous tap was inside the time window and close enough.
         if let (Some(lt), Some(lp)) = (self.last_tap_time, self.last_tap_pos) {
             let dt = Instant::now().duration_since(lt).as_millis();
             let dx = self.down_pos.0 - lp.0;
             let dy = self.down_pos.1 - lp.1;
             if dt < DOUBLE_TAP_TIMEOUT_MS && dx * dx + dy * dy <= DOUBLE_TAP_SLOP * DOUBLE_TAP_SLOP {
-                // 双击命中——清空记录（第三次 tap 重新计数）
+                // Double tap hit — clear the record (a third tap starts counting afresh).
                 self.last_tap_time = None;
                 self.last_tap_pos = None;
                 return GestureAction::DoubleTap(self.down_pos);
             }
         }
-        // 记录本次 tap（供下一次双击判定）
+        // Record this tap (for the next double-tap decision).
         self.last_tap_time = Some(Instant::now());
         self.last_tap_pos = Some(self.down_pos);
         GestureAction::Tap(self.down_pos)
     }
 
-    /// 取消（系统打断）——返回 drag cancel（拖拽中）或 None。
-    /// ⚠ 当前 winit 未接入 PointerCanceled/TouchCanceled 事件——此分支为
-    /// 预留 API（未来窗口失焦/触控取消时驱动）；状态机逻辑已单测覆盖。
+    /// Cancel (the system interrupted) — returns drag cancel (while dragging) or None.
+    /// NOTE: winit does not deliver PointerCanceled/TouchCanceled events yet — this branch is a
+    /// reserved API (for a future window losing focus or a touch being cancelled); the state machine
+    /// logic is already covered by unit tests.
     #[allow(dead_code)] // reserved: see the doc comment above; the state machine is unit-tested
     pub(crate) fn on_cancel(&mut self) -> GestureAction {
         if self.dragging {
@@ -291,7 +298,7 @@ impl GestureTracker {
         }
     }
 
-    /// 供下一次手势创建时取回双击上下文
+    /// Hand back the double-tap context to the next gesture created.
     pub(crate) fn tap_context(&self) -> Option<(Instant, (f32, f32))> {
         self.last_tap_time.zip(self.last_tap_pos)
     }
@@ -320,8 +327,6 @@ impl GestureTracker {
     }
 }
 
-// ═══════════════ 测试 ═══════════════
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,28 +343,28 @@ mod tests {
 
     #[test]
     fn test_tap_moved_within_slop() {
-        // 移动 < slop 仍算 tap
+        // Moving less than the slop still counts as a tap.
         let mut t = tracker(false);
         assert_eq!(t.on_move((14.0, 12.0), true), GestureAction::None);
-        assert_eq!(t.on_up(), GestureAction::Tap((10.0, 10.0)), "slop 内移动仍是 tap");
+        assert_eq!(t.on_up(), GestureAction::Tap((10.0, 10.0)), "moving inside the slop is still a tap");
     }
 
     #[test]
     fn test_tap_cancelled_by_slop() {
-        // 移动超过 slop 且无 drag 回调 → tap 取消
+        // Moving past the slop without a drag callback → the tap is cancelled.
         let mut t = tracker(false);
         assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::None);
-        assert_eq!(t.on_up(), GestureAction::None, "超过 slop 的 tap 应取消");
+        assert_eq!(t.on_up(), GestureAction::None, "a tap that moves past the slop is cancelled");
     }
 
     #[test]
     fn test_drag_sequence() {
         let mut t = tracker(true);
-        // 未超 slop：无动作
+        // Below the slop: no action.
         assert_eq!(t.on_move((15.0, 10.0), true), GestureAction::None);
-        // 超 slop：DragStart（首次）
+        // Past the slop: DragStart (first time).
         assert_eq!(t.on_move((30.0, 10.0), true), GestureAction::DragStart((30.0, 10.0)));
-        // 后续：DragMove(pos, delta)
+        // Afterwards: DragMove(pos, delta).
         assert_eq!(
             t.on_move((50.0, 20.0), true),
             GestureAction::DragMove((50.0, 20.0), (20.0, 10.0))
@@ -372,7 +377,7 @@ mod tests {
         let mut t = tracker(true);
         t.on_move((30.0, 10.0), true); // slop
         t.on_move((40.0, 10.0), true);
-        // 第二次大移动仍是 DragMove（start 只一次）
+        // The second large move is still a DragMove (start fires only once).
         assert_eq!(
             t.on_move((60.0, 10.0), true),
             GestureAction::DragMove((60.0, 10.0), (20.0, 0.0))
@@ -381,10 +386,10 @@ mod tests {
 
     #[test]
     fn test_double_tap() {
-        // 第一次 tap
+        // First tap.
         let mut t1 = tracker(false);
         assert_eq!(t1.on_up(), GestureAction::Tap((10.0, 10.0)));
-        // 第二次（携带上次 tap 上下文）
+        // Second tap (carrying the previous tap's context).
         let mut t2 = GestureTracker::new(1, (12.0, 11.0), false, t1.tap_context());
         assert_eq!(t2.on_up(), GestureAction::DoubleTap((12.0, 11.0)));
     }
@@ -396,23 +401,23 @@ mod tests {
         assert_eq!(t.node_id, 7);
         assert_eq!(t.pos, (3.0, 4.0));
         assert_eq!(t.overlay_id, None, "a main-tree tap carries no overlay id");
-        assert!(t.deadline > std::time::Instant::now(), "deadline 应在双击窗口之后");
+        assert!(t.deadline > std::time::Instant::now(), "the deadline lies beyond the double-tap window");
     }
 
     #[test]
     fn test_pending_tap_on_down() {
         use std::time::{Duration, Instant};
         let now = Instant::now();
-        // 已超时 → 补发
+        // Already timed out → send it late.
         let expired = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now - Duration::from_millis(1) };
         assert_eq!(pending_tap_on_down(&expired, now, 7), PendingTapAction::Fire);
-        assert_eq!(pending_tap_on_down(&expired, now, 99), PendingTapAction::Fire, "超时与其他节点无关");
-        // 窗口内同节点第二次按下 → 取消
+        assert_eq!(pending_tap_on_down(&expired, now, 99), PendingTapAction::Fire, "a timeout does not depend on which node is pressed");
+        // A second press on the same node inside the window → cancel.
         let live = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: Some(3), deadline: now + Duration::from_millis(100) };
         assert_eq!(pending_tap_on_down(&live, now, 7), PendingTapAction::Cancel);
-        // 窗口内其他节点按下 → 保留（不提前补发、不取消）
+        // A press on another node inside the window → keep (neither sent early nor cancelled).
         assert_eq!(pending_tap_on_down(&live, now, 99), PendingTapAction::Keep);
-        // 边界：deadline == now → 视为超时补发
+        // Boundary: deadline == now → treated as timed out and sent late.
         let boundary = PendingTap { slot_key: 1, node_id: 7, pos: (0.0, 0.0), overlay_id: None, deadline: now };
         assert_eq!(pending_tap_on_down(&boundary, now, 7), PendingTapAction::Fire);
     }
@@ -421,9 +426,9 @@ mod tests {
     fn test_double_tap_too_far() {
         let mut t1 = tracker(false);
         t1.on_up();
-        // 位置差 > 50：不算双击
+        // Position difference above 50: not a double tap.
         let mut t2 = GestureTracker::new(1, (80.0, 10.0), false, t1.tap_context());
-        assert_eq!(t2.on_up(), GestureAction::Tap((80.0, 10.0)), "位置过远不算双击");
+        assert_eq!(t2.on_up(), GestureAction::Tap((80.0, 10.0)), "too far apart to be a double tap");
     }
 
     #[test]

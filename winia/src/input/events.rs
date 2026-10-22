@@ -22,7 +22,7 @@ pub enum KbEventType {
     KeyUp,
 }
 
-/// 指针按钮
+/// A pointer button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerButton {
     Primary,
@@ -58,7 +58,7 @@ impl PointerKind {
     }
 }
 
-/// 指针事件类型
+/// The kind of pointer event.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PointerEventType {
     Down,
@@ -67,7 +67,7 @@ pub enum PointerEventType {
     Scroll { delta: f32, is_vertical: bool },
 }
 
-/// 指针类型（对齐 Compose PointerType）
+/// The pointer kind (Compose's `PointerType`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PointerKind {
     Mouse { button: PointerButton },
@@ -75,7 +75,7 @@ pub enum PointerKind {
     Pen { kind: PenKind, pressure: Option<f32> },
 }
 
-/// 触控笔类型
+/// The stylus kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PenKind {
     Stylus,
@@ -83,7 +83,7 @@ pub enum PenKind {
     Unknown,
 }
 
-/// 指针事件
+/// A pointer event.
 #[derive(Debug, Clone)]
 pub struct PointerEvent {
     pub event_type: PointerEventType,

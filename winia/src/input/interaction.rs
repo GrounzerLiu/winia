@@ -1,48 +1,55 @@
-//! InteractionSource / ComponentState——对标 Compose foundation `interaction`。
+//! InteractionSource / ComponentState — Compose foundation's `interaction`.
 //!
-//! Compose 的实现是 `MutableSharedFlow<Interaction>` 事件流 + `collectIsPressedAsState`
-//! 等扩展函数维护"活动交互列表"再导出布尔状态（官方源码 foundation 1.11.4：
-//! `InteractionSource.kt` / `PressInteraction.kt` 等）。Winia 为单指针同步模型，
-//! 用四个 `State<bool>` 等价表达（pressed/focused/hovered/dragged）：
-//! - 读取（`is_*` / `state()`）走 `State::get()` → 注册组合依赖，状态变化自动重组消费者；
-//! - 发射（`emit_*`）走 `State::set()` → PartialEq 去重 + notify + 唤醒事件循环。
+//! Compose implements it as a `MutableSharedFlow<Interaction>` event stream plus extensions such
+//! as `collectIsPressedAsState`, which maintain an "active interactions" list and expose boolean
+//! state derived from it (upstream foundation 1.11.4: `InteractionSource.kt`,
+//! `PressInteraction.kt`, and so on). winia has a single-pointer synchronous model, so four
+//! `State<bool>` values express the same thing (pressed/focused/hovered/dragged):
+//! - Reads (`is_*` / `state()`) go through `State::get()` → they register a composition dependency,
+//!   so a state change recomposes the consumer;
+//! - Emits (`emit_*`) go through `State::set()` → PartialEq dedup + notify + wake the event loop.
 //!
-//! 差异（有意简化，文档化）：Compose 的 Press/Release/Cancel 带交互实例身份以支持
-//! 多指/多交互并存；Winia 每窗口单活动指针，布尔标志足够，多指支持留待指针管道升级。
+//! The difference (a deliberate simplification, documented here): Compose's Press/Release/Cancel
+//! carry an interaction instance identity so several pointers or interactions can coexist; winia
+//! has one active pointer per window, where boolean flags suffice. Multi-pointer support waits for
+//! the pointer pipeline upgrade.
 
 use crate::runtime::state::State;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-/// 水波纹扩散时长——参考旧版 ripple.rs（Tween 500ms）
+/// Ripple expansion duration — from the old ripple.rs (a 500ms Tween).
 pub(crate) const RIPPLE_EXPAND_MS: u64 = 500;
-/// 释放后淡出时长——参考旧版 ripple.rs（Tween 300ms）
+/// Fade-out duration after release — from the old ripple.rs (a 300ms Tween).
 pub(crate) const RIPPLE_FADE_MS: u64 = 300;
-/// 波纹不透明度——参考旧版 ripple.rs（ripple_opacity 0.1）
+/// Ripple opacity — from the old ripple.rs (`ripple_opacity` 0.1).
 pub(crate) const RIPPLE_OPACITY: f32 = 0.10;
-/// hover/focus 状态层透明度（参考旧版 background_opacity 0.08）
+/// State-layer opacity for hover/focus (from the old `background_opacity` 0.08).
 pub(crate) const STATE_LAYER_HOVER: f32 = 0.08;
 pub(crate) const STATE_LAYER_FOCUS: f32 = 0.12;
-/// 状态层过渡时长（旧版 hover 动画 500ms）
+/// State-layer transition duration (the old hover animation, 500ms).
 pub(crate) const STATE_LAYER_TRANSITION_MS: u64 = 500;
-/// 焦点环淡入/淡出时长（M3 focus indicator 约 150-200ms）
+/// Focus-ring fade-in/fade-out duration (M3's focus indicator, about 150-200ms).
 pub(crate) const FOCUS_INDICATOR_TRANSITION_MS: u64 = 180;
 
-/// 单个波纹层（参考旧版 D:\winia ripple.rs 的分层设计）：
-/// 每次按下产生一层，中心 = 按压点（节点本地坐标——相对节点左上角，
-/// 对标 Compose pressPosition），扩散进度 0→1；
-/// 释放后标记 fading，透明度淡出到 0 后自动从列表移除（动画 on_finish）。
+/// One ripple layer (following the layered design of the old `D:\winia ripple.rs`): each press
+/// creates a layer centred on the press point (node-local coordinates, relative to the node's
+/// top-left — Compose's `pressPosition`), with expansion progress 0→1. After release the layer is
+/// marked `fading`, and once its opacity has faded to 0 the animation's `on_finish` removes it from
+/// the list.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RippleLayer {
-    /// 层 id（按下递增——多指预留；当前单指针模型）
+    /// Layer id (incremented per press — reserved for multi-pointer; the model is single-pointer
+    /// today).
     pub(crate) id: u64,
-    /// 按压点（节点本地坐标——渲染时加布局原点即画布坐标）
+    /// The press point (node-local coordinates; drawing adds the layout origin to get canvas
+    /// coordinates).
     pub(crate) center: (f32, f32),
-    /// 扩散进度 0..1（500ms Tween 驱动）
+    /// Expansion progress, 0..1 (driven by a 500ms Tween).
     pub(crate) progress: crate::runtime::state::State<f32>,
-    /// 当前透明度（按下 0.10；释放后 300ms 淡出到 0）
+    /// Current opacity (0.10 on press; fades to 0 over 300ms after release).
     pub(crate) opacity: crate::runtime::state::State<f32>,
-    /// 释放后淡出中（防重复触发淡出）
+    /// Fading after release (guards against starting the fade twice).
     pub(crate) fading: bool,
 }
 
@@ -58,8 +65,9 @@ impl RippleLayer {
     }
 }
 
-/// 组件交互状态快照（对标 material3 状态组合：enabled/pressed/hovered/focused/dragged）。
-/// 由 `MutableInteractionSource::state(enabled)` 一次性读取（注册依赖）。
+/// A snapshot of a component's interaction state (material3's state combination:
+/// enabled/pressed/hovered/focused/dragged). Read in one go from
+/// `MutableInteractionSource::state(enabled)`, which registers the dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ComponentState {
     pub enabled: bool,
@@ -70,17 +78,18 @@ pub struct ComponentState {
 }
 
 impl ComponentState {
-    /// 禁用态（enabled=false——组件不响应交互且视觉降级）
+    /// The disabled state (enabled=false — the component ignores interactions and is drawn
+    /// de-emphasised).
     pub const fn disabled() -> Self {
         Self { enabled: false, pressed: false, hovered: false, focused: false, dragged: false }
     }
 
-    /// 启用且无任何活动交互
+    /// Enabled with no interaction active.
     pub const fn idle() -> Self {
         Self { enabled: true, pressed: false, hovered: false, focused: false, dragged: false }
     }
 
-    /// 是否处于可交互状态（enabled 且未禁用视觉）
+    /// Whether the component is interactive (enabled and not visually disabled).
     pub fn is_interactive(&self) -> bool {
         self.enabled
     }
@@ -111,33 +120,37 @@ impl ComponentState {
     }
 }
 
-/// 可变的交互源——组件（Button/TextField/clickable/focusable/hoverable）发射
-/// 交互事件，消费者读取派生状态。对标 Compose `MutableInteractionSource()`。
+/// A mutable interaction source — components (Button/TextField/clickable/focusable/hoverable)
+/// emit interaction events and consumers read the derived state. Compose's
+/// `MutableInteractionSource()`.
 ///
-/// 必须通过 `ctx.remember(|| MutableInteractionSource::new())` 创建（与普通 State
-/// 相同：创建期注册到 Composer 队列，`set()` 才能推送到重组）。
+/// It must be created through `ctx.remember(|| MutableInteractionSource::new())` (like any other
+/// State: it registers with the Composer queue when created, which is what lets `set()` push a
+/// recomposition).
 #[derive(Clone, Debug)]
 pub struct MutableInteractionSource {
     pressed: State<bool>,
     hovered: State<bool>,
     focused: State<bool>,
     dragged: State<bool>,
-    /// 水波纹层（每次按下新增一层——Ripple 渲染读取）
+    /// Ripple layers (one added per press; the Ripple renderer reads them).
     ripple_layers: Arc<Mutex<Vec<RippleLayer>>>,
-    /// 层 id 计数器
+    /// Layer id counter.
     next_layer_id: Arc<std::sync::atomic::AtomicU64>,
-    /// hover/focus 状态层透明度（动画驱动——避免状态切换生硬跳变）
+    /// State-layer opacity for hover/focus (animation-driven, so a state change does not jump).
     hover_opacity: crate::runtime::state::State<f32>,
     focus_opacity: crate::runtime::state::State<f32>,
-    /// 焦点环透明度（聚焦 0→1 淡入、失焦 1→0 淡出——独立于状态层）
+    /// Focus-ring opacity (0→1 on focus, 1→0 on blur — independent of the state layer).
     focus_indicator_alpha: crate::runtime::state::State<f32>,
 }
 
-/// 身份比较：同一交互源实例（跨 clone 稳定）——供 Modifier 参数相等判断
-/// （与 State 的"id 或值相等"不同：两个不同源即使标志相同也不算相等）。
+/// Identity comparison: the same interaction source instance (stable across clones) — used for
+/// Modifier parameter equality (unlike a State's "same id or same value": two different sources
+/// are not equal even when their flags match).
 impl PartialEq for MutableInteractionSource {
     fn eq(&self, other: &Self) -> bool {
-        // 身份比较走 StateId（u64 ——与 public u32 id 同源唯一，State Phase4 统一）
+        // Identity goes through StateId (u64 — unique from the same source as the public u32 id,
+        // unified by State Phase4).
         self.pressed.state_id() == other.pressed.state_id()
             && self.hovered.state_id() == other.hovered.state_id()
             && self.focused.state_id() == other.focused.state_id()
@@ -168,17 +181,17 @@ impl MutableInteractionSource {
         }
     }
 
-    // ── 发射（对标 Compose emit/tryEmit）──
+    // Emission (Compose's emit/tryEmit).
 
-    /// 按下（PressInteraction.Press 等价——位置取 (0,0)）
+    /// Press (the equivalent of `PressInteraction.Press` — position (0, 0)).
     pub fn emit_press(&self) {
         self.emit_press_at((0.0, 0.0));
     }
 
-    /// 按下并记录位置（对标 Compose `PressInteraction.Press(pressPosition)`，
-    /// `pos` 为**节点本地坐标**——
-    /// 新建一层水波纹从按压点扩散；进度由动画系统驱动（500ms Tween——
-    /// 参考旧版 ripple.rs），完成自动停止）
+    /// Press and record the position (Compose's `PressInteraction.Press(pressPosition)`; `pos` is
+    /// in **node-local coordinates**). A new ripple layer expands from the press point, its
+    /// progress driven by the animation system (a 500ms Tween, as in the old ripple.rs) and stopping
+    /// on its own when it completes.
     pub fn emit_press_at(&self, pos: (f32, f32)) {
         let id = self.next_layer_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.ripple_layers.lock().push(RippleLayer::new(id, pos));
@@ -194,8 +207,9 @@ impl MutableInteractionSource {
         );
     }
 
-    /// 释放（PressInteraction.Release 等价——含拖拽越界取消）：
-    /// 当前层进入淡出（参考 ripple.rs：释放后 opacity 动画到 0，on_finish 清理）
+    /// Release (the equivalent of `PressInteraction.Release`, including the cancel when a drag
+    /// leaves the slop): the current layers start fading out (as in ripple.rs — opacity animates to
+    /// 0 after release and `on_finish` cleans up).
     pub fn emit_release(&self) {
         let ids: Vec<u64> = {
             let mut layers = self.ripple_layers.lock();
@@ -227,49 +241,51 @@ impl MutableInteractionSource {
         self.pressed.set(false);
     }
 
-    /// 淡出完成回调：从列表移除层
+    /// Fade-out completion callback: remove the layer from the list.
     fn remove_ripple_layer(&self, id: u64) {
         self.ripple_layers.lock().retain(|l| l.id != id);
     }
 
-    /// 是否有未结束的波纹层（事件循环驱动重绘的依据）
+    /// Whether any ripple layer is still running (the event loop uses this to keep redrawing).
     #[allow(dead_code)] // the tests in this file call it
     pub(crate) fn has_active_ripples(&self) -> bool {
         !self.ripple_layers.lock().is_empty()
     }
 
-    /// 波纹层快照（渲染读取——场景坐标中心）
+    /// A snapshot of the ripple layers (read while rendering; centres in scene coordinates).
     pub(crate) fn ripple_layers(&self) -> Vec<RippleLayer> {
         self.ripple_layers.lock().clone()
     }
 
-    /// 获得焦点（FocusInteraction.Focus 等价）
+    /// Gain focus (the equivalent of `FocusInteraction.Focus`).
     pub fn emit_focus(&self) {
         self.focused.set(true);
         self.animate_state_layer(&self.focus_opacity, STATE_LAYER_FOCUS);
         self.animate_focus_indicator(1.0);
     }
 
-    /// 失去焦点（FocusInteraction.Unfocus 等价）
+    /// Lose focus (the equivalent of `FocusInteraction.Unfocus`).
     pub fn emit_unfocus(&self) {
         self.focused.set(false);
         self.animate_state_layer(&self.focus_opacity, 0.0);
         self.animate_focus_indicator(0.0);
     }
 
-    /// 指针悬停进入（HoverInteraction.Enter 等价）——状态层 500ms 淡入
+    /// Pointer hover enter (the equivalent of `HoverInteraction.Enter`) — the state layer fades in
+    /// over 500ms.
     pub fn emit_hover_enter(&self) {
         self.hovered.set(true);
         self.animate_state_layer(&self.hover_opacity, STATE_LAYER_HOVER);
     }
 
-    /// 指针悬停离开（HoverInteraction.Exit 等价）——状态层 500ms 淡出
+    /// Pointer hover exit (the equivalent of `HoverInteraction.Exit`) — the state layer fades out
+    /// over 500ms.
     pub fn emit_hover_exit(&self) {
         self.hovered.set(false);
         self.animate_state_layer(&self.hover_opacity, 0.0);
     }
 
-    /// 状态层透明度动画（hover/focus 过渡平滑——参考旧版 500ms Tween）
+    /// Animate the state layer's opacity (a smooth hover/focus transition — the old 500ms Tween).
     fn animate_state_layer(&self, state: &crate::runtime::state::State<f32>, target: f32) {
         crate::animation::push_animatable(
             state.clone(),
@@ -281,7 +297,7 @@ impl MutableInteractionSource {
         );
     }
 
-    /// 焦点环透明度动画（M3 focus indicator 淡入/淡出）
+    /// Animate the focus ring's opacity (the M3 focus indicator fading in/out).
     fn animate_focus_indicator(&self, target: f32) {
         crate::animation::push_animatable(
             self.focus_indicator_alpha.clone(),
@@ -293,42 +309,43 @@ impl MutableInteractionSource {
         );
     }
 
-    /// hover 状态层当前透明度（渲染读取——动画值）
+    /// The hover state layer's current opacity (read while rendering; an animated value).
     pub(crate) fn hover_opacity_value(&self) -> f32 {
         self.hover_opacity.peek()
     }
 
-    /// focus 状态层当前透明度（渲染读取——动画值）
+    /// The focus state layer's current opacity (read while rendering; an animated value).
     pub(crate) fn focus_opacity_value(&self) -> f32 {
         self.focus_opacity.peek()
     }
 
-    /// 焦点环当前透明度（渲染读取——动画值）
+    /// The focus ring's current opacity (read while rendering; an animated value).
     pub(crate) fn focus_indicator_alpha_value(&self) -> f32 {
         self.focus_indicator_alpha.peek()
     }
 
-    /// 源身份代理（node_key 用——以 pressed State id 为身份代理）。
-    /// 跨 clone 稳定（State::Clone 共享 Arc）。注意：与 `PartialEq` 不等价
-    /// （PartialEq 比 4 个 State id，此处仅取 pressed 作代理——字段私有、
-    /// `new()` 四 id 同生、`clone()` 四 Arc 同行，实践等价；P2-3 明确化）。
-    /// `State::id()` 为过渡保留 u32（满 2^32 回绕实践不可达），未来随
-    /// `state_id()` u64 迁移。
+    /// Source identity proxy (for node_key — the pressed State's id stands in for the identity).
+    /// Stable across clones (State::Clone shares the Arc). Note that it is not equivalent to
+    /// `PartialEq` (which compares all four State ids, while this takes `pressed` as the proxy —
+    /// the fields are private, `new()` creates all four ids together and `clone()` shares all four
+    /// Arcs, so in practice they agree; spelled out by P2-3). `State::id()` keeps a u32 for the
+    /// transition (wrapping past 2^32 is unreachable in practice) and will move to the u64
+    /// `state_id()` later.
     pub fn source_id(&self) -> u32 {
         self.pressed.id()
     }
 
-    /// 拖拽开始（DragInteraction.Start 等价）
+    /// Drag start (the equivalent of `DragInteraction.Start`).
     pub fn emit_drag_start(&self) {
         self.dragged.set(true);
     }
 
-    /// 拖拽结束/取消（DragInteraction.Stop/Cancel 等价）
+    /// Drag end or cancel (the equivalent of `DragInteraction.Stop`/`Cancel`).
     pub fn emit_drag_end(&self) {
         self.dragged.set(false);
     }
 
-    // ── 派生状态读取（注册组合依赖——状态变化自动重组）──
+    // Derived-state reads (they register composition dependencies, so a state change recomposes).
 
     pub fn is_pressed(&self) -> bool {
         self.pressed.get()
@@ -346,17 +363,19 @@ impl MutableInteractionSource {
         self.dragged.get()
     }
 
-    // ── 渲染期读取（peek，不注册依赖——DrawNode::draw/渲染闭包用，P1-4）──
-    // 渲染不在依赖帧内，get 亦注册不上；用 peek 语义诚实、防未来渲染进帧后
-    // 误注册错依赖。build/measure 内仍用 get（需注册）。
+    // Render-time reads (`peek`, no dependency registered — for `DrawNode::draw` and render
+    // closures, P1-4). Rendering does not happen inside a dependency frame, so `get` could not
+    // register anyway; `peek` is the honest semantics and stops a future render-in-frame from
+    // registering the wrong dependency. build/measure still use `get`, which must register.
 
-    /// 渲染期 focused 读取（peek）。
+    /// Render-time focused read (`peek`).
     pub(crate) fn is_focused_value(&self) -> bool {
         self.focused.peek()
     }
 
 
-    /// 一次读取全部状态（与 material3 的 enabled/pressed/hovered/focused 组合一致）
+    /// Read all the state at once (matching material3's enabled/pressed/hovered/focused
+    /// combination).
     pub fn state(&self, enabled: bool) -> ComponentState {
         ComponentState {
             enabled,
@@ -384,7 +403,7 @@ mod tests {
         assert!(s.is_hovered());
         s.emit_release();
         assert!(!s.is_pressed());
-        assert!(s.is_hovered(), "release 不影响 hover");
+        assert!(s.is_hovered(), "release does not affect hover");
         s.emit_hover_exit();
         assert!(!s.is_hovered());
         s.emit_focus();
@@ -399,45 +418,46 @@ mod tests {
 
     #[test]
     fn test_source_emit_triggers_recompose() {
-        // remember 创建的 source：读取注册依赖、发射推送到 composer pending——
-        // 验证"状态变化自动重组消费者"闭环
+        // A source created by `remember`: reads register dependencies and emits push into the
+        // composer's pending set — verifying the "a state change recomposes the consumer" loop.
         let mut composer = Composer::new();
         let mut holder: Option<MutableInteractionSource> = None;
         let mut reads = 0i32;
         composer.compose(|ctx| {
             let src = ctx.remember(|| MutableInteractionSource::new()).get();
-            let _ = src.is_pressed(); // 注册依赖（模拟 Button::build 内读取）
+            let _ = src.is_pressed(); // Registers the dependency (simulating a read in Button::build).
             holder = Some(src.clone());
             reads += 1;
         });
-        let src = holder.expect("compose 应执行一次");
-        src.emit_press(); // 变化 → notify → pending
-        assert!(composer.has_pending_states(), "set 应推送到 composer pending 队列");
+        let src = holder.expect("compose should run once");
+        src.emit_press(); // Change → notify → pending.
+        assert!(composer.has_pending_states(), "set should push into the composer pending queue");
         let before = reads;
         composer.recompose(|ctx| {
             let src = ctx.remember(|| MutableInteractionSource::new()).get();
             let _ = src.is_pressed();
             reads += 1;
         });
-        assert!(reads > before, "读取过 is_pressed 的 slot 应被标记 dirty 并重跑");
+        assert!(reads > before, "the slot that read is_pressed should be marked dirty and re-run");
         assert!(src.is_pressed());
     }
 
     #[test]
     fn test_ripple_layers_press_release() {
         let s = MutableInteractionSource::new();
-        // 未按下：无层
+        // Not pressed: no layers.
         assert!(!s.has_active_ripples());
-        // 按下：产生一层（中心=按压点）
+        // Press: one layer is created, centred on the press point.
         s.emit_press_at((12.0, 34.0));
         assert!(s.is_pressed());
         let layers = s.ripple_layers();
         assert_eq!(layers.len(), 1);
         assert_eq!(layers[0].center, (12.0, 34.0));
-        assert_eq!(layers[0].opacity.get(), RIPPLE_OPACITY, "波纹初始透明度 0.10");
+        assert_eq!(layers[0].opacity.get(), RIPPLE_OPACITY, "ripple starts at opacity 0.10");
         assert!(!layers[0].fading);
         assert!(s.has_active_ripples());
-        // 释放：进入淡出（进度/透明度动画由动画系统驱动——animation 测试覆盖）
+        // Release: fading starts (the progress/opacity animations are driven by the animation
+        // system and covered by the animation tests).
         s.emit_release();
         assert!(!s.is_pressed());
         assert!(s.ripple_layers()[0].fading);
@@ -445,19 +465,20 @@ mod tests {
 
     #[test]
     fn test_ripple_removed_after_fade() {
-        // 淡出动画 on_finish 的清理路径：remove_ripple_layer 按 id 移除
+        // The cleanup path of the fade-out animation's `on_finish`: remove_ripple_layer removes by
+        // id.
         let s = MutableInteractionSource::new();
         s.emit_press_at((1.0, 2.0));
         let id = s.ripple_layers()[0].id;
         s.remove_ripple_layer(id);
-        assert!(!s.has_active_ripples(), "淡出完成后层应被清理");
+        assert!(!s.has_active_ripples(), "the layer should be cleaned up once the fade completes");
     }
 
     #[test]
     fn test_focus_indicator_alpha_api() {
         let s = MutableInteractionSource::new();
-        assert_eq!(s.focus_indicator_alpha_value(), 0.0, "初始无焦点环");
-        s.emit_focus();   // 淡入动画启动（值由全局动画系统推进）
-        s.emit_unfocus(); // 淡出动画启动
+        assert_eq!(s.focus_indicator_alpha_value(), 0.0, "no focus ring initially");
+        s.emit_focus();   // Starts the fade-in animation (the global animation system advances it).
+        s.emit_unfocus(); // Starts the fade-out animation.
     }
 }
