@@ -16,6 +16,7 @@ use super::{measure::measure_flow, FlowOverflow};
 pub struct FlowRowLayout {
     pub arrangement: Arrangement,
     pub alignment: Alignment,
+    pub cross_arrangement: Arrangement,
     pub main_spacing: f32,
     pub cross_spacing: f32,
     pub max_items_in_row: usize,
@@ -29,6 +30,7 @@ impl FlowRowLayout {
         FlowRowLayout {
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            cross_arrangement: Arrangement::Start,
             main_spacing: 0.0,
             cross_spacing: 0.0,
             max_items_in_row: usize::MAX,
@@ -40,6 +42,7 @@ impl FlowRowLayout {
 
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
     pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
@@ -63,6 +66,7 @@ impl MeasurePolicy for FlowRowLayout {
         measure_flow::<HorizontalAxis>(
             self.arrangement,
             self.alignment,
+            self.cross_arrangement,
             self.main_spacing,
             self.cross_spacing,
             self.max_items_in_row,
@@ -89,15 +93,17 @@ impl MeasurePolicy for FlowRowLayout {
 /// toolbars).
 ///
 /// Mirrors `FlowRow(horizontalArrangement, verticalArrangement, maxItemsInEachRow)`:
-/// `main_spacing` is the gap inside a line, `cross_spacing` the gap between lines, and
-/// `max_items_in_row` the per-line cap (unlimited by default), `max_lines` the row cap (Clip mode;
-/// Visible bypasses it), and `overflow` chooses between Compose's Clip (drop items past the
-/// cross-axis budget) and Visible (keep painting them). v1 has no weight or overflow-indicator
+/// `main_spacing` is the gap inside a line, `cross_spacing` the gap between lines,
+/// `cross_arrangement` the distribution of the free cross space, and `max_items_in_row` the
+/// per-line cap (unlimited by default), `max_lines` the row cap (Clip mode; Visible bypasses it),
+/// and `overflow` chooses between Compose's Clip (drop items past the cross-axis budget) and
+/// Visible (keep painting them). v1 has no weight or overflow-indicator
 /// API; see the `layout::flow` module docs.
 pub struct FlowRow {
     modifier: Modifier,
     arrangement: Arrangement,
     alignment: Alignment,
+    cross_arrangement: Arrangement,
     main_spacing: f32,
     cross_spacing: f32,
     max_items_in_row: usize,
@@ -111,6 +117,7 @@ impl FlowRow {
             modifier: Modifier::new(),
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            cross_arrangement: Arrangement::Start,
             main_spacing: 0.0,
             cross_spacing: 0.0,
             max_items_in_row: usize::MAX,
@@ -122,6 +129,7 @@ impl FlowRow {
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
     pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
@@ -135,6 +143,7 @@ impl FlowRow {
         ctx.changed(&self.cross_spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
+        ctx.changed(&self.cross_arrangement);
         // max_items_in_row is a usize with PartialEq, so it can be declared directly.
         ctx.changed(&self.max_items_in_row);
         ctx.changed(&self.max_lines);
@@ -147,6 +156,7 @@ impl FlowRow {
             FlowRowLayout::new()
                 .arrangement(self.arrangement)
                 .alignment(self.alignment)
+                .cross_arrangement(self.cross_arrangement)
                 .main_spacing(self.main_spacing)
                 .cross_spacing(self.cross_spacing)
                 .max_items_in_row(self.max_items_in_row)

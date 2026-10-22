@@ -71,6 +71,107 @@ fn flow_row_does_not_place_lines_past_the_cross_maximum() {
     assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
 }
 
+/// cross_arrangement distributes the free cross space between lines; Center centres the stack.
+#[test]
+fn flow_row_cross_arrangement_centres_lines() {
+    let policy = FlowRowLayout::new().cross_arrangement(Arrangement::Center);
+    let mut nodes = vec![
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(size.height, 100.0);
+    assert_eq!(placements[0].position.y, 30.0, "two lines of 20 leave 60/2 above");
+    assert_eq!(placements[3].position.y, 50.0, "the second line follows 20px later");
+}
+
+/// FlowColumn routes cross_arrangement through the same code on the horizontal cross axis.
+#[test]
+fn flow_column_cross_arrangement_centres_columns() {
+    let policy = FlowColumnLayout::new().cross_arrangement(Arrangement::Center);
+    let mut nodes = vec![
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, 70.0),
+    );
+    assert_eq!(size.width, 100.0);
+    assert_eq!(placements[0].position.x, 30.0, "two 20px columns leave 60/2 on each side");
+    assert_eq!(placements[2].position.x, 50.0);
+}
+
+/// SpaceBetween must spend the free cross space on the gaps, not only on a leading offset.
+#[test]
+fn flow_row_space_between_cross_arrangement_uses_the_gap() {
+    let policy = FlowRowLayout::new().cross_arrangement(Arrangement::SpaceBetween);
+    let mut nodes = vec![
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(placements[0].position.y, 0.0);
+    assert_eq!(placements[3].position.y, 80.0, "40 content + 60 free puts the second line at 80");
+}
+
+/// A single line with Center uses the gap-count-zero branch without dividing by zero.
+#[test]
+fn flow_row_single_line_cross_arrangement_centres() {
+    let policy = FlowRowLayout::new().cross_arrangement(Arrangement::Center);
+    let mut nodes = vec![make_leaf(30.0, 20.0), make_leaf(30.0, 20.0)];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(placements[0].position.y, 40.0, "20 content in 100 leaves 40 above");
+}
+
+/// FlowColumn mirrors the cross arrangement in RTL; Center's leading offset is mirrored too.
+#[test]
+fn flow_column_rtl_cross_arrangement_mirrors() {
+    let policy = FlowColumnLayout::new()
+        .cross_arrangement(Arrangement::Center)
+        .direction(LayoutDirection::Rtl);
+    let mut nodes = vec![
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, 70.0),
+    );
+    assert_eq!(placements[0].position.x, 50.0, "first column mirrors to the right");
+    assert_eq!(placements[2].position.x, 30.0, "second column mirrors to the left");
+}
+
 /// max_lines caps the row count even when the cross axis has room for more.
 #[test]
 fn flow_row_max_lines_caps_rows() {

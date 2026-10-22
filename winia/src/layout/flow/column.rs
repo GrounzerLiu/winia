@@ -16,6 +16,7 @@ use super::{measure::measure_flow, FlowOverflow};
 pub struct FlowColumnLayout {
     pub arrangement: Arrangement,
     pub alignment: Alignment,
+    pub cross_arrangement: Arrangement,
     pub main_spacing: f32,
     pub cross_spacing: f32,
     pub max_items_in_column: usize,
@@ -29,6 +30,7 @@ impl FlowColumnLayout {
         FlowColumnLayout {
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            cross_arrangement: Arrangement::Start,
             main_spacing: 0.0,
             cross_spacing: 0.0,
             max_items_in_column: usize::MAX,
@@ -40,6 +42,7 @@ impl FlowColumnLayout {
 
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
     pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
@@ -63,6 +66,7 @@ impl MeasurePolicy for FlowColumnLayout {
         measure_flow::<VerticalAxis>(
             self.arrangement,
             self.alignment,
+            self.cross_arrangement,
             self.main_spacing,
             self.cross_spacing,
             self.max_items_in_column,
@@ -91,6 +95,7 @@ pub struct FlowColumn {
     modifier: Modifier,
     arrangement: Arrangement,
     alignment: Alignment,
+    cross_arrangement: Arrangement,
     main_spacing: f32,
     cross_spacing: f32,
     max_items_in_column: usize,
@@ -104,6 +109,7 @@ impl FlowColumn {
             modifier: Modifier::new(),
             arrangement: Arrangement::Start,
             alignment: Alignment::Start,
+            cross_arrangement: Arrangement::Start,
             main_spacing: 0.0,
             cross_spacing: 0.0,
             max_items_in_column: usize::MAX,
@@ -115,6 +121,7 @@ impl FlowColumn {
     pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
     pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
     pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn cross_arrangement(mut self, a: Arrangement) -> Self { self.cross_arrangement = a; self }
     pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
     pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
     pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
@@ -127,6 +134,7 @@ impl FlowColumn {
         ctx.changed(&self.cross_spacing);
         ctx.changed(&self.arrangement);
         ctx.changed(&self.alignment);
+        ctx.changed(&self.cross_arrangement);
         ctx.changed(&self.max_items_in_column);
         ctx.changed(&self.max_lines);
         ctx.changed(&self.overflow);
@@ -138,6 +146,7 @@ impl FlowColumn {
             FlowColumnLayout::new()
                 .arrangement(self.arrangement)
                 .alignment(self.alignment)
+                .cross_arrangement(self.cross_arrangement)
                 .main_spacing(self.main_spacing)
                 .cross_spacing(self.cross_spacing)
                 .max_items_in_column(self.max_items_in_column)

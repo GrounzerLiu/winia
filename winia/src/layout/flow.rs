@@ -5,7 +5,8 @@
 //! item, after `max_items`, or when the remaining main-axis room cannot fit the next item. A
 //! line's height is its tallest item that fits; items align on the cross axis by `alignment`;
 //! the remaining main-axis space is distributed by `arrangement` (through `compute_spacing`);
-//! and `spacing` separates the lines. Items past the cross-axis maximum follow Compose's default
+//! `cross_arrangement` distributes the free cross space and `cross_spacing` adds a fixed gap
+//! between lines. Items past the cross-axis maximum follow Compose's default
 //! `Clip` overflow: they are measured but not placed.
 //!
 //! v1 scope (differences from Compose, documented in `docs/flow-layout.md`):

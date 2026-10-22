@@ -167,6 +167,41 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                     }
                 });
 
+            Text::new("■ FlowRow — cross arrangement centres lines")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .max_items_in_row(3)
+                .cross_arrangement(Arrangement::Center)
+                .main_spacing(8.0)
+                .cross_spacing(8.0)
+                .modifier(
+                    Modifier::new()
+                        .width(140.0)
+                        .height(120.0)
+                        .background(Color::from_argb(20, 100, 50, 100), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    for n in 0..4 {
+                        ctx.key(("cross", n), |ctx| {
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .size(40.0, 20.0)
+                                        .background(
+                                            Color::from_argb(255, 150, 100, 200),
+                                            Shape::rounded(6.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new(format!("C{n}")).font_size(12.0).build(ctx);
+                                });
+                        });
+                    }
+                });
+
             Text::new("■ FlowRow — max 3 per row")
                 .font_size(16.0)
                 .build(ctx);

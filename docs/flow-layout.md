@@ -15,6 +15,7 @@
 FlowRow::new()
     .main_spacing(8.0)        // gap inside a line (Compose horizontalArrangement.spacedBy)
     .cross_spacing(8.0)       // gap between lines (Compose verticalArrangement.spacedBy)
+    .cross_arrangement(Arrangement::Start) // line distribution (Top/Center/Bottom/Space*)
     .max_items_in_row(3)      // per-line cap (unlimited by default)
     .max_lines(2)             // row cap (unlimited by default)
     .overflow(FlowOverflow::Clip) // Clip (default) or Visible
@@ -27,6 +28,7 @@ FlowRow::new()
 FlowColumn::new()
     .main_spacing(8.0)
     .cross_spacing(8.0)
+    .cross_arrangement(Arrangement::Start)
     .max_items_in_column(2)
     .build(ctx, |ctx| { /* children */ });
 ```
@@ -49,7 +51,7 @@ FlowColumn::new()
   `max_lines`, and keeps painting every row outside the container, matching Compose's
   `willOverflowCrossAxis` order (`FlowLayoutBuildingBlocks.kt:84-90`).
 - **In-line distribution**: the main axis uses `arrangement` + `main_spacing`; the cross axis
-  currently has only a fixed `cross_spacing` (no vertical/horizontal cross arrangement).
+  uses `cross_arrangement` + `cross_spacing` (Start/Center/End/SpaceBetween/SpaceAround/SpaceEvenly).
 - **Container size**: main = widest visible line (wrap) or the constraint (fill); cross = the
   visible line heights plus the gaps.
 - **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
@@ -67,6 +69,10 @@ FlowColumn::new()
   v1 rule); Compose returns an empty flow. `max_lines(0)` does return an empty flow.
 - No intrinsic overrides: the four `MeasurePolicy` intrinsic methods fall back to the generic
   approximation, which treats the flow as one unbounded line.
+- `cross_arrangement` distributes the free cross space between lines; `cross_spacing` remains
+  the fixed gap added before the arrangement's share. A single line with `SpaceBetween` is
+  centred by the shared `compute_spacing` helper (the legacy flex convention); Compose starts
+  it at the leading edge. Other arrangements match Compose.
 - Row layout size is `max(content, constraints.min)`: a fill parent gives a container-wide line
   with in-line alignment; a wrap parent gives a content-wide line. Compose's line layout size is
   the content width; the difference is invisible under wrap-content and under fill it only moves
@@ -80,7 +86,8 @@ cargo test -p winia --lib layout::flow
 ```
 
 The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
-`Visible` overflow, spacing and in-line centring, RTL mirroring, column wrapping, fill-tight
+`Visible` overflow, spacing and in-line centring, cross arrangement (Center/SpaceBetween/RTL),
+RTL mirroring, column wrapping, fill-tight
 containers, child measurement against the container width, cross-axis item clipping (including
 a tall item after short ones), a first line that cannot fit, cross spacing in the cut-off, and
 the two composition paths.

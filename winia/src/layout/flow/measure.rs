@@ -13,6 +13,7 @@ use crate::unit::{Offset, Size};
 pub(crate) fn measure_flow<A: FlexAxis>(
     arrangement: Arrangement,
     alignment: Alignment,
+    cross_arrangement: Arrangement,
     main_spacing: f32,
     cross_spacing: f32,
     max_items_in_main_axis: usize,
@@ -159,6 +160,12 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         line_infos.iter().map(|l| l.main).fold(0.0f32, f32::max),
     );
     let container_cross = A::constrain_cross(constraints, content_cross);
+    let remaining_cross = (container_cross - content_cross).max(0.0);
+    let (cross_extra, cross_leading) = compute_spacing(
+        cross_arrangement,
+        remaining_cross,
+        line_infos.len().saturating_sub(1),
+    );
 
     // Placement.
     let mut placements: Vec<Placement> = vec![
@@ -168,7 +175,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         };
         n
     ];
-    let mut cross_offset = 0.0f32;
+    let mut cross_offset = cross_leading;
     for (li, &(s, e)) in lines.iter().enumerate() {
         let info = &line_infos[li];
         let count = e - s;
@@ -216,7 +223,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
             };
             main_offset += child_main + eff_spacing;
         }
-        cross_offset += info.cross + cross_spacing;
+        cross_offset += info.cross + cross_spacing + cross_extra;
     }
 
     // RTL mirroring (the same final pass flex uses: container width - x - w). Mirror exactly the
