@@ -37,8 +37,12 @@ pub struct GraphicsLayerParams {
     pub rotation_y: f32,
     /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
     pub camera_distance: f32,
-    /// 图层阴影高度（逻辑 px——>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，
-    /// 对标 Compose graphicsLayer.shadowElevation）
+    /// 图层阴影高度（>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，对标 Compose
+    /// graphicsLayer.shadowElevation）。
+    ///
+    /// The renderer COMPRESSES this value before it becomes Skia's Z: `z = (K+1)·e/(K+e)` with K = 16
+    /// (`render::paint::compressed_elevation`), so the visual steps get smaller as elevation grows.
+    /// The colour alpha is not compressed. See `docs/draw-layer-extras.md`.
     pub shadow_elevation: f32,
     /// 图层阴影形状（None = 矩形）
     pub shadow_shape: Option<Shape>,

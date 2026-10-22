@@ -48,3 +48,25 @@ animated at paint time with `.graphics_layer(closure)`.
 
 Not ported: color-filter chains as render effects, and `graphicsLayer { shape = ... }` (use
 `Modifier::clip(shape)`, which clips the same content).
+
+## Elevation compression
+
+`graphicsLayer.shadowElevation` is not passed to Skia unchanged. The renderer maps it through
+
+```text
+z = (K + 1) · e / (K + e),   K = 16
+```
+
+before it becomes the shadow's Z plane (`render::paint::compressed_elevation`). The curve is zero at
+zero, fixes f(1) = 1, is monotonic and approaches K+1 = 17, so the smallest step keeps its size and
+larger ones stop growing: 1 dp maps to 1.0, 3 to 2.68, 6 to 4.64, 8 to 5.67, 12 to 7.29, 16 to 8.5,
+24 to 10.2.
+
+Why: Skia's spot blur and offset scale with `z/(600-z)`, i.e. roughly linearly through the 1-24 dp
+range, while Material's token ladder (1/3/6/8/12) already assumes diminishing visual steps. Without
+the curve a 12 dp shadow looks three times as deep as a 3 dp one instead of a step up.
+
+This is a deliberate deviation from Compose's physical Z. It lives in ONE place so every consumer —
+`Modifier::shadow`, `Surface`, Card, Button, FAB — gets the same curve; do not compress again in a
+component. The configured ambient/spot colours keep their alpha: the curve changes the shadow's
+geometry (offset, blur, scale), not its opacity.

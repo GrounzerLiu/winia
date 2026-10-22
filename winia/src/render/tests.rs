@@ -561,6 +561,36 @@
         );
     }
 
+    #[test]
+    fn elevation_is_compressed_before_it_reaches_skia() {
+        use super::paint::{compressed_elevation, ELEVATION_KNEE};
+
+        assert_eq!(compressed_elevation(0.0), 0.0);
+        assert_eq!(compressed_elevation(-2.0), 0.0);
+        assert_eq!(compressed_elevation(f32::NAN), 0.0);
+
+        let mut previous = 0.0;
+        for elevation in [1.0, 2.0, 3.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 100.0] {
+            let z = compressed_elevation(elevation);
+            assert!(z > previous, "the curve is monotonic: {elevation} dp -> {z}");
+            assert!(z <= elevation, "compression never grows a step: {elevation} -> {z}");
+            assert!(z <= ELEVATION_KNEE + 1.0, "and bounded by the asymptote: {elevation} -> {z}");
+            previous = z;
+        }
+
+        // Fixed anchors so a change of curve cannot pass silently.
+        assert!(
+            (compressed_elevation(1.0) - 1.0).abs() < 1e-4,
+            "1 dp keeps its physical size: {}",
+            compressed_elevation(1.0)
+        );
+        assert!(
+            (compressed_elevation(ELEVATION_KNEE) - (ELEVATION_KNEE + 1.0) / 2.0).abs() < 1e-4,
+            "the knee is the half-way point: {}",
+            compressed_elevation(ELEVATION_KNEE)
+        );
+    }
+
     fn render_rect_with_gl(gl: &GraphicsLayerParams) -> (usize, usize, bool) {
         use skia_safe::{Color, Paint, surfaces};
         let mut surface = surfaces::raster_n32_premul((400, 200)).unwrap();

@@ -106,9 +106,6 @@ pub(super) fn build_gl_3d_matrix(
     Some(m)
 }
 
-/// GraphicsLayer shadow：使用 Skia `SkShadowUtils::draw_shadow` 绘制真正的
-/// ambient + spot 阴影。elevation 是 Compose 语义的 Z 高度，不再手工换算
-/// blur radius 或 spot offset；光源参数集中在这里，便于后续校准平台差异。
 /// Whether the layer needs an offscreen `save_layer`: a colour filter, alpha, a render effect, or
 /// `CompositingStrategy::Offscreen` (blend modes and group opacity need a real offscreen).
 /// `ModulateAlpha` has no per-draw equivalent in winia, so it takes the `Auto` path.
@@ -119,6 +116,33 @@ pub(super) fn graphics_layer_needs_layer(gl: &crate::graphics::GraphicsLayerPara
         || gl.compositing == crate::graphics::CompositingStrategy::Offscreen
 }
 
+/// The knee of the elevation compression curve: the asymptote is ELEVATION_KNEE + 1.
+pub(super) const ELEVATION_KNEE: f32 = 16.0;
+
+/// The compressed Z handed to Skia: (K+1)·e/(K+e) with K = ELEVATION_KNEE.
+///
+/// f(0) = 0, f(1) = 1 (the smallest Material step keeps its physical size), monotonic, and bounded
+/// by K+1, so a huge or animated value can never make the shadow run away. Not applied to the
+/// colour alpha: Skia's ambient/spot strength is the configured colour's alpha, and the curve only
+/// changes the geometry (offset, blur, scale).
+pub(super) fn compressed_elevation(elevation: f32) -> f32 {
+    if !elevation.is_finite() || elevation <= 0.0 {
+        return 0.0;
+    }
+    (ELEVATION_KNEE + 1.0) * elevation / (ELEVATION_KNEE + elevation)
+}
+
+/// GraphicsLayer shadow：使用 Skia `SkShadowUtils::draw_shadow` 绘制真正的
+/// ambient + spot 阴影。elevation 是 Compose 语义的 Z 高度，不再手工换算
+/// blur radius 或 spot offset；光源参数集中在这里，便于后续校准平台差异。
+///
+/// The elevation is COMPRESSED before it becomes Skia's Z (see compressed_elevation): Compose's
+/// physical Z makes every extra dp grow the shadow about linearly (Skia's spot blur and offset
+/// scale with z/(600-z)), while Material's token ladder 1/3/6/8/12 already expects diminishing
+/// visual steps. The curve keeps 0 at 0, leaves 1 dp at 1.0, and maps 8/16/24 dp to 5.67/8.5/10.2,
+/// so the top of the ladder no longer dwarfs the bottom. This is a deliberate deviation from
+/// Compose; it lives here so every consumer (Modifier::shadow, Surface, Card, Button, FAB) gets the
+/// same curve, and no component compresses twice.
 pub(super) fn draw_elevation_shadow(
     canvas: &Canvas,
     rect: Rect,
@@ -127,7 +151,8 @@ pub(super) fn draw_elevation_shadow(
     ambient_color: crate::graphics::Color,
     spot_color: crate::graphics::Color,
 ) {
-    if elevation <= 0.0 || !elevation.is_finite() {
+    let elevation = compressed_elevation(elevation);
+    if elevation <= 0.0 {
         return;
     }
 
