@@ -10,7 +10,7 @@
 //! `Clip` overflow: they are measured but not placed.
 //!
 //! v1 scope (differences from Compose, documented in `docs/flow-layout.md`):
-//! - no weight (Compose re-distributes the line's remaining space in a second measure pass)
+//! - weight is supported within a line; line breaking still uses the child's natural size
 //! - `max_lines` and the `Clip` / `Visible` overflow modes exist; the indicator variants
 //!   (`ExpandIndicator` / `ExpandOrCollapseIndicator`) do not
 //! - no intrinsic overrides (the generic `MeasurePolicy` approximation is used)

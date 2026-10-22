@@ -97,8 +97,9 @@ impl MeasurePolicy for FlowRowLayout {
 /// `cross_arrangement` the distribution of the free cross space, and `max_items_in_row` the
 /// per-line cap (unlimited by default), `max_lines` the row cap (Clip mode; Visible bypasses it),
 /// and `overflow` chooses between Compose's Clip (drop items past the cross-axis budget) and
-/// Visible (keep painting them). v1 has no weight or overflow-indicator
-/// API; see the `layout::flow` module docs.
+/// Visible (keep painting them). Children may carry `layout_weight` /
+/// `layout_weight_fill`; line breaking uses their natural size. There is no overflow-indicator
+/// API yet; see the `layout::flow` module docs.
 pub struct FlowRow {
     modifier: Modifier,
     arrangement: Arrangement,

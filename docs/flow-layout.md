@@ -52,6 +52,9 @@ FlowColumn::new()
   `willOverflowCrossAxis` order (`FlowLayoutBuildingBlocks.kt:84-90`).
 - **In-line distribution**: the main axis uses `arrangement` + `main_spacing`; the cross axis
   uses `cross_arrangement` + `cross_spacing` (Start/Center/End/SpaceBetween/SpaceAround/SpaceEvenly).
+  A child with `layout_weight` shares the line's free main-axis space after fixed children and
+  spacing; the target is the bounded main-axis maximum (Compose's rule), or the natural line size
+  when the axis is unbounded. `layout_weight_fill(weight, false)` treats that share as a maximum.
 - **Container size**: main = widest visible line (wrap) or the constraint (fill); cross = the
   visible line heights plus the gaps.
 - **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
@@ -60,9 +63,14 @@ FlowColumn::new()
 
 ## 3. Differences from Compose
 
-- No weight. Compose re-distributes a line's remaining space in a second measure pass; winia
-  measures a `layout_weight` child at its natural size and silently ignores the weight. Remove
-  the weight when migrating a Row to a FlowRow.
+- Clip decisions are made after weight shares are applied, so a weighted child that grows taller
+  when its share narrows can be clipped differently from Compose, whose first measurement decides
+  the clip. The version that is actually laid out is used here.
+- Weight is supported per line: `layout_weight(weight)` fills its share (default `fill = true`),
+  `layout_weight_fill(weight, false)` uses the share as a maximum. Line breaking is computed
+  from the children's natural sizes before the shares are allocated, whereas Compose uses the
+  weighted intrinsic measurement; a heavily weighted child can therefore choose a different
+  line than Compose's intrinsic pass would.
 - No overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`). `max_lines`
   and the `Clip` / `Visible` modes are implemented; the indicator variants are not.
 - `max_items_in_row(0)` / `max_items_in_column(0)` is treated as one item per line (defensive
@@ -86,8 +94,8 @@ cargo test -p winia --lib layout::flow
 ```
 
 The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
-`Visible` overflow, spacing and in-line centring, cross arrangement (Center/SpaceBetween/RTL),
-RTL mirroring, column wrapping, fill-tight
+`Visible` overflow, weight sharing, spacing and in-line centring, cross arrangement
+(Center/SpaceBetween/RTL), RTL mirroring, column wrapping, fill-tight
 containers, child measurement against the container width, cross-axis item clipping (including
 a tall item after short ones), a first line that cannot fit, cross spacing in the cut-off, and
 the two composition paths.

@@ -202,6 +202,41 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                     }
                 });
 
+            Text::new("■ FlowRow — weight fills the line")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .main_spacing(8.0)
+                .modifier(
+                    Modifier::new()
+                        .width(240.0)
+                        .height(60.0)
+                        .background(Color::from_argb(20, 100, 50, 100), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(40.0, 40.0)
+                                .background(Color::from_argb(255, 100, 160, 220), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("fix").font_size(12.0).build(ctx);
+                        });
+                    Stack::new()
+                        .modifier(
+                            Modifier::new()
+                                .size(40.0, 40.0)
+                                .layout_weight(1.0)
+                                .background(Color::from_argb(255, 220, 160, 100), Shape::rounded(6.0)),
+                        )
+                        .build(ctx, |ctx| {
+                            Text::new("weight 1").font_size(12.0).build(ctx);
+                        });
+                });
+
             Text::new("■ FlowRow — max 3 per row")
                 .font_size(16.0)
                 .build(ctx);

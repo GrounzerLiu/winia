@@ -572,8 +572,87 @@ fn flow_row_single_oversized_item_clamps_line() {
 }
 
 #[test]
-fn flow_row_weight_is_ignored_measures_natural() {
-    // P2: v1 silently ignores weight; a child carrying it is measured at its natural size.
+fn flow_row_weight_uses_a_bounded_wrap_maximum() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(40.0, 20.0),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0).layout_weight(1.0)),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let policy = FlowRowLayout::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 200.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.width, 200.0, "the bounded maximum is the weight target");
+    assert_eq!(placements[1].size.width, 160.0, "200 - 40 fixed");
+    assert_eq!(placements[1].position.x, 40.0);
+}
+
+#[test]
+fn flow_row_weight_fill_false_does_not_stretch_a_short_child() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(30.0, 20.0),
+        LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight_fill(1.0, false)),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let policy = FlowRowLayout::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.width, 60.0, "fill = false leaves the line at its natural size");
+    assert_eq!(placements[1].size.width, 30.0);
+}
+
+#[test]
+fn flow_row_two_weights_split_the_share() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight(1.0)),
+        LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight(3.0)),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let policy = FlowRowLayout::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(100.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.width, 100.0);
+    assert_eq!(placements[0].size.width, 25.0);
+    assert_eq!(placements[1].size.width, 75.0);
+    assert_eq!(placements[1].position.x, 25.0);
+}
+
+#[test]
+#[test]
+fn flow_column_weight_fills_the_column() {
+    use crate::modifier::Modifier;
+    let mut nodes = vec![
+        make_leaf(20.0, 30.0),
+        LayoutNode::leaf(Modifier::new().size(20.0, 30.0).layout_weight(1.0)),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let policy = FlowColumnLayout::new();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 100.0, 100.0),
+    );
+    assert_eq!(size.height, 100.0, "the weighted child fills the column");
+    assert_eq!(placements[1].size.height, 70.0);
+    assert_eq!(placements[1].position.y, 30.0);
+}
+
+fn flow_row_weight_fills_the_line() {
     use crate::modifier::Modifier;
     let mut node = LayoutNode::leaf(Modifier::new().size(30.0, 20.0).layout_weight(1.0));
     let mut nodes = vec![node, make_leaf(30.0, 20.0)];
@@ -583,10 +662,11 @@ fn flow_row_weight_is_ignored_measures_natural() {
         &mut nodes,
         &[],
         &children,
-        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+        Constraints::new(100.0, 100.0, 0.0, f32::MAX),
     );
-    assert_eq!(size.width, 60.0, "weight ignored: natural sizes 30 + 30");
-    assert_eq!(placements[1].position.x, 30.0);
+    assert_eq!(size.width, 100.0, "the weighted child fills the line");
+    assert_eq!(placements[0].size.width, 70.0, "100 - 30 fixed = 70 for weight 1");
+    assert_eq!(placements[1].position.x, 70.0);
 }
 
 #[test]

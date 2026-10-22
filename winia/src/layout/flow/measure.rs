@@ -92,6 +92,55 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         lines.truncate(max_lines);
     }
 
+    // Compose's `FlowRowScope` inherits `RowScope.weight`: a weighted item shares the line's free
+    // main-axis space instead of taking its natural size. The initial measurement above is the
+    // intrinsic-ish size used for wrapping; after the lines are known, re-measure each weighted
+    // child with its share. The line target is `max(natural, constraints.min)`, which is the same
+    // line layout size used by arrangement below: a wrap-content flow has no free space, a fill
+    // flow fills its minimum (usually its fixed width).
+    let weights: Vec<Option<f32>> = children
+        .iter()
+        .map(|&c| nodes[c].modifier.get_layout_weight().filter(|w| *w > 0.0))
+        .collect();
+    let fills: Vec<bool> = children
+        .iter()
+        .map(|&c| nodes[c].modifier.get_layout_weight_fill().unwrap_or(true))
+        .collect();
+    let main_max = A::main_max(constraints);
+    let bounded_main = main_max < f32::MAX;
+    for &(s, e) in &lines {
+        let mut total_weight = 0.0f32;
+        let mut natural_main = 0.0f32;
+        let mut fixed_main = 0.0f32;
+        for i in s..e {
+            if i > s {
+                natural_main += main_spacing;
+            }
+            natural_main += A::main_size(child_sizes[i]);
+            match weights[i] {
+                Some(w) => total_weight += w,
+                None => fixed_main += A::main_size(child_sizes[i]),
+            }
+        }
+        if total_weight <= 0.0 {
+            continue;
+        }
+        let spacing_total = main_spacing * (e - s - 1) as f32;
+        // Compose uses the bounded main-axis MAXIMUM as the weighting target
+        // (RowColumnMeasurePolicy.kt:157-165): a wrap-content flow with a finite parent still
+        // gives its weighted child the free width. An unbounded axis keeps the natural size (the
+        // friendlier side of Compose's mainAxisMin fallback).
+        let target_main = if bounded_main { main_max } else { natural_main };
+        let available = (target_main - fixed_main - spacing_total).max(0.0);
+        for i in s..e {
+            let Some(w) = weights[i] else { continue };
+            let allocated = available * w / total_weight;
+            let cc = A::build_phase2(constraints, allocated, fills[i], false);
+            let (size, _) = measure_node(nodes, policies, children[i], cc);
+            child_sizes[i] = size;
+        }
+    }
+
     // Line sizes. The main axis is the raw content width, NOT clamped: under fill, clamping would
     // lift the content to the container width with the min bound, leaving remaining at 0 and
     // degrading Center/End/Space* to Start. The container is clamped separately; an item wider
