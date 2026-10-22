@@ -388,7 +388,7 @@
         // paints an opaque bar over the press point. The press pixel must show the bar
         // color, not the ripple color.
         use crate::runtime::composer::Composer;
-        use crate::interaction::MutableInteractionSource;
+        use crate::input::interaction::MutableInteractionSource;
         use skia_safe::surfaces;
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();

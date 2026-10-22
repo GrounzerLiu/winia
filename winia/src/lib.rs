@@ -29,7 +29,6 @@
 //! `OverlayAnimSpec` and the four presentation helpers they need with it, which places five things
 //! worse than it fixes one. So the edge is deliberate, narrow — one type — and recorded here.
 
-pub mod component_styles;
 pub mod runtime;
 pub mod unit;
 /// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。
@@ -50,7 +49,6 @@ pub mod graphics;
 pub mod icon;
 pub mod modifier;
 pub mod focus;
-pub mod interaction;
 pub mod layout;
 pub mod components;
 pub mod text;
@@ -84,7 +82,6 @@ pub mod accessibility {
 }
 pub mod app;
 pub mod effect;
-pub mod flow;
 pub mod input;
 pub mod debug;
 
@@ -107,7 +104,7 @@ pub mod prelude {
         Animating, Backchannel, DerivedFloat, DerivedValue, Reactive, State, StateChanges, StateId,
         Visual, write_batch,
     };
-    pub use crate::component_styles::{with_component_styles, ComponentStyles, Styling};
+    pub use crate::components::component_styles::{with_component_styles, ComponentStyles, Styling};
     pub use crate::components::button::{ButtonStyling, ButtonStylingScope};
     pub use crate::components::checkbox::{CheckboxStyling, CheckboxStylingScope};
     pub use crate::runtime::saveable::{
@@ -188,7 +185,7 @@ pub mod prelude {
         SMALL_TAB_HEIGHT, SCROLLABLE_TAB_ROW_MIN_TAB_WIDTH, SCROLLABLE_TAB_ROW_EDGE_START_PADDING,
     };
     pub use crate::text::{TextAlign, TextOverflow, TextStyle, FontWeight, FontSlant};
-    pub use crate::interaction::{MutableInteractionSource, ComponentState};
+    pub use crate::input::interaction::{MutableInteractionSource, ComponentState};
     // The general drawing surface (Compose `Canvas` / `DrawScope`) and the constraints-aware box
     // (Compose `BoxWithConstraints`) — the two entry points a caller reaches for when no existing
     // component expresses what they need.
@@ -252,7 +249,7 @@ pub mod prelude {
     pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
     pub use crate::window::insets::{Insets, InsetsKind, WindowInsetsController};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
-    pub use crate::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
+    pub use crate::runtime::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{
         LaunchedEffect, DisposableEffect, CoroutineScope, remember_coroutine_scope,
         observe_watch, with_frame_nanos, remember_updated_state, on_forget, side_effect, FrameClock,

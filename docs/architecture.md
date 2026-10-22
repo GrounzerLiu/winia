@@ -154,7 +154,7 @@ with it, which places five things worse than it fixes one. The edge is deliberat
 | `accessibility.rs` | 1.3k | the Windows UIA bridge (feature `accessibility`) |
 | `overlay.rs` | 597 | the overlay runtime: `Popup`, `Dialog`, `OverlayDesc` |
 | `animation/` | 2 submodules | `animation.rs` (the facade), `interpolator.rs`, `visibility.rs` |
-| `unit.rs`, `interaction.rs`, `nested_scroll.rs`, `effect.rs`, `selection.rs`, `debug/`, `icon/`, `debug/animation.rs` | | as the layers table says |
+| `unit.rs`, `input/interaction`, `nested_scroll.rs`, `effect.rs`, `selection.rs`, `debug/`, `icon/`, `debug/animation.rs` | | as the layers table says |
 
 ## A frame
 

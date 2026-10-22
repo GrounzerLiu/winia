@@ -45,7 +45,7 @@ use crate::layout::components::Column;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
 use crate::overlay::{next_overlay_id, OverlayAnimSpec, OverlayDesc, PopupPosition};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 

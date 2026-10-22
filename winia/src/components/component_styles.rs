@@ -29,7 +29,7 @@ use crate::runtime::composition_local::CompositionLocal;
 /// A component defines its own alias, so the name at the call site is its own:
 ///
 /// ```ignore
-/// pub type ButtonStyling = crate::component_styles::Styling<ButtonStylingScope>;
+/// pub type ButtonStyling = crate::components::component_styles::Styling<ButtonStylingScope>;
 /// ```
 pub struct Styling<S: 'static>(Arc<dyn Fn(&mut S) + Send + Sync>);
 

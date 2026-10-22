@@ -477,7 +477,7 @@
     fn tab_accepts_injected_interaction_source() {
         // interaction_source 注入：外部 remember 创建的源应被使用
         //（不 panic，渲染结构同内部创建路径）
-        use crate::interaction::MutableInteractionSource;
+        use crate::input::interaction::MutableInteractionSource;
         let mut c = Composer::new();
         let colors = crate::theme::ThemeColors::default_light();
         let src: MutableInteractionSource = {

@@ -40,7 +40,7 @@ use crate::unit::{Offset, Size};
 use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use std::sync::Arc;
 

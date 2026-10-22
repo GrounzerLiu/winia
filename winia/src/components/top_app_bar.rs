@@ -187,7 +187,7 @@ impl TopAppBarScrollBehavior {
         ctx: &mut crate::runtime::composer::ComposeCtx,
     ) -> crate::runtime::state::State<bool> {
         let source = self.clone();
-        crate::flow::remember_derived_state(ctx, move || source.is_collapsed())
+        crate::runtime::flow::remember_derived_state(ctx, move || source.is_collapsed())
     }
     pub fn state(&self) -> Option<TopAppBarState> { match &self.kind { TopAppBarBehaviorKind::Nested(state, _) => Some(state.clone()), _ => None } }
     pub fn nested_scroll_connection(&self) -> Option<TopAppBarNestedConnection> { match &self.kind { TopAppBarBehaviorKind::Nested(state, mode) => Some(TopAppBarNestedConnection::new(state.clone(), *mode)), _ => None } }
@@ -271,7 +271,7 @@ impl TopAppBar {
             let scrolled = match &self.scroll_behavior {
                 Some(behavior) => {
                     let source = behavior.clone();
-                    crate::flow::remember_derived_state(ctx, move || source.scroll_offset() != 0.0).get()
+                    crate::runtime::flow::remember_derived_state(ctx, move || source.scroll_offset() != 0.0).get()
                 }
                 None => false,
             };

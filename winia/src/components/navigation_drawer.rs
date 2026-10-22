@@ -49,7 +49,7 @@ use crate::layout::{Alignment, BoxLayout, LayoutDirection};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::overlay::anchored_draggable::AnchoredDraggableState;
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::layout::components::{Column, Row, Stack};
 use crate::theme::WiniaTheme;
 use crate::unit::Dp;

@@ -7,7 +7,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
 use crate::components::button::ButtonBorder;
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 

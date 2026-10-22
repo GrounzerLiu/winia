@@ -681,7 +681,7 @@ pub struct TextField {
     /// 最小行数（对标 Compose minLines，默认 1——空内容也占位）
     min_lines: usize,
     /// 交互源（None = build 时内部 remember——对标 Compose TextField 可选注入）
-    interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::input::interaction::MutableInteractionSource>,
     /// 错误状态（对标 Compose isError——文字/边框错误色，供按状态取色）
     is_error: bool,
     /// 容器变体（None = 无容器视觉——裸输入；Filled/Outlined 对齐 M3）
@@ -812,7 +812,7 @@ impl TextField {
 
     /// 注入交互源（hoist——TextField 的 focus 状态发射到此源；
     /// 不传则内部 remember 一个）
-    pub fn interaction_source(mut self, source: crate::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(mut self, source: crate::input::interaction::MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -939,7 +939,7 @@ impl TextField {
         // 读到 None 而 focused 恒 false：外部注入或内部 remember）
         let interaction = if self.enabled {
             Some(self.interaction_source.clone()
-                .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get()))
+                .unwrap_or_else(|| ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get()))
         } else {
             None
         };

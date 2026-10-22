@@ -16,7 +16,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::layout::Dimension;
 use crate::graphics::{Shape};
-use crate::interaction::{ComponentState, MutableInteractionSource};
+use crate::input::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 use std::fmt;
 
@@ -383,8 +383,8 @@ pub struct ButtonVisual {
     pub border: Option<crate::graphics::Color>,
 }
 
-/// One button styling, registered through [`crate::component_styles::ComponentStyles::with`].
-pub type ButtonStyling = crate::component_styles::Styling<ButtonStylingScope>;
+/// One button styling, registered through [`crate::components::component_styles::ComponentStyles::with`].
+pub type ButtonStyling = crate::components::component_styles::Styling<ButtonStylingScope>;
 
 /// What a button should look like: the variant default for `theme`, with the styling in scope applied
 /// on top when there is one.
@@ -400,11 +400,11 @@ pub fn button_visual_with_styles(
         colors: ButtonColors::from_theme(theme, variant),
         border: None,
     };
-    let styles = crate::component_styles::current_component_styles();
+    let styles = crate::components::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<ButtonStyling>() {
         let mut scope = ButtonStylingScope {
             theme: theme.clone(),
-            is_dark: crate::component_styles::palette_is_dark(theme),
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
             colors: visual.colors,
             border: None,
         };

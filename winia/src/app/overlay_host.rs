@@ -92,7 +92,7 @@ pub(crate) struct OverlayWindow {
     /// overlay 是独立 composer，slot 与主树可能重复）
     pub(crate) hovered_slots: std::collections::HashSet<u64>,
     /// 该 overlay 内当前按下 的 interaction source（Press 波纹——up/取消时释放）
-    pub(crate) pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
+    pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
     /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
     /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
     /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）

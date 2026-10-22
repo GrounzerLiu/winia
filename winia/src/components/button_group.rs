@@ -31,7 +31,7 @@ use crate::composable;
 use crate::graphics::Shape;
 use crate::layout::node::{measure_node, LayoutNode, MeasurePolicy, Placement};
 use crate::layout::{Constraints, LayoutDirection};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::runtime::state::Backchannel;
 use crate::modifier::Modifier;
 use crate::runtime::composer::{ComposeCtx, GroupStatus};

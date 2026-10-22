@@ -271,7 +271,7 @@ impl ChipElevation {
 
     /// The elevation for a state snapshot, latest interaction first — the order the Button and Card use, since
     /// `animateElevation` resolves it from the last interaction.
-    pub fn for_state(&self, state: &crate::interaction::ComponentState) -> f32 {
+    pub fn for_state(&self, state: &crate::input::interaction::ComponentState) -> f32 {
         if !state.enabled {
             self.disabled
         } else if state.dragged {
@@ -303,7 +303,7 @@ impl ChipElevation {
     /// `container_alpha` is the container colour the renderer is showing right now, which during the selection
     /// fade is the interpolated one — the transparent-to-filled direction therefore shows no shadow until the
     /// fill has arrived, and the filled-to-transparent direction drops it as soon as the fill starts leaving.
-    pub fn shadow_for(state: &crate::interaction::ComponentState, container_alpha: u8, elevation: &ChipElevation) -> f32 {
+    pub fn shadow_for(state: &crate::input::interaction::ComponentState, container_alpha: u8, elevation: &ChipElevation) -> f32 {
         if container_alpha < ChipDefaults::SHADOW_OPAQUE_ALPHA {
             0.0
         } else {
@@ -377,7 +377,7 @@ pub struct Chip {
     elevation: Option<ChipElevation>,
     /// A caller-supplied interaction source (`interactionSource: MutableInteractionSource?` upstream). When it
     /// is absent the component remembers one of its own.
-    interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::input::interaction::MutableInteractionSource>,
 }
 
 impl Chip {
@@ -449,7 +449,7 @@ impl Chip {
     /// clickable in winia exposes.
     pub fn interaction_source(
         mut self,
-        source: crate::interaction::MutableInteractionSource,
+        source: crate::input::interaction::MutableInteractionSource,
     ) -> Self {
         self.interaction_source = Some(source);
         self
@@ -571,7 +571,7 @@ impl Chip {
         let interaction = self
             .interaction_source
             .clone()
-            .unwrap_or_else(|| ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get());
+            .unwrap_or_else(|| ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get());
         let state = interaction.state(self.enabled);
         let last_kind: crate::runtime::state::Backchannel<
             Option<crate::animation::ElevationInteraction>,
@@ -669,7 +669,7 @@ fn build_chip(
     modifier: Modifier,
     enabled: bool,
     container_anim: crate::runtime::state::State<crate::graphics::Color>,
-    interaction: crate::interaction::MutableInteractionSource,
+    interaction: crate::input::interaction::MutableInteractionSource,
     elevation_anim: Option<crate::runtime::state::State<f32>>,
     border_color: crate::graphics::Color,
     border_width: f32,

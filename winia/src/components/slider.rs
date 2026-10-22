@@ -23,7 +23,7 @@ use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::input::{KbEvent, KbEventType};
 use crate::graphics::{Color};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 

@@ -386,7 +386,7 @@ fn input_field(
     leading_icon: &Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
     trailing_icon: &Option<Arc<dyn Fn(&mut ComposeCtx) + Send + Sync>>,
     colors: &Option<TextFieldColors>,
-    interaction: &Option<crate::interaction::MutableInteractionSource>,
+    interaction: &Option<crate::input::interaction::MutableInteractionSource>,
     focus: &Option<crate::modifier::FocusRequester>,
 ) {
     let oc = on_query_change.clone();

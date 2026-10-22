@@ -5,7 +5,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::layout::{Alignment, BoxLayout};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 use crate::components::text::{ProvideTextStyle};
 use crate::text::{TextStyle};

@@ -14,7 +14,7 @@ use crate::graphics::{DEFAULT_AMBIENT_SHADOW_COLOR, DEFAULT_SPOT_SHADOW_COLOR};
 use crate::input::{KbEvent, PointerEvent};
 use crate::layout::{Dimension, IntrinsicSize, SizeValue};
 use crate::text::RichSpanStyle;
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::graphics::{
     BackgroundColor, Color, ColorFilter, FilterQuality, GraphicsLayerParams,
     GraphicsLayerSpec, ShadowParams, Shape, TransformOrigin,

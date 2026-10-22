@@ -744,8 +744,8 @@
         let plain = button_colors_with_styles(&theme, ButtonStyle::Filled);
         assert_eq!(plain.container, theme.primary, "the default still comes from the role colour");
 
-        let styled = crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        let styled = crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(ButtonStyling::new(|scope| scope.container(green()))),
             || button_colors_with_styles(&theme, ButtonStyle::Filled),
         );
@@ -756,8 +756,8 @@
     #[test]
     fn a_button_styling_can_derive_from_the_theme() {
         let theme = crate::theme::ThemeColors::default_light();
-        let styled = crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        let styled = crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(ButtonStyling::new(|scope| scope.container(scope.theme.tertiary))),
             || button_colors_with_styles(&theme, ButtonStyle::Filled),
         );
@@ -767,8 +767,8 @@
     #[test]
     fn the_button_styling_ends_with_its_block() {
         let theme = crate::theme::ThemeColors::default_light();
-        crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(ButtonStyling::new(|scope| scope.container(green()))),
             || assert_eq!(button_colors_with_styles(&theme, ButtonStyle::Filled).container, green()),
         );
@@ -805,8 +805,8 @@
         let theme = crate::theme::ThemeColors::default_light();
         let broad = ButtonStyling::new(|scope| scope.container(red()));
         let narrow = ButtonStyling::new(|scope| scope.container(green()));
-        let styled = crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new().with(broad.then(narrow)),
+        let styled = crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new().with(broad.then(narrow)),
             || button_colors_with_styles(&theme, ButtonStyle::Filled),
         );
         assert_eq!(styled.container, green());
@@ -817,17 +817,17 @@
     fn a_button_styling_can_style_light_and_dark_differently() {
         let light = crate::theme::ThemeColors::default_light();
         let dark = crate::theme::ThemeColors::default_dark();
-        assert!(!crate::component_styles::palette_is_dark(&light));
-        assert!(crate::component_styles::palette_is_dark(&dark));
+        assert!(!crate::components::component_styles::palette_is_dark(&light));
+        assert!(crate::components::component_styles::palette_is_dark(&dark));
 
         let styling = ButtonStyling::new(|scope| {
             scope.container(if scope.is_dark { red() } else { green() });
         });
-        let styles = crate::component_styles::ComponentStyles::new().with(styling);
-        let on_light = crate::component_styles::with_component_styles(styles.clone(), || {
+        let styles = crate::components::component_styles::ComponentStyles::new().with(styling);
+        let on_light = crate::components::component_styles::with_component_styles(styles.clone(), || {
             button_colors_with_styles(&light, ButtonStyle::Filled)
         });
-        let on_dark = crate::component_styles::with_component_styles(styles, || {
+        let on_dark = crate::components::component_styles::with_component_styles(styles, || {
             button_colors_with_styles(&dark, ButtonStyle::Filled)
         });
         assert_eq!(on_light.container, green());
@@ -841,8 +841,8 @@
         let theme = crate::theme::ThemeColors::default_light();
         let mut composer = crate::runtime::composer::Composer::new();
         let styled = green();
-        crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(ButtonStyling::new(move |scope| scope.container(styled))),
             || {
                 composer.compose(|ctx| {
@@ -875,8 +875,8 @@
         let theme = crate::theme::ThemeColors::default_light();
         let explicit = crate::graphics::Color::from_argb(255, 0, 0, 255);
         let mut composer = crate::runtime::composer::Composer::new();
-        crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(ButtonStyling::new(|scope| scope.container(green()))),
             || {
                 composer.compose(|ctx| {
@@ -909,11 +909,11 @@
     #[test]
     fn a_merged_set_lets_the_page_win_per_class() {
         let theme = crate::theme::ThemeColors::default_light();
-        let base = crate::component_styles::ComponentStyles::new()
+        let base = crate::components::component_styles::ComponentStyles::new()
             .with(ButtonStyling::new(|scope| scope.container(red())));
-        let page = crate::component_styles::ComponentStyles::new()
+        let page = crate::components::component_styles::ComponentStyles::new()
             .with(ButtonStyling::new(|scope| scope.container(green())));
-        let resolved = crate::component_styles::with_component_styles(base.merge(page), || {
+        let resolved = crate::components::component_styles::with_component_styles(base.merge(page), || {
             button_colors_with_styles(&theme, ButtonStyle::Filled)
         });
         assert_eq!(resolved.container, green());

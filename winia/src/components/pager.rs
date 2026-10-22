@@ -470,7 +470,7 @@ impl<A: LazyAxis> Pager<A> {
         // `PagerState` it passes at one call site would keep deriving from the old one. Keying the scope
         // by the state's identity rebuilds the derive when the state changes.
         let state_id = state.identity;
-        let _position = ctx.key(state_id, |ctx| crate::flow::remember_derived_state(ctx, move || {
+        let _position = ctx.key(state_id, |ctx| crate::runtime::flow::remember_derived_state(ctx, move || {
             // Everything is read through `get()`: the derive is remembered ONCE, so a captured builder
             // value would freeze the first frame's answer - and the first frame's viewport is 0, which
             // is exactly why the counter never moved (step 0 -> early return, forever).

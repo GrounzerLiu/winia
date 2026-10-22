@@ -611,7 +611,7 @@
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::runtime::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::interaction::MutableInteractionSource::new();
+        let focus_src = crate::input::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         // 首帧：未聚焦（label 展开，progress 目标 0）
         for frame in 0..3 {
@@ -672,7 +672,7 @@
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::runtime::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::interaction::MutableInteractionSource::new();
+        let focus_src = crate::input::interaction::MutableInteractionSource::new();
         let progress_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -725,7 +725,7 @@
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::runtime::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::interaction::MutableInteractionSource::new();
+        let focus_src = crate::input::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -776,7 +776,7 @@
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::runtime::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::interaction::MutableInteractionSource::new();
+        let focus_src = crate::input::interaction::MutableInteractionSource::new();
         let alpha_log: std::sync::Arc<std::sync::Mutex<Vec<f32>>> = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mk_field = |log: std::sync::Arc<std::sync::Mutex<Vec<f32>>>| {
             TextField::new(value.clone())
@@ -827,7 +827,7 @@
         let _guard = rt.enter();
         let mut composer = Composer::new();
         let value = crate::runtime::state::State::new(TextFieldValue::new(""));
-        let focus_src = crate::interaction::MutableInteractionSource::new();
+        let focus_src = crate::input::interaction::MutableInteractionSource::new();
         let scroll = crate::modifier::ScrollState::new();
         let scroll2 = scroll.clone();
         let mk = || {

@@ -426,7 +426,7 @@ with_component_styles(
 );
 ```
 
-**Where the pieces live.** `winia/src/component_styles.rs` holds the MECHANISM only: the generic
+**Where the pieces live.** `winia/src/components/component_styles.rs` holds the MECHANISM only: the generic
 `Styling<S>` (a function over a scope, composable with `then`), the type-keyed `ComponentStyles`
 registry, and the `CompositionLocal` plus its provider. A component owns its SCOPE and its styling
 alias in its own file:

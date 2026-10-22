@@ -592,7 +592,7 @@
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = crate::runtime::composer::Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
-        let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
+        let src_holder = std::cell::RefCell::new(None::<crate::input::interaction::MutableInteractionSource>);
         let scene = |ctx: &mut ComposeCtx| {
             WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
                 let c = ctx.remember(|| false);
@@ -753,7 +753,7 @@
         let theme = ThemeColors::light_from_seed(0x6750A4);
         let mut composer = crate::runtime::composer::Composer::new();
         let holder = std::cell::RefCell::new(None::<crate::runtime::state::State<bool>>);
-        let src_holder = std::cell::RefCell::new(None::<crate::interaction::MutableInteractionSource>);
+        let src_holder = std::cell::RefCell::new(None::<crate::input::interaction::MutableInteractionSource>);
         let mut custom_colors = SwitchColors::from_theme(&theme);
         custom_colors.checked_track = crate::graphics::Color::from_argb(255, 46, 125, 50);
         custom_colors.checked_thumb = crate::graphics::Color::WHITE;

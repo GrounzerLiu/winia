@@ -152,7 +152,7 @@
     /// `Level1` at rest and `Level2` (3 dp) hovered.
     #[test]
     fn the_elevation_sets_are_the_tokens_in_dp() {
-        use crate::interaction::ComponentState;
+        use crate::input::interaction::ComponentState;
         assert_eq!(ChipElevation::flat().for_state(&ComponentState::idle()), 0.0);
         assert_eq!(
             ChipElevation::flat().for_state(&ComponentState { dragged: true, pressed: true, ..ComponentState::idle() }),
@@ -179,7 +179,7 @@
     /// the transparent-to-filled direction shows none until it has arrived.
     #[test]
     fn a_transparent_container_never_shadows() {
-        use crate::interaction::ComponentState;
+        use crate::input::interaction::ComponentState;
         let hovered = ComponentState { hovered: true, ..ComponentState::idle() };
         let transparent = 0u8;
         let fading_in = 128u8;
@@ -267,7 +267,7 @@
     /// Drive frames until the animations settle, re-composing each frame the way a real window does.
     fn settle_shadow(
         composer: &mut Composer,
-        source: crate::interaction::MutableInteractionSource,
+        source: crate::input::interaction::MutableInteractionSource,
         selected: bool,
     ) {
         for _ in 0..200 {
@@ -281,7 +281,7 @@
 
     fn build_filter_chip(
         composer: &mut Composer,
-        source: crate::interaction::MutableInteractionSource,
+        source: crate::input::interaction::MutableInteractionSource,
         selected: bool,
     ) {
         composer.compose(move |ctx: &mut ComposeCtx| {
@@ -301,7 +301,7 @@
         let _g = crate::animation::tests::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         crate::animation::clear_all_animations();
         // A SELECTED filter chip: its container is filled, so the transparency gate lets the shadow through.
-        let source = crate::interaction::MutableInteractionSource::new();
+        let source = crate::input::interaction::MutableInteractionSource::new();
         let mut composer = Composer::new();
 
         source.emit_hover_enter();

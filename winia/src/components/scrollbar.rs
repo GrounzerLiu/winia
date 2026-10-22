@@ -28,7 +28,7 @@ use crate::runtime::state::State;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::Color;
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::WiniaTheme;
 
 /// 默认厚度（M3 `Thickness = 4dp`，桌面 CMP 常用 8dp 含 padding——winia 取 6dp）

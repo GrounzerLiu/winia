@@ -11,7 +11,7 @@ use crate::components::button::ButtonBorder;
 use crate::components::icon_button::{
     IconButtonDefaults, IconButtonShape, IconButtonSize, IconButtonStyle,
 };
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 

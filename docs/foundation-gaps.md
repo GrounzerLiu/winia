@@ -30,8 +30,8 @@ same absent primitive:
 
 | Approximation | Where | What it exists to solve |
 | --- | --- | --- |
-| `remember_derived_state` | `flow.rs` | recompute-on-read / notify-only-on-change (`derivedStateOf`) |
-| `snapshot_flow` | `flow.rs` | observe a set of reads and re-run when they change |
+| `remember_derived_state` | `runtime/flow.rs` | recompute-on-read / notify-only-on-change (`derivedStateOf`) |
+| `snapshot_flow` | `runtime/flow.rs` | observe a set of reads and re-run when they change |
 | the dependency frame + revision handshake | `runtime/state.rs` | subscribe-at-read and rollback on panic |
 
 Each carries its own resubscription and dedup logic, and they share a gap: **within one pass, two

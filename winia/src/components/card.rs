@@ -13,7 +13,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::interaction::{ComponentState, MutableInteractionSource};
+use crate::input::interaction::{ComponentState, MutableInteractionSource};
 use std::sync::Arc;
 
 // ═══════════════════════════════════════════════════════════

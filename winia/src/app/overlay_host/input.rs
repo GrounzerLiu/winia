@@ -370,7 +370,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
 }
 /// overlay 内 hover 更新（overlay composer + 本地坐标）
 pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
-    let hit: Vec<(u64, crate::interaction::MutableInteractionSource)> = {
+    let hit: Vec<(u64, crate::input::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
         let Some(r) = ov.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);

@@ -242,7 +242,7 @@ impl LazyListState {
         ctx: &mut crate::runtime::composer::ComposeCtx,
     ) -> crate::runtime::state::State<bool> {
         let source = self.clone();
-        crate::flow::remember_derived_state(ctx, move || source.can_scroll_forward())
+        crate::runtime::flow::remember_derived_state(ctx, move || source.can_scroll_forward())
     }
 
     /// [`can_scroll_backward`](Self::can_scroll_backward) as a `State` that notifies only on a flip.
@@ -252,7 +252,7 @@ impl LazyListState {
         ctx: &mut crate::runtime::composer::ComposeCtx,
     ) -> crate::runtime::state::State<bool> {
         let source = self.clone();
-        crate::flow::remember_derived_state(ctx, move || source.can_scroll_backward())
+        crate::runtime::flow::remember_derived_state(ctx, move || source.can_scroll_backward())
     }
     /// Whether a drag or a fling is in progress — Compose's `LazyListState.isScrollInProgress`, which
     /// callers use to stay off a list that is already moving.

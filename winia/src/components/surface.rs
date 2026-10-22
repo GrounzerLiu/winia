@@ -20,7 +20,7 @@ use crate::runtime::composer::{ComposeCtx, GroupStatus};
 use crate::composable;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::selection::ToggleableState;
 use std::sync::Arc;
 

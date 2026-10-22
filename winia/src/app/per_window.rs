@@ -34,7 +34,7 @@ pub(crate) struct PerWindow {
     /// only made when the hovered node asks for something different.
     pub(crate) cursor_icon: crate::input::PointerIcon,
     /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
-    pub(crate) pressed_interaction: Option<(u64, crate::interaction::MutableInteractionSource)>,
+    pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
     /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
     pub(crate) focused_interaction_slot: Option<u64>,
     /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
@@ -941,7 +941,7 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         }
     }
     // 当前路径上所有 hoverable 的 (slot, interaction)
-    let (hit, icon): (Vec<(u64, crate::interaction::MutableInteractionSource)>, crate::input::PointerIcon) = {
+    let (hit, icon): (Vec<(u64, crate::input::interaction::MutableInteractionSource)>, crate::input::PointerIcon) = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
         let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);

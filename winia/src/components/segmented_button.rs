@@ -35,7 +35,7 @@ use crate::layout::node::{
 use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape, TransformOrigin};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::components::text::ProvideTextStyle;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;

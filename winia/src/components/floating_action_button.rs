@@ -14,7 +14,7 @@ use crate::unit::{Offset, Size};
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::interaction::{ComponentState, MutableInteractionSource};
+use crate::input::interaction::{ComponentState, MutableInteractionSource};
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 

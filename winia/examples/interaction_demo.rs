@@ -13,7 +13,7 @@ use winia::runtime::composer::ComposeCtx;
 use winia::composable;
 use winia::modifier::{Modifier};
 use winia::graphics::{Shape};
-use winia::interaction::MutableInteractionSource;
+use winia::input::interaction::MutableInteractionSource;
 
 #[composable]
 fn interaction_ui(ctx: &mut ComposeCtx) {

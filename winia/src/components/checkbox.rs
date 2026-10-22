@@ -14,7 +14,7 @@ use crate::composable;
 use crate::layout::BoxLayout;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, GraphicsLayerParams, Shape};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::theme::{ThemeColors, WiniaTheme};
 use std::sync::Arc;
 
@@ -212,17 +212,17 @@ impl CheckboxStylingScope {
     }
 }
 
-/// One checkbox styling, registered through [`crate::component_styles::ComponentStyles::with`].
-pub type CheckboxStyling = crate::component_styles::Styling<CheckboxStylingScope>;
+/// One checkbox styling, registered through [`crate::components::component_styles::ComponentStyles::with`].
+pub type CheckboxStyling = crate::components::component_styles::Styling<CheckboxStylingScope>;
 
 /// The checkbox resolution: the theme's derivation, with the styling in scope applied on top.
 pub fn checkbox_colors_with_styles(theme: &crate::theme::ThemeColors) -> CheckboxColors {
     let mut colors = CheckboxDefaults::checkbox_colors(theme);
-    let styles = crate::component_styles::current_component_styles();
+    let styles = crate::components::component_styles::current_component_styles();
     if let Some(styling) = styles.get::<CheckboxStyling>() {
         let mut scope = CheckboxStylingScope {
             theme: theme.clone(),
-            is_dark: crate::component_styles::palette_is_dark(theme),
+            is_dark: crate::components::component_styles::palette_is_dark(theme),
             colors,
         };
         styling.apply(&mut scope);
@@ -983,8 +983,8 @@ mod tests;
         let theme = crate::theme::ThemeColors::default_light();
         let purple = Color::from_argb(255, 120, 0, 200);
         let plain = checkbox_colors_with_styles(&theme);
-        let styled = crate::component_styles::with_component_styles(
-            crate::component_styles::ComponentStyles::new()
+        let styled = crate::components::component_styles::with_component_styles(
+            crate::components::component_styles::ComponentStyles::new()
                 .with(CheckboxStyling::new(move |scope| scope.checked_box(purple))),
             || checkbox_colors_with_styles(&theme),
         );

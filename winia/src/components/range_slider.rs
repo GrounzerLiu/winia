@@ -32,7 +32,7 @@ use crate::layout::node::{LayoutNode, MeasurePolicy, Placement, measure_node};
 use crate::unit::{Offset, Size};
 use crate::modifier::{Modifier};
 use crate::input::{KbEvent};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::components::slider::{
     SLIDER_THUMB_HEIGHT, SLIDER_THUMB_WIDTH,
     SLIDER_TOUCH_HEIGHT, SLIDER_TRACK_HEIGHT, SliderColors, SliderDefaults, draw_thumb,

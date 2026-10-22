@@ -456,7 +456,7 @@ mod tests {
         let out = slot.clone();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(move |ctx| {
-            let derived = crate::flow::remember_derived_state(ctx, move || {
+            let derived = crate::runtime::flow::remember_derived_state(ctx, move || {
                 let av = aa.get();
                 if c.fetch_add(1, Ordering::SeqCst) == 1 {
                     // Mid-computation write: the version moves, so this result is discarded.
@@ -489,7 +489,7 @@ mod tests {
         let slot_in = slot.clone();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(move |ctx| {
-            let derived = crate::flow::remember_derived_state(ctx, move || {
+            let derived = crate::runtime::flow::remember_derived_state(ctx, move || {
                 c.fetch_add(1, Ordering::SeqCst);
                 s.get() != 0
             });
@@ -524,7 +524,7 @@ mod tests {
         let c = calls.clone();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(move |ctx| {
-            let _ = crate::flow::remember_derived_state(ctx, move || {
+            let _ = crate::runtime::flow::remember_derived_state(ctx, move || {
                 c.fetch_add(1, Ordering::SeqCst);
                 s.get() != 0
             });
@@ -555,7 +555,7 @@ mod tests {
         let slot_in = slot.clone();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(move |ctx| {
-            let derived = crate::flow::remember_derived_state(ctx, move || {
+            let derived = crate::runtime::flow::remember_derived_state(ctx, move || {
                 c.fetch_add(1, Ordering::SeqCst);
                 if f.get() { x.get() } else { y.get() }
             });
@@ -597,7 +597,7 @@ mod tests {
         let slot_in = slot.clone();
         let mut composer = crate::runtime::composer::Composer::new();
         composer.compose(move |ctx| {
-            let derived = crate::flow::remember_derived_state(ctx, move || s.get() != 0);
+            let derived = crate::runtime::flow::remember_derived_state(ctx, move || s.get() != 0);
             *slot_in.lock().unwrap() = Some(derived);
         });
         let drive = || rt.block_on(async { for _ in 0..50 { tokio::task::yield_now().await; } });

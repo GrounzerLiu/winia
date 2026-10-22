@@ -142,7 +142,7 @@ pub trait DrawWrapNode: std::fmt::Debug + Send + Sync {
 pub trait ClickNode: std::fmt::Debug + Send + Sync {
     fn on_click(&self);
     /// 绑定的交互源（press 波纹用；无则 None）。
-    fn interaction(&self) -> Option<crate::interaction::MutableInteractionSource> {
+    fn interaction(&self) -> Option<crate::input::interaction::MutableInteractionSource> {
         None
     }
     /// Skip 指纹 MUST 规范（同 DrawNode）：静态参数进 key；回写/瞬态动画值

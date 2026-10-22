@@ -24,10 +24,10 @@ component already exposes.
 
 | Piece | Where | Role |
 | --- | --- | --- |
-| `Styling<S>` | `component_styles.rs` | one class's styling: `Arc<dyn Fn(&mut S)>`, composable with `then` |
-| `ComponentStyles` | `component_styles.rs` | the registry: `TypeId -> styling`, `with`, `get`, `merge` |
-| `with_component_styles` | `component_styles.rs` | provides a registry through a `CompositionLocal` |
-| `palette_is_dark` | `component_styles.rs` | whether the palette in scope is dark |
+| `Styling<S>` | `components/component_styles.rs` | one class's styling: `Arc<dyn Fn(&mut S)>`, composable with `then` |
+| `ComponentStyles` | `components/component_styles.rs` | the registry: `TypeId -> styling`, `with`, `get`, `merge` |
+| `with_component_styles` | `components/component_styles.rs` | provides a registry through a `CompositionLocal` |
+| `palette_is_dark` | `components/component_styles.rs` | whether the palette in scope is dark |
 | `XStylingScope`, `XStyling`, `x_colors_with_styles` | the component's own file | what the class exposes and how it resolves |
 
 ```rust

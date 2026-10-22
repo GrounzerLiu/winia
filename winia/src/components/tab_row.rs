@@ -713,7 +713,7 @@ pub struct Tab {
     /// LeadingIconTab 模式：icon 左 + text 右（水平排列，SmallTabHeight）
     leading: bool,
     /// 外部交互源注入（缺省内部创建）
-    interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    interaction_source: Option<crate::input::interaction::MutableInteractionSource>,
     modifier: Modifier,
 }
 
@@ -741,7 +741,7 @@ impl Tab {
     }
 
     /// 注入外部交互源（缺省内部创建），用于外部观察 pressed/hover/focus 状态。
-    pub fn interaction_source(mut self, source: crate::interaction::MutableInteractionSource) -> Self {
+    pub fn interaction_source(mut self, source: crate::input::interaction::MutableInteractionSource) -> Self {
         self.interaction_source = Some(source);
         self
     }
@@ -815,7 +815,7 @@ impl Tab {
         // 与 Compose interactionSource 参数语义一致），缺省内部创建
         let interaction = match self.interaction_source.clone() {
             Some(src) => src,
-            None => ctx.remember(|| crate::interaction::MutableInteractionSource::new()).get(),
+            None => ctx.remember(|| crate::input::interaction::MutableInteractionSource::new()).get(),
         };
         let callback = self.on_click.clone();
 

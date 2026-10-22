@@ -25,7 +25,7 @@ Three separable things, often discussed as one:
 | write observation | `runtime/state.rs` `notify` | per-state revision + `Subscriber` list + `StateObserver` list |
 | read tracking | `runtime/state.rs` `record_dep` | thread-local dependency frame, active during a compose pass, reconciled at commit |
 | pass loop | `app.rs` `recompose_until_stable` | composes again while anything is pending, then one layout |
-| approximations | `flow.rs` | `remember_derived_state` (recompute + dedup), `snapshot_flow` (subscribe + reconcile) |
+| approximations | `runtime/flow.rs` | `remember_derived_state` (recompute + dedup), `snapshot_flow` (subscribe + reconcile) |
 
 There are no per-snapshot records. Writes take effect immediately and notify immediately; the
 composer drains its pending set at the start of the next pass. (A global version and `write_batch`

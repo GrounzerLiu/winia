@@ -288,7 +288,7 @@ Switch 符合①但枚举耦合深（14 处 match），Divider 太简单无代�
 ### 实测教训
 
 1. **`source_id()` 需新加**：`MutableInteractionSource` 无公开身份（`PartialEq`
-   用内部 State id 比较）。加 `pub fn source_id(&self) -> u32`（`interaction.rs`，
+   用内部 State id 比较）。加 `pub fn source_id(&self) -> u32`（`input/interaction.rs`，
    取 pressed State id，同 PartialEq 语义跨 clone 稳定）。不要 `Debug` 格式化
    整个源（State 地址每帧变，key 抖动致永不 Skip）。
 2. **测试要配 `DrawNode` import**：`node_key()` 是 trait 方法，测试模块需

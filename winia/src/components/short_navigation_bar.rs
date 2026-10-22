@@ -21,7 +21,7 @@ use crate::unit::{Offset, Size};
 use crate::layout::LayoutDirection;
 use crate::modifier::{Modifier};
 use crate::graphics::{Color, Shape};
-use crate::interaction::MutableInteractionSource;
+use crate::input::interaction::MutableInteractionSource;
 use crate::components::navigation_bar::{
     NavigationBarItem, NavigationBarItemColors, NavigationItemIconPosition, NAVIGATION_BAR_HEIGHT,
     NAVIGATION_BAR_ITEM_SPACING,
