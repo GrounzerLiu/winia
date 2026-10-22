@@ -79,6 +79,33 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                     }
                 });
 
+            Text::new("■ FlowRow — baseline alignment")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .main_spacing(12.0)
+                .modifier(
+                    Modifier::new()
+                        .width(320.0)
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    Text::new("small")
+                        .font_size(12.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                    Text::new("BIG")
+                        .font_size(28.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                    Text::new("medium")
+                        .font_size(20.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                });
+
             Text::new("■ FlowRow — long text wraps inside a fixed width")
                 .font_size(16.0)
                 .build(ctx);
