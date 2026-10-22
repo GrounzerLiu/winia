@@ -24,22 +24,22 @@ pub(super) fn spec_kind(spec: &AnimationSpec) -> String {
     }
 }
 
-/// 更新所有活跃动画，返回是否有动画还在运行
+/// Update every active animation; returns whether any is still running.
 pub fn update_animations() -> bool {
-    // 锁内取出动画，锁外执行 update（避免锁内执行用户代码导致死锁）
+    // Take the animations out under the lock and run update outside it (running user code under the lock could deadlock).
     let anims = std::mem::take(&mut *ACTIVE_ANIMATIONS.lock().unwrap());
     let mut still = Vec::new();
     for mut a in anims {
         if a.update() { still.push(a); }
     }
     let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-    // 去重：锁外新 push 的动画优先，丢弃 still 中同 state 的旧动画
+    // De-duplicate: an animation pushed outside the lock wins, so drop the older one for the same state.
     for a in still {
         if !list.iter().any(|x| x.state_id() == a.state_id()) {
             list.push(a);
         }
     }
-    // Color 动画
+    // Colour animations
     let canims = std::mem::take(&mut *ACTIVE_COLOR_ANIMATIONS.lock().unwrap());
     let mut cstill = Vec::new();
     for mut c in canims {
@@ -54,30 +54,30 @@ pub fn update_animations() -> bool {
     !list.is_empty() || !clist.is_empty()
 }
 
-/// 从所有动画列表移除指定 state 的动画（InfiniteTransition::dispose 用）
+/// Remove the animation for one state from every list (used by `InfiniteTransition::dispose`).
 pub fn remove_animation_by_state(state_id: StateId) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|a| a.state_id() != state_id);
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|a| a.state.state_id() != state_id);
 }
 
-/// 清空全部活跃动画（测试隔离用——跨测试清理全局表）
+/// Clear every active animation (test isolation — wipes the global tables between tests).
 #[cfg(test)]
 pub(crate) fn clear_all_animations() {
     ACTIVE_ANIMATIONS.lock().unwrap().clear();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
 }
 
-/// 指定 state 是否已在任一动画列表（跨列表去重，防双倍推进）
+/// Whether the state already has an animation in either list (checked across lists to avoid advancing it twice).
 pub fn has_animation_for_state(state_id: StateId) -> bool {
     ACTIVE_ANIMATIONS.lock().unwrap().iter().any(|a| a.state_id() == state_id)
         || ACTIVE_COLOR_ANIMATIONS.lock().unwrap().iter().any(|a| a.state.state_id() == state_id)
 }
 
-/// 取消指定 state 的进行中动画（值保持当前，不再被动画覆盖）。
+/// Cancel the running animation for one state (the value stays where it is and is no longer overwritten).
 ///
-/// 注意：`State::set` **不**取消动画——动画是独立系统，set 后下一帧
-/// update_animations 仍会把动画值写回。要"立即停下并设为目标值"请先
-/// `cancel_animation(&state)` 再 `state.set(v)`（或直接用 Snap push）。
+/// Note: `State::set` does **not** cancel an animation — animations are a separate system, and the next
+/// `update_animations` frame writes the animated value back. To stop now and land on the target value, call
+/// `cancel_animation(&state)` first and then `state.set(v)` (or push a Snap directly).
 pub fn cancel_animation<T: 'static>(state: &State<T>) {
     cancel_animation_by_id(state.state_id());
 }
@@ -293,7 +293,7 @@ pub fn active_animations_report() -> Vec<String> {
     lines
 }
 
-/// 是否有动画在运行（用于控制事件循环 Poll/Wait）
+/// Whether any animation is running (used to pick Poll or Wait for the event loop).
 pub fn is_animating() -> bool {
     !ACTIVE_ANIMATIONS.lock().unwrap().is_empty()
         || !ACTIVE_COLOR_ANIMATIONS.lock().unwrap().is_empty()

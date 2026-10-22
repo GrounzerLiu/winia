@@ -1,9 +1,5 @@
 use super::*;
 
-// ═══════════════════════════════════════════════════════════
-// A slot owns the motion it started
-// ═══════════════════════════════════════════════════════════
-
 /// The imperative handle re-targets; the per-frame path keeps deduping.
 ///
 /// `animate*AsState` calls its push on every recomposition, so a same-target motion there must be
@@ -135,15 +131,11 @@ fn a_slot_owned_motion_dies_with_its_slot() {
     clear_all_animations();
 }
 
-// ═══════════════════════════════════════════════════════════
-// P3-2 无限动画生命周期（T5/T6）
-// ═══════════════════════════════════════════════════════════
-
-/// T5：无限动画作用域随组合点移除自动 dispose——动画全局表清空，
-/// `update_animations()` 不再空转。
+/// T5: an infinite-animation scope is disposed automatically when its composition point goes
+/// away, so the global animation table is emptied and `update_animations()` no longer spins.
 #[test]
 fn test_infinite_transition_auto_dispose() {
-    // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
+    // The global animation table is shared, hence the serial lock (parallel clears would wipe it).
     let (_guard, _clock) = crate::animation::tests::serial_clock();
     use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
@@ -152,12 +144,12 @@ fn test_infinite_transition_auto_dispose() {
     use crate::runtime::state::State;
     use std::time::Duration;
 
-    // 清空全局动画表（跨测试并行隔离）
+    // Empty the global animation table (isolation from parallel tests).
     ACTIVE_ANIMATIONS.lock().unwrap().clear();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
     let mut composer = Composer::new();
     let holder = std::cell::RefCell::new(None::<State<bool>>);
-    // 记录自己动画的 state_id（跨测试并行隔离——只断言自己的动画状态）
+    // Remember our own animation's state_id: assert only on our own state.
     let sid_holder = std::cell::RefCell::new(None::<StateId>);
 
     let build = |composer: &mut Composer,
@@ -171,7 +163,7 @@ fn test_infinite_transition_auto_dispose() {
                 GroupStatus::Skip => {}
                 GroupStatus::Enter => {
                     if show.get() {
-                        // 无限动画作用域（内部挂 on_remove 自动 dispose）
+                        // Infinite-animation scope (it registers on_remove to dispose itself).
                         let mut inf = ctx.remember_infinite_transition();
                         let s = inf.animate_float(
                             ctx,
@@ -188,21 +180,21 @@ fn test_infinite_transition_auto_dispose() {
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
     };
 
-    // 帧1：动画注册 → 活跃
+    // Frame 1: the animation is registered and live.
     build(&mut composer, &holder, &sid_holder);
     let sid = sid_holder.borrow().unwrap();
-    assert!(has_animation_for_state(sid), "帧1 应有无限动画（活跃）");
+    assert!(has_animation_for_state(sid), "frame 1 should have a live infinite animation");
 
-    // 帧2：show=false → 组合点移除 → on_remove → dispose → 表清空
+    // Frame 2: show=false removes the composition point, on_remove disposes, the table empties.
     holder.borrow().as_ref().unwrap().set(false);
     build(&mut composer, &holder, &sid_holder);
-    assert!(!has_animation_for_state(sid), "组合点移除后无限动画应自动 dispose（无空转）");
+    assert!(!has_animation_for_state(sid), "the infinite animation is disposed when its composition point goes away");
 }
 
-/// T6：显式 dispose + on_remove 双重触发幂等——无 panic、表不变。
+/// T6: an explicit dispose plus the on_remove firing is idempotent: no panic, table unchanged.
 #[test]
 fn test_infinite_transition_manual_dispose_idempotent() {
-    // 全局动画表共享——串行锁（仓库既有约定，防并行测试 clear 误删）
+    // The global animation table is shared, hence the serial lock (parallel clears would wipe it).
     let (_guard, _clock) = crate::animation::tests::serial_clock();
     use crate::runtime::composer::{Composer, GroupStatus};
     use crate::layout::constraints::Constraints;
@@ -211,12 +203,12 @@ fn test_infinite_transition_manual_dispose_idempotent() {
     use crate::runtime::state::State;
     use std::time::Duration;
 
-    // 清空全局动画表（跨测试并行隔离）
+    // Empty the global animation table (isolation from parallel tests).
     ACTIVE_ANIMATIONS.lock().unwrap().clear();
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().clear();
     let mut composer = Composer::new();
     let holder = std::cell::RefCell::new(None::<State<bool>>);
-    // 保存 InfiniteTransition 引用（模拟用户持有——显式 dispose 路径）
+    // Keep a reference to the InfiniteTransition (the user holds one; explicit-dispose path).
     let inf_holder = std::cell::RefCell::new(None::<InfiniteTransition>);
 
     let build = |composer: &mut Composer,
@@ -246,19 +238,19 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         composer.layout(Constraints::new(0.0, 500.0, 0.0, 500.0));
     };
 
-    // 帧1：注册
+    // Frame 1: register.
     build(&mut composer, &holder, &inf_holder);
     let sid = inf_holder.borrow().as_ref().unwrap().ids.lock().unwrap()[0];
-    assert!(has_animation_for_state(sid), "帧1 应有无限动画");
+    assert!(has_animation_for_state(sid), "frame 1 should have an infinite animation");
 
-    // 显式 dispose（用户路径）→ 表清空
+    // Explicit dispose (the user path) empties the table.
     inf_holder.borrow().as_ref().unwrap().dispose();
-    assert!(!has_animation_for_state(sid), "显式 dispose 后表应清空");
+    assert!(!has_animation_for_state(sid), "the table should be empty after an explicit dispose");
 
-    // 组合点移除 → on_remove 再触发（ids 已 drain——幂等无 panic）
+    // The composition point goes away, so on_remove fires again (ids are drained: idempotent).
     holder.borrow().as_ref().unwrap().set(false);
     build(&mut composer, &holder, &inf_holder);
-    assert!(!has_animation_for_state(sid), "双重触发后表仍空（幂等）");
+    assert!(!has_animation_for_state(sid), "the table is still empty after both triggers (idempotent)");
 }
 
     /// Wiring test for the table-driven interpolators (v1's 29 curves plus `Linear`).
@@ -311,19 +303,20 @@ fn test_infinite_transition_manual_dispose_idempotent() {
         );
         _clock.advance(Duration::from_millis(60));
         anim2.update();
-        assert!((st2.peek() - 20.0).abs() < 5.0, "linear 推进 60ms 应≈20（实际 {}）", st2.peek());
+        assert!((st2.peek() - 20.0).abs() < 5.0, "linear after 60 ms should be about 20 (got {})", st2.peek());
     }
 
-    /// 回归：过冲插值器（Elastic/Back）动画完成后必须停靠精确目标——
-    /// 修复前用 eased>=1.0 判定，过冲使动画提前结束于越界值
+    /// Regression: after an overshooting interpolator (Elastic/Back) finishes, the animation must
+    /// settle exactly on the target. Previously completion used eased >= 1.0, so the overshoot ended
+    /// the animation early at an out-of-range value.
     #[test]
     fn tween_overshoot_interpolator_settles_at_target() {
         let (_guard, _clock) = crate::animation::tests::serial_clock();
         use crate::animation::interpolator::{EaseOutElastic, Interpolator};
-        // 曲线本身在 t≈0.98 处 eased 就 > 1.0（过冲）
+        // The curve itself already has eased > 1.0 at t ~ 0.98 (the overshoot).
         let ease = EaseOutElastic::new();
-        assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic 末端应过冲（>1.0）");
-        // 动画推进完整时长——必须精确停靠 100（修复前停在过冲值）
+        assert!(ease.interpolate(0.98) > 1.0, "EaseOutElastic should overshoot (> 1.0) near the end");
+        // Advance the full duration: it must settle exactly on 100 (before the fix it stopped at the overshoot).
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(
@@ -335,18 +328,18 @@ fn test_infinite_transition_manual_dispose_idempotent() {
             _clock.advance(Duration::from_millis(40));
             frames += 1;
         }
-        assert!(frames < 30, "动画应收敛");
-        assert_eq!(st.peek(), 100.0, "过冲插值器完成必须精确停靠目标（修复前停在越界值）");
+        assert!(frames < 30, "the animation should converge");
+        assert_eq!(st.peek(), 100.0, "an overshooting interpolator must settle exactly on the target");
     }
 
-    /// Keyframes done 帧同样必须停靠精确目标（与 Tween/Spring 一致）——
-    /// 末帧 progress<1.0 时插值结果 ≠ to
+    /// The Keyframes done frame must settle exactly on the target too, like Tween and Spring: with a
+    /// final progress < 1.0 the interpolated value is not `to`.
     #[test]
     fn keyframes_settles_at_target() {
         let (_guard, _clock) = crate::animation::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
-        // 末帧 progress=0.8（<1.0）——done 时若用插值结果将 ≠ to
+        // The last frame has progress 0.8 (< 1.0): using the interpolated value at done would not equal to.
         anim.animate_to(
             100.0,
             AnimationSpec::Keyframes(KeyframesSpec {
@@ -362,8 +355,8 @@ fn test_infinite_transition_manual_dispose_idempotent() {
             _clock.advance(Duration::from_millis(40));
             frames += 1;
         }
-        assert!(frames < 20, "keyframes 应收敛");
-        assert_eq!(st.peek(), 100.0, "keyframes 完成必须精确停靠目标（末帧 progress<1.0 时修复前≠to）");
+        assert!(frames < 20, "keyframes should converge");
+        assert_eq!(st.peek(), 100.0, "keyframes must settle exactly on the target even when the last progress < 1.0");
     }
 
 /// With a frozen clock the engine's trajectory is a function of time, so a test can assert WHERE the

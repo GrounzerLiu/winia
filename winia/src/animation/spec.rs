@@ -4,13 +4,13 @@ use super::*;
 pub enum AnimationSpec {
     Spring(SpringSpec),
     Tween(TweenSpec),
-    /// 关键帧序列（对标 Compose keyframes）
+    /// A keyframe sequence (cf. Compose `keyframes`).
     Keyframes(KeyframesSpec),
-    /// 重复执行子动画（对标 Compose repeatable）
+    /// Run a sub-animation repeatedly (cf. Compose `repeatable`).
     Repeatable(RepeatableSpec),
     /// Instant jump to the target (cf. Compose `snap`), optionally after a delay
     Snap(SnapSpec),
-    /// 指数衰减（对标 Compose exponentialDecay——fling/惯性滚动，无目标值）
+    /// Exponential decay (cf. Compose `exponentialDecay` — fling/inertial scrolling, no target value).
     Decay(DecaySpec),
 }
 
@@ -59,7 +59,7 @@ impl Default for SpringSpec {
     fn default() -> Self {
         Self {
             damping_ratio: 1.0,
-            // Compose StiffnessLow 级别（200）：收敛 ~300-400ms，过渡平滑明显
+            // Compose StiffnessLow (200): settles in ~300-400ms with a smooth, pronounced transition
             stiffness: 200.0,
             mass: 1.0,
             threshold: 0.01,
@@ -68,22 +68,22 @@ impl Default for SpringSpec {
 }
 
 impl SpringSpec {
-    // ── Compose Spring 常量（对标 androidx.compose.animation.core.Spring）──
-    /// 阻尼比：无弹跳（1.0——临界阻尼）
+    // -- Compose Spring constants (cf. androidx.compose.animation.core.Spring) --
+    /// Damping ratio: no bounce (1.0 — critically damped).
     pub const DAMPING_RATIO_NO_BOUNCY: f32 = 1.0;
-    /// 阻尼比：低弹跳（0.75）
+    /// Damping ratio: low bounce (0.75).
     pub const DAMPING_RATIO_LOW_BOUNCY: f32 = 0.75;
-    /// 阻尼比：中弹跳（0.5）
+    /// Damping ratio: medium bounce (0.5).
     pub const DAMPING_RATIO_MEDIUM_BOUNCY: f32 = 0.5;
-    /// 阻尼比：高弹跳（0.4）
+    /// Damping ratio: high bounce (0.4).
     pub const DAMPING_RATIO_HIGH_BOUNCY: f32 = 0.4;
-    /// 刚度：极低（50——慢速柔和）
+    /// Stiffness: very low (50 — slow and soft).
     pub const STIFFNESS_VERY_LOW: f32 = 50.0;
-    /// 刚度：低（200）
+    /// Stiffness: low (200).
     pub const STIFFNESS_LOW: f32 = 200.0;
-    /// 刚度：中（400）
+    /// Stiffness: medium (400).
     pub const STIFFNESS_MEDIUM: f32 = 400.0;
-    /// 刚度：高（1000——快速干脆）
+    /// Stiffness: high (1000 — fast and crisp).
     pub const STIFFNESS_HIGH: f32 = 1000.0;
     /// M3's `StandardMotionTokens.SpringDefaultEffectsStiffness` (1600) — the spring behind
     /// `MotionSchemeKeyTokens.DefaultEffects`.
@@ -166,13 +166,13 @@ pub struct TweenSpec {
     /// `tween(delayMillis)`). `Duration::ZERO` is the plain tween, so a spec that never sets it
     /// behaves exactly as before.
     pub delay: Duration,
-    /// 表驱动插值器（v1 预采样表——避免运行时计算过重；`Linear::new()` 为恒等）
+    /// Table-driven interpolator (a v1 pre-sampled table, so no heavy computation at runtime; `Linear::new()` is the identity).
     pub interpolator: std::sync::Arc<dyn interpolator::Interpolator>,
 }
 
 impl TweenSpec {
-    /// 便捷构造：`TweenSpec::new(duration, interpolator)`——插值器自动包装为
-    /// `Arc<dyn Interpolator>`（29 个表驱动插值器 + Linear 直接传入）
+    /// Convenience constructor: `TweenSpec::new(duration, interpolator)` — the interpolator is wrapped in
+    /// `Arc<dyn Interpolator>` automatically (the 29 table-driven interpolators, or `Linear` passed straight in).
     pub fn new(
         duration: Duration,
         interpolator: impl Into<std::sync::Arc<dyn interpolator::Interpolator>>,
@@ -217,7 +217,7 @@ pub struct KeyframesSpec {
 }
 
 impl KeyframesSpec {
-    /// 简化构造：仅 (progress, value)，段间线性
+    /// Simplified constructor: just (progress, value), linear between segments.
     pub fn new(duration: Duration, frames: Vec<(f32, f32)>) -> Self {
         let linear: std::sync::Arc<dyn interpolator::Interpolator> =
             std::sync::Arc::new(interpolator::Linear::new());
@@ -302,7 +302,7 @@ impl KeyframesOf {
     }
 }
 
-/// 重复执行：iterations 次后完成
+/// Repeat: completes after `iterations` runs.
 #[derive(Clone, Debug)]
 pub struct RepeatableSpec {
     pub iterations: u32,

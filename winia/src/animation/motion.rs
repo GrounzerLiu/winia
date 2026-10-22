@@ -1,18 +1,17 @@
 use super::*;
 
-// ═══════════════════════════════════════════════════════════
-
 /// One value the engine can move: the state it writes, the motion in progress, and the callbacks.
 /// Renamed from `Animatable` when the public Compose-shaped handle took that name.
 pub(super) struct Motion<T: Clone + 'static> {
     pub(super) state: crate::runtime::state::Animating<T>,
     pub(super) anim_state: Option<AnimationState<T>>,
-    /// 动画完成回调（done 帧触发一次，take 后释放）
+    /// Completion callback: fires once on the done frame, then the slot is taken (released).
     pub(super) on_finish: Option<Box<dyn FnOnce(MotionEnd) + Send>>,
-    /// fling 撞到 clamp 边界时回调一次，参数为该帧尚未消费的瞬时速度。
+    /// Fires once when a fling hits the clamp boundary, with the instantaneous velocity left
+    /// unconsumed on that frame.
     pub(super) on_boundary: Option<Box<dyn FnOnce(f32) + Send>>,
-    /// fling 边界 clamp（Decay 专用）：每帧求值（读最新滚动极限）；
-    /// 值被 clamp 改变 → 立即完成（对齐 Compose：fling 消耗完即停）
+    /// Fling boundary clamp (Decay only): evaluated every frame, reading the latest scroll limit; a
+    /// value the clamp changes completes the motion at once (as Compose does when a fling is consumed).
     pub(super) clamp: Option<Box<dyn Fn(f32) -> f32 + Send + Sync>>,
 }
 
@@ -23,13 +22,15 @@ pub(super) struct AnimationState<T> {
     pub(super) spec: AnimationSpec,
     pub(super) last_velocity: f32,
     pub(super) last_update: Instant,
-    // Spring 持续的位移（累积值，非每帧重算）
+    // Displacement carried by a running spring (accumulated, not recomputed per frame).
     pub(super) current_displacement: f32,
-    // Decay 初始速度（v0 常数——解析式需要，不被 last_velocity 覆盖）
+    // Decay's initial velocity (the v0 constant the analytic form needs; not overwritten by
+    // last_velocity).
     pub(super) initial_velocity: f32,
-    /// 多分量值（`Size`/`Offset`）上跑 Spring 时，每个分量一条弹簧——Compose 的
-    /// `VectorizedSpringSpec` 语义。`None` 表示单分量：走下面的标量位移
-    /// （`current_displacement`），标量类型与 Tween/Keyframes 等一律走它。
+    /// Running a Spring on a multi-component value (`Size`/`Offset`): one spring per component —
+    /// Compose's `VectorizedSpringSpec` semantics. `None` means a single component, which uses the
+    /// scalar displacement below (`current_displacement`); scalar types and Tween/Keyframes use
+    /// that path.
     pub(super) lanes: Option<Vec<SpringLane>>,
     /// A fling on a multi-component value: one exponential decay per component — Compose's
     /// `DecayAnimationSpec<T>` vectorized through the type's `VectorConverter` (each axis its own
@@ -50,7 +51,8 @@ pub(super) struct DecayLane {
     pub(super) velocity: f32,
 }
 
-/// 一条分量弹簧：目标值 + 该分量的位移与速度（标量路径的字段按分量复制一份）。
+/// One component's spring: its target plus that component's displacement and velocity —
+/// a per-component copy of the scalar path's fields.
 pub(super) struct SpringLane {
     pub(super) to: f32,
     pub(super) displacement: f32,
@@ -66,7 +68,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         Self { state, anim_state: None, on_finish: None, on_boundary: None, clamp: None }
     }
 
-    /// fling 边界 clamp（仅 Decay 生效）：值被 clamp 改变 → 写边界值并立即完成
+    /// Fling boundary clamp (Decay only): a value the clamp changes is written at the bound and the
+    /// motion completes.
     pub fn set_clamp(&mut self, f: impl Fn(f32) -> f32 + Send + Sync + 'static) {
         self.clamp = Some(Box::new(f));
     }
@@ -77,8 +80,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         self.clamp = clamp;
     }
 
-    /// 注册动画完成回调（对标 Compose animate*AsState 的 finishedListener——
-    /// 动画自然完成/超时强制完成时调用一次）
+    /// Register a completion callback — Compose's `finishedListener` on `animate*AsState`: it fires
+    /// once, when the animation finishes naturally or is forced to finish by the overrun guard.
     pub fn on_finish(&mut self, f: impl FnOnce() + Send + 'static) {
         self.on_finish = Some(Box::new(move |_end| f()));
     }
@@ -110,30 +113,32 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         }
     }
 
-    /// 启动动画到目标值
+    /// Start an animation towards the target value.
     pub fn animate_to(&mut self, to: T, spec: AnimationSpec) {
-        // P2-9 速度延续：被打断的动画从当前速度继续（Compose 核心语义——
-        // 弹簧弹到一半改目标，新动画继承旧速度，物理连续）。
-        // Spring/Decay 每帧更新 last_velocity；Tween/Keyframes/Repeatable
-        // 无速度语义恒 0——继承无影响（从静止重启）。
+        // Velocity continuity (P2-9): an interrupted animation continues from its current velocity —
+        // core Compose semantics, where a spring retargeted half way inherits the old velocity and stays
+        // physically continuous. Spring/Decay update last_velocity every frame; Tween/Keyframes/Repeatable
+        // carry no velocity and stay at 0, so inheriting there is a restart from rest.
         let start_velocity = self.retarget_velocity();
         self.start_with_velocity(to, spec, start_velocity);
     }
 
-    /// 内部启动入口：显式指定初始速度（`push_animatable` retarget 时从
-    /// 被移除的旧动画继承；`animate_to` 从自身 anim_state 继承）。
+    /// Internal start entry taking an explicit initial velocity: `push_animatable` inherits it from the
+    /// animation it replaces on a retarget, and `animate_to` from its own `anim_state`.
     pub(super) fn start_with_velocity(&mut self, to: T, spec: AnimationSpec, start_velocity: RetargetVelocity) {
-        // review fix：只有 Spring/Decay 有物理速度语义——Tween/Keyframes/
-        // Repeatable/Snap 被打断时从静止重启。否则"Spring→Tween→Spring"
-        // 第二次打断会继承 Tween 期间的过期速度（Tween 不更新 last_velocity）。
+        // Review fix: only Spring/Decay have physical velocity semantics — Tween/Keyframes/
+        // Repeatable/Snap restart from rest when interrupted. Otherwise a "Spring -> Tween ->
+        // Spring" chain would inherit the stale velocity from the Tween phase on its second
+        // interruption (a Tween never updates last_velocity).
         let start_velocity = match spec {
             AnimationSpec::Spring(_) | AnimationSpec::Decay(_) => start_velocity,
             _ => RetargetVelocity::ZERO,
         };
         let from = self.state.peek();
         let displacement = AnimatableValue::to_f32(&from) - AnimatableValue::to_f32(&to);
-        // Spring 在多分量值（Size/Offset）上按分量推进：每轴一条弹簧、各自收敛——这样
-        // 尺寸弹簧的两个轴都能落到目标，而不是共用一条沿范数运动的单值位移。
+        // A Spring on a multi-component value (Size/Offset) advances per component: one spring per axis,
+        // each settling on its own, so both axes of a size spring reach the target instead of sharing a
+        // single scalar displacement travelling along the norm.
         let lanes: Option<Vec<SpringLane>> = match &spec {
             AnimationSpec::Spring(_) => {
                 let mut from_components = [0.0; MAX_ANIMATION_COMPONENTS];
@@ -214,7 +219,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         let from = self.state.peek();
         self.anim_state = Some(AnimationState {
             from: from.clone(),
-            to: from.clone(), // Decay 无目标——占位（更新时用解析式）
+            to: from.clone(), // Decay has no target — placeholder (the update uses the analytic form).
             start: now(),
             spec: AnimationSpec::Decay(spec),
             last_velocity: 0.0,
@@ -267,18 +272,20 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         });
     }
 
-    /// 检查并更新动画值，返回是否还在动画中
+    /// Advance the animation by one frame; returns whether it is still running.
     pub fn update(&mut self) -> bool {
         let Some(ref mut state) = self.anim_state else { return false; };
         let now = now();
-        // 极端参数保护：Spring/Decay 超过 5s 未收敛强制完成——Spring 有 done
-        // 阈值但渐近收敛可能永不达（stiffness=0）；Decay 的 friction 过小时
-        // 速度衰减极慢（e^(-0.1·t) 需 ~94s 才低于阈值）。Tween/Keyframes/
-        // Repeatable 有明确时长、Snap 立即完成——不被截断（用户设 >5s 时长合法）
+        // Extreme-parameter guard: a Spring/Decay that has not settled after 5s is forced to finish.
+        // A Spring has a done threshold, but asymptotic convergence may never reach it (stiffness=0); with
+        // a tiny friction a Decay's velocity falls very slowly (e^(-0.1*t) needs ~94s to drop below the
+        // threshold). Tween/Keyframes/Repeatable have an explicit duration and Snap completes at once —
+        // they are never cut short (a user-set duration above 5s is legal).
         if now.saturating_duration_since(state.start) > Duration::from_secs(5) {
             let overrun = match &state.spec {
                 AnimationSpec::Spring(_) => Some(state.to.clone()),
-                // Decay：写当前解析值（极限可能因 friction 过小而超大——不跳极限）
+                // Decay: write the current analytic value (a tiny friction can make the limit huge —
+                // do not jump to it).
                 AnimationSpec::Decay(spec) => {
                     let t = now.saturating_duration_since(state.start).as_secs_f32();
                     let friction = spec.friction.max(0.001);
@@ -367,9 +374,11 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
         let (value, done) = match &state.spec {
             AnimationSpec::Spring(spec) => {
                 if state.lanes.is_some() {
-                    // 多分量（Size/Offset）：每个分量一条弹簧，各自按可见阈值收敛，全部到位才
-                    // 算完成——Compose 的 `VectorizedSpringSpec` 同样以"所有轴都结束"为结束。
-                    // 先到位的分量写精确目标值，免得它在别的轴还在动时留下阈值内的残余位移。
+                    // Multi-component (Size/Offset): one spring per component, each settling on the
+                    // visible threshold, and the motion is done only when all are — Compose's
+                    // `VectorizedSpringSpec` likewise ends when every axis has. A component that
+                    // arrives early writes the exact target, so it leaves no sub-threshold residue
+                    // while other axes still move.
                     let (components, len, all_done, last_velocity) = {
                         let lanes = state.lanes.as_mut().unwrap();
                         let mut components = [0.0; MAX_ANIMATION_COMPONENTS];
@@ -381,7 +390,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                                 lane.displacement, &mut lane.velocity, dt, spec.threshold,
                             );
                             if spring_at_rest(lane.displacement, lane.velocity, spec.threshold) {
-                                // 同标量路径：done 时写精确目标值，而不是阈值内的近似值
+                                // As on the scalar path: on done write the exact target, not the
+                                // within-threshold approximation.
                                 components[i] = lane.to;
                             } else {
                                 all_done = false;
@@ -393,7 +403,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                         }
                         (components, lanes.len(), all_done, last_velocity)
                     };
-                    // 打断时的速度延续取最快的那条分量（`push_animatable` 的 retarget 用）
+                    // Velocity continuity on an interruption takes the fastest component
+                    // (used by `push_animatable`'s retarget).
                     state.last_velocity = last_velocity;
                     if all_done || spring_on_clock {
                         (state.to.clone(), true)
@@ -407,14 +418,16 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                         state.current_displacement, &mut state.last_velocity, dt, spec.threshold,
                     );
                     state.current_displacement = displacement;
-                    // 直接使用物理值，不做 lerp/clamp（避免超调截断导致抖动）
+                    // Use the physical value directly, with no lerp/clamp (truncating the overshoot
+                    // would cause jitter).
                     // One test, shared with the integrator: see `spring_at_rest`.
                     let done = spring_on_clock
                         || spring_at_rest(displacement, state.last_velocity, spec.threshold);
                     if done {
-                        // Spring 渐近收敛：done 时位移只是"小于阈值"而非精确 0——
-                        // 必须返回精确目标值，否则调用方（如 AnimatedVisibility 的
-                        // exit 完成检测 progress<0.001）会因残余位移卡住/误判
+                        // A Spring converges asymptotically: on done the displacement is merely "below the
+                        // threshold", not exactly 0, so the exact target must be returned. Otherwise a caller
+                        // (e.g. AnimatedVisibility's exit check `progress < 0.001`) stalls or misjudges
+                        // because of the residual displacement.
                         (state.to.clone(), true)
                     } else {
                         let spring_val = to_f32 + displacement;
@@ -430,7 +443,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     (state.from.clone(), false)
                 } else {
                 let elapsed = elapsed - spec.delay;
-                // duration=0 → 立即完成（0 时长 = 瞬移）；>0 走正常时间轴
+                // duration=0 -> complete immediately (a zero duration is a jump); >0 follows the
+                // normal timeline.
                 let t = if spec.duration.is_zero() {
                     1.0
                 } else {
@@ -438,8 +452,9 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 };
                 let eased = spec.interpolator.interpolate(t);
                 if t >= 1.0 {
-                    // 时间到：写精确目标——过冲插值器（Elastic/Back）eased 会提前
-                    // >= 1.0，若用 eased 判定则动画提前结束于过冲值（停在越界位置）
+                    // Time is up: write the exact target. An overshooting interpolator (Elastic/Back) can
+                    // push `eased` past 1.0 early, and judging by `eased` would end the animation at the
+                    // overshoot value (parking outside the range).
                     (state.to.clone(), true)
                 } else {
                     (state.from.lerp(&state.to, eased), false)
@@ -448,15 +463,16 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             }
             AnimationSpec::Keyframes(spec) => {
                 let elapsed = now.saturating_duration_since(state.start);
-                // duration=0 → 立即完成（同 Tween）
+                // duration=0 -> complete immediately (same as Tween).
                 let t = if spec.duration.is_zero() {
                     1.0
                 } else {
                     (elapsed.as_secs_f64() / spec.duration.as_secs_f64()).min(1.0) as f32
                 };
                 if t >= 1.0 {
-                    // 时间到：写精确目标（与 Tween/Spring done 语义一致——
-                    // 末帧 progress<1.0 或末帧值过冲时插值结果可能≠to）
+                    // Time is up: write the exact target, matching the Tween/Spring done semantics
+                    // (when the last frame is progress<1.0 or overshoots, the interpolated result may
+                    // differ from `to`).
                     (state.to.clone(), true)
                 } else {
                     let factor = interpolate_keyframes(&spec.frames, t);
@@ -480,9 +496,11 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                     StartOffsetType::Delay => elapsed.saturating_sub(spec.start_offset),
                     StartOffsetType::FastForward => elapsed + spec.start_offset,
                 };
-                // total=0（Snap/0 时长）→ elapsed>=0 恒真 → 首次 update 即完成（Snap 语义）
+                // total=0 (Snap / zero duration) -> elapsed>=0 is always true -> done on the
+                // first update (Snap semantics).
                 if played >= total {
-                    // 完成值：Reverse + 偶数次时最后 cycle 结束于 from（否则结束于 to）
+                    // Final value: with Reverse and an even iteration count the last cycle ends at
+                    // `from` (otherwise at `to`).
                     let end_val = match spec.mode {
                         RepeatMode::Restart => state.to.clone(),
                         RepeatMode::Reverse => {
@@ -499,7 +517,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                         RepeatMode::Restart => t,
                         RepeatMode::Reverse => if cycle_idx % 2 == 0 { t } else { 1.0 - t },
                     };
-                    // base 曲线求值（factor 反转对 Keyframes 即曲线倒放）
+                    // Evaluate the base curve (a reversed factor plays a Keyframes curve backwards).
                     (base.value_at(&state.from, &state.to, factor), false)
                 }
             }
@@ -516,7 +534,8 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
             AnimationSpec::Decay(spec) => {
                 let elapsed = now.saturating_duration_since(state.start);
                 let t = elapsed.as_secs_f32();
-                let friction = spec.friction.max(0.001); // 除零保护（friction<=0 退化为极慢）
+                // Division-by-zero guard (friction<=0 degenerates to very slow).
+                let friction = spec.friction.max(0.001);
                 if let Some(lanes) = state.decay_lanes.as_mut() {
                     // A fling on a multi-component value: one decay per component, exactly as Compose's
                     // `DecayAnimationSpec<T>` runs the float spec through the type's `VectorConverter`.
@@ -547,7 +566,7 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
                 let decay = (-friction * t).exp();
                 let vel_now = v0 * decay;
                 state.last_velocity = vel_now; // for an interruption (velocity continuity, P2-9)
-                // 解析式极限（速度低于阈值时精确停靠）
+                // Analytic limit (parks exactly once the velocity falls below the threshold).
                 let raw = if vel_now.abs() < spec.threshold {
                     state.from.to_f32() + v0 / friction
                 } else {
@@ -608,17 +627,14 @@ impl<T: Clone + PartialEq + AnimatableValue + 'static> Motion<T> {
 
 }
 
-// ═══════════════════════════════════════════════════════════
-// Spring 物理模拟（半隐式欧拉积分）
-// ═══════════════════════════════════════════════════════════
-
-/// 关键帧插值：在 frames 中按进度 t 定位段，段内用 interpolator 插值
+/// Keyframe interpolation: locate the segment for progress `t` in `frames` and interpolate inside it
+/// with that segment's interpolator.
 pub(super) fn interpolate_keyframes(frames: &[(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)], t: f32) -> f32 {
     if frames.is_empty() { return 0.0; }
     if t <= 0.0 { return frames[0].1; }
     let last = frames.last().unwrap();
     if t >= last.0 { return last.1; }
-    // t 小于首帧 progress 时取首帧值（首帧 progress 可能 > 0）
+    // Below the first frame's progress take its value (the first frame's progress may be > 0).
     if t < frames[0].0 { return frames[0].1; }
     for i in 0..frames.len() - 1 {
         let (p0, v0, _) = frames[i];

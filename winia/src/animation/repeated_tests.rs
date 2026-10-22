@@ -2,14 +2,14 @@
     use std::sync::Arc;
     use crate::runtime::composer::Composer;
 
-    /// 反复动画循环：多次 push 目标 + update 步进——最终收敛到最新目标。
-    /// 验证动画引擎在反复触发（点击循环）时值正确（旧动画移除/去重无双驱动）。
+    /// Repeated animation cycles: push targets and step updates repeatedly, converging to the latest target.
+    /// Verifies the engine stays correct under repeated triggers (click loops), with no double driving.
     #[test]
     fn repeated_animation_cycles_converge() {
         let (_guard, _clock) = super::tests::serial_clock();
         let state = crate::runtime::state::State::new(40.0f32);
 
-        // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
+        // Each round: push a target, advance past the duration, run one update with the real dt, then check.
         for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
             push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
             }));
@@ -18,35 +18,35 @@
             let v = state.peek();
             eprintln!("[repeat-anim] round {} target={} val={:.1}", i, target, v);
             assert!((v - target).abs() < 1.0,
-                "反复动画第 {} 轮应收敛到 {}，实际 {:.1}", i, target, v);
+                "repeated animation round {} should converge to {}, got {:.1}", i, target, v);
         }
     }
 
-    /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
+    /// Pushing again before the animation finishes (retargeting mid-flight) switches to the new target.
     #[test]
     fn mid_flight_retarget_switches() {
         let (_guard, _clock) = super::tests::serial_clock();
         let state = crate::runtime::state::State::new(40.0f32);
         push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(1000), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
-        // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
+        // Retarget to 40 mid-flight (after 10 frames); this should switch over.
         _clock.advance(std::time::Duration::from_millis(50));
         update_animations();
         let mid = state.peek();
-        assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
+        assert!(mid > 40.0 && mid < 200.0, "should be mid-animation, got {}", mid);
         push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         _clock.advance(std::time::Duration::from_millis(300));
         update_animations();
-        // 完成判定可能差一帧（dt 偏移）——再 sleep + update 一次确保收敛
+        // Completion can be off by one frame (dt offset); advance and update once more to settle.
         _clock.advance(std::time::Duration::from_millis(250));
         update_animations();
         let v = state.peek();
         eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
-        assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
+        assert!((v - 90.0).abs() < 1.0, "mid-flight retarget should converge to 90, got {:.1}", v);
     }
 
-    /// i32 插值（animate_int_as_state 的基础）：四舍五入 + spring 支持
+    /// i32 interpolation (the basis of animate_int_as_state): rounding + spring support.
     #[test]
     fn int_value_lerp_rounds() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -55,18 +55,18 @@
         assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.51), 5);
         assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.55), 6);
         assert_eq!(<i32 as AnimatableValue>::from_f32(3.7), 4);
-        assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
-        // 动画收敛：0 → 100（Tween）
+        assert!(<i32 as AnimatableValue>::supports_spring(), "i32 scalars should support Spring");
+        // Animation convergence: 0 -> 100 (Tween).
         let state = crate::runtime::state::State::new(0i32);
         push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
         }));
         _clock.advance(std::time::Duration::from_millis(300));
         update_animations();
-        assert_eq!(state.peek(), 100, "i32 动画应收敛到 100");
+        assert_eq!(state.peek(), 100, "i32 animation should converge to 100");
     }
 
-    /// Transition::animate 泛型（animate_value 核心）：Color 值经 target_fn
-    /// 映射 + push_animatable 驱动收敛
+    /// Generic Transition::animate (the core of animate_value): a Color value is
+    /// mapped through target_fn and driven to convergence by push_animatable.
     #[test]
     fn transition_animate_generic_value() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -77,7 +77,7 @@
             let s = t.animate(ctx, |v| *v * 2.0, "v");
             captured = Some(s);
         });
-        assert_eq!(captured.unwrap().peek(), 6.0, "target_fn 映射应立即生效（同值跳过动画）");
+        assert_eq!(captured.unwrap().peek(), 6.0, "target_fn mapping applies immediately (same value skips)");
     }
 
     #[test]

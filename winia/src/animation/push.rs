@@ -1,15 +1,11 @@
 use super::*;
 
-// ═══════════════════════════════════════════════════════════
-// InfiniteTransition — 无限循环动画（对标 Compose rememberInfiniteTransition）
-// ═══════════════════════════════════════════════════════════
-
-/// 重复模式
+/// How a loop repeats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepeatMode {
-    /// 结束回到起点重来
+    /// Start over from the beginning after reaching the end.
     Restart,
-    /// 往返（from→to→from）
+    /// Ping-pong (from → to → from).
     Reverse,
 }
 
@@ -97,8 +93,8 @@ impl DurationSpec {
 pub struct InfiniteRepeatableSpec {
     pub duration: Duration,
     pub(crate) mode: RepeatMode,
-    /// 循环周期内的取值曲线（None = 线性 from→to）；
-    /// 对标 Compose `infiniteRepeatable(tween{...}/keyframes{...})`
+    /// The value curve within one cycle (None = linear from → to);
+    /// Compose's `infiniteRepeatable(tween{...}/keyframes{...})`.
     pub(crate) base: Option<DurationSpec>,
     pub(crate) start_offset: Duration,
     pub(crate) start_offset_type: StartOffsetType,
@@ -111,7 +107,7 @@ impl InfiniteRepeatableSpec {
     pub fn reverse(duration: Duration) -> Self {
         Self { duration, mode: RepeatMode::Reverse, base: None, start_offset: Duration::ZERO, start_offset_type: StartOffsetType::Delay }
     }
-    /// 周期内按 tween 曲线取值（对标 Compose `infiniteRepeatable(tween(...))`）
+    /// Sample a tween curve within each cycle (Compose's `infiniteRepeatable(tween(...))`).
     pub fn restart_tween(duration: Duration, tween: TweenSpec) -> Self {
         Self {
             duration,
@@ -121,8 +117,8 @@ impl InfiniteRepeatableSpec {
             start_offset_type: StartOffsetType::Delay,
         }
     }
-    /// 周期内按 keyframes 曲线取值（对标 Compose `infiniteRepeatable(keyframes{...})`）——
-    /// frames = (周期内进度 0..1, 值 0..1，段间插值器)
+    /// Sample a keyframes curve within each cycle (Compose's `infiniteRepeatable(keyframes{...})`) —
+    /// frames = (progress 0..1 within the cycle, value 0..1, per-segment interpolator).
     pub fn restart_keyframes(
         duration: Duration,
         frames: Vec<(f32, f32, std::sync::Arc<dyn interpolator::Interpolator>)>,
@@ -155,7 +151,7 @@ impl InfiniteRepeatableSpec {
     }
 }
 
-/// 无限循环动画实例（永远运行，直到被移除）——泛型统一（f32/Color 共用）。
+/// An infinite loop instance (runs until removed) — generic over the value type (shared by f32/Color).
 pub(super) struct Infinite<T: AnimatableValue> {
     pub(super) state: crate::runtime::state::Visual<T>,
     pub(super) from: T,
@@ -197,11 +193,11 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
                 self.state.set(self.from.lerp(&self.to, eased));
             }
         }
-        true // 永远运行
+        true // Runs forever.
     }
     fn same_target(&self, _target: &dyn std::any::Any) -> bool { false }
     fn state_id(&self) -> StateId { self.state.state_id() }
-    fn last_velocity(&self) -> f32 { 0.0 } // 无限循环无速度延续语义
+    fn last_velocity(&self) -> f32 { 0.0 } // A loop has no velocity-continuity semantics.
     fn describe(&self) -> String {
         format!(
             "state={:?} spec=infinite({}ms, {}, offset {}ms {}) value={:.3}->{:.3}",
@@ -222,26 +218,26 @@ impl<T: AnimatableValue + Send + Sync + 'static> AnimationInstance for Infinite<
     }
 }
 
-/// 注册一个无限循环动画（f32/Color 等 AnimatableValue 共用——泛型表，无独立第三表）
+/// Register an infinite loop (shared by f32/Color and other `AnimatableValue`s — one generic
+/// registry, no separate third table).
 pub fn push_infinite<T: AnimatableValue + Send + Sync + 'static>(
     state: State<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
 ) {
     push_infinite_visual(state.into_visual(), from, to, spec);
 }
 
-/// `push_infinite` 的 Visual-handle 入口（InfiniteTransition 已持有 Visual
-/// 时避免 State round-trip）。
+/// Visual-handle entry of `push_infinite` (skips the State round-trip when an
+/// InfiniteTransition already holds the Visual).
 pub fn push_infinite_visual<T: AnimatableValue + Send + Sync + 'static>(
     visual: crate::runtime::state::Visual<T>, from: T, to: T, spec: InfiniteRepeatableSpec,
 ) {
     let sid = visual.state_id();
-    if has_animation_for_state(sid) { return; } // 跨列表去重
+    if has_animation_for_state(sid) { return; } // Dedup across lists.
     let anim = Infinite { state: visual, from, to, spec, start: now() };
     ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
 }
 
-/// 注册一个动画到全局活跃列表
-/// Register a `Motion<T>` in the global active list (called by `animate_*_as_state`)
+/// Register a `Motion<T>` in the global active list (called by `animate_*_as_state`).
 pub fn push_animatable<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: State<T>, target: T, spec: AnimationSpec) {
     push_animatable_handle(state.into_animating(), target, spec);
 }
@@ -354,8 +350,8 @@ pub fn push_animatable_with_velocity_and_done<
     crate::runtime::state::wake_loop();
 }
 
-/// `push_animatable` 的 Animating-handle 入口（调用方已持有 Animating
-/// 时避免 State round-trip；语义与 `push_animatable` 完全一致）。
+/// Animating-handle entry of `push_animatable` (skips the State round-trip when the caller
+/// already holds an Animating; identical semantics).
 pub fn push_animatable_handle<T: Clone + PartialEq + AnimatableValue + Send + Sync + 'static>(state: crate::runtime::state::Animating<T>, target: T, spec: AnimationSpec) {
     push_animatable_handle_inner(state, target, spec, false);
 }
@@ -368,10 +364,11 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
 ) {
     let sid = state.state_id();
     if state.peek() == target {
-        // 当前值已等于目标：仅当无进行中动画（或动画目标相同）时才可直接返回。
-        // 若存在目标不同的旧动画，必须取消它——否则旧动画会继续把值拉向旧目标
-        // （快速切换 + Backchannel 场景：peek 恰好等于新目标，旧弹簧 22→2 存活，
-        // 最终把容器写回 2 而状态已是 true）。
+        // The value already equals the target: return only when no animation is running (or the
+        // running one has the same target). A stale animation with a different target must be
+        // cancelled — otherwise it keeps pulling the value towards the old target (fast toggling +
+        // Backchannel: peek happens to equal the new target, the old spring 22→2 stays alive, and
+        // it finally writes the container back to 2 while the state is already true).
         let conflicting = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
             list.iter().any(|a| a.state_id() == sid && !a.same_target(&target))
@@ -379,15 +376,18 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
         if !conflicting && !restart {
             return;
         }
-        // 取消旧动画后继续走注册路径：from == target，零位移动画的每一帧都精确写回 target，
-        // 避免“取消后直接返回”在极端时序下残留中间值/1 帧回弹。
+        // After cancelling the old animation, continue down the registration path: from == target,
+        // so a zero-displacement motion writes the exact target every frame — this avoids the
+        // residual intermediate value / one-frame rebound that an early return after cancelling
+        // can leave under extreme timing.
         // (A Spring completes on its first update; a Tween/Keyframes motion holds the value for its
         // whole duration. The value is the target either way.)
         cancel_animation_by_id(sid);
     }
     let inherited_velocity: RetargetVelocity;
     let spec = normalise_target_spec(spec);
-    // 同 `push_animatable_with_velocity_and_done`：只有声明不支持 Spring 的类型才降级
+    // As in `push_animatable_with_velocity_and_done`: only a type that declares no Spring support
+    // is downgraded.
     let spec = if T::supports_spring() {
         spec
     } else {
@@ -398,27 +398,29 @@ fn push_animatable_handle_inner<T: Clone + PartialEq + AnimatableValue + Send + 
     };
     {
         let mut list = ACTIVE_ANIMATIONS.lock().unwrap();
-        // 同 state 同目标运行中 → 跳过（防每帧重启/双驱动）。
+        // Same state, same target already running → skip (no per-frame restart or double drive).
         // The imperative path (`restart`) replaces it instead: re-targeting with a new spec is a
         // deliberate request, and silence there is a bug, not a guard.
         if !restart && list.iter().any(|anim| anim.state_id() == sid && anim.same_target(&target)) { return; }
-        // 同 state 不同目标 → 移除旧动画（用户中途改目标——旧动画继续会与
-        // 新目标竞争，导致值卡在旧目标路径上）；P2-9：移除前继承旧速度
-        // （Spring/Decay 被打断时新动画从当前速度继续，物理连续）
+        // Same state, different target → remove the old animation (the user retargeted mid-flight;
+        // letting the old one run would compete with the new target and strand the value on the old
+        // path). P2-9: inherit the old velocity before removing it (an interrupted Spring/Decay
+        // continues from its current velocity, physically continuous).
         // Each component inherits its own velocity — see `RetargetVelocity`.
         inherited_velocity = list.iter().find(|a| a.state_id() == sid)
             .map(|a| a.retarget_velocity()).unwrap_or(RetargetVelocity::ZERO);
         list.retain(|anim| anim.state_id() != sid);
-    } // 锁释放，下面 anim.update() 不持锁执行用户代码
+    } // Lock released; the anim.update() below runs user code without holding it.
     let mut anim = Motion::from_animating(state);
     anim.start_with_velocity(target, spec, inherited_velocity);
-    // 立即执行首次更新，避免等下一帧 flash
+    // Run the first update immediately so the value does not flash for a frame.
     // A motion that completes on its first update is not registered: its writes and callbacks already
     // happened, and a finished entry would keep `is_animating`/`has_animation_for_state` true for a frame.
     if anim.update() {
         ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     }
-    // 唤醒事件循环启动推进轮次（渲染中注册——渲染后 Wait 休眠会卡住动画）
+    // Wake the event loop for a tick round (registering during a render would otherwise stall the
+    // animation while the post-render Wait sleeps).
     crate::runtime::state::wake_loop();
 }
 
@@ -455,8 +457,8 @@ fn normalise_target_spec(spec: AnimationSpec) -> AnimationSpec {
 pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate::graphics::Color, spec: AnimationSpec) {
     
     if state.peek() == target {
-        // 与 push_animatable 相同：存在目标不同的旧颜色动画时必须取消，
-        // 否则旧动画会把值继续拉向旧目标
+        // As in `push_animatable`: a stale colour animation with a different target must be
+        // cancelled, otherwise it keeps pulling the value towards the old target.
         let sid = state.state_id();
         let conflicting = {
             let list = ACTIVE_COLOR_ANIMATIONS.lock().unwrap();
@@ -489,32 +491,34 @@ pub fn push_animatable_color(state: State<crate::graphics::Color>, target: crate
     if anim.update() {
         ACTIVE_COLOR_ANIMATIONS.lock().unwrap().push(anim);
     }
-    // 唤醒事件循环启动推进轮次（同 push_animatable）
+    // Wake the event loop for a tick round (same as `push_animatable`).
     crate::runtime::state::wake_loop();
 }
 
-/// 指数衰减动画规格（对标 Compose exponentialDecay）——无目标值，
-/// 从初始速度衰减到自然停止（fling/惯性滚动核心）。
+/// Exponential decay spec (Compose's `exponentialDecay`) — no target value: it decays from an
+/// initial velocity to a natural stop (the core of a fling / inertial scrolling).
 ///
-/// 解析式：`value(t) = from + v0/friction·(1 - e^(-friction·t))`
-/// 完成：速度 `|v0·e^(-friction·t)| < threshold` → 写极限值（精确停靠）。
+/// Analytic form: `value(t) = from + v0/friction·(1 - e^(-friction·t))`
+/// Completion: velocity `|v0·e^(-friction·t)| < threshold` → write the limit value (parking exactly).
 ///
-/// ⚠️ 仅标量语义：内部经 `AnimatableValue::to_f32/from_f32`，向量类型
-/// （Offset/Size）会退化为范数方向——Decay 只应用于 f32（滚动偏移等）。
+/// ⚠️ Scalar semantics only: this goes through `AnimatableValue::to_f32/from_f32`, so a vector type
+/// (Offset/Size) degenerates into the norm direction — Decay applies to f32 only (scroll offsets and
+/// the like).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecaySpec {
-    /// 摩擦系数（越大停得越快；对标 Compose 默认 4.2）
+    /// Friction coefficient (higher stops sooner; Compose's default is 4.2).
     pub friction: f32,
-    /// 速度阈值（低于即视为停止，px/s 量级）
+    /// Velocity threshold (below it the motion counts as stopped; on the px/s scale).
     pub threshold: f32,
 }
 
 impl DecaySpec {
-    /// 快速失败：friction<=0 会导致极限位移无限大（v0/friction）或永不停止——
-    /// 配置错误立即暴露（`max(0.001)` 是 update 里的双保险，不替代校验）
+    /// Fail fast: friction<=0 makes the limit displacement infinite (v0/friction) or the motion
+    /// never stop — a misconfiguration surfaces immediately (the `max(0.001)` in update is a second
+    /// safety net, not a replacement for validation).
     pub fn new(friction: f32, threshold: f32) -> Self {
-        assert!(friction > 0.0, "DecaySpec::new: friction 必须 > 0（收到 {friction}）");
-        assert!(threshold > 0.0, "DecaySpec::new: threshold 必须 > 0（收到 {threshold}）");
+        assert!(friction > 0.0, "DecaySpec::new: friction must be > 0 (got {friction})");
+        assert!(threshold > 0.0, "DecaySpec::new: threshold must be > 0 (got {threshold})");
         Self { friction, threshold }
     }
 
@@ -532,14 +536,15 @@ impl Default for DecaySpec {
     }
 }
 
-/// `exponential_decay(friction)`——对标 Compose `exponentialDecay(frictionMultiplier)`。
-/// 摩擦越大停得越快（默认 4.2）。
+/// `exponential_decay(friction)` — Compose's `exponentialDecay(frictionMultiplier)`.
+/// Higher friction stops sooner (default 4.2).
 pub fn exponential_decay(friction: f32) -> DecaySpec {
     DecaySpec::new(friction, 0.1)
 }
 
-/// 便捷注册指数衰减（fling/惯性滚动）：`push_decay(state, v0, exponential_decay(4.2))`。
-/// 语义：同 state 已有动画 → 取代（新 fling 接管，与 retarget 一致）。
+/// Convenience registration of an exponential decay (fling / inertial scrolling):
+/// `push_decay(state, v0, exponential_decay(4.2))`. Semantics: an existing animation on the same
+/// state is replaced (the new fling takes over, consistent with a retarget).
 pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     let sid = state.state_id();
     {
@@ -553,7 +558,7 @@ pub fn push_decay(state: State<f32>, initial_velocity: f32, spec: DecaySpec) {
     if anim.update() {
         ACTIVE_ANIMATIONS.lock().unwrap().push(Box::new(anim));
     }
-    // 唤醒事件循环启动推进轮次（同 push_animatable）
+    // Wake the event loop for a tick round (same as `push_animatable`).
     crate::runtime::state::wake_loop();
 }
 
@@ -583,9 +588,10 @@ pub fn push_decay_vector<T: Clone + PartialEq + AnimatableValue + Send + Sync + 
     crate::runtime::state::wake_loop();
 }
 
-/// fling 惯性滚动：指数衰减 + 边界 clamp（撞边界立即停——对齐 Compose fling
-/// 在 scrollBy 消耗完时停止）。clamp 每帧求值（读最新滚动极限——布局期回写）。
-/// 同 state 已有动画 → 取代（新 fling 接管）。
+/// Fling inertial scrolling: exponential decay plus a boundary clamp (stop at once when a bound is
+/// hit — as a Compose fling stops once `scrollBy` is consumed). The clamp is evaluated every frame
+/// (it reads the latest scroll limit, written back during layout). An existing animation on the same
+/// state is replaced (the new fling takes over).
 pub fn push_fling(
     state: State<f32>,
     initial_velocity: f32,
@@ -596,10 +602,12 @@ pub fn push_fling(
     push_fling_internal(state, initial_velocity, spec, clamp, None, on_finish);
 }
 
-/// 惯性滚动并报告撞到 clamp 边界时的瞬时剩余速度。
+/// Inertial scrolling that also reports the instantaneous leftover velocity when it hits the clamp
+/// boundary.
 ///
-/// `on_boundary` 最多调用一次；自然衰减到零时不会调用。nested-scroll 使用
-/// 该回调把 child 未消费的速度交给祖先的 post-fling 链。
+/// `on_boundary` is called at most once; it is not called when the decay reaches zero naturally.
+/// Nested scroll uses it to hand the velocity the child did not consume to an ancestor's
+/// post-fling chain.
 pub fn push_fling_with_boundary(
     state: State<f32>,
     initial_velocity: f32,
@@ -639,16 +647,17 @@ fn push_fling_internal(
     crate::runtime::state::wake_loop();
 }
 
-/// `animateIntAsState`（对标 Compose）——target 变化时自动从当前值动画到新值，
-/// 返回的 State 直接用于渲染（组合期 `get()` 或绘制期 `peek()`）。
+/// `animateIntAsState` (Compose's) — when the target changes, animate from the current value to the
+/// new one; the returned State is used directly for rendering (`get()` while composing, `peek()` while
+/// drawing).
 ///
 /// ```ignore
 /// let animated = animate_int_as_state(ctx, count.get(), TweenSpec::new(300, EaseOutQuad::new()));
 /// Text::new(format!("{}", animated.get()));
 /// ```
 ///
-/// 内部：`remember` 保存动画 State + 每次调用比较 target——变化即
-/// `push_animatable`（target 由调用方 `get()` 注册依赖 → 变化触发重跑）。
+/// Internally: `remember` stores the animated State and every call compares the target — a change
+/// calls `push_animatable` (the caller's `get()` registers the dependency, so a change re-runs it).
 pub fn animate_int_as_state(
     ctx: &mut ComposeCtx,
     target: i32,
@@ -661,8 +670,8 @@ pub fn animate_int_as_state(
     value
 }
 
-/// `animateValueAsState`（对标 Compose 泛型版）——任意 `AnimatableValue` 的
-/// target 动画（f32/i32/Color；Offset/Size 的 Spring 按分量跑，不会降级）。
+/// `animateValueAsState` (Compose's generic form) — target animation for any `AnimatableValue`
+/// (f32/i32/Color; a Spring on Offset/Size runs per component and is never downgraded).
 ///
 /// ```ignore
 /// let animated = animate_value_as_state(ctx, color, TweenSpec::new(300, Linear::new()));

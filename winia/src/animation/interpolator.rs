@@ -1,4 +1,4 @@
-/** 线性插值 (x = x) */
+/** Linear interpolation (x = x) */
 pub fn linear(x: f32) -> f32 { x }
 
 pub trait Interpolator : Sync + Send + std::fmt::Debug {
@@ -35,7 +35,7 @@ impl Interpolator for Linear {
     }
 }
 
-// 使用二分法查找x所在的区间
+// Use binary search to find the interval containing x.
 fn find_interval(points: &Vec<(f32, f32)>, x: f32) -> usize {
     let mut low = 0;
     let mut high = points.len() - 1;
@@ -88,10 +88,10 @@ macro_rules! interpolator {
                     return 1.0;
                 }
 
-                // 查找x所在的区间
+                // Find the interval containing x.
                 let idx = find_interval(&self.points, x);
 
-                // 计算线性插值
+                // Compute the linear interpolation.
                 let (x1, y1) = self.points[idx];
                 let (x2, y2) = self.points[idx + 1];
                 ((y2 - y1) / (x2 - x1)) * (x - x1) + y1
@@ -1270,9 +1270,6 @@ interpolator!(
 		(0.99, 0.9946375),    (1.0, 1.0),
 	]
 );
-// ═══════════════════════════════════════════════════════════
-// 运行时自定义缓动（对标 Compose CubicBezierEasing / PathEasing）
-// ═══════════════════════════════════════════════════════════
 
 /// Compose's `FastOutSlowInEasing`: the curve `tween()` uses when a spec names no easing —
 /// `CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)` (`animation/core/Easing.kt:50`), and therefore the
@@ -1285,10 +1282,10 @@ pub fn fast_out_slow_in() -> CubicBezier {
     CubicBezier::new(0.4, 0.0, 0.2, 1.0)
 }
 
-/// 三次贝塞尔缓动（对标 Compose `CubicBezierEasing`）——运行时曲线，
-/// 不预采样查表：x→t 用牛顿迭代 + 二分兜底求解，然后采样 y。
+/// Cubic bezier easing (mirrors Compose's `CubicBezierEasing`): a runtime curve, not a
+/// pre-sampled table — solve x→t by Newton iterations with a bisection fallback, then sample y.
 ///
-/// 用法：`TweenSpec::new(dur, CubicBezier::new(0.25, 0.1, 0.25, 1.0))`
+/// Usage: `TweenSpec::new(dur, CubicBezier::new(0.25, 0.1, 0.25, 1.0))`
 #[derive(Debug, Clone)]
 pub struct CubicBezier {
     p1x: f32, p1y: f32, p2x: f32, p2y: f32,
@@ -1312,7 +1309,7 @@ impl CubicBezier {
         3.0 * mt * mt * self.p1x + 6.0 * mt * t * (self.p2x - self.p1x) + 3.0 * t * t * (1.0 - self.p2x)
     }
 
-    /// 牛顿迭代求解 x→t（epsilon 1e-6；迭代失败回退二分）
+    /// Solve x→t by Newton iterations (epsilon 1e-6; fall back to bisection on failure).
     fn solve_x(&self, x: f32) -> f32 {
         let mut t = x;
         for _ in 0..8 {
@@ -1322,7 +1319,7 @@ impl CubicBezier {
             if d.abs() < 1e-6 { break; }
             t -= err / d;
         }
-        // 二分兜底
+        // Bisection fallback.
         let (mut lo, mut hi) = (0.0f32, 1.0f32);
         let mut t = x;
         while hi - lo > 1e-7 {
@@ -1345,21 +1342,22 @@ impl From<CubicBezier> for std::sync::Arc<dyn Interpolator> {
     fn from(e: CubicBezier) -> Self { std::sync::Arc::new(e) }
 }
 
-/// 运行时路径缓动（对标 Compose `PathEasing`）——任意控制点折线，
-/// 段间线性插值（表驱动插值器的运行时等价物，点集不固定）。
+/// Runtime path easing (mirrors Compose's `PathEasing`): a polyline through arbitrary
+/// control points, interpolated linearly between segments — the runtime equivalent of the
+/// table-driven interpolators, whose point set is not fixed.
 ///
-/// 用法：`TweenSpec::new(dur, PathEasing::new(vec![(0.0,0.0),(0.5,1.0),(1.0,1.0)]))`
+/// Usage: `TweenSpec::new(dur, PathEasing::new(vec![(0.0,0.0),(0.5,1.0),(1.0,1.0)]))`
 #[derive(Debug, Clone)]
 pub struct PathEasing {
     points: Vec<(f32, f32)>,
 }
 
 impl PathEasing {
-    /// 控制点折线（x 必须单调递增——二分查找依赖有序性）
+    /// Control-point polyline (x must increase monotonically — the binary search relies on the ordering).
     pub fn new(points: Vec<(f32, f32)>) -> Self {
         debug_assert!(
             points.windows(2).all(|w| w[0].0 <= w[1].0),
-            "PathEasing 点集 x 必须单调递增（收到 {points:?}）"
+            "PathEasing point set must have monotonically increasing x (got {points:?})"
         );
         Self { points }
     }
@@ -1431,23 +1429,23 @@ mod tests {
         assert!(curve.interpolate(0.5) > 0.75, "FastOutSlowIn rushes through the middle: {}", curve.interpolate(0.5));
     }
 
-    /// CubicBezier：端点精确、对称曲线中点 ≈ 0.5、单调递增
+    /// CubicBezier: exact endpoints, midpoint ≈ 0.5 on a symmetric curve, monotonic increase.
     #[test]
     fn cubic_bezier_endpoints_symmetry_monotonic() {
-        let e = CubicBezier::new(0.25, 0.1, 0.75, 0.9); // 标准 easeInOut（对称：p1+p2=(1,1)）
-        assert_eq!(e.interpolate(0.0), 0.0, "起点必须精确 0");
-        assert_eq!(e.interpolate(1.0), 1.0, "终点必须精确 1");
-        assert!((e.interpolate(0.5) - 0.5).abs() < 0.02, "对称曲线中点应≈0.5（实际 {}）", e.interpolate(0.5));
-        // 单调性：10 个采样点递增
+        let e = CubicBezier::new(0.25, 0.1, 0.75, 0.9); // Standard easeInOut (symmetric: p1+p2=(1,1))
+        assert_eq!(e.interpolate(0.0), 0.0, "start point must be exactly 0");
+        assert_eq!(e.interpolate(1.0), 1.0, "end point must be exactly 1");
+        assert!((e.interpolate(0.5) - 0.5).abs() < 0.02, "symmetric curve midpoint should be ≈0.5 (actual {})", e.interpolate(0.5));
+        // Monotonicity: the 10 sample points increase.
         let mut prev = 0.0f32;
         for i in 1..=10 {
             let v = e.interpolate(i as f32 / 10.0);
-            assert!(v >= prev - 1e-4, "必须单调（{prev} -> {v}）");
+            assert!(v >= prev - 1e-4, "must be monotonic ({prev} -> {v})");
             prev = v;
         }
     }
 
-    /// CubicBezier：越界 clamp（Compose 语义）
+    /// CubicBezier: out-of-range inputs clamp (Compose semantics).
     #[test]
     fn cubic_bezier_clamps_out_of_range() {
         let e = CubicBezier::new(0.4, 0.0, 0.2, 1.0);
@@ -1455,27 +1453,27 @@ mod tests {
         assert_eq!(e.interpolate(1.5), 1.0);
     }
 
-    /// PathEasing：段间线性插值 + 端点/clamp
+    /// PathEasing: linear interpolation between segments, plus endpoints and clamping.
     #[test]
     fn path_easing_segment_interpolation() {
         let e = PathEasing::new(vec![(0.0, 0.0), (0.5, 1.0), (1.0, 1.0)]);
         assert_eq!(e.interpolate(0.0), 0.0);
         assert_eq!(e.interpolate(1.0), 1.0);
-        assert_eq!(e.interpolate(-1.0), 0.0, "越界 clamp");
-        assert_eq!(e.interpolate(1.5), 1.0, "越界 clamp");
-        assert!((e.interpolate(0.25) - 0.5).abs() < 1e-5, "第一段中点 = 0.5");
-        assert!((e.interpolate(0.75) - 1.0).abs() < 1e-5, "第二段已到平台 1.0");
-        assert!((e.interpolate(0.5) - 1.0).abs() < 1e-5, "拐点 = 1.0");
+        assert_eq!(e.interpolate(-1.0), 0.0, "out-of-range clamp");
+        assert_eq!(e.interpolate(1.5), 1.0, "out-of-range clamp");
+        assert!((e.interpolate(0.25) - 0.5).abs() < 1e-5, "first segment midpoint = 0.5");
+        assert!((e.interpolate(0.75) - 1.0).abs() < 1e-5, "second segment is already on the plateau at 1.0");
+        assert!((e.interpolate(0.5) - 1.0).abs() < 1e-5, "the corner = 1.0");
     }
 
-    /// PathEasing：单点退化（无段可插值 → 返回该点 y）
+    /// PathEasing: single-point degenerate case (no segment to interpolate → returns that point's y).
     #[test]
     fn path_easing_single_point() {
         let e = PathEasing::new(vec![(0.0, 0.3)]);
         assert_eq!(e.interpolate(0.5), 0.3);
     }
 
-    /// 两种运行时缓动都能进入 TweenSpec（From<Arc<dyn Interpolator>> 接线）
+    /// Both runtime easings can enter a TweenSpec (wired via From<Arc<dyn Interpolator>>).
     #[test]
     fn runtime_easing_into_tween() {
         let cb: std::sync::Arc<dyn Interpolator> = CubicBezier::new(0.4, 0.0, 0.2, 1.0).into();

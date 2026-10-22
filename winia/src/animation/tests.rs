@@ -1,4 +1,4 @@
-    // 测试串行锁：动画引擎用全局 ACTIVE_ANIMATIONS——并行测试互相干扰（push/update 竞态）
+    // Test serial lock: the engine uses the global ACTIVE_ANIMATIONS, so parallel tests interfere (push/update races).
     pub(crate) static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The suite's shared guard: serialises the global registries AND installs a frozen clock, so a
@@ -14,7 +14,7 @@
     use crate::runtime::composer::Composer;
     use std::time::Duration;
 
-    /// 模拟一帧 16.7ms，步进 n 帧推进弹簧
+    /// Simulates 16.7 ms frames, stepping n frames to advance the spring.
     fn step_spring(
         stiffness: f32, damping: f32, threshold: f32,
         start: f32, target: f32,
@@ -93,7 +93,7 @@
     #[test]
     fn spring_converges_to_target() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 临界阻尼，50→300
+        // Critically damped, 50 -> 300.
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 50.0, 300.0, 300);
         assert!(done, "spring should settle within 300 frames");
         assert!((val - 300.0).abs() < 1.0, "val={} should be near 300", val);
@@ -102,13 +102,13 @@
     #[test]
     fn spring_bouncy_overshoots_then_converges() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 欠阻尼 bouncy，应超调后收敛
+        // Underdamped bouncy spring: it should overshoot and then converge.
         let (mut val, mut done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 5);
-        // 早期应明显低于目标（尚未到达）或已超调
+        // Early on it is well below the target (not there yet) or already overshooting.
         let (final_val, final_done) = step_spring(1500.0, 0.6, 0.1, 50.0, 300.0, 300);
         assert!(final_done, "bouncy should settle");
         assert!((final_val - 300.0).abs() < 1.0, "final_val={}", final_val);
-        // 记录中间某帧是否超调过（val > 300 出现过）
+        // Record whether any intermediate frame overshot (val > 300 was seen).
         let mut overshot = false;
         let mut disp = -250.0f32;
         let mut vel = 0.0f32;
@@ -123,7 +123,7 @@
     #[test]
     fn spring_reverse_animation() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 反向 300→50 也应收敛（此前 bug：分母 max(EPSILON) 卡死）
+        // The reverse 300 -> 50 direction must converge too (an earlier bug pinned the denominator to max(EPSILON)).
         let (val, done) = step_spring(1500.0, 1.0, 0.1, 300.0, 50.0, 300);
         assert!(done);
         assert!((val - 50.0).abs() < 1.0, "val={} should be near 50", val);
@@ -132,7 +132,7 @@
     #[test]
     fn spring_dt_zero_is_safe() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // dt=0 不应 panic/产生 NaN
+        // dt=0 must not panic or produce NaN.
         let mut disp = -250.0f32;
         let mut vel = 0.0f32;
         let d = compute_spring_displacement(1500.0, 1.0, 0.1, disp, &mut vel, Duration::ZERO, 0.1);
@@ -145,7 +145,7 @@
         let (_guard, _clock) = super::tests::serial_clock();
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Tween(TweenSpec::default()));
-        // 模拟 400ms（每帧 10ms），应超过 300ms duration 完成
+        // Simulate 400 ms (10 ms per frame): it should finish past the 300 ms duration.
         let mut frames = 0;
         while anim.update() && frames < 60 {
             _clock.advance(Duration::from_millis(10));
@@ -212,7 +212,7 @@
         }
         assert!(min_seen <= 0.5, "restart should return near from, min={}", min_seen);
         assert!(max_seen >= 9.5, "restart should reach near to, max={}", max_seen);
-        // 无限动画永不完成
+        // An infinite animation never completes.
         assert!(inf.update(), "infinite should never complete");
     }
 
@@ -456,13 +456,13 @@
         };
         let mut saw_blue = false;
         let mut saw_red = false;
-        // ⚠ 确定性相位推进（替代旧的 sleep 采样）：Reverse 周期 = 2×duration（100ms），
-        // 前半（phase<1）红→蓝、后半蓝→红。拨动 inf.start 到各相位并 update，直接采样
-        // 端点邻域——避免旧 sleep(10ms)×30 采样在负载下跳过仅几 ms 宽的端点窗口（flaky）。
+        // Deterministic phase stepping (instead of the old sleep sampling): a Reverse cycle is
+        // 2 x duration (100 ms); the first half (phase < 1) goes red -> blue and the second half
+        // blue -> red. Move inf.start to each phase and update, sampling the endpoints directly.
         let set_phase = |inf: &mut Infinite<Color>, phase_ms: u64| {
             inf.start = now() - std::time::Duration::from_millis(phase_ms);
         };
-        // 蓝端：phase≈25ms（t→1）；红端：phase≈0/50/75ms（t→0）
+        // Blue end: phase ~ 25 ms (t -> 1); red end: phase ~ 0/50/75 ms (t -> 0).
         for phase_ms in [0u64, 24, 25, 26, 49, 50, 51, 74, 75, 76] {
             set_phase(&mut inf, phase_ms);
             inf.update();
@@ -497,7 +497,7 @@
     #[test]
     fn remove_animation_by_state_cleans_lists() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 推入 f32 + Color + 无限 Color 三种动画
+        // Push three animations: f32, Color and infinite Color.
         let s1 = State::new(0.0f32);
         let s2 = State::new(crate::graphics::Color::RED);
         let s3 = State::new(crate::graphics::Color::BLUE);
@@ -507,10 +507,10 @@
             InfiniteRepeatableSpec::restart(Duration::from_millis(50)));
         assert!(is_animating(), "animations should be registered");
 
-        // 移除 s1 和 s3 对应的动画
+        // Remove the animations for s1 and s3.
         remove_animation_by_state(s1.state_id());
         remove_animation_by_state(s3.state_id());
-        // s2 仍在
+        // s2 is still there.
         assert!(has_animation_for_state(s2.state_id()), "s2 color animation should remain");
         remove_animation_by_state(s2.state_id());
         assert!(!has_animation_for_state(s2.state_id()), "s2 should be removed");
@@ -520,14 +520,14 @@
     fn keyframes_interpolate_segments() {
         let (_guard, _clock) = super::tests::serial_clock();
         use crate::unit::DpExt;
-        // 0%→0, 50%→50, 100%→100，线性
+        // 0% -> 0, 50% -> 50, 100% -> 100, linear.
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.0), 0.0);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.25), 0.25);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.5), 0.5);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.75), 0.75);
         assert_eq!(interpolate_keyframes(&spec.frames, 1.0), 1.0);
-        assert_eq!(interpolate_keyframes(&spec.frames, 2.0), 1.0); // 超界 clamp
+        assert_eq!(interpolate_keyframes(&spec.frames, 2.0), 1.0); // out of range clamps
     }
 
     #[test]
@@ -542,7 +542,7 @@
             _clock.advance(Duration::from_millis(10));
             frames += 1;
         }
-        // 3 × 40ms = 120ms，应完成
+        // 3 x 40 ms = 120 ms: it should finish.
         assert!(frames < 100, "repeatable should finish within 100 frames");
         assert_eq!(anim.state.get(), 100.0);
     }
@@ -550,7 +550,7 @@
     #[test]
     fn repeatable_reverse_even_ends_at_from() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // blocking bug：Reverse + 偶数次时最后 cycle 结束于 from，完成值不应跳变到 to
+        // Blocking bug: Reverse with an even count ends the last cycle at from, not at to.
         let mut anim = Motion::<f32>::new(State::new(0.0));
         anim.animate_to(100.0, AnimationSpec::Repeatable(
             RepeatableSpec::new(2, RepeatMode::Reverse,
@@ -558,7 +558,7 @@
         while anim.update() {
             _clock.advance(Duration::from_millis(10));
         }
-        // 2 次反向：第1次 0→100，第2次 100→0，结束于 0（from）
+        // Two reverse iterations: 0 -> 100, then 100 -> 0, ending at 0 (from).
         let final_val = anim.state.peek();
         assert!((final_val - 0.0).abs() < 1.0, "should end at from=0, got {}", final_val);
     }
@@ -566,7 +566,7 @@
     #[test]
     fn keyframes_first_frame_offset() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 首帧 progress > 0 时，t < 首帧 progress 应取首帧值
+        // With a first frame at progress > 0, t below it takes the first frame's value.
         let spec = KeyframesSpec::new(Duration::from_millis(100), vec![(0.5, 0.7), (1.0, 1.0)]);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.1), 0.7);
         assert_eq!(interpolate_keyframes(&spec.frames, 0.5), 0.7);
@@ -586,15 +586,15 @@
     #[test]
     fn offset_dedup_is_exact_not_norm() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // blocking bug：两个同范数不同 Offset 不应互相误判为同目标
+        // Blocking bug: two Offsets with the same norm must not be mistaken for the same target.
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
         push_animatable(s.clone(), Offset::new(10.0, 0.0), AnimationSpec::Tween(TweenSpec::default()));
-        // 移除第一个动画（避免跨列表拦截），再注册同范数不同目标
+        // Remove the first animation (so it cannot intercept), then register the same-norm target.
         remove_animation_by_state(s.state_id());
         push_animatable(s.clone(), Offset::new(0.0, 10.0), AnimationSpec::Tween(TweenSpec::default()));
         assert!(is_animating(), "new offset animation should be registered (norm collision must not block)");
-        // 目标精确是 (0,10) 而非 (10,0)
+        // The target is exactly (0,10), not (10,0).
         let list = ACTIVE_ANIMATIONS.lock().unwrap();
         let target_ok = list.iter().any(|a| a.same_target(&Offset::new(0.0, 10.0)));
         assert!(target_ok, "animation target should be (0,10)");
@@ -605,14 +605,15 @@
     #[test]
     fn offset_spring_no_longer_downgraded_to_tween() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 曾经的 blocking bug：Offset 用 Spring 会沿范数收敛到 (norm,norm) 而非目标，
-        // 因此被强制降级成 Tween。现在 Offset 声明 `write_components`（x、y 各一条弹簧），
-        // 两条弹簧各自落到目标——降级不再需要，这个测试守住"不再降级"。
+        // A former blocking bug: an Offset driven by Spring converged along the norm to (norm,norm)
+        // instead of the target, so it was forced down to Tween. Offset now declares
+        // `write_components` (one spring per axis) and each lands on its own target, so the
+        // downgrade is gone; this test pins that it stays gone.
         use crate::unit::Offset;
         let s = State::new(Offset::new(0.0, 0.0));
         push_animatable(s.clone(), Offset::new(3.0, 4.0), AnimationSpec::Spring(SpringSpec::default()));
         assert!(has_animation_for_state(s.state_id()), "Offset animation should be registered");
-        // 真实帧间隔步进到结束（update() 用真实时钟，连调 dt≈0 永不推进）
+        // Step with real frame intervals (update() uses the real clock; back-to-back calls never advance).
         for _ in 0..400 {
             if !update_animations() {
                 break;
@@ -622,7 +623,7 @@
         assert_eq!(
             s.peek(),
             Offset::new(3.0, 4.0),
-            "每条分量弹簧各写自己的精确目标（降级成 Tween 或沿范数跑都得不到 (3,4)）"
+            "each component spring writes its own exact target (Tween or a norm-following run cannot reach (3,4))"
         );
         remove_animation_by_state(s.state_id());
         assert!(!has_animation_for_state(s.state_id()), "own animation should be removed");
@@ -631,9 +632,10 @@
     #[test]
     fn size_spring_lands_each_axis_on_its_own_target() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // Compose 的 `IntSize.VectorConverter`：宽高各一条弹簧，两条都到位动画才结束
-        // （`AnimationModifier.kt:70-74`）。两轴位移差得远（宽 +10、高 −1）——单值位移
-        // 会沿范数同时拉两轴，谁也落不到自己的目标上。
+        // Compose's `IntSize.VectorConverter`: one spring each for width and height, and the
+        // animation ends only when both arrive (`AnimationModifier.kt:70-74`). The two axes travel
+        // very different distances (width +10, height -1), so a single scalar displacement would
+        // drag both along the norm and neither would land on its own target.
         use crate::unit::Size;
         let s = State::new(Size::new(50.0, 10.0));
         push_animatable(
@@ -649,8 +651,8 @@
             _clock.advance(std::time::Duration::from_millis(8));
             frames += 1;
         }
-        assert!(frames > 1, "两条分量弹簧要跑若干帧，不是一次 Snap（frames={frames}）");
-        assert_eq!(s.peek(), Size::new(60.0, 9.0), "宽高各写自己的精确目标");
+        assert!(frames > 1, "two component springs take several frames, not one Snap (frames={frames})");
+        assert_eq!(s.peek(), Size::new(60.0, 9.0), "width and height each write their own exact target");
     }
 
     #[test]
@@ -691,22 +693,22 @@
     #[test]
     fn spring_done_returns_exact_target() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // 回归：Spring 渐近收敛——done 时 Animatable 必须写出精确目标值
-        // （修复前返回 to+残余位移——AnimatedVisibility 的 exit 完成检测
-        //   progress<0.001 会因残余位移卡住/误判）
+        // Regression: Spring converges asymptotically, so on done the Animatable must write the
+        // exact target value. Before the fix it returned to + residual displacement, and
+        // AnimatedVisibility's exit check (progress < 0.001) then stalled or misfired.
         use crate::runtime::state::State;
         let st = State::new(1.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(0.0, AnimationSpec::Spring(SpringSpec::default()));
-        // 步进直到完成：每帧把冻结时钟推进 16ms（60fps），update() 用注入的时间而不是墙钟。
-        // 上限 100 帧防死循环。
+        // Step until done: advance the frozen clock 16 ms per frame (60 fps) and let update() read
+        // the injected time instead of the wall clock. Cap at 100 frames to avoid an infinite loop.
         let mut frames = 0;
         while anim.update() && frames < 100 {
             _clock.advance(Duration::from_millis(16));
             frames += 1;
         }
-        assert!(frames < 100, "spring 应收敛（stiffness=200 约 300-400ms）");
-        assert_eq!(st.peek(), 0.0, "done 后值必须精确等于目标（修复前为残余位移）");
+        assert!(frames < 100, "the spring should converge (stiffness=200 takes about 300-400 ms)");
+        assert_eq!(st.peek(), 0.0, "on done the value must equal the target exactly (it used to be the residual)");
     }
 
     /// `target_value` is the asymptote the decay itself lands on, `v0 / friction` — the number a pager
@@ -722,8 +724,8 @@
         assert_eq!(spec.target_value(0.0), 0.0);
     }
 
-    /// Decay（指数衰减）：v0=1000、friction=4.2 → 极限 = 1000/4.2 ≈ 238.1
-    /// 验证：单调递增、done 后精确停靠极限值
+    /// Decay (exponential): v0=1000, friction=4.2, so the limit is 1000/4.2 ~ 238.1. Verifies that the
+    /// motion is monotonically increasing and settles exactly on the limit at done.
     #[test]
     fn decay_moves_and_stops_at_limit() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -734,23 +736,23 @@
         let mut frames = 0;
         while anim.update() && frames < 300 {
             let v = st.peek();
-            assert!(v >= prev - 0.01, "decay 必须单调（帧 {}：{prev} -> {v}）", frames);
+            assert!(v >= prev - 0.01, "decay must be monotonic (frame {}: {prev} -> {v})", frames);
             prev = v;
             _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
-        assert!(frames < 300, "decay 应收敛");
+        assert!(frames < 300, "decay should converge");
         let limit = 1000.0 / 4.2;
         assert!(
             (st.peek() - limit).abs() < 0.5,
-            "done 后必须精确停靠极限 {}（实际 {}）",
+            "on done it must settle exactly on the limit {} (got {})",
             limit,
             st.peek()
         );
     }
 
-    /// P2-10：Repeatable 支持 Keyframes base——每周期走关键帧曲线
-    /// （修复前回退 300ms 线性：3 次迭代 = 900ms；Keyframes base 50ms×3=150ms）
+    /// P2-10: Repeatable supports a Keyframes base, running the keyframe curve each cycle. Before the
+    /// fix it fell back to a 300 ms linear ramp (3 iterations = 900 ms); the Keyframes base is 50 ms x 3 = 150 ms.
     #[test]
     fn repeatable_keyframes_base() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -772,11 +774,11 @@
             _clock.advance(Duration::from_millis(16));
             frames += 1;
         }
-        assert!(frames < 20, "Keyframes base 3×50ms 应在 ~10 帧内完成（实际 {frames}——回退 300ms 线性会 >20）");
-        assert_eq!(st.peek(), 100.0, "完成后必须精确停靠 to");
+        assert!(frames < 20, "a Keyframes base of 3 x 50 ms should finish in ~10 frames (got {frames}; a 300 ms linear fallback would exceed 20)");
+        assert_eq!(st.peek(), 100.0, "it must settle exactly on to when done");
     }
 
-    /// P2-10：Repeatable 支持 Snap base——立即完成
+    /// P2-10: Repeatable supports a Snap base, which completes at once.
     #[test]
     fn repeatable_snap_base() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -786,22 +788,23 @@
             100.0,
             AnimationSpec::Repeatable(RepeatableSpec::new(3, RepeatMode::Restart, SnapSpec::default())),
         );
-        assert!(!anim.update(), "Snap base 应首次 update 即完成");
-        assert_eq!(st.peek(), 100.0, "Snap base 完成值 = to");
+        assert!(!anim.update(), "a Snap base completes on the first update");
+        assert_eq!(st.peek(), 100.0, "a Snap base completes at to");
     }
 
-    /// Decay：初始速度为 0 → 立即完成，值不变
+    /// Decay with an initial velocity of 0 completes at once and leaves the value unchanged.
     #[test]
     fn decay_zero_velocity_done_immediately() {
         let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(42.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_decay(0.0, DecaySpec::default());
-        assert!(!anim.update(), "v0=0 应立即完成");
-        assert_eq!(st.peek(), 42.0, "v0=0 值不变");
+        assert!(!anim.update(), "v0=0 completes at once");
+        assert_eq!(st.peek(), 42.0, "v0=0 leaves the value unchanged");
     }
 
-    /// animateIntAsState：target 变化自动动画，值单调逼近且最终精确到达
+    /// animateIntAsState: a target change starts the animation, the value approaches monotonically and
+    /// finally arrives exactly.
     #[test]
     fn animate_int_as_state_animates_to_target() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -817,14 +820,14 @@
                         crate::animation::interpolator::Linear::new(),
                     ),
                 );
-                let _ = v.get(); // 注册依赖（目标变化驱动重跑）
+                let _ = v.get(); // register the dependency (a target change re-runs this)
                 *value.borrow_mut() = Some(v.clone());
             });
         };
         recompose(&mut composer, 0);
-        assert_eq!(value.borrow().as_ref().unwrap().peek(), 0, "初始 = target");
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), 0, "initially equal to target");
 
-        // target 变 100 → 动画启动 → 中途值在 0..100 且递增
+        // Target becomes 100, the animation starts, and mid-flight values are in 0..100 and rising.
         recompose(&mut composer, 100);
         let mut prev = 0i32;
         let mut frames = 0;
@@ -832,17 +835,17 @@
             crate::animation::update_animations();
             _clock.advance(std::time::Duration::from_millis(20));
             let v = value.borrow().as_ref().unwrap().peek();
-            assert!(v >= prev, "i32 动画必须单调递增（{prev} -> {v}）");
+            assert!(v >= prev, "an i32 animation must rise monotonically ({prev} -> {v})");
             prev = v;
             frames += 1;
             if v >= 100 || frames > 60 {
                 break;
             }
         }
-        assert_eq!(prev, 100, "i32 动画最终精确到达 target（{frames} 帧）");
+        assert_eq!(prev, 100, "the i32 animation finally arrives exactly at target ({frames} frames)");
     }
 
-    /// animateValueAsState 泛型：Color target 动画到达目标色
+    /// Generic animateValueAsState: a Color target animates to the destination colour.
     #[test]
     fn animate_value_as_state_color_reaches_target() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -865,7 +868,7 @@
             });
         };
         recompose(&mut composer, from.clone());
-        assert_eq!(value.borrow().as_ref().unwrap().peek(), from, "初始 = target");
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), from, "initially equal to target");
 
         recompose(&mut composer, to.clone());
         let mut frames = 0;
@@ -878,89 +881,92 @@
                 break;
             }
         }
-        assert_eq!(value.borrow().as_ref().unwrap().peek(), to, "Color 到达 target（{frames} 帧）");
+        assert_eq!(value.borrow().as_ref().unwrap().peek(), to, "the Color reaches target ({frames} frames)");
     }
 
-    /// P2-9 速度延续（实例级）：Decay 中途 animate_to(Spring)——
-    /// 新动画继承旧速度（物理连续，Compose 打断语义）
+    /// P2-9 velocity continuity (instance level): animate_to(Spring) mid-Decay, where the new
+    /// animation inherits the old velocity (physical continuity, Compose's interruption semantics).
     #[test]
     fn retarget_inherits_velocity() {
         let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_decay(1000.0, DecaySpec::default());
-        // 步进 5 帧（20ms）——速度衰减但仍 > 0
+        // Step 5 frames (20 ms): the velocity decays but is still > 0.
         for _ in 0..5 {
             anim.update();
             _clock.advance(Duration::from_millis(20));
         }
         let old_vel = anim.anim_state.as_ref().unwrap().last_velocity;
-        assert!(old_vel > 100.0, "5 帧后速度应仍显著（实际 {old_vel}）");
-        // 打断 → 新 Spring 目标 200——继承旧速度
+        assert!(old_vel > 100.0, "the velocity should still be significant after 5 frames (got {old_vel})");
+        // Interrupt with a new Spring toward 200: it inherits the old velocity.
         anim.animate_to(200.0, AnimationSpec::Spring(SpringSpec::default()));
         let new_vel = anim.anim_state.as_ref().unwrap().last_velocity;
-        assert_eq!(new_vel, old_vel, "retarget 必须继承旧速度（修复前为 0 重启）");
-        // 且起点 = 当前值（不跳变）
+        assert_eq!(new_vel, old_vel, "a retarget must inherit the old velocity (it used to restart at 0)");
+        // And it starts from the current value, with no jump.
         let from = anim.anim_state.as_ref().unwrap().from;
-        assert!((from - st.peek()).abs() < 0.01, "from 必须是当前值（无跳变）");
+        assert!((from - st.peek()).abs() < 0.01, "from must be the current value (no jump)");
     }
 
-    /// cancel_animation：动画进行中取消后，值不再被动画覆盖
-    /// （回归：Reset 按钮 set(0) 后下一帧被 Decay 写回——reset 无效）
+    /// cancel_animation: after cancelling mid-flight the value is no longer overwritten by the
+    /// animation. Regression: after a Reset button set(0), Decay wrote the old value back on the next
+    /// frame, so the reset did nothing.
     #[test]
     fn cancel_animation_stops_decay() {
         let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         push_decay(st.clone(), 1000.0, DecaySpec::default());
-        // 推进 5 帧——值显著移动
+        // Advance 5 frames: the value moves noticeably.
         for _ in 0..5 {
             super::update_animations();
             _clock.advance(Duration::from_millis(20));
         }
         let mid = st.peek();
-        assert!(mid > 50.0, "Decay 推进后值应显著（实际 {mid}）");
-        // 取消动画 + set 0（Reset 语义）
+        assert!(mid > 50.0, "the value should have moved noticeably under Decay (got {mid})");
+        // Cancel the animation and set 0 (the Reset semantics).
         cancel_animation(&st);
         st.set(0.0);
-        // 再推进 5 帧——值必须保持 0（不被动画写回）
+        // Advance 5 more frames: the value must stay 0 (the animation must not write it back).
         for _ in 0..5 {
             super::update_animations();
             _clock.advance(Duration::from_millis(20));
         }
-        assert_eq!(st.peek(), 0.0, "取消后值必须保持（修复前被 Decay 写回）");
+        assert_eq!(st.peek(), 0.0, "the value must stay put after cancelling (Decay used to write it back)");
     }
 
-    /// review fix：速度残留——Spring→Tween→Spring 第二次打断必须从静止重启
-    /// （Tween 期间 last_velocity 不更新，继承它会带着过期物理速度）
+    /// Review fix: velocity residue. A second interruption (Spring -> Tween -> Spring) must restart
+    /// from rest, because last_velocity does not update during a Tween and inheriting it would carry a
+    /// stale physical velocity.
     #[test]
     fn retarget_after_tween_restarts_from_rest() {
         let (_guard, _clock) = super::tests::serial_clock();
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
-        // 1) Spring 跑起来（速度显著）
+        // 1) Get the Spring running (a significant velocity).
         anim.animate_to(100.0, AnimationSpec::Spring(SpringSpec::default()));
         for _ in 0..5 {
             anim.update();
             _clock.advance(Duration::from_millis(20));
         }
         let spring_vel = anim.anim_state.as_ref().unwrap().last_velocity;
-        assert!(spring_vel > 10.0, "Spring 推进后速度应显著（实际 {spring_vel}）");
-        // 2) 打断成 Tween（review fix：非物理 spec 不继承速度——归零）
+        assert!(spring_vel > 10.0, "the velocity should be significant after the Spring runs (got {spring_vel})");
+        // 2) Interrupt with a Tween (review fix: non-physical specs do not inherit velocity; it zeroes).
         anim.animate_to(200.0, AnimationSpec::Tween(TweenSpec::default()));
         for _ in 0..3 {
             anim.update();
             _clock.advance(Duration::from_millis(16));
         }
         let tween_vel = anim.anim_state.as_ref().unwrap().last_velocity;
-        assert_eq!(tween_vel, 0.0, "Tween 必须从静止开始（review fix：不继承 Spring 速度）");
-        // 3) 再打断成 Spring——必须从静止重启（修复前继承 Tween 的过期 spring_vel）
+        assert_eq!(tween_vel, 0.0, "a Tween must start from rest (review fix: it does not inherit the Spring velocity)");
+        // 3) Interrupt with a Spring again: it must restart from rest (it used to inherit the stale spring_vel).
         anim.animate_to(50.0, AnimationSpec::Spring(SpringSpec::default()));
         let final_vel = anim.anim_state.as_ref().unwrap().last_velocity;
-        assert_eq!(final_vel, 0.0, "Tween 打断后的 Spring 必须从静止重启（修复前继承过期速度 {spring_vel}）");
+        assert_eq!(final_vel, 0.0, "a Spring after a Tween interruption must restart from rest (it used to inherit the stale velocity {spring_vel})");
     }
 
-    /// fling：指数衰减 + 边界 clamp——撞边界写边界值并立即完成（对齐 Compose
-    /// fling 消耗完即停）。v0=10000 极限 2380 → 被 clamp 在 100
+    /// fling: exponential decay plus a boundary clamp. Hitting the boundary writes the boundary value
+    /// and completes at once (matching Compose, where a fling stops once it is spent). v0=10000 gives a
+    /// limit of 2380, clamped to 100.
     #[test]
     fn fling_clamps_at_boundary_and_stops() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -973,8 +979,8 @@
             _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
-        assert!(frames < 300, "fling 撞边界应收敛（{frames} 帧）");
-        assert_eq!(st.peek(), 100.0, "clamp 到边界值并停止");
+        assert!(frames < 300, "a fling hitting the boundary should converge ({frames} frames)");
+        assert_eq!(st.peek(), 100.0, "it clamps to the boundary value and stops");
     }
 
     #[test]
@@ -1014,19 +1020,20 @@
             _clock.advance(Duration::from_millis(20));
             frames += 1;
         }
-        assert!(frames < 300, "反向 fling 应收敛（{frames} 帧）");
-        assert_eq!(st.peek(), 0.0, "下限 clamp 到 0");
+        assert!(frames < 300, "the backward fling should converge ({frames} frames)");
+        assert_eq!(st.peek(), 0.0, "the lower bound clamps to 0");
     }
 
-    /// review fix：DecaySpec friction<=0 快速失败（配置错误立即暴露）
+    /// Review fix: DecaySpec fails fast on friction <= 0, so a misconfiguration surfaces at once.
     #[test]
-    #[should_panic(expected = "friction 必须 > 0")]
+    #[should_panic(expected = "friction must be > 0")]
     fn decay_spec_rejects_nonpositive_friction() {
         let (_guard, _clock) = super::tests::serial_clock();
         let _ = DecaySpec::new(0.0, 0.1);
     }
 
-    /// 限制 #6：duration=0 的 Tween/Keyframes 立即完成且值精确 = to（无除零 NaN）
+    /// Limitation #6: a Tween/Keyframes with duration=0 completes at once with the value exactly = to
+    /// (no division-by-zero NaN).
     #[test]
     fn zero_duration_tween_and_keyframes_complete_immediately() {
         let (_guard, _clock) = super::tests::serial_clock();
@@ -1034,8 +1041,8 @@
         let st = State::new(0.0f32);
         let mut anim = Motion::new(st.clone());
         anim.animate_to(42.0, AnimationSpec::Tween(TweenSpec::new(Duration::ZERO, interpolator::Linear::new())));
-        assert!(!anim.update(), "duration=0 Tween 应首次 update 即完成");
-        assert_eq!(st.peek(), 42.0, "duration=0 Tween 完成值 = to");
+        assert!(!anim.update(), "a duration=0 Tween completes on the first update");
+        assert_eq!(st.peek(), 42.0, "a duration=0 Tween completes at to");
         // Keyframes duration=0
         let st2 = State::new(0.0f32);
         let mut anim2 = Motion::new(st2.clone());
@@ -1043,19 +1050,19 @@
             42.0,
             AnimationSpec::Keyframes(KeyframesSpec::new(Duration::ZERO, vec![(0.0, 0.0), (1.0, 1.0)])),
         );
-        assert!(!anim2.update(), "duration=0 Keyframes 应首次 update 即完成");
-        assert_eq!(st2.peek(), 42.0, "duration=0 Keyframes 完成值 = to");
+        assert!(!anim2.update(), "duration=0 Keyframes completes on the first update");
+        assert_eq!(st2.peek(), 42.0, "duration=0 Keyframes completes at to");
     }
 
-    /// P2-9 速度延续（push 路径）：push_decay → push_animatable retarget——
-    /// 全局表里的新动画继承旧速度
+    /// P2-9 velocity continuity (push path): push_decay then a push_animatable retarget, where the new
+    /// animation in the global table inherits the old velocity.
     #[test]
     fn push_retarget_inherits_velocity() {
         let (_guard, _clock) = super::tests::serial_clock();
         use crate::runtime::state::State;
         let st = State::new(0.0f32);
         push_decay(st.clone(), 1000.0, DecaySpec::default());
-        // 推进 5 帧（update_animations 驱动全局表）
+        // Advance 5 frames (update_animations drives the global table).
         for _ in 0..5 {
             super::update_animations();
             _clock.advance(Duration::from_millis(20));
@@ -1064,8 +1071,8 @@
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
             list.iter().find(|a| a.state_id() == st.state_id()).map(|a| a.last_velocity()).unwrap_or(0.0)
         };
-        assert!(vel_before > 100.0, "Decay 推进后速度应显著（实际 {vel_before}）");
-        // retarget：同 state 推新目标（Spring）
+        assert!(vel_before > 100.0, "the velocity should be significant after Decay runs (got {vel_before})");
+        // Retarget: push a new target (Spring) for the same state.
         push_animatable(st.clone(), 200.0, AnimationSpec::Spring(SpringSpec::default()));
         let vel_after = {
             let list = ACTIVE_ANIMATIONS.lock().unwrap();
@@ -1073,9 +1080,9 @@
         };
         assert!(
             (vel_after - vel_before).abs() < 1.0,
-            "push retarget 必须继承旧速度（before={vel_before} after={vel_after}——Spring 首步 dt≈0 引入微差）"
+            "a push retarget must inherit the old velocity (before={vel_before} after={vel_after}; the Spring's first step has dt ~ 0, hence the small difference)"
         );
-        // 清理：等动画结束（避免残留影响其他测试）
+        // Clean up: let the animation finish so no residue leaks into other tests.
         for _ in 0..60 {
             if !super::update_animations() { break; }
             _clock.advance(Duration::from_millis(16));
@@ -1085,7 +1092,7 @@
     #[test]
     fn on_finish_fires_when_animation_completes() {
         let (_guard, _clock) = super::tests::serial_clock();
-        // finishedListener（对标 Compose）：动画完成帧触发一次
+        // finishedListener (Compose parity): fires once on the frame the animation completes.
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
         use crate::runtime::state::State;
@@ -1097,13 +1104,13 @@
             f2.store(true, Ordering::SeqCst);
         });
         anim.animate_to(1.0, AnimationSpec::Snap(SnapSpec::default()));
-        anim.update(); // Snap 一帧完成 → 回调触发
-        assert!(fired.load(Ordering::SeqCst), "动画完成应触发 on_finish");
-        assert_eq!(st.peek(), 1.0, "动画值应到达目标");
+        anim.update(); // a Snap completes in one frame, firing the callback
+        assert!(fired.load(Ordering::SeqCst), "completion should fire on_finish");
+        assert_eq!(st.peek(), 1.0, "the animated value should reach the target");
     }
-    /// 复现 animation_demo 滚动卡死（dup-key）：Column + vertical_scroll +
-    /// Crossfade + 多 section。滚动 → Skip/Enter 交替 + 动画 notify → 每帧
-    /// 2 次 compose（recompose loop）→ 节点不应泄漏/dup-key。
+    /// Reproduces the animation_demo scroll freeze (dup-key): Column + vertical_scroll + Crossfade +
+    /// several sections. Scrolling alternates Skip/Enter and the animations notify, so each frame
+    /// composes twice (a recompose loop); nodes must not leak or duplicate their keys.
     #[test]
     fn scroll_with_animation_no_dup_key() {
         use std::cell::RefCell;
@@ -1121,7 +1128,7 @@
                         .modifier(crate::modifier::Modifier::new()
                             .fill_max_size()
                             .vertical_scroll({
-                                // 先取 clone 再判断——borrow_mut 与外层 borrow 冲突
+                                // Clone first, then decide: borrow_mut would clash with the outer borrow.
                                 let cur = scroll.borrow().clone();
                                 if let Some(s) = cur {
                                     s
@@ -1135,10 +1142,10 @@
                             for i in 0..10 {
                                 crate::components::Text::new(format!("section {i}")).font_size(14.0).build(ctx);
                                 crate::layout::Row::new().build(ctx, |ctx| {
-                                    crate::components::Text::new(format!("内容 {i} —— 撑高内容")).build(ctx);
+                                    crate::components::Text::new(format!("content {i} - tall content")).build(ctx);
                                 });
                             }
-                            // 动画 section（每帧 notify——demo 8a/8b 等价）
+                            // The animated section (notifies every frame, as in demos 8a/8b).
                             let a = ctx.animate_float_as_state(
                                 if frame_parity.borrow().get() { 200.0 } else { 40.0 },
                                 crate::animation::TweenSpec::default().into(),
@@ -1177,7 +1184,7 @@
             scene(&mut composer);
             let n = composer.arena.nodes.len();
             assert!(n <= nodes1 + 20,
-                "帧 {frame}: 节点数不应持续增长（{n} vs 初始 {nodes1}）——泄漏/dup");
+                "frame {frame}: the node count must not keep growing ({n} vs initial {nodes1}), a leak or duplicate");
         }
     }
 

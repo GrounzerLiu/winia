@@ -1,14 +1,14 @@
-//! 动画系统 — 对齐 Jetpack Compose 动画三层 API
+//! Animation system — mirrors Jetpack Compose's three-layer animation API
 //!
-//! ## 层级
-//! - **高层**: `animate_*_as_state` — 单值动画，开箱即用
-//! - **中层**: `update_transition` — 多属性协同动画
-//! - **底层**: `Animatable`（内部实现，pub(crate)——由高层 API 驱动）
+//! ## Layers
+//! - **High level**: `animate_*_as_state` — single-value animation, works out of the box
+//! - **Mid level**: `update_transition` — several properties animated together
+//! - **Low level**: `Animatable` (internal, `pub(crate)` — driven by the high-level API)
 //!
-//! ## 核心
-//! - 默认 `SpringSpec`（物理弹簧），可选 `TweenSpec`（补间）
-//! - 与 `State<T>` 集成 → 自动触发重组
-//! - 帧驱动在 `app.rs` 的 `AboutToWait` 中更新
+//! ## Core
+//! - `SpringSpec` (a physical spring) by default, `TweenSpec` (tween) optionally
+//! - Integrated with `State<T>` → recomposition is triggered automatically
+//! - Frame driving is updated in `AboutToWait` in `app.rs`
 
 pub mod interpolator;
 pub mod visibility;
@@ -22,17 +22,9 @@ use crate::runtime::composer::ComposeCtx;
 use timed::{compute_spring_displacement, spring_at_rest};
 use std::time::{Duration, Instant};
 
-// ═══════════════════════════════════════════════════════════
-// 活跃动画管理（全局注册表，避开 Composer 字段修改）
-// ═══════════════════════════════════════════════════════════
-
 #[allow(unused_imports)] // the file-scope `#[test]` functions below build interpolators in an Arc
 use std::sync::Arc;
 use std::sync::{Mutex, LazyLock};
-
-// ═══════════════════════════════════════════════════════════
-// The clock
-// ═══════════════════════════════════════════════════════════
 
 /// The time every motion in this module reads.
 ///
@@ -137,13 +129,13 @@ impl RetargetVelocity {
     }
 }
 
-/// 动画实例 trait（擦除类型后存储在全局列表）
+/// An animation instance — type-erased and kept in the global lists.
 pub trait AnimationInstance: Send {
     fn update(&mut self) -> bool;
     fn state_id(&self) -> StateId;
-    /// 类型安全的精确目标比较（跨类型返回 false）
+    /// Type-safe exact target comparison (returns false across types).
     fn same_target(&self, target: &dyn std::any::Any) -> bool;
-    /// 当前速度（px/s）——供 retarget 速度延续（P2-9）
+    /// Current velocity (px/s) — carried over when a retarget interrupts the motion (P2-9).
     fn last_velocity(&self) -> f32;
     /// The per-component velocity to inherit on a retarget; by default `last_velocity()` is the
     /// only component.
@@ -169,7 +161,7 @@ pub trait AnimationInstance: Send {
 
 static ACTIVE_ANIMATIONS: LazyLock<Mutex<Vec<Box<dyn AnimationInstance>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
-/// Color 动画列表（与 f32 动画分开，避免类型擦除）
+/// Colour animations, kept apart from the f32 ones to avoid type erasure.
 static ACTIVE_COLOR_ANIMATIONS: LazyLock<Mutex<Vec<Motion<crate::graphics::Color>>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
@@ -182,12 +174,6 @@ pub fn clear_animations_for_states(state_ids: &[StateId]) {
     ACTIVE_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state_id()));
     ACTIVE_COLOR_ANIMATIONS.lock().unwrap().retain(|anim| !state_ids.contains(&anim.state.state_id()));
 }
-
-
-// ═══════════════════════════════════════════════════════════
-// 单元测试
-// ═══════════════════════════════════════════════════════════
-
 
 #[cfg(test)]
 pub(crate) mod tests;
