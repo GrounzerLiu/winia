@@ -1,4 +1,5 @@
 use super::*;
+use super::slot_table::Slot;
 
 mod core_tests {
     use super::*;
