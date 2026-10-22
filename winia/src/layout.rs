@@ -35,7 +35,7 @@ pub use constraints::Constraints;
 pub use column::Column;
 pub use row::Row;
 pub use box_layout::Stack;
-pub use flow::{FlowColumn, FlowRow};
+pub use flow::{FlowColumn, FlowOverflow, FlowRow};
 pub use spacer::Spacer;
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};

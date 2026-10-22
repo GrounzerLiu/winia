@@ -133,6 +133,40 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                     }
                 });
 
+            Text::new("■ FlowRow — max 2 lines")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .max_items_in_row(3)
+                .max_lines(2)
+                .main_spacing(8.0)
+                .cross_spacing(8.0)
+                .modifier(
+                    Modifier::new()
+                        .fill_max_width()
+                        .background(Color::from_argb(20, 100, 50, 100), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    for n in 0..7 {
+                        ctx.key(("lines", n), |ctx| {
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .size(48.0, 48.0)
+                                        .background(
+                                            Color::from_argb(255, 120, 80, 160),
+                                            Shape::rounded(8.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new(format!("L{n}")).font_size(14.0).build(ctx);
+                                });
+                        });
+                    }
+                });
+
             Text::new("■ FlowRow — max 3 per row")
                 .font_size(16.0)
                 .build(ctx);

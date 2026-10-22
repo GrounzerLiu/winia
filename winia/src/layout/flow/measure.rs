@@ -1,6 +1,7 @@
 //! The flow measurement algorithm shared by FlowRow and FlowColumn.
 
 use crate::layout::flex::FlexAxis;
+use super::FlowOverflow;
 use crate::layout::node::{compute_spacing, measure_node};
 use crate::layout::{
     Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement,
@@ -15,6 +16,8 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     main_spacing: f32,
     cross_spacing: f32,
     max_items_in_main_axis: usize,
+    max_lines: usize,
+    overflow: FlowOverflow,
     direction: LayoutDirection,
     nodes: &mut Vec<LayoutNode>,
     policies: &[Box<dyn MeasurePolicy>],
@@ -29,6 +32,13 @@ pub(crate) fn measure_flow<A: FlexAxis>(
                 constraints.constrain_height(0.0),
             ),
             Vec::new(),
+        );
+    }
+
+    if max_lines == 0 {
+        return (
+            Size::ZERO,
+            vec![Placement { size: Size::ZERO, position: Offset::new(0.0, 0.0) }; n],
         );
     }
 
@@ -55,6 +65,8 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     let mut lines: Vec<(usize, usize)> = Vec::new();
     let mut line_start = 0usize;
     let mut line_main = 0.0f32; // main-axis space used by the current line, spacing included
+    // v1 keeps max_items == 0 as "one item per line"; Compose folds it into the empty-flow
+    // return. max_lines == 0 is the empty flow above. Documented in docs/flow-layout.md.
     let max_items = max_items_in_main_axis.max(1);
     for i in 0..n {
         let item_main = A::main_size(child_sizes[i]);
@@ -73,6 +85,11 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         }
     }
     lines.push((line_start, n));
+    // Compose's Visible overflow disables the maxLines check (FlowLayoutBuildingBlocks.kt:84-90);
+    // Clip and the indicator modes do cap the line count.
+    if overflow != FlowOverflow::Visible && max_lines < lines.len() {
+        lines.truncate(max_lines);
+    }
 
     // Line sizes. The main axis is the raw content width, NOT clamped: under fill, clamping would
     // lift the content to the container width with the min bound, leaving remaining at 0 and
@@ -91,7 +108,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         cross: f32,
     }
     let max_cross = A::cross_max(constraints);
-    let bounded_cross = max_cross < f32::MAX;
+    let bounded_cross = overflow == FlowOverflow::Clip && max_cross < f32::MAX;
     let mut visible_lines: Vec<(usize, usize)> = Vec::with_capacity(lines.len());
     let mut line_infos: Vec<LineInfo> = Vec::with_capacity(lines.len());
     let mut used_cross = 0.0f32;

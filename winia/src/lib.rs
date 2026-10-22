@@ -243,7 +243,7 @@ pub mod prelude {
         IdentityTransformation, OffsetMapping, PasswordTransformation, VisualTransformation,
     };
     pub use crate::text::{InlineDrawable, ImageDrawable, SvgDrawable};
-    pub use crate::layout::{Column, FlowColumn, FlowRow, Row, Spacer, Stack};
+    pub use crate::layout::{Column, FlowColumn, FlowOverflow, FlowRow, Row, Spacer, Stack};
     pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
     pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};

@@ -10,9 +10,22 @@
 //!
 //! v1 scope (differences from Compose, documented in `docs/flow-layout.md`):
 //! - no weight (Compose re-distributes the line's remaining space in a second measure pass)
-//! - no `maxLines` or overflow-indicator API (`ExpandIndicator` / `ExpandOrCollapseIndicator`);
-//!   the default Clip cross-axis cut is implemented
+//! - `max_lines` and the `Clip` / `Visible` overflow modes exist; the indicator variants
+//!   (`ExpandIndicator` / `ExpandOrCollapseIndicator`) do not
 //! - no intrinsic overrides (the generic `MeasurePolicy` approximation is used)
+
+/// What happens to items that do not fit the cross-axis maximum, and whether `max_lines` applies
+/// (Compose's `FlowRowOverflow`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlowOverflow {
+    /// Stop placing items once the cross-axis budget is exhausted; `max_lines` caps the rows
+    /// (Compose's default).
+    #[default]
+    Clip,
+    /// Place every line even when it extends past the cross-axis maximum; `max_lines` is ignored
+    /// (Compose's `Visible`).
+    Visible,
+}
 
 mod column;
 mod measure;

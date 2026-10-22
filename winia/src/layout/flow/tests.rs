@@ -71,6 +71,82 @@ fn flow_row_does_not_place_lines_past_the_cross_maximum() {
     assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
 }
 
+/// max_lines caps the row count even when the cross axis has room for more.
+#[test]
+fn flow_row_max_lines_caps_rows() {
+    let policy = FlowRowLayout::new().max_lines(1);
+    let mut nodes = vec![
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 20.0, "only the first line is kept");
+    assert_eq!(placements[3].size, Size::ZERO, "the fourth item is outside max_lines");
+}
+
+/// Compose's Visible overflow also bypasses max_lines (FlowLayoutBuildingBlocks.kt:84-90): all
+/// rows remain visible.
+#[test]
+fn flow_row_visible_overflow_ignores_max_lines() {
+    let policy = FlowRowLayout::new().max_items_in_row(3).max_lines(1).overflow(FlowOverflow::Visible);
+    let mut nodes: Vec<LayoutNode> = (0..7).map(|_| make_leaf(30.0, 20.0)).collect();
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 60.0, "three rows of 20px are visible");
+    assert_eq!(placements[6].size, Size::new(30.0, 20.0));
+}
+
+/// Visible overflow keeps placing rows past the cross-axis maximum; Clip would drop them.
+#[test]
+fn flow_row_visible_overflow_keeps_items_past_the_cross_maximum() {
+    let policy = FlowRowLayout::new().overflow(FlowOverflow::Visible);
+    let mut nodes = vec![
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    assert_eq!(size.height, 35.0, "the container is still clamped to its max");
+    assert_eq!(placements[3].size, Size::new(30.0, 30.0), "Visible paints the overflow");
+    assert_eq!(placements[3].position.y, 30.0);
+}
+
+/// max_lines = 0 is Compose's empty flow, not one item per line. Tight constraints are used so
+/// the early return (0x0) is distinguishable from the truncate path (100x0).
+#[test]
+fn flow_row_zero_max_lines_is_empty() {
+    let policy = FlowRowLayout::new().max_lines(0);
+    let mut nodes = vec![make_leaf(30.0, 20.0), make_leaf(30.0, 20.0)];
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &[0, 1],
+        Constraints::new(100.0, 100.0, 0.0, 50.0),
+    );
+    assert_eq!(size, Size::ZERO);
+    assert!(placements.iter().all(|p| p.size == Size::ZERO));
+}
+
 /// Cross-axis clipping is per item, not per line: two 20px items fit a 35px cross axis even when a
 /// third item in the same line is 40px tall. Compose keeps the two short items and drops the tall
 /// one; a line-granular guard would drop the whole line.
@@ -132,6 +208,27 @@ fn flow_row_rtl_does_not_mirror_omitted_items() {
     );
     assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
     assert_eq!(placements[0].position.x, 60.0, "the first item is mirrored to the right");
+}
+
+/// max_lines also caps columns in FlowColumn; this pins the duplicated column wiring.
+#[test]
+fn flow_column_max_lines_caps_columns() {
+    let policy = FlowColumnLayout::new().max_lines(1);
+    let mut nodes = vec![
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 70.0),
+    );
+    assert_eq!(size.height, 60.0, "only the first column is kept");
+    assert_eq!(placements[2].size, Size::ZERO, "the second column is outside max_lines");
 }
 
 /// The same item-level cross guard works on the vertical axis: a second column that does not fit

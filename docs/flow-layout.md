@@ -16,6 +16,8 @@ FlowRow::new()
     .main_spacing(8.0)        // gap inside a line (Compose horizontalArrangement.spacedBy)
     .cross_spacing(8.0)       // gap between lines (Compose verticalArrangement.spacedBy)
     .max_items_in_row(3)      // per-line cap (unlimited by default)
+    .max_lines(2)             // row cap (unlimited by default)
+    .overflow(FlowOverflow::Clip) // Clip (default) or Visible
     .arrangement(Arrangement::Start)  // in-line main-axis distribution
     .alignment(Alignment::Start)      // in-line cross-axis alignment
     .modifier(Modifier)
@@ -39,11 +41,13 @@ FlowColumn::new()
   A text child therefore wraps at the flow's width instead of reporting its unwrapped width.
 - **Line sizes**: the main axis is the raw content extent (clamped only at the container);
   the cross axis is the tallest item that actually fits in the line.
-- **Cross-axis clipping** (Compose's default `Clip` overflow): items are added to a line one
+- **Cross-axis clipping** (`FlowOverflow::Clip`, the default): items are added to a line one
   at a time. The first item whose cross size exceeds the remaining cross space stops the flow;
   items already accepted, including the shorter items before it on the same line, stay placed.
-  The gap before a line counts against that budget. This is the default Clip behaviour, not the
-  `maxLines` / overflow-indicator API.
+  The gap before a line counts against that budget. `max_lines` caps the number of rows even when
+  the cross axis has room (Clip mode). `FlowOverflow::Visible` skips both the cross-axis cut and
+  `max_lines`, and keeps painting every row outside the container, matching Compose's
+  `willOverflowCrossAxis` order (`FlowLayoutBuildingBlocks.kt:84-90`).
 - **In-line distribution**: the main axis uses `arrangement` + `main_spacing`; the cross axis
   currently has only a fixed `cross_spacing` (no vertical/horizontal cross arrangement).
 - **Container size**: main = widest visible line (wrap) or the constraint (fill); cross = the
@@ -57,8 +61,10 @@ FlowColumn::new()
 - No weight. Compose re-distributes a line's remaining space in a second measure pass; winia
   measures a `layout_weight` child at its natural size and silently ignores the weight. Remove
   the weight when migrating a Row to a FlowRow.
-- No `maxLines` or overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`).
-  The default Clip cross-axis cut is implemented; the indicator variants are not.
+- No overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`). `max_lines`
+  and the `Clip` / `Visible` modes are implemented; the indicator variants are not.
+- `max_items_in_row(0)` / `max_items_in_column(0)` is treated as one item per line (defensive
+  v1 rule); Compose returns an empty flow. `max_lines(0)` does return an empty flow.
 - No intrinsic overrides: the four `MeasurePolicy` intrinsic methods fall back to the generic
   approximation, which treats the flow as one unbounded line.
 - Row layout size is `max(content, constraints.min)`: a fill parent gives a container-wide line
@@ -73,7 +79,8 @@ cargo run -p winia --example flow_demo
 cargo test -p winia --lib layout::flow
 ```
 
-The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, spacing and
-in-line centring, RTL mirroring, column wrapping, fill-tight containers, child measurement
-against the container width, cross-axis item clipping (including a tall item after short ones),
-a first line that cannot fit, cross spacing in the cut-off, and the two composition paths.
+The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
+`Visible` overflow, spacing and in-line centring, RTL mirroring, column wrapping, fill-tight
+containers, child measurement against the container width, cross-axis item clipping (including
+a tall item after short ones), a first line that cannot fit, cross spacing in the cut-off, and
+the two composition paths.
