@@ -1,12 +1,13 @@
 //! `Shape` — how a background, border or clip is outlined (Compose's `graphics.Shape`).
 
 
-/// 形状描述（用于 background / border / clip）
+/// A shape outline (used for background / border / clip).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
-    /// 矩形（可带圆角）
+    /// A rectangle, optionally with rounded corners.
     RoundedRect { corner_radius: f32 },
-    /// 仅顶部圆角（对齐 M3 BottomSheet 顶部 28dp——底部直角贴屏）
+    /// Rounded on the top corners only (M3's BottomSheet rounds its top 28dp and squares the
+    /// bottom against the screen edge).
     TopRoundedRect { radius: f32 },
     /// Rounded on the two RIGHT corners only (upper-right + lower-right), left edge
     /// square. Geometric rather than direction-resolved: a modal navigation drawer
@@ -17,8 +18,8 @@ pub enum Shape {
     RightRoundedRect { radius: f32 },
     /// Mirror of [`Shape::RightRoundedRect`] — rounded on the two LEFT corners only.
     LeftRoundedRect { radius: f32 },
-    /// 胶囊（圆角 = 短边一半——对标 Compose `CornerFull`，material3
-    /// Button 默认形状；宽高变化时自动跟随）
+    /// A pill (corner = half the SHORT side — Compose's `CornerFull`, material3's default Button
+    /// shape; it follows automatically as the box changes size).
     Pill,
     /// Percent-50 corner, i.e. Compose's `CircleShape` == `RoundedCornerShape(50)`: on a
     /// square box that is a circle, and on a NON-square box a stadium that fills the whole
@@ -42,7 +43,7 @@ pub enum Shape {
         bottom_right: f32,
         bottom_left: f32,
     },
-    /// 直角矩形
+    /// A square-cornered rectangle.
     Rectangle,
     /// A `CornerFull` (percent-50) corner part-way to a FIXED radius: `t = 0.0` is exactly
     /// [`Shape::Pill`], `t = 1.0` exactly [`Shape::RoundedRect`] with `corner_radius`.
@@ -106,7 +107,7 @@ impl Shape {
         Shape::LeftRoundedRect { radius }
     }
 
-    /// 胶囊形状（对标 Compose `RoundedCornerShape(50)`——短边一半圆角）
+    /// A pill shape (Compose's `RoundedCornerShape(50)` — corner radius of half the short side).
     pub fn pill() -> Self {
         Shape::Pill
     }

@@ -11,12 +11,13 @@ pub(crate) const DEFAULT_AMBIENT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0,
 
 pub(crate) const DEFAULT_SPOT_SHADOW_COLOR: Color = Color { r: 0, g: 0, b: 0, a: 0x50 };
 
-/// 图形层变换参数
+/// Graphics-layer transform parameters.
 ///
-/// ⚠ 只影响**绘制**（外观），不参与布局与命中测试（对标 Compose
-/// graphicsLayer：命中区域始终是布局 bounds）。命中测试唯一考虑的
-/// 位移是 scroll（布局层）；此处变换（translation/scale/rotate/
-/// rotationX/Y/camera）不会改变可点击区域或按压点本地坐标。
+/// ⚠ These affect **drawing only** (appearance) and take no part in layout or hit testing
+/// (Compose's `graphicsLayer`: the hit area is always the layout bounds). The only displacement
+/// hit testing accounts for is scroll (a layout concern); the transforms here
+/// (translation/scale/rotate/rotationX/Y/camera) never change the clickable area or the local
+/// coordinates of a press point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphicsLayerParams {
     pub scale_x: f32,
@@ -25,33 +26,35 @@ pub struct GraphicsLayerParams {
     pub translation_x: f32,
     pub translation_y: f32,
     pub rotation_z: f32,
-    /// 变换原点（pivot 分数——0..1，相对节点宽高）——对标 Compose
-    /// `transformOrigin`（默认 Center——scale/rotate 绕中心）
+    /// Transform origin (a pivot fraction, 0..1, relative to the node's width and height) —
+    /// Compose's `transformOrigin` (default Center, so scale/rotate go around the centre).
     pub transform_origin: TransformOrigin,
-    /// 裁剪到节点 bounds（对标 Compose graphicsLayer `clip`；
-    /// `Modifier.alpha` 便捷版默认 clip=true）
+    /// Clip to the node's bounds (Compose's `graphicsLayer` `clip`; the convenience form,
+    /// `Modifier.alpha`, defaults to clip=true).
     pub clip: bool,
-    /// 绕 X 轴 3D 旋转（度——带 cameraDistance 透视）
+    /// 3D rotation about the X axis (degrees — perspective applies via `camera_distance`).
     pub rotation_x: f32,
-    /// 绕 Y 轴 3D 旋转（度——带 cameraDistance 透视）
+    /// 3D rotation about the Y axis (degrees — perspective applies via `camera_distance`).
     pub rotation_y: f32,
-    /// 3D 相机距离（逻辑 px——越大透视越平；Compose 默认 8.dp）
+    /// 3D camera distance (logical px — the larger it is, the flatter the perspective; Compose
+    /// defaults to 8.dp).
     pub camera_distance: f32,
-    /// 图层阴影高度（>0 时由 Skia ShadowUtils 绘制 ambient+spot 阴影，对标 Compose
-    /// graphicsLayer.shadowElevation）。
+    /// Layer shadow elevation (>0 makes Skia's ShadowUtils draw an ambient plus a spot shadow —
+    /// Compose's `graphicsLayer.shadowElevation`).
     ///
     /// The renderer COMPRESSES this value before it becomes Skia's Z: `z = (K+1)·e/(K+e)` with K = 16
     /// (`render::paint::compressed_elevation`), so the visual steps get smaller as elevation grows.
     /// The colour alpha is not compressed. See `docs/draw-layer-extras.md`.
     pub shadow_elevation: f32,
-    /// 图层阴影形状（None = 矩形）
+    /// The layer's shadow shape (None = a rectangle).
     pub shadow_shape: Option<Shape>,
-    /// 环境光阴影颜色（默认约 10% 黑，对标 Compose ambientShadowColor）。
+    /// Ambient shadow colour (about 10% black by default; Compose's `ambientShadowColor`).
     pub ambient_shadow_color: Color,
-    /// 投射光阴影颜色（默认约 25% 黑，对标 Compose spotShadowColor）。
+    /// Spot shadow colour (about 25% black by default; Compose's `spotShadowColor`).
     pub spot_shadow_color: Color,
-    /// 颜色滤镜（对标 Compose graphicsLayer `colorFilter`——渲染期 saveLayer
-    /// paint 挂 color filter，层内所有内容被染色；Text/Icon 用 `Tint` 做动态颜色动画）
+    /// Colour filter (Compose's `graphicsLayer` `colorFilter` — the saveLayer paint carries a
+    /// colour filter at render time, tinting everything inside the layer; Text/Icon use `Tint` for
+    /// animated colour changes).
     pub color_filter: Option<ColorFilter>,
     /// How the layer is composited — Compose's `compositingStrategy`. winia supports `Auto` (the
     /// layer appears only when alpha/filter/effect need one) and `Offscreen` (always composite
@@ -106,31 +109,32 @@ impl Default for GraphicsLayerParams {
     }
 }
 
-/// 变换原点（对标 Compose `TransformOrigin`）——pivot 分数坐标，
-/// 相对节点宽高（0.0 = 左/上，0.5 = 中心，1.0 = 右/下）
+/// The transform origin (Compose's `TransformOrigin`) — pivot fractions relative to the node's
+/// width and height (0.0 = left/top, 0.5 = centre, 1.0 = right/bottom).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TransformOrigin(pub f32, pub f32);
 
-/// 阴影参数（对标 Compose `graphics.shadow.Shadow`——dropShadow 可配置集）。
-/// 绘制对齐 DropShadowPainter：扩边画布 → 形状路径（模糊）画进离屏 mask →
-/// 颜色 SrcIn 着色 → 按 offset 平移到画布。
+/// Shadow parameters (Compose's `graphics.shadow.Shadow` — the configurable drop-shadow set).
+/// Drawing follows DropShadowPainter: grow the canvas → draw the shape path (blurred) into an
+/// offscreen mask → tint it with SrcIn → translate it onto the canvas by the offset.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ShadowParams {
-    /// 模糊半径（逻辑 px，对标 radius）
+    /// Blur radius (logical px, Compose's `radius`).
     pub radius: f32,
-    /// 扩展半径（阴影比形状大多少——超出部分另画 stroke，对标 spread）
+    /// Spread radius (how much larger the shadow is than the shape — the excess is stroked
+    /// separately; Compose's `spread`).
     pub spread: f32,
-    /// 阴影偏移（对标 offset）
+    /// Shadow offset (Compose's `offset`).
     pub offset_x: f32,
     pub offset_y: f32,
-    /// 阴影颜色（对标 color，默认黑）
+    /// Shadow colour (Compose's `color`, black by default).
     pub color: Color,
-    /// 独立透明度 0-1（对标 alpha）
+    /// Independent opacity, 0-1 (Compose's `alpha`).
     pub alpha: f32,
 }
 
 impl ShadowParams {
-    /// 便捷构造（radius/offset/color/alpha；spread=0）
+    /// Convenience constructor (radius/offset/color/alpha; spread = 0).
     pub fn new(radius: f32, offset_x: f32, offset_y: f32, color: Color, alpha: f32) -> Self {
         Self { radius, spread: 0.0, offset_x, offset_y, color, alpha }
     }
@@ -150,11 +154,11 @@ impl Default for ShadowParams {
 }
 
 impl TransformOrigin {
-    /// 中心（Compose 默认）
+    /// Centre (Compose's default).
     pub const CENTER: Self = Self(0.5, 0.5);
-    /// 左上角
+    /// Top-left corner.
     pub const TOP_LEFT: Self = Self(0.0, 0.0);
-    /// 右下角
+    /// Bottom-right corner.
     pub const BOTTOM_RIGHT: Self = Self(1.0, 1.0);
 }
 

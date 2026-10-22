@@ -5,7 +5,7 @@
 //! 1,700 places) a member of the modifier chain rather than of the drawing layer it describes.
 
 
-/// 颜色（占位，后续由 skia Color 或 material theme 替代）
+/// A colour (placeholder; to be replaced by skia's `Color` or the material theme).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: u8,
@@ -87,9 +87,9 @@ fn to_srgb_byte(c: f32) -> u8 {
 }
 
 impl Color {
-    /// 状态层叠加（对标 Material3 state layer）：
-    /// 把 `overlay` 以 `alpha` 透明度叠到当前颜色上——hover 8% / press/focus 12% /
-    /// drag 16% 的近似实现（Material3 的容器状态层）。
+    /// State-layer overlay (mirrors Material3's state layer):
+    /// blend `overlay` onto this colour at `alpha` opacity — the approximation of the
+    /// hover 8% / press/focus 12% / drag 16% container state layer (Material3's container state layer).
     pub fn overlay(&self, overlay: Color, alpha: f32) -> Color {
         let a = alpha.clamp(0.0, 1.0);
         let lerp = |b: u8, o: u8| (b as f32 * (1.0 - a) + o as f32 * a).round() as u8;
@@ -102,8 +102,8 @@ impl Color {
     }
 }
 
-/// 混合模式（对标 Compose `BlendMode`，与 skia 同源 29 值——
-/// 渲染期映射 `skia_safe::BlendMode`）
+/// Blend mode (mirrors Compose's `BlendMode`; the same 29 values as skia —
+/// mapped to `skia_safe::BlendMode` at render time).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
     Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
@@ -112,27 +112,27 @@ pub enum BlendMode {
     Hue, Saturation, Color, Luminosity,
 }
 
-/// 颜色滤镜（对标 Compose `ColorFilter`——Image/Icon 渲染期挂到 paint）
+/// Colour filter (mirrors Compose's `ColorFilter` — attached to the paint while rendering an Image/Icon).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColorFilter {
-    /// 染色（对标 `ColorFilter.tint`——默认 SrcIn 保留形状 alpha）
+    /// Tint (mirrors `ColorFilter.tint` — defaults to SrcIn, preserving the shape's alpha).
     Tint { color: Color, blend_mode: BlendMode },
-    /// 颜色矩阵（20 值行主序——对标 `ColorFilter.colorMatrix`）
+    /// Colour matrix (20 values, row-major — mirrors `ColorFilter.colorMatrix`).
     Matrix([f32; 20]),
-    /// 光照效果（像素 × multiply + add——对标 `ColorFilter.lighting`）
+    /// Lighting effect (pixel × multiply + add — mirrors `ColorFilter.lighting`).
     Lighting { multiply: Color, add: Color },
 }
 
-/// 采样质量（对标 Compose `FilterQuality`）——缩放位图时的过滤策略
+/// Sampling quality (mirrors Compose's `FilterQuality`) — the filtering strategy when scaling a bitmap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterQuality {
-    /// 最近邻（无过滤——像素风/精确采样）
+    /// Nearest neighbour (no filtering — pixel art / exact sampling).
     None,
-    /// 双线性（默认——缩小放大平滑）
+    /// Bilinear (the default — smooth when scaling down and up).
     Low,
-    /// 双线性 + 最近 mipmap（缩小更平滑）
+    /// Bilinear + nearest mipmap (smoother when scaling down).
     Medium,
-    /// 三线性（双线性 + 线性 mipmap——最高质量）
+    /// Trilinear (bilinear + linear mipmap — the highest quality).
     High,
 }
 

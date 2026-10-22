@@ -1,29 +1,23 @@
 use super::*;
 
-// ─────────────────────────────────────────────────────────────────────────
-// Icon 组件
-// ─────────────────────────────────────────────────────────────────────────
+// Image scaling — how a source fills the box it is drawn into.
 
-// ─────────────────────────────────────────────────────────────────────────
-// Image scaling — how a source fills the box it is drawn into
-// ─────────────────────────────────────────────────────────────────────────
-
-/// 内容缩放模式（对标 Compose `ContentScale`）
+/// How content scales into the box (Compose's `ContentScale`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentScale {
-    /// 原尺寸（不缩放——对标 ContentScale.None；超出 bounds 的部分由裁剪决定）
+    /// Original size, no scaling (Compose `ContentScale.None`); anything outside the bounds is up to the clip.
     None,
-    /// 完整放入 bounds（保持比例——默认，对标 ContentScale.Fit）
+    /// Fit inside the bounds, preserving the aspect ratio (the default; Compose `ContentScale.Fit`).
     Fit,
-    /// 覆盖 bounds（保持比例，超出部分裁剪——对标 ContentScale.Crop）
+    /// Cover the bounds, preserving the aspect ratio and cropping the overflow (Compose `ContentScale.Crop`).
     Crop,
-    /// 保持比例且不超过 bounds（缩小不放大——对标 ContentScale.Inside）
+    /// Preserve the aspect ratio without exceeding the bounds (shrink, never enlarge; Compose `ContentScale.Inside`).
     Inside,
-    /// 宽填满 bounds，高按比例（可超出——对标 ContentScale.FillWidth）
+    /// Fill the width; the height follows the aspect ratio and may overflow (Compose `ContentScale.FillWidth`).
     FillWidth,
-    /// 高填满 bounds，宽按比例（可超出——对标 ContentScale.FillHeight）
+    /// Fill the height; the width follows the aspect ratio and may overflow (Compose `ContentScale.FillHeight`).
     FillHeight,
-    /// 两轴独立拉伸到 bounds（不保持比例——对标 ContentScale.FillBounds）。
+    /// Stretch both axes independently to the bounds, ignoring the aspect ratio (Compose `ContentScale.FillBounds`).
     /// NOTE: this is what winia's `None` used to be before it was aligned with Compose;
     /// the shared-element flight path needs the explicit member, because FillBounds is the
     /// behaviour it has to be able to reproduce.
@@ -31,10 +25,8 @@ pub enum ContentScale {
 }
 
 
-// ── Image ──
-
-/// 图片内容在 bounds 内的对齐（对标 Compose `Alignment` 9 值；
-/// Start/End 随布局方向镜像——RTL 下 Start 在右）
+/// Where the image content sits inside the bounds (Compose's nine `Alignment` values).
+/// `Start`/`End` mirror with the layout direction, so `Start` is on the right under RTL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageAlignment {
     TopStart,
@@ -61,10 +53,11 @@ pub(crate) fn content_scale_rect(
     if iw <= 0.0 || ih <= 0.0 {
         return rect;
     }
-    // 缩放：走 `ContentScale::scale_factors` 这一处唯一事实来源（Image 与共享元素飞行共用）
+    // Scaling goes through ContentScale::scale_factors, the single source of truth shared by Image
+    // and the shared-element flight.
     let (fsx, fsy) = scale.scale_factors((iw, ih), (rect.width(), rect.height()));
     let (w, h) = (iw * fsx, ih * fsy);
-    // 对齐偏移（0.0/0.5/1.0；RTL 时 Start↔End 镜像）
+    // Alignment offset (0.0 / 0.5 / 1.0; Start and End swap under RTL).
     let sx = match alignment {
         ImageAlignment::TopStart | ImageAlignment::CenterStart | ImageAlignment::BottomStart => {
             if rtl { 1.0 } else { 0.0 }

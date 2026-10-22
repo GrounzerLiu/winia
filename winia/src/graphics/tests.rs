@@ -42,7 +42,7 @@
             parse_view_box("<svg viewBox='0 0 24 24'><path d='M0 0'/></svg>"),
             Some((24.0, 24.0))
         );
-        // width/height 属性优先于 viewBox（布局尺寸语义）
+        // The width/height attributes win over the viewBox (they define the layout size).
         assert_eq!(
             parse_view_box("<svg width='32' height='32' viewBox='0 0 960 960'></svg>"),
             Some((32.0, 32.0))
@@ -53,36 +53,36 @@
 
     #[test]
     fn test_content_scale_fit_keeps_aspect() {
-        // bounds 200x100、图 100x60（1.67:1）→ Fit：s=min(2, 1.67)=1.67 → 166.7x100 居中
+        // bounds 200x100, image 100x60 (1.67:1) -> Fit: s = min(2, 1.67) = 1.67 -> 166.7x100, centred.
         let r = content_scale_rect(ContentScale::Fit, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 60.0, ImageAlignment::Center, false);
-        assert!((r.width() - 166.7).abs() < 0.1, "宽 {}", r.width());
-        assert!((r.height() - 100.0).abs() < 0.01, "高 {}", r.height());
+        assert!((r.width() - 166.7).abs() < 0.1, "width {}", r.width());
+        assert!((r.height() - 100.0).abs() < 0.01, "height {}", r.height());
         assert!((r.left - 16.65).abs() < 0.1, "x {}", r.left);
         assert!((r.top - 0.0).abs() < 0.01, "y {}", r.top);
     }
     #[test]
     fn test_content_scale_crop_covers_bounds() {
-        // bounds 200x100、图 100x100 → Crop：scale=max(2,1)=2 → 200x200，裁剪上下
+        // bounds 200x100, image 100x100 -> Crop: scale = max(2, 1) = 2 -> 200x200, cropped top and bottom.
         let r = content_scale_rect(ContentScale::Crop, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 100.0, ImageAlignment::Center, false);
         assert_eq!((r.width(), r.height()), (200.0, 200.0));
-        assert_eq!((r.left, r.top), (0.0, -50.0), "超出部分在上下");
+        assert_eq!((r.left, r.top), (0.0, -50.0), "the overflow is above and below");
     }
     #[test]
     fn test_content_scale_inside_never_upscales() {
-        // bounds 200x100、图 100x50 → Inside：100x50（不放大）
+        // bounds 200x100, image 100x50 -> Inside: 100x50 (never enlarged).
         let r = content_scale_rect(ContentScale::Inside, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 100.0, 50.0, ImageAlignment::TopStart, false);
         assert_eq!((r.width(), r.height()), (100.0, 50.0));
-        // 大图 400x200 → Inside：缩小到 200x100
+        // Large image 400x200 -> Inside: shrunk to 200x100.
         let r2 = content_scale_rect(ContentScale::Inside, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), 400.0, 200.0, ImageAlignment::Center, false);
         assert_eq!((r2.width(), r2.height()), (200.0, 100.0));
     }
     #[test]
     fn test_content_scale_fill_width_height() {
-        // 非对称 bounds 200x80（区分两分支）：
-        // FillWidth：宽 200，高按比例（100x50 → 200x100，超出高）
+        // Asymmetric bounds 200x80 (separates the two branches):
+        // FillWidth: width 200, height by ratio (100x50 -> 200x100, overflowing the height).
         let r = content_scale_rect(ContentScale::FillWidth, Rect::from_xywh(0.0, 0.0, 200.0, 80.0), 100.0, 50.0, ImageAlignment::TopStart, false);
         assert_eq!((r.width(), r.height()), (200.0, 100.0));
-        // FillHeight：高 80，宽按比例（100x50 → 160x80）
+        // FillHeight: height 80, width by ratio (100x50 -> 160x80).
         let r2 = content_scale_rect(ContentScale::FillHeight, Rect::from_xywh(0.0, 0.0, 200.0, 80.0), 100.0, 50.0, ImageAlignment::TopStart, false);
         assert_eq!((r2.width(), r2.height()), (160.0, 80.0));
     }
@@ -99,13 +99,13 @@
     #[test]
     fn test_alignment_positions_within_bounds() {
         let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-        // Fit 图 100x60 → 167x100：TopStart → (0,0)；BottomEnd → (33,0)
+        // Fit image 100x60 -> 167x100: TopStart -> (0,0); BottomEnd -> (33,0).
         let tl = content_scale_rect(ContentScale::Fit, bounds, 100.0, 60.0, ImageAlignment::TopStart, false);
         assert_eq!((tl.left, tl.top), (0.0, 0.0));
         let br = content_scale_rect(ContentScale::Fit, bounds, 100.0, 60.0, ImageAlignment::BottomEnd, false);
         assert!((br.left - 33.3).abs() < 0.1, "x {}", br.left);
-        assert_eq!(br.top, 0.0, "高已填满，y=0");
-        // RTL：TopStart 镜像到右侧
+        assert_eq!(br.top, 0.0, "the height is already filled, so y = 0");
+        // RTL: TopStart mirrors to the right.
         let rtl = content_scale_rect(ContentScale::Fit, bounds, 100.0, 60.0, ImageAlignment::TopStart, true);
         assert!((rtl.left - 33.3).abs() < 0.1, "RTL x {}", rtl.left);
         assert_eq!(rtl.top, 0.0);

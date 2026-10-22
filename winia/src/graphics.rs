@@ -37,7 +37,7 @@ use std::sync::LazyLock;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// 路径填充规则（写入包裹 SVG 的 fill-rule 属性——不自行解析路径）
+/// Path fill rule (written into the fill-rule attribute of the wrapping SVG — the path itself is never parsed here).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PathFillType {
     NonZero,

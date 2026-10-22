@@ -247,7 +247,7 @@ impl GradientBrush {
     }
 }
 
-// ── the modifier-facing source ──
+// The modifier-facing source.
 
 /// What `Modifier::background_brush` accepts: a [`Brush`], or a value evaluated per paint for a
 /// gradient that follows animated state.

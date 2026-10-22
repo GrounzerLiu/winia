@@ -1,8 +1,6 @@
 use super::*;
 
-// ─────────────────────────────────────────────────────────────────────────
 // Variable-font axes
-// ─────────────────────────────────────────────────────────────────────────
 
 /// A variable-font axis value: a literal, or a value evaluated per paint (a state or a closure).
 ///
@@ -11,8 +9,8 @@ use super::*;
 /// keeps working through the alias.
 pub type AxisValue = Dyn<f32>;
 
-/// Material Symbols 可变轴（官方范围）：
-/// FILL 0..=1、GRAD -50..=200、opsz 20..=48、wght 100..=700
+/// Material Symbols variable axes (official ranges):
+/// FILL 0..=1, GRAD -50..=200, opsz 20..=48, wght 100..=700.
 #[derive(Debug, Clone)]
 pub struct SymbolAxes {
     pub fill: AxisValue,
@@ -47,9 +45,9 @@ impl PartialEq for SymbolAxes {
 }
 
 impl SymbolAxes {
-    /// 渲染期求值并按官方范围钳制
+    /// Evaluated at render time and clamped to the official ranges.
     pub fn evaluated(&self) -> (f32, f32, f32, f32) {
-        // NaN 防御：clamp(NaN) 返回 NaN，会污染缓存键与字体轴
+        // NaN defence: clamp(NaN) returns NaN, which would poison the cache key and the font axes.
         let clamp = |v: f32, (lo, hi): (f32, f32)| if v.is_nan() { lo } else { v.clamp(lo, hi) };
         (
             clamp(self.fill.eval(), FILL_RANGE),
@@ -60,22 +58,20 @@ impl SymbolAxes {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 图标来源
-// ─────────────────────────────────────────────────────────────────────────
+// Icon source
 
-/// 图标来源——默认不内置任何图标；SVG path / SVG 文档 / 图片文件始终可用，
-/// 可变字体符号需启用 `material-symbols-*` feature。
+/// Where an icon comes from — no icons are built in by default; an SVG path, an SVG document and
+/// an image file are always available, while variable-font symbols need a `material-symbols-*` feature.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IconSource {
-    /// 原始 SVG path 数据（fonts.google.com/icons 复制）——渲染时包成
-    /// `<svg viewBox="0 0 24 24">` 文档交给 Skia `svg::Dom`，不自研解析
+    /// Raw SVG path data (copied from fonts.google.com/icons) — wrapped at render time in an
+    /// `<svg viewBox="0 0 24 24">` document handed to Skia's `svg::Dom`; no hand-written parser.
     SvgPath { data: Arc<str>, fill_type: PathFillType },
-    /// 完整 SVG 文档字符串（`<svg viewBox=...>...</svg>`）
+    /// A complete SVG document string (`<svg viewBox=...>...</svg>`).
     Svg(Arc<str>),
-    /// 图片文件路径（png/jpg/jpeg/webp/bmp/svg，按扩展名解码）
+    /// An image file path (png/jpg/jpeg/webp/bmp/svg, decoded by extension).
     File(Arc<str>),
-    /// Material Symbols 可变字体符号
+    /// A Material Symbols variable-font symbol.
     #[cfg(any(
         feature = "material-symbols-outlined",
         feature = "material-symbols-rounded",
@@ -106,7 +102,7 @@ impl IconSource {
         IconSource::Symbol(symbol)
     }
 
-    /// 单色源（SvgPath / Svg / Symbol）默认染主题色；File 默认保留原色
+    /// Monochrome sources (SvgPath / Svg / Symbol) are tinted with the theme colour by default; File keeps its own colours.
     pub(crate) fn default_tinted(&self) -> bool {
         !matches!(self, IconSource::File(_))
     }
@@ -135,9 +131,10 @@ impl IconSource {
         }
     }
 
-    /// 固有尺寸：SvgPath/Symbol 默认 24×24；SVG 文档解析 viewBox（失败回退
-    /// 24×24——与 `decode_svg_str` 回退一致，避免 Image 测量 0 尺寸空白而
-    /// Icon 正常显示的不一致）；位图取像素尺寸（解码失败 None——调用方按 0 处理）
+    /// Intrinsic size: SvgPath/Symbol default to 24x24; an SVG document parses its viewBox (falling
+    /// back to 24x24 — the same fallback as `decode_svg_str`, so Image does not measure a 0-sized
+    /// blank while Icon displays normally); a bitmap takes its pixel size (None when decoding fails —
+    /// the caller treats that as 0).
     pub(crate) fn intrinsic_size(&self) -> Option<(f32, f32)> {
         match self {
             IconSource::SvgPath { .. } => Some((24.0, 24.0)),
@@ -153,13 +150,13 @@ impl IconSource {
     }
 }
 
-/// 把裸 path 数据包成最小 SVG 文档（Skia svg::Dom 要求完整文档）
+/// Wrap bare path data in a minimal SVG document (Skia's svg::Dom requires a complete document).
 pub(crate) fn wrap_svg_path(data: &str, fill_type: PathFillType) -> String {
     let rule = match fill_type {
         PathFillType::NonZero => "nonzero",
         PathFillType::EvenOdd => "evenodd",
     };
-    // path 数据来自公开 API——转义 XML 特殊字符，防止破坏文档
+    // The path data comes from a public API — escape XML special characters so it cannot break the document.
     let escaped = data
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -169,9 +166,7 @@ pub(crate) fn wrap_svg_path(data: &str, fill_type: PathFillType) -> String {
     )
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 渲染规格（进入 ModifierElement::DrawIcon）
-// ─────────────────────────────────────────────────────────────────────────
+// Render spec (goes into ModifierElement::DrawIcon)
 
 #[derive(Debug, Clone)]
 pub struct IconSpec {
@@ -205,21 +200,20 @@ pub(crate) fn option_same_parameter<T: PartialEq>(
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// 全局缓存：path 解析 / SVG 与图片解码 / 字形 blob
-// ─────────────────────────────────────────────────────────────────────────
+// Global caches: path parsing / SVG and image decoding / glyph blobs
 
-/// 解码后的图标内容（供渲染层绘制）。
+/// Decoded icon content (for the render layer to draw).
 ///
-/// 不变式：解码后**绘制期只读**——SVG 容器尺寸在解码期固定，
-/// 绘制按目标尺寸重设容器后 `render`。`svg::Dom` 未保证线程安全，
-/// 因此解码缓存是线程本地的（渲染线程内创建与使用），不跨线程共享。
+/// Invariant: after decoding it is **read-only during painting** — an SVG container size is fixed
+/// at decode time, and painting re-sizes the container to the target size before `render`. `svg::Dom`
+/// is not guaranteed thread-safe, so the decode cache is thread-local (created and used on the render
+/// thread) and never shared across threads.
 pub(crate) enum DecodedIcon {
     Bitmap { image: skia_safe::Image, width: f32, height: f32 },
     Svg { dom: RefCell<svg::Dom>, width: f32, height: f32 },
 }
 
-/// 解码缓存键（SvgPath 按数据+填充规则区分）
+/// Decode cache key (SvgPath is distinguished by data + fill rule).
 #[derive(Hash, PartialEq, Eq, Clone)]
 enum DecodeKey {
     SvgPath(Arc<str>, PathFillType),
@@ -227,8 +221,8 @@ enum DecodeKey {
     File(Arc<str>),
 }
 
-/// 解码缓存 TTL：成功/失败都 5 秒刷新——开发期改文件能生效，
-/// 失败也不会每帧重读磁盘
+/// Decode cache TTL: refreshed every 5 seconds for success and failure alike — editing a file during
+/// development takes effect, and a failure does not re-read the disk every frame.
 const CACHE_TTL: Duration = Duration::from_secs(5);
 
 thread_local! {
@@ -274,7 +268,7 @@ pub(crate) fn decoded_icon(source: &IconSource) -> Option<Arc<DecodedIcon>> {
             ))]
             IconSource::Symbol(_) => None,
         };
-        // 成功与失败都缓存（失败带 TTL——避免每帧重读，但会过期重试）
+        // Cache successes and failures alike (a failure carries the TTL — no re-read every frame, but it retries once it expires).
         let entry = (Instant::now(), decoded.map(Arc::new));
         let result = entry.1.clone();
         cache.insert(key, entry);
@@ -302,9 +296,9 @@ fn decode_file(path: &str) -> Option<DecodedIcon> {
     }
     if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp") {
         let image = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(&data))?;
-        // 预生成 mipmap 链：FilterQuality::Medium/High 的 MipmapMode 需要
-        //（Skia 对无 mipmap 的 image 会退化为普通线性过滤）；Low 不受影响。
-        // 解码缓存保证只生成一次，不随绘制重复计算。
+        // Pre-generate the mipmap chain: FilterQuality::Medium/High's MipmapMode needs one
+        // (Skia falls back to plain linear filtering for an image without mipmaps); Low is unaffected.
+        // The decode cache guarantees it is generated once, not recomputed per paint.
         let image = image.with_default_mipmaps().unwrap_or(image);
         let (w, h) = (image.width() as f32, image.height() as f32);
         return Some(DecodedIcon::Bitmap { image, width: w, height: h });
@@ -332,8 +326,9 @@ fn file_intrinsic_size(path: &str) -> Option<(f32, f32)> {
     size
 }
 
-/// 从 SVG 字符串提取固有尺寸：优先 `width`/`height` 属性（SVG 规范中它们
-/// 决定布局尺寸，viewBox 只是坐标系统）；没有则回退 viewBox 的第 3、4 个值。
+/// Extract the intrinsic size from an SVG string: prefer the `width`/`height` attributes (the SVG
+/// spec makes them decide the layout size; viewBox is only the coordinate system), falling back to
+/// the 3rd and 4th viewBox values when they are absent.
 pub fn parse_view_box(svg: &str) -> Option<(f32, f32)> {
     let tag = svg_open_tag(svg)?;
     if let (Some(w), Some(h)) = (parse_svg_attr_len(tag, "width"), parse_svg_attr_len(tag, "height")) {
@@ -356,7 +351,7 @@ pub fn parse_view_box(svg: &str) -> Option<(f32, f32)> {
     }
 }
 
-/// 截取 `<svg ...>` 开标签（属性只在开标签内解析，避免误匹配文档其它位置）
+/// Take the `<svg ...>` open tag (attributes are parsed inside the open tag only, so nothing elsewhere in the document is matched by mistake).
 fn svg_open_tag(svg: &str) -> Option<&str> {
     let lower = svg.to_ascii_lowercase();
     let start = lower.find("<svg")?;
@@ -364,7 +359,7 @@ fn svg_open_tag(svg: &str) -> Option<&str> {
     Some(&svg[start..end])
 }
 
-/// 解析开标签内属性的长度（`24`、`24px` 等；百分比不支持，返回 None）
+/// Parse the length of an attribute inside the open tag (`24`, `24px`, ...; percentages are unsupported and return None).
 fn parse_svg_attr_len(tag: &str, name: &str) -> Option<f32> {
     let lower = tag.to_ascii_lowercase();
     let idx = find_attr(&lower, name)?;
@@ -391,8 +386,8 @@ fn parse_svg_attr_len(tag: &str, name: &str) -> Option<f32> {
     digits.parse::<f32>().ok()
 }
 
-/// 在开标签内查找 `name=`，要求属性名前是空白/引号/标签开头——
-/// 避免 `stroke-width=` 误命中 `width=`、路径文本误命中 `viewbox`
+/// Find `name=` inside the open tag, requiring whitespace/a quote/the start of the tag before the
+/// attribute name — so `stroke-width=` cannot hit `width=` and path text cannot hit `viewbox`.
 fn find_attr(lower: &str, name: &str) -> Option<usize> {
     let pat = format!("{name}=");
     let mut search = 0usize;
@@ -474,7 +469,7 @@ pub(crate) fn symbol_blob(
     }
     let blob = crate::icon::symbol_text_blob(symbol, size, fill, grad, opsz, wght).map(Arc::new);
     cache.insert(key, blob.clone());
-    // 动画轴组合可能无限增长——简单上限，超限清空重建
+    // The combinations of animated axes could grow without bound — a simple cap; past it, clear and rebuild.
     if cache.len() > 512 {
         cache.clear();
     }
