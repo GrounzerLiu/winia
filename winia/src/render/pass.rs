@@ -803,6 +803,11 @@ pub(super) fn render_pass1(
     let focus_alpha = node.modifier.focusable_interaction()
         .map(|src| src.focus_indicator_alpha_value())
         .unwrap_or(if node.focused { 1.0 } else { 0.0 });
+    // Deferred: the ring sits OUTSIDE the node's own clip (see draw_focus), so it has to be painted
+    // after the container clip is restored at the end of this pass. Painting it here clipped the whole
+    // ring away on any component that carries Modifier::clip(shape) — IconButton and IconToggleButton
+    // both do, and their focus ring was invisible.
+    let mut pending_focus_ring = None;
     if !has_tf_container && !no_focus_ring && (node.focused || focus_alpha > 0.001) {
         // 焦点环形状跟随组件（最近 Background/Border/Clip 形状，回退矩形）；
         // 颜色由组件组合期从主题捕获（node.focus_color）
@@ -815,11 +820,15 @@ pub(super) fn render_pass1(
         }).map(|shape| shape.eval()).unwrap_or(crate::graphics::Shape::Rectangle);
         // `paint_rect`, not `rect`: the ring hugs the container. Drawing the container's rounded shape on
         // the (possibly grown) node box put a squircle outside the control on the two smallest sizes.
-        draw_focus(canvas, paint_rect, &focus_shape, tf_radii, node.focus_color.get(), focus_alpha, 2.0);
+        pending_focus_ring = Some((paint_rect, focus_shape, tf_radii, node.focus_color.get(), focus_alpha));
     }
 
     // Scroll clip + translate
     let mut scrolled = false;
+    // Replayed for the focus ring below: the ring is painted after the scroll save is restored (it
+    // must escape the container's clip), but it still has to ride the scroll translation and the
+    // viewport clip.
+    let mut scroll_replay: Option<(Rect, (f32, f32))> = None;
     if scroll_offset_v.is_some() || scroll_offset_h.is_some() {
         // clip 用 visible 尺寸，优先从 modifier 中提取 Size 或 FillMax 信息
         let mut cw = w;
@@ -883,6 +892,7 @@ pub(super) fn render_pass1(
         canvas.clip_rect(clip_rect, None, Some(false));
         canvas.translate((dx, dy));
         scrolled = true;
+        scroll_replay = Some((clip_rect, (dx, dy)));
     }
 
     // 穿行子节点（backdrop 节点自身内容照常绘制在模糊层之上）。
@@ -936,6 +946,21 @@ pub(super) fn render_pass1(
 
     if clipped {
         canvas.restore();
+    }
+
+    // The focus ring, outside the container clip but still inside the scroll viewport and the
+    // graphics-layer effects.
+    if let Some((ring_rect, ring_shape, ring_radii, ring_color, ring_alpha)) = pending_focus_ring {
+        let replayed = scroll_replay.is_some();
+        if let Some((clip_rect, (dx, dy))) = scroll_replay {
+            canvas.save();
+            canvas.clip_rect(clip_rect, None, Some(false));
+            canvas.translate((dx, dy));
+        }
+        draw_focus(canvas, ring_rect, &ring_shape, ring_radii, ring_color, ring_alpha, 2.0);
+        if replayed {
+            canvas.restore();
+        }
     }
 
     if blur_radius.is_some() {

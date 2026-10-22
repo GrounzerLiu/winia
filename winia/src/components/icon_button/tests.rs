@@ -438,6 +438,63 @@
         }
     }
 
+    /// A focused IconButton carries `.clip(shape)` (the container must clip its children) and the focus
+    /// ring is drawn OUTSIDE the container by `draw_focus`. Before the ring moved after the clip
+    /// restore, the clip swallowed the whole ring and this sample came back pure white.
+    #[test]
+    fn a_focused_icon_button_paints_its_ring_outside_the_container_clip() {
+        let (_guard, clock) = crate::animation::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let theme = ThemeColors::light_from_seed(0x6750A4);
+        let source = MutableInteractionSource::new();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let src = source.clone();
+        composer.compose(move |ctx| {
+            WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+                crate::layout::Column::new()
+                    .modifier(Modifier::new().fill_max_size().padding(20.0))
+                    .build(ctx, |ctx| {
+                        IconButton::new()
+                            .interaction_source(src.clone())
+                            .on_click(|| {})
+                            .build(ctx, |ctx| {
+                                crate::components::icon::Icon::svg_path("M12 2L22 12 12 22 2 12Z")
+                                    .build(ctx);
+                            });
+                    });
+            });
+        });
+        composer.layout(crate::layout::Constraints::new(0.0, 100.0, 0.0, 100.0));
+        // The button node is the 48 dp touch target at (20,20); its container is the 40 dp box inside
+        // it, so the ring (2 px gap + a 3 px stroke) lands on x = 19..22 at the vertical centre.
+        source.emit_focus();
+        clock.advance(std::time::Duration::from_millis(250));
+        crate::animation::update_animations();
+
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).expect("surface");
+        surface.canvas().clear(skia_safe::Color::WHITE);
+        let root = composer.layout_root_idx().expect("laid out");
+        crate::render::render(composer.arena_nodes(), root, surface.canvas());
+        let pm = surface.peek_pixels().expect("pixmap");
+        let px: &[[u8; 4]] = pm.pixels::<[u8; 4]>().expect("pixels");
+        let at = |x: usize, y: usize| px[y * 100 + x];
+
+        let ring = at(20, 44);
+        let inside = at(28, 44);
+        eprintln!("probe icon-button focus ring: outside {ring:?}, inside {inside:?}");
+        // A clipped ring leaves pure WHITE here; the ring is the theme's primary, antialiased
+        // against the background, so pin only that it is substantially darker than white.
+        assert!(
+            ring[0] < 230 && ring[1] < 230 && ring[2] < 230,
+            "the focus ring is painted outside the container at x = 20: {ring:?}"
+        );
+        assert!(
+            (inside[0] as i32 - inside[1] as i32).abs() <= 2
+                && (inside[1] as i32 - inside[2] as i32).abs() <= 2,
+            "inside the container is the neutral focus state layer, not the ring: {inside:?}"
+        );
+    }
+
     /// The shape morph runs on `MotionSchemeKeyTokens.DefaultEffects`, which upstream comments is
     /// "intentional here to prevent any bounce in this component" (`IconButton.kt:1558-1568`). A
     /// spatial spring overshoots by design, and at the expressive scheme's `fast_spatial`
