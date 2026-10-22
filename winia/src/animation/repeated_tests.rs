@@ -1,0 +1,138 @@
+    use super::*;
+    use std::sync::Arc;
+    use crate::runtime::composer::Composer;
+
+    /// 反复动画循环：多次 push 目标 + update 步进——最终收敛到最新目标。
+    /// 验证动画引擎在反复触发（点击循环）时值正确（旧动画移除/去重无双驱动）。
+    #[test]
+    fn repeated_animation_cycles_converge() {
+        let (_guard, _clock) = super::tests::serial_clock();
+        let state = crate::runtime::state::State::new(40.0f32);
+
+        // 每轮：push 目标 → sleep 超过动画时长 → update 一次（真实时间 dt）→ 检查收敛
+        for (i, target) in [(1usize, 200.0f32), (2, 40.0), (3, 200.0), (4, 40.0)] {
+            push_animatable(state.clone(), target, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(300), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+            }));
+            _clock.advance(std::time::Duration::from_millis(400));
+            update_animations();
+            let v = state.peek();
+            eprintln!("[repeat-anim] round {} target={} val={:.1}", i, target, v);
+            assert!((v - target).abs() < 1.0,
+                "反复动画第 {} 轮应收敛到 {}，实际 {:.1}", i, target, v);
+        }
+    }
+
+    /// 动画未完成时再次 push（中途改变目标）——应切换目标（旧动画移除）
+    #[test]
+    fn mid_flight_retarget_switches() {
+        let (_guard, _clock) = super::tests::serial_clock();
+        let state = crate::runtime::state::State::new(40.0f32);
+        push_animatable(state.clone(), 200.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(1000), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        }));
+        // 中途（10 帧后）改目标 40——应切换（用真实时间 sleep 模拟帧间隔）
+        _clock.advance(std::time::Duration::from_millis(50));
+        update_animations();
+        let mid = state.peek();
+        assert!(mid > 40.0 && mid < 200.0, "中途应处于动画中（{}）", mid);
+        push_animatable(state.clone(), 90.0, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        }));
+        _clock.advance(std::time::Duration::from_millis(300));
+        update_animations();
+        // 完成判定可能差一帧（dt 偏移）——再 sleep + update 一次确保收敛
+        _clock.advance(std::time::Duration::from_millis(250));
+        update_animations();
+        let v = state.peek();
+        eprintln!("[retarget] mid={:.1} final={:.1}", mid, v);
+        assert!((v - 90.0).abs() < 1.0, "中途改目标应收敛到 90，实际 {:.1}", v);
+    }
+
+    /// i32 插值（animate_int_as_state 的基础）：四舍五入 + spring 支持
+    #[test]
+    fn int_value_lerp_rounds() {
+        let (_guard, _clock) = super::tests::serial_clock();
+        use crate::animation::AnimatableValue;
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.5), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.51), 5);
+        assert_eq!(<i32 as AnimatableValue>::lerp(&0, &10, 0.55), 6);
+        assert_eq!(<i32 as AnimatableValue>::from_f32(3.7), 4);
+        assert!(<i32 as AnimatableValue>::supports_spring(), "i32 标量应支持 Spring");
+        // 动画收敛：0 → 100（Tween）
+        let state = crate::runtime::state::State::new(0i32);
+        push_animatable(state.clone(), 100, AnimationSpec::Tween(TweenSpec { duration: std::time::Duration::from_millis(200), delay: Duration::ZERO, interpolator: std::sync::Arc::new(crate::animation::interpolator::Linear::new()),
+        }));
+        _clock.advance(std::time::Duration::from_millis(300));
+        update_animations();
+        assert_eq!(state.peek(), 100, "i32 动画应收敛到 100");
+    }
+
+    /// Transition::animate 泛型（animate_value 核心）：Color 值经 target_fn
+    /// 映射 + push_animatable 驱动收敛
+    #[test]
+    fn transition_animate_generic_value() {
+        let (_guard, _clock) = super::tests::serial_clock();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut captured = None;
+        composer.compose(|ctx| {
+            let mut t = ctx.update_transition(3.0f32, AnimationSpec::Tween(TweenSpec::default()), "t");
+            let s = t.animate(ctx, |v| *v * 2.0, "v");
+            captured = Some(s);
+        });
+        assert_eq!(captured.unwrap().peek(), 6.0, "target_fn 映射应立即生效（同值跳过动画）");
+    }
+
+    #[test]
+    fn transition_animate_value_named_wrapper() {
+        // animate_value is the Compose-named twin of the generic animate<U>.
+        let (_guard, _clock) = super::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let mut captured = None;
+        composer.compose(|ctx| {
+            let mut t = ctx.update_transition(10i32, AnimationSpec::Tween(TweenSpec::default()), "t");
+            let s = t.animate_value(ctx, |v| *v + 5, "v");
+            captured = Some(s);
+        });
+        assert_eq!(captured.unwrap().peek(), 15, "animate_value maps target_fn immediately");
+        crate::animation::clear_all_animations();
+    }
+
+    #[test]
+    fn transition_child_follows_parent_target() {
+        // create_child_transition: child target derives from parent target on every
+        // call — flip the parent, the child re-maps and animates to the new value.
+        let (_guard, _clock) = super::tests::serial_clock();
+        crate::animation::clear_all_animations();
+        let mut composer = crate::runtime::composer::Composer::new();
+        let parent = crate::runtime::state::State::new(1i32);
+        let child_val = std::cell::RefCell::new(None);
+        let build = |composer: &mut crate::runtime::composer::Composer,
+                     child_val: &std::cell::RefCell<
+            Option<crate::runtime::state::State<f32>>,
+        >| {
+            let p = parent.clone();
+            composer.compose(|ctx| {
+                let t = ctx.update_transition(p.get(), AnimationSpec::Tween(TweenSpec::default()), "p");
+                let child = t.create_child_transition(|v| *v * 100);
+                let mut child = child;
+                let s = child.animate_float(ctx, |v| *v as f32, "c");
+                *child_val.borrow_mut() = Some(s.clone());
+            });
+            composer.layout(crate::layout::constraints::Constraints::new(0.0, 400.0, 0.0, 400.0));
+        };
+        build(&mut composer, &child_val);
+        assert_eq!(child_val.borrow().clone().unwrap().peek(), 100.0, "child maps parent 1 → 100");
+        // Flip parent 1 → 2: child target becomes 200 and animates there.
+        parent.set(2);
+        build(&mut composer, &child_val);
+        for _ in 0..10 {
+            crate::animation::update_animations();
+            _clock.advance(std::time::Duration::from_millis(50));
+            build(&mut composer, &child_val);
+        }
+        let v = child_val.borrow().clone().unwrap().peek();
+        assert!(
+            (v - 200.0).abs() < 5.0,
+            "child should converge 100 → 200 after parent flip, got {v}"
+        );
+        crate::animation::clear_all_animations();
+    }
