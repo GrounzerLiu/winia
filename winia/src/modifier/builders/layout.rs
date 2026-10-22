@@ -421,75 +421,75 @@ impl Modifier {
     /// Compose's `Modifier.windowInsetsPadding(insets)`: pad by the window's current insets of this
     /// kind, resolved at measure time (an inset change re-measures only the nodes that asked), and
     /// consume them for the subtree.
-    pub fn window_insets_padding(self, kind: crate::insets::InsetsKind) -> Self {
+    pub fn window_insets_padding(self, kind: crate::window::insets::InsetsKind) -> Self {
         self.push(ModifierElement::WindowInsetsPadding {
             kind,
-            controller: crate::insets::current(),
+            controller: crate::window::insets::current(),
         })
     }
 
     /// Compose's `Modifier.consumeWindowInsets(insets)`: mark the insets consumed for the subtree
     /// without padding by them.
-    pub fn consume_window_insets(self, kind: crate::insets::InsetsKind) -> Self {
+    pub fn consume_window_insets(self, kind: crate::window::insets::InsetsKind) -> Self {
         self.push(ModifierElement::ConsumeWindowInsets {
             kind,
-            controller: crate::insets::current(),
+            controller: crate::window::insets::current(),
         })
     }
 
     /// Compose's `Modifier.statusBarsPadding()`.
     pub fn status_bars_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::StatusBars)
+        self.window_insets_padding(crate::window::insets::InsetsKind::StatusBars)
     }
 
     /// Compose's `Modifier.navigationBarsPadding()`.
     pub fn navigation_bars_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::NavigationBars)
+        self.window_insets_padding(crate::window::insets::InsetsKind::NavigationBars)
     }
 
     /// Compose's `Modifier.systemBarsPadding()`.
     pub fn system_bars_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::SystemBars)
+        self.window_insets_padding(crate::window::insets::InsetsKind::SystemBars)
     }
 
     /// Compose's `Modifier.imePadding()`.
     pub fn ime_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::Ime)
+        self.window_insets_padding(crate::window::insets::InsetsKind::Ime)
     }
 
     /// Compose's `Modifier.displayCutoutPadding()`.
     pub fn display_cutout_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::DisplayCutout)
+        self.window_insets_padding(crate::window::insets::InsetsKind::DisplayCutout)
     }
 
     /// Compose's `Modifier.systemGesturesPadding()`.
     pub fn system_gestures_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::SystemGestures)
+        self.window_insets_padding(crate::window::insets::InsetsKind::SystemGestures)
     }
 
     /// Compose's `Modifier.tappableElementPadding()`.
     pub fn tappable_element_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::TappableElements)
+        self.window_insets_padding(crate::window::insets::InsetsKind::TappableElements)
     }
 
     /// Compose's `Modifier.safeDrawingPadding()`.
     pub fn safe_drawing_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::SafeDrawing)
+        self.window_insets_padding(crate::window::insets::InsetsKind::SafeDrawing)
     }
 
     /// Compose's `Modifier.safeGesturesPadding()`.
     pub fn safe_gestures_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::SafeGestures)
+        self.window_insets_padding(crate::window::insets::InsetsKind::SafeGestures)
     }
 
     /// Compose's `Modifier.safeContentPadding()`.
     pub fn safe_content_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::SafeContent)
+        self.window_insets_padding(crate::window::insets::InsetsKind::SafeContent)
     }
 
     /// Compose's `Modifier.mandatorySystemGesturesPadding()`.
     pub fn mandatory_system_gestures_padding(self) -> Self {
-        self.window_insets_padding(crate::insets::InsetsKind::MandatorySystemGestures)
+        self.window_insets_padding(crate::window::insets::InsetsKind::MandatorySystemGestures)
     }
 
     pub fn padding_from(

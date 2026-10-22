@@ -440,8 +440,8 @@ impl Composer {
         }
         // Switches (fresh + retarget-lite).
         for c in detect_switch(&self.prev_shared_endpoints, &live) {
-            if crate::anim_trace::enabled() {
-                crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+            if crate::debug::animation::enabled() {
+                crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                     format!("flight:{}", c.key),
                     "candidate",
                     format!("old={:#x} new={:#x}", c.old_slot, c.new_slot),
@@ -496,8 +496,8 @@ impl Composer {
                         .map(|a| a.flight.key.clone())
                         .unwrap_or_default();
                     self.clear_transition_for_slot(c.old_slot, FlightKey { cid: self.composer_id, id });
-                    if crate::anim_trace::enabled() {
-                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                    if crate::debug::animation::enabled() {
+                        crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                             format!("flight:{key}"),
                             "rebind",
                             format!("target {:#x} -> {:#x}", c.old_slot, c.new_slot),
@@ -685,7 +685,7 @@ impl Composer {
                 .map(|i| scene_of_node(&self.arena.nodes, i))
                 .unwrap_or(None)
         };
-        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+        crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
             format!("flight:{}", c.key),
             "start",
             format!(
@@ -761,9 +761,9 @@ impl Composer {
         // else in a trace says so — record the key, the progress it died at, and WHICH call site did
         // it (five of them can, and they mean different bugs). Gated: with the feature off `record` is a
         // no-op but its arguments would still be built.
-        if crate::anim_trace::enabled() {
+        if crate::debug::animation::enabled() {
             let p = a.progress_value();
-            crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+            crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                 format!("flight:{}", a.flight.key),
                 "cancel",
                 format!(
@@ -958,7 +958,7 @@ impl Composer {
     /// a duplicate (a scene host re-composing a copy of a key that a flight already owns) shows up here
     /// as two records with the same `key`, different rects, one of them with `role: null`.
     pub(crate) fn trace_marked_nodes(&self) {
-        if !crate::anim_trace::enabled() {
+        if !crate::debug::animation::enabled() {
             return;
         }
         // One id→index map for the whole pass (see `scene_of_node_with`).
@@ -978,12 +978,12 @@ impl Composer {
                 TransitionRole::Target => "Target",
                 TransitionRole::Morph => "Morph",
             });
-            let mut rec = crate::anim_trace::TraceRecord::flight(format!(
+            let mut rec = crate::debug::animation::TraceRecord::flight(format!(
                 "mark:{}#{}",
                 m.key,
                 role.unwrap_or("plain")
             ));
-            rec.kind = crate::anim_trace::TraceKind::Node;
+            rec.kind = crate::debug::animation::TraceKind::Node;
             rec.scope = Some(m.scope_id);
             rec.key = Some(m.key.clone());
             rec.role = role;
@@ -1001,7 +1001,7 @@ impl Composer {
                 .root
                 .map(|r| crate::app::node_abs_position(&self.arena.nodes, r, n.id))
                 .unwrap_or((n.position.x, n.position.y));
-            rec.layout = Some(crate::anim_trace::TraceRect::new(
+            rec.layout = Some(crate::debug::animation::TraceRect::new(
                 ax,
                 ay,
                 n.measured_size.width,
@@ -1013,14 +1013,14 @@ impl Composer {
                 Some(t) => {
                     let l = t.lerped();
                     (
-                        crate::anim_trace::TraceRect::new(l.x, l.y, l.width, l.height),
+                        crate::debug::animation::TraceRect::new(l.x, l.y, l.width, l.height),
                         t.alpha(),
                     )
                 }
                 None => {
                     let cb = n.content_box();
                     (
-                        crate::anim_trace::TraceRect::new(ax, ay, cb.width, cb.height),
+                        crate::debug::animation::TraceRect::new(ax, ay, cb.width, cb.height),
                         1.0,
                     )
                 }
@@ -1028,7 +1028,7 @@ impl Composer {
             rec.painted = Some(rect);
             rec.alpha = Some(alpha);
             rec.effective_alpha = Some(alpha);
-            crate::anim_trace::record(rec);
+            crate::debug::animation::record(rec);
         }
     }
 
@@ -1081,8 +1081,8 @@ impl Composer {
                 let (ox, oy) = self.screen_origin;
                 // Gated: with the feature off `record` is a no-op but its arguments (including a
                 // `scene_of_node` ancestry walk) would still be evaluated.
-                if crate::anim_trace::enabled() {
-                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                if crate::debug::animation::enabled() {
+                    crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                         format!(
                             "flight:{}",
                             find_shared_marker(&self.arena.nodes[tidx].modifier)
@@ -1492,7 +1492,7 @@ impl Composer {
         // is the flight's lerped rect (what the flight draws), and opacity is recorded in three parts
         // (`alpha` = the end's own, `effective_alpha` = what the draw composes, `scene_visibility` =
         // the scene host's value) so "who faded it" is answerable without guessing.
-        if crate::anim_trace::enabled() {
+        if crate::debug::animation::enabled() {
             let (scope_id, key) = self
                 .shared_flights
                 .get(&id)
@@ -1526,7 +1526,7 @@ impl Composer {
                     None => continue,
                 };
                 let lerped = t.lerped();
-                let mut rec = crate::anim_trace::TraceRecord::flight(match role {
+                let mut rec = crate::debug::animation::TraceRecord::flight(match role {
                     TransitionRole::Source => format!("flight:{key}#Source"),
                     TransitionRole::Target => format!("flight:{key}#Target"),
                     TransitionRole::Morph => format!("flight:{key}#Morph"),
@@ -1541,13 +1541,13 @@ impl Composer {
                 rec.flight = Some(id);
                 rec.phase = Some(if t.progress >= 1.0 { "settled" } else { "flying" });
                 rec.progress = Some(t.progress);
-                rec.layout = Some(crate::anim_trace::TraceRect::new(
+                rec.layout = Some(crate::debug::animation::TraceRect::new(
                     n.position.x,
                     n.position.y,
                     n.measured_size.width,
                     n.measured_size.height,
                 ));
-                rec.painted = Some(crate::anim_trace::TraceRect::new(
+                rec.painted = Some(crate::debug::animation::TraceRect::new(
                     lerped.x, lerped.y, lerped.width, lerped.height,
                 ));
                 rec.alpha = Some(t.alpha());
@@ -1559,7 +1559,7 @@ impl Composer {
                 rec.radii = Some(t.radii());
                 rec.clip = Some(t.clip);
                 rec.composer = Some(self.composer_id);
-                crate::anim_trace::record(rec);
+                crate::debug::animation::record(rec);
             }
         }
     }
@@ -2420,7 +2420,7 @@ impl Composer {
                 Pending::Fresh { scope_id, key, slot, start, end } => {
                     // anim-trace: morph opens are otherwise invisible in a trace (no `start` event, only
                     // per-frame records), which made "what did the resize animate?" hard to answer.
-                    crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                    crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                         format!("flight:{key}"),
                         "morph_open",
                         format!(
@@ -2437,7 +2437,7 @@ impl Composer {
                         .map(|a| (a.flight.scope_id, a.flight.key.clone(), a.flight.target_slot));
                     self.cancel_flight(id, "morph_reopen");
                     if let Some((scope_id, key, Some(slot))) = meta.map(|(s, k, t)| (s, k, t)) {
-                        crate::anim_trace::record(crate::anim_trace::TraceRecord::event(
+                        crate::debug::animation::record(crate::debug::animation::TraceRecord::event(
                             format!("flight:{key}"),
                             "morph_open",
                             format!(

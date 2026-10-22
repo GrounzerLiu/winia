@@ -275,7 +275,7 @@ pub fn with_nav_scene<R>(scene: NavSceneInfo, f: impl FnOnce() -> R) -> R {
     // anim-trace: hand the handle to the trace so the frame barrier records this scene's visibility
     // (it is a closure over the host's progress, so it has to be sampled once per frame rather than
     // read here). No-op unless the tracing feature is on.
-    crate::anim_trace::note_scene(scene);
+    crate::debug::animation::note_scene(scene);
     f()
 }
 

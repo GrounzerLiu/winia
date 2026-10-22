@@ -17,9 +17,9 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
     // the window's status-bar/navigation-bar/IME insets into it, and the inset-padding modifiers read
     // them at measure time.
     let insets = ctx
-        .remember(|| crate::insets::WindowInsetsController::new())
+        .remember(|| crate::window::insets::WindowInsetsController::new())
         .get();
-    crate::insets::LOCAL_WINDOW_INSETS.provides(insets, || {
+    crate::window::insets::LOCAL_WINDOW_INSETS.provides(insets, || {
         // 内容铺满窗口，不做默认留白（Scaffold 等全屏页面需要 edge-to-edge）。
         Column::new().build(ctx, |ctx| {
             content(ctx);

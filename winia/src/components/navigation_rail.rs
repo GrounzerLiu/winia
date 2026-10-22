@@ -139,8 +139,8 @@ const WIDE_START_INDICATOR_V_PADDING: f32 = 16.0;
 ///
 /// 桌面平台默认全零（无系统栏叠加）。自定义窗口装饰（自绘标题栏模拟状态栏）或平台后端填充
 /// 真实系统栏尺寸后传入 [NavigationRail::window_insets]；insets padding 在最外层，rail 自身
-/// 垂直 padding 在其内。The foundation type is [`crate::insets::Insets`].
-pub use crate::insets::Insets as WindowInsets;
+/// 垂直 padding 在其内。The foundation type is [`crate::window::insets::Insets`].
+pub use crate::window::insets::Insets as WindowInsets;
 
 // ── 颜色 ──
 

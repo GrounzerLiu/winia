@@ -723,7 +723,7 @@ pub fn start_stdin_channel() {
                 // `anim-trace` feature.
                 "tr" => {
                     let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
-                    println!("TRACE:{}", crate::anim_trace::recent_lines(n).join("\n"));
+                    println!("TRACE:{}", crate::debug::animation::recent_lines(n).join("\n"));
                 }
                 // save <path>: write the last CAPTURED frame (see `r`) to a PNG. The other pixel routes
                 // hand colour values to a client (`px` one at a time, `p` over the WebSocket); this is the
@@ -878,7 +878,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
             // what an animation is doing, no WINIA_ANIM_TRACE file needed. Empty without `anim-trace`.
             "tr" => {
                 let n: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
-                let lines = crate::anim_trace::recent_lines(n);
+                let lines = crate::debug::animation::recent_lines(n);
                 let _ = write
                     .send(Message::text(format!(
                         "{}",

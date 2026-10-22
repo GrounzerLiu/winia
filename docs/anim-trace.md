@@ -110,10 +110,10 @@ unknown option, or a trace with no flight records exit 2 instead of silently pas
 ## Tests
 
 ```rust
-crate::anim_trace::capture_start();
+crate::debug::animation::capture_start();
 // … drive the composer …
-let records = crate::anim_trace::capture_take();
-crate::anim_trace::capture_stop();
+let records = crate::debug::animation::capture_take();
+crate::debug::animation::capture_stop();
 ```
 
 `anim_trace_records_a_headless_flight` (gated on the feature) uses this to pin a flight's trajectory:

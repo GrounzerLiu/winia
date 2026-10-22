@@ -197,7 +197,7 @@ rendering does not tick them — use tokio timers for wall-clock work.
 - `active_animations_report()` — one line per live motion (`spec=`, `from`, `target`, `elapsed`,
   `v=`, component counts). The only way to answer "who is moving this state".
 - `animation_target` / `animation_velocity` / `is_animating_state` — per-state introspection.
-- `docs/anim-trace.md` + `anim_trace.rs` — with the `anim-trace` feature and `WINIA_ANIM_TRACE=<file>`,
+- `docs/anim-trace.md` + `debug/animation.rs` — with the `anim-trace` feature and `WINIA_ANIM_TRACE=<file>`,
   one NDJSON line per subject per frame (layout rect, painted rect, alpha in three parts).
 - `trace_flag(name)` — a cached env-var switch for per-component traces.
 

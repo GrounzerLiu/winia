@@ -104,7 +104,7 @@ the overlay queue below.
 | 4 | `render` | walking the arena onto a Skia canvas |
 | 5 | `components`, `theme`, `overlay`, `nav` | the 51 components, the M3 theme, the overlay runtime, Navigation 3 |
 | 6 | `app` | the winit application, the window, the frame loop |
-| — | `debug`, `accessibility`, `anim_trace`, `icon` | the dev-server channel, the UIA bridge, the frame trace, the icon tables |
+| — | `debug`, `accessibility`, `debug/animation`, `icon` | the dev-server channel, the UIA bridge, the frame trace, the icon tables |
 
 The edges that go up, and why each is there:
 
@@ -154,7 +154,7 @@ with it, which places five things worse than it fixes one. The edge is deliberat
 | `accessibility.rs` | 1.3k | the Windows UIA bridge (feature `accessibility`) |
 | `overlay.rs` | 597 | the overlay runtime: `Popup`, `Dialog`, `OverlayDesc` |
 | `animation/` | 2 submodules | `animation.rs` (the facade), `interpolator.rs`, `visibility.rs` |
-| `unit.rs`, `interaction.rs`, `nested_scroll.rs`, `effect.rs`, `selection.rs`, `debug/`, `icon/`, `anim_trace.rs` | | as the layers table says |
+| `unit.rs`, `interaction.rs`, `nested_scroll.rs`, `effect.rs`, `selection.rs`, `debug/`, `icon/`, `debug/animation.rs` | | as the layers table says |
 
 ## A frame
 

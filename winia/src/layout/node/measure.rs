@@ -620,21 +620,21 @@ pub(crate) fn measure_node_inner(
     // Window-inset padding is resolved HERE, at measure time: the controller's state read registers a
     // layout dependency (so an inset change re-measures just these nodes), and the insets it applies
     // are consumed for the subtree. Consume-only elements mark them without padding.
-    let mut inset_consumed = crate::insets::consumed();
+    let mut inset_consumed = crate::window::insets::consumed();
     for (kind, controller) in nodes[idx].modifier.inset_padding_steps() {
         let window = controller.state().get();
-        let value = crate::insets::remaining(kind, window, inset_consumed);
+        let value = crate::window::insets::remaining(kind, window, inset_consumed);
         pad_start += value.left;
         pad_end += value.right;
         pad_top += value.top;
         pad_bottom += value.bottom;
-        inset_consumed = crate::insets::consume(kind, window, inset_consumed);
+        inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
     }
     for (kind, controller) in nodes[idx].modifier.inset_consume_steps() {
         let window = controller.state().get();
-        inset_consumed = crate::insets::consume(kind, window, inset_consumed);
+        inset_consumed = crate::window::insets::consume(kind, window, inset_consumed);
     }
-    let _inset_guard = crate::insets::ConsumeScope::enter(inset_consumed);
+    let _inset_guard = crate::window::insets::ConsumeScope::enter(inset_consumed);
     let pad_x = pad_start + pad_end;
     let pad_y = pad_top + pad_bottom;
     if pad_x > 0.0 || pad_y > 0.0 {

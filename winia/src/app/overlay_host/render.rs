@@ -41,8 +41,8 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
         // Render-time trace: the overlay's reveal/alpha/offset exist only here, at paint time — the debug
         // server's tree reports POST-LAYOUT sizes, so a reveal (a clip) was invisible to every other
         // channel (`reveal` and `dy` are fractions; `clip_h` is what is actually applied).
-        if crate::anim_trace::enabled() {
-            let mut r = crate::anim_trace::TraceRecord::render(ov.id);
+        if crate::debug::animation::enabled() {
+            let mut r = crate::debug::animation::TraceRecord::render(ov.id);
             r.phase = Some(if ov.closing { "closing" } else { "opening" });
             r.alpha = Some(anim_alpha);
             r.clip = Some(clip_h >= 0.0);
@@ -50,7 +50,7 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
             // the animation is settled (`clip_h == -1` means "no clip", not "zero height" — reporting 0
             // there made a fully open panel look empty).
             let painted_h = if clip_h >= 0.0 { clip_h } else { size.1 };
-            r.painted = Some(crate::anim_trace::TraceRect {
+            r.painted = Some(crate::debug::animation::TraceRect {
                 x: ov.screen_pos.0,
                 y: ov.screen_pos.1,
                 w: size.0,
@@ -60,7 +60,7 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
                 "reveal={anim_reveal:.4} dy={anim_dy:.4} scale={anim_scale:.4} layout_h={:.1}",
                 size.1
             ));
-            crate::anim_trace::record(r);
+            crate::debug::animation::record(r);
         }
         if clip_h >= 0.0 {
             // clip_rect is affected by the current matrix (screen_pos translate

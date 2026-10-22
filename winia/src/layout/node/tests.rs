@@ -577,13 +577,13 @@
 
     #[test]
     fn inset_padding_consumes_for_the_subtree() {
-        use crate::insets::{Insets, WindowInsets};
+        use crate::window::insets::{Insets, WindowInsets};
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let controller = crate::insets::current();
+        let controller = crate::window::insets::current();
         // Reset on Drop, not at the end of the body: a failing assertion must not leave system
         // insets behind for every later test in this process.
-        struct ResetInsets(crate::insets::WindowInsetsController);
+        struct ResetInsets(crate::window::insets::WindowInsetsController);
         impl Drop for ResetInsets {
             fn drop(&mut self) {
                 self.0.set(WindowInsets::default());
@@ -613,7 +613,7 @@
         // Consume-only: the inner padding must not reappear.
         let mut nodes = vec![
             LayoutNode::new(
-                Modifier::new().consume_window_insets(crate::insets::InsetsKind::NavigationBars),
+                Modifier::new().consume_window_insets(crate::window::insets::InsetsKind::NavigationBars),
                 Some(0),
             ),
             LayoutNode::leaf(Modifier::new().navigation_bars_padding().size(10.0, 10.0)),

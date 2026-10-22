@@ -32,7 +32,6 @@
 pub mod component_styles;
 pub mod runtime;
 pub mod unit;
-pub mod anim_trace;
 /// 调试日志宏：仅 `debug-server` feature 下打印（用户构建零噪音）。
 /// 用法：`debug_log!("[tag] {}", x);`——编译期折叠（非 feature 构建零开销）。
 #[macro_export]
@@ -63,7 +62,7 @@ pub mod animation;
 /// (`winia::fling`, `winia::nested_scroll`, `winia::overscroll`).
 pub mod scroll;
 pub use scroll::{fling, nested as nested_scroll, overscroll};
-pub mod insets;
+pub mod window;
 pub mod nav;
 pub mod semantics;
 pub mod theme;
@@ -251,7 +250,7 @@ pub mod prelude {
     pub use crate::layout::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
     pub use crate::layout::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
     pub use crate::layout::{Arrangement, Alignment, ContentAlignment, Constraints, LayoutDirection};
-    pub use crate::insets::{Insets, InsetsKind, WindowInsetsController};
+    pub use crate::window::insets::{Insets, InsetsKind, WindowInsetsController};
     pub use crate::unit::{Dp, Sp, Offset, Size, Density, Px, DpExt, SpExt, PxExt};
     pub use crate::flow::{debounce, remember_derived_state, snapshot_flow, SnapshotFlow};
     pub use crate::effect::{

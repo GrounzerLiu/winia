@@ -41,7 +41,7 @@ impl Modifier {
     /// The window-inset padding elements on this chain, in order.
     pub(crate) fn inset_padding_steps(
         &self,
-    ) -> Vec<(crate::insets::InsetsKind, crate::insets::WindowInsetsController)> {
+    ) -> Vec<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
         self.elements
             .iter()
             .filter_map(|el| match el {
@@ -56,7 +56,7 @@ impl Modifier {
     /// The consume-only inset elements on this chain, in order.
     pub(crate) fn inset_consume_steps(
         &self,
-    ) -> Vec<(crate::insets::InsetsKind, crate::insets::WindowInsetsController)> {
+    ) -> Vec<(crate::window::insets::InsetsKind, crate::window::insets::WindowInsetsController)> {
         self.elements
             .iter()
             .filter_map(|el| match el {

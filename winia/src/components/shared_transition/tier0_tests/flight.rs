@@ -5,7 +5,7 @@ use super::*;
 fn anim_trace_records_a_headless_flight() {
     let _g = lock_serial();
     crate::animation::clear_all_animations();
-    crate::anim_trace::capture_start();
+    crate::debug::animation::capture_start();
     let mut composer = Composer::new();
     let show = State::new(true);
     frame(&mut composer, &show);
@@ -19,13 +19,13 @@ fn anim_trace_records_a_headless_flight() {
         }
         advance(&mut composer, &show);
     }
-    let recs = crate::anim_trace::capture_take();
-    crate::anim_trace::capture_stop();
+    let recs = crate::debug::animation::capture_take();
+    crate::debug::animation::capture_stop();
 
-    let of = |role: &str| -> Vec<crate::anim_trace::TraceRecord> {
+    let of = |role: &str| -> Vec<crate::debug::animation::TraceRecord> {
         recs.iter()
             .map(|(_, _, r)| r.clone())
-            .filter(|r| r.kind == crate::anim_trace::TraceKind::Flight)
+            .filter(|r| r.kind == crate::debug::animation::TraceKind::Flight)
             .filter(|r| r.role == Some(role))
             .collect()
     };
@@ -37,7 +37,7 @@ fn anim_trace_records_a_headless_flight() {
         source.len(),
         target.len()
     );
-    let painted_w = |r: &crate::anim_trace::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
+    let painted_w = |r: &crate::debug::animation::TraceRecord| r.painted.map(|p| p.w).unwrap_or(0.0);
     // Both ends draw the SAME lerped rect, which starts at the source's size (this scene's list
     // hero is 120x80) and finishes at the target's (the detail hero is 300x160).
     assert!(
@@ -59,7 +59,7 @@ fn anim_trace_records_a_headless_flight() {
     );
     // Opacity crossfades: the leaving end starts opaque and ends invisible, the entering one the
     // reverse. Both are recorded, in three parts.
-    let a = |r: &crate::anim_trace::TraceRecord| r.alpha.unwrap_or(-1.0);
+    let a = |r: &crate::debug::animation::TraceRecord| r.alpha.unwrap_or(-1.0);
     assert!(a(&source[0]) > 0.9, "the leaving end starts opaque");
     assert!(a(source.last().unwrap()) < 0.1, "…and ends invisible");
     assert!(a(&target[0]) < 0.1, "the entering end starts invisible");

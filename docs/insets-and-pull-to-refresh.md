@@ -44,7 +44,7 @@ target the window while composition is running; a button handler or position cal
 that stack and would silently write the process-wide fallback controller instead. Capture the
 controller during composition and keep it for the handler:
 
-    let insets = winia::insets::current();          // while composing
+    let insets = winia::window::insets::current();          // while composing
     Button::new().on_click(move || insets.set_ime_insets(Insets::new(0.0, 0.0, 0.0, 240.0)))
 
 NavigationRail's WindowInsets is now the same foundation Insets type.

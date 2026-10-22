@@ -29,6 +29,8 @@ mod imp;
 
 pub use imp::*;
 
+pub mod animation;
+
 /// One input a debug client injects into the event loop. `app` drains the queue with
 /// [`take_queued_events`] and routes each variant to the same code path a real event takes.
 #[derive(Debug, Clone)]

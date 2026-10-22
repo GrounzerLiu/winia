@@ -573,7 +573,7 @@ impl PerWindow {
         // With `anim-trace` off this is a no-op. With it ON it always runs — the ring that serves the
         // debug server's `tr` command is always fed — and only the FILE sink is gated on WINIA_ANIM_TRACE,
         // so a build with the feature and no env var records into memory and writes nothing.
-        crate::anim_trace::begin_frame(
+        crate::debug::animation::begin_frame(
             self.clock.frame_counter,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

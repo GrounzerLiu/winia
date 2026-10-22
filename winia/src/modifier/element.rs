@@ -300,13 +300,13 @@ pub(crate) enum ModifierElement {
     /// Padding equal to a part of the window's insets (Compose's windowInsetsPadding). The applied
     /// insets are consumed for the subtree, so a nested call pads by nothing.
     WindowInsetsPadding {
-        kind: crate::insets::InsetsKind,
-        controller: crate::insets::WindowInsetsController,
+        kind: crate::window::insets::InsetsKind,
+        controller: crate::window::insets::WindowInsetsController,
     },
     /// Consume a part of the window's insets without padding (Compose's consumeWindowInsets).
     ConsumeWindowInsets {
-        kind: crate::insets::InsetsKind,
-        controller: crate::insets::WindowInsetsController,
+        kind: crate::window::insets::InsetsKind,
+        controller: crate::window::insets::WindowInsetsController,
     },
     /// Fill the incoming maximum width — Compose `fillMaxWidth`. `fraction < 1` takes that share
     /// of the maximum; an unbounded maximum is a no-op (Compose's `FillNode`).

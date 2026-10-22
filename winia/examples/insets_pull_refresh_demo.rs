@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use winia::animation::interpolator::EaseOutCubic;
 use winia::animation::{AnimationSpec, TweenSpec};
-use winia::insets::Insets;
+use winia::window::insets::Insets;
 use winia::prelude::*;
 
 const STATUS_BAR_HEIGHT: f32 = 36.0;
@@ -32,9 +32,9 @@ fn insets_pull_refresh_demo(ctx: &mut ComposeCtx) {
     let tab = ctx.remember(|| 0usize);
 
     // This window owns its decoration, so it also owns the insets.
-    winia::insets::set_status_bars(Insets::new(0.0, STATUS_BAR_HEIGHT, 0.0, 0.0));
-    winia::insets::set_navigation_bars(Insets::new(0.0, 0.0, 0.0, NAV_BAR_HEIGHT));
-    winia::insets::set_ime(if keyboard.get() {
+    winia::window::insets::set_status_bars(Insets::new(0.0, STATUS_BAR_HEIGHT, 0.0, 0.0));
+    winia::window::insets::set_navigation_bars(Insets::new(0.0, 0.0, 0.0, NAV_BAR_HEIGHT));
+    winia::window::insets::set_ime(if keyboard.get() {
         Insets::new(0.0, 0.0, 0.0, KEYBOARD_HEIGHT)
     } else {
         Insets::ZERO
