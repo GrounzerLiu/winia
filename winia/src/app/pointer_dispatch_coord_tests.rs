@@ -4,15 +4,15 @@
     use crate::modifier::{Modifier, ScrollState};
     use crate::input::{PointerButton, PointerEvent, PointerEventType, PointerKind};
 
-    /// 构造 scroll 容器(0,0,100×200) + 子节点(0,100,100×60，带 PointerEvent handler)。
-    /// scroll offset=50 → 子节点视觉顶边 y=50。
+    /// Builds a scroll container (0,0,100x200) plus a child (0,100,100x60) carrying a PointerEvent
+    /// handler. With scroll offset=50 the child's visual top edge is y=50.
     fn build_scrolled_tree() -> (Vec<LayoutNode>, std::sync::Arc<std::sync::Mutex<Option<(f32, f32)>>>, std::sync::Arc<std::sync::Mutex<Option<(f32, f32)>>>, ScrollState) {
         let scroll = ScrollState::new();
         scroll.offset.set(50.0);
-        // 子节点 handler 记录（验证子节点局部坐标扣除祖先 scroll）
+        // Records the child's handler calls (to verify the child's local coordinates subtract the ancestor scroll).
         let received = std::sync::Arc::new(std::sync::Mutex::new(None::<(f32, f32)>));
         let recv2 = received.clone();
-        // 容器自身 handler 记录（验证自身局部坐标不减自身 offset）
+        // Records the container's own handler calls (to verify its local coordinates do not subtract its own offset).
         let container_recv = std::sync::Arc::new(std::sync::Mutex::new(None::<(f32, f32)>));
         let crecv2 = container_recv.clone();
         let mut nodes = vec![
@@ -35,7 +35,7 @@
     fn make_event() -> PointerEvent {
         PointerEvent {
             event_type: PointerEventType::Move,
-            position: (0.0, 0.0), // dispatch 会覆盖
+            position: (0.0, 0.0), // dispatch overwrites this
             scene_position: (0.0, 0.0),
             kind: PointerKind::Mouse { button: PointerButton::Primary },
             is_alt_pressed: false,
@@ -49,52 +49,54 @@
     fn dispatch_local_coord_matches_scene_to_node_local_in_scroll() {
         let (nodes, received, _container_recv, _scroll) = build_scrolled_tree();
         let root = 0;
-        // 场景点 (50,60)：滚动后应命中子节点（视觉顶边 y=50，范围 50..110）
+        // Scene point (50,60): after scrolling it should hit the child (visual top y=50, spanning 50..110).
         let path = hit_test(&nodes, root, 50.0, 60.0);
-        assert_eq!(path, vec![0, 1], "滚动后子节点视觉范围应命中");
+        assert_eq!(path, vec![0, 1], "the child's visual range should be hit after scrolling");
 
         let (expect_x, expect_y) = scene_to_node_local(&nodes, &path, 1, 50.0, 60.0);
-        assert_eq!((expect_x, expect_y), (50.0, 10.0), "基线：scene_to_node_local 须扣除滚动");
+        assert_eq!((expect_x, expect_y), (50.0, 10.0), "baseline: scene_to_node_local must subtract the scroll");
 
         dispatch_ptr_event(&nodes, root, &path, &make_event(), (50.0, 60.0), None);
         let got = *received.lock().unwrap();
         assert_eq!(got, Some((expect_x, expect_y)),
-            "dispatch 传给 handler 的局部坐标必须与 hit_test/scene_to_node_local 一致");
+            "the local coordinates dispatch hands the handler must match hit_test/scene_to_node_local");
     }
 
     #[test]
     fn dispatch_coord_follows_scroll_offset_change() {
         let (nodes, received, _container_recv, scroll) = build_scrolled_tree();
         let root = 0;
-        // offset 100：视觉顶边 y=0，场景 (50,50) → 本地 y=50
+        // offset 100: visual top y=0, so scene (50,50) maps to local y=50.
         scroll.offset.set(100.0);
         let path = hit_test(&nodes, root, 50.0, 50.0);
-        assert_eq!(path, vec![0, 1], "offset=100 时场景 (50,50) 仍命中子节点");
+        assert_eq!(path, vec![0, 1], "at offset=100 the scene point (50,50) still hits the child");
         let (expect_x, expect_y) = scene_to_node_local(&nodes, &path, 1, 50.0, 50.0);
         assert_eq!((expect_x, expect_y), (50.0, 50.0));
 
         dispatch_ptr_event(&nodes, root, &path, &make_event(), (50.0, 50.0), None);
         let got = *received.lock().unwrap();
         assert_eq!(got, Some((expect_x, expect_y)),
-            "滚动偏移变化后 dispatch 坐标须同步");
+            "dispatch coordinates must follow a change in the scroll offset");
     }
 
     #[test]
     fn dispatch_scroll_container_own_coord_uses_ancestor_not_self() {
-        // scroll 容器自身的局部坐标 = 场景 - 容器位置（自身 offset 不影响自身左上角）
+        // A scroll container's own local coordinates are scene minus container position; its own offset
+        // does not move its top-left corner.
         let (nodes, _received, container_recv, _scroll) = build_scrolled_tree();
         let root = 0;
-        let path = vec![0]; // 只命中容器自身（子节点外区域）
-        // 场景 (20,30)：容器本地 (20,30)，不应减自身 offset=50
+        let path = vec![0]; // only the container itself is hit (outside the child)
+        // Scene (20,30): the container's local point is (20,30) and must not subtract its own offset=50.
         dispatch_ptr_event(&nodes, root, &path, &make_event(), (20.0, 30.0), None);
         let got = *container_recv.lock().unwrap();
         assert_eq!(got, Some((20.0, 30.0)),
-            "scroll 容器自身局部坐标不应减自身 offset（offset 只影响子节点）");
+            "a scroll container's own local coordinates must not subtract its own offset (the offset only affects children)");
     }
 
-    /// 双轨（exp/modifier-node）：PointerNode 与枚举 PointerEvent 同场分发。
-    /// 验证：①隧道外→内、冒泡内→外顺序；②node 收到与枚举相同的本地坐标；
-    /// ③枚举消费（true）时 node 不再收到（旧行为优先）。
+    /// Dual track (exp/modifier-node): PointerNode and the enum PointerEvent are dispatched together.
+    /// Verifies that (1) the tunnel runs outside-in and the bubble inside-out, (2) the node receives the
+    /// same local coordinates as the enum, and (3) when the enum consumes (returns true) the node no
+    /// longer receives the event (the old behaviour wins).
     #[test]
     fn dispatch_pointer_node_dual_track_order_and_coords() {
         use crate::modifier::PointerNode;
@@ -135,11 +137,11 @@
         nodes[1].position = Offset::new(20.0, 30.0);
         nodes[0].children.push(1);
         let path = vec![0, 1];
-        // 场景 (50,60) → 子本地 (30,30)
+        // Scene (50,60) maps to child-local (30,30).
         dispatch_ptr_event(&nodes, 0, &path, &make_event(), (50.0, 60.0), None);
         assert_eq!(*enum_log.lock().unwrap(), vec![(30.0, 30.0)]);
-        assert_eq!(*ev_log.lock().unwrap(), vec![(30.0, 30.0)], "node 冒泡坐标与枚举一致");
-        assert_eq!(*pre_log.lock().unwrap(), vec![(30.0, 30.0)], "node 隧道坐标一致");
+        assert_eq!(*ev_log.lock().unwrap(), vec![(30.0, 30.0)], "the node's bubble coordinates match the enum's");
+        assert_eq!(*pre_log.lock().unwrap(), vec![(30.0, 30.0)], "the node's tunnel coordinates match too");
     }
 
     #[test]
@@ -160,16 +162,17 @@
         let mut nodes = vec![LayoutNode::leaf(
             Modifier::new()
                 .size(100.0, 100.0)
-                .on_pointer_event(|_| true) // 枚举消费
+                .on_pointer_event(|_| true) // the enum consumes
                 .pointer_node(Rec { ev: ev_log.clone() }),
         )];
         nodes[0].measured_size = Size::new(100.0, 100.0);
         dispatch_ptr_event(&nodes, 0, &[0], &make_event(), (10.0, 10.0), None);
-        assert!(ev_log.lock().unwrap().is_empty(), "枚举消费后同节点 node 不应收到");
+        assert!(ev_log.lock().unwrap().is_empty(), "once the enum consumes, the node on that path must not receive it");
     }
 
-    /// P0-1 回归：内层装饰性 PointerNode 不偷外层 tap。
-    /// gesture 目标选择只认 TapOn/DragOn 枚举——内层纯 node 时外层 TapOnTap 命中。
+    /// P0-1 regression: an inner decorative PointerNode must not steal the outer tap. Gesture target
+    /// selection only considers the TapOn/DragOn enums, so with a bare node inside, the outer TapOnTap
+    /// still gets the hit.
     #[test]
     fn pointer_node_does_not_steal_outer_tap_target() {
         use crate::layout::node::hit_test;
@@ -187,24 +190,24 @@
             LayoutNode::leaf(
                 Modifier::new()
                     .size(100.0, 100.0)
-                    .pointer_node(Deco), // 装饰性：恒返 false，不消费
+                    .pointer_node(Deco), // decorative: always returns false, consumes nothing
             ),
         ];
         nodes[0].measured_size = Size::new(200.0, 200.0);
         nodes[1].measured_size = Size::new(100.0, 100.0);
         nodes[1].position = Offset::new(20.0, 20.0);
         nodes[0].children.push(1);
-        // 点内层 (50,50)：命中路径 [0,1]
+        // Clicking the inner node at (50,50) gives the hit path [0,1].
         let path = hit_test(&nodes, 0, 50.0, 50.0);
         assert_eq!(path, vec![0, 1]);
-        // gesture 目标选择（与 gesture_down 同逻辑）：最内层 has_gesture 者
+        // Gesture target selection (same logic as gesture_down): the innermost node that has_gesture.
         let gid = path
             .iter()
             .rev()
             .find(|&&i| nodes[i].modifier.has_gesture())
             .copied();
-        assert_eq!(gid, Some(0), "内层纯 PointerNode 不进路由，外层 tap 命中");
-        // fire_gesture_action 语义：gid=0 的枚举 TapOnTap 可触发
+        assert_eq!(gid, Some(0), "a bare inner PointerNode is not routed, so the outer tap is the target");
+        // fire_gesture_action semantics: gid=0's TapOnTap enum can fire.
         assert!(nodes[0].modifier.has_gesture());
         assert!(!nodes[1].modifier.has_gesture());
     }

@@ -2,21 +2,21 @@
     use crate::unit::{Offset, Size};
     use crate::modifier::{Modifier, ScrollState};
 
-    /// 构造：root(Column) → outer_scroll(0,184,420×536) → [内容0..7, 内层scroll, 内容8..]
+    /// Builds: root(Column) -> outer_scroll(0,184,420x536) -> [content 0..7, inner scroll, content 8..].
     fn build_demo_tree() -> (Vec<LayoutNode>, usize) {
         let outer = ScrollState::new();
         let inner = ScrollState::new();
         let mut nodes = Vec::new();
-        // idx 0: root Column（全窗口 420×720）
+        // idx 0: root Column (the whole window, 420x720).
         nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 720.0)));
         nodes[0].measured_size = Size::new(420.0, 720.0);
-        // idx 1: 外层 scroll（视口 536，顶部 y=184）
+        // idx 1: the outer scroll (viewport 536, top at y=184).
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(outer).size(420.0, 536.0)));
         nodes[1].position = Offset::new(0.0, 184.0);
         nodes[1].measured_size = Size::new(420.0, 536.0);
         nodes[1].scroll_viewport_height = 536.0;
-        nodes[0].children.push(1); // 外层 scroll 挂到 root
-        // 内容 0..7：每行 37 高
+        nodes[0].children.push(1); // attach the outer scroll to the root
+        // Content 0..7: 37 high each.
         for i in 0..8 {
             let idx = nodes.len();
             nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 37.0)));
@@ -24,98 +24,98 @@
             nodes[idx].measured_size = Size::new(420.0, 37.0);
             nodes[1].children.push(idx);
         }
-        // 内层 scroll：内容流 y = 8*37 = 296，视口 180
+        // Inner scroll: the content flow sits at y = 8*37 = 296, viewport 180.
         let inner_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().vertical_scroll(inner).size(420.0, 180.0)));
         nodes[inner_idx].position = Offset::new(0.0, 296.0);
         nodes[inner_idx].measured_size = Size::new(420.0, 180.0);
         nodes[inner_idx].scroll_viewport_height = 180.0;
-        // 内层子项：一列（可滚动内容）
+        // The inner child: one column (scrollable content).
         let item_idx = nodes.len();
         nodes.push(LayoutNode::leaf(Modifier::new().size(420.0, 32.0)));
         nodes[item_idx].position = Offset::new(0.0, 0.0);
         nodes[item_idx].measured_size = Size::new(420.0, 32.0);
         nodes[inner_idx].children.push(item_idx);
         nodes[1].children.push(inner_idx);
-        (nodes, 1) // 返回 outer_scroll idx
+        (nodes, 1) // return the outer_scroll idx
     }
 
     #[test]
     fn drag_target_on_outer_content_is_outer_not_inner() {
         let (nodes, outer_idx) = build_demo_tree();
-        // 鼠标在外层内容区域：屏幕 y=250（外层顶部 184 + 内容 y=66 → 内容 1）
+        // The mouse is over the outer content: screen y=250 (outer top 184 + content y=66 -> content 1).
         let path = hit_test(&nodes, 0, 210.0, 250.0);
-        assert!(!path.is_empty(), "应命中某节点");
-        // 命中路径应包含外层 scroll，且**不含内层 scroll**
-        assert!(path.contains(&outer_idx), "外层 scroll 应在命中路径");
-        // 内层 scroll 视觉位置 y=480..660——y=250 不应命中
-        let inner_idx = nodes[outer_idx].children[8]; // 内容 0..7 之后是内层
-        assert!(!path.contains(&inner_idx), "鼠标在外层内容区域不应命中内层 scroll");
-        // drag_scroll 目标选择：path 逆序找第一个 scroll → 应为外层
+        assert!(!path.is_empty(), "something should be hit");
+        // The hit path should contain the outer scroll and **not the inner scroll**.
+        assert!(path.contains(&outer_idx), "the outer scroll should be on the hit path");
+        // The inner scroll sits visually at y=480..660, so y=250 must not hit it.
+        let inner_idx = nodes[outer_idx].children[8]; // the inner scroll follows content 0..7
+        assert!(!path.contains(&inner_idx), "a mouse over the outer content must not hit the inner scroll");
+        // drag_scroll's target selection walks the path in reverse for the first scroll: the outer one.
         let target = path.iter().rev().find(|&&i| {
             nodes[i].modifier.vertical_scroll_state().is_some()
                 || nodes[i].modifier.horizontal_scroll_state().is_some()
         });
-        assert_eq!(target, Some(&outer_idx), "drag 目标应是外层 scroll");
+        assert_eq!(target, Some(&outer_idx), "the drag target should be the outer scroll");
     }
 
     #[test]
     fn drag_target_on_inner_list_is_inner() {
         let (nodes, outer_idx) = build_demo_tree();
-        // 鼠标在内层列表视觉区域：屏幕 y=500（内层 480..660）
+        // The mouse is over the inner list's visual area: screen y=500 (inner 480..660).
         let path = hit_test(&nodes, 0, 210.0, 500.0);
         let inner_idx = nodes[outer_idx].children[8];
-        assert!(path.contains(&inner_idx), "内层 scroll 应在命中路径");
+        assert!(path.contains(&inner_idx), "the inner scroll should be on the hit path");
         let target = path.iter().rev().find(|&&i| {
             nodes[i].modifier.vertical_scroll_state().is_some()
                 || nodes[i].modifier.horizontal_scroll_state().is_some()
         });
-        assert_eq!(target, Some(&inner_idx), "drag 目标应是内层 scroll");
+        assert_eq!(target, Some(&inner_idx), "the drag target should be the inner scroll");
     }
 
-    /// 用户复现场景：外层已滚动（offset>0），内层列表视觉上移到外层内容
-    /// 0-7 区域。此时鼠标在外层顶部内容区域按下——期望滚外层（鼠标视觉
-    /// 在"外层内容"上），但若命中内层则 bug。
+    /// The user-reported scenario: the outer list has scrolled (offset > 0), so the inner list has
+    /// visually moved up into the outer content's 0-7 band. Pressing in that band should scroll the
+    /// outer list (that is what the mouse is visually over); hitting the inner list is the bug.
     #[test]
     fn drag_target_after_outer_scrolled_uses_visual_position() {
         let (mut nodes, outer_idx) = build_demo_tree();
-        // 外层滚 offset=300：内层视觉 y = 184 + 296 - 300 = 180（上移到顶部区域）
+        // Outer scrolled to offset=300: the inner visual y = 184 + 296 - 300 = 180 (moved up to the top band).
         let outer = nodes[outer_idx].modifier.vertical_scroll_state().unwrap().clone();
         outer.offset.set(300.0);
         let inner_idx = nodes[outer_idx].children[8];
-        // 内层视觉位置（渲染）应在 180..360——覆盖"外层内容 0-7"区域
+        // The inner's visual (rendered) position should be 180..360, covering the "outer content 0-7" band.
         let (_, sdy) = crate::layout::node::scroll_offset_for_node(&nodes[outer_idx]);
         let inner_visual_y = 184.0 + nodes[inner_idx].position.y - sdy;
-        assert!(inner_visual_y < 400.0, "内层应上移到顶部区域（视觉 y={}）", inner_visual_y);
+        assert!(inner_visual_y < 400.0, "the inner should have moved up into the top band (visual y={})", inner_visual_y);
 
-        // 情形 1：鼠标在 y=250（内层视觉覆盖区）——应命中内层（z-order）
+        // Case 1: the mouse at y=250 (covered by the inner's visual area) should hit the inner (z-order).
         let path = hit_test(&nodes, 0, 210.0, 250.0);
         let contains_inner = path.contains(&inner_idx);
         assert!(contains_inner,
-            "内层视觉覆盖 y=250（视觉 y={inner_visual_y}..{:.0}）应命中内层——z-order 语义",
+            "the inner's visual area covers y=250 (visual y={inner_visual_y}..{:.0}), so z-order says it hits the inner",
             inner_visual_y + 180.0);
         let target = path.iter().rev().find(|&&i| {
             nodes[i].modifier.vertical_scroll_state().is_some()
                 || nodes[i].modifier.horizontal_scroll_state().is_some()
         });
-        assert_eq!(target, Some(&inner_idx), "drag 目标应是内层（视觉覆盖区）");
+        assert_eq!(target, Some(&inner_idx), "the drag target should be the inner (the visually covered area)");
 
-        // 情形 2：鼠标在 y=440（内层视觉区下方，仍在外层视口内）——应命中
-        // 外层内容（内层不覆盖该点）
+        // Case 2: the mouse at y=440 (below the inner's visual area, still inside the outer viewport)
+        // should hit the outer content, since the inner does not cover that point.
         let path2 = hit_test(&nodes, 0, 210.0, 440.0);
         assert!(!path2.contains(&inner_idx),
-            "y=440 在内层视觉区（{inner_visual_y}..{:.0}）下方，不应命中内层",
+            "y=440 is below the inner's visual area ({inner_visual_y}..{:.0}), so it must not hit the inner",
             inner_visual_y + 180.0);
         let target2 = path2.iter().rev().find(|&&i| {
             nodes[i].modifier.vertical_scroll_state().is_some()
                 || nodes[i].modifier.horizontal_scroll_state().is_some()
         });
-        assert_eq!(target2, Some(&outer_idx), "drag 目标应是外层（内层不覆盖处）");
+        assert_eq!(target2, Some(&outer_idx), "the drag target should be the outer (where the inner does not cover)");
     }
 
-    /// 验证：真实 Composer 两次 compose（状态行文本变化触发重组）后，
-    /// 外层/内层 scroll 容器的 slot_key 保持稳定（drag_scroll 依赖 slot_key
-    /// 在 move 阶段定位节点——key 漂移会滚错目标）。
+    /// Verifies that after a real Composer composes twice (a change in the status line's text triggers
+    /// recomposition) the outer and inner scroll containers keep stable slot_keys. drag_scroll locates
+    /// its node by slot_key during the move phase, so a drifting key scrolls the wrong target.
     #[test]
     fn scroll_slot_keys_stable_across_recompose() {
         use crate::runtime::composer::Composer;
@@ -131,24 +131,24 @@
                 crate::layout::Column::new()
                     .modifier(Modifier::new().fill_max_size())
                     .build(ctx, |ctx| {
-                        // 状态行（文本随 offset 变化 → 触发重组）
+                        // The status line (its text follows the offset, so it triggers recomposition).
                         Text::new(format!("outer: {:.0} inner: {:.0}", outer.offset.get(), inner.offset.get()))
                             .font_size(12.0).build(ctx);
-                        // 外层滚动区
+                        // The outer scroll area.
                         Column::new()
                             .modifier(Modifier::new().fill_max_width().fill_max_height().vertical_scroll(outer.clone()))
                             .build(ctx, |ctx| {
                                 for i in 0..8 {
-                                    Text::new(format!("页面内容 {i}"))
+                                    Text::new(format!("page content {i}"))
                                         .modifier(Modifier::new().padding(10.0).fill_max_width())
                                         .build(ctx);
                                 }
-                                // 内层列表
+                                // The inner list.
                                 Column::new()
                                     .modifier(Modifier::new().fill_max_width().height(180.0).vertical_scroll(inner.clone()))
                                     .build(ctx, |ctx| {
                                         for i in 0..30 {
-                                            Text::new(format!("内层列表项 {i}"))
+                                            Text::new(format!("inner list item {i}"))
                                                 .modifier(Modifier::new().padding(8.0).fill_max_width())
                                                 .build(ctx);
                                         }
@@ -158,7 +158,7 @@
             });
         };
 
-        // 帧 1
+        // Frame 1.
         build(&mut composer, &outer, &inner);
         composer.layout(Constraints::new(0.0, 420.0, 0.0, 720.0));
         let collect_keys = |composer: &Composer| -> Vec<u64> {
@@ -168,25 +168,25 @@
                 .collect()
         };
         let keys1 = collect_keys(&composer);
-        assert_eq!(keys1.len(), 2, "应有外层+内层两个 scroll 节点");
-        // ⚠ 关键：两个 scroll 节点的 slot_key 必须**互不相同**——若碰撞，
-        // drag_scroll move 阶段 find_node_id_by_slot_key 会返回第一个匹配
-        // （可能滚错目标：按下外层、move 滚内层——用户报告的 bug）
+        assert_eq!(keys1.len(), 2, "there should be two scroll nodes, outer and inner");
+        // Key point: the two scroll nodes' slot_keys must **differ**. On a collision,
+        // find_node_id_by_slot_key in drag_scroll's move phase returns the first match, which can
+        // scroll the wrong target (press on the outer, move, and the inner scrolls: the user-reported bug).
         assert_ne!(keys1[0], keys1[1],
-            "外层与内层 scroll 的 slot_key 碰撞！{keys1:?}——drag_scroll 会定位到错误节点");
-        eprintln!("[keys] 帧1 scroll keys = {keys1:?}（互不相同 ✅）");
+            "the outer and inner scroll slot_keys collided! {keys1:?}: drag_scroll would locate the wrong node");
+        eprintln!("[keys] frame 1 scroll keys = {keys1:?} (all distinct)");
 
-        // 帧 2：内层滚动（状态行文本变化 → 重组）
+        // Frame 2: the inner scrolls (the status line's text changes, so it recomposes).
         inner.offset.set(29.0);
         build(&mut composer, &outer, &inner);
         composer.layout(Constraints::new(0.0, 420.0, 0.0, 720.0));
         let keys2 = collect_keys(&composer);
         assert_eq!(keys1, keys2,
-            "scroll 容器 slot_key 跨重组必须稳定（drag_scroll move 阶段依赖）——\n帧1={keys1:?} 帧2={keys2:?}");
+            "a scroll container's slot_key must be stable across recomposition (drag_scroll's move phase relies on it)\nframe1={keys1:?} frame2={keys2:?}");
     }
 
-    /// scroll 容器高度 clamp 回归（review B1）：`.height(180)` + padding 的
-    /// 滚动容器，measured_size 必须精确为 180（内容再多也不撑开）。
+    /// Regression for the scroll container's height clamp (review B1): a scroll container with
+    /// `.height(180)` plus padding must measure exactly 180, however much content it holds.
     #[test]
     fn scroll_container_height_clamps_to_fixed_height() {
         use crate::runtime::composer::Composer;
@@ -199,9 +199,9 @@
             Column::new()
                 .modifier(Modifier::new().fill_max_width().height(180.0).padding(4.0).vertical_scroll(inner.clone()))
                 .build(ctx, |ctx| {
-                    // 30 项内容——总高远超 180
+                    // 30 items, whose total height is far past 180.
                     for i in 0..30 {
-                        Text::new(format!("列表项 {i}"))
+                        Text::new(format!("list item {i}"))
                             .modifier(Modifier::new().padding(8.0).fill_max_width())
                             .build(ctx);
                     }
@@ -211,11 +211,12 @@
         let root = composer.layout_root_idx().unwrap();
         let n = &composer.arena_nodes()[root];
         assert_eq!(n.measured_size.height, 180.0,
-            "scroll 容器高度必须 clamp 回 .height(180)，实际 {}", n.measured_size.height);
-        assert!(n.scroll_viewport_height > 0.0, "viewport 应已回写（供滚动 clamp）");
+            "the scroll container's height must clamp back to .height(180), got {}", n.measured_size.height);
+        assert!(n.scroll_viewport_height > 0.0, "the viewport should be written back for the scroll clamp");
     }
 
-    /// scroll 容器无固定高度 + 无限父约束：随内容撑开（clamp 是 no-op）。
+    /// A scroll container with no fixed height under unbounded parent constraints grows with its
+    /// content (the clamp is a no-op).
     #[test]
     fn scroll_container_grows_with_unbounded_parent() {
         use crate::runtime::composer::Composer;
@@ -229,17 +230,17 @@
                 .modifier(Modifier::new().fill_max_width().vertical_scroll(inner.clone()))
                 .build(ctx, |ctx| {
                     for i in 0..5 {
-                        Text::new(format!("列表项 {i}"))
+                        Text::new(format!("list item {i}"))
                             .modifier(Modifier::new().padding(8.0).fill_max_width())
                             .build(ctx);
                     }
                 });
         });
-        // 父约束高度无限（f32::MAX）——容器应随内容撑开
+        // The parent constraint's height is unbounded (f32::MAX), so the container should grow with its content.
         composer.layout(Constraints::new(0.0, 420.0, 0.0, f32::MAX));
         let root = composer.layout_root_idx().unwrap();
         let n = &composer.arena_nodes()[root];
         assert!(n.measured_size.height > 0.0,
-            "无固定高度 + 无限约束应随内容撑开（>0），实际 {}", n.measured_size.height);
+            "with no fixed height and unbounded constraints it should grow with its content (>0), got {}", n.measured_size.height);
     }
 

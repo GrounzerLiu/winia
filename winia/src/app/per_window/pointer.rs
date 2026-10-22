@@ -1,9 +1,9 @@
 use super::*;
 
-/// 沿命中路径从内到外触发第一个 on_click——返回是否触发。
-/// 主树 click 与 overlay 点击共用（消除重复）
-/// 双轨（exp/modifier-node）：枚举 Clickable 优先（旧行为），无枚举时回退
-/// 开放 ClickNode（第三方自定义点击无需改核心）。
+/// Fire the first on_click walking the hit path from inside out; returns whether one fired.
+/// Shared by main-tree clicks and overlay clicks (no duplicated implementation).
+/// Dual track (exp/modifier-node): the enum Clickable wins (the old behaviour), and with none
+/// present it falls back to an open ClickNode (third-party custom clicks need no core change).
 pub(crate) fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], path: &[usize]) -> bool {
     for &i in path.iter().rev() {
         if let Some(cb) = nodes[i].modifier.on_click() {
@@ -19,8 +19,8 @@ pub(crate) fn fire_click_along_path(nodes: &[crate::layout::node::LayoutNode], p
 }
 
 
-/// 按下：命中路径最内层 clickable 绑定的交互源 → 发射 Press
-/// （对标 Compose clickable 的 PressInteraction.Press）
+/// Press: emit Press on the interaction source bound to the innermost clickable on the hit path
+/// (Compose clickable's `PressInteraction.Press`).
 pub(crate) fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_pos: (f32, f32)) {
     let (slot, idx, src) = {
         let nodes = pw.composer.arena_nodes();
@@ -41,21 +41,25 @@ pub(crate) fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_p
         };
         (nodes[idx].slot_key, idx, src)
     };
-    // 场景坐标 → 节点本地坐标（对标 Compose PressInteraction.Press.pressPosition）。
-    // 波纹中心必须存本地坐标：绘制时加回布局原点，滚动/变换后波纹跟随节点；
-    // 若存场景坐标，按下后滚动/动画会脱离按钮。
+    // Scene coordinates → node-local coordinates (Compose's `PressInteraction.Press.pressPosition`).
+    // The ripple centre must be stored locally: drawing adds the layout origin back, so the ripple
+    // follows the node through scrolling/transforms. Stored in scene coordinates it would detach
+    // from the button once a scroll or animation happens after the press.
     let local = {
         let nodes = pw.composer.arena_nodes();
         let clickable_local =
             crate::layout::node::scene_to_node_local(nodes, path, idx, scene_pos.0, scene_pos.1);
-        // Ripple 与 clickable 不同节点时（如 Switch 的 Handle 容器）：
-        // 按压坐标要换算到 Ripple 节点本地空间，否则波纹锚点偏移。
-        // 本地坐标差 = 两节点绝对位置差（无滚动/变换时等价于 scene 换算）。
+        // When the Ripple and the clickable are different nodes (Switch's Handle container, say),
+        // the press coordinates have to be converted into the Ripple node's local space, or the
+        // ripple anchor is offset. The local-coordinate difference equals the absolute-position
+        // difference of the two nodes (equivalent to the scene conversion when nothing scrolls or
+        // transforms).
         let ripple_adjust = pw.composer.layout_root_idx().and_then(|r| {
-            // 优先在命中路径内定位（同一 source 复用时避免锚点错位）；Switch 的
-            // ripple 挂在 Handle 子节点上，点击轨道空白处时不在 path 内——回退
-            // 全树搜索。已知限制：同一 source 复用于多个组件时全树搜索可能取到
-            // 错误节点（当前 Switch 均为每组件独立 source，不受影响）。
+            // Prefer locating it within the hit path (avoids a misplaced anchor when one source is
+            // reused); Switch's ripple hangs on a Handle child node, which is not on the path when
+            // the track's blank area is clicked — hence the whole-tree fallback. Known limitation:
+            // when one source is reused by several components the whole-tree search may pick the
+            // wrong node (every current Switch uses its own source, so it does not bite).
             let ridx = path
                 .iter()
                 .copied()
@@ -90,12 +94,14 @@ pub(crate) fn press_interaction_down(pw: &mut PerWindow, path: &[usize], scene_p
     pw.pressed_interaction = Some((slot, src));
 }
 
-/// 释放/取消按下交互（Up 或越界 slop）——对标 PressInteraction.Release/Cancel
+/// Release or cancel the press interaction (on Up or when the pointer leaves the slop) —
+/// Compose's `PressInteraction.Release`/`Cancel`.
 pub(crate) fn release_pressed_interaction(pw: &mut PerWindow) {
     if let Some((_, src)) = pw.pressed_interaction.take() {
         src.emit_release();
     }
-    // overlay 的按下交互同步释放（overlay 独立 composer——独立 pressed 状态）
+    // Release the overlay press interactions too (an overlay has its own composer, hence its own
+    // pressed state).
     for ov in &mut pw.overlay.layers {
         if let Some((_, src)) = ov.pressed_interaction.take() {
             src.emit_release();
@@ -103,10 +109,11 @@ pub(crate) fn release_pressed_interaction(pw: &mut PerWindow) {
     }
 }
 
-/// 悬停更新：**路径上所有 hoverable** 节点进入/离开 → 发射 Hover Enter/Exit
-/// （对标 Compose hoverable：每个 hoverable 独立收到 Enter/Exit；修复前只
-/// 发射最内层——嵌套 hoverable（如 Tooltip 锚点容器 + 内部 Button）外层
-/// 收不到 Enter → Tooltip 不显示）。节点移除时自动补 Exit。
+/// Hover update: **every hoverable on the path** enters/leaves → emit Hover Enter/Exit
+/// (Compose hoverable: each hoverable independently receives Enter/Exit; before the fix only the
+/// innermost was emitted, so an outer nested hoverable — a Tooltip anchor container with a Button
+/// inside — never got Enter and the Tooltip did not show). A removed node gets its Exit
+/// automatically.
 /// The cursor a hit path asks for: the deepest `pointer_hover_icon`, unless an ancestor with
 /// `override_descendants` wins — Compose Desktop's `PointerHoverIconModifierNode` rule.
 pub(crate) fn pointer_icon_for_path(
@@ -143,18 +150,19 @@ pub(crate) fn update_cursor(pw: &mut PerWindow, icon: crate::input::PointerIcon)
 }
 
 pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
-    // overlay 优先：指针在 overlay 内容上 → 只更新 overlay 的 hover，
-    // 同时主树 + **其他 overlay** 全部退出 hover（overlay 盖住下层——
-    // 对齐真实指针层叠；堆叠 overlay 时下层按钮 hover 不残留）
+    // Overlays first: when the pointer is over overlay content, update only that overlay's hover
+    // and clear hover on the main tree and on **every other overlay** (an overlay covers what is
+    // below it — matching real pointer stacking, so a lower button keeps no stale hover while
+    // overlays are stacked).
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
         let ov = &mut pw.overlay.layers[i];
         overlay_update_hover(ov, local);
-        // 主树 hover 全清（指针在 overlay 上——主树不可见）
+        // Clear all main-tree hover (the pointer is over an overlay, so the main tree is hidden).
         let olds: Vec<u64> = pw.hovered_slots.drain().collect();
         for slot in olds {
             exit_hover_at(pw, slot);
         }
-        // 其他 overlay（下层）hover 全清
+        // Clear hover on the other (lower) overlays.
         for j in 0..pw.overlay.layers.len() {
             if j == i { continue; }
             let olds: Vec<u64> = pw.overlay.layers[j].hovered_slots.drain().collect();
@@ -182,15 +190,15 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
         update_cursor(pw, icon);
         return;
     }
-    // 未命中任何 overlay：主树 hover 更新 + 所有 overlay hover 全清
-    // （指针离开 overlay——overlay 的 hover 状态清理）
+    // No overlay hit: update the main tree's hover and clear hover on all overlays (the pointer
+    // left them, so their hover state is cleaned up).
     for ov in &mut pw.overlay.layers {
         let olds: Vec<u64> = ov.hovered_slots.drain().collect();
         for slot in olds {
             overlay_exit_hover_at(ov, slot);
         }
     }
-    // 当前路径上所有 hoverable 的 (slot, interaction)
+    // (slot, interaction) for every hoverable on the current path.
     let (hit, icon): (Vec<(u64, crate::input::interaction::MutableInteractionSource)>, crate::input::PointerIcon) = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -203,14 +211,14 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     };
     update_cursor(pw, icon);
     let hit_slots: std::collections::HashSet<u64> = hit.iter().map(|(s, _)| *s).collect();
-    // 仍在 hover 的：跳过（已 enter）
-    // 新进入：emit enter + 记录
+    // Still hovering: skip (Enter already emitted).
+    // Newly entered: emit Enter and record.
     for (slot, src) in &hit {
         if pw.hovered_slots.insert(*slot) {
             src.emit_hover_enter();
         }
     }
-    // 已退出：补 Exit + 移除
+    // Left: emit Exit and drop the slot.
     let gone: Vec<u64> = pw.hovered_slots.iter().copied().filter(|s| !hit_slots.contains(s)).collect();
     for slot in gone {
         pw.hovered_slots.remove(&slot);
@@ -219,7 +227,8 @@ pub(crate) fn update_hover(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 }
 
 
-/// 对指定 slot 的节点补发 Hover Exit（节点已移除则跳过——hover 状态自然清理）
+/// Emit Hover Exit for the node with the given slot (skipped when the node is gone — the hover
+/// state cleans itself up).
 pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -232,17 +241,18 @@ pub(crate) fn exit_hover_at(pw: &mut PerWindow, slot: u64) {
     }
 }
 
-/// Compose 风格 click 检测：Down 记录（pointer_down_state）、Up 释放时触发 on_click。
-/// 真实 PointerButton Up 与 debug 模拟（d/u）共用——消除平行实现并可模拟验证。
+/// Compose-style click detection: Down records (`pointer_down_state`) and Up fires on_click on
+/// release. Shared by the real PointerButton Up path and the debug simulation (d/u), so there is
+/// no parallel implementation and the behaviour can be verified by simulation.
 pub(crate) fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     const CLICK_SLOP: f32 = 18.0;
     const CLICK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
     let Some(down) = pw.input.down.take() else {
         return false;
     };
-    // Down 时所在节点的 slot_key（跨重组稳定——Down 与 Up 之间可能发生重组
-    // （如聚焦触发），arena 节点重建 → node_id 变化 → 旧 id 匹配必然失败；
-    // slot_key 按组合位置稳定，不受重组影响）
+    // slot_key of the node the Down landed on (stable across recomposition: one may happen between
+    // Down and Up, e.g. triggered by focus, rebuilding arena nodes → node ids change → matching the
+    // old id would always fail; a slot_key is stable by composition position).
     let down_slot = pw.input.down_slot;
     let dx = scene_pos.0 - down.position.0;
     let dy = scene_pos.1 - down.position.1;
@@ -256,7 +266,7 @@ pub(crate) fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
                 .map(|slot| path.iter().any(|&i| nodes[i].slot_key == slot))
                 .unwrap_or_else(|| path.iter().any(|&i| nodes[i].id == down.node_id));
             if hit {
-                // 只在相同节点触发 click（从内到外找第一个 on_click）
+                // Only fire the click on the same node (the first on_click from inside out).
                 return fire_click_along_path(nodes, &path);
             }
         }
@@ -264,18 +274,20 @@ pub(crate) fn detect_click(pw: &mut PerWindow, scene_pos: (f32, f32)) -> bool {
     false
 }
 
-/// 键盘事件派发到焦点路径（Preview: root→focused；Bubble: focused→root，
-/// 对齐 onPreviewKeyEvent/onKeyEvent）+ 聚焦组件激活（Enter/Space 触发
-/// onClick——仅聚焦节点自身的 clickable）。
+/// Dispatch a key event along the focus path (Preview: root→focused; Bubble: focused→root,
+/// matching `onPreviewKeyEvent`/`onKeyEvent`) plus focused-component activation (Enter/Space
+/// triggers onClick — only the focused node's own clickable).
 ///
-/// 真实 KeyboardInput 与 debug 模拟共用（防行为分叉）：Escape/Tab 等
-/// 框架级按键由调用方前置处理（聚焦导航/清焦），不进入本函数。
+/// Shared by the real KeyboardInput path and the debug simulation (so the two cannot diverge):
+/// framework-level keys such as Escape/Tab are handled by the caller beforehand (focus navigation,
+/// clearing focus) and never reach this function.
 
-/// 指针按下核心（真实 PointerButton 与 debug 模拟共用——防行为分叉）。
+/// Pointer-down core (shared by the real PointerButton path and the debug simulation, so they
+/// cannot diverge).
 ///
-/// 统一：hit_test → 清除旧选区 → grapheme anchor 定位 → PtrDownState 记录 →
-/// 光标设置/自动聚焦（仅真实路径 `with_focus`）→ on_pointer_event 分发。
-/// 返回 true 表示命中节点并已处理。
+/// One path: hit_test → clear the old selection → grapheme anchor placement → record
+/// `PtrDownState` → cursor/auto-focus (real path only, `with_focus`) → dispatch
+/// `on_pointer_event`. Returns true when a node was hit and handled.
 pub(crate) fn handle_pointer_down(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
@@ -283,8 +295,8 @@ pub(crate) fn handle_pointer_down(
     modifiers: &winit::keyboard::ModifiersState,
     with_focus: bool,
 ) -> bool {
-    // 顶层弹出层优先：命中 overlay → 记录点击目标（事件不进主树）；
-    // 外部点击 → dismiss（模态/可关闭）
+    // Top-level popups first: an overlay hit records the click target (the event does not reach the
+    // main tree); an outside click dismisses (modal / dismissible).
     if overlay_down(pw, scene_pos, kind.clone()) {
         return true;
     }
@@ -293,41 +305,45 @@ pub(crate) fn handle_pointer_down(
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
     let Some(&innermost) = path.last() else { return false; };
 
-    // 清除旧的选区（新点击开始）
+    // Clear the old selection (a new click begins).
     {
         if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
             reg.clear_selection();
         }
     }
-    // grapheme anchor 定位。
-    // ⚠ TextField 容器化后：paragraph 只缓存在**输入 leaf**，容器节点无
-    // cached_paragraph——点击容器空白命中容器 → innermost 无 para。由
-    // find_anchor_text_node 处理：向上找有 paragraph 的祖先（命中文本本身），
-    // 失败且命中 TextField 容器时向下找子树中的输入 leaf。
+    // Grapheme anchor placement.
+    // ⚠ With a containerized TextField the paragraph is cached only on the **input leaf**, so a
+    // container node has no `cached_paragraph` — clicking the container's blank area hits the
+    // container, and the innermost node has no para. `find_anchor_text_node` handles it: search
+    // upward for an ancestor with a paragraph (the hit text itself), and when that fails and the
+    // hit is a TextField container, search downward for the input leaf in the subtree.
     let anchor_node = find_anchor_text_node(nodes, &path, innermost);
     let anchor = anchor_node.and_then(|ai| {
         let borrow = nodes[ai].cached_paragraph.try_borrow().ok()?;
         borrow.as_ref().map(|para| {
             let (ax, ay) = node_abs_position(nodes, r, nodes[ai].id);
-            // 段落局部坐标须扣除节点 padding（渲染侧文本画在 content 区 =
-            // 节点原点 + padding——不扣则点击位置整体偏 padding 偏移，
-            // 光标跳错位置）
+            // The paragraph-local coordinate has to subtract the node's padding (the renderer draws
+            // text in the content area = node origin + padding; without the subtraction every click
+            // position is off by the padding and the cursor jumps to the wrong place).
             let (pad_s, pad_t, pad_e, _) = nodes[ai].modifier.get_padding_sides();
             let pad_x = if nodes[ai].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
             let tl = crate::text::TextLayout::new(para, 0);
             let hit = tl.get_closest_grapheme_cluster_cluster_at(skia_safe::Point::new(scene_pos.0 - ax - pad_x, scene_pos.1 - ay - pad_t));
-            // 定位结果是显示文本偏移（paragraph = 显示文本）——经 OffsetMapping
-            // 转回编辑偏移（密码掩码/格式化输入）。
-            // ⚠ TextFieldVisual 挂在**容器**——须向上找（offset_mapping_for_node）
+            // The result is a display-text offset (the paragraph holds the displayed text), so it
+            // goes back through the OffsetMapping to an editing offset (password masking / formatted
+            // input).
+            // ⚠ `TextFieldVisual` sits on the **container**, so it must be looked up upward
+            // (`offset_mapping_for_node`).
             crate::text::field::offset_mapping_for_node(nodes, r, ai)
                 .map(|m| m.transformed_to_original(hit))
                 .unwrap_or(hit)
         })
     });
-    // reg 只用 anchor 节点自己的 registrar（不 fallback active_registrar）——
-    // 不可选节点（输出 Text 等未注册）的 node.registrar 为 None，
-    // fallback 会取到全局残留（如 Container B 的）→ anchor_registrar
-    // 错绑 B → 拖动到 B 时 same_reg=true → 混合偏移 → B 被选
+    // Use only the anchor node's own registrar (never fall back to the active registrar): a
+    // non-selectable node (an unregistered output Text, say) has `node.registrar == None`, and a
+    // fallback would pick up a global leftover (Container B's, say) → `anchor_registrar` bound to
+    // the wrong container → dragging to B gives `same_reg = true` → mixed offsets → B gets
+    // selected.
     let own_reg = anchor_node.and_then(|ai| nodes[ai].registrar.borrow().as_ref().cloned());
     let anchor_global = anchor.and_then(|a| {
         anchor_node.and_then(|ai| {
@@ -340,16 +356,17 @@ pub(crate) fn handle_pointer_down(
         position: scene_pos,
         time: std::time::Instant::now(),
         selection_anchor: anchor_global,
-        anchor_registrar: own_reg, // None（不可选节点）→ 无 anchor 容器
+        anchor_registrar: own_reg, // None (a non-selectable node) → no anchor container.
     });
     pw.input.down_slot = Some(nodes[innermost].slot_key);
 
     if with_focus {
-        // 设置 TextField 光标位置 + selection 更新回调（仅真实路径）。
-        // ⚠ 点击聚焦由组件自己决定（TextField 内部 requestFocus）——
-        // 框架层不自动聚焦（对标 Compose：clickable/focusable 点击不请求焦点，
-        // 焦点由 Tab 导航或显式 requestFocus 获得）。
-        // 光标设置在 anchor 节点（输入 leaf）上——光标绘制/回调都在 leaf
+        // Set the TextField cursor position and run the selection callback (real path only).
+        // ⚠ Click-to-focus is the component's own decision (TextField requests focus internally) —
+        // the framework never auto-focuses (Compose: clicking a clickable/focusable does not request
+        // focus; focus comes from Tab navigation or an explicit requestFocus).
+        // The cursor is set on the anchor node (the input leaf) — both the cursor drawing and the
+        // callback live there.
         if let (Some(a), Some(ai)) = (anchor, anchor_node) {
             nodes[ai].cursor_index.set(a);
             if let Some(cb) = nodes[ai].cursor_callback.borrow_mut().as_mut() {
@@ -358,15 +375,18 @@ pub(crate) fn handle_pointer_down(
         }
     }
 
-    // 按下交互（clickable 绑定源——Compose Press 语义；置于 nodes 借用结束后）
+    // Press interaction (the clickable's bound source — Compose Press semantics; placed after the
+    // `nodes` borrow ends).
     press_interaction_down(pw, &path, scene_pos);
 
-    // 手势入口（on_press 立即触发；后续 move/up 由 gesture_node 路由）——
-    // 置于 with_focus 块后（nodes 借用结束，避免与 pw mut 冲突）
+    // Gesture entry (on_press fires immediately; later move/up are routed by the gesture node) —
+    // placed after the `with_focus` block (the `nodes` borrow has ended, so it does not conflict
+    // with the `pw` mutable borrow).
     gesture_down(pw, scene_pos);
 
-    // 拖拽滚动目标：按下点向上找最近滚动容器。文本选择/组件 drag 手势优先
-    // （拖选文本/组件拖拽不滚动——对齐 Compose 最内层 pointerInput 消费）
+    // Drag-scroll target: from the press point, walk up to the nearest scroll container. Text
+    // selection and a component's drag gesture take priority (dragging a selection or a component
+    // does not scroll — Compose lets the innermost `pointerInput` consume it).
     pw.input.drag_scroll = (|| {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return None };
@@ -388,10 +408,12 @@ pub(crate) fn handle_pointer_down(
         let selecting = pw.input.down.as_ref()
             .map(|s| s.selection_anchor.is_some())
             .unwrap_or(false);
-        // 内层手势优先，但**滚动优先于外层面板拖拽**（对齐 Compose：BottomSheet 面板
-        // 整面板可拖，但列表区按下时内容滚动优先——面板 on_drag 是外层 fallback）。
-        // child_drag 仅在「drag 节点比 scroll 节点更深」（内层组件如 slider/switch）
-        // 时才成立；drag 是 scroll 祖先（面板）→ 滚动优先，不放行 child_drag。
+        // Inner gestures first, but **scrolling outranks an outer panel's drag** (Compose: a
+        // BottomSheet panel is draggable as a whole, yet a press inside the list area scrolls the
+        // content first — the panel's on_drag is the outer fallback). `child_drag` holds only when
+        // the drag node is deeper than the scroll node (an inner component such as a slider/switch);
+        // when the drag is the scroll's ancestor (a panel), scrolling wins and child_drag is not
+        // granted.
         let drag_idx = path_drag_idx(nodes, &path);
         let scroll_idx = path_scroll_idx(nodes, &path);
         let child_drag = inner_component_drag(drag_idx, scroll_idx);
@@ -412,7 +434,7 @@ pub(crate) fn handle_pointer_down(
         }
     })();
 
-    // 分发 on_pointer_event（Down）
+    // Dispatch on_pointer_event (Down).
     let nodes = pw.composer.arena_nodes();
     let ptr_ev = crate::input::PointerEvent {
         event_type: crate::input::PointerEventType::Down,
@@ -429,24 +451,29 @@ pub(crate) fn handle_pointer_down(
     true
 }
 
-/// 指针移动核心（真实 PointerMoved 与 debug 模拟共用——防行为分叉）。
+/// Pointer-move core (shared by the real PointerMoved path and the debug simulation, so they
+/// cannot diverge).
 ///
-/// 统一：拖拽选区（18px slop + x_off 对齐偏移 + grapheme 定位 + compute_selection）
-/// + on_pointer_event 分发。返回是否消费（选择更新或 handler 消费）。
+/// One path: drag-selection (18px slop + `x_off` alignment shift + grapheme placement +
+/// `compute_selection`) plus `on_pointer_event` dispatch. Returns whether the move was consumed
+/// (the selection changed or a handler consumed it).
 pub(crate) fn handle_pointer_move(
     pw: &mut PerWindow,
     scene_pos: (f32, f32),
     kind: crate::input::PointerKind,
     modifiers: &winit::keyboard::ModifiersState,
 ) -> bool {
-    // 手势驱动（drag capture：tracker 存在即路由——指针移出组件仍接收）
-    // ⚠ 必须在 nodes 借用之前（gesture_move 内部自取 nodes/pw mut）
+    // Gesture drive (drag capture: route whenever a tracker exists — the pointer keeps receiving
+    // moves even outside the component).
+    // ⚠ Must run before the `nodes` borrow (`gesture_move` takes `nodes` and a mutable `pw`
+    // itself).
     let mut handled = false;
     if pw.input.node.is_some() && gesture_move(pw, scene_pos) {
         handled = true;
     }
-    // overlay 点击 slop 取消：按下 overlay 后拖出 18px → 取消 click（对齐
-    // 主树 detect_click 的 slop 判定；down 位置 = overlay screen_pos + local）
+    // Cancel an overlay click past the slop: dragging 18px away after pressing on the overlay
+    // cancels the click (matching the main tree's `detect_click` slop rule; the down position is
+    // the overlay's `screen_pos` plus the local offset).
     if pw.overlay.click.is_some() {
         let cancel = match pw.overlay.click {
             Some((idx, local, _)) => {
@@ -512,9 +539,11 @@ pub(crate) fn handle_pointer_move(
             handled = true;
         }
     }
-    // overlay 内拖拽滚动（独立 Composer——BottomSheet 内 LazyColumn）
-    // 列表滚动走 overlay Composer 的 dispatch_nested_scroll_delta，Sheet 通过 panel 上的
-    // SheetNested（nested_scroll）吃剩余 available。此分支仅消费列表，能否拖 Sheet 取决于 nested。
+    // Drag-scrolling inside an overlay (its own Composer — a LazyColumn inside a BottomSheet).
+    // List scrolling goes through the overlay Composer's `dispatch_nested_scroll_delta`, and the
+    // Sheet consumes the remaining available delta through `SheetNested` (nested_scroll) on the
+    // panel. This branch consumes only the list; whether the Sheet can also be dragged is up to
+    // the nested-scroll chain.
     if pw.overlay.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
             let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
@@ -566,8 +595,9 @@ pub(crate) fn handle_pointer_move(
             }
         }
     }
-    // 拖拽滚动：内容跟随指针 + 记录速度样本（松手 fling 用）。放在手势/文本
-    // 选择之前——但按下时已排除组件 drag 手势与文本选择，此处无冲突
+    // Drag-scrolling: the content follows the pointer and velocity samples are recorded (for the
+    // fling on release). Placed before gesture/text selection — but the press already excluded a
+    // component drag gesture and a text selection, so nothing conflicts here.
     if pw.input.drag_scroll.is_some() {
         let target: Option<usize> = (|| {
             let nodes = pw.composer.arena_nodes();
@@ -598,7 +628,8 @@ pub(crate) fn handle_pointer_move(
                     nodes[idx].modifier.horizontal_scroll_state().is_some(),
                     pw.input.drag_scroll.as_ref().map(|d| d.slot));
             }
-            // 轴感知：垂直容器吃 dy，水平容器吃 dx（apply_scroll_delta 按节点轴取）
+            // Axis-aware: a vertical container takes dy and a horizontal one takes dx
+            // (`apply_scroll_delta` picks by the node's axis).
             let (ax, ay) = {
                 let nodes = pw.composer.arena_nodes();
                 if nodes[idx].modifier.vertical_scroll_state().is_some() {
@@ -621,7 +652,8 @@ pub(crate) fn handle_pointer_move(
                 )).unwrap_or(crate::nested_scroll::ScrollDelta::ZERO);
                 handled = consumed.x != 0.0 || consumed.y != 0.0;
             }
-            // 拖拽中标记（apply_scroll_delta 内部取消 fling 时置 false——这里覆盖）
+            // Mark the drag as in progress (`apply_scroll_delta` sets this false when it cancels a
+            // fling — this assignment overrides that).
             let nodes = pw.composer.arena_nodes();
             if let Some(ss) = nodes[idx].modifier.vertical_scroll_state() {
                 ss.is_scroll_in_progress.set(true);
@@ -630,17 +662,18 @@ pub(crate) fn handle_pointer_move(
             }
         }
     }
-    // 悬停更新（自身 hit test——不依赖下方 nodes 借用）
+    // Hover update (does its own hit test — it does not depend on the `nodes` borrow below).
     update_hover(pw, scene_pos);
-    // 越界 slop：按下交互取消（Compose：press 超过 touch slop → Cancel）
+    // Past the slop: cancel the press interaction (Compose: a press moving beyond the touch slop
+    // is cancelled).
     if pw.input.down.is_some() {
         let down = pw.input.down.as_ref().unwrap();
         let dx = scene_pos.0 - down.position.0;
         let dy = scene_pos.1 - down.position.1;
         if (dx * dx + dy * dy).sqrt() > 18.0 {
             release_pressed_interaction(pw);
-            // overlay 点击同步取消（对齐主树 detect_click 的 slop 判定——
-            // 拖出 slop 后 up 不应 fire overlay click）
+            // Cancel the overlay click too (matching the main tree's `detect_click` slop rule — once
+            // dragged past the slop, Up must not fire an overlay click).
             pw.overlay.click = None;
         }
     }
@@ -648,24 +681,25 @@ pub(crate) fn handle_pointer_move(
     let Some(r) = pw.composer.layout_root_idx() else { return false; };
     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
 
-    // 拖拽选中文本
+    // Drag-select text.
     if pw.input.down.is_some() {
         if let Some(&innermost) = path.last() {
             let down = pw.input.down.as_ref().unwrap();
             let dx = scene_pos.0 - down.position.0;
             let dy = scene_pos.1 - down.position.1;
             const CLICK_SLOP: f32 = 18.0;
-            // 文本选择：按下在可选中文本（anchor 有值）→ **任意移动即更新
-            // 选区**（单字母 ~7px < CLICK_SLOP——slop 门槛导致无法选中单
-            // 字母/小范围文本；对齐 Compose：按下即进入拖选）。其余场景
-            // 保持 slop 判定（clickable/拖拽手势）
+            // Text selection: pressing on selectable text (an anchor exists) → **every move updates
+            // the selection** (a single letter is ~7px < CLICK_SLOP, so the slop threshold made it
+            // impossible to select one letter or a small range; Compose enters drag-selection on
+            // press). Every other case keeps the slop rule (clickable / drag gesture).
             let text_selection = down.selection_anchor.is_some();
             if text_selection || (dx * dx + dy * dy).sqrt() > CLICK_SLOP {
                 let (abs_x, abs_y) = node_abs_position(nodes, r, nodes[innermost].id);
                 if let Ok(borrow) = nodes[innermost].cached_paragraph.try_borrow() {
                     if let Some(para) = borrow.as_ref() {
-                        // 对齐偏移（匹配渲染侧 x_off）——绘制用内容盒，选区高亮须一致
-                        //（飞行中 measured_size 是父级被告知的尺寸，review R3-F6）
+                        // Alignment shift (matching the renderer's `x_off`) — drawing uses the content
+                        // box, and the selection highlight has to agree (mid-flight `measured_size` is
+                        // the size the parent was told, review R3-F6).
                         let node_w = nodes[innermost].content_box().width;
                         let align = nodes[innermost].modifier.align().unwrap_or(crate::text::TextAlign::Left);
                         // The slack rule has to be the PAINT paths' rule, not a copy of the old
@@ -695,20 +729,22 @@ pub(crate) fn handle_pointer_move(
                             crate::text::TextAlign::Right => abs_x + slack,
                             _ => abs_x,
                         };
-                        // 段落局部坐标：扣节点 padding（与渲染侧 content 区一致——
-                        // 否则拖动选区整体偏 padding 偏移）
+                        // Paragraph-local coordinate: subtract the node's padding (consistent with the
+                        // renderer's content area — otherwise the dragged selection is off by the
+                        // padding).
                         let (pad_s, pad_t, pad_e, _) = nodes[innermost].modifier.get_padding_sides();
                         let pad_x = if nodes[innermost].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
                         let tl = crate::text::TextLayout::new(para, 0);
                         {
                             let down = pw.input.down.as_ref().unwrap();
-                            // 不可选节点（未注册到任何 SelectionContainer）→ 不更新选择
-                            // （用 if let 包裹而非 else return——return 会跳过 dispatch_ptr_event/request_redraw）
+                            // A non-selectable node (not registered with any SelectionContainer) → do not
+                            // update the selection (wrapped in `if let` rather than `else return`, because a
+                            // return would skip `dispatch_ptr_event`/`request_redraw`).
                             if let Some(reg) = nodes[innermost].registrar.borrow().as_ref().cloned() {
                                 let current_index = tl.get_closest_grapheme_cluster_cluster_at(
                                     skia_safe::Point::new(scene_pos.0 - x_off - pad_x, scene_pos.1 - abs_y - pad_t));
-                                // 显示偏移 → 编辑偏移（密码掩码/格式化输入；
-                                // TextFieldVisual 在容器——向上找）
+                                // Display offset → editing offset (password masking / formatted input;
+                                // `TextFieldVisual` is on the container, so look upward).
                                 let current_index = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                     .map(|m| m.transformed_to_original(current_index))
                                     .unwrap_or(current_index);
@@ -718,8 +754,9 @@ pub(crate) fn handle_pointer_move(
                                     &reg, cur_off, current_index,
                                     scene_pos.1, down.position.1, abs_y,
                                 ) {
-                                    // 范围是编辑偏移（anchor/current 已转回）——
-                                    // reg 空间 = 显示偏移，写入选区前转换
+                                    // The range is in editing offsets (anchor/current were converted back);
+                                    // the registrar's space is display offsets, so convert before writing the
+                                    // selection.
                                     let (ts, te) = crate::text::field::offset_mapping_for_node(nodes, r, innermost)
                                         .map(|m| (m.original_to_transformed(s), m.original_to_transformed(e)))
                                         .unwrap_or((s, e));
@@ -734,7 +771,7 @@ pub(crate) fn handle_pointer_move(
         }
     }
 
-    // 分发 on_pointer_event（悬停 Move 也可能更新 State）
+    // Dispatch on_pointer_event (even a hover Move can update State).
     let nodes = pw.composer.arena_nodes();
     let ptr_ev = crate::input::PointerEvent {
         event_type: crate::input::PointerEventType::Move,

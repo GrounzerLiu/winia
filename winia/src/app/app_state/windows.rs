@@ -1,9 +1,10 @@
 use super::*;
 
 impl AppState {
-    /// 消费 DevTools 注入事件（点击/按键/滚动/拖拽等——UI 测试 + WS 调试）。
-    /// 在 window_event（RedrawRequested）与 new_events（兜底）两处调用：
-    /// 多窗口下主窗口可能在后台——RedrawRequested 不来时事件卡队列，
+    /// Consume events injected by DevTools (clicks, keys, scrolls, drags — UI tests and WS debugging).
+    /// Called from two places, window_event (RedrawRequested) and new_events (as a fallback): with several
+    /// windows the main one may be in the background, and then RedrawRequested never arrives and the events
+    /// sit in the queue.
     /// Perform the actions a platform bridge (or anything else off the UI thread) queued for this
     /// window. Invoke runs the node's real click callback; Focus moves the ring to the node.
     pub(crate) fn consume_ui_actions(&mut self, window_id: WindowId) {
@@ -36,22 +37,24 @@ impl AppState {
         debug::wake();
     }
 
-    /// new_events 每轮事件批次必然执行——保证注入事件不丢失。
+    /// Runs on every event batch from new_events, so an injected event is never lost.
     pub(crate) fn consume_debug_events(&mut self, window_id: WindowId) {
         let Some(pw) = self.windows.get_mut(&window_id) else { return };
         let mut handled = false;
         for evt in debug::take_queued_events(window_id.into_raw() as u64) {
             match evt {
                 debug::DebugEvent::Click { x, y } => {
-                    // overlay 优先（对齐真实指针路径 handle_pointer_down）：
-                    // 命中 overlay → 消费（不进主树）；外部点击 → dismiss。
-                    // ⚠ Click 是合成单事件（非 down/up 分离）——overlay 命中后
-                    // 必须立即执行点击（真实路径 down 记录 + up 触发；这里
-                    // down 记录后直接 exec，否则 overlay 按钮永远点不动）
+                    // Overlay first (mirroring the real pointer path, handle_pointer_down):
+                    // a hit on an overlay is consumed there (it never reaches the main tree); a click
+                    // outside dismisses it.
+                    // NOTE: Click is a synthesized single event (no separate down/up) — once the
+                    // overlay is hit the click has to run immediately (the real path records on down
+                    // and fires on up; here we record on down and exec straight away, otherwise an
+                    // overlay button could never be clicked).
                     let click_kind = pw.input.last_kind.clone();
                     if overlay_down(pw, (x, y), click_kind) {
-                        // 命中 overlay：立即执行点击（合成单事件——down 记录 +
-                        // 立即 up 触发；真实路径由 PointerUp 事件触发）
+                        // Overlay hit: run the click now (synthesized single event — record on
+                        // down and fire on up immediately; the real path fires on PointerUp).
                         exec_overlay_click(pw);
                         // The synthetic click is down + up in one event, so it has to close the
                         // gesture the down opened, exactly as the real up path does
@@ -59,23 +62,24 @@ impl AppState {
                         // leave its tracker (and any deferred tap) behind, and `on_tap` would never
                         // fire for a harness click.
                         gesture_up(pw, (x, y));
-                        // 释放 overlay 的 press（合成事件无真实 up——否则按下
-                        // 波纹/按压态卡死到 overlay 关闭）
+                        // Release the overlay's press (a synthesized event has no real up — otherwise
+                        // the ripple/pressed state stays stuck until the overlay closes).
                         release_pressed_interaction(pw);
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         handled = true;
                         continue;
                     }
-                    // 只读阶段：hit_test + click 检测（arena 借用在块尾结束）
+                    // Read-only phase: hit_test + click detection (the arena borrow ends at the block's end).
                     let (fid, sk, _path_len, _click_handled) = {
                         let arena = pw.composer.arena_nodes();
                         let root_idx = pw.composer.layout_root_idx();
                         if let Some(r) = root_idx {
                             let path = hit_test_with_flights(arena, r, pw.composer.transition_roots(), x, y);
-                            // debug 点击聚焦：path 中最深的 focusable 节点
-                            // （text-field-v2 容器化后焦点/交互在容器——空字段
-                            // 输入子节点 0 宽点不中；旧逻辑只看 ime_callback
-                            // 已失效）；兼容声明 IME 的节点（旧 leaf 语义）
+                            // Debug click focus: the deepest focusable node on the path
+                            // (after the text-field-v2 containerisation focus/interaction live on the
+                            // container — a child of an empty field is 0 px wide and cannot be hit; the
+                            // old logic only looked at ime_callback and no longer works); also matches
+                            // nodes that declare IME (the old leaf semantics).
                             // NOTE: deliberately BROADER than the real overlay path
                             // (`overlay_down`, which focuses only a field that holds an input):
                             // a synthesized click has to be able to put focus anywhere, because
@@ -88,8 +92,8 @@ impl AppState {
                                 (has_focusable || wants_ime).then_some((arena[i].id, arena[i].slot_key))
                             }).unwrap_or((0, 0));
                             let path_len = path.len();
-                            // Click 检测（P2-1：复用 fire_click_along_path，
-                            // 与主树/overlay 同语义，防内联重复漂移）
+                            // Click detection (P2-1: reuses fire_click_along_path, with the same
+                            // semantics as the main tree and overlays, so an inline copy cannot drift).
                             let click_handled = fire_click_along_path(arena, &path);
                             if click_handled {
                                 handled = true;
@@ -123,9 +127,10 @@ impl AppState {
                         // copy instead of the framework). Shift is not expressible in `k <key>`.
                         pw.tab_move_focus(false);
                     } else if let Some(k) = parse_debug_key(&key) {
-                        // 任意按键：复用真实键盘派发路径（Preview/Bubble/激活）——
-                        // WS 可模拟字符输入/删除/方向键。修饰键默认无（Ctrl 等
-                        // 组合暂不支持——如需可扩展 KbEvent 修饰字段）
+                        // Any key: reuse the real keyboard dispatch path (Preview/Bubble/activation) —
+                        // so WS can simulate character input, deletion and arrow keys. Modifiers default
+                        // to none (Ctrl and other combinations are not supported yet — add modifier
+                        // fields to KbEvent if needed).
                         let ke = crate::input::KbEvent {
                             key: k,
                             event_type: crate::input::KbEventType::KeyDown,
@@ -215,45 +220,45 @@ impl AppState {
                     }
                 }
                 debug::DebugEvent::PointerDown { x, y } => {
-                    // 模拟指针按下：与真实 PointerButton Down 共用核心
-                    // （with_focus=false——调试路径不做光标/聚焦）
+                    // Simulate a pointer down: shares the core with the real PointerButton Down
+                    // (with_focus=false — the debug path does no cursor/focus work).
                     pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
                     handle_pointer_down(pw, (x, y), pw.input.last_kind.clone(), &modifiers, false);
                     handled = true;
                 }
                 debug::DebugEvent::PointerMove { x, y } => {
-                    // 模拟拖动选择：与真实 PointerMoved 共用核心（含 x_off 对齐偏移）
+                    // Simulate a drag selection: shares the core with the real PointerMoved (including the x_off alignment offset).
                     pw.input.last_pos = Some((x, y));
                     let modifiers = pw.modifiers;
                     handle_pointer_move(pw, (x, y), pw.input.last_kind.clone(), &modifiers);
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
                 debug::DebugEvent::PointerUp { x, y } => {
-                    // 模拟释放：先走真实 Up 的 click 检测（验证真实链路）
-                    // 与真实路径（PointerButton Up 分支）一致：on_click 内
-                    // State set 后必须 request_redraw——否则依赖 wake_up 异步
-                    // 链（偶发丢失 → 用户看到 count 不刷新）
+                    // Simulate a release: first run the real Up click detection (exercising the real
+                    // chain). As on the real path (the PointerButton Up arm), a State set inside
+                    // on_click must request_redraw — otherwise it relies on the asynchronous wake_up
+                    // chain (occasionally lost → the user sees the count not refresh).
                     if detect_click(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // overlay 点击执行（与真实路径一致）
+                    // Execute the overlay click (same as the real path).
                     if exec_overlay_click(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // overlay 拖拽结束（与真实路径一致）
+                    // End the overlay drag (same as the real path).
                     if overlay_drag_up(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // 手势 up 判定（与真实路径一致）
+                    // Gesture up detection (same as the real path).
                     if gesture_up(pw, (x, y)) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // 拖拽滚动结束：速度足够 → fling（与真实路径一致）
+                    // End the drag scroll: fast enough → fling (same as the real path).
                     drag_scroll_up(pw);
-                    // 释放按下交互（与真实路径一致）
+                    // Release the pressed interaction (same as the real path).
                     release_pressed_interaction(pw);
-                    // 通知选区变化 + 清理
+                    // Notify a selection change, then clean up.
                     if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
@@ -329,9 +334,10 @@ impl AppState {
                     }
                 }
                 debug::DebugEvent::Resize { w, h } => {
-                    // 真实 resize：request_inner_size → WM_SIZE → SurfaceResized
-                    // 事件自然回流——与拖拽/最大化完全同通路（pw 字段与尺寸 State
-                    // 均由事件处理器统一更新，避免与 surface_size 自愈互相打架）
+                    // Real resize: request_inner_size → WM_SIZE → SurfaceResized
+                    // comes back through the event path naturally — exactly the same route as dragging or
+                    // maximising (both the pw fields and the size State are updated by the event handler,
+                    // so this does not fight surface_size self-healing).
                     if let Some(ref sw) = pw.skia_window {
                         let _ = sw.request_surface_size(
                             winit::dpi::LogicalSize::new(w as f64, h as f64).into(),

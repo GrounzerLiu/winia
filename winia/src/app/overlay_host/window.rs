@@ -1,6 +1,6 @@
 use super::*;
 
-// ── 顶层弹出层（Popup/Dialog/DropdownMenu） ──
+// ── Top-level popup layers (Popup/Dialog/DropdownMenu) ──
 
 impl OverlayWindow {
     pub(crate) fn new_with_composer(desc: crate::overlay::OverlayDesc, composer: Composer) -> Self {
@@ -124,17 +124,17 @@ impl OverlayWindow {
     }
 }
 
-/// 主树 compose 后同步 overlay：按 id 匹配（保留 State）——新增/更新/删除。
-/// 删除依据 = 组合期显式记录的 active=false（Popup/Dialog/DropdownMenu build
-/// 总执行时 record_overlay_active）——主动关闭（visible/expanded=false）→ 删；
-/// 注册方 Skip（build 未执行 → 本帧无记录）→ 保留（闪烁根因：旧 retain 把
-/// Skip 帧误判为主动关闭）。
+/// Sync overlays after the main tree composes: match by id (preserving State) — add/update/remove.
+/// Removal is decided by the `active=false` recorded explicitly during composition (Popup/Dialog/DropdownMenu
+/// build always runs `record_overlay_active`) — an active close (visible/expanded=false) → remove;
+/// a registrant that Skips (build did not run → no record this frame) → keep (the flicker root cause:
+/// the old retain mistook Skip frames for an active close).
 pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     let descs = pw.composer.take_overlays();
     for desc in descs {
         if let Some(ov) = pw.overlay.layers.iter_mut().find(|o| o.id == desc.id) {
-            // 复用：规格翻转（None↔Some）时 update 重建 progress——新规格有
-            // enter 动画则 push 0→1（否则 update 内已 Backchannel 写 1.0 保持显示）
+            // Reuse: `update` rebuilds progress when a spec flips (None↔Some) — if the new spec has an
+            // enter animation, push 0→1 (otherwise `update` already wrote 1.0 through the Backchannel to keep it visible).
             let had_enter = ov.enter_anim.is_some();
             ov.update(desc);
             // ⚠ The caller just recomposed and handed us a NEW content closure, so the overlay's whole
@@ -164,9 +164,9 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                 }
             }
         } else {
-            // 新 overlay：创建 + 启动进入动画（progress 0→1；无 enter 规格 =
-            // 瞬时显示——但 exit 有规格时 progress 直接置 1.0，退出才能 1→0）
-            // 共享主窗 AdaptiveContext，确保 overlay 读 window_size/density 与主窗一致
+            // New overlay: create it + start the enter animation (progress 0→1; no enter spec =
+            // shown instantly — but when there IS an exit spec, set progress straight to 1.0, since the exit needs 1→0).
+            // Share the main window's AdaptiveContext so the overlay reads the same window_size/density as the main window.
             let mut composer = Composer::new();
             composer.adaptive = pw.composer.adaptive.clone();
             // The overlay is its own composer, but it belongs to the same window: frame_clock()
@@ -186,15 +186,15 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
                         spec.animation_spec(),
                     );
                 } else {
-                    // 无进入动画（但 exit 有）：直接完整显示（progress=1）
+                    // No enter animation (but there is an exit one): show it fully at once (progress=1).
                     p.as_raw().set_backchannel(1.0);
                 }
             }
         }
     }
-    // 组合期记录 active=false 的 overlay → 主动关闭 → 启动退出动画
-    // （先触发 on_dismiss；动画完成由 finish_closing_overlays 移除——不复位
-    // 则保留渲染播放退出动画）
+    // Overlays recorded as active=false during composition → an active close → start the exit animation
+    // (fire `on_dismiss` first; removal is done by `finish_closing_overlays` when the animation finishes —
+    // if not reset, the overlay is kept and rendered to play the exit animation).
     let to_close: Vec<u64> = pw.composer.overlay_active.iter()
         .filter(|(_, active)| !**active)
         .map(|(&id, _)| id)
@@ -202,7 +202,7 @@ pub(crate) fn sync_overlays(pw: &mut PerWindow, _recomposed: bool) {
     for id in &to_close {
         begin_overlay_close(pw, *id);
     }
-    // 退出动画完成检测：closing 且 progress≈0（或无动画规格）→ 真正移除
+    // Exit-animation completion check: closing and progress≈0 (or no animation spec) → really remove.
     finish_closing_overlays(pw);
 }
 

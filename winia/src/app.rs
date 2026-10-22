@@ -1,4 +1,4 @@
-//! 应用壳 — run_app + 窗口管理 + 事件循环（多窗口）
+//! The app shell: run_app, window management and the event loop (multi-window).
 
 pub mod gesture;
 pub mod overlay_host;
@@ -28,8 +28,8 @@ use crate::layout::constraints::Constraints;
 use crate::layout::node::{hit_test_with_flights, focus_next, focus_prev, LayoutNode};
 use crate::render;
 
-/// 拖拽/嵌套滚动调试 trace 开关（debug_assertions 下 + 环境变量 WINIA_DRAG_TRACE）。
-/// 收敛 7 处重复判断（review E1）——release 构建零成本。
+/// Drag/nested-scroll debug trace switch (debug_assertions builds plus the WINIA_DRAG_TRACE env var).
+/// Consolidates seven repeated checks (review E1); a release build pays nothing.
 #[cfg(debug_assertions)]
 pub(crate) fn drag_trace_enabled() -> bool {
     std::env::var("WINIA_DRAG_TRACE").is_ok()
@@ -103,12 +103,12 @@ fn ime_enable_request() -> ImeRequest {
     )
 }
 
-/// 方向键焦点导航方向
+/// Arrow-key focus navigation direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FocusDir { Left, Right, Up, Down }
 
-/// 查询窗口当前所在显示器的刷新率 → 帧间隔（mHz：300000 = 300Hz）。
-/// 查询失败返回 None——调用方保留旧值（创建期才回退 16ms）。
+/// Queries the refresh rate of the monitor the window is on and returns the frame interval (mHz:
+/// 300000 = 300 Hz). None when the query fails; the caller keeps the old value (creation falls back to 16 ms).
 fn current_frame_interval(sw: &SkiaWindow) -> Option<std::time::Duration> {
     let mhz = sw.current_monitor()
         .and_then(|m| m.current_video_mode())
@@ -152,24 +152,27 @@ impl WindowThemeState {
 /// loop's own bookkeeping — nothing outside `app.rs` touches them, and together they are what makes
 /// "should this frame be drawn" have an answer.
 pub(crate) struct FrameClock {
-    /// 渲染帧计数（vsync 研究——Fifo 下应 ~60fps）
+    /// Rendered-frame counter (vsync study: under Fifo this should sit near 60 fps).
     pub(crate) frame_counter: u64,
-    /// 上次 request_redraw 时刻（request 节流独立计时——避免与渲染节流共用
-    /// last_render_time 导致理论上的 2I 间隔减半：WM_PAINT 处理晚于 request（ε>0），
-    /// 定时器按 I 唤醒时 now-last_render = I-ε < I 恒拦截）
+    /// When request_redraw last ran (the request throttle keeps its own clock so it does not share
+    /// last_render_time with the render throttle, which would halve the theoretical 2I interval:
+    /// WM_PAINT is handled later than the request (ε > 0), so a timer waking at I sees
+    /// now - last_render = I - ε < I and is always rejected).
     pub(crate) last_request_time: std::time::Instant,
-    /// 帧间隔（屏幕刷新率对齐——窗口创建时从 monitor 获取；刷新率变化（显示器
-    /// 切换）需重建窗口——当前不做动态跟踪）
+    /// Frame interval, aligned to the screen refresh rate (read from the monitor at window creation;
+    /// a refresh-rate change needs a new window, since there is no dynamic tracking today).
     pub(crate) frame_interval: std::time::Duration,
-    /// 强制渲染（resize/动画停止等必须显示的帧——跳过分支的请求链断裂修复）
+    /// Forced render: frames that must be drawn (resize, animations stopping), fixing the broken
+    /// request chain when a frame is skipped.
     pub(crate) force_redraw: bool,
-    /// 崩溃边界（P3-3）：连续渲染 panic 计数（防风暴停更）
+    /// Crash boundary (P3-3): consecutive render panics, so a panic storm stops redrawing.
     pub(crate) consecutive_panics: u32,
-    /// 渲染已禁用（连续 panic 后停更——保留最后画面，不再自旋）
+    /// Rendering is disabled (after consecutive panics: keep the last frame, stop spinning).
     pub(crate) render_disabled: bool,
-    /// 上次渲染时间（帧率限制——Windows acquire 不阻塞 vsync，应用层节流 60fps）
+    /// Last render time (frame-rate cap: on Windows acquire does not block on vsync, so the app
+    /// throttles to 60 fps).
     pub(crate) last_render_time: std::time::Instant,
-    /// 上次刷新率查询时刻（Moved/ScaleFactorChanged 高频触发——300ms 去抖）
+    /// Last refresh-rate query (Moved/ScaleFactorChanged fire often, so this debounces for 300 ms).
     pub(crate) last_refresh_check: std::time::Instant,
 }
 
@@ -189,9 +192,9 @@ impl Default for FrameClock {
 }
 
 
-// ── 公共 API ──
+// ── Public API ──
 
-// ── 公共 API ──
+// ── Public API ──
 
 static GLOBAL_PENDING: std::sync::Mutex<Vec<PendingWindow>> = std::sync::Mutex::new(Vec::new());
 static APP_PROXY: Mutex<Option<winit::event_loop::EventLoopProxy>> = Mutex::new(None);
@@ -261,28 +264,31 @@ fn take_pending_windows() -> Vec<PendingWindow> {
 /// drag callbacks only), so an anchor element carrying just `clickable` still lets the field's own
 /// press — the caret placement — fire.
 
-/// §3.6 坐标一致性回归：dispatch_ptr_event 传给 handler 的局部坐标必须与
-/// hit_test/scene_to_node_local（同一坐标空间）一致——滚动容器内自定义
-/// PointerEvent 的拖拽/capture 位置不偏移。
+/// §3.6 coordinate-consistency regression: the local coordinates dispatch_ptr_event hands a handler
+/// must match hit_test/scene_to_node_local (the same coordinate space), so a custom PointerEvent's
+/// drag/capture position inside a scrolling container is not offset.
 
-/// 双轨（exp/modifier-node）：KeyNode 与枚举 KbEvent 同场分发。
-/// dispatch_key_to_focus 需 PerWindow（ ancestors 查找走 arena），此处用真实
-/// PerWindow + Composer 组树验证端到端：枚举与 node 各收到一次，顺序为枚举先。
+/// Dual track (exp/modifier-node): KeyNode and the enum KbEvent are dispatched together.
+/// dispatch_key_to_focus needs a PerWindow (the ancestor lookup walks the arena), so this builds a
+/// real PerWindow + Composer tree and checks end to end: the enum and the node each receive the
+/// event once, enum first.
 
-/// §3.8 nested scroll 链级集成测试：dispatch_nested_scroll_delta 的 pre/post
-/// 顺序与 target 参与。树结构 root(connection R) → mid(connection M) →
-/// target(scroll + connection T)。验证：
-/// 1. pre 按 R→M→T 正序
-/// 2. child 消费后 post 按 M→T→R 逆序（**含 target T**——TopAppBar 等
-///    connection 挂在 scroll 容器节点上，排除 target 会破坏 post 回调）
+/// §3.8 chain-level nested-scroll integration test: dispatch_nested_scroll_delta's pre/post order and
+/// target participation. The tree is root(connection R) -> mid(connection M) ->
+/// target(scroll + connection T). Verifies:
+/// 1. pre runs in forward order R -> M -> T
+/// 2. after the child consumes, post runs in reverse order M -> T -> R (**including target T**: a
+///    TopAppBar-style connection hangs off the scroll container node, and excluding the target would
+///    break its post callback)
 
 /// The release-velocity floor at the fling call site, and the exception a paged list gets from it.
 
-/// 拖拽滚动目标复现（用户报告：鼠标在外层内容上按下拖拽，内层却滚动了）。
-/// 构造与 nested_scroll_demo 同几何的树：外层 scroll 视口 536（y=184..720），
-/// 内层 scroll 视口 180（内容流 y=296，视觉 480..660，scroll_viewport 已设）。
-/// 验证：鼠标在外层内容 0-7 区域（如 y=250）按下时，hit_test 命中的是外层
-/// 内容节点而非内层——drag_scroll 目标选择（path 逆序找 scroll）应选外层。
+/// Drag-scroll target reproduction (user report: pressing on the outer content and dragging scrolled
+/// the inner list). Builds a tree with the same geometry as nested_scroll_demo: an outer scroll
+/// viewport of 536 (y=184..720) and an inner one of 180 (content flow at y=296, visually 480..660,
+/// scroll_viewport set). Verifies that a press in the outer content's 0-7 band (say y=250) has
+/// hit_test hit the outer content node, not the inner one, so drag_scroll's target selection (walk the
+/// path in reverse for a scroll) picks the outer node.
 
 pub fn run_app(app: impl FnOnce(&mut ComposeCtx) + 'static) {
     // Own the tokio runtime: effects (LaunchedEffect, debug WS server) need

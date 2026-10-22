@@ -1,10 +1,10 @@
 use super::*;
 
-/// overlay 命中测试——返回 (overlay 索引, 本地坐标)——从最上层（最后一个）往下
+/// Overlay hit test — returns (overlay index, local coordinates) — from the topmost (last) layer down.
 pub(crate) fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usize, (f32, f32))> {
     for i in (0..pw.overlay.layers.len()).rev() {
         let ov = &pw.overlay.layers[i];
-        // 关闭中（退出动画播放）：不响应交互——命中视同穿透（下层/主树）
+        // Closing (exit animation playing): does not respond to interaction — the hit counts as a pass-through (lower layer / main tree).
         if ov.closing {
             continue;
         }
@@ -18,17 +18,17 @@ pub(crate) fn hit_overlay(pw: &PerWindow, scene_pos: (f32, f32)) -> Option<(usiz
     }
     None
 }
-/// overlay 渲染（主树之后——上层；模态先画遮罩）
+/// Overlay rendering (after the main tree — on top; a modal draws its scrim first).
 
-/// overlay 拖拽结束（含嵌套滚动 fling）。overlay 内可滚列表的 fling 走 overlay Composer。
+/// Overlay drag end (including nested-scroll fling). A fling of a scrollable list inside an overlay goes through the overlay Composer.
 pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
     let mut handled = false;
     if let Some(ds) = pw.overlay.drag_scroll.take() {
-        // 复用主树 drag_scroll_up 逻辑：样本估速 → overlay 的 dispatch_nested_scroll_fling
-        //（此前为空壳——注释"由 overlay 内 NestedScrollConnection on_post_fling 兜底"未接通，
-        // 导致松手后列表不 fling、sheet 不 settle → "松手没有动画"）
+        // Reuse the main tree's drag_scroll_up logic: estimate velocity from the samples → the overlay's dispatch_nested_scroll_fling
+        // (this used to be an empty shell — the comment "covered by the overlay's NestedScrollConnection on_post_fling" was never wired up,
+        // so releasing did not fling the list and the sheet did not settle → "no animation on release").
         let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
-        // target 反查：ds.slot 是 down 时 overlay composer 的 scroll 节点 slot_key
+        // Reverse lookup of the target: ds.slot is the scroll node's slot_key in the overlay composer at down time.
         let target: Option<usize> = (|| {
             let ov_idx = pw.overlay.layers.len().checked_sub(1).unwrap_or(0);
             let ov = pw.overlay.layers.get(ov_idx)?;
@@ -44,7 +44,7 @@ pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
         let Some(idx) = target else { handled = true; return handled; };
         let Some(ov) = pw.overlay.layers.last_mut() else { handled = true; return handled; };
         let Some(r) = ov.composer.layout_root_idx() else { handled = true; return handled; };
-        // 手指速度 → 滚动速度（内容速度 = -手指速度），走 nested scroll pre/post fling 链
+        // Finger velocity → scroll velocity (content velocity = -finger velocity), through the nested scroll pre/post fling chain.
         let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
         let _ = dispatch_nested_scroll_fling(ov.composer.arena_nodes_mut(), r, idx, velocity);
         handled = true;
@@ -68,39 +68,39 @@ pub(crate) fn overlay_drag_up(pw: &mut PerWindow) -> bool {
 pub(crate) fn exec_overlay_click(pw: &mut PerWindow) -> bool {
     let Some((idx, local, _nid)) = pw.overlay.click.take() else { return false; };
     let Some(ov) = pw.overlay.layers.get(idx) else { return false; };
-    // 关闭中（down 后外部 dismiss 等）→ 不 fire click（避免对已关闭的
-    // overlay 误触发——极窄边界但语义正确）
+    // Closing (an outside dismiss after down, etc.) → do not fire the click (avoid misfiring on an
+    // already-closed overlay — a very narrow edge case, but the semantics are right).
     if ov.closing {
         return false;
     }
     let Some(r) = ov.composer.layout_root_idx() else { return false; };
     let nodes = ov.composer.arena_nodes();
     let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
-    // 沿路径找 clickable（最内层优先）
+    // Find the clickable along the path (innermost first).
     let r = fire_click_along_path(nodes, &path);
     r
 }
-/// 指针按下：先测 overlay（最上层）——命中 → 记录点击目标；外部 → dismiss
+/// Pointer down: test the overlays first (topmost) — a hit records the click target; outside → dismiss.
 pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crate::input::PointerKind) -> bool {
     if pw.overlay.layers.is_empty() {
         return false;
     }
     if let Some((i, local)) = hit_overlay(pw, scene_pos) {
-        // 命中 overlay 内容——记录点击目标（v1：仅 clickable——up 时执行）
-        // ⚠ click_passthrough（Tooltip）：命中浮层但**放行主树**——浮层盖住
-        // 锚点（锚点上方 tooltip 与锚点本身重叠）时点击锚点仍生效（否则
-        // tooltip 挡住锚点按钮 → 外部 visible 控制关不了）
+        // Hit the overlay content — record the click target (v1: only `clickable` — performed on up).
+        // ⚠ click_passthrough (Tooltip): the hit lands on the floating layer but **lets the main tree through** — when the floating
+        // layer covers the anchor (a tooltip above the anchor overlapping the anchor itself), clicking the anchor still works (otherwise
+        // the tooltip blocks the anchor button → an outside `visible` cannot close it).
         let ov = &mut pw.overlay.layers[i];
         if ov.click_passthrough {
             return false;
         }
-        // overlay：按 drag 相对 scroll 的深度判定（对齐主树 child_drag「最内层手势优先」：
-        // app.rs:2922-2926）——内层可拖组件（slider/switch）优先于滚动；外层面板 on_drag 让位
-        // 于内层滚动（列表滚动优先，到边后由 SheetNested.on_post_scroll 折叠 sheet）。
-        // path 下标从根到叶递增；rev() 找到的第一个命中即最内层（下标最大）。
-        // - drag 更深（组件在 scroll 内部，didx_last > scroll_idx 且更内层）→ 拖拽组件优先
-        // - 否则若有 scroll → 滚动优先（列表滚；面板 on_drag 让位）
-        // - 否则若有 drag → 面板 on_drag 拖 sheet（背景/文字/空白）
+        // Overlay: decide by drag depth relative to scroll (matching the main tree's child_drag "innermost gesture wins":
+        // app.rs:2922-2926) — an inner draggable component (slider/switch) wins over scrolling; the outer panel's on_drag yields
+        // to inner scrolling (list scrolling wins; at the edge, SheetNested.on_post_scroll collapses the sheet).
+        // Path indices increase from root to leaf; the first match from rev() is the innermost (largest index).
+        // - drag is deeper (the component is inside the scroll, didx_last > scroll_idx and further in) → the draggable component wins
+        // - otherwise, if there is a scroll → scrolling wins (the list scrolls; the panel's on_drag yields)
+        // - otherwise, if there is a drag → the panel's on_drag drags the sheet (background/text/blank area)
         {
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
@@ -122,13 +122,13 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                         pw.overlay.drag_scroll = None;
                     }
                 } else if let Some(t) = scroll_idx {
-                    // 列表区（面板 on_drag 让位）：内容滚动优先
+                    // List area (the panel's on_drag yields): content scrolling wins.
                     pw.overlay.drag = None;
                     pw.overlay.drag_started = false;
                     pw.overlay.drag_last = None;
                     pw.overlay.drag_scroll = Some(DragScroll::new(nodes[t].slot_key, scene_pos));
                 } else if let Some(didx) = drag_idx {
-                    // 非滚动区：fallback 到面板 on_drag（背景/文字拖 sheet）
+                    // Non-scrolling area: fall back to the panel's on_drag (background/text drags the sheet).
                     pw.overlay.drag = Some((i, nodes[didx].slot_key, scene_pos));
                     pw.overlay.drag_origin = ov.screen_pos;
                     pw.overlay.drag_started = false;
@@ -142,12 +142,12 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 }
             }
         }
-        // 发射 Press（按下波纹——对标 Compose PressInteraction.Press；
-        // ripple 渲染已支持 overlay，缺的只是事件触发）
+        // Emit Press (the press ripple — mirrors Compose's PressInteraction.Press;
+        // the ripple renderer already supports overlays, only the event firing was missing).
         {
-            // ⚠ 找不到 clickable_interaction 时**跳过 Press 但不阻断**——
-            // 否则普通 clickable（无 interaction source，如 ModalBottomSheet
-            // Scrim 层）的点击永远到不了 overlay_click → 点击丢失。
+            // ⚠ When no clickable_interaction is found, **skip Press but do not block** —
+            // otherwise clicks on a plain clickable (no interaction source, e.g. the ModalBottomSheet
+            // scrim layer) would never reach overlay_click → the click is lost.
             let nodes = ov.composer.arena_nodes();
             if let Some(r) = ov.composer.layout_root_idx() {
                 let path = hit_test_with_flights(nodes, r, ov.composer.transition_roots(), local.0, local.1);
@@ -161,7 +161,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                         .cloned()
                         .or_else(|| nodes[idx].modifier.node_click_interaction())
                     {
-                        // 波纹中心 = 节点本地坐标（overlay 内无滚动/变换——直接换算）
+                        // Ripple centre = node-local coordinates (no scroll/transform inside the overlay — convert directly).
                         let local_press = crate::layout::node::scene_to_node_local(nodes, &path, idx, local.0, local.1);
                         src.emit_press_at(local_press);
                         ov.pressed_interaction = Some((nodes[idx].slot_key, src.clone()));
@@ -319,7 +319,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
             hit_test_with_flights(nodes, r, pw.overlay.layers[i].composer.transition_roots(), local.0, local.1).last().map(|&idx| nodes[idx].id)
         });
         pw.overlay.click = Some((i, local, nid.unwrap_or(0)));
-        return true; // 事件消费——不进主树
+        return true; // event consumed — does not reach the main tree
     }
     // Outside press: an overlay that dismisses on an outside press closes; an overlay that does
     // not still CONSUMES the press when it is modal (its scrim blocks what is behind it).
@@ -330,8 +330,8 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
     // keep the overlay open, and callers pass the flag for exactly that — Nav3's
     // `dialogProperties` (`nav.rs`) and `AlertDialog`'s own builder. Treating `modal` as
     // "dismiss" made those flags silent no-ops.
-    // ⚠ 同步移除（不等 recompose）——否则残留 overlay 会吞掉关闭后
-    // 紧接着的点击（用户"点两次才打开"）且多渲染一帧（视觉闪烁）
+    // ⚠ Remove synchronously (do not wait for recompose) — otherwise the leftover overlay swallows the click
+    // right after closing (the user's "have to click twice to open") and renders one extra frame (visual flicker).
     for i in (0..pw.overlay.layers.len()).rev() {
         // A closing overlay is on its way out: it must not be dismissed again and must not swallow
         // the press — `hit_overlay` treats it as transparent for the same reason. Without this a
@@ -359,8 +359,8 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
                 begin_overlay_close(pw, id);
             }
         }
-        // ⚠ Tooltip（passthrough）：dismiss 后**放行主树**——点击不消费
-        // （否则点按钮第一次只关 tooltip、按钮收不到——需点两次）
+        // ⚠ Tooltip (passthrough): after dismissing, **let the main tree through** — the click is not consumed
+        // (otherwise the first click on a button only closes the tooltip and the button never sees it — needing two clicks).
         if passthrough {
             continue;
         }
@@ -368,7 +368,7 @@ pub(crate) fn overlay_down(pw: &mut PerWindow, scene_pos: (f32, f32), kind: crat
     }
     false
 }
-/// overlay 内 hover 更新（overlay composer + 本地坐标）
+/// Update hover inside an overlay (overlay composer + local coordinates).
 pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
     let hit: Vec<(u64, crate::input::interaction::MutableInteractionSource)> = {
         let nodes = ov.composer.arena_nodes();
@@ -391,7 +391,7 @@ pub(crate) fn overlay_update_hover(ov: &mut OverlayWindow, local: (f32, f32)) {
         overlay_exit_hover_at(ov, slot);
     }
 }
-/// 对 overlay 内指定 slot 的节点补发 Hover Exit
+/// Re-emit Hover Exit for the node at the given slot inside an overlay.
 pub(crate) fn overlay_exit_hover_at(ov: &mut OverlayWindow, slot: u64) {
     let nodes = ov.composer.arena_nodes();
     let Some(r) = ov.composer.layout_root_idx() else { return; };

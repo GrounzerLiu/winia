@@ -21,21 +21,22 @@ pub(crate) struct PerWindow {
     /// Stable key this window saves its saveable state under (see `PendingWindow::saveable_key`).
     pub(crate) saveable_key: Option<u64>,
 
-    /// 焦点节点的 slot_key
+    /// slot_key of the focused node.
     pub(crate) focused_slot_key: Option<u64>,
-    /// 当前窗口修饰键状态（ModifiersChanged 按 WindowId 维护）
+    /// This window's modifier state (ModifiersChanged is tracked per WindowId).
     pub(crate) modifiers: winit::keyboard::ModifiersState,
-    /// 当前悬停节点的 slot_key（指针移入/移出时发射 Hover Enter/Exit）
-    /// 当前 hover 的 hoverable 节点 slot 集合（**支持嵌套**——Tooltip 锚点
-    /// 容器与内部 Button 等可同时 hover；修复前只存最内层 → 嵌套 hoverable
-    /// 外层收不到 Enter（Tooltip 锚点挂 hoverable 时内部 Button 抢走事件））
+    /// Slots of the currently hovered hoverable nodes (**nesting is supported** — a Tooltip
+    /// anchor container and the Button inside it can be hovered at once; before the fix only the
+    /// innermost was stored, so an outer nested hoverable never got Enter (with hoverable on the
+    /// Tooltip anchor, the inner Button stole the event)).
     pub(crate) hovered_slots: std::collections::HashSet<u64>,
     /// The cursor currently applied to the window — `set_cursor` is a platform call, so it is
     /// only made when the hovered node asks for something different.
     pub(crate) cursor_icon: crate::input::PointerIcon,
-    /// 当前按下交互（clickable 绑定源 + 按下节点 slot——Up/越界 slop 时释放）
+    /// The current press interaction (the clickable's bound source plus the pressed node's slot;
+    /// released on Up or when the pointer leaves the slop).
     pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
-    /// 已发射 Focus 的节点 slot（focus 变化时对旧节点补发 Unfocus）
+    /// Slot of the node Focus was emitted for (the old node gets an Unfocus when focus changes).
     pub(crate) focused_interaction_slot: Option<u64>,
     /// What this window draws with, and what it has already drawn with (see `WindowThemeState`).
     pub(crate) theme: WindowThemeState,
@@ -63,8 +64,8 @@ impl PerWindow {
     }
     pub(crate) fn created_id(&self) -> Option<u64> { self.created_id }
 
-    /// 焦点同步：focused_slot_key 变化时，对旧焦点节点补发 Unfocus、
-    /// 新焦点节点补发 Focus（布局后调用——焦点标志已随重组刷新）。
+    /// Focus sync: when `focused_slot_key` changes, emit Unfocus for the old focused node and
+    /// Focus for the new one (called after layout, once recomposition has refreshed the flags).
     pub(crate) fn sync_focus_interaction(&mut self) {        let new_slot = self.focused_slot_key;
         if new_slot == self.focused_interaction_slot {
             return;
@@ -154,8 +155,9 @@ impl PerWindow {
         }
     }
 
-    /// 按指定焦点节点同步 IME 开关（Tab/方向键/Escape/焦点请求共用）——
-    /// 框架只做机械转发：节点声明了 ime_callback 才开启，否则关闭。
+    /// Sync the IME switch to the given focused node (shared by Tab, the arrow keys, Escape and
+    /// focus requests) — the framework only forwards mechanically: the IME is enabled when the
+    /// node declares an `ime_callback`, and disabled otherwise.
     pub(crate) fn apply_ime_for_focus(&self, fid: Option<u64>) {
         self.apply_ime_for_focus_in(None, fid);
     }
@@ -187,9 +189,10 @@ impl PerWindow {
         }
     }
 
-    /// 重新查询窗口所在显示器的刷新率并更新帧间隔（跨屏跟随）。
-    /// Moved/ScaleFactorChanged 高频触发——300ms 去抖；查询失败保留旧值
-    /// （避免瞬时失败把高刷错误降级成 60fps）。
+    /// Re-query the refresh rate of the display this window is on and update the frame interval
+    /// (follows the window across screens). Moved/ScaleFactorChanged fire in bursts, so this is
+    /// debounced to 300ms; a failed query keeps the old value (a transient failure must not
+    /// downgrade a high-refresh display to 60fps).
     pub(crate) fn refresh_frame_interval(&mut self) {
         const RECHECK_MIN: std::time::Duration = std::time::Duration::from_millis(300);
         let now = std::time::Instant::now();
@@ -206,8 +209,9 @@ impl PerWindow {
         }
     }
 
-    /// 补发延迟的 tap（Compose：onDoubleTap 存在时 onTap 延迟到双击窗口结束）。
-    /// 超时或按下其他节点时调用——按当前布局树换算组件本地坐标。
+    /// Fire a deferred tap (Compose delays onTap until the double-tap window ends when onDoubleTap
+    /// exists). Called on timeout or when another node is pressed; component-local coordinates are
+    /// resolved against the current layout tree.
     pub(crate) fn fire_pending_tap(&mut self, t: crate::input::gesture::PendingTap) {
         let action = crate::input::gesture::GestureAction::Tap(t.pos);
         // A deferred tap belongs to the arena its node was pressed in (main tree or that popup's
@@ -287,7 +291,7 @@ impl PerWindow {
             }
             self.focused_id = None;
             self.focused_slot_key = None;
-            // Escape 清焦后关闭输入法（避免 IME 残留开启）
+            // After Escape clears focus, turn the IME off (so it is not left enabled).
             self.apply_ime_for_focus(None);
             return true;
         }
@@ -444,8 +448,9 @@ impl PerWindow {
         false
     }
 
-    /// 方向键移动焦点（对标 Compose Desktop 方向导航）——
-    /// 候选 = 目标方向半平面内的可聚焦节点，得分 = 方向距离 + 垂直偏离×2
+    /// Move focus with the arrow keys (Compose Desktop's directional navigation) — candidates are
+    /// the focusable nodes in the half-plane of the requested direction, scored as
+    /// `directional distance + cross-axis deviation × 2`.
     ///
     /// The arena is the same one Tab uses ([`keyboard_scope`]): while an overlay owns the keyboard —
     /// a modal one, or any overlay something inside was clicked into — the arrows move inside it too.
@@ -509,8 +514,9 @@ impl PerWindow {
                     self.focused_slot_key = slot;
                 }
             }
-            // IME 按组件声明（方向键聚焦文本组件时开启输入法）—— resolved in the arena the focus
-            // actually moved in (see `apply_ime_for_focus_in`).
+            // The IME follows the component's declaration (focusing a text component with the arrow
+            // keys opens it) — resolved in the arena the focus actually moved in (see
+            // `apply_ime_for_focus_in`).
             self.apply_ime_for_focus_in(overlay, Some(target));
             return true;
         }
@@ -550,7 +556,7 @@ impl PerWindow {
             });
             any_composed |= did_compose;
             self.restore_focus_by_slot_key();
-            // 如果在 compose 期间又有新 notify 入队，需要再处理一次
+            // If new notifications were queued during composition, handle them with another pass.
             if !did_compose && !self.composer.has_pending_states() {
                 break;
             }
@@ -558,13 +564,15 @@ impl PerWindow {
         any_composed
     }
 
-    /// 增量重组 → 恢复焦点 → 布局 → 渲染（供 RedrawRequested 使用）
-    /// 循环消费 notify 队列直到稳定，避免 tokio task 的并发通知丢失。
+    /// Incremental recomposition → restore focus → layout → render (used by RedrawRequested).
+    /// Drains the notification queue until it is stable, so concurrent notifications from tokio
+    /// tasks are not lost.
     pub(crate) fn recompose_layout_render(&mut self, window_id: WindowId, after_draw: impl FnOnce(&[LayoutNode], usize, &mut skia_safe::Surface)) {
         let _focus_window = self.composer.focus_window(window_id.into_raw() as u64);
-        // 帧时钟按窗口分发：ComposeCtx::frame_clock() 用它把等待者绑到本窗口的帧上。
+        // The frame clock is dispatched per window: `ComposeCtx::frame_clock()` uses it to bind
+        // waiters to this window's frames.
         self.composer.set_window_id(window_id.into_raw() as u64);
-        // vsync 研究：渲染帧计数（每秒渲染次数——Fifo 下应 ~60）
+        // Vsync study: render frame counter (renders per second — should be ~60 under Fifo).
         self.clock.frame_counter += 1;
         debug_log!("[fps] render#{} compose#{} pending={}", self.clock.frame_counter, self.composer.compose_count(), self.composer.pending_state_count());
         // anim-trace frame barrier: stamps the frame number and a wall-clock timestamp, samples every
@@ -580,15 +588,18 @@ impl PerWindow {
                 .map(|d| d.as_millis())
                 .unwrap_or(0),
         );
-        // 临时：窗口节点数（诊断主窗口塌缩）
-        // 提供当前窗口 Density（从 scale_factor）——覆盖 compose + layout + draw 全程，
-        // 保证 Dimension::Px / TextUnit::Px 在布局/渲染期使用窗口 sf 而非 standard(1.0)
+        // Temporary: window node count (diagnosing main-window collapse).
+        // Provide this window's Density (from `scale_factor`) for the whole compose + layout + draw
+        // path, so `Dimension::Px` / `TextUnit::Px` use the window's sf during layout/rendering
+        // rather than `standard(1.0)`.
         let density = crate::unit::Density::from_density(self.scale_factor as f32);
         crate::runtime::density::with_density(density, || {
-        // 更新当前 Composer 的 adaptive context；不再覆盖 thread-local singleton。
+        // Update the current Composer's adaptive context; the thread-local singleton is no longer
+        // overwritten.
         self.composer.set_adaptive_window_size(self.width, self.height);
-        // 循环 compose 直到没有新的 pending state——处理并发 task 在 compose 期间
-        // 完成的 case（第二个 notify 的 state 在第一次 compose 之后才入队）
+        // Compose in a loop until no new pending state is left — this handles a concurrent task
+        // finishing during composition (the second notification's state is queued only after the
+        // first compose).
         // The theme is brought up to date HERE, immediately before the frame's recomposition: the marking
         // it does is what makes the next `recompose` re-run the content closure, so it has to land in the
         // same call as the compose. Doing it from the render handler instead consumed the change on a
@@ -598,7 +609,7 @@ impl PerWindow {
         // pass cap would otherwise be consumed by this frame's loop BEFORE its own layout ran, costing a
         // compose the frame did not need.
         let _ = crate::runtime::composer::take_compose_after_layout();
-        // 循环 compose 直到没有新的 pending state
+        // Compose in a loop until no new pending state is left.
         let mut any_composed = self.recompose_until_stable();
         self.composer.layout(Constraints::new(0.0, self.width, 0.0, self.height));
         // A layout pass can find that this frame's composition cannot fill the space it was measured in:
@@ -629,13 +640,15 @@ impl PerWindow {
         // per-frame visual snapshots, reap completed flights. Render reads
         // plain f32 snapshots — never subscribes (zero-recomposition rule).
         self.composer.poll_shared_flights();
-        // 焦点交互同步（Focus/Unfocus 发射——focus 标志已随重组刷新）
+        // Focus interaction sync (emit Focus/Unfocus — the focus flags were refreshed by
+        // recomposition).
         self.sync_focus_interaction();
 
-        // 顶层弹出层：同步（按 id 匹配保留 State）+ compose + layout + 定位
-        // ⚠ recomposed 标志：recompose 跳过的帧（无 pending State 变化）不能执行
-        // retain 删除——take_overlays 为空会误删仍开着的 overlay（dialog_open 未变），
-        // 导致 overlay 消失但状态残留 → 下次点击 toggle 错乱（"点两次才开"）
+        // Top-level popups: sync (keep State by matching id) + compose + layout + position.
+        // ⚠ The `recomposed` flag matters: on a frame where recompose was skipped (no pending
+        // State change) the retain must not run — an empty `take_overlays` would delete overlays
+        // that are still open (`dialog_open` unchanged), so the overlay disappears while the state
+        // stays set and the next toggle click misfires ("needs two clicks to open").
         sync_overlays(self, any_composed);
         layout_overlays(self);
         // A modal overlay owns the keyboard from the frame it appears on and until it closes. The
@@ -717,7 +730,8 @@ impl PerWindow {
                     }
                     after_draw(nodes, root_idx, surface);
                 });
-                // 截图读回在 flush 之后（skiwin draw 内）——保证真实呈现帧
+                // The screenshot read-back happens after the flush (inside skiwin's draw), which
+                // guarantees a genuinely presented frame.
                 if crate::debug::screenshot_requested(debug_window_id) {
                     if let Some((w2, h2, pixels)) = take_capture() {
                         crate::debug::update_pixels(debug_window_id, &pixels, w2, h2);

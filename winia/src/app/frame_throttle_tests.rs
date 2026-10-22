@@ -10,7 +10,8 @@
 
     #[test]
     fn request_below_interval_blocked() {
-        // I-ε（ε=1ns）：减半回归的边界——晚于 request 的渲染不应把下次请求推迟到 2I
+        // I-ε (ε=1 ns): the edge of the halving regression; a render later than the request must not
+        // push the next request out to 2I.
         let t0 = Instant::now();
         let interval = Duration::from_millis(16);
         assert!(!should_request_redraw(t0, t0 + interval - Duration::from_nanos(1), interval));
@@ -37,7 +38,7 @@
         assert!(should_request_redraw(t0, t0 + interval + Duration::from_millis(1), interval));
     }
 
-    /// Shift + 滚轮：垂直 delta 转为水平，且清除垂直分量
+    /// Shift + wheel: the vertical delta becomes horizontal, and the vertical component is cleared.
     #[test]
     fn shift_wheel_delta_becomes_horizontal() {
         assert_eq!(super::scroll_delta_with_shift(0.0, -20.0, true), (-20.0, 0.0));
@@ -56,7 +57,7 @@
         assert_eq!(first.modifiers, second.modifiers);
     }
 
-    /// 滚动 delta 应用到 Column（scroll 节点查找 + offset 更新 + clamp）
+    /// Applying a scroll delta to a Column: find the scroll node, update the offset, then clamp.
     #[test]
     fn scroll_delta_applies_to_column() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -71,7 +72,7 @@
             crate::layout::Column::new()
                 .modifier(crate::modifier::Modifier::new().fill_max_size().vertical_scroll(scroll2))
                 .build(ctx, |ctx| {
-                    // 内容总高 > 视口 600（每行 ~19px × 40 行 ≈ 760）
+                    // The content is taller than the 600 viewport (~19 px per line x 40 lines ~ 760).
                     for _ in 0..40 {
                         crate::components::Text::new("line content line content").build(ctx);
                     }
@@ -84,9 +85,9 @@
             composer.arena_nodes_mut(),
             root,
             0.0,
-            -200.0, // 负 dy = 向下滚动（内容上移——与 winit 滚轮语义一致）
+            -200.0, // a negative dy scrolls down (the content moves up, matching winit's wheel semantics)
             crate::unit::Density::from_density(1.0),
         );
-        assert!(consumed.y != 0.0, "应消费 scroll delta");
-        assert!(scroll.offset.get() > 0.0, "滚动后 offset 应 > 0（实际 {}）", scroll.offset.get());
+        assert!(consumed.y != 0.0, "the scroll delta should be consumed");
+        assert!(scroll.offset.get() > 0.0, "the offset should be > 0 after scrolling (got {})", scroll.offset.get());
     }

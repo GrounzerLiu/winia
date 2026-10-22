@@ -5,12 +5,13 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
-/// Window 占位 leaf / created_id 的 key 盐（黄金比例——与内容节点 next_key 空间隔离）
+/// Key salt for the Window placeholder leaf / created_id (the golden ratio, keeping it in a separate
+/// key space from content nodes' next_key).
 const WINDOW_KEY_SALT: u64 = 0x9E37_79B9_7F4A_7C15;
 
-/// 子窗口内容包装（#[composable]——框架内部组合点也遵守稳定 key 规则：
-/// app.rs 的 process_pending_windows 直接 compose 此闭包——STMT_STACK 空，
-/// 无宏覆盖会触发稳定 key panic）
+/// Sub-window content wrapper. It is #[composable] because framework-internal composition points
+/// follow the stable-key rules too: app.rs's process_pending_windows composes this closure directly
+/// with an empty STMT_STACK, and without the macro's scope it would trip the stable-key panic.
 #[composable]
 fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) {
     // Each window owns its inset controller: the custom decoration (or the platform backend) writes
@@ -20,18 +21,19 @@ fn sub_window_content(ctx: &mut ComposeCtx, content: &impl Fn(&mut ComposeCtx)) 
         .remember(|| crate::window::insets::WindowInsetsController::new())
         .get();
     crate::window::insets::LOCAL_WINDOW_INSETS.provides(insets, || {
-        // 内容铺满窗口，不做默认留白（Scaffold 等全屏页面需要 edge-to-edge）。
+        // The content fills the window with no default padding (full-screen pages such as Scaffold
+        // need edge-to-edge).
         Column::new().build(ctx, |ctx| {
             content(ctx);
         });
     });
 }
 
-/// 全局已创建窗口 ID 集合。
+/// The set of window IDs created so far, globally.
 pub(crate) static CREATED: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// 声明式窗口 Builder。
+/// The declarative window builder.
 pub struct Window {
     state: WindowState,
     on_close: Option<Box<dyn FnMut() + Send>>,
@@ -70,7 +72,7 @@ impl Window {
         self
     }
 
-    /// 在 compose 末尾调用，检测是否有关闭窗口需求
+    /// Called at the end of compose to check whether a window asked to close.
     pub(crate) fn process_detached(windows: &mut std::collections::HashMap<winit::window::WindowId, crate::app::PerWindow>,
                                    event_loop: &dyn winit::event_loop::ActiveEventLoop,
                                    force_shutdown: &dyn Fn(),
@@ -113,7 +115,8 @@ impl Window {
                         }
                     }
                 }
-                // 清理 debug 树条目（逻辑关闭不走 winit Destroyed——残留会误判）
+                // Drop the debug tree entry: a logical close never goes through winit's Destroyed, and a
+                // stale entry would confuse later checks.
                 crate::debug::remove_tree(w.into_raw() as u64);
                 if let Some(ref mut cb) = pw.on_close { cb(); }
                 for pw2 in windows.values() {
@@ -126,9 +129,10 @@ impl Window {
 
     #[composable]
     pub fn build(self, ctx: &mut ComposeCtx, content: impl Fn(&mut ComposeCtx) + Send + 'static) {
-        // 占位 leaf 与 created_id 共用同一个加盐 key：① 与内容节点 key 空间隔离
-        // （结构变化时不误复用旧槽）；② 每 Window 独立（remember_at_key(u64::MAX)
-        // 会让多个 Window 共享同一 created_id → 第二个 Window 永不创建）
+        // The placeholder leaf and created_id share one salted key, for two reasons: (1) it keeps them
+        // in a separate key space from content nodes, so a structural change cannot silently reuse an
+        // old slot; (2) it is per-Window (remember_at_key(u64::MAX) would make several Windows share
+        // one created_id, so the second Window would never be created).
         let key = ctx.next_key().wrapping_add(WINDOW_KEY_SALT);
         let created_id = ctx.remember_at_key(key, || 0u64);
         let _wid = created_id.get();
@@ -201,7 +205,7 @@ impl Window {
 
         ctx.end_node();
 
-        // end_node 后：标记 Window::build 已被调用
+        // After end_node: mark that Window::build has been called.
         lifecycle.mark_rebuilt();
     }
 

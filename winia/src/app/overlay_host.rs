@@ -6,8 +6,8 @@
 use super::*;
 use super::set_ime_enabled;
 
-/// 顶层弹出层实例——独立 Composer 组合单元（State 跨帧保持），
-/// 渲染定位在主树之上（模态遮罩 + 内容）
+/// Top-level popup layer instance — its own Composer composition unit (State survives across
+/// frames), rendered above the main tree (modal scrim + content).
 /// The window's overlay host: the layers themselves, and the interaction state that only makes
 /// sense against them.
 ///
@@ -16,23 +16,23 @@ use super::set_ime_enabled;
 /// target, the frozen arena origins and the focus the host suspends are all about *an overlay*, not
 /// about the window; what stays on `PerWindow` is the frame.
 pub(crate) struct OverlayHost {
-    /// 顶层弹出层（独立组合单元——渲染在主树之上）
+    /// Top-level popup layers (independent composition units — rendered above the main tree).
     pub(crate) layers: Vec<OverlayWindow>,
-    /// overlay 点击目标（down 命中 overlay 记录——up 执行 click；v1 仅 clickable）
+    /// Overlay click target (recorded when down hits an overlay — up performs the click; v1 only `clickable`).
     pub(crate) click: Option<(usize, (f32, f32), u64)>,
-    /// overlay 拖拽会话（down 命中 overlay 且有 on_drag 的节点时建立——
-    /// (overlay index, 节点 slot_key, 拖拽起点 scene)）。overlay 是独立
-    /// composer，拖拽走 overlay 内容节点的 on_drag/on_drag_end。
+    /// Overlay drag session (created when down hits an overlay node that has `on_drag` —
+    /// (overlay index, node slot_key, drag start scene)). The overlay is its own
+    /// composer, so the drag runs through the overlay content node's `on_drag`/`on_drag_end`.
     pub(crate) drag: Option<(usize, u64, (f32, f32))>,
     /// The overlay's screen origin frozen when the drag started — the absolute `pos` handed to
     /// `on_drag_start` / `on_drag` is arena-local, and an overlay that moves during the drag must not
     /// inject its own motion into it (the deltas are scene-space and unaffected).
     pub(crate) drag_origin: (f32, f32),
-    /// overlay 拖拽是否已越过 slop 触发 DragStart
+    /// Whether the overlay drag has passed the slop and fired DragStart.
     pub(crate) drag_started: bool,
-    /// overlay 拖拽上一次 move 位置（增量计算用）
+    /// Previous move position of the overlay drag (for the delta).
     pub(crate) drag_last: Option<(f32, f32)>,
-    /// overlay 内的可滚动容器（独立 Composer——嵌套滚动用，列表到顶下拉拖 Sheet）
+    /// Scrollable container inside an overlay (its own Composer — nested scrolling: a list scrolled to the top hands the drag to the sheet).
     pub(crate) drag_scroll: Option<DragScroll>,
     /// Overlay focus interaction target (overlay id, slot) — overlay inputs report `is_focused()`
     /// only after `emit_focus` in their own arena.
@@ -79,27 +79,27 @@ pub(crate) struct OverlayWindow {
     pub(crate) match_anchor_width: bool,
     pub(crate) on_dismiss: Option<Arc<dyn Fn() + Send + Sync>>,
     pub(crate) content: Box<dyn Fn(&mut ComposeCtx)>,
-    /// 注册时（主树 provides 内）捕获的 CompositionLocal 快照——recompose
-    /// 时重放（overlay 独立 Composer 继承主树主题/方向/排版）
+    /// CompositionLocal snapshot captured at registration (inside the main tree's `provides`) —
+    /// replayed on recompose (the overlay's own Composer inherits the main tree's theme/direction/typography).
     pub(crate) local_snapshot: crate::runtime::composition_local::LocalSnapshot,
-    /// 渲染/命中用的屏幕位置（逻辑坐标——每帧布局后更新）
+    /// Screen position for rendering/hit-testing (logical coordinates — updated after each layout pass).
     pub(crate) screen_pos: (f32, f32),
     /// The anchor's window rect `(x, y, w, h)`, resolved each layout pass (the only pass that knows it).
     /// Kept for the render: an animation that grows out of the anchor needs both rects, and material3's
     /// menus compute their transform origin from exactly these two (`calculateTransformOrigin`).
     pub(crate) anchor_rect: Option<(f32, f32, f32, f32)>,
-    /// 该 overlay 内当前 hover 的 hoverable slot 集合（独立于主树——
-    /// overlay 是独立 composer，slot 与主树可能重复）
+    /// Hoverable slot keys currently hovered inside this overlay (independent of the main tree —
+    /// the overlay is its own composer, so its slot keys may repeat the main tree's).
     pub(crate) hovered_slots: std::collections::HashSet<u64>,
-    /// 该 overlay 内当前按下 的 interaction source（Press 波纹——up/取消时释放）
+    /// Interaction source currently pressed inside this overlay (Press ripple — released on up/cancel).
     pub(crate) pressed_interaction: Option<(u64, crate::input::interaction::MutableInteractionSource)>,
-    /// 显示进度（1=完全显示，0=隐藏）——进入/退出动画统一驱动：
-    /// 打开 push_animatable(progress, 1.0)（0→1），关闭 push(progress, 0.0)
-    /// （1→0）；渲染期 peek 计算 scale/alpha。None=无动画（恒 1）
+    /// Show progress (1 = fully shown, 0 = hidden) — driven by the enter and exit animations alike:
+    /// opening pushes progress to 1.0 (0→1), closing pushes it to 0.0 (1→0); the render peeks it for
+    /// scale/alpha. None = no animation (always 1).
     pub(crate) progress: Option<crate::runtime::state::Animating<f32>>,
-    /// 进入动画规格（None = 瞬时——Popup/DropdownMenu 默认）
+    /// Enter animation spec (None = instant — the default for `Popup`/`DropdownMenu`).
     pub(crate) enter_anim: Option<crate::overlay::OverlayAnimSpec>,
-    /// 退出动画规格（None = 瞬时消失）
+    /// Exit animation spec (None = disappears instantly).
     pub(crate) exit_anim: Option<crate::overlay::OverlayAnimSpec>,
     /// Closing in progress (exit animation playing — kept rendered until done;
     /// no interaction meanwhile)
@@ -131,12 +131,12 @@ pub(crate) struct OverlayWindow {
     /// into the IME on every frame of a modal's life.
     pub(crate) claimed_keyboard: bool,
 }
-/// 启动 overlay 关闭（退出动画）：标记 closing + 触发 on_dismiss + 驱动
-/// progress 1→0（有退出规格）——动画完成前保留渲染（对齐 Compose
-/// AnimatedVisibility exit 语义）。无退出规格 → 立即移除。
+/// Start closing an overlay (exit animation): mark `closing` + fire `on_dismiss` + drive
+/// progress 1→0 (when there is an exit spec) — keep rendering until the animation finishes
+/// (matching Compose's `AnimatedVisibility` exit semantics). With no exit spec → remove at once.
 pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
     let Some(idx) = pw.overlay.layers.iter().position(|o| o.id == id) else { return };
-    // 已在关闭中（重复关闭请求）→ 跳过（防重入：动画重启/on_dismiss 重复）
+    // Already closing (duplicate close request) → skip (guards against re-entry: restarted animation / duplicate on_dismiss).
     if pw.overlay.layers[idx].closing {
         return;
     }
@@ -163,8 +163,8 @@ pub(crate) fn begin_overlay_close(pw: &mut PerWindow, id: u64) {
         if let Some(ref sw) = pw.skia_window { set_ime_enabled(&sw, false); }
     }
     cleanup_overlay_interactions(&mut pw.overlay.layers[idx]);
-    // 启动退出动画（progress 1→0）；无退出规格 → 立即移除（不推无用动画——
-    // 否则对即将 drop 的孤儿 State 浪费 200ms 动画）
+    // Start the exit animation (progress 1→0); with no exit spec → remove at once (do not push a
+    // useless animation — that wastes a 200 ms tween on an orphan State about to be dropped).
     let has_exit = pw.overlay.layers[idx].exit_anim.is_some();
     if has_exit {
         if let Some(p) = pw.overlay.layers[idx].progress.clone() {
@@ -362,7 +362,7 @@ pub(crate) fn finish_closing_overlays(pw: &mut PerWindow) {
     pw.overlay.layers.retain_mut(|ov| {
         if !ov.closing { return true; }
         let is_declared = declared.contains(&ov.id);
-        // 无 progress（无动画）不应到这里（begin 已移除）；有则等动画完成
+        // No progress (no animation) should not reach here (`begin` already removed those); otherwise wait for the animation to finish.
         let progress = ov.progress.as_ref().map(|p| p.peek());
         let done = closing_overlay_is_done(progress, ov.closing_since, now);
         if is_declared {
@@ -408,8 +408,8 @@ pub(crate) fn closing_overlay_is_done(
     }
 }
 
-/// overlay 移除前清理交互状态（hover 补 Exit + press 释放）——
-/// overlay 删除后其节点销毁，交互 source 悬空 → 必须在移除前发射
+/// Clean up interaction state before an overlay is removed (emit hover Exit + release the press) —
+/// once the overlay is gone its nodes are destroyed and the interaction sources dangle, so this must fire before removal.
 fn cleanup_overlay_interactions(ov: &mut OverlayWindow) {
     let olds: Vec<u64> = ov.hovered_slots.drain().collect();
     for slot in olds {
@@ -437,7 +437,7 @@ pub(crate) fn overlay_anchor_rect(
     Some((x, y, size.width, size.height))
 }
 
-/// overlay compose + layout（独立组合单元——约束为窗口尺寸），并计算屏幕定位
+/// Overlay compose + layout (its own composition unit — constrained to the window size), plus screen positioning.
 
 mod input;
 mod placement;

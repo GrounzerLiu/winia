@@ -5,8 +5,9 @@
 
 use super::*;
 
-/// 拖拽滚动会话：slot key（跨重组稳定）+ 最近位置 + 速度样本（松手 fling 用）。
-/// 双轴跟踪（LazyRow 横向拖拽/惯性用 x 轴）——样本 (t, x, y)。
+/// A drag-scroll session: a slot key (stable across recomposition), the last position, and velocity
+/// samples (used for the fling on release). Both axes are tracked (a LazyRow's horizontal drag and
+/// inertia use x); a sample is (t, x, y).
 pub(crate) struct DragScroll {
     pub(crate) slot: u64,
     pub(crate) last_x: f32,
@@ -29,9 +30,10 @@ impl DragScroll {
 }
 
 impl DragScroll {
-    /// 手指速度（px/s）：最近 ~200ms 窗口的最小二乘斜率。
-    /// ⚠ x 轴用"距离现在的时长"（越大越早）——回归斜率符号与真实时间相反，
-    /// 取负修正（实测：向上拖 100px 得 +650 而非 -650，fling 方向反了）。
+    /// Finger velocity (px/s): the least-squares slope over the last ~200 ms.
+    /// Note the x axis is "time since now" (larger means earlier), so the regression slope has the
+    /// opposite sign to real time and is negated (measured: a 100 px upward drag read +650 rather
+    /// than -650, and the fling went the wrong way).
     fn regression(&self, sel: fn(&(std::time::Instant, f32, f32)) -> f32) -> f32 {
         let now = std::time::Instant::now();
         let cutoff = now - std::time::Duration::from_millis(200);
@@ -54,8 +56,9 @@ impl DragScroll {
     pub(crate) fn velocity_y(&self) -> f32 { self.regression(|s| s.2) }
 }
 
-/// Shift + 滚轮语义：把垂直滚轮 delta 转为水平滚动（保留方向，清除垂直分量）。
-/// 用于兼容 LazyRow 等横向滚动容器——多数平台不会自动把 Shift+wheel 转成 dx。
+/// Shift + wheel semantics: turn a vertical wheel delta into horizontal scrolling (direction kept,
+/// vertical component cleared). This is for LazyRow-style horizontal containers; most platforms do
+/// not turn Shift+wheel into dx on their own.
 pub(crate) fn scroll_delta_with_shift(dx: f32, dy: f32, shift: bool) -> (f32, f32) {
     if shift {
         (dy, 0.0)
@@ -116,7 +119,7 @@ fn nested_scroll_delta(
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
             #[cfg(debug_assertions)]
             if drag_trace_enabled() {
-                eprintln!("[pre-scroll] idx={} connection=有", idx);
+                eprintln!("[pre-scroll] idx={} connection=present", idx);
             }
             let part = connection.on_pre_scroll(remaining, source).clamp_to(remaining);
             total = total + part;
@@ -130,9 +133,10 @@ fn nested_scroll_delta(
     };
     total = total + child_consumed;
     remaining = remaining - child_consumed;
-    // post-scroll：祖先从内到外（**含 target 自身**——TopAppBar 等 connection
-    // 挂在 scroll 容器节点上，依赖 on_post_scroll 更新 content_offset 变色；
-    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）
+    // post-scroll: ancestors from the inside out (**including target itself**: a TopAppBar-style
+    // connection hangs off the scroll container node and relies on on_post_scroll to recolour
+    // content_offset; excluding the target would break that, see
+    // scaffold_demo/fixture_nested_scroll).
     for &idx in path.iter().rev() {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
             let part = connection.on_post_scroll(child_consumed, remaining, source).clamp_to(remaining);
@@ -163,8 +167,8 @@ pub(crate) fn dispatch_nested_scroll_fling(
 
     let mut remaining = velocity;
     let mut consumed = crate::nested_scroll::ScrollVelocity::default();
-    // pre-fling：祖先（含 target）先消费一部分速度——正序 path，target 自身
-    // connection 也参与 pre（对标 Compose：目标自身的 connection 参与 pre）
+    // pre-fling: the ancestors (including target) consume some velocity first, in forward path
+    // order; the target's own connection takes part in pre too (Compose parity).
     for &idx in &path {
         if let Some(connection) = nodes[idx].modifier.nested_scroll_connection() {
             let part = connection.on_pre_fling(remaining).clamp_to(remaining);
@@ -174,15 +178,16 @@ pub(crate) fn dispatch_nested_scroll_fling(
             remaining.y -= part.y;
         }
     }
-    // child fling：剩余速度交给目标滚动节点；撞边界时把瞬时剩余速度交给
-    // post-fling 链。post 链 = path 逆序（**含 target 自身**——TopAppBar 等
-    // connection 挂在 scroll 容器节点上，依赖 on_post_fling 弹回/复位；
-    // 排除 target 会破坏该行为，见 scaffold_demo/fixture_nested_scroll）。
+    // child fling: the remaining velocity goes to the target scroll node; on hitting a boundary the
+    // instantaneous remainder goes to the post-fling chain. That chain is the path in reverse
+    // (**including target itself**: a TopAppBar-style connection hangs off the scroll container node
+    // and relies on on_post_fling to spring back or reset; excluding the target would break that,
+    // see scaffold_demo/fixture_nested_scroll).
     let child_velocity = remaining;
-    // child 实际消费量 = 起始速度 − 边界剩余速度（在 boundary 回调内计算——
-    // fling_with_boundary 回调传入的是撞边界时的瞬时剩余速度）。
-    // ⚠ 不能传起始速度：on_post_fling 的 consumed_by_child 语义是"child 实际
-    // 消费了多少"，TopAppBar 依赖它做回弹幅度（review C1）。
+    // What the child actually consumed is the start velocity minus the remainder at the boundary,
+    // computed inside the boundary callback (that is the instantaneous remainder on impact).
+    // Do NOT pass the start velocity: on_post_fling's consumed_by_child means "how much the child
+    // actually consumed", and a TopAppBar uses it to size the spring-back (review C1).
     let post_connections: Vec<std::sync::Arc<dyn crate::nested_scroll::NestedScrollConnection>> =
         path.iter().rev()
             .filter_map(|&idx| nodes[idx].modifier.nested_scroll_connection())
@@ -200,7 +205,7 @@ pub(crate) fn dispatch_nested_scroll_fling(
             if child_velocity.y.abs() >= 50.0 || ss.wants_fling() {
                 let post_connections = post_connections.clone();
                 ss.fling_with_boundary(child_velocity.y, move |remaining_velocity| {
-                    // child 实际消费 = 起始 − 边界剩余（剩余为 0 时全消费）
+                    // child consumption = start minus the boundary remainder (all of it when the remainder is 0).
                     let consumed_by_child = crate::nested_scroll::ScrollVelocity {
                         x: 0.0,
                         y: child_velocity.y - remaining_velocity,
@@ -216,11 +221,12 @@ pub(crate) fn dispatch_nested_scroll_fling(
         } else if let Some(ss) = node.modifier.horizontal_scroll_state() {
             if child_velocity.x.abs() >= 50.0 || ss.wants_fling() {
                 let post_connections = post_connections.clone();
-                // ⚠ reverse（RTL）滚动：fling 速度方向与手势 delta 同需镜像
-                //（apply_scroll_delta 已镜像 delta，此处镜像速度保持一致）
+                // Note reverse (RTL) scrolling: the fling velocity must be mirrored just like the
+                // gesture delta (apply_scroll_delta already mirrors the delta, so mirroring here keeps
+                // the two consistent).
                 let fling_vx = if node.scroll_reverse { -child_velocity.x } else { child_velocity.x };
                 ss.fling_with_boundary(fling_vx, move |remaining_velocity| {
-                    // child 实际消费 = 起始 − 边界剩余
+                    // child consumption = start minus the boundary remainder.
                     let consumed_by_child = crate::nested_scroll::ScrollVelocity {
                         x: child_velocity.x - remaining_velocity,
                         y: 0.0,
@@ -257,12 +263,13 @@ pub(crate) fn apply_scroll_delta(nodes: &mut [LayoutNode], idx: usize, dx: f32, 
     apply_scroll_delta_inner(nodes, idx, dx, dy, density, true)
 }
 
-/// `apply_scroll_delta` 实现。`recursive=true` 时，若节点自身未消费（已到
-/// 边界），回退递归子节点（旧行为——wheel/拖拽的 fallback 语义，让内层
-/// 子 scroll 消费）。`recursive=false` 时**只滚目标自身**——`dispatch_nested
-/// _scroll_delta` 的显式 target 语义：target 滚不动应留给 post 链的祖先
-/// connection 处理，**不能**偷偷滚子节点（否则"在外层顶部向下拖"会错误地
-/// 滚动内层子列表——用户报告的 bug：外层已到顶，delta 递归到内层）。
+/// The implementation of `apply_scroll_delta`. With `recursive=true`, a node that consumed nothing
+/// itself (already at its boundary) falls back to recursing into its children (the old behaviour, the
+/// fallback semantics of wheel/drag that lets an inner scroll consume). With `recursive=false` it
+/// scrolls **the target only**: `dispatch_nested_scroll_delta`'s explicit-target semantics mean a
+/// target that cannot scroll leaves the delta to the post chain's ancestor connections, and must
+/// **not** quietly scroll a child (otherwise "drag down while the outer list is at its top" scrolled
+/// the inner list, the user-reported bug).
 fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f32, density: crate::unit::Density, recursive: bool) -> crate::nested_scroll::ScrollDelta {
     let mut consumed = crate::nested_scroll::ScrollDelta::ZERO;
     {
@@ -275,15 +282,15 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
         }
         if dy != 0.0 {
             if let Some(state) = node.modifier.vertical_scroll_state() {
-            // 手动输入接管：取消进行中的 fling + 结束滚动中标记（拖拽路径随后置回）
+            // Manual input takes over: cancel the running fling and clear the in-progress flag (the drag path sets it again).
             crate::animation::cancel_animation(&state.offset);
             state.is_scroll_in_progress.set(false);
             let current = state.offset.get();
             #[cfg(debug_assertions)]
             if drag_trace_enabled() {
-                eprintln!("[apply-scroll] → state.offset 应用前 = {}", current);
+                eprintln!("[apply-scroll] -> state.offset before apply = {}", current);
             }
-            // 滚动极限 = 内容总高度 - 可视区域高度
+            // Scroll limit = total content height - visible height.
             // The visible size is the node's OWN measured height — what the user sees. It used to prefer
             // `scroll_viewport_height`, which is the padding-DEDUCTED measure constraint: for a menu
             // (a 112x424 container holding 20 items with 8dp of padding) that gave a range of
@@ -306,8 +313,8 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                     })
                     .unwrap_or(0.0)
             };
-            // 内容总高：lazy 列表（scroll_content_height > 0）用其真实内容高；
-            // 否则用节点自身高度（普通 scroll 容器）
+            // Total content height: a lazy list (scroll_content_height > 0) uses its real content
+            // height; otherwise the node's own height (an ordinary scroll container).
             let content_h = if node.scroll_content_height > 0.0 {
                 node.scroll_content_height
             } else {
@@ -333,7 +340,8 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
             }
             }
         }
-        // 水平滚动（LazyRow/横向 scroll 容器）——与垂直对称：dx 正 = 内容左移
+        // Horizontal scrolling (LazyRow / horizontal scroll container), symmetric to vertical:
+        // a positive dx moves the content left.
         if dx != 0.0 {
         if let Some(state) = node.modifier.horizontal_scroll_state() {
             crate::animation::cancel_animation(&state.offset);
@@ -363,8 +371,9 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
                 node.measured_size.width
             };
             let max_offset = (content_w - visible_w).max(0.0);
-            // ⚠ reverse（RTL）滚动：render 端 offset 语义被镜像（offset 0 = 内容末端），
-            // 手势 delta 方向也需镜像——否则拖动方向反（用户实测 bug）。垂直同理见上。
+            // Note reverse (RTL) scrolling: the render-side offset semantics are mirrored (offset 0
+            // is the end of the content), so the gesture delta must be mirrored too, or dragging goes
+            // the wrong way (a user-measured bug). The vertical case above is the same.
             let raw = if node.scroll_reverse {
                 current + dx
             } else {
@@ -383,10 +392,11 @@ fn apply_scroll_delta_inner(nodes: &mut [LayoutNode], idx: usize, dx: f32, dy: f
         }
     }
     if consumed.x != 0.0 || consumed.y != 0.0 { return consumed; }
-    // 自身未消费：recursive 模式回退递归子节点（旧 fallback 语义）；
-    // 非 recursive（dispatch 路径）不递归——target 滚不动交给 post 链
+    // Nothing consumed here: in recursive mode fall back to the children (the old fallback
+    // semantics); the non-recursive dispatch path does not recurse, and leaves a stuck target to the
+    // post chain.
     if !recursive { return consumed; }
-    // 子节点（clone 索引后递归，避免与 nodes 的可变借用冲突）
+    // Children (clone the indices first, so the recursion does not fight nodes' mutable borrow).
     let children: Vec<usize> = nodes[idx].children.clone();
     for c in children {
         let child = apply_scroll_delta_inner(nodes, c, dx, dy, density, true);
@@ -403,10 +413,11 @@ mod nested_scroll_chain_tests {
     use crate::modifier::{Modifier, ScrollState};
     use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource, ScrollDelta, ScrollVelocity};
 
-    /// 记录器 connection：记录 on_pre_scroll/on_post_scroll 的调用顺序。
-    /// pre 消费一半，post 消费全部 available——便于验证顺序与消费量。
-    /// `global_log`（可选）记录**跨节点**顺序（如 "pre-R" "post-T"）——
-    /// 独立 log 只能验证单节点内部顺序，无法捕获 pre-R→M→T→post-T→M→R。
+    /// A recorder connection: logs the call order of on_pre_scroll/on_post_scroll. pre consumes half
+    /// and post consumes all of available, which makes both the order and the consumed amount easy to
+    /// check. The optional `global_log` records the **cross-node** order ("pre-R", "post-T" and so
+    /// on); a per-node log can only verify that node's own order and cannot capture
+    /// pre-R -> M -> T -> post-T -> M -> R.
     struct Recorder {
         name: String,
         log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -499,11 +510,11 @@ mod nested_scroll_chain_tests {
 
     #[test]
     fn delta_chain_pre_post_order_includes_target() {
-        // 构造 root(connection R) → mid(connection M) → target(scroll + connection T)
+        // Build root(connection R) -> mid(connection M) -> target(scroll + connection T).
         let r_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let m_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let t_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-        // 共享全局 log：验证跨节点顺序 pre-R→M→T→post-T→M→R
+        // A shared global log, to verify the cross-node order pre-R -> M -> T -> post-T -> M -> R.
         let global = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
 
         let conn_r = Recorder::with_global("R", r_log.clone(), global.clone());
@@ -523,14 +534,15 @@ mod nested_scroll_chain_tests {
         nodes[2].measured_size = Size::new(100.0, 100.0);
         nodes[2].position = Offset::new(0.0, 100.0);
         nodes[2].scroll_viewport_height = 100.0;
-        nodes[2].scroll_content_height = 200.0; // 可滚动 100
+        nodes[2].scroll_content_height = 200.0; // 100 of scrollable range
         nodes[0].children.push(1);
         nodes[1].children.push(2);
 
         let density = crate::unit::Density::from_density(1.0);
-        // 消费推演（dy=-20，负 delta = 内容上移 = offset 增加；每个 pre 吃一半）：
-        //   R pre -10 → M pre -5 → T pre -2.5 → child 剩余 -2.5 → child 消费 2.5
-        //   post 链（含 T）：M post 全吃 available → T post 全吃 → R post 全吃剩余
+        // Consumption walk-through (dy=-20; a negative delta moves the content up, i.e. raises the
+        // offset; each pre eats half):
+        //   R pre -10 -> M pre -5 -> T pre -2.5 -> child left -2.5 -> child consumes 2.5
+        //   post chain (including T): M post eats all of available -> T post eats all -> R post eats the rest
         let consumed = dispatch_nested_scroll_delta(
             &mut nodes, 0, 2,
             ScrollDelta::new(0.0, -20.0),
@@ -538,22 +550,24 @@ mod nested_scroll_chain_tests {
             density,
         );
 
-        // R：pre 一次（吃 10）+ post 一次（child 消费后，吃剩余）——R 是最后 post
-        assert_eq!(*r_log.lock().unwrap(), vec!["pre-R-0", "post-R-1"], "R pre 后 post");
-        // M：pre 一次 + post 一次（在 T/R 之前——逆序 M→T→R）
-        assert_eq!(*m_log.lock().unwrap(), vec!["pre-M-0", "post-M-1"], "M pre 后 post");
-        // T：pre + post（TopAppBar 类 connection 挂在 target 上，post 必须被调用——
-        // 修复前的关键回归点：排除 target 会破坏 content_offset 变色/回弹）
-        assert_eq!(*t_log.lock().unwrap(), vec!["pre-T-0", "post-T-1"], "T 也参与 post（TopAppBar 依赖）");
+        // R: one pre (eats 10) plus one post (after the child consumes, eats the rest); R is the last post.
+        assert_eq!(*r_log.lock().unwrap(), vec!["pre-R-0", "post-R-1"], "R runs pre then post");
+        // M: one pre plus one post, before T and R (reverse order M -> T -> R).
+        assert_eq!(*m_log.lock().unwrap(), vec!["pre-M-0", "post-M-1"], "M runs pre then post");
+        // T: pre plus post (a TopAppBar-style connection hangs off the target, so post must be
+        // called; this was the key regression before the fix, where excluding the target broke the
+        // content_offset recolour and the spring-back).
+        assert_eq!(*t_log.lock().unwrap(), vec!["pre-T-0", "post-T-1"], "T takes part in post too (a TopAppBar relies on it)");
 
-        // consumed 应为负（负 delta 方向消费），且 child 已实际滚动 offset>0
-        assert!(consumed.y < 0.0, "应沿 delta 方向消费，实际 {:?}", consumed);
-        assert!(scroll.offset.get() > 0.0, "child 应实际滚动（pre 只吃一半），实际 {}", scroll.offset.get());
+        // consumed should be negative (consumed in the negative delta direction), and the child has
+        // actually scrolled, so offset > 0.
+        assert!(consumed.y < 0.0, "consumption should follow the delta direction, got {:?}", consumed);
+        assert!(scroll.offset.get() > 0.0, "the child should actually scroll (pre only eats half), got {}", scroll.offset.get());
 
-        // 跨节点全局顺序：pre 正序 R→M→T，post 逆序 T→M→R（含 target T）
+        // Cross-node global order: pre forward R -> M -> T, post reverse T -> M -> R (including target T).
         let g = global.lock().unwrap().clone();
         assert_eq!(g, vec!["pre-R", "pre-M", "pre-T", "post-T", "post-M", "post-R"],
-            "全局顺序应为 pre-R→M→T→post-T→M→R（含 target T 参与 post）——实际 {g:?}");
+            "the global order should be pre-R -> M -> T -> post-T -> M -> R (target T takes part in post), got {g:?}");
     }
 }
 

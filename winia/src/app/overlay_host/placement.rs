@@ -22,15 +22,15 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             .collect()
     };
     for (overlay_index, ov) in pw.overlay.layers.iter_mut().enumerate() {
-        // 关闭中：仍需 recompose/layout 以驱动 BottomSheet 的 slide（offset 动画）
-        // —— Dialog 等静态内容重组无副作用；冻结仅针对交互（hit_overlay 已跳过 closing）
-        // 之前 `if closing { continue; }` 导致 hide() 的 offset 动画不被布局，面板
-        // 卡在 401 仅 fade，视觉上“淡出而非下滑”。
+        // Closing: still needs recompose/layout to drive the BottomSheet slide (offset animation)
+        // — a static Dialog's recomposition has no side effects; the freeze applies to interaction only
+        // (`hit_overlay` already skips closing ones). The previous `if closing { continue; }` left hide()'s
+        // offset animation unlaid-out, so the panel stuck at 401 and only faded — visually "a fade, not a slide".
         if ov.closing {
-            // 仍执行 recompose/layout，但不处理输入（hit_overlay 已过滤 closing）
+            // Still recompose/layout, but do not handle input (`hit_overlay` already filters out closing ones).
         }
-        // ⚠ 重放 CompositionLocal 快照（主树捕获时的主题/方向/排版）——
-        // overlay 独立 Composer 在 provides 弹栈后 recompose，需快照继承。
+        // ⚠ Replay the CompositionLocal snapshot (theme/direction/typography captured by the main tree) —
+        // the overlay's own Composer recomposes after the `provides` stack has popped, so it needs the snapshot to inherit them.
         let snap = ov.local_snapshot.clone();
         // Same same-frame contract as the main tree (a measure whose window cannot fill the viewport it
         // is measured in asks for one more compose). Consuming the request HERE, right after this
@@ -66,7 +66,7 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
             }
         }
     }
-    // 定位（需主树锚点位置——在 draw 前算）
+    // Positioning (needs the main tree's anchor position — computed before draw).
     let nodes = pw.composer.arena_nodes();
     let root = pw.composer.layout_root_idx();
     let (w, h) = (pw.width, pw.height);
@@ -74,7 +74,7 @@ pub(crate) fn layout_overlays(pw: &mut PerWindow) {
         let size = ov.composer.layout_root()
             .map(|r| (r.measured_size.width, r.measured_size.height))
             .unwrap_or((0.0, 0.0));
-        // 锚点位置（主树）
+        // Anchor position (main tree).
         let anchor = ov.anchor_slot.and_then(|s| root.and_then(|r| {
             crate::layout::node::find_node_id_by_slot_key(nodes, r, s)
         })).and_then(|nid| root.map(|r| {

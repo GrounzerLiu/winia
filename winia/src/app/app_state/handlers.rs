@@ -2,15 +2,15 @@ use super::*;
 
 impl ApplicationHandler for AppState {
         fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
-        // Wait + request_redraw 自驱动动画（避免 Poll↔Wait 切换竞态丢帧）
+        // Wait + request_redraw drives the animation itself (avoids dropping frames when racing between Poll and Wait).
         event_loop.set_control_flow(ControlFlow::Wait);
-        // 每轮推进动画（与窗口解耦，多窗口/子窗口动画均正确推进）
-        // 动画（水波纹/状态层过渡也注册在全局动画列表——自动驱动重绘）
+        // Advance the animations on every pass (independent of windows, so multi-window and child-window animations advance correctly).
+        // Animations (ripples and state-layer transitions register in the global animation list too — they drive redraws automatically).
         let animating = crate::animation::update_animations();
         if animating {
-            // 动画活跃：WaitUntil 定时唤醒（对齐刷新率）保证每帧唤醒（不冻结），
-            // request 节流（距上次渲染 >= 帧间隔）限制 WM_PAINT 生成频率——
-            // 修复 request 每轮发送 → WM_PAINT 消息唤醒 Wait 的 55k/s 自驱动空转
+            // Animations active: WaitUntil wakes on a timer (aligned to the refresh rate) so every
+            // frame is woken (no freeze), while request throttling (at least a frame interval since
+            // the last render) limits WM_PAINT production — fixing the 55k/s self-driven spin.
             let interval = self.windows.values().map(|pw| pw.clock.frame_interval).min()
                 .unwrap_or(std::time::Duration::from_millis(16));
             event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + interval));
@@ -22,21 +22,22 @@ impl ApplicationHandler for AppState {
                 }
             }
         } else if self.was_animating {
-            // 动画刚停止：强制终帧渲染（最后一次 set 的 request 可能被跳过）
+            // Animations just stopped: force a final frame (the request from the last set may have been skipped).
             for pw in self.windows.values_mut() {
                 if let Some(ref sw) = pw.skia_window {
-                    pw.clock.force_redraw = true; // 仅可渲染窗口设（避免 None 残留）
+                    pw.clock.force_redraw = true; // Only set for a renderable window (no None left behind).
                     sw.request_redraw();
                 }
             }
         }
-        // 兜底：pending 存在（State 已变化待重组——点击/异步回调）或渲染欠账
-        // （force_redraw——帧节流跳过的更新）时请求重绘。节流命中不丢弃：
-        // WaitUntil 到下一个可用时刻重试，保证一次性更新不卡到外部事件
+        // Fallback: request a redraw when a pending state exists (a State changed and awaits
+        // recomposition — a click or an async callback) or a render is owed (force_redraw — an
+        // update skipped by frame throttling). A throttled pass is not dropped: WaitUntil retries
+        // at the next available moment, so a one-off update does not wait for an external event.
         let now = std::time::Instant::now();
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
-            // 渲染欠账按 last_render 对齐（force_redraw 由帧节流跳过时设置）
+            // An owed render aligns on last_render (force_redraw is set when frame throttling skips one).
             if pw.clock.force_redraw {
                 if now.duration_since(pw.clock.last_render_time) >= pw.clock.frame_interval {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -45,7 +46,7 @@ impl ApplicationHandler for AppState {
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
             }
-            // pending state 按 last_request 节流（动画持续 pending 时每帧至多一次）
+            // Pending states throttle on last_request (at most once per frame while an animation keeps them pending).
             if pw.composer.has_pending_states() {
                 if now.duration_since(pw.clock.last_request_time) >= pw.clock.frame_interval {
                     pw.clock.last_request_time = now;
@@ -59,9 +60,10 @@ impl ApplicationHandler for AppState {
         if let Some(d) = retry_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
-        // 延迟 tap 超时补发（Compose detectTapGestures：onDoubleTap 存在时
-        // onTap 延迟触发）——超时立即补发；未超时用 WaitUntil 定时唤醒
-        // （idle 时也能在双击窗口结束后补发，不依赖下一次输入事件）
+        // Fire a deferred tap when its timeout expires (Compose detectTapGestures: with an
+        // onDoubleTap, onTap fires after a delay) — fired at once when overdue, otherwise a WaitUntil
+        // timer wakes us (an idle window still fires it after the double-tap window closes, with no
+        // input event needed).
         let now = std::time::Instant::now();
         let mut next_tap_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
@@ -111,8 +113,8 @@ impl ApplicationHandler for AppState {
         if let Some(d) = next_long_press {
             event_loop.set_control_flow(ControlFlow::WaitUntil(d));
         }
-        // DevTools 事件兜底消费：只遍历有 queued events 的窗口，避免每轮
-        // 事件批次空转全部窗口；legacy target 0 只会匹配 parent。
+        // Fallback consumption of DevTools events: only walk windows with queued events, so an event
+        // batch does not spin through every window; legacy target 0 only ever matches the parent.
         let targets = debug::queued_event_targets();
         if !targets.is_empty() {
             let windows: Vec<WindowId> = self.windows.keys().copied().collect();
@@ -141,13 +143,13 @@ impl ApplicationHandler for AppState {
     fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {}
 
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-                // 如果 debug server 请求关闭，退出事件循环
+                // If the debug server asked to shut down, exit the event loop.
         if debug::is_shutdown() {
             event_loop.exit();
             return;
         }
         AppState::process_pending_windows(self, event_loop);
-        // 消费 pending close（on_remove 推入，compose 末尾也消费一次）
+        // Consume pending closes (pushed by on_remove; the end of compose consumes them too).
         crate::app::window::Window::process_detached(
             &mut self.windows,
             event_loop,
@@ -164,7 +166,7 @@ impl ApplicationHandler for AppState {
                 }
             }
         }
-        // Debug 工具有 pending 请求时唤醒窗口（截图/模拟事件需要 RedrawRequested）
+        // Wake the windows when the debug tool has pending requests (screenshots and simulated events need RedrawRequested).
         if debug::has_pending() {
             for pw in self.windows.values() {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -177,8 +179,8 @@ impl ApplicationHandler for AppState {
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
         }
-        // 异步 State 变更唤醒事件循环后需要 request_redraw（节流：距上次 request
-        // 够帧间隔才发——动画每帧 notify 触发 proxy_wake_up，无节流会渲染风暴）
+        // An async State change wakes the event loop and then needs request_redraw (throttled to at
+        // most one per frame interval — an animation notifies every frame and would otherwise storm).
         let now = std::time::Instant::now();
         let mut retry_deadline: Option<std::time::Instant> = None;
         for pw in self.windows.values_mut() {
@@ -187,7 +189,7 @@ impl ApplicationHandler for AppState {
                     pw.clock.last_request_time = now;
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 } else {
-                    // 节流命中不丢弃：到期重试（一次性更新不卡到外部事件）
+                    // A throttled pass is not dropped: retry when due (a one-off update does not wait for an external event).
                     let d = pw.clock.last_request_time + pw.clock.frame_interval;
                     retry_deadline = Some(match retry_deadline { Some(e) => e.min(d), None => d });
                 }
@@ -246,8 +248,8 @@ impl ApplicationHandler for AppState {
                     // delta scrolls nothing rather than being guessed at.
                     _ => WheelDelta { dx: 0.0, dy: 0.0, kind: WheelKind::Notch },
                 };
-                // Shift + 垂直滚轮 → 转为水平滚动（兼容 LazyRow 等横向容器；
-                // 多数系统不会自动把 Shift+wheel 翻译成 dx，这里显式处理）
+                // Shift + vertical wheel → horizontal scroll (so horizontal containers such as LazyRow
+                // work; most systems do not translate Shift+wheel into dx, so it is done explicitly here).
                 let (dx, dy) = scroll_delta_with_shift(wheel.dx, wheel.dy, pw.modifiers.shift_key());
                 wheel.dx = dx;
                 wheel.dy = dy;
@@ -285,19 +287,18 @@ impl ApplicationHandler for AppState {
                         );
                     } else if let Some(root_idx) = pw.composer.layout_root_idx() {
                         let nodes = pw.composer.arena_nodes();
-                        // §3.7 修复：优先按鼠标位置 hit-test，在命中路径上找滚动
-                        // 目标——两个并排滚动区域只滚鼠标悬停的那一个（旧实现
-                        // find_scroll_target 按反向 child 顺序盲找，可能滚错）。
-                        // 用最后 PointerMoved 位置（winit 0.31 MouseWheel 事件
-                        // 不携带 cursor position）。
-                        // ⚠ 真实滚轮**没有**盲找兜底：鼠标不在任何滚动节点上时
-                        // 不滚动（否则鼠标在空白处滚轮也会带动列表/Shift+横滚，
-                        // 用户实测 bug）。`None`（启动后无移动/已离开窗口）也
-                        // 不滚——盲找只留给 DebugEvent::Scroll（测试注入无坐标，
-                        // 见 consume_debug_events）。
+                        // §3.7 fix: hit-test at the mouse position first, then find the scroll target on the
+                        // hit path — of two side-by-side scroll areas only the hovered one scrolls (the old
+                        // find_scroll_target blind-searched children in reverse order and could pick wrong).
+                        // Uses the last PointerMoved position (winit 0.31 MouseWheel carries no cursor position).
+                        // NOTE: the real wheel has **no** blind-search fallback — with the mouse over no scroll
+                        // node nothing scrolls (otherwise wheeling over blank space moved a list or
+                        // Shift+horizontal-scrolled: a user-reported bug). `None` (no movement since startup,
+                        // or the pointer left the window) does not scroll either; the blind search belongs to
+                        // DebugEvent::Scroll only (injected test events have no coordinates — see consume_debug_events).
                         let target = pw.input.last_pos.and_then(|(px, py)| {
                             let path = crate::layout::node::hit_test_with_flights(nodes, root_idx, pw.composer.transition_roots(), px, py);
-                            // 命中路径从根到叶——从内向外找第一个轴匹配的 scroll 节点
+                            // The hit path runs root → leaf; find the first axis-matching scroll node from the inside out.
                             wheel_scroll_target(nodes, &path, wheel.dx, wheel.dy)
                         });
                         if let Some(target) = target {
@@ -334,11 +335,11 @@ impl ApplicationHandler for AppState {
                     crate::accessibility::uninstall(&**sw, window_id.into_raw() as u64);
                 }
                 self.windows.remove(&window_id);
-                // 窗口没了，它的帧时钟一并丢掉（否则每开一个窗口注册表就多一份）。
+                // The window is gone, so drop its frame clock too (otherwise the registry grows by one entry per window opened).
                 crate::effect::forget_window(window_id.into_raw() as u64);
-                // 清理 debug 树条目（窗口关闭后不再渲染——残留会让 UI 测试误判）
+                // Clean up the debug tree entry (nothing renders after close — a leftover would mislead UI tests).
                 debug::remove_tree(window_id.into_raw() as u64);
-                // 通知其他窗口重绘（状态可能已变化）
+                // Ask the other windows to redraw (state may have changed).
                 for pw in self.windows.values() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
@@ -361,7 +362,7 @@ impl ApplicationHandler for AppState {
                     event_loop.exit();
                 }
             }
-            // 跨屏移动：Moved 高频触发（拖动过程）——内部 300ms 去抖
+            // Moving across screens: Moved fires at a high rate while dragging — debounced inside with 300 ms.
             WindowEvent::Moved { .. } => {
                 pw.refresh_frame_interval();
             }
@@ -371,20 +372,20 @@ impl ApplicationHandler for AppState {
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 pw.scale_factor = scale_factor;
-                // 换显示器可能伴随缩放变化——顺带刷新帧间隔（去抖在方法内）
+                // Switching monitors may change the scale — refresh the frame interval too (debounced inside the method).
                 pw.refresh_frame_interval();
-                // Phase 4.1：scale 变化必须触发重组——TextUnit::Px/Dimension::Px
-                // 在组合期用 current_density() 转换写入 modifier，若 build 不重跑
-                // 则 px 值保留旧 density 结果（文本/尺寸不随 DPI 缩放）。
-                // 全量重组（needs_recomposition=true）——DPI 变化罕见，代价可接受。
+                // Phase 4.1: a scale change must trigger recomposition — TextUnit::Px/Dimension::Px
+                // are converted with current_density() and written into the modifier during composition,
+                // so without a re-run of build the px values keep the old density (text and sizes would
+                // not follow DPI scaling). Full recomposition — DPI changes are rare, the cost is fine.
                 pw.composer.request_recomposition(0);
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::PointerButton { position, state, button, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                // Down/Up 也刷新指针位置（点击后不移动直接滚轮时，
-                // last_pointer_pos 否则还是旧值——命中目标错位）
+                // Down/Up refresh the pointer position too (wheeling right after a click without moving
+                // would otherwise use a stale last_pointer_pos and hit the wrong target).
                 pw.input.last_pos = Some(scene_pos);
                 let event_type = if state.is_pressed() {
                     crate::input::PointerEventType::Down
@@ -392,41 +393,42 @@ impl ApplicationHandler for AppState {
                     crate::input::PointerEventType::Up
                 };
                 if state.is_pressed() {
-                    // ── Down：指针按下核心（共享——真实/Debug 防分叉）──
+                    // -- Down: the pointer-down core (shared, so the real and Debug paths cannot diverge) --
                     let modifiers = pw.modifiers;
                     handle_pointer_down(pw, scene_pos, crate::input::PointerKind::from_button_source(&button), &modifiers, true);
                 }
-                // ── Up：Compose 风格 click 检测（仅释放时——Down 保留
-                // pointer_down_state 供拖动选择；无条件执行会 Down 后立即 take
-                // 掉 state → 拖动无法选择）──
-                // ⚠ 必须位于 `if state.is_pressed()`（Down 块）之外：Up 事件（Released）
-                // 不进入 Down 块——嵌套在块内的 click 检测对 Up 事件永不执行
-                // （曾导致真实点击永远无效，而 [sel-up-clean]（块外）正常打印）
+                // -- Up: Compose-style click detection (on release only — Down keeps
+                // pointer_down_state for drag selection; running it unconditionally would take the
+                // state right after Down, so a drag could not select) --
+                // NOTE: this must sit OUTSIDE `if state.is_pressed()` (the Down block): an Up event
+                // (Released) never enters the Down block, so click detection nested inside it never
+                // ran for Up (which once made every real click a no-op while [sel-up-clean] outside
+                // the block printed fine).
                 if !state.is_pressed() {
-                    // 显式请求重绘：on_click 内的 State set 走 wake_up 链路（异步），
-                    // 若无 pending 检查兜底会漏刷新（用户看到 count 不变）
+                    // Request a redraw explicitly: a State set inside on_click goes through the async
+                    // wake_up chain, and without the pending check as a fallback the refresh was missed.
                     if detect_click(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // overlay 点击执行（down 命中 overlay 时记录——up 触发；
-                    // 主树 detect_click 因 down 短路未记录 pointer_down_state 而空转）
+                    // Execute the overlay click (recorded when down hit an overlay — fired on up; the
+                    // main-tree detect_click short-circuits on down, records no pointer_down_state and idles).
                     if exec_overlay_click(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // overlay 拖拽结束（up）
+                    // End the overlay drag (up).
                     if overlay_drag_up(pw) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // 手势 up 判定（tap/double-tap/long-press/drag-end）
+                    // Gesture up detection (tap/double-tap/long-press/drag-end).
                     if gesture_up(pw, scene_pos) {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
-                    // 拖拽滚动结束：速度足够 → fling（惯性滚动）
+                    // End the drag scroll: fast enough → fling (inertial scrolling).
                     drag_scroll_up(pw);
-                    // 释放按下交互（Compose Release 语义——clickable 按下态结束）
+                    // Release the pressed interaction (Compose's Release semantics — the clickable pressed state ends).
                     release_pressed_interaction(pw);
                 }
-                // ── 指针事件分发（Up 时先分发后清除 capture）──
+                // -- Pointer event dispatch (on Up, dispatch before clearing the capture) --
                 let nodes = pw.composer.arena_nodes();
                 if let Some(r) = pw.composer.layout_root_idx() {
                     let path = hit_test_with_flights(nodes, r, pw.composer.transition_roots(), scene_pos.0, scene_pos.1);
@@ -443,9 +445,9 @@ impl ApplicationHandler for AppState {
                     pw.input.last_kind = ptr_ev.kind.clone();
                     dispatch_ptr_event(nodes, r, &path, &ptr_ev, scene_pos, pw.input.down_slot);
                 }
-                // Up 后清除 capture + 通知选区变化
+                // After Up, clear the capture and notify a selection change.
                 if !state.is_pressed() {
-                    // Compose 方式：从拖拽节点 slot_key 取 registrar 直接 fire
+                    // The Compose way: take the registrar by the dragged node's slot_key and fire directly.
                     if let Some(slot) = pw.input.down_slot {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
@@ -459,7 +461,7 @@ impl ApplicationHandler for AppState {
                         }
                     }
                     pw.input.down_slot = None;
-                    // 防御：take 可能未执行（click 检测分支外的边界）——强制清 state
+                    // Defensive: take may not have run (an edge outside the click-detection branch) — clear the state anyway.
                     pw.input.down = None;
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
@@ -476,22 +478,22 @@ impl ApplicationHandler for AppState {
             WindowEvent::PointerMoved { position, .. } => {
                 let lp = position.to_logical::<f32>(pw.scale_factor);
                 let scene_pos = (lp.x, lp.y);
-                // 记录最后指针位置（MouseWheel 命中滚动目标用——§3.7；
-                // winit 0.31 MouseWheel 事件不带 cursor position）
+                // Record the last pointer position (used by MouseWheel to find its scroll target — §3.7;
+                // winit 0.31 MouseWheel events carry no cursor position).
                 pw.input.last_pos = Some(scene_pos);
-                // 指针移动核心（共享——真实/Debug 防分叉；Debug 路径此前缺
-                // x_off 对齐偏移——Center/Right 对齐文本选择错位，合并修复）
+                // The pointer-move core (shared, so the real and Debug paths cannot diverge; the Debug
+                // path used to lack the x_off alignment offset, misplacing Center/Right text selection).
                 let modifiers = pw.modifiers;
                 let consumed = handle_pointer_move(pw, scene_pos, pw.input.last_kind.clone(), &modifiers);
-                // 消费（on_pointer_event 可能更新 State）或按下拖动选区时请求重绘；
-                // 未消费的悬停移动不唤醒事件循环（避免每帧白醒）
+                // Request a redraw when the move was consumed (on_pointer_event may update State) or a
+                // drag selection is in progress; an unconsumed hover move does not wake the event loop.
                 if consumed || pw.input.down.is_some() {
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
             }
-            // 指针离开窗口：清所有 hover（对每个 hoverable 补发 Exit）+
-            // 清指针位置（否则离开窗口后滚轮仍用旧坐标命中滚动容器，
-            // 鼠标已不在上面却还能滚动——用户实测 bug）
+            // Pointer left the window: clear every hover (send Exit to each hoverable) and clear the
+            // pointer position (otherwise the wheel still uses the old coordinates and scrolls a
+            // container the mouse is no longer over — a user-reported bug).
             WindowEvent::PointerLeft { .. } => {
                 let olds: Vec<u64> = pw.hovered_slots.drain().collect();
                 for old in olds {
@@ -537,8 +539,9 @@ impl ApplicationHandler for AppState {
                         consumed = dispatch_key_to_focus(pw, &ke);
                     }
                 }
-                // 方向键焦点导航（对标 Compose Desktop arrow-key navigation）——
-                // 在目标方向半平面内选"方向距离 + 垂直偏离×2"最小的可聚焦节点
+                // Arrow-key focus navigation (mirroring Compose Desktop's arrow-key navigation) —
+                // picks the focusable node in the target direction's half-plane with the smallest
+                // "directional distance + perpendicular offset x 2".
                 if !consumed && event.state.is_pressed() && !event.repeat {
                     let dir = match &event.logical_key {
                         Key::Named(NamedKey::ArrowRight) => Some(FocusDir::Right),
@@ -564,9 +567,10 @@ impl ApplicationHandler for AppState {
                     Ime::Preedit(text, cursor) => {
                         // Focused overlay first (independent composer — main-tree
                         // lookup can never reach overlay nodes), then main tree.
-                        // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入 leaf——
-                        // 只查焦点节点自身则 Preedit 永远到不了（预输入不显示）。
-                        // 从焦点节点向下找第一个 ime_callback。
+                        // NOTE TextField containerisation: focus is on the container and ime_callback is
+                        // on the input leaf — looking only at the focused node means Preedit never
+                        // arrives (the pre-edit is not shown).
+                        // Find the first ime_callback downwards from the focused node.
                         let overlay_target: Option<(usize, usize)> = (0..pw.overlay.layers.len()).rev().find_map(|i| {
                             let ov = &pw.overlay.layers[i];
                             if ov.closing { return None; }
@@ -597,7 +601,7 @@ impl ApplicationHandler for AppState {
                         if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                     }
                     Ime::Commit(text) => {
-                        // IME 提交文本——派发给聚焦节点的 on_key_event 以 Character 形式.
+                        // IME committed text — dispatched to the focused node's on_key_event as Characters.
                         // Focused overlay first, then main tree (same routing rule).
                         let overlay_target: Option<usize> = (0..pw.overlay.layers.len()).rev().find(|&i| {
                             let ov = &pw.overlay.layers[i];
@@ -609,7 +613,7 @@ impl ApplicationHandler for AppState {
                             }).is_some()
                         });
                         if let Some(i) = overlay_target {
-                            // 逐字符发送 (overlay arena — bubble-only, mirroring main)
+                            // Send character by character (overlay arena — bubble-only, mirroring main).
                             for ch in text.chars() {
                                 let s = ch.to_string();
                                 let ke = crate::input::KbEvent {
@@ -650,7 +654,7 @@ impl ApplicationHandler for AppState {
                         } else if let Some(fid) = pw.focused_id {
                             let nodes = pw.composer.arena_nodes();
                             if let Some(r) = pw.composer.layout_root_idx() {
-                                // 逐字符发送
+                                // Send character by character.
                                 for ch in text.chars() {
                                     let s = ch.to_string();
                                     let ke = crate::input::KbEvent {
@@ -690,31 +694,34 @@ impl ApplicationHandler for AppState {
                 }
             }
             WindowEvent::SurfaceResized(s) => {
-                // 直接采纳事件尺寸。旧版对 >50% 变化做忽略（防 winit #2094 陈旧
-                // 事件）——但最大化必然 >50%，整个最大化路径被吞（尺寸/布局全部
-                // 卡旧值）。陈旧事件改由 RedrawRequested 的每帧 inner_size 校准自愈。
+                // Adopt the event size directly. The old version ignored changes above 50% (to guard
+                // against stale winit #2094 events) — but maximising always changes more than 50%, so
+                // the whole maximise path was swallowed (size and layout stuck on the old values).
+                // Stale events are now healed by the per-frame inner_size calibration in RedrawRequested.
                 let l = s.to_logical::<f32>(pw.scale_factor);
                 pw.width = l.width; pw.height = l.height;
                 if let Some(ref mut sw) = pw.skia_window { sw.resize(); }
-                // 不设 force_redraw：拖拽时 SurfaceResized 以鼠标速率（~125Hz）到达，
-                // 无条件渲染会绕过帧节流（实测 3.6ms/帧）。帧节流的"渲染欠账"机制
-                // （跳过时自设 force_redraw）保证更新不丢；request_redraw 保持链路
-                // （OS 拖拽期间持续 WM_PAINT + 自驱，帧距 ≥16ms）
-                // 尺寸 State set() 通知——依赖方（NavigationSuiteScaffold 等
-                // 读 window_size() 的 slot）标记 dirty，增量重组切换形态
+                // No force_redraw here: while dragging, SurfaceResized arrives at mouse rate (~125 Hz),
+                // and rendering unconditionally would bypass frame throttling (measured 3.6 ms/frame).
+                // Frame throttling's "render owed" mechanism (it sets force_redraw when it skips) keeps
+                // updates from being lost, while request_redraw keeps the chain alive (continuous
+                // WM_PAINT plus self-driving while the OS drags, frame gap >= 16 ms).
+                // The size State's set() notifies dependents (slots that read window_size(), such as
+                // NavigationSuiteScaffold) as dirty, so incremental recomposition switches their form.
                 if let Some(s) = pw.window_size_state.borrow().as_ref() {
                     s.set((l.width, l.height));
                 }
                 if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
             }
             WindowEvent::RedrawRequested => {
-                // 帧时钟 tick：全局的（with_frame_nanos，任意窗口的帧）和本窗口的
-                // （ctx.frame_clock()，只被自己的帧唤醒）。
+                // Frame clock tick: the global one (with_frame_nanos, any window's frame) and this
+                // window's own (ctx.frame_clock(), woken only by its own frames).
                 crate::effect::frame_tick();
                 crate::effect::FrameClock::for_window(window_id.into_raw() as u64).tick();
-                // 尺寸自愈校准：以 winit 实际 surface 尺寸为准。winit #2094 类
-                // 陈旧事件（最大化时旧尺寸事件可能后到）由此在下一帧纠正——
-                // 偏差 >0.5 逻辑像素即更新 pw + 通知尺寸 State（套件形态随之刷新）
+                // Size self-healing calibration: trust winit's actual surface size. Stale events of
+                // the winit #2094 kind (an old size event can arrive late when maximising) are
+                // corrected on the next frame — a deviation above 0.5 logical pixels updates pw and
+                // notifies the size State (so the suite's form refreshes too).
                 if let Some(ref sw) = pw.skia_window {
                     let phys = sw.surface_size();
                     let l = phys.to_logical::<f32>(pw.scale_factor);
@@ -726,12 +733,13 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
-                // 动画推进（冗余于 new_events——Windows 拖拽 resize 是模态循环，
-                // new_events/AboutToWait 被阻塞不触发；WM_PAINT 驱动的 RedrawRequested
-                // 是拖拽中唯一持续到达的事件——在此 tick 才有"边拖边动"的动画。
-                // 与 new_events 双 tick 无害：Animatable 按实际 dt 推进）
+                // Advance animations (redundant with new_events — a Windows drag-resize runs a modal
+                // loop, so new_events/AboutToWait are blocked and never fire; the WM_PAINT-driven
+                // RedrawRequested is the only event that keeps arriving during a drag, so ticking here
+                // is what makes animations move while dragging). Ticking in both places is harmless:
+                // Animatable advances by the real dt.
                 crate::animation::update_animations();
-                // 消费焦点请求（在 compose 前处理，避免丢失）
+                // Consume focus requests (handled before compose so none are lost).
                 let _focus_window = pw.composer.focus_window(window_id.into_raw() as u64);
                 for id in pw.composer.take_focus_requests() {
                     // Main tree first; on miss try overlays topmost-first (overlay
@@ -814,18 +822,20 @@ impl ApplicationHandler for AppState {
                             }
                         }
                     }
-                    // 单独查 slot_key（避免与 root 的 borrow 冲突）
+                    // Look up slot_key separately (avoids a borrow conflict with root).
                     if let Some(fid) = pw.focused_id {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
                             if let Some(found) = crate::layout::node::find_node_by_id(nodes, r, fid) {
                                 pw.focused_slot_key = Some(nodes[found].slot_key);
-                                // IME 按组件声明开关：文本组件（TextField）在组合期
-                                // set_current_node_ime_callback 主动声明 IME 需求；
-                                // 框架只做机械转发，不判断组件类型。Button 等未声明
-                                // ime_callback 的 focusable 聚焦时不开启输入法。
-                                // ⚠ TextField 容器化：焦点在容器、ime_callback 在输入
-                                // leaf——须向下找子树（node_or_descendant_wants_ime）
+                                // IME is switched per component declaration: text components (TextField)
+                                // declare the IME requirement during composition via
+                                // set_current_node_ime_callback; the framework only forwards mechanically
+                                // and does not inspect component types. A focusable such as Button that
+                                // declares no ime_callback does not turn the IME on when focused.
+                                // NOTE TextField containerisation: focus is on the container and
+                                // ime_callback on the input leaf — so search the subtree downwards
+                                // (node_or_descendant_wants_ime).
                                 let wants_ime = node_or_descendant_wants_ime(nodes, found);
                                 if let Some(ref sw) = pw.skia_window {
                                     set_ime_enabled(&sw, wants_ime);
@@ -835,28 +845,33 @@ impl ApplicationHandler for AppState {
                     }
                     if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                 }
-                // 增量重组 → 布局 → 渲染
-                // 帧率限制：Windows 上 acquire_next_image 不阻塞 vsync（实测 1-2ms），
-                // 无节流会 ~1300fps 渲染风暴（present fence 只等 GPU 提交不等显示刷新）。
-                // 距上次渲染 <16ms（~60fps）跳过——动画值下轮渲染时取最新（不丢帧）。
+                // Incremental recomposition → layout → render.
+                // Frame-rate limit: on Windows acquire_next_image does not block on vsync (measured
+                // 1-2 ms), so without throttling a ~1300 fps render storm follows (the present fence
+                // waits only for the GPU submission, not for the display refresh). Skip when less than
+                // 16 ms (~60 fps) has passed since the last render — animation values are picked up
+                // fresh on the next render (no dropped frames).
                 let now = std::time::Instant::now();
                 if pw.clock.render_disabled {
-                    // 崩溃边界（P3-3）：连续 panic 后停更——保留最后画面
+                    // Crash boundary (P3-3): stop updating after repeated panics — keep the last picture.
                     return;
                 }
                 if !pw.clock.force_redraw && now.duration_since(pw.clock.last_render_time) < pw.clock.frame_interval {
-                    // 帧节流命中：不丢弃本次更新——记渲染欠账（force_redraw），
-                    // 下一个可用帧由 new_events 补发 request_redraw。原实现直接
-                    // 跳过：一次性状态变更（如双击延迟 tap）会卡到外部事件才刷新
+                    // Frame throttling hit: do not drop this update — record a render owed (force_redraw),
+                    // and the next available frame re-sends request_redraw from new_events. The original
+                    // implementation skipped outright, so a one-off state change (a deferred double-tap
+                    // tap) only refreshed on the next external event.
                     pw.clock.force_redraw = true;
                     event_loop.set_control_flow(ControlFlow::WaitUntil(pw.clock.last_render_time + pw.clock.frame_interval));
                 } else {
                 pw.clock.last_render_time = now;
-                // 崩溃边界（P3-3）：compose/layout/draw 任一段 panic（用户 content 代码 /
-                // skia 异常）不崩窗口——捕获后跳过本帧（保留上帧画面），下帧正常重试。
-                // 连续 panic 计数防风暴：超过阈值打印错误并停更（不再自旋）。
-                // 渲染路径无 unsafe（P2-3 后）——catch_unwind 后继续用 self 仅"逻辑不一致"
-                // 非内存不安全；slot/arena 每帧从 root 重建结构，panic 中断的半状态下帧自愈。
+                // Crash boundary (P3-3): a panic in compose/layout/draw (user content code, a skia
+                // exception) does not crash the window — it is caught, the frame is skipped (the
+                // previous picture stays) and the next frame retries normally. The consecutive-panic
+                // counter prevents a storm: past the threshold it prints an error and stops updating.
+                // The render path has no unsafe (since P2-3) — using self after catch_unwind is only
+                // logically inconsistent, not memory-unsafe; slots/arenas are rebuilt from the root
+                // every frame, so a half-updated state left by a panic heals on the next frame.
                 let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let wid = window_id.into_raw() as u64;
                     // Built only when something consumes it (the debug server or the accessibility
@@ -869,9 +884,10 @@ impl ApplicationHandler for AppState {
                             main_nodes = crate::semantics::semantics_tree(nodes, root_idx);
                         }
                     });
-                    // overlay 独立 Composer 的 arena 同样进调试树（modal/popup 可观测；
-                    // 每帧整体替换——overlay 关闭后条目自动消失）。z 序 = pw.overlay.layers
-                    // 栈序，与 render_overlays 绘制顺序一致。
+                    // The arenas of the overlays' own Composers go into the debug tree too (modal/popup
+                    // become observable; replaced wholesale every frame — an entry disappears once the
+                    // overlay closes). z order = pw.overlay.layers stack order, matching the draw order
+                    // of render_overlays.
                     let ov_trees: Vec<(u64, (f32, f32), String)> = pw.overlay.layers.iter().filter_map(|ov| {
                         ov.composer.layout_root_idx()
                             .map(|r| (ov.id, ov.screen_pos, debug::build_tree_json(ov.composer.arena_nodes(), r)))
@@ -906,13 +922,14 @@ impl ApplicationHandler for AppState {
                 }));
                 match panic_result {
                     Ok(()) => {
-                        pw.clock.force_redraw = false; // 渲染成功后才清除强制帧（中途异常保留）
+                        pw.clock.force_redraw = false; // Clear the forced frame only after a successful render (kept if it panicked).
                         pw.clock.consecutive_panics = 0;
-                        // 动画自驱动兜底：渲染中注册的动画依赖 wake_up 启动下一轮，
-                        // 但 Windows 上从事件处理内调用 EventLoopProxy::wake_up 偶发丢失
-                        // （winit 已知竞态）→ 动画冻结在起始值，直到下一个外部事件
-                        // （鼠标移动）才用大 dt 一次收敛。显式 request_redraw 保证
-                        // 动画帧持续推进，不依赖那次可能丢失的唤醒。
+                        // Animation self-driving fallback: an animation registered during a render relies
+                        // on wake_up to start the next round, but on Windows EventLoopProxy::wake_up from
+                        // inside event handling is occasionally lost (a known winit race) → the animation
+                        // freezes at its start value until the next external event (a mouse move) converges
+                        // it in one large dt. An explicit request_redraw keeps animation frames coming
+                        // without depending on that possibly-lost wake-up.
                         if crate::animation::is_animating() {
                             if let Some(ref sw) = pw.skia_window { sw.request_redraw(); }
                         }
@@ -922,38 +939,40 @@ impl ApplicationHandler for AppState {
                         let msg = if let Some(s) = e.downcast_ref::<&str>() { (*s).to_string() }
                                   else if let Some(s) = e.downcast_ref::<String>() { s.clone() }
                                   else { "unknown panic".to_string() };
-                        eprintln!("[render-panic] 第 {} 次连续 panic（本帧已跳过，上帧画面保留）: {}", pw.clock.consecutive_panics, msg);
+                        eprintln!("[render-panic] consecutive panic #{} (frame skipped, previous picture kept): {}", pw.clock.consecutive_panics, msg);
                         if pw.clock.consecutive_panics >= 30 {
-                            eprintln!("[render-panic] 连续 30 次 panic——停止本窗口渲染（避免 panic 风暴）");
+                            eprintln!("[render-panic] 30 consecutive panics — stopping rendering for this window (avoiding a panic storm)");
                             pw.clock.render_disabled = true;
                         }
-                        // force_redraw 保持 true——下帧继续尝试（若未停更）
+                        // force_redraw stays true — the next frame tries again (unless rendering stopped).
                     }
                 }
-                // IME 光标区域更新（输入法候选框跟随光标位置）
+                // Update the IME caret area (so the candidate window follows the caret).
                 if let Some(ref sw) = pw.skia_window {
                     if let Some(fid) = pw.focused_id {
                         let nodes = pw.composer.arena_nodes();
                         if let Some(r) = pw.composer.layout_root_idx() {
-                            // ⚠ TextField 容器化：焦点在容器、paragraph/cursor 在输入
-                            // leaf——须向下找 ime_callback 节点（find_descendant_ime_callback）；
-                            // 只查焦点节点则容器无 paragraph → 候选框区域从不更新
+                            // NOTE TextField containerisation: focus is on the container and
+                            // paragraph/cursor on the input leaf — so search downwards for the
+                            // ime_callback node (find_descendant_ime_callback); looking only at the
+                            // focused node leaves the container without a paragraph, so the candidate
+                            // area never updates.
                             let pidx = crate::layout::node::find_node_by_id(nodes, r, fid)
                                 .and_then(|idx| find_descendant_ime_callback(nodes, idx));
                             if let Some(pidx) = pidx {
                                 if let Ok(borrow) = nodes[pidx].cached_paragraph.try_borrow() {
                                     if let Some(p) = borrow.as_ref() {
                                         let abs = node_abs_position(nodes, r, nodes[pidx].id);
-                                        // 内容区偏移（渲染侧 content_x = 节点原点 +
-                                        // padding——IME 区域须与其对称，否则预选
-                                        // 窗口整体偏 padding 偏移）
+                                        // Content-box offset (on the render side content_x = node origin +
+                                        // padding — the IME area must match, otherwise the candidate
+                                        // window is shifted by the whole padding).
                                         let (pad_s, pad_t, pad_e, _) = nodes[pidx].modifier.get_padding_sides();
                                         let pad_x = if nodes[pidx].layout_direction == crate::layout::LayoutDirection::Rtl { pad_e } else { pad_s };
-                                        // 空文本：无 glyph 可定位——IME 区域放内容
-                                        // 起点（行高近似；与渲染端空文本光标一致）
+                                        // Empty text: no glyph to locate — put the IME area at the content
+                                        // origin (line height approximated; matches the render side's empty cursor).
                                         let empty = nodes[pidx].modifier.content_len() == 0;
-                                        // 光标索引是编辑偏移——经映射转显示偏移
-                                        // （TextFieldVisual 挂在容器——向上找）
+                                        // The caret index is the edit offset — map it to the display offset
+                                        // (TextFieldVisual sits on the container — search upwards).
                                         let caret_idx = crate::text::field::offset_mapping_for_node(nodes, r, pidx)
                                             .map(|m| m.original_to_transformed(nodes[pidx].cursor_index.get()))
                                             .unwrap_or_else(|| nodes[pidx].cursor_index.get());
@@ -976,10 +995,10 @@ impl ApplicationHandler for AppState {
                                         // told (review R3-F6).
                                         let node_w = nodes[pidx].content_box().width;
                                         let intrinsic_w = p.max_intrinsic_width();
-                                        // ⚠ 空文本：渲染端光标画在内容起点（左对齐，
-                                        // 不随 align 偏移）——IME 区域须一致（否则
-                                        // Center/Right 对齐时空文本输入候选框在容器
-                                        // 中央而非光标处）
+                                        // NOTE Empty text: the render side draws the caret at the content
+                                        // origin (left-aligned, not offset by align) — the IME area must
+                                        // match, otherwise with Center/Right alignment the candidate window
+                                        // for empty input sits in the middle of the container instead of at the caret.
                                         let x = if empty {
                                             (abs.0 + pad_x) as f64
                                         } else {
@@ -1006,12 +1025,12 @@ impl ApplicationHandler for AppState {
                         }
                     }
                 }
-                } // end 帧率限制 else（渲染 + IME 同步）
-                // 检查 compose 后是否有待关闭窗口
+                } // end frame-rate limit else (render + IME sync)
+                // Check whether compose left a window pending close.
                 if pw.composer.pending_window_close_id().is_some() {
                     if let Some(ref proxy) = *APP_PROXY.lock().unwrap() { let _ = proxy.wake_up(); }
                 }
-                // DevTools 事件消费（仅父窗口）——new_events 也兜底调用（见下）
+                // Consume DevTools events (parent window only) — new_events calls this as a fallback too (see below).
                 if is_parent {
                     self.consume_debug_events(window_id);
                 }

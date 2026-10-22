@@ -32,7 +32,7 @@ pub(crate) fn dispatch_key_in_arena(
     fid: u64,
     ke: &crate::input::KbEvent,
 ) -> bool {
-    // 收集焦点路径：root → ... → focused
+    // Collect the focus path: root → ... → focused.
     let mut path: Vec<usize> = Vec::new();
     if let Some(idx) = crate::layout::node::find_node_by_id(nodes, r, fid) {
         path.push(idx);
@@ -45,8 +45,9 @@ pub(crate) fn dispatch_key_in_arena(
         }
         path.reverse(); // path[0] == root, path[last] == focused
     }
-    // Preview: root → focused（对齐 onPreviewKeyEvent）
-    // 双轨（exp/modifier-node）：枚举 on_pre_key 先行，同节点 key node 紧随。
+    // Preview: root → focused (matching `onPreviewKeyEvent`).
+    // Dual track (exp/modifier-node): the enum `on_pre_key` handlers run first, then the node's own
+    // key node on the same node.
     for &ni in &path {
         for el in nodes[ni].modifier.elements() {
             if let crate::modifier::ModifierElement::KbEvent { on_pre_key: Some(handler), .. } = el {
@@ -57,7 +58,7 @@ pub(crate) fn dispatch_key_in_arena(
             if k.on_pre(ke) { return true; }
         }
     }
-    // Bubble: focused → root（对齐 onKeyEvent）
+    // Bubble: focused → root (matching `onKeyEvent`).
     for &ni in path.iter().rev() {
         for el in nodes[ni].modifier.elements().iter().rev() {
             if let crate::modifier::ModifierElement::KbEvent { on_key: Some(handler), .. } = el {
@@ -68,8 +69,9 @@ pub(crate) fn dispatch_key_in_arena(
             if k.on_event(ke) { return true; }
         }
     }
-    // 聚焦组件的键盘激活（对标 Compose clickable：聚焦时按 Enter/Space
-    // 触发 onClick——仅聚焦节点自身的 clickable 响应，不向祖先冒泡）
+    // Keyboard activation of the focused component (Compose `clickable`: Enter/Space on the
+    // focused node triggers onClick — only the focused node's own clickable responds, and it does
+    // not bubble to ancestors).
     let is_activate = matches!(&ke.key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
         || matches!(&ke.key, winit::keyboard::Key::Character(c) if c == " ");
     if ke.event_type == crate::input::KbEventType::KeyDown && !ke.repeat && is_activate {
@@ -78,7 +80,7 @@ pub(crate) fn dispatch_key_in_arena(
                 on_click();
                 return true;
             }
-            // 双轨：node 点击同样响应键盘激活
+            // Dual track: a node click handler responds to keyboard activation too.
             if let Some(node_cb) = nodes[idx].modifier.node_click() {
                 node_cb.on_click();
                 return true;
@@ -88,8 +90,8 @@ pub(crate) fn dispatch_key_in_arena(
     false
 }
 
-/// 解析 debug `k` 命令的按键字符串为 winit Key（单字符 → Character；
-/// 特殊名 → NamedKey）。无法解析返回 None（忽略）。
+/// Parse a key string from the debug `k` command into a winit Key (a single character →
+/// `Character`, a special name → `NamedKey`). Returns None when it cannot be parsed (ignored).
 pub(crate) fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
     use winit::keyboard::{Key, NamedKey};
     match s {
@@ -113,23 +115,27 @@ pub(crate) fn parse_debug_key(s: &str) -> Option<winit::keyboard::Key> {
     }
 }
 
-/// 查找 grapheme anchor 定位用的文本节点（有 cached_paragraph 的节点）。
+/// Find the text node used for grapheme anchor placement (a node with a `cached_paragraph`).
 ///
-/// 策略分两步：
-/// 1. **向上**：沿命中路径从 innermost 起找第一个有 paragraph 的节点——
-///    命中文本本身（输入 leaf / label / 输出 Text）时直接命中。
-/// 2. **向下**（向上失败，且 innermost 是 TextField 容器）：点击容器空白
-///    （文本右侧/padding/后缀区）时输入 leaf 不在命中路径——DFS 容器子树
-///    找第一个「有 paragraph + 有 registrar」的后代（TextField 输入 leaf；
-///    label/placeholder 有 para 无 reg，排除）。
+/// Two steps:
+/// 1. **Upward**: walk the hit path from the innermost node and take the first one with a
+///    paragraph — when the hit is the text itself (an input leaf / label / output Text) this
+///    matches directly.
+/// 2. **Downward** (upward failed and the innermost node is a TextField container): clicking the
+///    container's blank area (right of the text / padding / suffix) leaves the input leaf off the
+///    hit path, so DFS the container subtree for the first descendant with both a paragraph and a
+///    registrar (the TextField input leaf; a label/placeholder has a para but no reg, so it is
+///    excluded).
 ///
-/// ⚠ 向下分支必须**限定 TextField 容器**（modifier 含 TextFieldVisual；
-/// 输入 leaf 无此标记）：非 TextField 空白（页面空隙/Column 空白/
-/// SelectionContainer 空白）绝不向下找——否则 DFS 会误命中子树中任意
-/// 「有 para+reg」的文本（如远处 TextField 的输入 leaf），从空白按下的
-/// 拖动会错误选中/错绑 anchor。
+/// ⚠ The downward branch must be **restricted to TextField containers** (the modifier holds a
+/// `TextFieldVisual`; an input leaf has no such marker): never search downward from blank space
+/// that is not a TextField (a page gap / Column gap / SelectionContainer gap) — otherwise the DFS
+/// would wrongly match any "para+reg" text in the subtree (e.g. the input leaf of a distant
+/// TextField), and a drag started on blank space would select the wrong text or bind the wrong
+/// anchor.
 ///
-/// 返回 None = 点击处无可定位文本（空区域点击 → 不设光标/不开始拖选）。
+/// None means there is no locatable text at the click point (a click on empty space → no cursor,
+/// no drag-selection).
 pub(crate) fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innermost: usize) -> Option<usize> {
     if let Some(&i) = path.iter().rev().find(|&&i| nodes[i].cached_paragraph.borrow().is_some()) {
         return Some(i);
@@ -139,7 +145,7 @@ pub(crate) fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innerm
     if !is_tf_container {
         return None;
     }
-    // 向下找：TextField 容器子树中的输入 leaf（para + registrar 双条件）
+    // Search downward: the input leaf inside the TextField container's subtree (both para and registrar).
     pub(crate) fn dfs(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
         if nodes[idx].cached_paragraph.borrow().is_some() && nodes[idx].registrar.borrow().is_some() {
             return Some(idx);
@@ -152,13 +158,14 @@ pub(crate) fn find_anchor_text_node(nodes: &[LayoutNode], path: &[usize], innerm
     dfs(nodes, innermost)
 }
 
-/// 节点或其子树中是否有节点声明 IME 需求（ime_callback 非空）。
+/// Does the node or its subtree declare an IME need (a non-empty `ime_callback`)?
 ///
-/// ⚠ TextField 容器化：焦点/键盘在容器（focusable 挂在容器 modifier），而
-/// ime_callback 在**输入 leaf**（set_current_node_ime_callback）——只查焦点
-/// 节点自身则 TextField 聚焦时 IME 永不开启。DFS 向下找子树（与
-/// find_anchor_text_node 同策略）；Button 等无 ime_callback 的 focusable
-/// 子树不匹配 → 聚焦不开启输入法。
+/// ⚠ TextField containment: focus and keyboard live on the container (focusable is on the
+/// container's modifier), while `ime_callback` is on the **input leaf**
+/// (`set_current_node_ime_callback`). Checking only the focused node itself would mean the IME
+/// never opens when a TextField is focused. So DFS the subtree (the same strategy as
+/// `find_anchor_text_node`); a focusable subtree without an `ime_callback` (a Button and the like)
+/// does not match → focusing it does not open the IME.
 pub(crate) fn node_or_descendant_wants_ime(nodes: &[LayoutNode], idx: usize) -> bool {
     if nodes[idx].ime_callback.borrow().is_some() {
         return true;
@@ -171,10 +178,11 @@ pub(crate) fn node_or_descendant_wants_ime(nodes: &[LayoutNode], idx: usize) -> 
     false
 }
 
-/// 从节点子树中找第一个声明 ime_callback 的节点（TextField 输入 leaf）。
+/// Find the first node in the subtree that declares an `ime_callback` (the TextField input leaf).
 ///
-/// ⚠ 与 node_or_descendant_wants_ime 同根因：焦点在容器、ime_callback 在
-/// 输入 leaf——Preedit 事件须派发到实际持有 ime_callback 的节点。
+/// ⚠ Same root cause as `node_or_descendant_wants_ime`: focus is on the container while
+/// `ime_callback` is on the input leaf, so a Preedit event has to be dispatched to the node that
+/// actually holds the callback.
 pub(crate) fn find_descendant_ime_callback(nodes: &[LayoutNode], idx: usize) -> Option<usize> {
     if nodes[idx].ime_callback.borrow().is_some() {
         return Some(idx);

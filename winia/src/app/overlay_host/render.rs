@@ -2,16 +2,16 @@ use super::*;
 
 pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Canvas, scale: f32, window: (f32, f32)) {
     for ov in overlays {
-        // 显示进度 → (scale, alpha, dy, reveal)：progress State 驱动（peek——
-        // 渲染期零重组）。打开：progress 0→1，apply() 正向；关闭（closing）：
-        // progress 1→0，apply_exit() 反向。dy = 高度倍数位移；reveal = 揭示
-        // 高度倍数（顶部展开用）。
+        // Show progress → (scale, alpha, dy, reveal): driven by the progress State (peek —
+        // zero recomposition during render). Opening: progress 0→1, apply() forward; closing:
+        // progress 1→0, apply_exit() reverse. dy = height-multiple offset; reveal = revealed
+        // height multiple (used for top expansion).
         let (anim_scale, anim_alpha, anim_dy, anim_reveal) = match (&ov.progress, ov.closing, &ov.enter_anim, &ov.exit_anim) {
-            (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // 进入
-            (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // 退出
-            _ => (1.0, 1.0, 0.0, 1.0),                                     // 无动画
+            (Some(p), false, Some(spec), _) => spec.apply(p.peek()),       // entering
+            (Some(p), true, _, Some(spec)) => spec.apply_exit(p.peek()),   // exiting
+            _ => (1.0, 1.0, 0.0, 1.0),                                     // no animation
         };
-        // 模态遮罩（淡入淡出——跟随内容 alpha）
+        // Modal scrim (fades in/out — follows the content alpha).
         if ov.modal {
             let mut mask = skia_safe::Paint::default();
             mask.set_color(skia_safe::Color::from_argb((110.0 * anim_alpha) as u8, 0, 0, 0));
@@ -24,16 +24,17 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
         let nodes = ov.composer.arena_nodes();
         canvas.save();
         canvas.translate((ov.screen_pos.0 * scale, ov.screen_pos.1 * scale));
-        // 进入/退出动画：围绕 overlay 中心缩放 + 内容淡入淡出 + 垂直滑入。
-        // ⚠ scale 在 translate 之后——先定位再缩放（缩放中心 = overlay 左上角 +
-        // 内容半尺寸，即内容中心）；slide 在缩放之后、内容绘制之前（布局空间位移）
+        // Enter/exit animation: scale around the overlay centre + content fade + vertical slide-in.
+        // ⚠ scale comes after translate — position first, then scale (the scale centre = the overlay's top-left
+        // + half the content size, i.e. the content centre); slide comes after the scale and before content
+        // drawing (a layout-space displacement).
         let size = ov.composer.layout_root()
             .map(|r| (r.measured_size.width, r.measured_size.height))
             .unwrap_or((0.0, 0.0));
-        // Slide/揭示期间裁到内容框（对齐上游下拉 `.clip(dropdownShape)` 与
-        // 展开揭示）——否则滑入起点整个面板压住 bar。clip 在 settled bounds 上；
-        // 动画结束内容恰好落回框内 → 无跳变。reveal<1 时按揭示高度裁。
-        // (anim_dy != 0.0) 或 (anim_reveal < 1.0) 时裁剪。
+        // While sliding/revealing, clip to the content box (matching upstream's `.clip(dropdownShape)` on the dropdown
+        // and the expansion reveal) — otherwise the whole panel covers the bar at the slide start. The clip is on the
+        // settled bounds; once the animation ends the content sits exactly inside the box → no jump. When reveal<1, clip to the revealed height.
+        // Clip when (anim_dy != 0.0) or (anim_reveal < 1.0).
         // The clip height comes from `overlay_reveal_clip_height`, which also keeps "no clip" (`None`)
         // distinct from "clipped to zero" — the distinction the render trace needs.
         let clip_h = crate::overlay::overlay_reveal_clip_height(size.1, anim_dy, anim_reveal)
@@ -105,11 +106,11 @@ pub(crate) fn render_overlays(overlays: &[OverlayWindow], canvas: &skia_safe::Ca
             canvas.translate((0.0, anim_dy * size.1 * scale));
         }
         if anim_alpha < 1.0 {
-            // 内容淡入/淡出：整体 alpha 层（save_layer_alpha_f——Skia 层叠 alpha）
+            // Content fade in/out: an overall alpha layer (save_layer_alpha_f — Skia layers the alpha).
             canvas.save_layer_alpha_f(None, anim_alpha);
         }
-        // overlay 内容与主树一致按 scale 绘制（坐标均为逻辑单位）——
-        // 缺省会导致内容以 1x 绘制：可见位置/大小与命中测试（逻辑坐标）错位
+        // Overlay content is drawn with the same scale as the main tree (all coordinates are logical units) —
+        // without it the content is drawn at 1x and its visible position/size no longer matches hit-testing (logical coordinates).
         canvas.scale((scale, scale));
         crate::render::render(nodes, r, canvas);
         // Transition layer (sources + elevated endpoints), overlay-local coords.

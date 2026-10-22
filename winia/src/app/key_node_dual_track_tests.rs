@@ -268,16 +268,16 @@
                 )
                 .build(ctx);
         });
-        // 跑一帧组合+布局（借 recompose_layout_render 的组合部分逻辑）
+        // Run one compose+layout frame (borrowing the compose half of recompose_layout_render).
         let content = std::mem::replace(&mut pw.content, Box::new(|_| {}));
         pw.composer.recompose(|ctx| content(ctx));
         pw.content = content;
         pw.composer.layout(Constraints::new(0.0, 400.0, 0.0, 300.0));
-        // 聚焦唯一节点
+        // Focus the only node.
         if let Some(r) = pw.composer.layout_root_idx() {
             let nodes = pw.composer.arena_nodes_mut();
             crate::layout::node::clear_focus(nodes, r);
-            // 首个 focusable 即 Text 节点（arena 序遍历）
+            // The first focusable is the Text node (walking the arena in order).
             let arena = pw.composer.arena_nodes();
             let mut found = None;
             let mut stack = vec![r];
@@ -300,10 +300,10 @@
                 pw.focused_id = Some(id);
             }
         }
-        assert!(pw.focused_id.is_some(), "应聚焦到 Text 节点");
+        assert!(pw.focused_id.is_some(), "the Text node should be focused");
         let handled = dispatch_key_to_focus(&pw, &make_key());
-        assert!(!handled, "都不消费应返回 false");
-        assert_eq!(pre_log.lock().unwrap().len(), 1, "隧道应到 node 一次");
-        assert_eq!(ev_log.lock().unwrap().len(), 1, "冒泡应到 node 一次");
-        assert_eq!(enum_log.lock().unwrap().len(), 1, "枚举应收到一次");
+        assert!(!handled, "nothing consumed it, so it should return false");
+        assert_eq!(pre_log.lock().unwrap().len(), 1, "the tunnel should reach the node once");
+        assert_eq!(ev_log.lock().unwrap().len(), 1, "the bubble should reach the node once");
+        assert_eq!(enum_log.lock().unwrap().len(), 1, "the enum should receive it once");
     }

@@ -5,10 +5,11 @@
 
 use super::*;
 
-/// 手势动作 → 节点回调（坐标转组件本地——对标 Compose onTap 的本地 offset）。
-/// `scene_pos` 是事件位置；tap/drag 系列动作自带 `down_pos`——坐标用动作
-/// 携带的位置（slop 内移动后 up 位置与按下位置不同，用 up 会偏）。
-/// 返回是否消费（有回调执行）。
+/// Gesture action → node callback (coordinates converted to component-local — mirrors Compose onTap's local offset).
+/// `scene_pos` is the event position; the tap/drag action family carries its own `down_pos` — the coordinates
+/// come from the position the action carries (after moving within the slop, the up position differs from the down
+/// position, and using up would be off).
+/// Returns whether it was consumed (a callback ran).
 /// What the pointer is doing: the press that may become a click, the gesture the press opened, and
 /// the sessions that gesture started.
 ///
@@ -17,24 +18,24 @@ use super::*;
 /// arena it lives in, the axis it locked onto, the scroll ancestor it may hand itself to, and the
 /// taps waiting out a double-tap window. The window keeps the frame; the pointer keeps this.
 pub(crate) struct GestureState {
-    /// 指针按下态（Compose 风格 click 检测）
+    /// Pointer down state (Compose-style click detection).
     pub(crate) down: Option<PtrDownState>,
-    /// 最近的 PointerKind（Move 事件继承自上一个 Down）
+    /// Most recent PointerKind (Move events inherit it from the last Down).
     pub(crate) last_kind: crate::input::PointerKind,
-    /// 最后一次 PointerMoved 的 scene 坐标（逻辑像素）——MouseWheel 命中
-    /// 滚动目标用（§3.7：winit 0.31 MouseWheel 事件不带 cursor position，
-    /// 需记录指针位置；PointerLeft 时由调用方清空）
+    /// Scene coordinates of the last PointerMoved (logical pixels) — used to hit the scroll target for
+    /// MouseWheel (§3.7: winit 0.31 MouseWheel events carry no cursor position, so the pointer position
+    /// must be recorded; cleared by the caller on PointerLeft).
     pub(crate) last_pos: Option<(f32, f32)>,
-    /// Down 时的最内层节点 ID（后续 Move/Up 优先发给此节点，而非 hit_test）
+    /// Innermost node ID at Down (subsequent Move/Up go to this node first rather than to hit_test).
     pub(crate) down_slot: Option<u64>,
-    /// 手势状态机（单活动手势——down 创建，up/cancel 销毁）
+    /// Gesture state machine (a single active gesture — created on down, destroyed on up/cancel).
     pub(crate) tracker: Option<crate::input::gesture::GestureTracker>,
-    /// 手势回调路由：手势节点 id
+    /// Gesture callback routing: the gesture node id.
     pub(crate) node: Option<u64>,
-    /// 双击上下文（上次 tap 的节点/时刻/位置——跨手势传递；
-    /// 绑定节点——不同节点的手势不共享双击计数）
+    /// Double-tap context (the previous tap's node/time/position — carried across gestures;
+    /// bound to a node — gestures on different nodes do not share the double-tap count).
     pub(crate) tap_ctx: Option<(u64, std::time::Instant, (f32, f32))>,
-    /// 手势节点的 slot_key（跨重组稳定——node_id 会变，find_node_by_id 会失败）
+    /// slot_key of the gesture node (stable across recomposition — node_id changes, so find_node_by_id fails).
     pub(crate) slot: Option<u64>,
     /// Arena of the node the current gesture belongs to: `None` = the main tree, `Some(overlay id)`
     /// = that popup's layer. The id (not the index) is stored because an overlay can be removed
@@ -54,11 +55,11 @@ pub(crate) struct GestureState {
     /// live origin turned a stationary finger into a slop-exceeding drag that cancelled the tap
     /// (`a_tap_survives_its_own_popup_moving`).
     pub(crate) arena_origin: (f32, f32),
-    /// 拖拽滚动会话（按下在滚动容器上：内容跟随指针，松手按速度 fling）
+    /// Drag-scroll session (the press landed on a scroll container: content follows the pointer, release flings by velocity).
     pub(crate) drag_scroll: Option<DragScroll>,
-    /// 延迟 tap 列表（节点注册 on_double_tap 时——Compose 语义：onTap 延迟到
-    /// 双击窗口结束；窗口内第二次 down 同节点 → 取消；超时 → 补发；不同节点
-    /// 的 pending 相互独立——快速连续点击多个手势节点时各自按 deadline 补发）
+    /// Deferred tap list (when the node registers on_double_tap — Compose semantics: onTap is deferred until
+    /// the double-tap window ends; a second down on the same node inside the window → cancel; on timeout → fire;
+    /// pendings for different nodes are independent — quick successive taps on several gesture nodes each fire at their own deadline).
     pub(crate) pending_taps: Vec<crate::input::gesture::PendingTap>,
 }
 
@@ -85,14 +86,14 @@ impl Default for GestureState {
     }
 }
 
-/// Compose 风格的 click 检测中间状态
+/// Intermediate state of Compose-style click detection.
 pub(crate) struct PtrDownState {
     pub(crate) node_id: u64,
     pub(crate) position: (f32, f32),
     pub(crate) time: std::time::Instant,
-    /// 文本选区的起始字符位置（Down 时记录）
+    /// Start character offset of the text selection (recorded on Down).
     pub(crate) selection_anchor: Option<usize>,
-    /// Down 时所在的 SelectionContainer registrar（拖动跨容器时选择不切偏移空间）
+    /// SelectionContainer registrar at Down time (so a drag across containers does not switch offset spaces).
     pub(crate) anchor_registrar: Option<crate::text::selection::SelectionRegistrar>,
 }
 
@@ -102,7 +103,7 @@ pub(crate) fn fire_gesture_action(
     slot_key: u64,
     action: crate::input::gesture::GestureAction,
 ) -> bool {
-    // ⚠ 用 slot_key 解析节点（跨重组稳定）——node_id 在重组后会变
+    // ⚠ Resolve the node by slot_key (stable across recomposition) — node_id changes after recomposition.
     let Some(nid) = crate::layout::node::find_node_id_by_slot_key(nodes, root, slot_key) else {
         return false;
     };
@@ -137,7 +138,7 @@ pub(crate) fn fire_gesture_action(
     fired
 }
 
-/// 命中路径上最内层滚动容器下标（rev 第一个 vertical/horizontal scroll state）
+/// Index of the innermost scroll container on the hit path (the first vertical/horizontal scroll state from rev).
 pub(crate) fn path_scroll_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
     path.iter().rev().find(|&&n| {
         nodes[n].modifier.vertical_scroll_state().is_some()
@@ -145,18 +146,18 @@ pub(crate) fn path_scroll_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<us
     }).copied()
 }
 
-/// 命中路径上最内层拖拽手势组件下标（has_drag_gesture）
+/// Index of the innermost drag-gesture component on the hit path (has_drag_gesture).
 pub(crate) fn path_drag_idx(nodes: &[LayoutNode], path: &[usize]) -> Option<usize> {
     path.iter().rev().find(|&&n| nodes[n].modifier.has_drag_gesture()).copied()
 }
 
-/// 「内容滚动优先」核心判定（对齐 Compose）：内层可拖组件（slider/switch 在 scroll
-/// 内部）优先于滚动；drag 是 scroll 祖先（如 BottomSheet 面板 on_drag）→ 滚动优先。
-/// 三处共享：handle_pointer_down 的 child_drag、gesture_down 目标选择、overlay_down。
+/// The core "content scrolling wins" decision (matching Compose): an inner draggable component (a slider/switch inside
+/// a scroll) wins over scrolling; when the drag is an ancestor of the scroll (e.g. the BottomSheet panel's on_drag) → scrolling wins.
+/// Shared by three call sites: handle_pointer_down's child_drag, gesture_down's target choice, and overlay_down.
 pub(crate) fn inner_component_drag(drag: Option<usize>, scroll: Option<usize>) -> bool {
     match (drag, scroll) {
-        (Some(d), Some(s)) => d > s, // drag 下标更大 = 更靠叶 = 组件在 scroll 内部
-        (Some(_), None) => true,     // 无滚动容器：独立的拖拽组件（不降级）
+        (Some(d), Some(s)) => d > s, // larger drag index = closer to the leaf = the component is inside the scroll
+        (Some(_), None) => true,     // no scroll container: a standalone draggable component (do not downgrade)
         _ => false,
     }
 }
@@ -297,10 +298,10 @@ pub(crate) fn process_pending_taps_on_down(pw: &mut PerWindow, node_id: u64) {
     pw.input.pending_taps = kept;
 }
 
-/// 指针按下手势入口：hit test 找最内层手势节点 → 创建 tracker（capture 语义——
-/// 后续 move/up 由 gesture_node 路由，指针移出组件仍接收）→ on_press 立即触发。
+/// Pointer-down gesture entry point: hit test to find the innermost gesture node → create the tracker (capture semantics —
+/// later move/up are routed by gesture_node, so the pointer still reaches it after leaving the component) → fire on_press immediately.
 pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
-    // 先解析手势目标（借用结束即释放——后面要可变借用 pw 处理 pending tap）
+    // Resolve the gesture target first (the borrow is released as soon as the block ends — `pw` is borrowed mutably below for the pending tap).
     let hit = {
         let nodes = pw.composer.arena_nodes();
         let Some(r) = pw.composer.layout_root_idx() else { return; };
@@ -321,7 +322,7 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
 
     process_pending_taps_on_down(pw, node_id);
 
-    // 双击上下文按节点隔离（Compose per-pointerInput 语义）——不同节点不共享
+    // The double-tap context is isolated per node (Compose per-pointerInput semantics) — different nodes do not share it.
     let ctx = pw.input.tap_ctx.take()
         .filter(|(n, _, _)| *n == node_id)
         .map(|(_, t, p)| (t, p));
@@ -332,13 +333,13 @@ pub(crate) fn gesture_down(pw: &mut PerWindow, scene_pos: (f32, f32)) {
     pw.input.axis = None;
     pw.input.scroll_slot = None;
     pw.input.arena_origin = (0.0, 0.0);
-    // on_press 立即触发（本地坐标）
+    // Fire on_press immediately (local coordinates).
     let nodes = pw.composer.arena_nodes();
     let Some(r) = pw.composer.layout_root_idx() else { return; };
     fire_gesture_action(nodes, r, slot, crate::input::gesture::GestureAction::Press(scene_pos));
 }
 
-/// 指针移动手势入口：tracker 存在即路由（capture——不依赖 hit test）。
+/// Pointer-move gesture entry point: route whenever a tracker exists (capture — independent of hit testing).
 ///
 /// A press can be claimed by two owners at once — an inner drag component (a swipeable row, a
 /// slider) and the scroll container it sits in — and the finger's dominant axis decides which one
@@ -422,8 +423,8 @@ pub(crate) fn end_gesture(pw: &mut PerWindow) {
     pw.input.arena_origin = (0.0, 0.0);
 }
 
-/// 拖拽滚动结束：速度足够 → 惯性 fling（内容速度 = -手指速度——手指向上甩
-/// 内容继续向上 = offset 增大）。速度不足 → 仅结束滚动中标记。
+/// Drag-scroll end: enough velocity → inertial fling (content velocity = -finger velocity — flicking the finger up
+/// keeps the content moving up, i.e. the offset grows). Not enough velocity → just clear the scrolling marker.
 pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
     let Some(ds) = pw.input.drag_scroll.take() else { eprintln!("[DBG-DS] up but no drag_scroll"); return };
     let (vx, vy) = (ds.velocity_x(), ds.velocity_y());
@@ -440,12 +441,12 @@ pub(crate) fn drag_scroll_up(pw: &mut PerWindow) {
     }
     let Some(idx) = target else { return };
     let Some(root) = pw.composer.layout_root_idx() else { return };
-    // 手指速度 → 滚动速度（内容速度 = -手指速度），并走 nested scroll pre/post fling 链
+    // Finger velocity → scroll velocity (content velocity = -finger velocity), through the nested scroll pre/post fling chain.
     let velocity = crate::nested_scroll::ScrollVelocity { x: -vx, y: -vy };
     let _ = dispatch_nested_scroll_fling(pw.composer.arena_nodes_mut(), root, idx, velocity);
 }
 
-/// 指针释放手势入口：up 判定（tap/double-tap/long-press/drag-end）→ 销毁 tracker。
+/// Pointer-up gesture entry point: decide on up (tap/double-tap/long-press/drag-end) → destroy the tracker.
 pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     let Some(slot) = pw.input.slot else { return false; };
     let Some(gid) = pw.input.node else { return false; };
@@ -459,8 +460,8 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     }
     let action = {
         let Some(mut t) = pw.input.tracker.take() else { return false; };
-        // ⚠ 必须先 on_up（Tap 分支记录 last_tap）再取 tap_context——
-        // 顺序颠倒则双击上下文恒 None（ctx 在 up 判定前读取）
+        // ⚠ on_up must run first (the Tap branch records last_tap) and only then read tap_context —
+        // in the reverse order the double-tap context is always None (ctx is read before the up decision).
         let action = t.on_up();
         pw.input.tap_ctx = t.tap_context().map(|(t, p)| (gid, t, p));
         action
@@ -469,9 +470,9 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
     if action == crate::input::gesture::GestureAction::None {
         return false;
     }
-    // ⚠ Compose detectTapGestures 语义：节点注册 onDoubleTap 时，onTap 延迟
-    // 到双击窗口结束——窗口内第二次 up 命中双击 → 只发 DoubleTap（第一次 tap
-    // 已在第二次 down 时取消）；超时/按下其他节点 → 补发 Tap（fire_pending_tap）
+    // ⚠ Compose detectTapGestures semantics: when the node registers onDoubleTap, onTap is deferred
+    // until the double-tap window ends — a second up on the same node inside the window → fire DoubleTap only (the first tap
+    // was already cancelled on the second down); on timeout/pressing another node → fire the deferred Tap (fire_pending_tap).
     if let crate::input::gesture::GestureAction::Tap(pos) = action {
         if slot_has_double_tap(pw, arena, slot) {
             pw.input.pending_taps.push(crate::input::gesture::PendingTap::new(slot, gid, pos, arena));
@@ -480,7 +481,7 @@ pub(crate) fn gesture_up(pw: &mut PerWindow, _scene_pos: (f32, f32)) -> bool {
         return fire_in_gesture_arena(pw, arena, slot, action);
     }
     if matches!(action, crate::input::gesture::GestureAction::DoubleTap(_)) {
-        // 双击命中：第一次 tap 的 pending 应已在第二次 down 时取消——防御性清理同节点残留
+        // Double-tap hit: the first tap's pending should already have been cancelled on the second down — defensively clear leftovers for this node.
         pw.input.pending_taps.retain(|t| t.node_id != gid);
     }
     fire_in_gesture_arena(pw, arena, slot, action)

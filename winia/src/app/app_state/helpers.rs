@@ -1,15 +1,15 @@
 use super::*;
 
 impl AppState {
-    /// 消费 `app::open_window` 排队的窗口请求 + 首次初始化
+    /// Drain the window requests queued by `app::open_window`, plus the first-time initialisation.
     pub(crate) fn process_pending_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
-        // 首次：运行 init 回调收集主窗口创建请求
+        // First pass: run the init callback to collect the main window's creation request.
         if self.windows.is_empty() {
             if let Some(init) = self.init.take() {
                 let mut composer = Composer::new();
                 composer.compose(|ctx| init(ctx));
-                // 临时 composer：compose 内部已 take_deps（注册到其 slot_deps）——
-                // 此处再 take 是防御性空操作（缓冲已空），确保 DEP_MODE 复位
+                // Temporary composer: `compose` already took the deps (registered in its slot_deps) —
+                // taking them again here is a defensive no-op (buffer empty) that resets DEP_MODE.
                 crate::runtime::state::take_deps();
                 // The temporary initialization Composer is not an active
                 // window owner; its lifecycle state is dropped with it.
@@ -20,7 +20,7 @@ impl AppState {
             self.pending_content.push(item);
         }
 
-        // 消费 pending：创建窗口
+        // Consume the pending queue: create the windows.
         while self.pending_content.len() > 0 {
             // drain-like: pop from front
             let pending = self.pending_content.remove(0);
@@ -36,7 +36,7 @@ impl AppState {
         let w = Arc::new(event_loop.create_window(a).expect("window"));
         let window_id = w.id();
         let sf = w.scale_factor();
-        // 帧间隔对齐屏幕刷新率（refresh_rate_millihertz：60000 = 60Hz）——须在 w 移入前获取
+        // Match the frame interval to the screen refresh rate (refresh_rate_millihertz: 60000 = 60 Hz) — must be read before `w` is moved.
         let mhz_opt = w.current_monitor()
             .and_then(|m| m.current_video_mode())
             .and_then(|v| v.refresh_rate_millihertz())
@@ -107,10 +107,10 @@ impl AppState {
         // here as well: an effect that captures ctx.frame_clock() on that pass would otherwise bind
         // to window 0 (which never ticks) and never be re-run.
         pw.composer.set_window_id(window_id.into_raw() as u64);
-        // 首次 compose+layout+draw 也提供 Density（Px 单位首帧即正确）
+        // The first compose+layout+draw gets a Density too (so Px units are right from frame one).
         let density = crate::unit::Density::from_density(sf as f32);
         crate::runtime::density::with_density(density, || {
-        // 首帧同样注入窗口尺寸（自适应组件首帧即正确形态）+ 挂载响应式 State
+        // The first frame also gets the window size injected (adaptive components are correct immediately) and the reactive State attached.
         pw.composer.set_adaptive_window_size(pending.width, pending.height);
         let slot = &pw.window_size_state;
         let (w0, h0) = (pending.width, pending.height);
