@@ -4,6 +4,27 @@ use super::*;
 use crate::layout::{Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
 use crate::unit::{Offset, Size};
 
+fn text_modifier(content: &str) -> Modifier {
+    use crate::modifier::ModifierElement;
+    Modifier::new().push(ModifierElement::TextContent {
+        content: content.to_string(),
+        font_size: 14.0,
+        color: crate::graphics::Color::from_argb(255, 0, 0, 0),
+        font_weight: crate::text::FontWeight::NORMAL,
+        font_style: crate::text::FontSlant::Upright,
+        max_lines: usize::MAX,
+        align: crate::text::TextAlign::Left,
+        overflow: crate::text::TextOverflow::Clip,
+        soft_wrap: true,
+        letter_spacing: 0.0,
+        line_height: None,
+    })
+}
+
+fn text_leaf(content: &str) -> LayoutNode {
+    LayoutNode::new(text_modifier(content), None)
+}
+
 fn make_leaf(width: f32, height: f32) -> LayoutNode {
     use crate::modifier::Modifier;
     LayoutNode::leaf(Modifier::new().size(width, height))
@@ -902,4 +923,106 @@ fn flow_column_composes_and_wraps() {
         .map(|&c| nodes[c].position.x)
         .collect();
     assert_eq!(xs, vec![0.0, 0.0, 0.0, 20.0], "the first three stay in the first column, the fourth wraps (xs={xs:?})");
+}
+
+/// Intrinsic line breaking must charge main_spacing; otherwise it reports one row where measure
+/// makes two (and a min width that the real layout cannot use).
+#[test]
+fn flow_row_intrinsics_charge_main_spacing() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
+    ];
+    nodes[0].children = vec![1, 2];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().main_spacing(30.0))];
+    let height = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0);
+    assert_eq!(height, 40.0, "40 + 30 + 40 does not fit 100, so two lines of 20");
+    let width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, 20.0);
+    assert_eq!(width, 110.0, "the minimum width includes the 30px gap");
+}
+
+/// max_lines(0) is the empty flow for all four intrinsic queries, like measure.
+#[test]
+fn flow_row_zero_max_lines_intrinsics_are_empty() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        LayoutNode::leaf(Modifier::new().size(40.0, 20.0)),
+    ];
+    nodes[0].children = vec![1];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new().max_lines(0))];
+    for query in [
+        IntrinsicQuery::MinWidth,
+        IntrinsicQuery::MaxWidth,
+        IntrinsicQuery::MinHeight,
+        IntrinsicQuery::MaxHeight,
+    ] {
+        assert_eq!(intrinsic_size_of(&mut nodes, &policies, 0, query, 100.0), 0.0);
+    }
+}
+
+/// FlowColumn's intrinsic methods are the transposed versions, using height as the main axis.
+#[test]
+fn flow_column_intrinsics_are_line_aware() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+
+    let mut single = vec![text_leaf("alpha")];
+    let one_height = intrinsic_size_of(&mut single, &[], 0, IntrinsicQuery::MaxHeight, 100.0);
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        text_leaf("alpha"),
+        text_leaf("bravo"),
+    ];
+    nodes[0].children = vec![1, 2];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowColumnLayout::new())];
+    let max_height = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, 100.0);
+    assert!(
+        max_height >= one_height * 1.9,
+        "two rows should be about twice one text line (one {one_height}, got {max_height})"
+    );
+    let max_width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 1000.0);
+    assert!(max_width > 0.0, "the column has a cross-axis width");
+}
+
+/// The intrinsic methods fold the same line rules as measure: max width is a line sum, and a
+/// narrower width makes max height grow by another text line.
+#[test]
+fn flow_row_intrinsics_are_line_aware() {
+    use crate::layout::{intrinsic_size_of, IntrinsicQuery};
+
+    fn leaf_width(content: &str) -> f32 {
+        let mut leaf = vec![text_leaf(content)];
+        intrinsic_size_of(&mut leaf, &[], 0, IntrinsicQuery::MaxWidth, 100.0)
+    }
+
+    let a_width = leaf_width("alpha");
+    let b_width = leaf_width("bravo");
+    let mut nodes = vec![
+        LayoutNode::new(Modifier::new(), Some(0)),
+        text_leaf("alpha"),
+        text_leaf("bravo"),
+    ];
+    nodes[0].children = vec![1, 2];
+    let policies: Vec<Box<dyn MeasurePolicy>> = vec![Box::new(FlowRowLayout::new())];
+    let max_width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxWidth, 100.0);
+    assert!(
+        max_width >= a_width + b_width - 0.5,
+        "the max width is the one-line sum ({a_width} + {b_width}, got {max_width})"
+    );
+    let one_line = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MaxHeight, max_width);
+    let narrow = intrinsic_size_of(
+        &mut nodes,
+        &policies,
+        0,
+        IntrinsicQuery::MaxHeight,
+        a_width.max(b_width),
+    );
+    assert!(
+        narrow > one_line,
+        "a width that fits one item wraps the other: {narrow} should exceed {one_line}"
+    );
+    let min_width = intrinsic_size_of(&mut nodes, &policies, 0, IntrinsicQuery::MinWidth, f32::MAX);
+    assert!(min_width > 0.0 && min_width < max_width, "min width is a word, not the line");
 }

@@ -13,7 +13,8 @@
 //! - weight is supported within a line; line breaking still uses the child's natural size
 //! - `max_lines` and the `Clip` / `Visible` overflow modes exist; the indicator variants
 //!   (`ExpandIndicator` / `ExpandOrCollapseIndicator`) do not
-//! - no intrinsic overrides (the generic `MeasurePolicy` approximation is used)
+//! - intrinsic queries are answered from the children's intrinsic sizes, using the same line
+//!   and max-items/max-lines rules as measurement
 
 /// What happens to items that do not fit the cross-axis maximum, and whether `max_lines` applies
 /// (Compose's `FlowRowOverflow`).
@@ -29,6 +30,7 @@ pub enum FlowOverflow {
 }
 
 mod column;
+mod intrinsic;
 mod measure;
 mod row;
 

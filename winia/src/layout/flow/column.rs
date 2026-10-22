@@ -86,6 +86,80 @@ impl MeasurePolicy for FlowColumnLayout {
             nodes[c].measured_size = placements[i].size;
         }
     }
+
+    fn min_intrinsic_width(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        super::intrinsic::min_cross(
+            ctx,
+            children,
+            false,
+            height,
+            self.main_spacing,
+            self.cross_spacing,
+            self.max_lines,
+            self.max_items_in_column,
+            self.overflow,
+        )
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        height: f32,
+    ) -> f32 {
+        super::intrinsic::max_cross(
+            ctx,
+            children,
+            false,
+            height,
+            self.main_spacing,
+            self.cross_spacing,
+            self.max_lines,
+            self.max_items_in_column,
+            self.overflow,
+        )
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        super::intrinsic::min_main(
+            ctx,
+            children,
+            false,
+            width,
+            self.main_spacing,
+            self.cross_spacing,
+            self.max_lines,
+            self.max_items_in_column,
+            self.overflow,
+        )
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        ctx: &mut crate::layout::IntrinsicCtx<'_>,
+        children: &[usize],
+        width: f32,
+    ) -> f32 {
+        super::intrinsic::max_main(
+            ctx,
+            children,
+            false,
+            width,
+            self.main_spacing,
+            self.max_items_in_column,
+            self.max_lines,
+        )
+    }
 }
 
 

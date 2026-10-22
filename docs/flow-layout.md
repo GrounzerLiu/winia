@@ -80,8 +80,9 @@ FlowColumn::new()
   and the `Clip` / `Visible` modes are implemented; the indicator variants are not.
 - `max_items_in_row(0)` / `max_items_in_column(0)` is treated as one item per line (defensive
   v1 rule); Compose returns an empty flow. `max_lines(0)` does return an empty flow.
-- No intrinsic overrides: the four `MeasurePolicy` intrinsic methods fall back to the generic
-  approximation, which treats the flow as one unbounded line.
+- Intrinsic queries are implemented: max main is the longest line sum, min main is a binary
+  search for the narrowest axis that fits the cross budget, and cross intrinsics use the same
+  line/max-items/max-lines rules as measurement.
 - `cross_arrangement` distributes the free cross space between lines; `cross_spacing` remains
   the fixed gap added before the arrangement's share. A single line with `SpaceBetween` is
   centred by the shared `compute_spacing` helper (the legacy flex convention); Compose starts
@@ -99,8 +100,8 @@ cargo test -p winia --lib layout::flow
 ```
 
 The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, `max_lines`,
-`Visible` overflow, weight sharing, spacing and in-line centring, cross arrangement
-(Center/SpaceBetween/RTL), RTL mirroring, column wrapping, fill-tight
+`Visible` overflow, weight sharing, intrinsic queries, spacing and in-line centring, cross
+arrangement (Center/SpaceBetween/RTL), RTL mirroring, column wrapping, fill-tight
 containers, child measurement against the container width, cross-axis item clipping (including
 a tall item after short ones), a first line that cannot fit, cross spacing in the cut-off, and
 the two composition paths.
