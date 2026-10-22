@@ -82,8 +82,9 @@ impl MeasurePolicy for FlowRowLayout {
 ///
 /// Mirrors `FlowRow(horizontalArrangement, verticalArrangement, maxItemsInEachRow)`:
 /// `main_spacing` is the gap inside a line, `cross_spacing` the gap between lines, and
-/// `max_items_in_row` the per-line cap (unlimited by default). v1 has no weight/maxLines/
-/// overflow; see the `layout::flow` module docs.
+/// `max_items_in_row` the per-line cap (unlimited by default). Items that do not fit the
+/// cross-axis maximum follow Compose's default Clip overflow and are not placed. v1 has no
+/// weight, `maxLines`, or overflow-indicator API; see the `layout::flow` module docs.
 pub struct FlowRow {
     modifier: Modifier,
     arrangement: Arrangement,

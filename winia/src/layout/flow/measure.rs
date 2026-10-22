@@ -36,12 +36,16 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     // An unbounded main axis never runs out of room, so it degenerates to a single Row/Column
     // line (as Compose does). max_items is orthogonal to available space, though, so it still
     // forces a wrap when unbounded (review P1: can_wrap must not disable the count branch).
-    let can_wrap = max_main.is_finite();
+    let can_wrap = max_main < f32::MAX;
 
-    // Measure each item loosely; v1 has no weight, so natural sizes are the whole story.
+    // Measure each item with the parent's main-axis budget (Compose does the same: its
+    // `measureConstraints` keeps `mainAxisMax` and only resets `mainAxisMin` to 0). Measuring
+    // with an infinite main axis would let a wrapping child report its unwrapped width and then
+    // paint outside the flow container.
+    let main_limit = A::main_max(constraints).min(f32::MAX);
     let mut child_sizes: Vec<Size> = vec![Size::ZERO; n];
     for (i, &c) in children.iter().enumerate() {
-        let cc = A::build_phase1(constraints, f32::MAX);
+        let cc = A::build_phase1(constraints, main_limit);
         let (size, _) = measure_node(nodes, policies, c, cc);
         child_sizes[i] = size;
     }
@@ -70,34 +74,67 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     }
     lines.push((line_start, n));
 
-    // Line sizes: the main axis is the content width (clamped by the constraints), the cross axis
-    // is the tallest item in the line.
+    // Line sizes. The main axis is the raw content width, NOT clamped: under fill, clamping would
+    // lift the content to the container width with the min bound, leaving remaining at 0 and
+    // degrading Center/End/Space* to Start. The container is clamped separately; an item wider
+    // than the line overflows visually, as in Compose. The cross axis is the tallest item that
+    // actually fits.
+    //
+    // Compose's default overflow is Clip: items are added to the line one at a time, and the first
+    // item whose cross size exceeds the remaining cross space stops the container
+    // (FlowLayoutBuildingBlocks willOverflowCrossAxis). The check must be per ITEM, not per line:
+    // a line of heights [20, 20, 40] in 35px keeps the two 20s and drops the 40. The sentinel for
+    // "unbounded" in winia is f32::MAX as well as infinity (see flex::build_phase1), hence the
+    // `< f32::MAX` test rather than `is_finite`.
     struct LineInfo {
         main: f32,
         cross: f32,
     }
+    let max_cross = A::cross_max(constraints);
+    let bounded_cross = max_cross < f32::MAX;
+    let mut visible_lines: Vec<(usize, usize)> = Vec::with_capacity(lines.len());
     let mut line_infos: Vec<LineInfo> = Vec::with_capacity(lines.len());
-    let mut content_cross = 0.0f32;
-    for &(s, e) in &lines {
-        let mut main = 0.0f32;
-        let mut cross = 0.0f32;
+    let mut used_cross = 0.0f32;
+    for (li, &(s, e)) in lines.iter().enumerate() {
+        let gap = if li == 0 { 0.0 } else { cross_spacing };
+        let mut line_cross = 0.0f32;
+        let mut end = s;
+        let mut truncated = false;
         for i in s..e {
-            let sz = child_sizes[i];
+            let next_cross = line_cross.max(A::cross_size(child_sizes[i]));
+            if bounded_cross && used_cross + gap + next_cross > max_cross {
+                truncated = true;
+                break;
+            }
+            line_cross = next_cross;
+            end = i + 1;
+        }
+        if end == s {
+            break;
+        }
+        let mut main = 0.0f32;
+        for i in s..end {
             if i > s {
                 main += main_spacing;
             }
-            main += A::main_size(sz);
-            cross = cross.max(A::cross_size(sz));
+            main += A::main_size(child_sizes[i]);
         }
-        // The line's main size is the raw content width, NOT clamped: under fill, clamping would
-        // lift the content to the container width with the min bound, leaving remaining at 0 and
-        // degrading Center/End/Space* to Start. The container is clamped separately; an item wider
-        // than the line overflows visually, as in Compose.
-        line_infos.push(LineInfo { main, cross });
-        content_cross += cross;
+        visible_lines.push((s, end));
+        line_infos.push(LineInfo { main, cross: line_cross });
+        used_cross += gap + line_cross;
+        if truncated {
+            break;
+        }
     }
-    let total_cross_spacing = cross_spacing * (lines.len() as f32 - 1.0).max(0.0);
-    content_cross += total_cross_spacing;
+    lines = visible_lines;
+
+    let mut content_cross = 0.0f32;
+    for (i, info) in line_infos.iter().enumerate() {
+        if i > 0 {
+            content_cross += cross_spacing;
+        }
+        content_cross += info.cross;
+    }
 
     // Container size.
     let container_main = A::constrain_main(
@@ -165,14 +202,24 @@ pub(crate) fn measure_flow<A: FlexAxis>(
         cross_offset += info.cross + cross_spacing;
     }
 
-    // RTL mirroring (the same final pass flex uses: container width - x - w).
+    // RTL mirroring (the same final pass flex uses: container width - x - w). Mirror exactly the
+    // items that were placed; a legitimate zero-size child still needs mirroring, while an omitted
+    // child must stay at (0, 0) so its placement does not depend on the layout direction.
     if direction == LayoutDirection::Rtl {
         let container_x = A::rtl_container_width(
             A::main_size(A::size(container_main, container_cross)),
             container_cross,
         );
-        for p in &mut placements {
-            p.position.x = container_x - p.position.x - p.size.width;
+        let mut placed = vec![false; n];
+        for &(s, e) in &lines {
+            for i in s..e {
+                placed[i] = true;
+            }
+        }
+        for (i, p) in placements.iter_mut().enumerate() {
+            if placed[i] {
+                p.position.x = container_x - p.position.x - p.size.width;
+            }
         }
     }
 

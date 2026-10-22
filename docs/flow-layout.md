@@ -1,27 +1,27 @@
-# FlowRow / FlowColumn 流式布局（foundation 对齐）
+# FlowRow / FlowColumn (foundation parity)
 
-> 状态：已实现（分支 `exp/flow-layout`，从 v2 分出）
-> 对标：Compose foundation `FlowRow` / `FlowColumn`
-> （`FlowLayout.kt` + `FlowLayoutBuildingBlocks.kt`，1.11.4-sources.jar，
-> 源码解包在 `tmp/flow-src/`——本地工作区，不进版本库）
-> 实现：`winia/src/layout/flow.rs`（`measure_flow<A: FlexAxis>` + 双策略）；
-> 组件：`winia/src/layout/components.rs`（`FlowRow` / `FlowColumn`）；
-> demo：`winia/examples/flow_demo.rs`（chip 过滤器 + max 行 + 换列）。
+> Status: implemented on branch `v2`.
+> Reference: Compose foundation `FlowRow` / `FlowColumn`
+> (`FlowLayout.kt`, `FlowLayoutBuildingBlocks.kt`, `FlowLayoutOverflow.kt`, 1.13.0-beta01).
+> Implementation: `winia/src/layout/flow.rs` is the facade; the algorithm lives in
+> `winia/src/layout/flow/measure.rs`, the two policies/builders in `flow/row.rs` and
+> `flow/column.rs`, and the tests in `flow/tests.rs`.
+> Demo: `winia/examples/flow_demo.rs`.
 
 ## 1. API
 
 ```rust
-// 流式行：主轴填满即换行（chip 组/标签云）
+// Flowing row: wraps when the main axis is full (chip groups, tag clouds).
 FlowRow::new()
-    .main_spacing(8.0)        // 行内主轴间距（对标 horizontalArrangement=spacedBy）
-    .cross_spacing(8.0)       // 行间距（对标 verticalArrangement=spacedBy）
-    .max_items_in_row(3)      // 每行上限（默认不限，对标 maxItemsInEachRow）
-    .arrangement(Arrangement::Start)  // 行内主轴分配（复用 flex compute_spacing）
-    .alignment(Alignment::Start)      // 行内交叉轴对齐（Top/Center/Bottom）
+    .main_spacing(8.0)        // gap inside a line (Compose horizontalArrangement.spacedBy)
+    .cross_spacing(8.0)       // gap between lines (Compose verticalArrangement.spacedBy)
+    .max_items_in_row(3)      // per-line cap (unlimited by default)
+    .arrangement(Arrangement::Start)  // in-line main-axis distribution
+    .alignment(Alignment::Start)      // in-line cross-axis alignment
     .modifier(Modifier)
     .build(ctx, |ctx| { /* children */ });
 
-// 流式列：主轴（垂直）填满即换列（参数对称）
+// Flowing column: same parameters, transposed.
 FlowColumn::new()
     .main_spacing(8.0)
     .cross_spacing(8.0)
@@ -29,37 +29,51 @@ FlowColumn::new()
     .build(ctx, |ctx| { /* children */ });
 ```
 
-## 2. 语义（对标项）
+## 2. Semantics
 
-- **断行**（对标 `FlowLayoutBuildingBlocks.getWrapInfo`）：行首不换、
-  超 `max_items` 换、主轴剩余放不下即换。主轴无界时永不换行（退化 Row/Column）。
-- **行尺寸**：行主轴 = 内容 clamp 进约束；行交叉 = 行内最高项。
-- **行内**：主轴按 `arrangement` 分配剩余（`compute_spacing` 复用）；
-  交叉轴按 `alignment`（per-child `align_self` 覆盖，复用 flex 语义）。
-- **容器**：主轴 = 最宽行（wrap）/约束宽（fill）；交叉 = 各行高 + 行间距。
-- **RTL**：终镜（复用 flex 模式：容器宽 − x − w）。
-- **组件不宏化**（同 Row/Column：content 顶层 `get` 需冒泡给父）；
-  `changed` 全参数声明（含 `max_items` + 方向）。
+- **Wrapping** (Compose `getWrapInfo`): never wrap at the start of a line; wrap past
+  `max_items`; wrap when the remaining main-axis space cannot fit the next item. An
+  unbounded main axis never wraps.
+- **Child measurement**: every child is measured with the incoming main-axis maximum and a
+  main-axis minimum of 0, exactly like Compose's `measureConstraints` (`FlowLayout.kt:1224-1231`).
+  A text child therefore wraps at the flow's width instead of reporting its unwrapped width.
+- **Line sizes**: the main axis is the raw content extent (clamped only at the container);
+  the cross axis is the tallest item that actually fits in the line.
+- **Cross-axis clipping** (Compose's default `Clip` overflow): items are added to a line one
+  at a time. The first item whose cross size exceeds the remaining cross space stops the flow;
+  items already accepted, including the shorter items before it on the same line, stay placed.
+  The gap before a line counts against that budget. This is the default Clip behaviour, not the
+  `maxLines` / overflow-indicator API.
+- **In-line distribution**: the main axis uses `arrangement` + `main_spacing`; the cross axis
+  currently has only a fixed `cross_spacing` (no vertical/horizontal cross arrangement).
+- **Container size**: main = widest visible line (wrap) or the constraint (fill); cross = the
+  visible line heights plus the gaps.
+- **RTL**: final mirror pass (container width − x − width), shared with the flex containers.
+- **Composition**: the builders are deliberately not macros (a `State.get()` at the content's
+  top level must bubble to the parent), and every parameter is declared with `ctx.changed`.
 
-## 3. 与 Compose 的差异（v1 范围）
+## 3. Differences from Compose
 
-- 无 weight（Compose 按行内剩余二次分配，需两阶段重测——后续加）。
-  ⚠ 子项若挂 `layout_weight`，v1 按自然尺寸测量（weight 静默忽略）——
-  从 Row 迁移到 FlowRow 时需去掉 weight。
-- 无 maxLines/overflow（情境 API：expand/collapse indicator——后续加）。
-- 无 intrinsic（winia 无 intrinsic 体系）。
-- 行布局尺寸取 `max(内容, min约束)`：fill 父（min=max）→ 行宽=容器宽，
-  行内对齐在容器内；wrap 父（min=0）→ 行宽=内容宽。Compose 行宽恒=内容宽
-  （wrap-content 下行为一致；fill 下 Compose 行内 Start 无可见差，
-  Center/End/SpaceBetween 在容器内对齐——winia 同）。
+- No weight. Compose re-distributes a line's remaining space in a second measure pass; winia
+  measures a `layout_weight` child at its natural size and silently ignores the weight. Remove
+  the weight when migrating a Row to a FlowRow.
+- No `maxLines` or overflow-indicator API (`ExpandIndicator`, `ExpandOrCollapseIndicator`).
+  The default Clip cross-axis cut is implemented; the indicator variants are not.
+- No intrinsic overrides: the four `MeasurePolicy` intrinsic methods fall back to the generic
+  approximation, which treats the flow as one unbounded line.
+- Row layout size is `max(content, constraints.min)`: a fill parent gives a container-wide line
+  with in-line alignment; a wrap parent gives a content-wide line. Compose's line layout size is
+  the content width; the difference is invisible under wrap-content and under fill it only moves
+  Start/Center/End/SpaceBetween inside the container, as winia does.
 
-## 4. 运行与测试
+## 4. Running and tests
 
 ```bash
 cargo run -p winia --example flow_demo
-cargo test -p winia --lib layout::flow        # policy 层 7 项
-cargo test -p winia --lib layout::components  # 组合链路 2 项
+cargo test -p winia --lib layout::flow
 ```
 
-测试覆盖：换行/永不换行（无界）/max_items 强制断行/spacing+行内居中/
-RTL 镜像/换列/fill-tight 容器宽/组合链路（4 子换行换列）。
+The flow tests cover wrapping, an unbounded main axis, `max_items` breaks, spacing and
+in-line centring, RTL mirroring, column wrapping, fill-tight containers, child measurement
+against the container width, cross-axis item clipping (including a tall item after short ones),
+a first line that cannot fit, cross spacing in the cut-off, and the two composition paths.

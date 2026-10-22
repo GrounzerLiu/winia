@@ -79,6 +79,60 @@ fn flow_demo_ui(ctx: &mut ComposeCtx) {
                     }
                 });
 
+            Text::new("■ FlowRow — long text wraps inside a fixed width")
+                .font_size(16.0)
+                .build(ctx);
+
+            // A wrapping child must be measured against the flow's width, not an unbounded main
+            // axis: the paragraph then reports a wrapped height instead of painting outside.
+            FlowRow::new()
+                .modifier(
+                    Modifier::new()
+                        .width(220.0)
+                        .background(Color::from_argb(20, 50, 100, 200), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    Text::new(
+                        "A long sentence that has to wrap several times inside the two hundred and \
+                         twenty pixel flow container so the measurement path is visible in the tree.",
+                    )
+                    .font_size(14.0)
+                    .build(ctx);
+                });
+
+            Text::new("■ FlowRow — fixed height drops lines past the cross maximum")
+                .font_size(16.0)
+                .build(ctx);
+
+            FlowRow::new()
+                .main_spacing(4.0)
+                .modifier(
+                    Modifier::new()
+                        .width(160.0)
+                        .height(60.0)
+                        .background(Color::from_argb(20, 0, 150, 50), Shape::rounded(8.0))
+                        .padding(8.0),
+                )
+                .build(ctx, |ctx| {
+                    for n in 0..4 {
+                        ctx.key(("clip", n), |ctx| {
+                            Stack::new()
+                                .modifier(
+                                    Modifier::new()
+                                        .size(40.0, 40.0)
+                                        .background(
+                                            Color::from_argb(255, 80, 160, 100),
+                                            Shape::rounded(6.0),
+                                        ),
+                                )
+                                .build(ctx, |ctx| {
+                                    Text::new(format!("K{n}")).font_size(12.0).build(ctx);
+                                });
+                        });
+                    }
+                });
+
             Text::new("■ FlowRow — max 3 per row")
                 .font_size(16.0)
                 .build(ctx);

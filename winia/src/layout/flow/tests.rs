@@ -2,12 +2,184 @@
 
 use super::*;
 use crate::layout::{Alignment, Arrangement, Constraints, LayoutDirection, LayoutNode, MeasurePolicy, Placement};
-use crate::unit::Offset;
+use crate::unit::{Offset, Size};
 
 fn make_leaf(width: f32, height: f32) -> LayoutNode {
     use crate::modifier::Modifier;
     LayoutNode::leaf(Modifier::new().size(width, height))
 }
+
+/// A long text inside a 100-wide FlowRow must be measured against the container width, so the
+/// paragraph wraps instead of reporting its unwrapped width and painting outside the flow.
+#[test]
+fn flow_row_measures_children_with_the_container_width() {
+    use crate::components::text::Text;
+    use crate::modifier::Modifier;
+
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            FlowRow::new()
+                .modifier(Modifier::new().width(100.0))
+                .build(ctx, |ctx| {
+                    Text::new("the quick brown fox jumps over the lazy dog and keeps running")
+                        .font_size(14.0)
+                        .build(ctx);
+                });
+        });
+    });
+    composer.layout(Constraints::new(0.0, 100.0, 0.0, 1000.0));
+    let nodes = composer.arena_nodes();
+    let text = nodes
+        .iter()
+        .find(|n| n.has_text_content)
+        .expect("the Text leaf was composed");
+    assert!(
+        text.measured_size.width <= 100.0 + 0.01,
+        "a child measured with an unbounded main axis reports {}px, wider than the 100px container",
+        text.measured_size.width
+    );
+    assert!(
+        text.measured_size.height > 20.0,
+        "the long text should wrap onto more than one line, got {}px tall",
+        text.measured_size.height
+    );
+}
+
+/// A fixed-height FlowRow stops at its cross-axis maximum. The fourth 30px-tall item would start a
+/// second line at y = 30 in a 35px-tall container, so Compose's default Clip overflow does not place
+/// it at all; neither may winia (otherwise it paints over the content below the flow).
+#[test]
+fn flow_row_does_not_place_lines_past_the_cross_maximum() {
+    let policy = FlowRowLayout::new();
+    let mut nodes = vec![
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    assert_eq!(size.height, 30.0, "only the first line fits in 35px");
+    assert_eq!(placements[3].size, Size::ZERO, "the overflowing item is not placed");
+    assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
+}
+
+/// Cross-axis clipping is per item, not per line: two 20px items fit a 35px cross axis even when a
+/// third item in the same line is 40px tall. Compose keeps the two short items and drops the tall
+/// one; a line-granular guard would drop the whole line.
+#[test]
+fn flow_row_keeps_short_items_before_a_tall_one_on_the_same_line() {
+    let policy = FlowRowLayout::new();
+    let mut nodes = vec![
+        make_leaf(30.0, 20.0),
+        make_leaf(30.0, 20.0),
+        LayoutNode::leaf(crate::modifier::Modifier::new().required_size(30.0, 40.0)),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    assert_eq!(size.height, 20.0, "the two 20px items define the visible line");
+    assert_eq!(size.width, 60.0, "the dropped 30px item is not part of the line extent");
+    assert_eq!(placements[0].size, Size::new(30.0, 20.0));
+    assert_eq!(placements[1].size, Size::new(30.0, 20.0));
+    assert_eq!(placements[2].size, Size::ZERO, "the 40px item does not fit");
+}
+
+/// A first line taller than the cross axis makes the flow empty, as Compose's Clip overflow does
+/// not place any item it cannot fit.
+#[test]
+fn flow_row_drops_a_first_line_that_cannot_fit() {
+    let policy = FlowRowLayout::new();
+    let mut nodes = vec![LayoutNode::leaf(crate::modifier::Modifier::new().required_size(30.0, 40.0))];
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &[0],
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    assert_eq!(size.height, 0.0);
+    assert_eq!(placements[0].size, Size::ZERO);
+}
+
+/// Under RTL only the placed items are mirrored; an item dropped by the cross-axis Clip must keep
+/// a direction-independent placement.
+#[test]
+fn flow_row_rtl_does_not_mirror_omitted_items() {
+    let policy = FlowRowLayout::new().direction(LayoutDirection::Rtl);
+    let mut nodes = vec![
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+        make_leaf(30.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (_, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, 35.0),
+    );
+    assert_eq!(placements[3].position, Offset::new(0.0, 0.0));
+    assert_eq!(placements[0].position.x, 60.0, "the first item is mirrored to the right");
+}
+
+/// The same item-level cross guard works on the vertical axis: a second column that does not fit
+/// the container's width is not placed.
+#[test]
+fn flow_column_drops_a_column_past_the_cross_maximum() {
+    let policy = FlowColumnLayout::new();
+    let mut nodes = vec![
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+        make_leaf(20.0, 30.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 25.0, 0.0, 70.0),
+    );
+    assert_eq!(size.width, 20.0, "one 20px column fits in 25px");
+    assert_eq!(size.height, 60.0, "the kept column is two 30px items tall");
+    assert_eq!(placements[0].size, Size::new(20.0, 30.0));
+    assert_eq!(placements[1].size, Size::new(20.0, 30.0));
+    assert_eq!(placements[2].size, Size::ZERO, "the second column does not fit");
+}
+
+/// The gap before a later line is part of its cross budget: two 10px lines with 10px between them
+/// need 30px, so a 25px cross axis keeps only the first line.
+#[test]
+fn flow_row_charges_cross_spacing_before_the_cutoff() {
+    let policy = FlowRowLayout::new().cross_spacing(10.0);
+    let mut nodes = vec![
+        make_leaf(40.0, 10.0),
+        make_leaf(40.0, 10.0),
+        make_leaf(40.0, 10.0),
+        make_leaf(40.0, 10.0),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = policy.measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 80.0, 0.0, 25.0),
+    );
+    assert_eq!(size.height, 10.0, "the second line plus its gap does not fit in 25px");
+    assert_eq!(placements[2].size, Size::ZERO);
+}
+
 
 #[test]
 fn flow_row_wraps_when_out_of_space() {

@@ -78,7 +78,7 @@ impl MeasurePolicy for FlowColumnLayout {
 
 
 /// A flowing column: the vertical main axis wraps once it is full. Mirrors `FlowColumn`, with the
-/// same parameters as FlowRow.
+/// same parameters and the same default Clip cross-axis cut as FlowRow.
 pub struct FlowColumn {
     modifier: Modifier,
     arrangement: Arrangement,
