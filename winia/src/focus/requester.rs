@@ -1,8 +1,6 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// ── FocusRequester ──
-
 static NEXT_FOCUS_ID: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
@@ -36,7 +34,8 @@ fn current_focus_window() -> u64 {
     CURRENT_FOCUS_WINDOW.with(|c| *c.borrow())
 }
 
-/// 消费所有排队的焦点请求（供 app.rs RedrawRequested 调用）
+/// Drain the queued focus requests for the current window (called from `app`'s
+/// `RedrawRequested`).
 pub(crate) fn take_focus_requests() -> Vec<u64> {
     let current = current_focus_window();
     let mut req = FOCUS_REQUESTS.lock().unwrap();
@@ -53,7 +52,7 @@ pub(crate) fn take_focus_requests() -> Vec<u64> {
     drained
 }
 
-/// 焦点请求器——可在代码中调用 request_focus() 让关联组件获得焦点
+/// A focus requester: call `request_focus()` to give the associated component focus.
 #[derive(Debug, Clone)]
 pub struct FocusRequester {
     pub(crate) id: u64,
@@ -67,11 +66,11 @@ impl FocusRequester {
 
     pub fn id(&self) -> u64 { self.id }
 
-    /// 请求焦点。无论是否启用 debug-server，都生效。
-    /// 焦点将在下一帧 RedrawRequested 时应用。
+    /// Request focus. Works with or without the `debug-server` feature; the request is applied
+    /// on the next frame's `RedrawRequested`.
     pub fn request_focus(&self) {
         FOCUS_REQUESTS.lock().unwrap().push(FocusRequest { window_id: self.window_id, id: self.id });
-        // 同时走 debug 通道（兼容旧行为）
+        // Also go through the debug channel, preserving the old behaviour.
         #[cfg(feature = "debug-server")]
         crate::debug::queue_event(crate::debug::DebugEvent::RequestFocus { id: self.id });
     }
