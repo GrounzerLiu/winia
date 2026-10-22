@@ -1,4 +1,5 @@
     use super::*;
+    use super::display::is_pop;
 
     /// The framework's default transition curve is part of its behaviour, not an implementation detail:
     /// every preset and NavDisplay's default go through `NavTransitionSpec::new`. This pins the default
