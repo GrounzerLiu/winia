@@ -1,3 +1,5 @@
+// @generated: Material Symbols codepoints. Do not edit by hand; regenerate from the
+// Material Symbols metadata when the icon set changes.
 #![allow(unused_variables)]
 #![allow(dead_code)]
 use crate::icon::MaterialSymbol;
