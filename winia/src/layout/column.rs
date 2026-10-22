@@ -13,6 +13,9 @@ use super::constraints::Constraints;
 use crate::unit::Size;
 use super::flex;
 use super::node::*;
+use super::container::build_container;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 
 /// Column 布局策略
 #[derive(Debug, Clone)]
@@ -399,4 +402,54 @@ mod tests {
         assert_eq!(placements[0].position.x, 100.0 - 50.0);
         assert_eq!(placements[1].position.x, 0.0);
     }
+}
+pub struct Column {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    spacing: f32,
+}
+
+impl Column {
+    pub fn new() -> Self {
+        Column {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            spacing: 0.0,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
+
+    /// ⚠ 不宏化：宏化引入内部 scope 会拦截 content 顶层 State.get() 的依赖注册
+    /// （content 依赖注册到内部 scope → 父容器感知不到 → 内容不重跑 → 联动断）
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（阶段 5：参数相等跳过——下帧 is_skip 比较 slot.params：
+        // spacing/arrangement/alignment 未变 → 容器 Skip（content 不重跑）；
+        // 变化 → Enter（重跑——修复"参数变化仍 Skip 用旧值"的缺口）
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        // 方向：modifier 覆盖（Modifier::layout_direction）> CompositionLocal 默认
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        build_container(
+            ctx,
+            self.modifier,
+            ColumnLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .spacing(self.spacing)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for Column {
+    fn default() -> Self { Self::new() }
 }

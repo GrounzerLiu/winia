@@ -14,6 +14,9 @@ use super::constraints::Constraints;
 use crate::unit::{Offset, Size};
 use super::flex::FlexAxis;
 use super::node::*;
+use super::container::build_container;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 
 /// 参数化 flow 测量。FlowRow（水平主轴）/ FlowColumn（垂直主轴）委托到此函数。
 pub(crate) fn measure_flow<A: FlexAxis>(
@@ -594,3 +597,124 @@ mod tests {
         assert_eq!(placements[1].position.x, 50.0);
     }
 }
+/// 流式行：主轴填满即换行（chip 组/标签云/工具栏换行）。
+///
+/// 对标 `FlowRow(horizontalArrangement/verticalArrangement/maxItemsInEachRow)`：
+/// `main_spacing` = 行内主轴间距，`cross_spacing` = 行间距，
+/// `max_items_in_row` = 每行上限（默认不限）。
+/// v1 无 weight/maxLines/overflow（见 `layout/flow.rs` 文档）。
+pub struct FlowRow {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    main_spacing: f32,
+    cross_spacing: f32,
+    max_items_in_row: usize,
+}
+
+impl FlowRow {
+    pub fn new() -> Self {
+        FlowRow {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            main_spacing: 0.0,
+            cross_spacing: 0.0,
+            max_items_in_row: usize::MAX,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn max_items_in_row(mut self, m: usize) -> Self { self.max_items_in_row = m; self }
+
+    /// ⚠ 不宏化（同 Row/Column：content 顶层 State.get() 需冒泡给父）。
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        ctx.changed(&self.main_spacing);
+        ctx.changed(&self.cross_spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        // max_items_in_row: usize 有 PartialEq，直接 changed
+        ctx.changed(&self.max_items_in_row);
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        ctx.changed(&dir);
+        build_container(
+            ctx,
+            self.modifier,
+            FlowRowLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .main_spacing(self.main_spacing)
+                .cross_spacing(self.cross_spacing)
+                .max_items_in_row(self.max_items_in_row)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for FlowRow {
+    fn default() -> Self { Self::new() }
+}
+/// 流式列：主轴（垂直）填满即换列。对标 `FlowColumn`，参数与 FlowRow 对称。
+pub struct FlowColumn {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    main_spacing: f32,
+    cross_spacing: f32,
+    max_items_in_column: usize,
+}
+
+impl FlowColumn {
+    pub fn new() -> Self {
+        FlowColumn {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            main_spacing: 0.0,
+            cross_spacing: 0.0,
+            max_items_in_column: usize::MAX,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn main_spacing(mut self, s: f32) -> Self { self.main_spacing = s; self }
+    pub fn cross_spacing(mut self, s: f32) -> Self { self.cross_spacing = s; self }
+    pub fn max_items_in_column(mut self, m: usize) -> Self { self.max_items_in_column = m; self }
+
+    /// ⚠ 不宏化（同 Row/Column）。
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        ctx.changed(&self.main_spacing);
+        ctx.changed(&self.cross_spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        ctx.changed(&self.max_items_in_column);
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        ctx.changed(&dir);
+        build_container(
+            ctx,
+            self.modifier,
+            FlowColumnLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .main_spacing(self.main_spacing)
+                .cross_spacing(self.cross_spacing)
+                .max_items_in_column(self.max_items_in_column)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for FlowColumn {
+    fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod container_tests;

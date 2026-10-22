@@ -6,6 +6,9 @@ use super::constraints::Constraints;
 use crate::unit::{Offset, Size};
 use super::node::*;
 use super::node::measure_node;
+use super::container::build_container;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 
 /// Box 布局策略 — 子节点层叠排列
 ///
@@ -280,4 +283,46 @@ mod tests {
             "with propagation the forced minimum reaches the child, so the child paints that wide"
         );
     }
+}
+pub struct Stack {
+    modifier: Modifier,
+    alignment: Alignment,
+    content_alignment: Option<ContentAlignment>,
+}
+
+impl Stack {
+    pub fn new() -> Self {
+        Stack {
+            modifier: Modifier::new(),
+            alignment: Alignment::Start,
+            content_alignment: None,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+
+    /// Each axis on its own — Compose's 2-D `Box(contentAlignment = …)`.
+    pub fn content_alignment(mut self, a: ContentAlignment) -> Self {
+        self.content_alignment = Some(a);
+        self
+    }
+
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（参数相等跳过——同 Column）
+        ctx.changed(&self.alignment);
+        ctx.changed(&self.content_alignment);
+        // 方向：modifier 覆盖 > CompositionLocal 默认（同 Column/Row）——对齐的水平轴靠它镜像
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        // content 闭包自动成为组合 scope（与 Column 一致）
+        let policy = match self.content_alignment {
+            Some(a) => BoxLayout::new().content_alignment(a).direction(dir),
+            None => BoxLayout::new().alignment(self.alignment).direction(dir),
+        };
+        build_container(ctx, self.modifier, policy, content);
+    }
+}
+
+impl Default for Stack {
+    fn default() -> Self { Self::new() }
 }

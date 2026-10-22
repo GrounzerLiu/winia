@@ -13,6 +13,9 @@ use super::constraints::Constraints;
 use crate::unit::Size;
 use super::flex;
 use super::node::*;
+use super::container::build_container;
+use crate::modifier::Modifier;
+use crate::runtime::composer::ComposeCtx;
 
 /// Row 布局策略
 #[derive(Debug, Clone)]
@@ -970,4 +973,50 @@ mod tests {
             "LastBaseline merges with ::max — the last line of the lowest child"
         );
     }
+}
+pub struct Row {
+    modifier: Modifier,
+    arrangement: Arrangement,
+    alignment: Alignment,
+    spacing: f32,
+}
+
+impl Row {
+    pub fn new() -> Self {
+        Row {
+            modifier: Modifier::new(),
+            arrangement: Arrangement::Start,
+            alignment: Alignment::Start,
+            spacing: 0.0,
+        }
+    }
+
+    pub fn modifier(mut self, m: Modifier) -> Self { self.modifier = self.modifier.then(m); self }
+    pub fn arrangement(mut self, a: Arrangement) -> Self { self.arrangement = a; self }
+    pub fn alignment(mut self, a: Alignment) -> Self { self.alignment = a; self }
+    pub fn spacing(mut self, s: f32) -> Self { self.spacing = s; self }
+
+    pub fn build(self, ctx: &mut ComposeCtx, content: impl FnOnce(&mut ComposeCtx)) {
+        // 参数暂存（参数相等跳过——同 Column）
+        ctx.changed(&self.spacing);
+        ctx.changed(&self.arrangement);
+        ctx.changed(&self.alignment);
+        // 方向参与 changed（同 Column——方向切换必须 Enter 替换 policy）
+        let dir = self.modifier.get_layout_direction().unwrap_or(crate::layout::direction::current());
+        ctx.changed(&dir);
+        build_container(
+            ctx,
+            self.modifier,
+            RowLayout::new()
+                .arrangement(self.arrangement)
+                .alignment(self.alignment)
+                .spacing(self.spacing)
+                .direction(dir),
+            content,
+        );
+    }
+}
+
+impl Default for Row {
+    fn default() -> Self { Self::new() }
 }

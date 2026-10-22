@@ -13,7 +13,9 @@ pub mod constraints;
 pub mod direction;
 pub mod sizing;
 pub use sizing::{Dimension, IntrinsicSize, SizeValue};
+pub(crate) mod container;
 pub mod components;
+pub mod spacer;
 pub mod box_with_constraints;
 pub mod lazy_column;
 pub mod adaptive;
@@ -30,7 +32,11 @@ pub use axis::{Axis, HorizontalAxis, VerticalAxis};
 pub use constraints::Constraints;
 // The layout primitives re-exported at the layer root: `Row`/`Column`/`Stack` are how a caller names
 // the layout, not which file they live in.
-pub use components::{Column, FlowColumn, FlowRow, Row, Spacer, Stack};
+pub use column::Column;
+pub use row::Row;
+pub use box_layout::Stack;
+pub use flow::{FlowColumn, FlowRow};
+pub use spacer::Spacer;
 pub use box_with_constraints::{BoxWithConstraints, BoxWithConstraintsScope};
 pub use lazy_column::{ItemHeightCache, LazyColumn, LazyListState, LazyRow};
 pub use adaptive::{set_window_size, window_size, HeightSizeClass, WidthSizeClass};
