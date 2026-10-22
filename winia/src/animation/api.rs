@@ -1,9 +1,5 @@
 use super::*;
 
-// ═══════════════════════════════════════════════════════════
-// Animatable — the handle a component drives by hand
-// ═══════════════════════════════════════════════════════════
-
 /// Compose's `Animatable<T>`: a value you drive by hand instead of pushing a target every frame.
 ///
 /// ```ignore
@@ -158,12 +154,10 @@ impl ComposeCtx<'_> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// updateTransition
-// ═══════════════════════════════════════════════════════════
-
 use crate::runtime::composer::ComposeCtx;
 
+/// What `updateTransition` returns: the state being animated TO, the state it is leaving, and the
+/// default spec (Compose's `Transition<T>`).
 pub struct Transition<T: Clone + PartialEq + 'static> {
     target: T,
     /// The state this transition is animating FROM — Compose's `Transition.initialState`. It is what
@@ -208,8 +202,8 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         &self.previous
     }
 
-    /// 泛型值动画（对标 Compose `TransitionScope.animateValue`）——任意
-    /// AnimatableValue 类型，target 变化 → 自动平滑过渡到新目标值。
+    /// Generic value animation (cf. Compose `TransitionScope.animateValue`). Any
+    /// `AnimatableValue` type works: when the target changes, the value eases to it.
     pub fn animate<U: crate::animation::AnimatableValue + Send + Sync + 'static>(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -239,7 +233,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         state
     }
 
-    /// animateFloat — 浮点值动画（对标 Compose `TransitionScope.animateFloat`）
+    /// Float animation (cf. Compose `TransitionScope.animateFloat`).
     pub fn animate_float(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -249,7 +243,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         self.animate(ctx, target_fn, label)
     }
 
-    /// animateColor — 颜色动画（CAM16-UCS 插值，对标 `animateColor`）
+    /// Colour animation, interpolated in CAM16-UCS (cf. Compose `animateColor`).
     pub fn animate_color(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -259,7 +253,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         self.animate(ctx, target_fn, label)
     }
 
-    /// animateDp — Dp 值动画（对标 `animateDp`）
+    /// Dp animation (cf. Compose `animateDp`).
     pub fn animate_dp(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -269,7 +263,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         self.animate(ctx, target_fn, label)
     }
 
-    /// animateSize — Size 值动画（对标 `animateSize`）
+    /// Size animation (cf. Compose `animateSize`).
     pub fn animate_size(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -279,7 +273,7 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
         self.animate(ctx, target_fn, label)
     }
 
-    /// animateOffset — Offset 值动画（对标 `animateOffset`）
+    /// Offset animation (cf. Compose `animateOffset`).
     pub fn animate_offset(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -376,27 +370,26 @@ impl<T: Clone + PartialEq + 'static> Transition<T> {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// InfiniteTransition — 无限循环动画
-// ═══════════════════════════════════════════════════════════
-
-/// 无限循环动画作用域：记录其创建的动画 state_id，可 dispose 统一移除
+/// The scope of an infinite (looping) transition: it records the state ids it creates, so
+/// `dispose` can remove them all at once.
 pub struct InfiniteTransition {
     pub(super) ids: std::sync::Arc<std::sync::Mutex<Vec<StateId>>>,
 }
 
 impl ComposeCtx<'_> {
-    /// rememberInfiniteTransition — 创建无限循环动画作用域。
+    /// rememberInfiniteTransition — creates an infinite-transition scope.
     ///
-    /// 生命周期绑定组合点：组合点被移除时自动 dispose（on_remove 触发——
-    /// 从动画全局表移除，防泄漏/每帧空转）。显式 `dispose()` 仍可用，
-    /// 双重触发安全（ids drain 幂等）。
+    /// Its lifetime is tied to the composition point: when that point leaves the tree the scope is
+    /// disposed automatically (the on-forget callback removes every motion from the global table, so
+    /// nothing leaks or ticks without a composable). Calling `dispose()` explicitly still works, and
+    /// the two paths are safe together because draining the ids is idempotent.
     pub fn remember_infinite_transition(&mut self) -> InfiniteTransition {
         let ids_state = self.remember(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
         // `.peek()`: the slot is a container whose contents are pushed through the mutex; the State
         // itself is never written, so a tracked read could only add a dead dependency edge.
         let ids = ids_state.peek();
-        // 自动清理：组合点移除 → 从全局表移除本作用域全部动画。
+        // Automatic cleanup: when the composition point is removed, take all of this scope's
+        // motions out of the global table.
         // `effect::on_forget` keeps the callback in the slot rather than on an implicit leaf node:
         // the node was a real child of the enclosing container, so a transition created inside a
         // spaced `Column`/`Row` opened a gap between its neighbours for a callback layout never used.
@@ -412,7 +405,8 @@ impl ComposeCtx<'_> {
 }
 
 impl InfiniteTransition {
-    /// 记录一个 state id，重复 id 只保留一份（组件重组会反复调用 animate_*）。
+    /// Record a state id; the same id is kept once, because a recomposing component calls the
+    /// animate_* methods again.
     fn push_id(&self, id: StateId) {
         let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
         if !ids.contains(&id) {
@@ -420,7 +414,7 @@ impl InfiniteTransition {
         }
     }
 
-    /// 注册一个 from→to 无限循环浮点动画
+    /// Register a looping float animation from `from` to `to`.
     pub fn animate_float(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -435,11 +429,12 @@ impl InfiniteTransition {
         visual
     }
 
-    /// 注册一个保留当前相位的无限浮点动画。
+    /// Register a looping float animation that keeps the value's current phase.
     ///
-    /// 与 [`animate_float`](Self::animate_float) 不同：如果该 state 之前已运行过、
-    /// 被移除后再次注册，会从**当前值**继续，而不是重置回 `default_from`。
-    /// 用于 wave offset 这类“相位必须连续”的循环动画。
+    /// Unlike [`animate_float`](Self::animate_float), a state that has run before — and is registered
+    /// again after being removed — continues from its CURRENT value instead of restarting at
+    /// `default_from`. This is for looping animations whose phase must stay continuous, such as a wave
+    /// offset.
     pub fn animate_float_preserving(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -456,7 +451,7 @@ impl InfiniteTransition {
         visual
     }
 
-    /// 注册一个 from→to 无限循环颜色动画（CAM16-UCS 插值）
+    /// Register a looping colour animation from `from` to `to` (CAM16-UCS interpolation).
     pub fn animate_color(
         &mut self,
         ctx: &mut ComposeCtx,
@@ -471,7 +466,8 @@ impl InfiniteTransition {
         visual
     }
 
-    /// 取消此作用域创建的所有动画（组件离开组合/不再需要时手动调用）
+    /// Cancel every animation this scope created (call it when the component leaves composition or
+    /// no longer needs them).
     pub fn dispose(&self) {
         let ids: Vec<StateId> = self.ids.lock().unwrap().drain(..).collect();
         for sid in ids {
