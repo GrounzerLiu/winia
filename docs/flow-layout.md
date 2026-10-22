@@ -50,6 +50,11 @@ FlowColumn::new()
   the cross axis has room (Clip mode). `FlowOverflow::Visible` skips both the cross-axis cut and
   `max_lines`, and keeps painting every row outside the container, matching Compose's
   `willOverflowCrossAxis` order (`FlowLayoutBuildingBlocks.kt:84-90`).
+- **Baseline alignment**: `Modifier::align_by` / `align_by_baseline` on a child aligns it by its
+  own alignment line instead of the edge; the line grows to the line's distance above the child
+  plus the content below it, as Row/Column do. That growth happens after the per-item Clip fit
+  check (Compose has the same looseness), so a baseline line can exceed the cross maximum by the
+  ascent + descent tail; it is not discarded by the line budget.
 - **In-line distribution**: the main axis uses `arrangement` + `main_spacing`; the cross axis
   uses `cross_arrangement` + `cross_spacing` (Start/Center/End/SpaceBetween/SpaceAround/SpaceEvenly).
   A child with `layout_weight` shares the line's free main-axis space after fixed children and

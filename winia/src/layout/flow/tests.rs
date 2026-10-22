@@ -9,6 +9,105 @@ fn make_leaf(width: f32, height: f32) -> LayoutNode {
     LayoutNode::leaf(Modifier::new().size(width, height))
 }
 
+/// FlowRow's children can align by a text baseline, like Row/ColumnScope.alignByBaseline.
+#[test]
+fn flow_row_aligns_text_by_baseline() {
+    use crate::components::text::Text;
+    use crate::modifier::Modifier;
+
+    let theme = ThemeColors::light_from_seed(0x6750A4);
+    let mut composer = Composer::new();
+    composer.compose(|ctx| {
+        WiniaTheme::with_theme(theme.clone(), ctx, |ctx| {
+            FlowRow::new()
+                .modifier(Modifier::new().width(400.0))
+                .build(ctx, |ctx| {
+                    Text::new("small")
+                        .font_size(12.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                    Text::new("BIG")
+                        .font_size(28.0)
+                        .modifier(Modifier::new().align_by_baseline())
+                        .build(ctx);
+                });
+        });
+    });
+    composer.layout(Constraints::new(0.0, 400.0, 0.0, 200.0));
+    let nodes = composer.arena_nodes();
+    let baselines: Vec<f32> = nodes
+        .iter()
+        .filter(|n| n.has_text_content)
+        .map(|n| {
+            n.position.y
+                + n.alignment_line(crate::layout::AlignmentLine::FIRST_BASELINE)
+                    .expect("text publishes a baseline")
+        })
+        .collect();
+    assert_eq!(baselines.len(), 2);
+    assert!(
+        (baselines[0] - baselines[1]).abs() < 0.1,
+        "baseline-aligned text should share a baseline, got {baselines:?}"
+    );
+}
+
+/// A published alignment line grows the line to ascent + descent, beyond the tallest child.
+#[test]
+fn flow_row_baseline_line_grows_the_row() {
+    use crate::layout::AlignmentLine;
+    use crate::modifier::Modifier;
+    let line = AlignmentLine::FIRST_BASELINE;
+    let mut nodes = vec![
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(30.0, 20.0)
+                .align_by(line)
+                .alignment_line(line, |_s: crate::unit::Size| 18.0),
+        ),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(30.0, 20.0)
+                .align_by(line)
+                .alignment_line(line, |_s: crate::unit::Size| 10.0),
+        ),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, placements) = FlowRowLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 28.0, "18 above + 10 below is taller than the 20px children");
+    assert_eq!(placements[0].position.y, 0.0);
+    assert_eq!(placements[1].position.y, 8.0, "10px line sits 8px below the 18px line");
+}
+
+/// An align_by on a line the child never publishes contributes nothing, like Row/Column.
+#[test]
+fn flow_row_ignores_an_unpublished_baseline() {
+    use crate::layout::AlignmentLine;
+    use crate::modifier::Modifier;
+    let line = AlignmentLine::FIRST_BASELINE;
+    let mut nodes = vec![
+        LayoutNode::leaf(Modifier::new().size(30.0, 40.0).align_by_baseline()),
+        LayoutNode::leaf(
+            Modifier::new()
+                .size(30.0, 20.0)
+                .align_by(line)
+                .alignment_line(line, |_s: crate::unit::Size| 10.0),
+        ),
+    ];
+    let children: Vec<usize> = (0..nodes.len()).collect();
+    let (size, _) = FlowRowLayout::new().measure(
+        &mut nodes,
+        &[],
+        &children,
+        Constraints::new(0.0, 100.0, 0.0, f32::MAX),
+    );
+    assert_eq!(size.height, 40.0, "the unspecified line must not add another 40px tail");
+}
+
 /// A long text inside a 100-wide FlowRow must be measured against the container width, so the
 /// paragraph wraps instead of reporting its unwrapped width and painting outside the flow.
 #[test]

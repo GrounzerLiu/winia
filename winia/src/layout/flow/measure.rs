@@ -156,6 +156,7 @@ pub(crate) fn measure_flow<A: FlexAxis>(
     struct LineInfo {
         main: f32,
         cross: f32,
+        line_before: f32,
     }
     let max_cross = A::cross_max(constraints);
     let bounded_cross = overflow == FlowOverflow::Clip && max_cross < f32::MAX;
@@ -180,14 +181,30 @@ pub(crate) fn measure_flow<A: FlexAxis>(
             break;
         }
         let mut main = 0.0f32;
+        let mut line_before = 0.0f32;
+        let mut line_after = 0.0f32;
         for i in s..end {
             if i > s {
                 main += main_spacing;
             }
             main += A::main_size(child_sizes[i]);
+            let child = children[i];
+            if let Some(line) = nodes[child].modifier.get_align_by() {
+                let position = nodes[child].alignment_line(line);
+                let child_cross = A::cross_size(child_sizes[i]);
+                // An unspecified line contributes 0 above and 0 below, as flex.rs and Compose's
+                // RowColumnMeasurePolicy do; treating it as the whole child would inflate a line
+                // next to a non-text Icon that merely carries align_by_baseline.
+                line_before = line_before.max(position.unwrap_or(0.0));
+                line_after = line_after.max(child_cross - position.unwrap_or(child_cross));
+            }
         }
+        // A baseline-aligned child contributes its line's distance from its own edge and the
+        // content below it; the line must be tall enough for the line plus that tail, exactly as
+        // the flex containers do (RowColumnMeasurePolicy.kt:228-251).
+        let line_cross = line_cross.max(line_before + line_after);
         visible_lines.push((s, end));
-        line_infos.push(LineInfo { main, cross: line_cross });
+        line_infos.push(LineInfo { main, cross: line_cross, line_before });
         used_cross += gap + line_cross;
         if truncated {
             break;
@@ -255,16 +272,22 @@ pub(crate) fn measure_flow<A: FlexAxis>(
                 .modifier
                 .get_align_self()
                 .unwrap_or(alignment);
-            let child_cross = if align == Alignment::Stretch {
+            let line = nodes[children[i]].modifier.get_align_by();
+            let child_cross = if align == Alignment::Stretch && line.is_none() {
                 info.cross
             } else {
                 child_cross_full
             };
-            let cross_in_line = match align {
-                Alignment::Start => 0.0,
-                Alignment::End => info.cross - child_cross,
-                Alignment::Center => (info.cross - child_cross) / 2.0,
-                Alignment::Stretch => 0.0,
+            let cross_in_line = match line {
+                Some(line) => {
+                    info.line_before - nodes[children[i]].alignment_line(line).unwrap_or(0.0)
+                }
+                None => match align {
+                    Alignment::Start => 0.0,
+                    Alignment::End => info.cross - child_cross,
+                    Alignment::Center => (info.cross - child_cross) / 2.0,
+                    Alignment::Stretch => 0.0,
+                },
             };
             placements[i] = Placement {
                 size: A::size(child_main, child_cross),
