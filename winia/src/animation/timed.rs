@@ -1,5 +1,17 @@
 use super::*;
+use super::motion::{estimate_spring_duration_seconds, interpolate_keyframes, loop_factor};
 
+/// A motion that can be asked for its value at ANY time — Compose's `TargetBasedAnimation` /
+/// `DecayAnimation` and their `getValueFromNanos`.
+///
+/// Nothing is registered and nothing ticks: this is the same evaluation the engine performs each frame,
+/// exposed as a function of time. What needs it is a gesture hand-off — freeze a motion in flight, let the
+/// pointer take over, then start the remainder from where it was — and any caller that wants to ask what a
+/// spec does at 137 ms without driving frames.
+///
+/// A spring is integrated from its start for the time asked, with the engine's own stepper, so a value here
+/// matches what a running animation would have shown; each query therefore costs O(steps) rather than a
+/// table lookup.
 pub struct TimedAnimation<T: AnimatableValue> {
     from: T,
     /// `None` for a fling: there is no target, only the decay's own limit.
