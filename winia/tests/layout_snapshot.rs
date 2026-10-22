@@ -137,12 +137,12 @@ fn fill_max_width_expands_to_parent() {
     composer.compose(winia::app_root!(|ctx| {
         Column::new().build(ctx, |ctx| {
             let k1 = ctx.next_key();
-            ctx.start_leaf(k1, Modifier::new().fill_max_width().size(Dimension::Auto, 20.0));
+            ctx.start_leaf(k1, Modifier::new().fill_max_width().size(SizeValue::Auto, 20.0));
             ctx.end_node();
         });
     }));
 
-    use winia::layout::Dimension;
+    use winia::layout::SizeValue;
     composer.layout(Constraints::new(0.0, 300.0, 0.0, 100.0));
 
     let root_idx = composer.layout_root_idx().expect("root exists");

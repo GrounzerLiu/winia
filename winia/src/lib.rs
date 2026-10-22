@@ -56,11 +56,13 @@ pub mod components;
 pub mod text;
 pub mod render;
 pub mod animation;
-/// The fling strategy: what a release turns into (Compose's `FlingBehavior` / `TargetedFlingBehavior`).
-pub mod fling;
+/// The scroll family: fling strategies, the nested-scroll protocol and overscroll.
+///
+/// The modules keep their historical crate-root names through the re-export below
+/// (`winia::fling`, `winia::nested_scroll`, `winia::overscroll`).
+pub mod scroll;
+pub use scroll::{fling, nested as nested_scroll, overscroll};
 pub mod insets;
-pub mod overscroll;
-pub mod nested_scroll;
 pub mod nav;
 pub mod semantics;
 pub mod theme;

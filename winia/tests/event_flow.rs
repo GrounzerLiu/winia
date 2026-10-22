@@ -205,13 +205,13 @@ fn nested_state_propagates_layout_recalculation() {
 
             if show_extra.get() {
                 let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(Dimension::Auto, 40.0));
+                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0));
                 ctx.end_node();
             }
         });
     }));
 
-    use winia::layout::Dimension;
+    use winia::layout::SizeValue;
     let root_idx = composer.layout_root_idx().unwrap();
     let nodes = composer.arena_nodes();
     let root = &nodes[root_idx];
@@ -229,7 +229,7 @@ fn nested_state_propagates_layout_recalculation() {
 
             if show_extra.get() {
                 let k2 = ctx.next_key();
-                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(Dimension::Auto, 40.0));
+                ctx.start_leaf(k2, Modifier::new().fill_max_width().size(SizeValue::Auto, 40.0));
                 ctx.end_node();
             }
         });
