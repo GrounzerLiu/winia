@@ -258,7 +258,9 @@ mod debug;
 mod param_eq;
 mod query;
 
-#[cfg(test)]
+// `debug-server` builds the tree JSON outside a test build, and the tree includes each open
+// node's key (`debug::server::describe_modifier`).
+#[cfg(any(test, feature = "debug-server"))]
 pub(crate) use param_eq::node_key_of;
 
 #[cfg(test)]

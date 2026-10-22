@@ -1,17 +1,18 @@
-//! DevTools — stdin + WebSocket 双通道调试
+//! DevTools — stdin + WebSocket two-channel debugging.
 //!
-//! stdin:  echo 'c 190 130' | ./app   # 点击
-//!         echo t | ./app              # 打印 UI 树
-//!         echo r | ./app              # 截图请求
-//! WebSocket: ws://127.0.0.1:9998（可用环境变量 WINIA_DEBUG_PORT 覆盖——UI 测试并行隔离）
-//!         wscat -c ws://localhost:9998 → 输入 c 190 130
+//! stdin:  echo 'c 190 130' | ./app   # click
+//!         echo t | ./app              # print the UI tree
+//!         echo r | ./app              # request a screenshot
+//! WebSocket: ws://127.0.0.1:9998 (override with WINIA_DEBUG_PORT — UI tests run in
+//! parallel and need isolation)
+//!         wscat -c ws://localhost:9998 -> type c 190 130
 use crate::layout::node::LayoutNode;
 use crate::modifier::ModifierElement;
 use std::net::TcpStream;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
-// ── 全局状态 ──
+// Global state
 
 static DEBUG_STATE: Mutex<Option<DebugData>> = Mutex::new(None);
 /// WindowId used for legacy stdin/WebSocket requests with target 0.
@@ -135,11 +136,11 @@ struct PixelFrame {
 
 struct DebugData {
     pixel_frames: std::collections::HashMap<u64, PixelFrame>,
-    /// 每个窗口的树 JSON（单行、合法 JSON）——window_id → 树根数组
+    /// Per-window tree JSON (single line, valid JSON): window_id -> the root array.
     trees: std::collections::HashMap<u64, String>,
-    /// 每个窗口的顶层弹出层树（overlay 独立 Composer 的 arena）——
-    /// window_id → [(overlay_id, JSON)]，按 z 序（栈序）排列；
-    /// 每帧整体替换（overlay 关闭后条目自动消失，无残留）
+    /// Per-window top-level overlay trees (each overlay has its own Composer arena):
+    /// window_id -> [(overlay_id, JSON)], in z order (stack order). Replaced wholesale every
+    /// frame, so closing an overlay removes its entry instead of leaving a stale one.
     overlay_trees: std::collections::HashMap<u64, Vec<(u64, (f32, f32), String)>>,
     /// Compose+layout rounds per rendered frame, per window, oldest first — capped. `fp` reports it and
     /// `fpc` clears it, which is how a test tells "one frame that converged in itself" (a frame with 2)
@@ -422,7 +423,8 @@ pub fn semantics_json(window_id: u64) -> String {
         .unwrap_or_else(|| "{\"main\":[],\"overlays\":[]}".to_string())
 }
 
-/// 更新指定窗口的树 JSON（多窗口：各窗口独立存储——不再互相覆盖）
+/// Update one window's tree JSON (multi-window: each window has its own entry, so they no
+/// longer overwrite one another).
 pub fn update_tree(window_id: u64, json: &str) {
     let mut data = DEBUG_STATE.lock().unwrap();
     if data.is_none() {
@@ -433,7 +435,8 @@ pub fn update_tree(window_id: u64, json: &str) {
     }
 }
 
-/// 整体替换指定窗口的弹出层树（每帧调用；空 vec = 无弹出层——清除残留）。
+/// Replace one window's overlay trees wholesale (called every frame; an empty vec means there
+/// are no popups and clears any stale entries).
 /// `trees` elements are `(overlay_id, logical screen origin, tree JSON)`, in render z order.
 ///
 /// The origin matters because a popup's tree is in ITS OWN coordinates (it is rendered
@@ -454,7 +457,7 @@ pub fn set_overlay_trees(window_id: u64, trees: Vec<(u64, (f32, f32), String)>) 
     }
 }
 
-/// 移除指定窗口的树 JSON（窗口关闭时清理——避免残留）
+/// Remove one window's tree JSON (cleanup on window close, so nothing is left behind).
 pub fn remove_tree(window_id: u64) {
     if let Some(ref mut d) = *DEBUG_STATE.lock().unwrap() {
         d.trees.remove(&window_id);
@@ -464,17 +467,19 @@ pub fn remove_tree(window_id: u64) {
     }
 }
 
-/// 全部窗口树 → 多窗口 JSON：主窗口条目 + 紧随其后的弹出层条目——
+/// All window trees -> multi-window JSON: a main entry per window, each followed by its overlay
+/// entries.
 ///
 /// ```json
 /// [{"window":0,"root":[...]},
 ///  {"window":0,"overlay":0,"id":7,"root":[...]}]
 /// ```
 ///
-/// - 主条目无 "overlay" 字段（既有解析兼容——零弹窗时输出与旧版完全一致）
+/// - A main entry has no "overlay" field (parser compatibility: with no popups the output is
+///   identical to the previous format).
 /// - Popup entries carry `overlay` = z index (0 is bottom-most), `id` = the OverlayDesc id and
 ///   `screen` = that layer's logical screen origin (a layer's node coordinates are layer-local).
-/// - 按 window id 排序；弹层跟随其宿主窗口
+/// - Entries are sorted by window id; an overlay follows the window that hosts it.
 fn all_trees_json() -> String {
     let data = DEBUG_STATE.lock().unwrap();
     let Some(d) = data.as_ref() else { return "[]".to_string() };
@@ -499,7 +504,7 @@ fn all_trees_json() -> String {
     out
 }
 
-// ── 事件队列 ──
+// Event queue
 
 static QUEUED_EVENTS: Mutex<Vec<(u64, DebugEvent)>> = Mutex::new(Vec::new());
 
@@ -554,7 +559,7 @@ pub fn simulate_native_click(x: f32, y: f32) {
     wake();
 }
 
-// ── 组件树 JSON ──
+// Component-tree JSON
 
 pub fn build_tree_json(nodes: &[LayoutNode], root_idx: usize) -> String {
     let mut out = String::from("[");
@@ -567,8 +572,8 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
     let node = &nodes[idx];
     let indent = "  ".repeat(depth + 1);
     let mod_desc = describe_modifier(&node.modifier);
-    // 非有限数（NaN/Inf——未初始化的测量值）格式化为 0——保证 JSON 合法
-    // （serde_json 拒绝 NaN——UI 测试解析树会失败）
+    // Non-finite numbers (NaN/Inf — an uninitialised measurement) are formatted as 0 so the JSON
+    // stays valid: serde_json rejects NaN, and a UI test parsing the tree would then fail.
     let pos_x = if node.position.x.is_finite() { node.position.x } else { 0.0 };
     let pos_y = if node.position.y.is_finite() { node.position.y } else { 0.0 };
     let size_w = if node.measured_size.width.is_finite() { node.measured_size.width } else { 0.0 };
@@ -586,7 +591,7 @@ fn build_node_json(nodes: &[LayoutNode], idx: usize, out: &mut String, depth: us
         node.focused,
     ));
     for (i, &child) in node.children.iter().enumerate() {
-        if i > 0 { out.push_str(","); } // 紧凑单行（无换行——println 走 stdout 管道不拆行）
+        if i > 0 { out.push_str(","); } // compact single line (no newline: the println stdout pipe must not split it)
         build_node_json(nodes, child, out, depth + 1);
     }
     out.push(']'); out.push('}');
@@ -602,14 +607,14 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         ModifierElement::PointerHoverIcon { icon, .. } => Some(format!("cursor({:?})", icon)),
         ModifierElement::Ripple { .. } => Some("ripple".into()),
         ModifierElement::TextContent { content, .. } => Some(format!("text({})",
-            // 完整转义（JSON 字符串——\t/\r/\b/\f 等控制字符不转义会生成非法 JSON，
-            // serde_json 解析失败 → 测试表现为超时难排查）
+            // Full escaping (JSON string): control characters such as \t/\r/\b/\f would make
+            // invalid JSON, and serde_json would fail — which shows up as a hard-to-diagnose test timeout.
             content.replace('\\', "\\\\").replace('"', "\\\"")
                 .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
                 .replace('\u{8}', "\\b").replace('\u{c}', "\\f"))),
         ModifierElement::PaddingSides { start, top, end, bottom } => {
             use crate::layout::Dimension;
-            // 四边求值（Debug 场景：显示累积/动态标记）
+            // Evaluate all four sides (debug view: show accumulated and dynamic markers).
             let sv = |v: &Dimension| match v {
                 Dimension::Fixed(x) | Dimension::Dp(crate::unit::Dp(x)) => format!("{x}"),
                 Dimension::Px(p) => format!("{:.0}", p.to_logical(crate::runtime::density::current_density())),
@@ -628,8 +633,9 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
         }
         _ => None,
     }).collect();
-    // 开放节点（exp/modifier-node）：node_key 进树，调试时可见第三方行为。
-    // P1-5：key 同文本做 JSON 转义（第三方 key 含引号/反斜杠/换行即非法 JSON）。
+    // Open nodes (exp/modifier-node): the node_key goes into the tree so third-party behaviour
+    // is visible while debugging. P1-5: escape the key like text (a third-party key containing a
+    // quote, backslash or newline would make invalid JSON).
     for n in modifier.modifier_nodes() {
         let raw = crate::modifier::node_key_of(n);
         let esc = raw
@@ -645,9 +651,7 @@ fn describe_modifier(modifier: &crate::modifier::Modifier) -> String {
     parts.join("|")
 }
 
-// ═══════════════════════════════════════════════════════════
-// stdin 通道
-// ═══════════════════════════════════════════════════════════
+// stdin channel
 
 pub fn start_stdin_channel() {
     use std::io::{self, BufRead};
@@ -682,7 +686,7 @@ pub fn start_stdin_channel() {
                 }
                 "k" if parts.len() >= 2 => queue_event(DebugEvent::Key { key: parts[1..].join(" ") }),
                 "s" if parts.len() >= 2 => {
-                    // s dy（单参）或 s dx dy（双参——横向滚轮/测试）
+                    // s dy (one argument) or s dx dy (two arguments — horizontal wheel / tests).
                     let (dx, dy) = if parts.len() >= 3 {
                         (parts[1].parse().unwrap_or(0.0), parts[2].parse().unwrap_or(0.0))
                     } else {
@@ -690,7 +694,7 @@ pub fn start_stdin_channel() {
                     };
                     queue_event(DebugEvent::Scroll { dx, dy });
                 }
-                // w <width> <height>：模拟窗口 resize（逻辑像素——驱动自适应组件）
+                // w <width> <height>: simulate a window resize (logical pixels — drives adaptive components).
                 "w" if parts.len() >= 3 => {
                     let w: f32 = parts[1].parse().unwrap_or(0.0);
                     let h: f32 = parts[2].parse().unwrap_or(0.0);
@@ -699,9 +703,10 @@ pub fn start_stdin_channel() {
                 // Screenshot target is selected by the app's parent window.
                 "r" => { request_screenshot(0); wake(); }
                 "t" => {
-                    // 树响应走 stdout（前缀 TREE:——UI 测试读管道；其他 demo
-                    // 输出可能污染 stdout——测试按前缀过滤）。无条件响应
-                    // （DEBUG_STATE 未填充时输出空——测试可区分 stdin 链路 vs 渲染时序）
+                    // Tree responses go to stdout with the TREE: prefix (UI tests read the pipe;
+                    // other demo output can pollute stdout, so tests filter by prefix). Always
+                    // answer, even when DEBUG_STATE is empty, so a test can tell the stdin link
+                    // apart from render timing.
                     println!("TREE:{}", all_trees_json());
                 }
                 // sem: the SEMANTICS tree of the last rendered frame — role/name/state per element,
@@ -752,7 +757,7 @@ pub fn start_stdin_channel() {
                     }
                 }
                 "swipe" if parts.len() >= 5 => {
-                    // swipe x1 y1 x2 y2 [steps] [delay_ms] — stdin 同步版（无延迟，全部入队）
+                    // swipe x1 y1 x2 y2 [steps] [delay_ms] — the synchronous stdin form (no delay; everything is queued).
                     let x1: f32 = parts[1].parse().unwrap_or(0.0);
                     let y1: f32 = parts[2].parse().unwrap_or(0.0);
                     let x2: f32 = parts[3].parse().unwrap_or(0.0);
@@ -775,9 +780,7 @@ pub fn start_stdin_channel() {
     });
 }
 
-// ═══════════════════════════════════════════════════════════
-// WebSocket 通道
-// ═══════════════════════════════════════════════════════════
+// WebSocket channel
 
 pub fn start_ws_server() {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -785,7 +788,7 @@ pub fn start_ws_server() {
         return;
     };
     handle.spawn(async move {
-        // 端口参数化（环境变量 WINIA_DEBUG_PORT）——UI 测试并行隔离；默认 9998
+        // The port is configurable (WINIA_DEBUG_PORT) so parallel UI tests stay isolated; default 9998.
         let port: u16 = std::env::var("WINIA_DEBUG_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -851,7 +854,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 queue_event(DebugEvent::Scroll { dx, dy });
                 let _ = write.send(Message::Text("ok scroll".into())).await;
             }
-            // w <width> <height>：模拟窗口 resize（逻辑像素——驱动自适应组件）
+            // w <width> <height>: simulate a window resize (logical pixels — drives adaptive components).
             "w" if parts.len() >= 3 => {
                 let w: f32 = parts[1].parse().unwrap_or(0.0);
                 let h: f32 = parts[2].parse().unwrap_or(0.0);
@@ -887,7 +890,7 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                     .await;
             }
             "p" => {
-                // 像素转储（调试截图分析）：二进制帧 = 8 字节 header(WxH u32 LE) + RGBA
+                // Pixel dump (for screenshot analysis): a binary frame = an 8-byte header (W x H, u32 LE) + RGBA.
                 let shot = legacy_target().and_then(pixel_frame);
                 match shot {
                     Some((w, h, pixels)) => {
@@ -907,8 +910,8 @@ async fn handle_ws(stream: tokio::net::TcpStream) {
                 let _ = write.send(Message::text(pixel_line(x, y))).await;
             }
             "swipe" if parts.len() >= 5 => {
-                // swipe x1 y1 x2 y2 [steps] [delay_ms] — 模拟拖拽（down → moves → up）
-                // 例：swipe 240 480 240 560 10 16
+                // swipe x1 y1 x2 y2 [steps] [delay_ms] — simulate a drag (down -> moves -> up).
+                // Example: swipe 240 480 240 560 10 16
                 let x1: f32 = parts[1].parse().unwrap_or(0.0);
                 let y1: f32 = parts[2].parse().unwrap_or(0.0);
                 let x2: f32 = parts[3].parse().unwrap_or(0.0);

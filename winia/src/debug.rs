@@ -42,10 +42,10 @@ pub enum DebugEvent {
     Resize { w: f32, h: f32 },
     FocusNext,
     RequestFocus { id: u64 },
-    /// 模拟指针按下（选择拖动的起点）
+    /// Simulate a pointer press (the start of a drag selection).
     PointerDown { x: f32, y: f32 },
-    /// 模拟指针移动（拖动选择）
+    /// Simulate a pointer move (drag selection).
     PointerMove { x: f32, y: f32 },
-    /// 模拟指针释放
+    /// Simulate a pointer release.
     PointerUp { x: f32, y: f32 },
 }

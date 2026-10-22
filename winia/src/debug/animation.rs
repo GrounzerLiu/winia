@@ -157,7 +157,7 @@ impl TraceRecord {
 }
 
 
-// ── Real implementation (feature on) ─────────────────────────────────────────────
+// Real implementation (feature on).
 
 #[cfg(feature = "anim-trace")]
 mod imp {
@@ -317,7 +317,7 @@ mod imp {
     }
 }
 
-// ── No-op implementation (feature off) ──────────────────────────────────────────
+// No-op implementation (feature off).
 
 #[cfg(not(feature = "anim-trace"))]
 mod imp {
