@@ -50,6 +50,7 @@ pub use material_shapes::RoundedPolygon;
 pub mod graphics;
 pub mod icon;
 pub mod modifier;
+pub mod focus;
 pub mod interaction;
 pub mod layout;
 pub mod components;
