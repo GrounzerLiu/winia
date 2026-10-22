@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::task::JoinHandle;
 
-/// 内部状态
+/// Internal state.
 struct LaunchedEffectState<T: PartialEq> {
     prev_key: Option<T>,
     /// The RUNNING task, not just its abort handle: replacing the effect has to wait for the old
@@ -17,16 +17,18 @@ struct LaunchedEffectState<T: PartialEq> {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
-/// key 变化时在协程中执行 block，离开组合时自动取消。
+/// Run `block` in a coroutine for one key; cancel it when the key changes or the point leaves.
 pub struct LaunchedEffect<T: PartialEq + Clone + Send + 'static> {
     key: T,
 }
 
 impl<T: PartialEq + Clone + Send + 'static> LaunchedEffect<T> {
-    /// 组合生命周期绑定的协程作用域——dispose 时自动取消所有未完成任务。
+    /// The coroutine scope bound to the composition's lifetime; every unfinished task is
+    /// cancelled when the effect is disposed.
     pub fn new(key: T) -> Self { Self { key } }
 
-    /// #[composable]：内部 remember/attach_cleanup 从 build 调用点取稳定 base
+    /// `#[composable]`: its internal remember/attach_cleanup takes a stable base from the
+    /// `build` call site.
     #[composable]
     pub fn build<F: std::future::Future<Output = ()> + Send + 'static>(
         self,

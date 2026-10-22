@@ -1,13 +1,13 @@
-//! Effect API — 类似 Jetpack Compose 的 LaunchedEffect / DisposableEffect。
+//! Effect API — the Jetpack Compose LaunchedEffect / DisposableEffect family.
 //!
-//! - LaunchedEffect: key 变化时启动异步任务，离开组合时自动取消
-//! - DisposableEffect: key 变化时执行同步副作用，离开组合时清理
-//! - remember_coroutine_scope: 获取组合生命周期绑定的协程作用域
-//! - observe_watch: 将 watch channel 转为组合生命周期绑定的 State
+//! - LaunchedEffect: start an async task when the key changes, cancel it when the point leaves
+//! - DisposableEffect: run a synchronous setup/cleanup pair keyed the same way
+//! - remember_coroutine_scope: the coroutine scope bound to the composition's lifetime
+//! - observe_watch: turn a watch channel into a State bound to the composition's lifetime
 //! - remember_updated_state: follow the latest value from a long-lived effect
 //! - on_forget: register a cleanup for one composition point (what the effects build on)
 //!
-//! 依赖 tokio 运行时（已作为项目依赖）。
+//! Requires the tokio runtime (already a project dependency).
 //!
 //! # Timing: these run DURING composition, not after it
 //!

@@ -6,7 +6,7 @@ use crate::runtime::state::State;
 
 
 
-// ── Effects are not layout citizens ──
+// Effects are not layout citizens.
 
 /// An effect occupies no layout node, so it does not shift its neighbours.
 ///
@@ -79,7 +79,7 @@ fn dropping_the_composer_runs_the_forget_callbacks() {
         "dropping the composer must run the cleanup, not leak it"
     );
 }
-// ── DisposableEffect: the lifecycle it promises ──
+// DisposableEffect: the lifecycle it promises.
 
 /// Setup runs once for one key, and a key change runs the OLD cleanup before the new setup.
 /// The order matters: a setup that installs a listener and a cleanup that removes it must not
@@ -196,7 +196,7 @@ fn a_panicking_cleanup_does_not_kill_the_effect() {
     );
 }
 
-// ── observe_watch: which channel is it actually listening to ──
+// observe_watch: which channel is it actually listening to.
 
 /// A REPLACED receiver is re-subscribed. The first version spawned once behind a `started`
 /// flag, so a different channel at the same call site was silently ignored and the state kept
@@ -242,7 +242,7 @@ fn observe_watch_follows_a_replaced_receiver() {
     );
 }
 
-// ── LaunchedEffect: replacement order ──
+// LaunchedEffect: replacement order.
 
 /// A key change ABORTS the old body (a parked future is dropped, it does not linger) and runs the
 /// replacement exactly once.
@@ -307,7 +307,7 @@ fn a_launched_effect_key_change_aborts_the_old_body() {
         "and it ran exactly once: {seen:?}"
     );
 }
-/// frame_tick 广播后，with_frame_nanos 返回新时间戳（非初始 0）
+/// After a frame_tick broadcast, with_frame_nanos returns a fresh timestamp (not the initial 0).
 #[test]
 fn frame_clock_ticks_and_waits() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
@@ -315,17 +315,17 @@ fn frame_clock_ticks_and_waits() {
         let fut = with_frame_nanos();
         frame_tick();
         let v = fut.await;
-        assert!(v > 0, "帧时间戳必须 > 0（实际 {v}）");
-        // 第二次 tick 返回更新的时间戳
+        assert!(v > 0, "the frame timestamp must be > 0 (got {v})");
+        // The second tick returns a newer timestamp.
         let fut2 = with_frame_nanos();
         std::thread::sleep(std::time::Duration::from_millis(2));
         frame_tick();
         let v2 = fut2.await;
-        assert!(v2 > v, "第二次 tick 时间戳必须递增（{v} -> {v2}）");
+        assert!(v2 > v, "the second tick's timestamp must increase ({v} -> {v2})");
     });
 }
 
-// ── observe_watch: leaving the composition stops the subscription ──
+// observe_watch: leaving the composition stops the subscription.
 
 /// Removing the composition point stops the watch task.
 ///
@@ -368,7 +368,7 @@ fn observe_watch_stops_when_the_composition_point_is_removed() {
     );
 }
 
-// ── remember_updated_state ──
+// remember_updated_state.
 
 /// The handle follows the latest value, and the write is silent.
 ///
@@ -410,7 +410,7 @@ fn remember_updated_state_follows_the_latest_value_without_scheduling_a_recompos
     );
 }
 
-// ── CoroutineScope: cancelled by the composition point ──
+// CoroutineScope: cancelled by the composition point.
 
 /// The scope cancels with its composition point, even while a clone is still alive.
 ///
@@ -463,7 +463,7 @@ fn a_scope_is_cancelled_by_its_composition_point_not_by_refcount() {
     );
 }
 
-// ── side_effect: after the composition commits ──
+// side_effect: after the composition commits.
 
 /// A side effect is deferred past the rest of the composition.
 ///

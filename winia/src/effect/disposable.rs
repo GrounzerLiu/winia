@@ -10,7 +10,7 @@ struct DisposableState<T: PartialEq> {
     cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
-/// key 变化时执行同步 setup 和 cleanup。
+/// Run a synchronous setup/cleanup pair whenever the key changes.
 pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
     key: T,
 }
@@ -18,7 +18,8 @@ pub struct DisposableEffect<T: PartialEq + Clone + Send + 'static> {
 impl<T: PartialEq + Clone + Send + 'static> DisposableEffect<T> {
     pub fn new(key: T) -> Self { Self { key } }
 
-    /// #[composable]：内部 remember/attach_cleanup 从 build 调用点取稳定 base
+    /// `#[composable]`: its internal remember/attach_cleanup takes a stable base from the
+    /// `build` call site.
     #[composable]
     pub fn build<F: FnOnce() + Send + 'static>(
         self,

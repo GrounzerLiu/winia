@@ -69,7 +69,7 @@ impl CoroutineScope {
         }
     }
 
-    /// 启动一个协程。当此 composable 离开组合树时，任务会被自动 abort。
+    /// Spawn a coroutine; it is aborted automatically when the composable leaves the tree.
     pub fn spawn(&self, fut: impl std::future::Future<Output = ()> + Send + 'static) {
         let handle = self.rt.spawn(fut);
         let mut h = self.state.handles.lock().unwrap();
@@ -86,10 +86,12 @@ impl CoroutineScope {
     }
 }
 
-/// 获取当前组合生命周期绑定的协程作用域。
-/// 重组安全——remember 保证同一组合位置返回同一个 scope。
-/// 当组合点被移除时，ScopeState::drop 自动 abort 所有未完成协程。
-/// #[composable]：内部 remember 从调用点语句取稳定 base
+/// The coroutine scope bound to the current composition's lifetime.
+///
+/// Recompose-safe: `remember` returns the same scope for the same composition position, and
+/// `ScopeState::drop` aborts every unfinished coroutine when the point is removed.
+///
+/// `#[composable]`: its internal `remember` takes a stable base from the call site's statement.
 #[composable]
 pub fn remember_coroutine_scope(ctx: &mut ComposeCtx) -> CoroutineScope {
     // `remember_handle`: the slot holds the scope itself, not a `State` wrapping it. There is

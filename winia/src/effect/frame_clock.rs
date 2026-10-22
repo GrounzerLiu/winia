@@ -64,7 +64,7 @@ pub fn with_frame_nanos() -> impl Future<Output = u64> + Send {
     next_frame_on(rx)
 }
 
-// ── per window ──
+// Per window.
 
 struct WindowClock {
     tx: broadcast::Sender<u64>,
