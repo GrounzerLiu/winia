@@ -7,6 +7,7 @@
 //!   （expect_text_timeout——异步重组）
 //! - **自清理**：UiTest Drop 优雅关闭（q → 限时 → kill），launch 清理残留进程
 
+#[path = "ui/support.rs"]
 mod ui;
 use ui::UiTest;
 use std::time::{Duration, Instant};
