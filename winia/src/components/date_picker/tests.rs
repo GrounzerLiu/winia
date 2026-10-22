@@ -1,4 +1,8 @@
     use super::*;
+    use super::calendar::{
+        format_string, local_utc_offset_millis, now_millis, today_at,
+    };
+    use super::picker::{arrow_target, sync_month_pages, year_panel_first_row, MAX_WAIT_FRAMES};
 
     /// Compose's `rememberDatePickerState` ends with `apply { this.selectableDates =
     /// selectableDates }` (`DatePicker.kt:384-389`, the property being `by mutableStateOf`), so the
